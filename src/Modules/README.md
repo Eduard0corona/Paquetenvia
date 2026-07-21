@@ -18,6 +18,8 @@ Paquetenvia es un monolito modular. La lista canónica de módulos de negocio es
 14. Notifications
 15. Reporting
 
-FND-001 crea solamente el baseline vacío de `Orders` para demostrar la convención
-Domain/Application/Infrastructure/Endpoints. Los demás módulos y su lógica se
-implementarán en tareas posteriores del backlog normativo.
+ARC-001 mantiene baselines vacíos de `Orders` y `Pricing` para demostrar y probar
+la convención Domain/Application/Infrastructure/Endpoints. Consulta la
+[guía de arquitectura modular](../../docs/development/module-architecture.md)
+antes de generar otro módulo. La lógica de negocio se implementará en tareas
+posteriores del backlog normativo.
