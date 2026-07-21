@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Npgsql;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
+using Paqueteria.ContractTests.Support;
+using YamlDotNet.RepresentationModel;
 
 namespace Paqueteria.ContractTests.PostgreSql.Tracking;
 
@@ -11,7 +13,19 @@ public sealed class PublicTrackingContractTests(PostgreSqlContractFixture fixtur
     [PostgreSqlContractFact]
     public async Task Sql_and_csharp_map_exactly_all_17_internal_states_and_fail_closed_for_unknown()
     {
+        var domain = YamlNodes.LoadMapping(RepositoryPaths.Normative("specs", "AI-04_DOMAIN_MODEL.yaml"));
+        var normativeMapping = domain.Mapping("public_tracking_contract")
+            .Mapping("internal_to_public")
+            .Children
+            .ToDictionary(
+                pair => ((YamlScalarNode)pair.Key).Value!,
+                pair => ((YamlScalarNode)pair.Value).Value!,
+                StringComparer.Ordinal);
+
         Assert.Equal(17, PublicStatusMappingReference.All.Count);
+        Assert.Equal(
+            normativeMapping.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+            PublicStatusMappingReference.All.OrderBy(pair => pair.Key, StringComparer.Ordinal));
         await using var command = fixture.AdminDataSource.CreateCommand(
             "SELECT security.map_public_order_status(@status)");
         var statusParameter = command.Parameters.Add("status", NpgsqlTypes.NpgsqlDbType.Text);

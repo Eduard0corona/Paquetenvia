@@ -143,6 +143,11 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_roles r ON r.oid=c.relowner
             WHERE n.nspname=ANY(@schemas) AND c.relkind IN ('r','p','S') AND r.rolname<>'paqueteria_migrator'
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas)));
+        Assert.Equal(0, await ScalarAsync<int>("""
+            SELECT count(*)::integer
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
+            WHERE n.nspname=ANY(@schemas) AND r.rolname IN ('paqueteria_app','paqueteria_worker')
+            """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas)));
 
         var specializedOwners = await QueryStringsAsync("""
             SELECT p.proname || ':' || r.rolname
@@ -189,6 +194,11 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             SELECT count(*)::integer FROM information_schema.role_table_grants
             WHERE grantee='paqueteria_outbox_executor'
             """));
+        Assert.False(await HasTablePrivilegeAsync("paqueteria_bootstrap", "identity.users", "SELECT"));
+        Assert.True(await ScalarAsync<bool>(
+            "SELECT has_column_privilege('paqueteria_bootstrap','identity.users','identity_subject','SELECT')"));
+        Assert.False(await ScalarAsync<bool>(
+            "SELECT has_column_privilege('paqueteria_bootstrap','identity.users','created_at','SELECT')"));
 
         foreach (var function in new[]
         {
