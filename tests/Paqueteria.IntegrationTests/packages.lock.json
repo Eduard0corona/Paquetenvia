@@ -373,8 +373,7 @@
         "type": "Project",
         "dependencies": {
           "Orders.Domain": "[1.0.0, )",
-          "Paqueteria.Application": "[1.0.0, )",
-          "Paqueteria.Contracts": "[1.0.0, )"
+          "Paqueteria.Application": "[1.0.0, )"
         }
       },
       "orders.domain": {
@@ -393,7 +392,8 @@
         "type": "Project",
         "dependencies": {
           "Orders.Application": "[1.0.0, )",
-          "Orders.Domain": "[1.0.0, )"
+          "Orders.Domain": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
       "paqueteria.api": {
@@ -403,7 +403,9 @@
           "Microsoft.OpenApi": "[2.7.5, )",
           "Orders.Endpoints": "[1.0.0, )",
           "Orders.Infrastructure": "[1.0.0, )",
-          "Paqueteria.Infrastructure": "[1.0.0, )"
+          "Paqueteria.Infrastructure": "[1.0.0, )",
+          "Pricing.Endpoints": "[1.0.0, )",
+          "Pricing.Infrastructure": "[1.0.0, )"
         }
       },
       "paqueteria.application": {
@@ -424,6 +426,33 @@
         "dependencies": {
           "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "pricing.application": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Application": "[1.0.0, )",
+          "Pricing.Domain": "[1.0.0, )"
+        }
+      },
+      "pricing.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "pricing.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Pricing.Application": "[1.0.0, )"
+        }
+      },
+      "pricing.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Infrastructure": "[1.0.0, )",
+          "Pricing.Application": "[1.0.0, )",
+          "Pricing.Domain": "[1.0.0, )"
         }
       },
       "Microsoft.AspNetCore.OpenApi": {

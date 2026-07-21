@@ -5,5 +5,6 @@
   <ItemGroup>
     <ProjectReference Include="..\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

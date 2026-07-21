@@ -1,9 +1,9 @@
-namespace Orders.Domain;
+namespace Pricing.Endpoints;
 
 public static class AssemblyReference
 {
     internal static Type[] Dependencies =>
     [
-        typeof(Paqueteria.Domain.AssemblyReference),
+        typeof(Pricing.Application.AssemblyReference),
     ];
 }
