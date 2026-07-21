@@ -54,6 +54,9 @@ secrets.json
 **/postgres-data/
 **/redis-data/
 **/minio-data/
+**/backups/
+deploy/.env.local
+deploy/.env.ci
 
 # Certificates, keys and local credentials
 *.pfx
