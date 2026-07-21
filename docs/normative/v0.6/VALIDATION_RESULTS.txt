@@ -1,0 +1,17 @@
+$ python3 tools/validate_contracts.py
+PASS: YAML parsed: 10
+PASS: Backlog: 56 tasks, DAG, dependencies resolved
+PASS: OpenAPI: 23 paths, 47 schemas, 180 refs
+PASS: Internal order statuses: 17 consistent
+PASS: Public status mapping: 17 contract/SQL/SignalR/OpenAPI entries consistent
+PASS: SQL tables: 36; foreign-key targets resolved
+PASS: SQL runtime hardening: extensions, acceptance, leases and eight lifecycle functions present
+PASS: Money: SQL bigint cents and OpenAPI int64
+PASS: Role model: ownership normalized; outbox access function-only; maintenance separated
+PASS: Cryptographic test vectors recomputed successfully
+PASS: Acceptance tests include v0.6 runtime/security scenarios
+PASS: SQL dollar delimiters balanced
+PASS: Manifest entries checked: 72
+VALIDATION_OK
+
+Exit code: 0

@@ -1,0 +1,53 @@
+# Changelog
+
+## Registro de decisiones v0.7 — 2026-07-21
+
+- ADR-032 aceptado como referencia de diseño para v0.7: tracking en vivo, `PICKUP_IN_PROGRESS` y verificación segura de entrega.
+- ADR-033 aceptado como referencia de diseño para v0.7: inventario de sellos de integridad y cadena de custodia física.
+- Se registran también el contrato conjunto del guard ADR-032↔ADR-033 y su plan de pruebas SQL/Testcontainers.
+- Esta actualización es únicamente aditiva y documental: no modifica contratos normativos v0.6, SQL, roles, endpoints, migraciones ni código.
+- La implementación continúa bloqueada por GATE-007/GATE-013, el delta normativo coordinado y la ejecución de pruebas en PostgreSQL/PostGIS real.
+
+## v0.6 — 2026-07-20
+
+- `pgcrypto` aislado en `extensions`; PostGIS permanece en `public` protegido.
+- Token de tracking con contrato SHA-256 simétrico C#/SQL sobre UTF-8 exacto.
+- Outbox business/GPS con `lease_token`, settle, stale requeue, dead-letter y purga.
+- Runtime sin SELECT/UPDATE/DELETE directo sobre outbox; inserts sin `RETURNING`.
+- Estados públicos normativos y timeline privado por defecto con `public_event_code`.
+- `order_acceptances` RLS/append-only con canonicalización legal fija.
+- Todo dinero migrado a `bigint`/OpenAPI `int64`.
+- Provisioning transaccional de usuarios/organizaciones bajo RLS.
+- `external_offers` recupera aceptante, fecha y versión.
+- Lane GPS sin FK y con `UNIQUE(driver_position_id)`.
+- OPS-004 y ADR-026 a ADR-031.
+- Backlog ampliado a 56 tareas.
+
+## v0.5 — 2026-07-20
+
+- Roles runtime NOBYPASSRLS; bootstrap y claim cross-tenant mediante funciones de roles NOLOGIN dedicados.
+- Grants append-only y mutabilidad por columna del outbox.
+- Contexto tenant transaction-local, retry-safe y preparado para PgBouncer.
+- Esquema físico por módulo y FKs cross-schema gobernadas.
+- Cotización de uso único, `pricing_tier`, piso congelado y snapshot sin PII.
+- Modelo multi-ciudad inicial.
+- POD por URL firmada/cuarentena y GPS batch con lane separado.
+- Política 401/403/404, COD mínimo, líneas de liquidación y ventana de reclamación.
+- Backlog ampliado a 53 tareas y nuevos ADR-016 a ADR-025.
+
+
+## v0.4 — 2026-07-20
+
+- Corrige contrato Quote→Order con ubicaciones y snapshots persistidos.
+- Introduce membresías y roles por organización.
+- Endurece RLS con FORCE, roles separados y políticas para tablas sensibles/hijas.
+- Corrige máquina de estados de cancelación, custodia y reintentos.
+- Añade ingesta REST de posiciones y contrato SignalR consistente.
+- Corrige OpenAPI, idempotencia, audit schema y `Order.version`.
+- Corrige FK de tarifas, índice de outbox y nombres de tablas de escalabilidad.
+- Corrige numeración ADR, plantilla de lectura y referencia a documentos inexistentes.
+- Backlog: 48 tareas, incluyendo ARC-002 y DRV-003; OBS-001 asciende a P0.
+
+## v0.3 — 2026-07-19
+
+- Arquitectura y escalabilidad progresiva formalizadas.
