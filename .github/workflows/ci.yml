@@ -59,13 +59,77 @@ jobs:
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore --locked-mode
 
       - name: Build
         run: dotnet build --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test --configuration Release --no-build
+        run: dotnet test --configuration Release --no-build --filter "Category!=PostgreSqlContract"
+
+  runtime-contracts:
+    name: Validate runtime contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Restore locked contract dependencies
+        run: dotnet restore ./tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --locked-mode
+
+      - name: Build contract tests
+        run: dotnet build ./tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --configuration Release --no-restore
+
+      - name: Execute PostgreSQL runtime contracts
+        run: >-
+          dotnet test ./tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=PostgreSqlContract"
+          --logger "trx;LogFileName=runtime-contracts.trx"
+          --results-directory ./TestResults/runtime-contracts
+
+      - name: Capture Testcontainers diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          docker version
+          docker ps --all --no-trunc
+          for container_id in $(docker ps --all --quiet --filter "label=org.testcontainers.lang=dotnet"); do
+            docker logs --tail 200 "$container_id" || true
+          done
+
+      - name: Publish failed runtime test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-contract-test-results
+          path: ./TestResults/runtime-contracts
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Clean Testcontainers resources
+        if: always()
+        shell: bash
+        run: |
+          container_ids=$(docker ps --all --quiet --filter "label=org.testcontainers.lang=dotnet")
+          if [ -n "$container_ids" ]; then
+            docker rm --force $container_ids
+          fi
+          network_ids=$(docker network ls --quiet --filter "label=org.testcontainers.lang=dotnet")
+          if [ -n "$network_ids" ]; then
+            docker network rm $network_ids
+          fi
 
   web:
     name: Validate web workspace
