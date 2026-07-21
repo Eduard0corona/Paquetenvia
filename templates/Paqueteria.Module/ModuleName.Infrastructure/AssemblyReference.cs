@@ -1,11 +1,11 @@
-namespace Orders.Infrastructure;
+namespace ModuleName.Infrastructure;
 
 public static class AssemblyReference
 {
     internal static Type[] Dependencies =>
     [
-        typeof(Orders.Application.AssemblyReference),
-        typeof(Orders.Domain.AssemblyReference),
+        typeof(ModuleName.Application.AssemblyReference),
+        typeof(ModuleName.Domain.AssemblyReference),
         typeof(Paqueteria.Infrastructure.AssemblyReference),
     ];
 }

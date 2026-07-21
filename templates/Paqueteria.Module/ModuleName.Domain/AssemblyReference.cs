@@ -1,4 +1,4 @@
-namespace Orders.Domain;
+namespace ModuleName.Domain;
 
 public static class AssemblyReference
 {

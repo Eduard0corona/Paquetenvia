@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Pricing.Domain/Pricing.Domain.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+  </ItemGroup>
+</Project>

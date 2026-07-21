@@ -6,9 +6,10 @@ marca comercial y los proveedores productivos siguen pendientes de sus gates.
 
 ## Estado actual
 
-El repositorio implementa **FND-001: Inicializar solución .NET y workspace web**.
-Incluye la solución compilable, API y Worker mínimos, Building Blocks pequeños,
-el baseline vacío del módulo Orders, pruebas de foundation, el workspace web y CI.
+El repositorio implementa **FND-001** y la plantilla arquitectónica de
+**ARC-001**. Incluye la solución compilable, API y Worker mínimos, Building
+Blocks pequeños, los módulos vacíos Orders y Pricing, reglas ejecutables de
+aislamiento, el workspace web y CI.
 
 La implementación vive fuera de `docs/normative/v0.6/`. Esa carpeta contiene la
 línea base normativa v0.6 congelada y es la fuente de verdad: no se modifica,
@@ -30,6 +31,16 @@ dotnet restore
 dotnet build --no-restore
 dotnet test --no-build
 ```
+
+Para crear un módulo con las cuatro capas canónicas:
+
+```powershell
+dotnet new install .\templates\Paqueteria.Module --force
+dotnet new paquetenvia-module --name Example --output .\src\Modules\Example
+```
+
+Consulta la [guía de arquitectura modular](docs/development/module-architecture.md)
+para agregarlo a la solución, registrarlo en el catálogo y validar sus límites.
 
 La API expone únicamente `GET /health/live`. OpenAPI del framework se publica
 solo en Development. El Worker inicia y espera cancelación sin conectarse a
@@ -87,10 +98,10 @@ docs/normative/v0.6         Línea base normativa congelada
 .github/workflows           Integración continua
 ```
 
-## Fuera de alcance de FND-001
+## Fuera de alcance
 
 No se implementan tablas, migraciones, RLS, autenticación real, endpoints de
 negocio, outbox funcional, SignalR, tracking, órdenes, pricing, despacho,
 custodia, sellos, ADR-032/ADR-033, Docker Compose (FND-002), proveedores externos
-ni lógica de negocio de módulos. La plantilla modular ampliada y sus reglas de
-controllers/hubs continúan en ARC-001.
+ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
+reglas de arquitectura.
