@@ -192,13 +192,11 @@ try {
     }
 
     Write-Host "Starting FND-002 environment '$($context.ProjectName)'..."
-    Invoke-DockerCompose -Context $context -Arguments @("up", "--detach", "--wait") | Out-Null
+    Start-ComposeEnvironment -Context $context -TimeoutSeconds $TimeoutSeconds
     $started = $true
-    Wait-ComposeHealthy -Context $context -TimeoutSeconds $TimeoutSeconds
 
     # A second up must be harmless and leave all services healthy.
-    Invoke-DockerCompose -Context $context -Arguments @("up", "--detach", "--wait") | Out-Null
-    Wait-ComposeHealthy -Context $context -TimeoutSeconds $TimeoutSeconds
+    Start-ComposeEnvironment -Context $context -TimeoutSeconds $TimeoutSeconds
 
     $extensionState = Invoke-PostgresQuery -Context $context -Query @"
 SELECT extname || ':' || nspname
@@ -260,9 +258,8 @@ ORDER BY extname;
     if ($preserved.Volumes.Count -lt 4) {
         throw "Non-destructive down did not preserve all four named volumes."
     }
-    Invoke-DockerCompose -Context $context -Arguments @("up", "--detach", "--wait") | Out-Null
+    Start-ComposeEnvironment -Context $context -TimeoutSeconds $TimeoutSeconds
     $started = $true
-    Wait-ComposeHealthy -Context $context -TimeoutSeconds $TimeoutSeconds
     Assert-SmokeData -Context $context -Schema $schema -Value $value -RedisKey $redisKey -MinioObject $minioObject -MailpitBaseUri $mailpitBaseUri -MailSubject $mailSubject
 
     Write-Host "Verifying unhealthy-service diagnostics..."
@@ -325,7 +322,7 @@ catch {
 finally {
     if ($null -ne $context) {
         if (-not $succeeded -and $started) {
-            Invoke-DockerCompose -Context $context -Arguments @("up", "--detach", "--wait") -AllowFailure | Out-Null
+            Invoke-DockerCompose -Context $context -Arguments @("up", "--detach", "postgres", "redis", "minio", "mailpit") -AllowFailure | Out-Null
             if ($schemaCreated) {
                 try { Invoke-PostgresQuery -Context $context -Query "DROP SCHEMA IF EXISTS $schema CASCADE;" | Out-Null } catch { }
             }

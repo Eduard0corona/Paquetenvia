@@ -294,6 +294,23 @@ function Wait-ComposeHealthy {
     throw "Local environment did not become healthy within $TimeoutSeconds seconds: $lastProblem"
 }
 
+function Start-ComposeEnvironment {
+    param(
+        [Parameter(Mandatory)] $Context,
+        [int] $TimeoutSeconds = 180
+    )
+
+    # Compose --wait expects selected services to remain running. The initializer
+    # is deliberately one-shot, so start and wait for permanent services first.
+    Invoke-DockerCompose -Context $Context -Arguments @(
+        "up", "--detach", "--wait", "postgres", "redis", "minio", "mailpit"
+    ) | Out-Null
+    Invoke-DockerCompose -Context $Context -Arguments @(
+        "up", "--no-deps", "minio-init"
+    ) | Out-Null
+    Wait-ComposeHealthy -Context $Context -TimeoutSeconds $TimeoutSeconds
+}
+
 function Assert-HostPortAvailable {
     param([Parameter(Mandatory)] [int] $Port)
 

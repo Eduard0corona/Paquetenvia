@@ -38,8 +38,7 @@ try {
             if ($existing.Containers.Count -eq 0) {
                 Assert-ConfiguredPortsAvailable -Context $context
             }
-            Invoke-DockerCompose -Context $context -Arguments @("up", "--detach", "--wait") | Out-Null
-            Wait-ComposeHealthy -Context $context -TimeoutSeconds $TimeoutSeconds
+            Start-ComposeEnvironment -Context $context -TimeoutSeconds $TimeoutSeconds
             Write-Host "Local environment '$($context.ProjectName)' is healthy."
         }
         "Down" {
@@ -47,9 +46,8 @@ try {
             Write-Host "Containers and network stopped; named volumes were preserved."
         }
         "Restart" {
-            Invoke-DockerCompose -Context $context -Arguments @("restart") | Out-Null
-            Invoke-DockerCompose -Context $context -Arguments @("up", "--detach", "--wait") | Out-Null
-            Wait-ComposeHealthy -Context $context -TimeoutSeconds $TimeoutSeconds
+            Invoke-DockerCompose -Context $context -Arguments @("restart", "postgres", "redis", "minio", "mailpit") | Out-Null
+            Start-ComposeEnvironment -Context $context -TimeoutSeconds $TimeoutSeconds
             Write-Host "Local environment restarted with named volumes preserved."
         }
         "Status" {

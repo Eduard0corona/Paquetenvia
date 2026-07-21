@@ -107,7 +107,12 @@ docker compose `
 docker compose `
   --env-file .\deploy\.env.local `
   --file .\deploy\docker-compose.yml `
-  up --detach --wait
+  up --detach --wait postgres redis minio mailpit
+
+docker compose `
+  --env-file .\deploy\.env.local `
+  --file .\deploy\docker-compose.yml `
+  up --no-deps minio-init
 
 docker compose `
   --env-file .\deploy\.env.local `
