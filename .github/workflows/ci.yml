@@ -101,3 +101,58 @@ jobs:
 
       - name: Build
         run: pnpm --dir apps/web build
+
+  infrastructure:
+    name: Validate local infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Generate synthetic CI environment
+        shell: pwsh
+        run: |
+          $projectName = "paquetenvia-ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          Get-Content ./deploy/.env.example |
+            ForEach-Object {
+              if ($_ -match '^COMPOSE_PROJECT_NAME=') {
+                "COMPOSE_PROJECT_NAME=$projectName"
+              }
+              else {
+                $_
+              }
+            } |
+            Set-Content ./deploy/.env.ci -Encoding utf8
+
+      - name: Validate Compose configuration
+        shell: pwsh
+        run: >-
+          docker compose
+          --env-file ./deploy/.env.ci
+          --file ./deploy/docker-compose.yml
+          config --quiet
+
+      - name: Run infrastructure smoke and persistence tests
+        shell: pwsh
+        run: >-
+          ./tools/test-local-environment.ps1
+          -EnvironmentFile ./deploy/.env.ci
+          -CI
+          -TimeoutSeconds 300
+
+      - name: Capture infrastructure diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          docker compose --env-file ./deploy/.env.ci --file ./deploy/docker-compose.yml ps --all
+          docker compose --env-file ./deploy/.env.ci --file ./deploy/docker-compose.yml logs --tail 200
+
+      - name: Clean infrastructure resources
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path ./deploy/.env.ci) {
+            docker compose --env-file ./deploy/.env.ci --file ./deploy/docker-compose.yml down --volumes --remove-orphans
+            Remove-Item ./deploy/.env.ci -Force
+          }
