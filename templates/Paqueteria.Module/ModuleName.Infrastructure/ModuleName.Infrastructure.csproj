@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../ModuleName.Application/ModuleName.Application.csproj" />
+    <ProjectReference Include="../ModuleName.Domain/ModuleName.Domain.csproj" />
+    <ProjectReference Include="__BUILDING_BLOCKS_PATH__/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

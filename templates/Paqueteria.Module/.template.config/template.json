@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Paquetenvia",
+  "classifications": [
+    "Paquetenvia",
+    "Modular Monolith"
+  ],
+  "identity": "Paquetenvia.Module.Template",
+  "name": "Paquetenvia modular architecture module",
+  "shortName": "paquetenvia-module",
+  "sourceName": "ModuleName",
+  "preferNameDirectory": false,
+  "symbols": {
+    "BuildingBlocksPath": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "../../../BuildingBlocks",
+      "description": "Path from the generated projects to src/BuildingBlocks.",
+      "replaces": "__BUILDING_BLOCKS_PATH__"
+    }
+  }
+}
