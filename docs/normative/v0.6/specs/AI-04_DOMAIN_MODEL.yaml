@@ -1,0 +1,429 @@
+meta:
+  version: '0.6'
+  status: NORMATIVE
+conventions:
+  ids: uuid
+  money: integer cents MXN
+  timestamps: timestamptz UTC
+  timezone_display: America/Mazatlan
+  tenant_context: X-Organization-Id validated against active membership; database settings are transaction-local
+  audit: append-only
+  pii: plaintext PII prohibited in JSON snapshots/logs/events
+entities:
+  Organization:
+    required:
+    - id
+    - organization_type
+    - legal_name
+    - display_name
+    - status
+  User:
+    required:
+    - id
+    - identity_subject
+    - status
+    rules:
+    - no global authorization role
+  OrganizationMembership:
+    required:
+    - id
+    - user_id
+    - organization_id
+    - role
+    - status
+    rules:
+    - unique active user/org/role
+    - one optional active default membership
+  City:
+    required:
+    - id
+    - country_code
+    - state_code
+    - name
+    - timezone
+  ServiceArea:
+    required:
+    - id
+    - owner_org_id
+    - city_id
+    - polygon
+    - status
+  OperatingZone:
+    required:
+    - id
+    - owner_org_id
+    - service_area_id
+    - zone_type
+    - polygon
+  Location:
+    required:
+    - id
+    - owner_org_id
+    - city_id
+    - point
+    - address_ciphertext
+    - address_summary
+    - pii_key_version
+    sensitive:
+    - address
+    - contact_name
+    - phone
+  Quote:
+    required:
+    - id
+    - owner_org_id
+    - city_id
+    - origin_location_id
+    - destination_location_id
+    - service_type
+    - pricing_tier
+    - request_snapshot_redacted
+    - package_snapshot
+    - total_cents
+    - minimum_total_cents_snapshot
+    - pricing_policy_version
+    - status
+    - expires_at
+    rules:
+    - single-use through UNIQUE orders.quote_id
+    - snapshot redacted contains no plaintext PII
+  Order:
+    required:
+    - id
+    - public_id
+    - quote_id
+    - owner_org_id
+    - city_id
+    - status
+    - pricing_tier
+    - total_cents
+    - version
+    versioned: true
+    rules:
+    - commercial ownership never changes silently
+    - CLOSED becomes final when claim window expires
+  DriverPosition:
+    required:
+    - id
+    - driver_id
+    - org_id
+    - city_id
+    - client_event_id
+    - point
+    - captured_at
+    rules:
+    - deduplicate by driver/client_event
+    - retention governed by GATE-007
+  ProofUploadSession:
+    required:
+    - id
+    - order_id
+    - object_key_quarantine
+    - status
+    - expires_at
+    mutable: true
+  Proof:
+    required:
+    - id
+    - order_id
+    - upload_session_id
+    - proof_type
+    - object_key
+    - sha256
+    - captured_at
+    immutable: true
+  OrderEvent:
+    required:
+    - id
+    - order_id
+    - owner_org_id
+    - event_type
+    - aggregate_version
+    - occurred_at
+    immutable: true
+    optional:
+    - public_event_code
+    rules:
+    - private by default when public_event_code is null
+    - public projection exposes code/time only and never raw payload
+  OutboxEvent:
+    required:
+    - id
+    - owner_org_id
+    - tenant_context
+    - topic
+    - payload
+    - status
+    - attempts
+    - available_at
+    - created_at
+    rules:
+    - content immutable after insert
+    - claim assigns lease_token and lease_expires_at
+    - settle requires matching lease_token and PROCESSING state
+    - runtime roles have no direct SELECT/UPDATE/DELETE
+    - application supplies all insert values and uses no RETURNING
+  LocationOutboxEvent:
+    required:
+    - id
+    - owner_org_id
+    - driver_position_id
+    - payload
+    - status
+    - attempts
+    - available_at
+    - created_at
+    rules:
+    - driver_position_id is unique but has no foreign key
+    - separate low-priority consumer and lag metric
+    - same lease-protected lifecycle as business outbox
+    - global uniqueness strategy must be revisited before partitioning this lane
+  CodTransaction:
+    required:
+    - id
+    - order_id
+    - amount_cents
+    - status
+    rules:
+    - RECORDED before delivery if COD expected
+    - RECONCILED before CLOSED
+  SettlementLine:
+    required:
+    - id
+    - settlement_id
+    - line_type
+    - amount_cents
+    - source_reference
+    immutable: true
+  OrderAcceptance:
+    required:
+    - id
+    - order_id
+    - quote_id
+    - owner_org_id
+    - terms_version
+    - privacy_version
+    - accepted_at_client
+    - recorded_at_server
+    - acceptance_channel
+    - evidence_schema_version
+    - evidence_hash
+    immutable: true
+    rules:
+    - one acceptance per order
+    - evidence_hash is SHA-256 over OrderAcceptanceCanonicalForm v1 UTF-8 bytes
+    - created inside quote_snapshot_to_order transaction
+    - IP and user-agent are prohibited until GATE-007 approval
+order_state_machine:
+  initial: DRAFT
+  statuses:
+  - DRAFT
+  - CONFIRMED
+  - READY_FOR_PICKUP
+  - ASSIGNED
+  - AT_PICKUP
+  - PICKED_UP
+  - IN_TRANSIT
+  - DELIVERING
+  - FAILED_ATTEMPT
+  - RESCHEDULED
+  - RETURNING
+  - RETURNED
+  - DELIVERED
+  - CLOSED
+  - CLAIM_OPEN
+  - CLAIM_RESOLVED
+  - CANCELLED
+  terminal_immediate:
+  - RETURNED
+  - CLAIM_RESOLVED
+  - CANCELLED
+  terminal_after_time:
+  - state: CLOSED
+    condition: now >= claim_window_ends_at and finalized_at is set
+  transitions:
+    DRAFT:
+    - CONFIRMED
+    - CANCELLED
+    CONFIRMED:
+    - READY_FOR_PICKUP
+    - CANCELLED
+    READY_FOR_PICKUP:
+    - ASSIGNED
+    - CANCELLED
+    ASSIGNED:
+    - AT_PICKUP
+    - READY_FOR_PICKUP
+    - CANCELLED
+    AT_PICKUP:
+    - PICKED_UP
+    - FAILED_ATTEMPT
+    - CANCELLED
+    PICKED_UP:
+    - IN_TRANSIT
+    - RETURNING
+    IN_TRANSIT:
+    - DELIVERING
+    - FAILED_ATTEMPT
+    - RETURNING
+    DELIVERING:
+    - DELIVERED
+    - FAILED_ATTEMPT
+    FAILED_ATTEMPT:
+    - RESCHEDULED
+    - RETURNING
+    - DELIVERING
+    RESCHEDULED:
+    - READY_FOR_PICKUP
+    - ASSIGNED
+    - DELIVERING
+    RETURNING:
+    - RETURNED
+    DELIVERED:
+    - CLOSED
+    - CLAIM_OPEN
+    CLOSED:
+    - CLAIM_OPEN
+    CLAIM_OPEN:
+    - CLAIM_RESOLVED
+  guards:
+    CONFIRMED:
+    - valid_active_quote
+    - payer_acceptance
+    - restricted_goods_check
+    ASSIGNED:
+    - eligible_driver
+    - capacity_available
+    - assignment_cost_present
+    PICKED_UP:
+    - pickup_proof_complete
+    DELIVERED:
+    - delivery_proof_complete
+    - if_cod_expected_then_cod_status_recorded_or_reconciled
+    CLOSED:
+    - no_unresolved_incident
+    - if_cod_expected_then_cod_status_reconciled
+    - financial_reconciliation_complete
+    - claim_window_ends_at_set
+    CLAIM_OPEN:
+    - now_before_or_equal_claim_window_ends_at
+    - claim_reason_present
+    CANCELLED:
+    - cancellation_reason_present
+    - if_from_at_pickup_then_custody_not_acquired
+    FAILED_ATTEMPT:
+    - attempt_stage_recorded
+    - custody_acquired_recorded
+    RETURNING:
+    - custody_acquired_true
+    DELIVERING:
+    - if_from_failed_attempt_or_rescheduled_then_custody_acquired_true_and_valid_assignment
+  prohibited:
+  - FAILED_ATTEMPT -> DELIVERED
+  - RESCHEDULED -> DELIVERING when custody_acquired=false
+  - CLAIM_OPEN after claim_window_ends_at
+authorization_invariants:
+- 401 when no valid authentication token exists
+- 403 when an authenticated actor can see the tenant resource but lacks a capability
+- 404 when resource is absent, belongs to another tenant, or public tracking token is invalid/expired/revoked
+- 404 bodies and timing must not reveal foreign-resource existence
+- bootstrap functions are the only pre-tenant database access path
+- server derives SignalR groups; clients cannot select arbitrary tenant groups
+- all tenant EF queries execute inside an explicit transaction with set_config(..., true)
+- queries outside transaction fail closed and raise an architectural diagnostic in development/test
+pricing_invariants:
+- Pricing.Domain is authoritative for pricing_tier and minimum_total_cents_snapshot
+- SQL checks are coherence backstops, not proof that tier selection was correct
+- BUSINESS_200_499 and BUSINESS_500_PLUS require consolidated_route or valid financial_override
+- total_cents must be >= minimum_total_cents_snapshot unless override
+- GATE-011 determines tax calculation but cannot change the frozen minimum snapshot retroactively
+transaction_coordinator_allowlist:
+- quote_snapshot_to_order
+- assignment_to_order_status_event
+- proof_custody_to_order_transition
+- cod_reconciliation_to_close
+- external_offer_acceptance_to_assignment
+privacy_invariants:
+- request_snapshot_redacted contains no plaintext address/contact/phone/access notes
+- driver location is worker personal data and is included in GATE-007 retention/ARCO
+- proof and audit records are append-only; privacy actions use access restriction, pseudonymization or cryptographic erasure
+  under approved policy
+outbox_invariants:
+- financial/custody/order events use platform.outbox_events with priority
+- GPS uses platform.location_outbox_events and may publish only significant/throttled positions
+- Worker credential is NOBYPASSRLS and mutates lifecycle only through SECURITY DEFINER functions
+- claim assigns lease_token; settle rejects stale or mismatched leases
+- stale PROCESSING is requeued; max-attempt poison messages become DEAD
+- purge is owned by paqueteria_maintenance and can delete only old PROCESSED/DEAD rows
+- runtime producers provide all inserted values and emit no INSERT RETURNING
+public_tracking_contract:
+  public_statuses:
+  - CREATED
+  - SCHEDULED
+  - IN_TRANSIT
+  - OUT_FOR_DELIVERY
+  - DELIVERY_EXCEPTION
+  - DELIVERED
+  - RETURNING
+  - RETURNED
+  - CANCELLED
+  internal_to_public:
+    DRAFT: CREATED
+    CONFIRMED: CREATED
+    READY_FOR_PICKUP: SCHEDULED
+    ASSIGNED: SCHEDULED
+    AT_PICKUP: SCHEDULED
+    PICKED_UP: IN_TRANSIT
+    IN_TRANSIT: IN_TRANSIT
+    DELIVERING: OUT_FOR_DELIVERY
+    FAILED_ATTEMPT: DELIVERY_EXCEPTION
+    RESCHEDULED: SCHEDULED
+    RETURNING: RETURNING
+    RETURNED: RETURNED
+    DELIVERED: DELIVERED
+    CLOSED: DELIVERED
+    CLAIM_OPEN: DELIVERED
+    CLAIM_RESOLVED: DELIVERED
+    CANCELLED: CANCELLED
+  public_event_codes:
+  - ORDER_CREATED
+  - PICKUP_SCHEDULED
+  - PICKED_UP
+  - IN_TRANSIT
+  - OUT_FOR_DELIVERY
+  - DELIVERY_ATTEMPTED
+  - RESCHEDULED
+  - DELIVERED
+  - RETURNING
+  - RETURNED
+  - CANCELLED
+  rules:
+  - new order event types remain private unless domain explicitly assigns public_event_code
+  - SQL projection returns no public result when internal state has no mapping
+  - C# mapping throws PublicStatusMappingException on missing mapping and emits operational alert
+  - CI contract test compares SQL and C# outputs for exactly all 17 internal states
+token_hash_contract:
+  token_entropy: 32 cryptographically random bytes
+  token_encoding: Base64URL without padding
+  hash_algorithm: SHA-256
+  hash_input: exact UTF-8 bytes of the encoded token, without trim or normalization
+  hash_storage: 32-byte bytea
+  sql_expression: extensions.digest(pg_catalog.convert_to(p_token,'UTF8'),'sha256')
+  contract_test: C# SHA256.HashData and PostgreSQL digest produce identical bytes for fixed vectors
+legal_acceptance_invariants:
+- canonical form is fixed-order compact JSON specific to order-acceptance-v1, not general JCS
+- UTF-8 without BOM; UUID D lowercase; UTC timestamp yyyy-MM-ddTHH:mm:ss.fffffffZ; channel uppercase
+- canonical key order is schema_version, order_id, quote_id, owner_org_id, actor_id, terms_version, privacy_version, accepted_at_client,
+  acceptance_channel
+- hash vectors are permanent compatibility fixtures
+- order_acceptances is RLS protected and append-only
+provisioning_invariants:
+- bootstrap functions never write
+- new user and organization UUIDs are generated by the application
+- new identifiers are added to transaction-local RLS context only for the provisioning transaction
+- identity_subject must match the validated OIDC principal
+- organization, initial membership and audit are atomic
+money_invariants:
+- all money is signed 64-bit integer cents in persistence and int64 in API contracts
+- currency is explicit and currently constrained to MXN
+- no floating point arithmetic is allowed for money

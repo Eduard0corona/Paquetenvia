@@ -1,0 +1,242 @@
+meta:
+  document_id: AI-20
+  source_version: '0.4'
+  status: REVIEWED_NOT_APPLIED
+  purpose: machine-readable remediation plan after independent verification
+summary:
+  findings_total: 20
+  blocker_or_p0: [F-001, F-002, F-003, F-004, F-005, F-007, F-008, F-009, F-011, F-013]
+  before_real_pilot: [F-010, F-014, F-016, F-018]
+  before_local_growth: [F-012, F-015, F-019, F-020]
+  long_term_domain: [F-017]
+findings:
+- id: F-001
+  source_number: 1
+  verdict: CONFIRMED_WITH_NUANCE
+  severity: HIGH
+  title: Runtime grants violate append-only contracts
+  decision: Restrict UPDATE/DELETE on immutable business records; outbox payload immutable but delivery-state columns mutable by worker.
+  required_changes:
+  - column/table-level grants
+  - immutable payload trigger
+  - update OutboxEvent domain semantics
+  dependencies: [F-004, F-010]
+- id: F-002
+  source_number: 2
+  verdict: CONFIRMED
+  severity: BLOCKER
+  title: RLS identity and public-tracking bootstrap is undefined
+  decision: Use narrowly scoped SECURITY DEFINER functions with fixed search_path and minimal projections.
+  required_changes:
+  - identity bootstrap function
+  - public tracking projection function
+  - ADR and integration/security tests
+  dependencies: [F-004, F-011]
+- id: F-003
+  source_number: 3
+  verdict: CONFIRMED
+  severity: BLOCKER
+  title: POD upload contracts conflict
+  decision: Signed upload session to quarantine followed by JSON proof finalization.
+  required_changes:
+  - replace multipart proof contract
+  - upload-session endpoints
+  - offline IndexedDB flow contract
+  - quarantine validation worker
+  dependencies: []
+- id: F-004
+  source_number: 4
+  verdict: CONFIRMED
+  severity: HIGH
+  title: Physical database schema strategy conflicts
+  decision: Use physical module schemas in one PostgreSQL database and parameterized grants/RLS.
+  required_changes:
+  - schema-qualified DDL
+  - module migrations and DbContexts
+  - grants/default privileges per schema
+  - security/platform schemas
+  dependencies: []
+- id: F-005
+  source_number: 5
+  verdict: CONFIRMED
+  severity: HIGH
+  title: Quote may create multiple orders
+  decision: One quote creates at most one order.
+  required_changes:
+  - unique orders.quote_id
+  - quote consumption metadata
+  - 409 error contract
+  dependencies: []
+- id: F-006
+  source_number: 6
+  verdict: CONFIRMED
+  severity: HIGH
+  title: Multi-city invariants absent from schema
+  decision: Add cities, service areas and operating zones to first migration.
+  required_changes:
+  - geographic master tables
+  - location/pricing/order relations and snapshots
+  - driver/ally area authorization
+  dependencies: [F-004]
+- id: F-007
+  source_number: 7
+  verdict: CONFIRMED
+  severity: HIGH
+  title: Rescheduled delivery lacks custody guard
+  decision: RESCHEDULED to DELIVERING requires active custody and assignment; otherwise require pickup flow.
+  required_changes:
+  - state guard
+  - matrix and acceptance tests
+  dependencies: []
+- id: F-008
+  source_number: 8
+  verdict: CONFIRMED_WITH_NUANCE
+  severity: HIGH
+  title: OpenAPI does not cover MVP-0 contracts
+  decision: Complete API, active organization context and uniform resource-concealment policy.
+  required_changes:
+  - location/zone/quote/context/document endpoints
+  - X-Organization-Id contract
+  - 401/403/404 responses
+  - route version
+  - typed offer eligibility schema
+  dependencies: [F-002, F-006]
+- id: F-009
+  source_number: 9
+  verdict: CONFIRMED
+  severity: HIGH
+  title: Quote snapshot duplicates plaintext PII
+  decision: Pricing snapshot is non-PII; encrypted address snapshot only if legally required.
+  required_changes:
+  - snapshot schema
+  - encryption/key-version contract if needed
+  - retention rule
+  dependencies: []
+- id: F-010
+  source_number: 10
+  verdict: CONFIRMED
+  severity: HIGH
+  title: Global BYPASSRLS worker role is overprivileged
+  decision: Normal workers are NOBYPASSRLS; cross-tenant claims/elevation use scoped functions or roles.
+  required_changes:
+  - worker role split
+  - outbox claim function
+  - tenant-local processing transaction
+  - privilege tests
+  dependencies: [F-002, F-011]
+- id: F-011
+  source_number: 11
+  verdict: CONFIRMED
+  severity: BLOCKER
+  title: Session-scoped RLS settings are unsafe with pooling
+  decision: Use set_config(..., true) inside every unit-of-work transaction and test with PgBouncer transaction pooling.
+  required_changes:
+  - tenant transaction interceptor
+  - pooled-connection regression tests
+  dependencies: [F-002]
+- id: F-012
+  source_number: 12
+  verdict: CONFIRMED_WITH_NUANCE
+  severity: MEDIUM_HIGH
+  title: GPS telemetry can saturate business outbox
+  decision: Batch ingestion plus separate low-priority telemetry outbox/topic and publication throttling.
+  required_changes:
+  - batch request schema
+  - topic/index/consumer separation
+  - coalescing rules
+  - independent metrics and retention
+  dependencies: []
+- id: F-013
+  source_number: 13
+  verdict: CONFIRMED
+  severity: HIGH
+  title: Low-price guard depends incorrectly on net amount
+  decision: Enforce by pricing tier/rule class rather than net_cents threshold.
+  required_changes:
+  - tier code on quote/order
+  - replace SQL checks
+  - tax gate compatibility test
+  dependencies: []
+- id: F-014
+  source_number: 14
+  verdict: CONFIRMED
+  severity: HIGH
+  title: COD state guards lack a data model
+  decision: Either disable COD in MVP-0 or implement minimal cash ledger; settlement lines required before reconciliation metric.
+  required_changes:
+  - cod_required and expected amount
+  - cash collection/reconciliation entities
+  - settlement lines
+  - conditional guards
+  dependencies: []
+- id: F-015
+  source_number: 15
+  verdict: OPPORTUNITY_CONFIRMED
+  severity: MEDIUM
+  title: Parent-join RLS will be expensive on high-volume children
+  decision: Denormalize tenant IDs before partitioning and use typed uuid-array tenant context.
+  required_changes:
+  - tenant columns and consistency enforcement
+  - compound tenant/time indexes
+  - RLS simplification
+  dependencies: [F-006]
+- id: F-016
+  source_number: 16
+  verdict: CONFIRMED
+  severity: MEDIUM
+  title: Schema hygiene gaps
+  decision: Add idempotency expiry maintenance, DB enum/check parity and partial active-membership uniqueness.
+  required_changes:
+  - expires_at index and cleanup job
+  - enum/check constraints
+  - partial unique membership index
+  dependencies: []
+- id: F-017
+  source_number: 17
+  verdict: OPPORTUNITY_CONFIRMED
+  severity: MEDIUM
+  title: Happy-path order lacks definitive lifecycle completion
+  decision: Prefer separate Claim aggregate with claim_deadline; otherwise add FINALIZED state.
+  required_changes:
+  - legal/commercial claim-window gate
+  - archival/lifecycle rules
+  dependencies: []
+- id: F-018
+  source_number: 18
+  verdict: OPPORTUNITY_CONFIRMED
+  severity: MEDIUM
+  title: Driver location retention is not explicit enough
+  decision: Privacy gate must explicitly cover worker telemetry and partition/retention before local growth.
+  required_changes:
+  - telemetry privacy policy
+  - partition and purge plan
+  - access audit
+  dependencies: [F-012]
+- id: F-019
+  source_number: 19
+  verdict: OPPORTUNITY_CONFIRMED
+  severity: MEDIUM
+  title: Shared transaction coordinator can erode module boundaries
+  decision: Executable allowlist of approved atomic workflows; any addition requires ADR.
+  required_changes:
+  - coordinator use registry
+  - architecture test
+  dependencies: [F-004]
+- id: F-020
+  source_number: 20
+  verdict: OPPORTUNITY_CONFIRMED
+  severity: MEDIUM
+  title: TrackingAndLocation extraction boundary is not prepared operationally
+  decision: Separate topic, consumers, storage/retention and contracts without extracting a service yet.
+  required_changes:
+  - telemetry boundary contract
+  - independent worker profile and metrics
+  - extraction readiness test
+  dependencies: [F-012, F-015]
+release_gates:
+- id: CONTRACT_HARDENING_V0_5
+  must_close: [F-001, F-002, F-003, F-004, F-005, F-006, F-007, F-008, F-009, F-010, F-011, F-013]
+- id: REAL_PILOT_READINESS
+  must_close: [F-014, F-016, F-018]
+- id: LOCAL_GROWTH_READINESS
+  must_close: [F-012, F-015, F-019, F-020]

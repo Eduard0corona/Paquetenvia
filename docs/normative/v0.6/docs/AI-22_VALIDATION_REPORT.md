@@ -1,0 +1,41 @@
+# AI-22 — Validation report v0.5
+
+Checks: 37
+
+- PASS — YAML specs/AI-02_PRODUCT_CONTRACT.yaml
+- PASS — YAML specs/AI-04_DOMAIN_MODEL.yaml
+- PASS — YAML contracts/AI-05_OPENAPI.yaml
+- PASS — YAML contracts/AI-12_SIGNALR_CONTRACT.yaml
+- PASS — YAML specs/AI-07_UI_CONTRACTS.yaml
+- PASS — YAML specs/AI-08_BACKLOG.yaml
+- PASS — YAML specs/AI-10_DECISIONS_AND_GATES.yaml
+- PASS — YAML specs/AI-15_SCALABILITY_CONTRACT.yaml
+- PASS — OpenAPI internal refs
+- PASS — OpenAPI no multipart
+- PASS — OpenAPI required paths: []
+- PASS — Private endpoints organization context
+- PASS — Status product/domain
+- PASS — Status product/OpenAPI
+- PASS — Status product/SQL: ['DRAFT', 'CONFIRMED', 'READY_FOR_PICKUP', 'ASSIGNED', 'AT_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERING', 'FAILED_ATTEMPT', 'RESCHEDULED', 'RETURNING', 'RETURNED', 'DELIVERED', 'CLOSED', 'CLAIM_OPEN', 'CLAIM_RESOLVED', 'CANCELLED']
+- PASS — Physical schemas complete: []
+- PASS — SQL FK references exist: []
+- PASS — Quote single-use
+- PASS — PII redacted snapshot
+- PASS — Multi-city tables
+- PASS — Outbox claim index
+- PASS — Idempotency expiry index
+- PASS — Worker NOBYPASSRLS
+- PASS — Bootstrap role
+- PASS — Append-only revoke
+- PASS — Outbox column grants
+- PASS — SignalR event references
+- PASS — SignalR no client commands
+- PASS — Backlog unique IDs
+- PASS — Backlog dependencies exist: []
+- PASS — Backlog acyclic: []
+- PASS — Backlog item count: meta=54 actual=54
+- PASS — Rescheduled custody guard
+- PASS — HTTP visibility invariants
+- PASS — Transaction coordinator allowlist
+- PASS — GPS lane separate
+- PASS — No missing source_documents reference

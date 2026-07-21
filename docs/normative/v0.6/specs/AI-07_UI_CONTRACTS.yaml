@@ -1,0 +1,190 @@
+principles:
+- mobile first
+- Spanish Mexico
+- keyboard accessible critical flows
+- never rely on color alone
+- show price breakdown before confirmation
+- mask sensitive information by role
+routes:
+  /login:
+    roles:
+    - all authenticated
+    release: MVP-0
+  /ops/dashboard:
+    roles:
+    - platform_admin
+    - dispatcher
+    - customer_support
+    release: MVP-0
+    widgets:
+    - orders_by_status
+    - capacity_alerts
+    - incidents
+    - map_list_toggle
+  /ops/orders/new:
+    roles:
+    - platform_admin
+    - dispatcher
+    release: MVP-0
+    steps:
+    - origin
+    - destination
+    - package
+    - service_window
+    - quote
+    - acceptance
+  /ops/orders/:id:
+    roles:
+    - authorized
+    release: MVP-0
+    sections:
+    - summary
+    - timeline
+    - assignment
+    - proofs
+    - incidents
+    - price_audit
+  /driver/stops:
+    roles:
+    - own_driver
+    - external_driver
+    release: MVP-0
+    offline: true
+  /driver/stops/:id:
+    roles:
+    - assigned_driver
+    release: MVP-0
+    actions:
+    - check_in
+    - pickup_proof
+    - start_transit
+    - delivery_proof
+    - fail_attempt
+    - incident
+  /track/:token:
+    roles:
+    - public
+    release: MVP-0
+    data_minimization: true
+  /business/orders:
+    roles:
+    - business_admin
+    - business_operator
+    release: MVP-2
+  /ally/network:
+    roles:
+    - ally_admin
+    - ally_dispatcher
+    release: MVP-3
+  /finance/settlements:
+    roles:
+    - finance
+    - platform_admin
+    release: MVP-1
+screen_contracts:
+  dispatch_dashboard:
+    must_show:
+    - public_id
+    - owner_brand
+    - visible_status
+    - pickup_window
+    - delivery_window
+    - zone
+    - assignment_type
+    - driver
+    - cost_warning
+    filters:
+    - status
+    - zone
+    - client
+    - owner_org
+    - operator_org
+    - service_type
+    - date
+    actions:
+    - open_order
+    - assign_own
+    - publish_external_offer
+    - add_to_route
+    - open_incident
+    forbidden:
+    - show another ally private tariff
+    - bulk status change without preview
+  create_order:
+    validation:
+    - Culiacán coverage
+    - phone format
+    - package limits
+    - restricted goods acknowledgment
+    - quote not expired
+    price_display:
+    - net
+    - tax
+    - recargos
+    - total
+    - rule explanation
+    low_price_guard: block confirmation at <=52 MXN net unless route flag or authorized override
+  driver_stop:
+    offline_cache:
+    - assigned stop minimum data
+    - pending events
+    - pending proof metadata
+    privacy:
+    - masked phone or relay
+    - no client account history
+    completion: cannot complete without required POD unless supervisor override ID
+  public_tracking:
+    show:
+    - brand
+    - public_id
+    - simplified status
+    - timeline
+    - delivery window
+    - support channel
+    hide:
+    - driver full name
+    - driver phone
+    - exact live location by default
+    - internal cost
+    - incident private notes
+    public_statuses:
+    - CREATED
+    - SCHEDULED
+    - IN_TRANSIT
+    - OUT_FOR_DELIVERY
+    - DELIVERY_EXCEPTION
+    - DELIVERED
+    - RETURNING
+    - RETURNED
+    - CANCELLED
+    timeline_codes:
+    - ORDER_CREATED
+    - PICKUP_SCHEDULED
+    - PICKED_UP
+    - IN_TRANSIT
+    - OUT_FOR_DELIVERY
+    - DELIVERY_ATTEMPTED
+    - RESCHEDULED
+    - DELIVERED
+    - RETURNING
+    - RETURNED
+    - CANCELLED
+    fail_closed: invalid/expired/revoked token, cross-tenant reference or unmapped internal state all render the same not-found
+      experience
+prototype_file: prototype/index.html
+meta:
+  version: '0.6'
+  status: NORMATIVE
+global_rules:
+- organization switcher uses /me/organization-contexts and sends X-Organization-Id
+- 404 screen is identical for missing and cross-tenant resources
+- POD offline queue stores upload metadata/idempotency key, never unencrypted PII in logs
+driver_location:
+  batch_size: 1-20
+  response: per-item accepted/duplicate/rejected
+  offline: retain until REST confirms each client_event_id
+proof_flow:
+- request signed upload session
+- upload directly to object storage
+- wait for READY/validation
+- finalize proof metadata and transition

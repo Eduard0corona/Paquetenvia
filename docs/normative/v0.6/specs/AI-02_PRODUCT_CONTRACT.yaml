@@ -1,0 +1,261 @@
+meta:
+  project: '[NOMBRE COMERCIAL PENDIENTE]'
+  version: '0.6'
+  date: '2026-07-20'
+  locale: es-MX
+  timezone: America/Mazatlan
+  currency: MXN
+mission: Coordinar envíos exclusivamente locales en Culiacán mediante flota propia, repartidores externos y paqueterías aliadas,
+  con trazabilidad y economía unitaria por orden.
+scope:
+  included:
+  - PWA web para administración, negocios, aliados y repartidores
+  - tracking público sin instalación
+  - órdenes individuales y CSV
+  - cotización por reglas
+  - asignación manual asistida
+  - POD de recolección y entrega
+  - incidencias, reintentos y devoluciones
+  - estados de cuenta y liquidaciones exportables
+  - multi-tenancy white-label
+  excluded:
+  - envíos regionales o nacionales
+  - marketplace público abierto
+  - optimización avanzada/IA
+  - wallet o crédito financiero complejo
+  - apps nativas iOS/Android
+  - integraciones profundas con todos los POS
+business_decisions:
+  coverage: Culiacán y zonas explícitamente autorizadas
+  fleet_model: mixed
+  assignment_policy:
+    own: rutas densas, cuentas recurrentes, COD, alto valor/control
+    external: urgencias, picos, aislados, zonas alejadas
+  pricing_mxn:
+    occasional: 75
+    business_1_49: 69
+    business_50_199: 59
+    business_200_499: 52
+    business_500_plus_route_from: 45
+  low_price_guard: Los precios 52 y 45 requieren consolidated_route=true o financial_override con actor, motivo y vigencia.
+  base_scenario:
+    requests_month: 1000
+    success_rate: 0.93
+    own_share_successful: 0.52
+    own_drivers: 1
+  commercial_target:
+    active_businesses: 20
+    anchor_clients: 5 clientes de 80-120 solicitudes/mes
+    medium_clients: 12-15 clientes de 20-50 solicitudes/mes
+    occasional_users: 20-50
+    max_client_concentration: 0.1
+  allies:
+    pilot_days: 60
+    pilot_allies: 3
+    digitized_deliveries_target: 300
+    backup_deliveries_target: 50-100
+    non_solicitation: true
+  pricing_guard: pricing_tier and minimum_total_cents_snapshot are persisted in quote/order; domain is authoritative and SQL
+    checks are backstops.
+actors:
+- platform_admin
+- dispatcher
+- customer_support
+- finance
+- business_admin
+- business_operator
+- ally_admin
+- ally_dispatcher
+- own_driver
+- external_driver
+- recipient
+- occasional_user
+mvp_success_metrics:
+  orders_with_complete_events_and_pod: '>=0.98'
+  assignments_with_cost_owner_audit: '1.00'
+  cross_tenant_access_incidents: 0
+  settlement_reconciliation_difference: <0.005
+  availability_monthly: '>=0.995'
+  critical_screen_p95_seconds: <2
+  order_creation_p95_seconds: <3 excluding external providers
+release_sequence:
+- MVP-0_INTERNAL
+- MVP-1_PILOT
+- MVP-2_BUSINESSES
+- MVP-3_ALLIES
+- V1_SCALE
+authoritative_statuses:
+- DRAFT
+- CONFIRMED
+- READY_FOR_PICKUP
+- ASSIGNED
+- AT_PICKUP
+- PICKED_UP
+- IN_TRANSIT
+- DELIVERING
+- FAILED_ATTEMPT
+- RESCHEDULED
+- RETURNING
+- RETURNED
+- DELIVERED
+- CLOSED
+- CLAIM_OPEN
+- CLAIM_RESOLVED
+- CANCELLED
+human_gates:
+- legal approval before production terms/privacy/contracts
+- accountant approval before CFDI and tax configuration
+- insurer approval before advertised coverage
+- finance approval for final pricing and credit
+- operations approval for service zones and SLA
+technical_baseline:
+  backend: .NET 10 LTS, ASP.NET Core Web API, C#
+  frontend: Next.js + React + TypeScript PWA
+  realtime: ASP.NET Core SignalR; REST remains source of truth
+  persistence: PostgreSQL/PostGIS via EF Core/Npgsql; pgcrypto isolated in extensions schema
+  cache_and_scale: Redis
+  background_processing: .NET Worker Service + lease-protected transactional outbox lifecycle
+  architecture_style: modular monolith with Clean Architecture per module
+  api_scaling: stateless horizontal replicas
+  consistency: PostgreSQL source of truth + transactional outbox
+  files: S3-compatible object storage
+  evolution: scale infrastructure first; selective service extraction only by metrics and ADR
+  contract_version: '0.6'
+  database_layout: one PostgreSQL schema per normative business module plus platform/security schemas
+  tenant_context: transaction-scoped set_config(..., true) with parameterized uuid[] and retry reapplication
+  proof_upload: signed URL to quarantine, validation/promotion, then JSON POD finalization
+  location_telemetry: batch REST ingestion; separate low-priority location outbox and consumer
+  public_tracking: SHA-256 token hash symmetry C#/SQL; fail-closed public status/event projection
+  money_storage: signed 64-bit integer cents in SQL and OpenAPI int64
+non_functional_architecture:
+  tenant_isolation: API authorization + PostgreSQL RLS + tenant-aware cache/storage/SignalR
+  resilience: timeouts, idempotent retries, circuit breakers and graceful degradation
+  observability: OpenTelemetry traces, metrics and structured logs with tenant/correlation redaction
+  deployment: containerized web/api/worker; managed infrastructure preferred
+  multi_city_ready: true
+  scalability_contract: specs/AI-15_SCALABILITY_CONTRACT.yaml
+contract_hardening:
+  quote_to_order:
+    quote_persists:
+    - origin_location_id
+    - destination_location_id
+    - city_id
+    - service_area_id
+    - service_type
+    - pricing_tier
+    - consolidated_route
+    - request_snapshot_redacted
+    - package_snapshot
+    - minimum_total_cents_snapshot
+    - pricing_policy_version
+    single_use: orders.quote_id is UNIQUE; quote transitions ACTIVE -> USED in the same transaction as order creation.
+    pii: request_snapshot_redacted contains no contact name, telephone, access notes or plaintext address; required PII is
+      encrypted separately.
+    order_creation: CreateOrder accepts quote_id and payer acceptance only; commercial, geographic and package fields are
+      copied from the valid quote.
+  identity_and_memberships:
+    authorization: roles are scoped by organization_memberships; X-Organization-Id selects one active context after membership
+      validation.
+    bootstrap: identity resolution uses a SECURITY DEFINER function owned by paqueteria_bootstrap NOLOGIN BYPASSRLS with column-limited
+      SELECT and EXECUTE granted only to paqueteria_app.
+    http_visibility: 401 for invalid authentication; 403 for missing capability inside a visible tenant; 404 for missing/cross-tenant/invalid
+      public token.
+  database_roles_and_rls:
+    runtime: paqueteria_app and paqueteria_worker are NOBYPASSRLS, own no tables and have no direct SELECT/UPDATE/DELETE on
+      outbox lanes.
+    privileged_functions: bootstrap, outbox lifecycle and retention are isolated in dedicated NOLOGIN BYPASSRLS function-owner
+      roles; runtime credentials cannot SET ROLE to them.
+    context: all tenant queries run inside an explicit transaction with transaction-local user/org settings; queries outside
+      a transaction fail closed.
+    append_only: order_events, order_acceptances, proofs and audit_logs deny UPDATE/DELETE; outbox lifecycle is function-only
+      and lease-protected.
+    outbox_producers: runtime producers supply UUID, timestamps, PENDING status, attempts=0 and availability explicitly; EF
+      mappings use ValueGeneratedNever and INSERT emits no RETURNING.
+  physical_schemas:
+    business:
+    - identity
+    - organizations
+    - clients
+    - locations
+    - pricing
+    - orders
+    - dispatch
+    - drivers
+    - routes
+    - custody
+    - incidents
+    - finance
+    - allies
+    - notifications
+    - reporting
+    technical:
+    - platform
+    - security
+    - extensions
+    rule: one schema per module; platform/security are technical application schemas; extensions is reserved for relocatable
+      extensions; cross-schema foreign keys must be allow-listed and architecture-tested.
+  driver_location:
+    ingestion: POST /driver/me/location-updates accepts 1-20 positions and returns one result per client_event_id.
+    deduplication: unique(driver_id, client_event_id) with mixed ACCEPTED/DUPLICATE batch results.
+    distribution: persist every accepted point; enqueue only throttled/significant points in location_outbox_events; public
+      tracking never receives exact coordinates.
+  pod_privacy:
+    flow: create upload session -> signed URL quarantine upload -> validate/promote -> finalize proof metadata/hash in transaction.
+    immutability: final proofs are append-only; mutable upload lifecycle lives in proof_upload_sessions.
+    gate: GATE-007 covers customer PII, POD, driver documents and driver location telemetry retention/ARCO.
+  finance:
+    cod_mvp0: delivery with COD requires a RECORDED cod_transaction; CLOSED requires RECONCILED.
+    settlement_audit: settlements require immutable settlement_lines/source_reference for reconciliation.
+  lifecycle:
+    claim_window: CLOSED accepts claims only until claim_window_ends_at; after expiration a job sets finalized_at. CLAIM_RESOLVED
+      is final immediately.
+    archival: archived_at follows approved retention; state remains CLOSED or CLAIM_RESOLVED to preserve the 17-state contract.
+  extension_and_token_hashing:
+    pgcrypto: installed in extensions schema; functions qualify extensions.digest and convert token text to UTF-8 bytes explicitly.
+    postgis: remains in public; runtime roles have USAGE but no CREATE on public.
+    token_format: 32 random bytes encoded Base64URL without padding; exact token string is hashed.
+    hash: SHA-256 over exact UTF-8 bytes; stored as 32-byte bytea; C# and PostgreSQL contract test must match.
+  outbox_lifecycle:
+    business_lane: claim/settle/requeue functions owned by paqueteria_outbox_executor; purge owned by paqueteria_maintenance.
+    location_lane: same lifecycle in an independent low-priority lane.
+    lease: each claim assigns a new lease_token and lease expiry; settle requires id + matching lease_token + PROCESSING state.
+    runtime_grants: Worker invokes lifecycle functions; it cannot directly SELECT, UPDATE or DELETE outbox rows.
+    recovery: stale PROCESSING rows are requeued in bounded batches; poison messages transition to DEAD.
+    retention: only old PROCESSED/DEAD rows are purgeable; active states are never deleted.
+  public_tracking:
+    statuses:
+    - CREATED
+    - SCHEDULED
+    - IN_TRANSIT
+    - OUT_FOR_DELIVERY
+    - DELIVERY_EXCEPTION
+    - DELIVERED
+    - RETURNING
+    - RETURNED
+    - CANCELLED
+    mapping: AI-04 is normative; SQL projection and C# policy must match all 17 internal states through a contract test.
+    timeline: order_events are private by default; only non-null public_event_code values are exposed, without internal payload.
+    fail_closed: C# throws and alerts on unmapped state; SQL returns no public projection and the anonymous API emits uniform
+      404.
+  legal_acceptance:
+    persistence: orders.order_acceptances is append-only, tenant protected and created atomically with quote consumption/order/event/outbox.
+    canonical_form: OrderAcceptanceCanonicalForm v1 uses a fixed ordered JSON representation, UTF-8 without BOM and SHA-256.
+    fields:
+    - schema_version
+    - order_id
+    - quote_id
+    - owner_org_id
+    - actor_id
+    - terms_version
+    - privacy_version
+    - accepted_at_client
+    - acceptance_channel
+    privacy: IP/user-agent are excluded until GATE-007 explicitly approves them.
+  provisioning:
+    bootstrap: bootstrap role remains read-only and never provisions.
+    first_user: application generates UUID, opens transaction, sets current_user_id to the new UUID and current_org_ids to
+      an empty uuid[] before insert.
+    organization: application pre-authorizes the newly generated organization UUID only within the provisioning transaction,
+      inserts organization + initial membership + audit atomically.
+    tenant_setting: app.current_org_ids is set from a parameterized PostgreSQL uuid[] text representation; empty is {} and
+      never NULL.

@@ -1,0 +1,241 @@
+meta:
+  version: '0.6'
+  status: APPROVED_BASELINE
+  scope: short_and_medium_term
+  principle: scale replicas and infrastructure first; extract services only after measured need
+architectural_invariants:
+- API instances are stateless
+- PostgreSQL is the source of truth
+- SignalR distributes confirmed events and is not a command authority
+- all external side effects originate from a persisted outbox
+- files are stored in S3-compatible object storage, never local persistent disk
+- tenant isolation is enforced in API, RLS, cache keys, storage paths and SignalR groups
+- workers are idempotent and horizontally scalable
+- provider SDKs stay behind adapters
+- no microservice extraction without metrics and ADR
+- tenant context uses transaction-local settings and is reapplied on every retry
+- business outbox and GPS/location outbox have independent claims, consumers, priorities and lag metrics
+- all physical module schemas and grants are created before application migrations are accepted
+- transaction coordinator use is restricted by an executable allow-list
+phases:
+- id: MVP_0_INTERNAL
+  purpose: synthetic validation and architecture correctness
+  topology:
+    web: 1 development instance
+    api: 1 instance
+    worker: 1 instance
+    signalr: in-process connection management
+    database: 1 PostgreSQL/PostGIS instance
+    redis: 1 instance
+    object_storage: MinIO or S3-compatible
+  required_capabilities:
+  - 20 synthetic deliveries end-to-end
+  - cross-tenant tests
+  - outbox retry and deduplication
+  - backup and restore drill
+  - reconnect and REST resynchronization
+- id: LOCAL_LAUNCH
+  purpose: real pilot in one city
+  topology:
+    web: CDN-backed deployment
+    api: 1-2 replicas
+    worker: 1-2 replicas
+    signalr: single node while one API; Redis backplane or managed service before multiple API nodes
+    database: managed PostgreSQL/PostGIS with automated backups and PITR
+    redis: managed or production-grade
+    object_storage: managed S3-compatible
+  required_capabilities:
+  - externalized secrets and data protection keys
+  - readiness/liveness probes
+  - structured telemetry and alerting
+  - provider circuit breakers
+  - load test baseline
+  - documented RPO/RTO approved by owner
+- id: LOCAL_GROWTH
+  purpose: multiple businesses, allies and sustained local volume
+  topology:
+    api: 2-4+ replicas behind load balancer
+    worker: 2-6+ replicas or profiles by consumer
+    signalr: Redis backplane or managed SignalR service
+    database: managed primary; PgBouncer; optional read replica for reporting
+    redis: shared cache/locks/backplane with high availability
+    analytics: materialized views and asynchronous exports
+    edge: CDN/WAF/gateway
+  required_capabilities:
+  - autoscaling policies
+  - queue/outbox lag alerts
+  - query performance budgets
+  - partition plan for high-volume event/location tables
+  - zero-downtime compatible migrations
+  - capacity testing for SignalR and uploads
+- id: REGIONAL_EXPANSION
+  purpose: multiple cities and selective component extraction
+  topology:
+    api: horizontal replicas, possibly region-aware
+    worker: consumers deployed independently by workload
+    eventing: durable event bus only after ADR and extraction need
+    database: partitioning, read replicas, archival; no sharding without separate approval
+    analytics: separate analytical store/warehouse fed asynchronously
+    signalr: managed service preferred when concurrency/SLA justify it
+  required_capabilities:
+  - city/service-area configuration
+  - tenant and geographic isolation tests
+  - data lifecycle and archival
+  - disaster recovery exercise
+  - service extraction playbook and contract compatibility
+scaling_signals:
+  notes: thresholds are engineering triggers, not customer SLA; tune with production baselines
+  api:
+  - metric: http_p95_ms
+    warning: 500
+    critical: 800
+    window: 15m
+  - metric: error_rate
+    warning: 0.01
+    critical: 0.03
+    window: 5m
+  - metric: cpu_utilization
+    warning: 0.7
+    critical: 0.85
+    window: 15m
+  worker:
+  - metric: oldest_outbox_age_seconds
+    warning: 60
+    critical: 120
+  - metric: job_failure_rate
+    warning: 0.01
+    critical: 0.03
+  - metric: worker_cpu_utilization
+    warning: 0.7
+    critical: 0.85
+    window: 15m
+  database:
+  - metric: db_cpu_utilization
+    warning: 0.7
+    critical: 0.85
+    window: 30m
+  - metric: connection_pool_utilization
+    warning: 0.8
+    critical: 0.95
+  - metric: core_query_p95_ms
+    warning: 250
+    critical: 500
+  - metric: replication_lag_seconds
+    warning: 10
+    critical: 30
+    when: read_replica_enabled
+  signalr:
+  - metric: connection_capacity_utilization
+    warning: 0.7
+    critical: 0.85
+  - metric: event_delivery_p95_seconds
+    warning: 2
+    critical: 5
+  - metric: reconnect_rate_spike
+    action: investigate node/network/provider before adding capacity
+  storage:
+  - metric: upload_failure_rate
+    warning: 0.01
+    critical: 0.03
+  - metric: signed_url_generation_p95_ms
+    warning: 250
+    critical: 500
+database_evolution:
+  short_term:
+  - proper indexes
+  - slow query telemetry
+  - connection pooling
+  - PITR backups
+  - read models
+  - partition-compatible driver_positions schema
+  - idempotency expiry cleanup
+  - tenant-context test using actual pooled connections
+  medium_term:
+  - PgBouncer
+  - read replica for reporting
+  - time partitioning for event and location tables
+  - archival policy
+  - materialized views
+  not_before_approval:
+  - sharding
+  - database per tenant
+  - multi-primary writes
+candidate_tables_for_partitioning:
+- orders.order_events
+- drivers.driver_positions
+- platform.audit_logs
+- platform.outbox_events
+- platform.location_outbox_events
+service_extraction_criteria:
+- sustained independent scaling requirement
+- failure isolation requirement
+- independent deployment cadence
+- stable API/event contract
+- clear data ownership
+- measured benefit exceeds operational cost
+- monitoring and runbook exist
+extraction_order_candidates:
+- component: Notifications
+  reason: provider retries and failure isolation
+- component: TrackingAndLocation
+  reason: high read/write and realtime volume
+- component: FileProcessing
+  reason: CPU/IO intensive evidence processing
+- component: ReportingAnalytics
+  reason: protect transactional database
+- component: RoutingOptimization
+  reason: compute intensive and independently scalable
+- component: Finance
+  reason: only when reconciliation/compliance complexity requires isolation
+components_to_keep_together:
+- components:
+  - Orders
+  - Dispatch
+  until: separation provides measured benefit and preserves atomic workflows
+multi_city_readiness:
+- locations.cities/service_areas/operating_zones exist in initial schema
+- city_id/service_area_id copied into quote/order/route/driver authorization
+- pricing/SLA/schedules/package limits configured per area
+- UTC storage and city timezone at boundaries
+- no hardcoded Culiacán rule outside seed/configuration
+release_gate:
+  id: V1_SCALE_READINESS
+  requires:
+  - load test report
+  - multi-instance API test
+  - multi-instance SignalR test
+  - outbox lag under budget
+  - database query budget
+  - restore and failover drill
+  - capacity dashboard
+  - approved hosting and data residency decision
+future_partition_candidates:
+- table: tracking_events
+  status: future; introduce only if public tracking events are separated from order_events
+- table: notifications
+  status: future; introduce with Notifications persistence module
+telemetry_lane:
+  ingestion_batch_size: 1-20
+  persistence: all valid points persisted
+  publication: only significant or throttled points enter location_outbox_events
+  consumer: independent low-priority consumer
+  retention: GATE-007
+  partition_before: LOCAL_GROWTH
+pooling_contract:
+  mode: transaction pooling compatible
+  requirement: set_config(..., true) as first statements after BEGIN
+  test: real PgBouncer regression before enabling transaction pooling
+claim_lifecycle:
+  closed_claim_window: configured and legally approved
+  finalization_job: sets finalized_at after window
+  archival: after retention gate; does not mutate evidentiary events
+outbox_operations:
+  lease_recovery: stale PROCESSING rows are requeued by bounded scheduled functions
+  dead_letter: messages exceeding max attempts become DEAD and alert
+  retention: OPS-004 purges only old PROCESSED/DEAD rows; active states are never deleted
+  lane_isolation: business and location lanes have independent workers, lag budgets and purge policy
+partitioning_constraints:
+  location_outbox_unique: MVP keeps UNIQUE(driver_position_id) without FK. Before partitioning location_outbox_events, approve
+    a global dedup strategy because PostgreSQL unique constraints on partitioned tables must include the partition key.
+  recommended_order: purge processed location lane, verify no active messages for period, then detach/drop driver_positions
+    partition

@@ -1,0 +1,2014 @@
+openapi: 3.1.0
+info:
+  title: Paquetería Local Culiacán API
+  version: 0.6.0
+  description: Contrato REST normativo v0.6. REST/PostgreSQL son autoridad; SignalR distribuye eventos confirmados. Seguridad
+    tenant, tracking público y outbox siguen contratos ejecutables.
+servers:
+- url: /api/v1
+security:
+- oidc: []
+tags:
+- name: Quotes
+- name: Orders
+- name: Dispatch
+- name: Driver
+- name: Tracking
+- name: Proofs
+- name: Incidents
+- name: Organizations
+- name: Audit
+- name: Identity
+- name: Locations
+- name: Drivers
+- name: Finance
+- name: Custody
+paths:
+  /quotes:
+    post:
+      tags:
+      - Quotes
+      operationId: createQuote
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQuoteRequest'
+      responses:
+        '201':
+          description: Quote created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /orders:
+    post:
+      tags:
+      - Orders
+      operationId: createOrder
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags:
+      - Orders
+      operationId: listOrders
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/OrderStatus'
+      - name: owner_org_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Tenant-filtered orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+                  next_cursor:
+                    type:
+                    - string
+                    - 'null'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /orders/{orderId}:
+    get:
+      tags:
+      - Orders
+      operationId: getOrder
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderDetail'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /orders/{orderId}/transitions:
+    post:
+      tags:
+      - Orders
+      operationId: transitionOrder
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Transition applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /orders/{orderId}/assignments:
+    post:
+      tags:
+      - Dispatch
+      operationId: assignDriver
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAssignmentRequest'
+      responses:
+        '201':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /external-offers:
+    post:
+      tags:
+      - Dispatch
+      operationId: createExternalOffer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOfferRequest'
+      responses:
+        '201':
+          description: Offer opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalOffer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+  /external-offers/{offerId}/accept:
+    post:
+      tags:
+      - Driver
+      operationId: acceptExternalOffer
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: offerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Accepted once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /driver/me/stops:
+    get:
+      tags:
+      - Driver
+      operationId: listMyStops
+      responses:
+        '200':
+          description: Active assigned stops only
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DriverStop'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+  /orders/{orderId}/proofs:
+    post:
+      tags:
+      - Custody
+      operationId: finalizeProof
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinalizeProofRequest'
+      responses:
+        '201':
+          description: Proof finalized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proof'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /orders/{orderId}/incidents:
+    post:
+      tags:
+      - Incidents
+      operationId: openIncident
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenIncidentRequest'
+      responses:
+        '201':
+          description: Incident opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /tracking/{token}:
+    get:
+      tags:
+      - Tracking
+      security: []
+      operationId: publicTracking
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 32
+      responses:
+        '200':
+          description: Minimal public tracking view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicTrackingProjection'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /organizations/{organizationId}/audit:
+    get:
+      tags:
+      - Audit
+      operationId: listAudit
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: organizationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Audit page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /driver/me/location-updates:
+    post:
+      tags:
+      - Driver
+      operationId: publishDriverLocation
+      description: Persists deduplicated driver telemetry. SignalR is server-push only; this endpoint is authoritative ingestion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DriverLocationBatchRequest'
+      responses:
+        '202':
+          description: Batch accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverLocationBatchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+  /quotes/{quoteId}:
+    get:
+      tags:
+      - Pricing
+      operationId: getQuote
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: quoteId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /me/organization-contexts:
+    get:
+      tags:
+      - Identity
+      operationId: listOrganizationContexts
+      parameters: []
+      responses:
+        '200':
+          description: Active authorized contexts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrganizationContext'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /cities:
+    get:
+      tags:
+      - Locations
+      operationId: listCities
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/City'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+  /service-areas:
+    get:
+      tags:
+      - Locations
+      operationId: listServiceAreas
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: city_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServiceArea'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /operating-zones:
+    get:
+      tags:
+      - Locations
+      operationId: listOperatingZones
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: service_area_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OperatingZone'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /locations:
+    get:
+      tags:
+      - Locations
+      operationId: listLocations
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Location'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+    post:
+      tags:
+      - Locations
+      operationId: createLocation
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLocationRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Location'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /orders/{orderId}/proof-upload-sessions:
+    post:
+      tags:
+      - Custody
+      operationId: createProofUploadSession
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProofUploadSessionRequest'
+      responses:
+        '201':
+          description: Upload session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofUploadSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /driver/me/documents:
+    get:
+      tags:
+      - Drivers
+      operationId: listMyDriverDocuments
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DriverDocument'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+    post:
+      tags:
+      - Drivers
+      operationId: registerMyDriverDocument
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterDriverDocumentRequest'
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverDocument'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /orders/{orderId}/cod-records:
+    post:
+      tags:
+      - Finance
+      operationId: recordCodCollection
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordCodRequest'
+      responses:
+        '201':
+          description: COD recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodTransaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /cod-records/{codId}/reconcile:
+    post:
+      tags:
+      - Finance
+      operationId: reconcileCod
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: codId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodTransaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+components:
+  securitySchemes:
+    oidc:
+      type: openIdConnect
+      openIdConnectUrl: https://identity.example/.well-known/openid-configuration
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrganizationContext:
+      name: X-Organization-Id
+      in: header
+      required: true
+      description: Organización activa; debe corresponder a una membresía ACTIVE del usuario.
+      schema:
+        type: string
+        format: uuid
+  responses:
+    ValidationError:
+      description: Validation failed
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: State, idempotency or concurrency conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Not found or inaccessible
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Authenticated actor lacks capability inside an otherwise visible tenant context
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UniformNotFound:
+      description: Missing, cross-tenant, expired or revoked resource. Response must not reveal existence.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Money:
+      type: object
+      required:
+      - currency
+      - amount_cents
+      properties:
+        currency:
+          type: string
+          const: MXN
+        amount_cents:
+          type: integer
+          minimum: 0
+          format: int64
+    OrderStatus:
+      type: string
+      enum:
+      - DRAFT
+      - CONFIRMED
+      - READY_FOR_PICKUP
+      - ASSIGNED
+      - AT_PICKUP
+      - PICKED_UP
+      - IN_TRANSIT
+      - DELIVERING
+      - FAILED_ATTEMPT
+      - RESCHEDULED
+      - RETURNING
+      - RETURNED
+      - DELIVERED
+      - CLOSED
+      - CLAIM_OPEN
+      - CLAIM_RESOLVED
+      - CANCELLED
+    AddressInput:
+      type: object
+      required:
+      - address_text
+      - contact_name
+      - phone
+      properties:
+        address_text:
+          type: string
+          minLength: 8
+        contact_name:
+          type: string
+        phone:
+          type: string
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+        lng:
+          type: number
+          minimum: -180
+          maximum: 180
+        references:
+          type: string
+          maxLength: 500
+    CreateQuoteRequest:
+      type: object
+      required:
+      - origin
+      - destination
+      - service_type
+      - packages
+      properties:
+        client_account_id:
+          type: string
+          format: uuid
+        origin:
+          $ref: '#/components/schemas/AddressInput'
+        destination:
+          $ref: '#/components/schemas/AddressInput'
+        service_type:
+          type: string
+          enum:
+          - SAME_DAY
+          - URGENT
+          - SCHEDULED_ROUTE
+        consolidated_route:
+          type: boolean
+          default: false
+        packages:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PackageInput'
+      description: Owner organization is derived from X-Organization-Id after membership validation.
+    PackageInput:
+      type: object
+      required:
+      - description
+      - weight_grams
+      - declared_value_cents
+      properties:
+        description:
+          type: string
+          maxLength: 250
+        weight_grams:
+          type: integer
+          minimum: 1
+        declared_value_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        length_mm:
+          type: integer
+          minimum: 1
+        width_mm:
+          type: integer
+          minimum: 1
+        height_mm:
+          type: integer
+          minimum: 1
+    Quote:
+      type: object
+      required:
+      - id
+      - net
+      - tax
+      - total
+      - rule_ids
+      - expires_at
+      - origin_location_id
+      - destination_location_id
+      - service_type
+      - consolidated_route
+      - package_snapshot
+      - pricing_tier
+      - minimum_total_cents_snapshot
+      - pricing_policy_version
+      - status
+      - city_id
+      properties:
+        id:
+          type: string
+          format: uuid
+        net:
+          $ref: '#/components/schemas/Money'
+        tax:
+          $ref: '#/components/schemas/Money'
+        total:
+          $ref: '#/components/schemas/Money'
+        rule_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        breakdown:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        expires_at:
+          type: string
+          format: date-time
+        origin_location_id:
+          type: string
+          format: uuid
+        destination_location_id:
+          type: string
+          format: uuid
+        service_type:
+          type: string
+          enum:
+          - SAME_DAY
+          - URGENT
+          - SCHEDULED_ROUTE
+        consolidated_route:
+          type: boolean
+        package_snapshot:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PackageInput'
+        city_id:
+          type: string
+          format: uuid
+        service_area_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        pricing_tier:
+          $ref: '#/components/schemas/PricingTier'
+        minimum_total_cents_snapshot:
+          type: integer
+          minimum: 0
+          format: int64
+        pricing_policy_version:
+          type: string
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - USED
+          - EXPIRED
+          - REVOKED
+        request_snapshot_redacted:
+          type: object
+          additionalProperties: true
+          description: Must not contain plaintext address, contact name, telephone or access notes.
+    CreateOrderRequest:
+      type: object
+      required:
+      - quote_id
+      - payer_type
+      - acceptance
+      properties:
+        quote_id:
+          type: string
+          format: uuid
+        payer_type:
+          type: string
+          enum:
+          - SENDER
+          - RECIPIENT
+          - BUSINESS_ACCOUNT
+        acceptance:
+          type: object
+          required:
+          - terms_version
+          - privacy_version
+          - accepted_at
+          - acceptance_channel
+          properties:
+            terms_version:
+              type: string
+            privacy_version:
+              type: string
+            accepted_at:
+              type: string
+              format: date-time
+              description: Client-observed acceptance timestamp; persisted as accepted_at_client after UTC normalization.
+            acceptance_channel:
+              type: string
+              enum:
+              - WEB
+              - PWA
+              - ASSISTED
+              - API
+    Order:
+      type: object
+      required:
+      - id
+      - public_id
+      - owner_org_id
+      - status
+      - price_net
+      - version
+      - origin_location_id
+      - destination_location_id
+      - service_type
+      - pricing_tier
+      - total
+      - city_id
+      properties:
+        id:
+          type: string
+          format: uuid
+        public_id:
+          type: string
+        owner_org_id:
+          type: string
+          format: uuid
+        operator_org_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        price_net:
+          $ref: '#/components/schemas/Money'
+        version:
+          type: integer
+          minimum: 1
+        origin_location_id:
+          type: string
+          format: uuid
+        destination_location_id:
+          type: string
+          format: uuid
+        service_type:
+          type: string
+          enum:
+          - SAME_DAY
+          - URGENT
+          - SCHEDULED_ROUTE
+        quote_id:
+          type: string
+          format: uuid
+        city_id:
+          type: string
+          format: uuid
+        service_area_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        pricing_tier:
+          $ref: '#/components/schemas/PricingTier'
+        total:
+          $ref: '#/components/schemas/Money'
+        claim_window_ends_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        finalized_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    OrderDetail:
+      allOf:
+      - $ref: '#/components/schemas/Order'
+      - type: object
+        properties:
+          timeline:
+            type: array
+            items:
+              $ref: '#/components/schemas/OrderEvent'
+    TransitionRequest:
+      type: object
+      required:
+      - target_status
+      - reason
+      - expected_version
+      properties:
+        target_status:
+          $ref: '#/components/schemas/OrderStatus'
+        reason:
+          type: string
+          maxLength: 500
+        expected_version:
+          type: integer
+          minimum: 1
+        metadata:
+          type: object
+          additionalProperties: true
+    CreateAssignmentRequest:
+      type: object
+      required:
+      - driver_id
+      - assignment_type
+      - cost_cents
+      properties:
+        driver_id:
+          type: string
+          format: uuid
+        assignment_type:
+          type: string
+          enum:
+          - OWN
+          - EXTERNAL
+          - ALLY_CAPACITY
+        cost_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        route_id:
+          type: string
+          format: uuid
+    Assignment:
+      type: object
+      required:
+      - id
+      - order_id
+      - driver_id
+      - status
+      - cost
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        driver_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - OFFERED
+          - ACCEPTED
+          - ACTIVE
+          - COMPLETED
+          - CANCELLED
+        cost:
+          $ref: '#/components/schemas/Money'
+    CreateOfferRequest:
+      type: object
+      required:
+      - order_id
+      - commission_cents
+      - expires_at
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        commission_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        expires_at:
+          type: string
+          format: date-time
+        eligible_constraints:
+          $ref: '#/components/schemas/EligibleConstraints'
+    ExternalOffer:
+      type: object
+      required:
+      - id
+      - order_id
+      - status
+      - commission
+      - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - OPEN
+          - ACCEPTED
+          - EXPIRED
+          - CANCELLED
+        commission:
+          $ref: '#/components/schemas/Money'
+        accepted_by_driver_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        accepted_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+    DriverStop:
+      type: object
+      required:
+      - order_public_id
+      - stop_type
+      - status
+      - address_summary
+      properties:
+        order_public_id:
+          type: string
+        stop_type:
+          type: string
+          enum:
+          - PICKUP
+          - DELIVERY
+          - RETURN
+        status:
+          type: string
+        address_summary:
+          type: string
+        contact_token:
+          type: string
+          description: Protected relay token; never a raw telephone number.
+    Proof:
+      type: object
+      required:
+      - id
+      - proof_type
+      - sha256
+      - captured_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        proof_type:
+          type: string
+        sha256:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+    OpenIncidentRequest:
+      type: object
+      required:
+      - type
+      - severity
+      - description
+      properties:
+        type:
+          type: string
+        severity:
+          type: string
+          enum:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - CRITICAL
+        description:
+          type: string
+          maxLength: 2000
+    Incident:
+      type: object
+      required:
+      - id
+      - order_id
+      - status
+      - severity
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - OPEN
+          - INVESTIGATING
+          - RESOLVED
+          - REJECTED
+        severity:
+          type: string
+    PublicTracking:
+      type: object
+      required:
+      - public_id
+      - visible_status
+      - timeline
+      properties:
+        public_id:
+          type: string
+        visible_status:
+          type: string
+        estimated_window:
+          type:
+          - string
+          - 'null'
+        timeline:
+          type: array
+          items:
+            type: object
+            required:
+            - status
+            - occurred_at
+            properties:
+              status:
+                type: string
+              occurred_at:
+                type: string
+                format: date-time
+    OrderEvent:
+      type: object
+      required:
+      - event_type
+      - occurred_at
+      properties:
+        event_type:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+    Problem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    AuditLog:
+      type: object
+      required:
+      - id
+      - org_id
+      - action
+      - entity_type
+      - entity_id
+      - occurred_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        actor_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        action:
+          type: string
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+        request_id:
+          type:
+          - string
+          - 'null'
+        occurred_at:
+          type: string
+          format: date-time
+    PricingTier:
+      type: string
+      enum:
+      - OCCASIONAL
+      - BUSINESS_1_49
+      - BUSINESS_50_199
+      - BUSINESS_200_499
+      - BUSINESS_500_PLUS
+      - CUSTOM
+    OrganizationContext:
+      type: object
+      required:
+      - organization_id
+      - display_name
+      - role
+      - is_default
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+        role:
+          type: string
+        is_default:
+          type: boolean
+    City:
+      type: object
+      required:
+      - id
+      - name
+      - state_code
+      - country_code
+      - timezone
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        state_code:
+          type: string
+        country_code:
+          type: string
+        timezone:
+          type: string
+    ServiceArea:
+      type: object
+      required:
+      - id
+      - city_id
+      - name
+      - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        city_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - INACTIVE
+    OperatingZone:
+      type: object
+      required:
+      - id
+      - service_area_id
+      - name
+      - zone_type
+      - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        service_area_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        zone_type:
+          type: string
+          enum:
+          - CORE
+          - STANDARD
+          - EXTENDED
+          - EXCLUDED
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - INACTIVE
+    CreateLocationRequest:
+      type: object
+      required:
+      - city_id
+      - address_text
+      - address_summary
+      - lat
+      - lng
+      - pii_key_version
+      properties:
+        city_id:
+          type: string
+          format: uuid
+        service_area_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        operating_zone_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        address_text:
+          type: string
+          minLength: 8
+        address_summary:
+          type: string
+          maxLength: 180
+        contact_name:
+          type:
+          - string
+          - 'null'
+        phone:
+          type:
+          - string
+          - 'null'
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+        lng:
+          type: number
+          minimum: -180
+          maximum: 180
+        pii_key_version:
+          type: string
+    Location:
+      type: object
+      required:
+      - id
+      - city_id
+      - address_summary
+      - lat
+      - lng
+      properties:
+        id:
+          type: string
+          format: uuid
+        city_id:
+          type: string
+          format: uuid
+        service_area_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        operating_zone_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        address_summary:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+    CreateProofUploadSessionRequest:
+      type: object
+      required:
+      - proof_type
+      - content_type
+      - size_bytes
+      properties:
+        proof_type:
+          type: string
+          enum:
+          - PICKUP_PHOTO
+          - DELIVERY_PHOTO
+          - SIGNATURE
+          - DELIVERY_CODE
+          - RETURN_PHOTO
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 1
+        sha256:
+          type:
+          - string
+          - 'null'
+          pattern: ^[a-fA-F0-9]{64}$
+    ProofUploadSession:
+      type: object
+      required:
+      - id
+      - status
+      - upload_url
+      - object_key
+      - expires_at
+      - required_headers
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - CREATED
+          - UPLOADED
+          - VALIDATING
+          - READY
+          - REJECTED
+          - EXPIRED
+          - CONSUMED
+        upload_url:
+          type: string
+          format: uri
+        object_key:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        required_headers:
+          type: object
+          additionalProperties:
+            type: string
+    FinalizeProofRequest:
+      type: object
+      required:
+      - upload_session_id
+      - proof_type
+      - captured_at
+      - sha256
+      properties:
+        upload_session_id:
+          type: string
+          format: uuid
+        proof_type:
+          type: string
+          enum:
+          - PICKUP_PHOTO
+          - DELIVERY_PHOTO
+          - SIGNATURE
+          - DELIVERY_CODE
+          - RETURN_PHOTO
+        captured_at:
+          type: string
+          format: date-time
+        sha256:
+          type: string
+          pattern: ^[a-fA-F0-9]{64}$
+        lat:
+          type:
+          - number
+          - 'null'
+        lng:
+          type:
+          - number
+          - 'null'
+        recipient_name:
+          type:
+          - string
+          - 'null'
+    DriverLocationPoint:
+      type: object
+      required:
+      - client_event_id
+      - lat
+      - lng
+      - accuracy_m
+      - captured_at
+      properties:
+        client_event_id:
+          type: string
+          format: uuid
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+        lng:
+          type: number
+          minimum: -180
+          maximum: 180
+        accuracy_m:
+          type: number
+          minimum: 0
+        captured_at:
+          type: string
+          format: date-time
+        heading_degrees:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+          maximum: 360
+        speed_mps:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+    DriverLocationBatchRequest:
+      type: object
+      required:
+      - positions
+      properties:
+        positions:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/DriverLocationPoint'
+    DriverLocationResult:
+      type: object
+      required:
+      - client_event_id
+      - status
+      - duplicate
+      properties:
+        client_event_id:
+          type: string
+          format: uuid
+        position_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        status:
+          type: string
+          enum:
+          - ACCEPTED
+          - DUPLICATE
+          - REJECTED
+        duplicate:
+          type: boolean
+        error_code:
+          type:
+          - string
+          - 'null'
+    DriverLocationBatchResponse:
+      type: object
+      required:
+      - items
+      - accepted_count
+      - duplicate_count
+      - rejected_count
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriverLocationResult'
+        accepted_count:
+          type: integer
+          minimum: 0
+        duplicate_count:
+          type: integer
+          minimum: 0
+        rejected_count:
+          type: integer
+          minimum: 0
+    DriverDocument:
+      type: object
+      required:
+      - id
+      - document_type
+      - status
+      - object_key
+      properties:
+        id:
+          type: string
+          format: uuid
+        document_type:
+          type: string
+        status:
+          type: string
+          enum:
+          - PENDING
+          - VALID
+          - REJECTED
+          - EXPIRED
+          - REVOKED
+        expires_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        object_key:
+          type: string
+    RegisterDriverDocumentRequest:
+      type: object
+      required:
+      - document_type
+      - object_key
+      - sha256
+      properties:
+        document_type:
+          type: string
+        object_key:
+          type: string
+        sha256:
+          type: string
+        expires_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    RecordCodRequest:
+      type: object
+      required:
+      - amount_cents
+      - reference
+      properties:
+        amount_cents:
+          type: integer
+          minimum: 1
+          format: int64
+        reference:
+          type: string
+          maxLength: 200
+    CodTransaction:
+      type: object
+      required:
+      - id
+      - order_id
+      - amount_cents
+      - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        amount_cents:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum:
+          - EXPECTED
+          - RECORDED
+          - RECONCILED
+          - DISPUTED
+          - REVERSED
+        recorded_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        reconciled_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    Route:
+      type: object
+      required:
+      - id
+      - status
+      - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - PLANNED
+          - ACTIVE
+          - COMPLETED
+          - CANCELLED
+        version:
+          type: integer
+          minimum: 1
+    EligibleConstraints:
+      type: object
+      required:
+      - vehicle_types
+      properties:
+        vehicle_types:
+          type: array
+          items:
+            type: string
+            enum:
+            - MOTORCYCLE
+            - CAR
+            - VAN
+            - BICYCLE
+            - WALKER
+        service_area_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        requires_cod:
+          type: boolean
+          default: false
+    AuditPage:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+    PublicOrderStatus:
+      type: string
+      enum:
+      - CREATED
+      - SCHEDULED
+      - IN_TRANSIT
+      - OUT_FOR_DELIVERY
+      - DELIVERY_EXCEPTION
+      - DELIVERED
+      - RETURNING
+      - RETURNED
+      - CANCELLED
+    PublicTimelineEventCode:
+      type: string
+      enum:
+      - ORDER_CREATED
+      - PICKUP_SCHEDULED
+      - PICKED_UP
+      - IN_TRANSIT
+      - OUT_FOR_DELIVERY
+      - DELIVERY_ATTEMPTED
+      - RESCHEDULED
+      - DELIVERED
+      - RETURNING
+      - RETURNED
+      - CANCELLED
+    OrderAcceptance:
+      type: object
+      required:
+      - id
+      - order_id
+      - terms_version
+      - privacy_version
+      - accepted_at_client
+      - recorded_at_server
+      - acceptance_channel
+      - evidence_schema_version
+      - evidence_hash
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        terms_version:
+          type: string
+        privacy_version:
+          type: string
+        accepted_at_client:
+          type: string
+          format: date-time
+        recorded_at_server:
+          type: string
+          format: date-time
+        acceptance_channel:
+          type: string
+          enum:
+          - WEB
+          - PWA
+          - ASSISTED
+          - API
+        evidence_schema_version:
+          type: string
+          enum:
+          - order-acceptance-v1
+        evidence_hash:
+          type: string
+          description: Base64 representation of 32-byte SHA-256 evidence hash
+    PublicTrackingProjection:
+      type: object
+      required:
+      - public_id
+      - public_status
+      - timeline
+      properties:
+        public_id:
+          type: string
+        public_status:
+          $ref: '#/components/schemas/PublicOrderStatus'
+        estimated_window:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        timeline:
+          type: array
+          items:
+            type: object
+            required:
+            - code
+            - occurred_at
+            properties:
+              code:
+                $ref: '#/components/schemas/PublicTimelineEventCode'
+              occurred_at:
+                type: string
+                format: date-time
+x-realtime-contract: ./AI-12_SIGNALR_CONTRACT.yaml
+x-authorization-visibility:
+  '401': invalid or missing authentication
+  '403': authenticated but missing capability for visible tenant resource
+  '404': missing, cross-tenant, expired or revoked; indistinguishable response
+x-runtime-contracts:
+  token_hash: SHA-256 over exact UTF-8 bytes of Base64URL-no-padding token; bytea length 32
+  money: all cents fields are int64
+  legal_acceptance: OrderAcceptanceCanonicalForm v1 fixed-order compact JSON + SHA-256
+  tenant_org_setting: parameterized uuid[] converted to PostgreSQL array text; empty {} and never null

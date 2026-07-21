@@ -1,0 +1,126 @@
+meta:
+  project: '[NOMBRE COMERCIAL PENDIENTE]'
+  version: '0.6'
+  status: NORMATIVE
+  date: '2026-07-20'
+extensions:
+  pgcrypto:
+    schema: extensions
+    references: always schema-qualified
+    token_digest: extensions.digest(pg_catalog.convert_to(token,'UTF8'),'sha256')
+  postgis:
+    schema: public
+    move_prohibited_without_adr: true
+    runtime_public_privileges:
+    - USAGE
+    runtime_public_prohibitions:
+    - CREATE
+tracking_token:
+  entropy_bytes: 32
+  encoding: Base64URL without padding
+  normalization: none
+  hash: SHA-256
+  hash_input: exact UTF-8 bytes of encoded token
+  storage: bytea length 32
+  required_contract_tests:
+  - C# vs PostgreSQL fixed vector
+  - valid token projection
+  - single-byte mutation mismatch
+  test_vector:
+    raw_bytes_hex: 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20
+    token: AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA
+    sha256_hex: eb9f16800c9029ffca85695763d23c3ace71011cf40e9354acd810205e250f87
+    sha256_base64: 658WgAyQKf/KhWlXY9I8Os5xARz0DpNUrNgQIF4lD4c=
+outbox_lifecycle:
+  lanes:
+  - platform.outbox_events
+  - platform.location_outbox_events
+  producer_insert:
+    ids: application-generated UUID
+    database_generated_values: false
+    ef_core: ValueGeneratedNever
+    returning_prohibited: true
+  runtime_direct_privileges:
+    SELECT: false
+    UPDATE: false
+    DELETE: false
+    INSERT: only approved producers
+  lease:
+    fields:
+    - lease_token
+    - lease_expires_at
+    - locked_at
+    - locked_by
+    settle_predicate: id matches AND status=PROCESSING AND lease_token matches AND lease not expired
+  business_functions:
+  - claim_outbox
+  - settle_outbox
+  - requeue_stale_outbox
+  - purge_outbox
+  location_functions:
+  - claim_location_outbox
+  - settle_location_outbox
+  - requeue_stale_location_outbox
+  - purge_location_outbox
+  owners:
+    claim_settle_requeue: paqueteria_outbox_executor NOLOGIN BYPASSRLS
+    purge: paqueteria_maintenance NOLOGIN BYPASSRLS
+  terminal_statuses:
+  - PROCESSED
+  - DEAD
+  active_statuses:
+  - PENDING
+  - RETRY
+  - PROCESSING
+public_tracking:
+  normative_source: specs/AI-04_DOMAIN_MODEL.yaml public_tracking_contract
+  sql_fail_closed: unmapped state returns no projection; anonymous API returns uniform 404
+  csharp_fail_loud: unmapped state throws PublicStatusMappingException and alerts
+  timeline: only non-null public_event_code; raw payload prohibited
+  contract_test: compare all 17 internal states between AI-04, SQL and C#
+legal_acceptance:
+  schema_version: order-acceptance-v1
+  canonicalizer: project-specific fixed schema; no external JCS dependency
+  encoding: UTF-8 without BOM
+  json: compact, fixed key order, standard JSON string escaping
+  uuid: D lowercase
+  timestamp: yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'
+  channel: uppercase
+  keys:
+  - schema_version
+  - order_id
+  - quote_id
+  - owner_org_id
+  - actor_id
+  - terms_version
+  - privacy_version
+  - accepted_at_client
+  - acceptance_channel
+  hash: SHA-256
+  persistence: orders.order_acceptances append-only + RLS
+  transaction: existing quote_snapshot_to_order allowlist entry
+  test_vector:
+    input:
+      schema_version: order-acceptance-v1
+      order_id: 11111111-1111-1111-1111-111111111111
+      quote_id: 22222222-2222-2222-2222-222222222222
+      owner_org_id: 33333333-3333-3333-3333-333333333333
+      actor_id: 44444444-4444-4444-4444-444444444444
+      terms_version: terms-2026-07
+      privacy_version: privacy-2026-07
+      accepted_at_client: '2026-07-20T12:34:56.1234560Z'
+      acceptance_channel: PWA
+    canonical_utf8: '{"schema_version":"order-acceptance-v1","order_id":"11111111-1111-1111-1111-111111111111","quote_id":"22222222-2222-2222-2222-222222222222","owner_org_id":"33333333-3333-3333-3333-333333333333","actor_id":"44444444-4444-4444-4444-444444444444","terms_version":"terms-2026-07","privacy_version":"privacy-2026-07","accepted_at_client":"2026-07-20T12:34:56.1234560Z","acceptance_channel":"PWA"}'
+    sha256_hex: 2a09176e270ddcc52e0fee157f3d5bd869f36047f7f946daa7caed4816ae0b37
+    sha256_base64: KgkXbicN3MUuD+4Vfz1b2GnzYEf3+Ubap8rtSBauCzc=
+tenant_context:
+  current_org_ids: parameterized uuid[] cast to text for set_config; empty is {} and never NULL
+  statement: SELECT set_config('app.current_org_ids', @organization_ids::uuid[]::text, true)
+  retry: reapply after every new transaction
+money:
+  storage: bigint cents
+  api: integer/int64
+  floating_point_prohibited: true
+partitioning:
+  location_outbox_mvp_unique: UNIQUE(driver_position_id) without FK
+  before_partitioning: approve global dedup strategy

@@ -1,0 +1,193 @@
+meta:
+  version: '0.6'
+  transport: ASP.NET Core SignalR
+  frontend_client: '@microsoft/signalr'
+  source_of_truth: REST API + PostgreSQL
+  timezone: UTC payloads; display America/Mazatlan
+  location_ingestion: REST POST /api/v1/driver/me/location-updates; hubs accept no authoritative client commands.
+envelope:
+  required:
+  - event_id
+  - event_type
+  - occurred_at
+  - aggregate_id
+  - aggregate_version
+  - payload
+  properties:
+    event_id: uuid
+    event_type: string versioned
+    occurred_at: ISO-8601 UTC
+    aggregate_id: uuid/public id by audience
+    aggregate_version: integer
+    correlation_id: uuid optional
+    payload: event-specific object
+hubs:
+- name: OperationsHub
+  path: /hubs/operations
+  authentication: OIDC access token required
+  groups:
+  - org:{authorized_org_id}
+  - order:{order_id when authorized}
+  client_methods: []
+  server_events:
+  - OrderStatusChanged
+  - OrderTimelineEventAdded
+  - AssignmentChanged
+  - RouteChanged
+  - IncidentCreated
+  - ExternalOfferChanged
+  - NotificationStatusChanged
+  - DriverLocationUpdated
+- name: DriverHub
+  path: /hubs/driver
+  authentication: OIDC access token + eligible driver required
+  groups:
+  - driver:{authenticated_driver_id}
+  - assignment:{authorized_assignment_id}
+  client_methods: []
+  server_events:
+  - AssignmentChanged
+  - RouteChanged
+  - OrderStatusChanged
+  - ExternalOfferChanged
+- name: TrackingHub
+  path: /hubs/tracking
+  authentication: short-lived scoped tracking token
+  groups:
+  - tracking:{public_order_id from validated token}
+  client_methods: []
+  server_events:
+  - PublicOrderStatusChanged
+  - PublicEtaChanged
+events:
+  OrderStatusChanged:
+    audience:
+    - operations
+    - authorized driver
+    payload:
+    - order_id
+    - previous_status
+    - new_status
+    - occurred_at
+  PublicOrderStatusChanged:
+    audience:
+    - tracking
+    payload:
+    - public_order_id
+    - public_status
+    - occurred_at
+    public_status_enum:
+    - CREATED
+    - SCHEDULED
+    - IN_TRANSIT
+    - OUT_FOR_DELIVERY
+    - DELIVERY_EXCEPTION
+    - DELIVERED
+    - RETURNING
+    - RETURNED
+    - CANCELLED
+    rules:
+    - mapped from AI-04 public_tracking_contract
+    - never publish raw internal order status
+    - unmapped state throws in C# and does not publish
+  OrderTimelineEventAdded:
+    audience:
+    - operations
+    payload:
+    - order_id
+    - timeline_event_id
+    - category
+    - summary
+    - occurred_at
+  AssignmentChanged:
+    audience:
+    - operations
+    - affected driver
+    payload:
+    - order_id
+    - assignment_id
+    - driver_id
+    - assignment_status
+    - occurred_at
+  RouteChanged:
+    audience:
+    - operations
+    - affected driver
+    payload:
+    - route_id
+    - route_version
+    - changed_stop_ids
+    - occurred_at
+  DriverLocationUpdated:
+    audience:
+    - operations
+    payload:
+    - driver_id
+    - lat
+    - lng
+    - accuracy_m
+    - captured_at
+    rules:
+    - operations audience only
+    - emitted from the dedicated location outbox after persistence
+    - coalesced/throttled before publication
+    origin: Persisted DriverPosition -> transactional outbox -> authorized OperationsHub groups
+  IncidentCreated:
+    audience:
+    - operations
+    payload:
+    - incident_id
+    - order_id
+    - type
+    - severity
+    - status
+    - occurred_at
+  ExternalOfferChanged:
+    audience:
+    - operations
+    - eligible/affected drivers
+    payload:
+    - offer_id
+    - status
+    - commission_cents
+    - expires_at
+  NotificationStatusChanged:
+    audience:
+    - operations
+    payload:
+    - notification_id
+    - channel
+    - status
+    - attempts
+    - occurred_at
+    rules:
+    - operations audience only; never sent to DriverHub unless contract audience is explicitly expanded
+  PublicEtaChanged:
+    audience:
+    - tracking
+    payload:
+    - public_order_id
+    - eta_from
+    - eta_to
+    - updated_at
+reliability:
+  publication: transactional outbox after commit
+  ordering: aggregate_version; clients ignore older versions
+  deduplication: event_id cached client-side
+  reconnect: automatic reconnect then GET current resource/timeline with last_seen_version
+  offline: no command is considered accepted until REST response confirms persistence
+  location_lane: DriverLocationUpdated originates from location_outbox_events, has independent consumer/lag metrics, and may
+    be coalesced.
+  commands: All commands and location ingestion use REST; hubs expose no client command methods.
+  outbox_lifecycle: claim/settle/requeue use lease_token; runtime Worker has no direct UPDATE/DELETE/SELECT on outbox lanes
+  public_mapping_contract: CI compares SQL and C# mapping for all 17 internal order statuses
+security:
+- server determines groups from claims and database authorization
+- never accept arbitrary org/group identifiers from client
+- CORS only trusted frontend origins
+- do not log access tokens or tracking tokens
+- rate-limit negotiate and connection attempts
+- payloads are audience-specific and minimize PII
+- public tracking invalid/expired/foreign tokens are indistinguishable 404 through a bootstrap projection function
+- exact driver coordinates are operations-only in MVP
+- public timeline exposes only allow-listed public_event_code and never raw order_event payload

@@ -1,0 +1,154 @@
+rules:
+  BLOCKER: agent must stop affected work
+  MAJOR: ADR + reversible default
+  MINOR: document convention
+open_decisions:
+- id: GATE-001
+  topic: commercial_name
+  severity: BLOCKER_FOR_PUBLIC_RELEASE
+  decision_needed: nombre y marca validados ante IMPI
+  work_allowed: internal code with neutral branding
+- id: GATE-002
+  topic: identity_provider
+  severity: BLOCKER_FOR_STAGING_AUTH
+  options:
+  - managed OIDC
+  - self-hosted OIDC
+  decision_needed: provider, SLA, cost, data region
+- id: GATE-003
+  topic: maps_provider
+  severity: BLOCKER_FOR_REAL_QUOTES
+  decision_needed: geocoding/routing provider and budget
+  work_allowed: mock adapter and manual coordinates
+- id: GATE-004
+  topic: messaging_provider
+  severity: BLOCKER_FOR_CUSTOMER_MESSAGES
+  decision_needed: WhatsApp/SMS/email providers and approved templates
+- id: GATE-005
+  topic: payment_provider
+  severity: BLOCKER_FOR_ONLINE_PAYMENTS
+  decision_needed: provider, commission, settlement, refunds
+  work_allowed: manual transfer and mock
+- id: GATE-006
+  topic: invoice_provider
+  severity: BLOCKER_FOR_CFDI
+  decision_needed: PAC/service and accountant workflow
+- id: GATE-007
+  topic: privacy_retention
+  severity: BLOCKER_FOR_REAL_PII
+  decision_needed: approved notice/lawful basis/retention/ARCO for customer PII, legal acceptance evidence, POD, driver documents
+    and driver location telemetry; cryptographic erasure/access restriction rules
+- id: GATE-008
+  topic: driver_contracts_and_social_security
+  severity: BLOCKER_FOR_EXTERNAL_DRIVER_PILOT
+  decision_needed: legal classification, contract and IMSS process
+- id: GATE-009
+  topic: insurance
+  severity: BLOCKER_FOR_COMMERCIAL_OPERATION
+  decision_needed: vehicle, civil liability, accident and cargo coverage
+- id: GATE-010
+  topic: service_zones_and_sla
+  severity: BLOCKER_FOR_REAL_QUOTES
+  decision_needed: zone polygons, hours, package limits, prohibited items, SLA
+- id: GATE-011
+  topic: tax_display
+  severity: BLOCKER_FOR_PUBLIC_PRICING
+  decision_needed: PLUS_VAT or VAT_INCLUDED; calculation of subtotal/discount/tax/total and review of configured absolute
+    price floors
+- id: GATE-012
+  topic: cloud_and_data_residency
+  severity: BLOCKER_FOR_PRODUCTION
+  decision_needed: hosting, backups, regions, logging and security budget
+- id: GATE-013
+  topic: signalr_scaling
+  severity: BLOCKER_FOR_MULTI_INSTANCE_PRODUCTION
+  options:
+  - Redis backplane
+  - managed SignalR service
+  decision_needed: hosting topology, concurrency, SLA, budget and data region
+  work_allowed: single instance for MVP-0; Redis-backed integration tests
+- id: GATE-014
+  topic: database_scale_topology
+  severity: BLOCKER_FOR_V1_SCALE
+  decision_needed: managed DB, PgBouncer transaction pooling, read replica and partition rollout; real-pooler tenant-context
+    regression test
+  work_allowed: instrumentation, indexes and partition-compatible schema design
+- id: GATE-015
+  topic: analytics_platform
+  severity: BLOCKER_FOR_SEPARATE_ANALYTICS_STORE
+  decision_needed: warehouse/ETL provider, retention, cost and data governance
+  work_allowed: read models, materialized views and asynchronous exports
+- id: GATE-016
+  topic: durable_event_bus
+  severity: BLOCKER_FOR_SERVICE_EXTRACTION
+  decision_needed: broker/provider, delivery semantics, operations and cost
+  work_allowed: transactional outbox and in-process contracts
+- id: GATE-017
+  topic: multi_city_launch
+  severity: BLOCKER_FOR_NEW_CITY
+  decision_needed: city, service zones, SLA, pricing, legal and operational ownership
+  work_allowed: generic city/service-area model and synthetic test configuration
+release_gates:
+  MVP-0_INTERNAL:
+  - mock identity/maps allowed
+  - synthetic/no real PII
+  - 20 synthetic deliveries
+  - bootstrap/RLS/append-only/POD contract tests pass
+  MVP-1_PILOT:
+  - GATE-003
+  - GATE-004
+  - GATE-007
+  - GATE-008
+  - GATE-009
+  - GATE-010
+  MVP-2_BUSINESSES:
+  - GATE-001
+  - GATE-005 or documented offline payment
+  - GATE-006
+  - GATE-011
+  PRODUCTION:
+  - all gates
+  - penetration test
+  - restore drill
+  - legal go-live checklist
+  V1_SCALE_READINESS:
+  - GATE-012
+  - GATE-013
+  - GATE-014
+  - load test report
+  - multi-instance API and SignalR tests
+  - outbox lag budget
+  - database query budget
+  - restore/failover drill
+  - capacity dashboard
+technical_decisions:
+  backend_runtime: .NET 10 LTS
+  api_framework: ASP.NET Core Web API
+  realtime: ASP.NET Core SignalR
+  frontend: Next.js/React/TypeScript PWA
+  status: APPROVED_V0_6
+  architecture_style: modular monolith
+  module_layers: Domain/Application/Infrastructure/Endpoints
+  source_of_truth: PostgreSQL/PostGIS
+  event_delivery: transactional outbox + .NET Worker
+  scaling_strategy: horizontal scale first; selective extraction by metrics and ADR
+  scalability_contract: AI-15_SCALABILITY_CONTRACT.yaml
+  quote_order_contract: quote owns normalized location references and package snapshot; order copies them
+  authorization_model: organization-scoped memberships
+  rls_model: separate DB roles + FORCE RLS
+  driver_location_ingestion: REST persistence then outbox/SignalR
+  rls_bootstrap: NOLOGIN BYPASSRLS function-owner role with column-limited SELECT
+  worker_model: NOBYPASSRLS worker; privileged cross-tenant claim only through security functions
+  physical_schemas: one schema per normative module plus platform/security
+  tenant_context: transaction-local set_config with retry reapplication
+  pod_upload: signed URL quarantine/validation/promotion/finalization
+  pricing_guard: pricing_tier + minimum_total_cents_snapshot
+  gps: batch ingestion + dedicated location outbox
+  authorization_visibility: 401 invalid auth; 403 missing capability; 404 absent/cross-tenant/invalid public token
+  extension_layout: pgcrypto in extensions; PostGIS in public with runtime USAGE and CREATE revoked
+  token_hash: SHA-256 exact UTF-8 token bytes; C#/SQL symmetry contract test
+  outbox_lifecycle: function-only lease-protected claim/settle/requeue; maintenance-owned purge
+  public_tracking: AI-04 public vocabulary + private-by-default public_event_code timeline
+  legal_acceptance: append-only order_acceptances with project-specific deterministic canonical form
+  money_storage: bigint cents / OpenAPI int64
+  provisioning: application-generated UUIDs pre-authorized only inside transaction-local RLS context

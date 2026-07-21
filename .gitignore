@@ -1,0 +1,90 @@
+# .NET build outputs
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+coverage/
+coverage.*
+*.coverage
+*.coveragexml
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# Node.js / Next.js / pnpm
+node_modules/
+.pnpm-store/
+.next/
+out/
+dist/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+appsettings.Development.local.json
+appsettings.Local.json
+secrets.json
+
+# Docker and local infrastructure data
+.docker/
+**/.docker-data/
+**/postgres-data/
+**/redis-data/
+**/minio-data/
+
+# Certificates, keys and local credentials
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*.cer
+
+# Operating system
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Python validator cache
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local package archives
+*.zip

@@ -1,0 +1,1195 @@
+meta:
+  version: '0.6'
+  generated: '2026-07-19'
+  execution_order: topological by depends_on; P0 before P1
+  item_count: 56
+definition_of_ready:
+- normative inputs identified
+- dependencies DONE
+- acceptance criteria testable
+- no unresolved BLOCKER
+definition_of_done:
+- criteria pass
+- tests pass
+- OpenAPI/schema/docs updated
+- SignalR contracts updated when realtime changes
+- tenant/security tests included
+- rollback documented
+- architecture boundaries remain valid
+- scale/readiness impact assessed for infrastructure changes
+items:
+- id: FND-001
+  epic: Foundation
+  release: MVP-0
+  title: Inicializar solución .NET y workspace web
+  priority: P0
+  depends_on:
+  - ARC-002
+  expected_outputs:
+  - Paqueteria.sln
+  - apps/web Next.js PWA
+  - src/Paqueteria.Api
+  - src/Paqueteria.Worker
+  - src/BuildingBlocks
+  - src/Modules baseline
+  - tests/ArchitectureTests, UnitTests e IntegrationTests
+  - CI dotnet + pnpm
+  acceptance_criteria:
+  - dotnet restore/build/test reproducible con comandos documentados
+  - pnpm install/lint/typecheck/test reproducible
+  - nullable y analyzers habilitados; warnings tratados como errores en CI
+  - TypeScript estricto en frontend
+  - pruebas de arquitectura impiden dependencias inválidas
+  required_tests:
+  - CI smoke .NET
+  - workspace web smoke
+  - architecture dependency test
+  approval_gate: null
+- id: ARC-001
+  epic: Architecture
+  release: MVP-0
+  title: Plantilla modular y pruebas de límites
+  priority: P0
+  depends_on:
+  - FND-001
+  expected_outputs:
+  - module template Domain/Application/Infrastructure/Endpoints
+  - architecture test suite
+  - dependency rules documentation
+  acceptance_criteria:
+  - módulos no referencian infraestructura de otros módulos
+  - Domain no referencia frameworks
+  - controllers y hubs no contienen reglas de negocio
+  required_tests:
+  - NetArchTest or equivalent
+  - forbidden reference test
+  approval_gate: null
+- id: ARC-002
+  epic: Architecture
+  release: MVP-0
+  title: Cerrar remediaciones contractuales v0.6
+  priority: P0
+  depends_on: []
+  expected_outputs:
+  - validated OpenAPI and public tracking vocabulary
+  - validated SQL role/RLS/extension/outbox lifecycle model
+  - quote-order-acceptance contract tests
+  - state/SignalR/hash consistency report
+  acceptance_criteria:
+  - extension placement and C#/SQL token hash symmetry are defined and tested
+  - bootstrap RLS, provisioning and transaction-local context are consistent
+  - outbox lease lifecycle, stale recovery, maintenance purge and grants are consistent
+  - public status mapping and public_event_code are fail-closed
+  - order_acceptances, bigint money and telemetry lane contracts are consistent
+  - OpenAPI/YAML/SQL/SignalR references validate without drift
+  required_tests:
+  - OpenAPI validator
+  - YAML parse
+  - manifest hash check
+  - contract consistency script
+  - PostgreSQL/Testcontainers execution suite
+  approval_gate: null
+- id: FND-002
+  epic: Foundation
+  release: MVP-0
+  title: Docker Compose local
+  priority: P0
+  depends_on:
+  - FND-001
+  expected_outputs:
+  - PostgreSQL/PostGIS
+  - Redis
+  - MinIO
+  - mail/mock provider
+  acceptance_criteria:
+  - healthchecks funcionales
+  - datos persistentes en volúmenes
+  - README con comandos
+  required_tests:
+  - environment smoke
+  approval_gate: null
+- id: SEC-001
+  epic: Security
+  release: MVP-0
+  title: Abstracción OIDC y sesión
+  priority: P0
+  depends_on:
+  - FND-001
+  expected_outputs:
+  - ASP.NET Core auth schemes
+  - IIdentityProvider + mock OIDC
+  - authorization policies
+  - tenant-aware claims transformation
+  acceptance_criteria:
+  - usuario autenticado recibe orgs/roles autorizados
+  - usuario suspendido no accede
+  - MFA flag exigible a privilegiados
+  required_tests:
+  - xUnit policy tests
+  - WebApplicationFactory API 401/403
+  - SignalR unauthorized connection
+  approval_gate: null
+- id: TEN-001
+  epic: Tenancy
+  release: MVP-0
+  title: Organizaciones, usuarios y contexto tenant
+  priority: P0
+  depends_on:
+  - SEC-001
+  - SEC-002
+  - DBA-001
+  expected_outputs:
+  - EF Core migrations organizations/users/organization_memberships
+  - ITenantContext middleware with explicit active organization
+  - separate migration/application/worker database role model
+  - FORCE RLS baseline including direct-org and child-table policies
+  - EF Core tenant interceptors/filters
+  acceptance_criteria:
+  - one user may hold different roles in multiple organizations
+  - authorization is derived from active organization membership
+  - absence or unauthorized organization context fails closed
+  - application role is not table owner and cannot bypass FORCE RLS
+  - driver_documents and audit_logs are directly tenant protected
+  - platform admin access is explicit and audited
+  - GET /me/organization-contexts lists active memberships without tenant bootstrap deadlock
+  - X-Organization-Id is validated and applied by transaction-local set_config
+  - retry strategy reapplies context and a query outside transaction fails closed
+  - first-user and organization provisioning use application-generated UUIDs pre-authorized only inside the provisioning transaction
+  - bootstrap role performs no writes
+  required_tests:
+  - cross-tenant integration
+  - RLS SQL tests with application role
+  - table-owner versus application-role bypass regression
+  - multi-organization membership authorization tests
+  - first-user provisioning integration
+  - organization + initial membership atomic provisioning
+  approval_gate: null
+- id: AUD-001
+  epic: Audit
+  release: MVP-0
+  title: Auditoría append-only
+  priority: P0
+  depends_on:
+  - TEN-001
+  expected_outputs:
+  - audit application service
+  - redaction policy
+  - audit table
+  - EF Core/audited command integration
+  acceptance_criteria:
+  - acciones sensibles registran actor/org/request
+  - no se pueden actualizar o borrar registros
+  - datos secretos no aparecen
+  required_tests:
+  - immutability DB test
+  - redaction unit
+  approval_gate: null
+- id: GEO-001
+  epic: Locations
+  release: MVP-0
+  title: Ubicaciones, zonas y adaptador geográfico
+  priority: P0
+  depends_on:
+  - TEN-001
+  expected_outputs:
+  - locations/zones endpoints
+  - geocoding interface + mock
+  - PostGIS queries
+  acceptance_criteria:
+  - pin y dirección normalizados
+  - orden fuera de zona se rechaza
+  - datos aislados por tenant
+  - cities, service areas, operating zones and location endpoints match OpenAPI
+  - quotes/orders carry city and service-area references
+  required_tests:
+  - PostGIS integration
+  - provider contract
+  approval_gate: null
+- id: PRC-001
+  epic: Pricing
+  release: MVP-0
+  title: Motor de cotización básico
+  priority: P0
+  depends_on:
+  - GEO-001
+  - ARC-002
+  expected_outputs:
+  - tariff rule evaluator
+  - quote endpoint
+  - persistent location references
+  - request/package/breakdown snapshots
+  acceptance_criteria:
+  - tarifas base configurables
+  - quote registra reglas y expiración
+  - quote persiste origin_location_id y destination_location_id
+  - quote guarda service/consolidated_route/package snapshot
+  - cálculos usan centavos
+  - quote contains pricing_tier, minimum_total_cents_snapshot and redacted snapshot
+  - GET quote is contracted
+  required_tests:
+  - table-driven unit
+  - property tests money
+  approval_gate: null
+- id: PRC-002
+  epic: Pricing
+  release: MVP-0
+  title: Guardia para tarifas de volumen
+  priority: P0
+  depends_on:
+  - PRC-001
+  - AUD-001
+  expected_outputs:
+  - financial override workflow
+  acceptance_criteria:
+  - Pricing.Domain chooses tier and minimum snapshot
+  - SQL backstops tier/route/override and total floor
+  - GATE-011 tests PLUS_VAT and VAT_INCLUDED
+  required_tests:
+  - API authorization
+  - audit assertion
+  approval_gate: null
+- id: ORD-001
+  epic: Orders
+  release: MVP-0
+  title: Crear y consultar órdenes
+  priority: P0
+  depends_on:
+  - PRC-001
+  - TEN-001
+  - ARC-002
+  expected_outputs:
+  - order/package migrations
+  - POST/GET endpoints
+  - public_id generator
+  acceptance_criteria:
+  - creación idempotente
+  - quote válido y no expirado requerido
+  - orden copia ubicaciones, servicio, paquetes y precio desde quote
+  - no se infieren ubicaciones desde breakdown
+  - public_id no enumerable
+  - tenant isolation
+  - a quote can create at most one order even with distinct idempotency keys
+  - quote ACTIVE->USED and order insert are atomic
+  - order_acceptance is inserted append-only in the same quote_snapshot_to_order transaction
+  - evidence hash matches OrderAcceptanceCanonicalForm v1 test vector
+  - all monetary fields use 64-bit cents
+  required_tests:
+  - idempotency integration
+  - cross-tenant e2e
+  - legal acceptance canonicalization vector
+  - append-only/RLS acceptance test
+  approval_gate: null
+- id: ORD-002
+  epic: Orders
+  release: MVP-0
+  title: Máquina de estados
+  priority: P0
+  depends_on:
+  - ORD-001
+  - AUD-001
+  expected_outputs:
+  - transition service
+  - guard registry
+  - events/outbox
+  acceptance_criteria:
+  - solo transiciones permitidas
+  - AT_PICKUP puede cancelar solo antes de adquirir custodia y con razón
+  - FAILED_ATTEMPT no transiciona directamente a DELIVERED
+  - retorno exige custodia adquirida
+  - optimistic lock evita pérdida
+  - evento y auditoría en misma transacción
+  - RESCHEDULED->DELIVERING requires custody and valid assignment
+  - claim window/finalization rules are enforced
+  required_tests:
+  - state matrix unit
+  - concurrency integration
+  approval_gate: null
+- id: DSP-001
+  epic: Dispatch
+  release: MVP-0
+  title: Perfiles y elegibilidad de repartidor propio
+  priority: P0
+  depends_on:
+  - TEN-001
+  expected_outputs:
+  - driver/doc tables
+  - eligibility service
+  acceptance_criteria:
+  - documento vencido bloquea
+  - capacidad y estado se verifican
+  - razón de rechazo estructurada
+  required_tests:
+  - eligibility table tests
+  approval_gate: null
+- id: DSP-002
+  epic: Dispatch
+  release: MVP-0
+  title: Asignación manual a repartidor propio
+  priority: P0
+  depends_on:
+  - ORD-002
+  - DSP-001
+  expected_outputs:
+  - assignment endpoint
+  - driver stops query
+  acceptance_criteria:
+  - una asignación activa por orden
+  - costo obligatorio
+  - ASSIGNED auditado
+  required_tests:
+  - unique race test
+  - authorization e2e
+  approval_gate: null
+- id: RTM-001
+  epic: Realtime
+  release: MVP-0
+  title: Infraestructura SignalR segura y tenant-aware
+  priority: P0
+  depends_on:
+  - SEC-001
+  - TEN-001
+  - AUD-001
+  - ARC-002
+  expected_outputs:
+  - OperationsHub, DriverHub y TrackingHub
+  - hubs fuertemente tipados
+  - IRealtimePublisher
+  - grupos derivados del servidor
+  - cliente @microsoft/signalr compartido en web
+  - contrato de eventos versionado
+  acceptance_criteria:
+  - conexiones privadas requieren identidad y autorización
+  - cliente no puede autoasignarse a grupo de otra organización
+  - tracking público usa token corto y limitado a una orden
+  - reconexión automática seguida de resincronización REST
+  - hubs no contienen estado de negocio mutable
+  required_tests:
+  - SignalR auth integration
+  - cross-tenant group isolation
+  - reconnect e2e
+  - contract schema validation
+  approval_gate: null
+- id: DRV-003
+  epic: Driver
+  release: MVP-0
+  title: Ingesta y persistencia de ubicación del repartidor
+  priority: P0
+  depends_on:
+  - DSP-001
+  - TEN-001
+  - AUD-001
+  expected_outputs:
+  - POST /driver/me/location-updates
+  - driver_positions migration/indexes/RLS
+  - client_event_id deduplication
+  - location outbox event
+  acceptance_criteria:
+  - endpoint accepts 1-20 positions and returns per-item ACCEPTED/DUPLICATE result
+  - dedup uses driver_id/client_event_id
+  - location outbox is separate and throttled
+  - location_outbox driver_position_id remains UNIQUE without FK
+  - location lane lifecycle uses lease-protected functions only
+  required_tests:
+  - driver authorization integration
+  - deduplication concurrency
+  - RLS location test
+  - outbox publication test
+  approval_gate: null
+- id: RTM-002
+  epic: Realtime
+  release: MVP-0
+  title: Publicación confiable de eventos operativos
+  priority: P0
+  depends_on:
+  - RTM-001
+  - ORD-002
+  - DSP-002
+  - DRV-003
+  expected_outputs:
+  - outbox-to-SignalR publisher
+  - OrderStatusChanged y AssignmentChanged
+  - OrderTimelineEventAdded
+  - version/cursor para resincronización
+  - métricas de publicación y conexiones
+  - DriverLocationUpdated from persisted driver positions
+  acceptance_criteria:
+  - solo se publican eventos de transacciones confirmadas
+  - reintento no duplica efectos visibles
+  - evento incluye event_id, occurred_at, aggregate_version y audience
+  - dashboard y tracking actualizan sin recarga
+  - estado final se recupera por REST tras pérdida de conexión
+  - DriverLocationUpdated is published only to authorized operations groups
+  required_tests:
+  - outbox publisher integration
+  - duplicate event handling
+  - disconnect/reconnect Playwright
+  - authorized audience tests
+  approval_gate: null
+- id: POD-001
+  epic: Custody
+  release: MVP-0
+  title: Carga segura de evidencia
+  priority: P0
+  depends_on:
+  - FND-002
+  - ORD-002
+  expected_outputs:
+  - S3 adapter
+  - proof endpoint
+  - signed download
+  acceptance_criteria:
+  - signed upload session is created without proxying bytes through API
+  - object stays in quarantine until hash/content validation
+  - final Proof is append-only and created once from a READY session
+  required_tests:
+  - storage contract
+  - unauthorized download
+  approval_gate: null
+- id: DRV-001
+  epic: Driver PWA
+  release: MVP-0
+  title: Lista y detalle de paradas
+  priority: P0
+  depends_on:
+  - DSP-002
+  expected_outputs:
+  - mobile routes
+  - minimal stop DTO
+  acceptance_criteria:
+  - solo órdenes asignadas
+  - contacto protegido
+  - flujo usable móvil
+  required_tests:
+  - driver authorization e2e
+  - Playwright mobile
+  approval_gate: null
+- id: DRV-002
+  epic: Driver PWA
+  release: MVP-0
+  title: Cola offline de eventos y POD
+  priority: P0
+  depends_on:
+  - DRV-001
+  - POD-001
+  expected_outputs:
+  - IndexedDB queue
+  - sync API/idempotency
+  acceptance_criteria:
+  - evento conserva client timestamp
+  - reintento no duplica
+  - conflicto requiere resolución visible
+  required_tests:
+  - offline Playwright
+  - duplicate upload
+  approval_gate: null
+- id: TRK-001
+  epic: Tracking
+  release: MVP-0
+  title: Tracking público mínimo
+  priority: P0
+  depends_on:
+  - ORD-002
+  - RTM-002
+  expected_outputs:
+  - tracking token service
+  - public endpoint/page
+  acceptance_criteria:
+  - token >=128 bits
+  - datos mínimos
+  - token rotatable/expirable
+  - sin PII de repartidor
+  - estado se actualiza por SignalR y se resincroniza por REST
+  - token is 32 random bytes encoded Base64URL without padding
+  - token hash is SHA-256 over exact UTF-8 bytes and stored as 32-byte bytea
+  - all 17 internal statuses map identically in SQL and C#
+  - timeline is private by default and exposes only public_event_code
+  required_tests:
+  - enumeration/security test
+  - public page e2e
+  - C#/SQL token hash symmetry
+  - 17-state public map contract
+  - unmapped-state anonymous 404 and internal alert
+  approval_gate: null
+- id: OBS-001
+  epic: Operations
+  release: MVP-0
+  title: Dashboard de despacho básico
+  priority: P0
+  depends_on:
+  - ORD-001
+  - DSP-002
+  - RTM-002
+  expected_outputs:
+  - status board
+  - filters
+  - order detail timeline
+  - SignalR live updates
+  acceptance_criteria:
+  - actualiza estados mediante SignalR sin recarga completa
+  - tras reconexión recupera brechas por REST
+  - filtros tenant-aware
+  - alerta sin asignación
+  required_tests:
+  - Playwright dispatch
+  approval_gate: null
+- id: OPS-001
+  epic: Operations
+  release: MVP-0
+  title: Seed y simulador de 20 entregas
+  priority: P0
+  depends_on:
+  - DRV-002
+  - TRK-001
+  - OBS-001
+  - RTM-002
+  expected_outputs:
+  - test scenario runner
+  - fixtures
+  acceptance_criteria:
+  - 20 órdenes completan ciclo
+  - '>=98% eventos/POD completos'
+  - sin auditoría faltante
+  - Worker crash leaves PROCESSING message recoverable through stale requeue
+  - settle rejects stale lease token
+  - poison message reaches DEAD without blocking newer messages
+  required_tests:
+  - full workflow e2e
+  approval_gate: null
+- id: OPS-002
+  epic: Operations
+  release: MVP-0
+  title: Backups y restauración
+  priority: P0
+  depends_on:
+  - FND-002
+  expected_outputs:
+  - backup script
+  - restore runbook
+  - restore test
+  acceptance_criteria:
+  - backup cifrado
+  - restauración probada
+  - RPO/RTO documentado
+  required_tests:
+  - restore drill
+  approval_gate: null
+- id: REL-000
+  epic: Release
+  release: MVP-0
+  title: Puerta de liberación interna
+  priority: P0
+  depends_on:
+  - OPS-001
+  - OPS-002
+  expected_outputs:
+  - release report
+  acceptance_criteria:
+  - todos P0 completos
+  - cero cross-tenant
+  - 20 pruebas completas
+  - rollback probado
+  required_tests:
+  - full suite
+  approval_gate: owner_product_technology
+- id: EXT-001
+  epic: External Drivers
+  release: MVP-1
+  title: Ofertas a repartidores externos
+  priority: P0
+  depends_on:
+  - REL-000
+  - DSP-001
+  expected_outputs:
+  - offer API
+  - eligibility filter
+  - driver offer UI
+  acceptance_criteria:
+  - muestra comisión antes de aceptar
+  - aceptación atómica
+  - aceptar/rechazar libre
+  - crear oferta exige Idempotency-Key
+  required_tests:
+  - concurrency 50 acceptors
+  - eligibility e2e
+  approval_gate: null
+- id: NTF-001
+  epic: Notifications
+  release: MVP-1
+  title: Outbox y notificaciones
+  priority: P0
+  depends_on:
+  - ORD-002
+  expected_outputs:
+  - .NET outbox worker
+  - provider adapter
+  - templates
+  acceptance_criteria:
+  - reintentos con backoff
+  - fallo no revierte orden
+  - plantilla por marca
+  required_tests:
+  - Worker Service integration
+  - provider fake
+  - outbox retry/idempotency
+  approval_gate: null
+- id: CSV-001
+  epic: Orders
+  release: MVP-1
+  title: Carga CSV con prevalidación
+  priority: P1
+  depends_on:
+  - ORD-001
+  expected_outputs:
+  - upload/preview/commit flow
+  - error report
+  acceptance_criteria:
+  - ninguna fila se crea antes de confirmar
+  - errores por fila
+  - commit idempotente
+  required_tests:
+  - CSV e2e
+  approval_gate: null
+- id: RTE-001
+  epic: Routes
+  release: MVP-1
+  title: Rutas manuales y secuencia
+  priority: P0
+  depends_on:
+  - DSP-002
+  expected_outputs:
+  - route/stop module
+  - drag reorder
+  acceptance_criteria:
+  - capacidad validada
+  - costo calculable
+  - ordenes de $45/$52 ligadas a ruta
+  required_tests:
+  - route constraints
+  - Playwright reorder
+  approval_gate: null
+- id: INC-001
+  epic: Incidents
+  release: MVP-1
+  title: Incidencias e intento fallido
+  priority: P0
+  depends_on:
+  - POD-001
+  - ORD-002
+  expected_outputs:
+  - incident module
+  - failed attempt workflow
+  acceptance_criteria:
+  - motivo/evidencia obligatorios
+  - siguiente acción explícita
+  - SLA timestamp
+  - operaciones de apertura exigen Idempotency-Key
+  required_tests:
+  - gherkin failed attempt
+  approval_gate: null
+- id: FIN-001
+  epic: Finance
+  release: MVP-0
+  title: Registro mínimo de COD y costo/ingreso por orden
+  priority: P0
+  depends_on:
+  - DSP-002
+  - EXT-001
+  - RTE-001
+  expected_outputs:
+  - unit economics calculator
+  acceptance_criteria:
+  - costo por modalidad
+  - margen por orden/ruta
+  - no usa floats
+  - COD expected is RECORDED before delivery and RECONCILED before close
+  required_tests:
+  - financial fixtures
+  approval_gate: null
+- id: SET-001
+  epic: Finance
+  release: MVP-1
+  title: Liquidaciones exportables
+  priority: P1
+  depends_on:
+  - FIN-001
+  expected_outputs:
+  - settlement module
+  - CSV export
+  acceptance_criteria:
+  - servicios y ajustes trazables
+  - cierre bloquea efectivo/incidente pendiente
+  - totales reconciliables
+  - every amount is traceable to immutable settlement_lines
+  required_tests:
+  - reconciliation integration
+  approval_gate: null
+- id: REL-001
+  epic: Release
+  release: MVP-1
+  title: Puerta piloto operativo
+  priority: P0
+  depends_on:
+  - EXT-001
+  - NTF-001
+  - CSV-001
+  - RTE-001
+  - INC-001
+  - FIN-001
+  - SET-001
+  expected_outputs:
+  - pilot readiness report
+  acceptance_criteria:
+  - 50-100 entregas reales planificadas
+  - datos completos >=98%
+  - restore vigente
+  required_tests:
+  - full regression
+  approval_gate: operations_finance_legal
+- id: BUS-001
+  epic: Business Portal
+  release: MVP-2
+  title: Portal de negocio y usuarios
+  priority: P0
+  depends_on:
+  - REL-001
+  expected_outputs:
+  - business order UI
+  - address book
+  - role permissions
+  acceptance_criteria:
+  - negocio solo ve propias
+  - crea sin operador
+  - descarga POD
+  required_tests:
+  - business tenant e2e
+  approval_gate: null
+- id: BUS-002
+  epic: Business Portal
+  release: MVP-2
+  title: Estados de cuenta y reportes
+  priority: P1
+  depends_on:
+  - BUS-001
+  - SET-001
+  expected_outputs:
+  - monthly statement
+  - exports
+  acceptance_criteria:
+  - totales coinciden con órdenes
+  - filtros por periodo
+  - PII minimizada
+  required_tests:
+  - report reconciliation
+  approval_gate: null
+- id: REL-002
+  epic: Release
+  release: MVP-2
+  title: Puerta autoservicio de negocios
+  priority: P0
+  depends_on:
+  - BUS-001
+  - BUS-002
+  expected_outputs:
+  - business pilot report
+  acceptance_criteria:
+  - 3-5 negocios
+  - '>=60% órdenes sin captura asistida'
+  required_tests:
+  - business journey e2e
+  approval_gate: product_operations
+- id: ALY-001
+  epic: Allies
+  release: MVP-3
+  title: Branding y configuración por aliado
+  priority: P0
+  depends_on:
+  - REL-002
+  - TEN-001
+  expected_outputs:
+  - logos/colors/slug/templates
+  acceptance_criteria:
+  - marca correcta por orden
+  - archivos y configs aislados
+  required_tests:
+  - branding tenant e2e
+  approval_gate: null
+- id: ALY-002
+  epic: Allies
+  release: MVP-3
+  title: Owner y operator org separados
+  priority: P0
+  depends_on:
+  - ALY-001
+  - ORD-001
+  expected_outputs:
+  - shared operation authorization
+  acceptance_criteria:
+  - propiedad comercial no cambia
+  - operador ve mínimo necesario
+  - cliente aliado protegido
+  required_tests:
+  - cross-org matrix tests
+  approval_gate: null
+- id: ALY-003
+  epic: Allies
+  release: MVP-3
+  title: Solicitud de respaldo
+  priority: P0
+  depends_on:
+  - ALY-002
+  - FIN-001
+  expected_outputs:
+  - wholesale quote
+  - network queue
+  acceptance_criteria:
+  - aliado ve mayorista antes de confirmar
+  - red registra margen/costo
+  - POD vuelve al aliado
+  required_tests:
+  - backup flow e2e
+  approval_gate: null
+- id: ALY-004
+  epic: Allies
+  release: MVP-3
+  title: Capacidad compartida
+  priority: P1
+  depends_on:
+  - ALY-002
+  - EXT-001
+  expected_outputs:
+  - private capacity offers
+  - ally settlement
+  acceptance_criteria:
+  - oferta privada
+  - aceptación auditada
+  - liquidación separada
+  required_tests:
+  - ally capacity e2e
+  approval_gate: null
+- id: ALY-005
+  epic: Allies
+  release: MVP-3
+  title: Controles de no captación
+  priority: P0
+  depends_on:
+  - ALY-002
+  - NTF-001
+  expected_outputs:
+  - marketing suppression policy
+  - contact access audit
+  acceptance_criteria:
+  - clientes del aliado excluidos de campañas
+  - lecturas sensibles auditadas
+  - exportaciones tenant-only
+  required_tests:
+  - campaign exclusion
+  - sensitive read audit
+  approval_gate: null
+- id: REL-003
+  epic: Release
+  release: MVP-3
+  title: Puerta piloto de aliados
+  priority: P0
+  depends_on:
+  - ALY-001
+  - ALY-002
+  - ALY-003
+  - ALY-004
+  - ALY-005
+  expected_outputs:
+  - allies pilot report
+  acceptance_criteria:
+  - 3 aliados
+  - cero acceso cruzado
+  - conciliación correcta
+  required_tests:
+  - penetration tenant suite
+  approval_gate: owner_legal_operations
+- id: SCL-001
+  epic: Scalability
+  release: MVP-1
+  title: API y Worker stateless/distributed-ready
+  priority: P0
+  depends_on:
+  - FND-002
+  - RTM-002
+  - NTF-001
+  expected_outputs:
+  - externalized data protection keys
+  - distributed locks/cache abstractions
+  - worker lease/idempotency
+  - no-local-storage validation
+  acceptance_criteria:
+  - dos réplicas API atienden indistintamente sin perder sesión/estado
+  - dos Workers no duplican efectos
+  - reinicio de nodo no pierde archivos ni jobs confirmados
+  required_tests:
+  - multi-instance integration
+  - worker duplicate claim test
+  - node restart smoke
+  approval_gate: null
+- id: SCL-002
+  epic: Scalability
+  release: V1_SCALE
+  title: SignalR multi-instancia y prueba de capacidad
+  priority: P1
+  depends_on:
+  - SCL-001
+  - RTM-002
+  expected_outputs:
+  - Redis backplane or approved managed adapter
+  - connection/fanout metrics
+  - capacity test report
+  - reconnect runbook
+  acceptance_criteria:
+  - evento publicado desde una API alcanza clientes conectados a otra
+  - aislamiento tenant se mantiene en scale-out
+  - latencia y conexiones permanecen dentro del presupuesto aprobado
+  required_tests:
+  - multi-node SignalR integration
+  - load test
+  - tenant isolation under load
+  approval_gate: GATE-013
+- id: SCL-003
+  epic: Scalability
+  release: V1_SCALE
+  title: Preparación de PostgreSQL para crecimiento
+  priority: P1
+  depends_on:
+  - SCL-001
+  - OPS-002
+  expected_outputs:
+  - query performance dashboard
+  - index review
+  - PgBouncer-compatible configuration
+  - partition migration plan
+  - read replica routing design
+  acceptance_criteria:
+  - consultas críticas cumplen presupuesto
+  - migraciones son expand/contract
+  - tablas candidatas tienen plan probado sin downtime destructivo
+  required_tests:
+  - query benchmark
+  - migration compatibility test
+  - restore with partitioned sample
+  approval_gate: GATE-014
+- id: SCL-004
+  epic: Scalability
+  release: V1_SCALE
+  title: Escalamiento independiente de consumers
+  priority: P1
+  depends_on:
+  - SCL-001
+  - SCL-003
+  expected_outputs:
+  - worker profiles per consumer
+  - concurrency configuration
+  - queue/outbox lag autoscaling signals
+  - dead-letter review runbook
+  acceptance_criteria:
+  - notification/file/report consumers pueden escalar sin duplicar efectos
+  - backpressure evita saturar DB/proveedores
+  - lag y fallos generan alertas
+  required_tests:
+  - consumer scale test
+  - backpressure test
+  - poison message test
+  approval_gate: null
+- id: SCL-005
+  epic: Scalability
+  release: V1_SCALE
+  title: Separación de reportes y carga analítica
+  priority: P1
+  depends_on:
+  - BUS-002
+  - SCL-003
+  expected_outputs:
+  - report read models
+  - materialized views or replica routing
+  - asynchronous exports
+  - analytics extraction decision record
+  acceptance_criteria:
+  - reportes pesados no bloquean transacciones
+  - dashboards tienen freshness observable
+  - datos siguen aislados por tenant/ciudad
+  required_tests:
+  - concurrent operations/report load
+  - tenant report isolation
+  approval_gate: GATE-015
+- id: REL-004
+  epic: Release
+  release: V1_SCALE
+  title: Puerta de preparación para escala
+  priority: P0
+  depends_on:
+  - SCL-002
+  - SCL-003
+  - SCL-004
+  - SCL-005
+  expected_outputs:
+  - scale readiness report
+  - capacity dashboard
+  - load/failover/restore evidence
+  acceptance_criteria:
+  - todos los requisitos de AI-15 V1_SCALE_READINESS pasan
+  - no existe fuga cross-tenant bajo carga
+  - runbooks y rollback aprobados
+  required_tests:
+  - full scale readiness suite
+  approval_gate: owner_technology_operations
+- id: SEC-002
+  title: Bootstrap seguro de identidad y tracking
+  priority: P0
+  release: MVP-0
+  depends_on:
+  - FND-002
+  - DBA-001
+  - SEC-001
+  outputs:
+  - security.resolve_identity_context
+  - security.get_public_tracking_projection
+  - role/grant migration
+  acceptance_criteria:
+  - NOLOGIN bootstrap role owns only two functions
+  - functions use fixed search_path and no dynamic SQL
+  - missing/expired/foreign tracking tokens are indistinguishable
+  - runtime roles cannot SET ROLE bootstrap
+  - pgcrypto is installed in extensions and tracking qualifies digest over explicit UTF-8 bytes
+  - C# and PostgreSQL SHA-256 outputs match fixed contract vectors
+  - both bootstrap functions execute against a real PostgreSQL/PostGIS Testcontainers database
+  - public projection exposes only mapped public status and non-null public_event_code
+  required_tests:
+  - extension/hash symmetry integration
+  - SQL bootstrap execution
+  - public status mapping SQL/C# contract
+- id: TEN-002
+  title: Contexto RLS transaccional y pooling seguro
+  priority: P0
+  release: MVP-0
+  depends_on:
+  - TEN-001
+  outputs:
+  - EF transaction interceptor/unit of work
+  - retry tests
+  - pooler regression test harness
+  acceptance_criteria:
+  - set_config is first work after BEGIN
+  - context reapplied on retry
+  - outside-transaction tenant query fails closed
+  - no context leaks across pooled connections
+  - current_org_ids is passed as a parameterized uuid[] and converted to PostgreSQL array text
+  - empty organization context is exactly {} and never NULL
+- id: DBA-001
+  title: Esquemas físicos, privilegios y append-only
+  priority: P0
+  release: MVP-0
+  depends_on:
+  - FND-002
+  - ARC-001
+  outputs:
+  - module schemas
+  - AI-18 role migration
+  - catalog architecture tests
+  - extension placement migration
+  - outbox lease/purge privilege assertions
+  acceptance_criteria:
+  - schemas map 1:1 to modules
+  - pgcrypto is installed in extensions; PostGIS remains in public; runtime has no CREATE on public
+  - default privileges iterate every schema
+  - append-only tables including order_acceptances reject UPDATE/DELETE
+  - runtime roles have no direct SELECT/UPDATE/DELETE on outbox lanes
+  - outbox producers provide all values and EF INSERT emits no RETURNING
+  - deployment assertions verify privileged function ownership and grants
+- id: LIF-001
+  title: Ventana de reclamación y finalización
+  priority: P1
+  release: MVP-1
+  depends_on:
+  - ORD-002
+  - INC-001
+  outputs:
+  - finalization job
+  - claim window configuration
+  - tests
+  acceptance_criteria:
+  - claim cannot open after window
+  - CLOSED is finalized by idempotent job
+  - archival waits for privacy retention gate
+- id: SCL-006
+  title: Particionar telemetría antes de crecimiento local
+  priority: P1
+  release: V1_SCALE
+  depends_on:
+  - DRV-003
+  - SCL-003
+  outputs:
+  - driver_positions/location_outbox partition migration
+  - retention runbook
+  acceptance_criteria:
+  - partition plan tested before LOCAL_GROWTH
+  - location retention is approved by GATE-007
+  - business outbox latency unaffected by GPS load
+  - partition plan preserves global driver_position_id deduplication or documents approved replacement
+  - purge order is lane processed rows before driver_positions partition removal
+- id: OPS-003
+  title: Limpieza de idempotencia y sesiones expiradas
+  priority: P1
+  release: MVP-1
+  depends_on:
+  - OPS-001
+  - POD-001
+  outputs:
+  - scheduled cleanup job
+  - metrics and dry-run command
+  acceptance_criteria:
+  - expired idempotency keys are deleted in bounded batches
+  - expired upload sessions are marked EXPIRED and quarantined objects follow retention policy
+  - job is idempotent and tenant-safe
+- id: TEN-003
+  title: Provisioning transaccional de usuario y organización
+  priority: P0
+  release: MVP-0
+  depends_on:
+  - SEC-001
+  - TEN-002
+  - DBA-001
+  epic: Tenancy
+  expected_outputs:
+  - first-user provisioning service
+  - organization provisioning service
+  - audit event
+  - integration tests
+  acceptance_criteria:
+  - bootstrap role never writes
+  - identity_subject equals validated OIDC subject
+  - new UUIDs are generated by application and authorized only in transaction-local context
+  - organization and initial membership are atomic
+  - failed provisioning leaves no partial user/organization/membership
+  required_tests:
+  - first login provisioning
+  - organization provisioning rollback
+  - RLS fail-closed without pre-authorized UUID
+- id: OPS-004
+  title: Retención y purga segura de outbox
+  priority: P1
+  release: MVP-1
+  depends_on:
+  - OPS-001
+  - DBA-001
+  epic: Operations
+  expected_outputs:
+  - purge_outbox functions
+  - maintenance-role grant migration
+  - dry-run and bounded cleanup job
+  - metrics/runbook
+  acceptance_criteria:
+  - paqueteria_maintenance owns only purge functions and cannot claim/settle messages
+  - only old PROCESSED and DEAD rows are eligible
+  - PENDING, RETRY and PROCESSING are never deleted
+  - business and location lanes use independent cutoffs and batch limits
+  - dry-run returns counts without mutation
+  - purge activity is auditable and idempotent
+  required_tests:
+  - privilege catalog assertions
+  - active-state purge rejection
+  - bounded batch purge integration
