@@ -5,6 +5,16 @@ namespace Paqueteria.ArchitectureTests;
 public sealed class DependencyRulesTests
 {
     [Fact]
+    public void Project_reference_separators_are_normalized_for_the_current_platform()
+    {
+        var normalized = ProjectMetadataReader.NormalizeProjectReferenceInclude("../BuildingBlocks\\Domain/Domain.csproj");
+
+        Assert.Equal(
+            Path.Combine("..", "BuildingBlocks", "Domain", "Domain.csproj"),
+            normalized);
+    }
+
+    [Fact]
     public void Catalog_registers_every_production_project_exactly_once()
     {
         var registered = SolutionCatalog.All

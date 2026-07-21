@@ -25,7 +25,9 @@ internal static class ProjectMetadataReader
         var projectReferences = project.Descendants("ProjectReference")
             .Select(element => element.Attribute("Include")?.Value)
             .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => TestRepository.Normalize(Path.Combine(projectDirectory, value!)))
+            .Select(value => TestRepository.Normalize(Path.Combine(
+                projectDirectory,
+                NormalizeProjectReferenceInclude(value!))))
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var packages = ReadIncludes(project, "PackageReference");
@@ -45,4 +47,9 @@ internal static class ProjectMetadataReader
             .Cast<string>()
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    internal static string NormalizeProjectReferenceInclude(string include) =>
+        include
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
 }
