@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Application\Paqueteria.Application.csproj" />
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Contracts\Paqueteria.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Domain\Paqueteria.Domain.csproj" />
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Domain\Orders.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Endpoints\Orders.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Paqueteria.Api\Paqueteria.Api.csproj" />
+    <ProjectReference Include="..\..\src\Paqueteria.Worker\Paqueteria.Worker.csproj" />
+  </ItemGroup>
+</Project>
