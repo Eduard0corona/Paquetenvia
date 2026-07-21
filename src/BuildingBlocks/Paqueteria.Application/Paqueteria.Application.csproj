@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Paqueteria.Contracts\Paqueteria.Contracts.csproj" />
+    <ProjectReference Include="..\Paqueteria.Domain\Paqueteria.Domain.csproj" />
+  </ItemGroup>
+</Project>
