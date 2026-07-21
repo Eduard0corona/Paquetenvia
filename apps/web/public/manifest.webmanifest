@@ -1,0 +1,10 @@
+{
+  "name": "Paquetenvia",
+  "short_name": "Paquetenvia",
+  "description": "Plataforma local de paquetería.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f0f4f8",
+  "theme_color": "#102a43",
+  "lang": "es-MX"
+}
