@@ -80,10 +80,8 @@ function Invoke-MinioCommand {
     foreach ($entry in $Variables.GetEnumerator()) {
         $arguments += @("--env", "$($entry.Key)=$($entry.Value)")
     }
-    $arguments += @(
-        "minio-init", "-c",
-        'mc alias set smoke http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && ' + $Command
-    )
+    $script = 'mc alias set smoke http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && ' + $Command
+    $arguments += @("minio-init", "-c", $script)
     $result = Invoke-DockerCompose -Context $Context -Arguments $arguments -CaptureOutput
     return $result.Output.Trim()
 }
