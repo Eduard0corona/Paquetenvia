@@ -130,6 +130,20 @@ function Send-SmokeEmail {
     }
 }
 
+function Remove-MailpitMessage {
+    param(
+        [Parameter(Mandatory)] [string] $BaseUri,
+        [Parameter(Mandatory)] [string] $MessageId
+    )
+
+    $body = @{ IDs = @($MessageId) } | ConvertTo-Json -Compress
+    Invoke-RestMethod `
+        -Method Delete `
+        -Uri "$BaseUri/api/v1/messages" `
+        -ContentType "application/json" `
+        -Body $body | Out-Null
+}
+
 function Assert-SmokeData {
     param(
         [Parameter(Mandatory)] $Context,
@@ -305,7 +319,7 @@ ORDER BY extname;
     $redisValueCreated = $false
     Invoke-MinioCommand -Context $context -Command 'mc rm --force "smoke/$MINIO_BUCKET/$SMOKE_OBJECT"' -Variables @{ SMOKE_OBJECT = $minioObject } | Out-Null
     $minioObjectCreated = $false
-    Invoke-RestMethod -Method Delete -Uri "$mailpitBaseUri/api/v1/messages/$mailMessageId" | Out-Null
+    Remove-MailpitMessage -BaseUri $mailpitBaseUri -MessageId $mailMessageId
     $mailMessageId = $null
 
     $succeeded = $true
@@ -331,7 +345,7 @@ finally {
                 try { Invoke-MinioCommand -Context $context -Command 'mc rm --force "smoke/$MINIO_BUCKET/$SMOKE_OBJECT"' -Variables @{ SMOKE_OBJECT = $minioObject } | Out-Null } catch { }
             }
             if (-not [string]::IsNullOrWhiteSpace($mailMessageId)) {
-                try { Invoke-RestMethod -Method Delete -Uri "$mailpitBaseUri/api/v1/messages/$mailMessageId" | Out-Null } catch { }
+                try { Remove-MailpitMessage -BaseUri $mailpitBaseUri -MessageId $mailMessageId } catch { }
             }
         }
         if ($CI) {
