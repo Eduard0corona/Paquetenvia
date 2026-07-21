@@ -20,7 +20,7 @@
 | Frontend | lint, typecheck, 1 test and production build passed |
 | Local infrastructure | Windows PowerShell smoke passed in 66.5 seconds |
 | Package audit | .NET clean; pnpm reports one high `sharp` advisory |
-| GitHub Actions | Pending first branch push |
+| GitHub Actions | All five jobs passed in run `29877096491` |
 
 ## Gate evidence
 
@@ -72,7 +72,8 @@ The workflow keeps the four existing jobs and adds `Validate runtime contracts`.
 The general .NET job runs `Category!=PostgreSqlContract`; the runtime job runs
 `Category=PostgreSqlContract` on `ubuntu-latest`, with locked restore, Release
 build, a 20-minute timeout, Testcontainers diagnostics, failed `.trx` upload,
-and unconditional cleanup. Status will be updated after the draft PR runs.
+and unconditional cleanup. GitHub Actions run `29877096491` passed all five
+jobs: normative baseline, .NET, web, local infrastructure, and runtime contracts.
 
 The only remaining ARC-002 gate is successful real deletion through both purge
 functions after an authorized normative correction. SEC-001, SEC-002, TEN-001,
