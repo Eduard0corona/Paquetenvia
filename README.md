@@ -6,10 +6,11 @@ marca comercial y los proveedores productivos siguen pendientes de sus gates.
 
 ## Estado actual
 
-El repositorio implementa **FND-001** y la plantilla arquitectónica de
-**ARC-001**. Incluye la solución compilable, API y Worker mínimos, Building
+El repositorio implementa **FND-001**, la plantilla arquitectónica de
+**ARC-001** y el entorno local reproducible de **FND-002**. Incluye la solución
+compilable, API y Worker mínimos, Building
 Blocks pequeños, los módulos vacíos Orders y Pricing, reglas ejecutables de
-aislamiento, el workspace web y CI.
+aislamiento, el workspace web, infraestructura local y CI.
 
 La implementación vive fuera de `docs/normative/v0.6/`. Esa carpeta contiene la
 línea base normativa v0.6 congelada y es la fuente de verdad: no se modifica,
@@ -21,6 +22,30 @@ reformatea ni regenera como parte del desarrollo.
 - Node.js 24.13.0, fijado por `.nvmrc`.
 - pnpm 11.15.1, fijado por `packageManager`.
 - Python 3 para el validador canónico.
+- PowerShell 7 y Docker Engine con Docker Compose V2 para la infraestructura.
+
+## Infraestructura local
+
+FND-002 levanta PostGIS, Redis, MinIO y Mailpit; no levanta la API, el Worker ni
+el cliente web. Desde la raíz del repositorio:
+
+```powershell
+Copy-Item .\deploy\.env.example .\deploy\.env.local
+pwsh .\tools\local-environment.ps1 Up
+pwsh .\tools\local-environment.ps1 Status
+pwsh .\tools\local-environment.ps1 Smoke
+pwsh .\tools\local-environment.ps1 Down
+```
+
+`Down` conserva los datos. Para eliminar de forma explícita los contenedores,
+la red y los cuatro volúmenes del proyecto local:
+
+```powershell
+pwsh .\tools\local-environment.ps1 Reset -Force
+```
+
+Consulta la [guía del entorno local](docs/development/local-environment.md) para
+los puertos, healthchecks, persistencia, diagnóstico y alternativas de backup.
 
 ## Backend
 
@@ -92,8 +117,8 @@ src/Modules                 Módulos del monolito modular
 tests                       Arquitectura, unidad, integración y contratos
 apps/web                    Next.js PWA
 database                    Reservas para migraciones, seeds y políticas
-deploy                      Reserva de despliegue
-tools                       Reserva de automatización
+deploy                      Docker Compose e inicialización local
+tools                       Automatización y pruebas del entorno
 docs/normative/v0.6         Línea base normativa congelada
 .github/workflows           Integración continua
 ```
@@ -102,6 +127,6 @@ docs/normative/v0.6         Línea base normativa congelada
 
 No se implementan tablas, migraciones, RLS, autenticación real, endpoints de
 negocio, outbox funcional, SignalR, tracking, órdenes, pricing, despacho,
-custodia, sellos, ADR-032/ADR-033, Docker Compose (FND-002), proveedores externos
+custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
 ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
-reglas de arquitectura.
+reglas de arquitectura; FND-002 aporta solamente dependencias locales.
