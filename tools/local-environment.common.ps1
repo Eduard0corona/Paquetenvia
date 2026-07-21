@@ -92,10 +92,27 @@ function Invoke-DockerCompose {
 
     $allArguments = @($Context.DockerArguments) + $Arguments
     if ($CaptureOutput) {
-        $output = & docker @allArguments 2>&1
-        $exitCode = $LASTEXITCODE
+        # Keep native stderr separate from command output. Windows PowerShell
+        # surfaces redirected native stderr as ErrorRecord objects, while
+        # Compose writes normal progress there even when the command succeeds.
+        $standardErrorPath = [System.IO.Path]::GetTempFileName()
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $output = & docker @allArguments 2> $standardErrorPath
+            $exitCode = $LASTEXITCODE
+            $standardError = Get-Content -LiteralPath $standardErrorPath -Raw
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+            Remove-Item -LiteralPath $standardErrorPath -Force -ErrorAction SilentlyContinue
+        }
         if ($exitCode -ne 0 -and -not $AllowFailure) {
-            throw "docker compose $($Arguments -join ' ') failed with exit code $exitCode.`n$($output -join [Environment]::NewLine)"
+            $diagnostics = @($output)
+            if (-not [string]::IsNullOrWhiteSpace($standardError)) {
+                $diagnostics += $standardError.Trim()
+            }
+            throw "docker compose $($Arguments -join ' ') failed with exit code $exitCode.`n$($diagnostics -join [Environment]::NewLine)"
         }
 
         return [pscustomobject]@{
