@@ -5,92 +5,77 @@
 | Field | Verified value |
 |---|---|
 | Date | 2026-07-21 |
-| Validated commit | `6bab4077bef5712f967c38c4695ddf07943486c6` |
-| Status | Partial - normative purge contradiction remains |
-| Image | `postgis/postgis:17-3.5` |
-| Digest | `sha256:404171ea9058c801f405af25d63b3b8e5c9e50f2759e49390dbcc3c7ee533f4d` |
-| PostgreSQL | `17.5 (Debian 17.5-1.pgdg110+1)` |
-| PostGIS | `3.5 USE_GEOS=1 USE_PROJ=1 USE_STATS=1` |
-| AI-06 then AI-18 bootstrap | 234 ms locally |
-| ContractTests | 30 passed, 0 failed, 0 skipped |
+| Branch | `fix/arc-002-purge-contract` |
+| Status | Remediated and locally validated; `DONE` pending five green CI jobs |
+| Image | `postgis/postgis:18-3.6` |
+| OCI index digest | `sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d` |
+| PostgreSQL | `18.4 (Debian 18.4-1.pgdg13+1)` |
+| PostGIS | `3.6.4` |
+| AI-06 SHA-256 | `c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96` |
+| AI-18 SHA-256 | `7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd` |
 | Static ContractTests | 11 passed |
-| PostgreSQL ContractTests | 19 passed |
-| Complete .NET test run | 51 passed, 0 failed, 0 skipped |
-| PostgreSQL invocation | approximately 6.5 seconds locally |
-| Frontend | lint, typecheck, 1 test and production build passed |
-| Local infrastructure | Windows PowerShell smoke passed in 66.5 seconds |
-| Package audit | .NET clean; pnpm reports one high `sharp` advisory |
-| GitHub Actions | All five jobs passed in run `29877096491` |
+| PostgreSQL ContractTests | 20 passed |
+| Complete .NET test run | 52 passed, 0 failed, 0 skipped (Debug and Release) |
+| Frontend | lint, typecheck, 1 test, and production build passed |
+| Canonical inventory | 72 files verified |
+| Local infrastructure | Clean and existing-volume smoke passed; final Down/Reset left 0 resources |
+| Package audit | .NET clean; pnpm reports one tracked high `sharp` advisory |
+| GitHub Actions | Pending draft PR |
 
 ## Gate evidence
 
 | Contract area | Result | Evidence |
 |---|---|---|
-| Frozen baseline | Pass | Canonical validator returned `VALIDATION_OK`; normative diff is empty |
-| AI-06 identity | Pass | SHA-256 `4b5fe5397ff088b63e0c288770903512665c5fe8a8dc7401d7e4d3af64643505` |
-| AI-18 identity | Pass | SHA-256 `7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd`, equal to `CHECKSUMS_SHA256.txt` |
-| Empty database bootstrap | Pass | AI-06 and AI-18 executed directly and unmodified in that order |
-| Extensions/schemas | Pass | Live `pg_extension`, `pg_namespace`, digest execution and privilege checks |
-| Roles/ownership | Pass | Live roles, memberships, owners, table/column/function privileges and negative `SET ROLE` |
-| RLS/tenant context | Pass | Live non-superuser logins, forced policies, A/B/multiple/empty/absent contexts and pooled transactions |
-| Provisioning | Pass | Active memberships, fail-closed lookup, preauthorized creation, rollback and no partial rows |
-| Outbox direct access | Pass | Both lanes deny select/update/delete and `RETURNING`; producer inserts work |
-| Claim/settle/requeue | Pass | Both lanes, lease negatives, retry/dead transitions, stale recovery and two-worker concurrency |
-| Purge dry-run/cutoffs | Pass | Both lanes report terminal candidates and reject unsafe cutoffs |
-| Purge deletion | **Blocked** | Both functions return PostgreSQL `42501`; AI-06 `FOR UPDATE` conflicts with AI-18 `SELECT,DELETE` grant |
-| Tracking crypto/projection | Pass | C#/PostgreSQL vector equality and indistinguishable null projections for invalid tokens |
-| Acceptance | Pass | AI-24 bytes/hashes, stored bytea, RLS and append-only negatives |
-| Quote/order snapshot | Pass | All 17 copied comparisons, unique consumption, atomic commit and clean rollback |
-| Money/external offers | Pass | bigint catalog, >int32 value, total constraint and external-offer acceptance constraint |
-| OpenAPI/YAML/SignalR | Pass | Parsed contracts, counts, references, status mapping and fail-closed schema checks |
-| Manifest | Pass | Exact set of 72 files, byte lengths and SHA-256 values |
+| Canonical baseline | Pass | `validate_contracts.py` returns `VALIDATION_OK` and verifies 72 manifest entries |
+| AI-06 remediation | Pass | Both purge branches omit row locks and recheck ID, terminal state, and cutoff in the target `DELETE` |
+| AI-18 identity | Pass | File unchanged and exact required hash retained |
+| PostgreSQL baseline | Pass | Disposable tests execute PostgreSQL 18.4 and PostGIS 3.6.4 |
+| Empty database bootstrap | Pass | AI-06 then AI-18 execute directly from the canonical files |
+| Extensions | Pass | PostGIS is in `public`; pgcrypto is in `extensions` |
+| Least privilege | Pass | maintenance has `SELECT,DELETE` without `UPDATE`; Worker has function-only purge access |
+| Business outbox purge | Pass | Dry-run, batch deletion, exact counts, state/cutoff preservation, unsafe cutoff, and idempotence |
+| Location outbox purge | Pass | Dry-run, batch deletion, exact counts, state/cutoff preservation, unsafe cutoff, and idempotence |
+| Concurrent purge | Pass | Two timed connections remove the exact eligible set without double count, deadlock, active-row loss, or residual transaction |
+| Other runtime contracts | Pass | Bootstrap, roles, RLS, provisioning, lifecycle, tracking, acceptance, snapshots, and money |
+| FND-002 persistence | Pass | Named volume mounts at `/var/lib/postgresql`; smoke preserves data through restart and `Down` |
+| CI completion gate | Pending | ARC-002 remains not-DONE until all five draft-PR jobs pass |
 
-Negative coverage includes mutated and padded tracking tokens, noncanonical
-acceptance bytes, empty/null/malformed tenant context, cross-tenant writes,
-privileged role assumption, runtime `CREATE`, direct outbox access,
-`INSERT ... RETURNING`, wrong and expired leases, repeated settle, active-state
-purge preservation, expired/revoked tracking, private timeline events,
-append-only update/delete, second quote consumption, inconsistent totals,
-invalid external-offer acceptance, and an unmapped public status.
+## Controlled normative change
 
-## Differences and contradictions
+The only behavioral SQL changes are inside the real deletion branches of
+`security.purge_outbox` and `security.purge_location_outbox`. Candidate locking
+was removed because it required an `UPDATE` privilege that ADR-030 intentionally
+denies to maintenance. The target `DELETE` now guards against stale candidate
+observations by rechecking the ID, terminal state, and relevant cutoff.
 
-1. AI-06 real purge uses `SELECT ... FOR UPDATE SKIP LOCKED`; AI-18 grants the
-   owning maintenance role `SELECT, DELETE` but not `UPDATE`. PostgreSQL 17
-   therefore rejects real purge with `42501`. No normative file was changed and
-   no compensating grant was introduced.
-2. AI-06's header comment identifies a PostgreSQL 18 baseline. The exact image
-   mandated by FND-002 and this task executes PostgreSQL 17.5.
+No `UPDATE` grant was added. ADR-030 and AI-18 were not modified. The bundle was
+reissued as `v0.6-full-canonical-sync-3-arc002-purge-remediation` with a complete
+manifest and checksum refresh.
 
-No inconsistent status was found between AI-04, OpenAPI, SignalR and live SQL.
-No manifest, hash, OpenAPI reference, RLS catalog or cryptographic-vector drift
-was found.
+## Local PostgreSQL 18 validation
 
-## CI and pending work
+The first PostgreSQL 18 start correctly rejected the existing PostgreSQL 17
+local volume. The authorized `Reset -Force` removed only the four named volumes
+for project `paquetenvia-local`. A clean `Up` then initialized PostgreSQL 18,
+and the smoke check proved exactly one initialization, persistence through
+individual restarts and a non-destructive `Down`/recovery cycle. A second smoke
+over the retained volume reported zero reinitializations. Final `Down` followed
+by `Reset -Force` left zero project containers and zero project volumes.
 
-The workflow keeps the four existing jobs and adds `Validate runtime contracts`.
-The general .NET job runs `Category!=PostgreSqlContract`; the runtime job runs
-`Category=PostgreSqlContract` on `ubuntu-latest`, with locked restore, Release
-build, a 20-minute timeout, Testcontainers diagnostics, failed `.trx` upload,
-and unconditional cleanup. GitHub Actions run `29877096491` passed all five
-jobs: normative baseline, .NET, web, local infrastructure, and runtime contracts.
+AI-06 and AI-18 were executed only in disposable Testcontainers. They were not
+applied to the FND-002 persistent database.
 
-The only remaining ARC-002 gate is successful real deletion through both purge
-functions after an authorized normative correction. SEC-001, SEC-002, TEN-001,
-DBA-001, migrations, persistent API/Worker integration and product behavior are
-not ARC-002 work and remain pending.
+## Dependency follow-up
 
-The package review also found GitHub advisory `GHSA-f88m-g3jw-g9cj`, published
-on the validation date, against `sharp 0.34.5` inherited from Next.js. The
-patched line starts at 0.35.0, while current Next.js 16.2.11 still declares
-`sharp ^0.34.5`. ARC-002 does not force an unsupported transitive override; this
-is recorded for separate frontend dependency maintenance.
+`pnpm audit` remains enabled. The inherited `sharp` advisory
+`GHSA-f88m-g3jw-g9cj` is not overridden in this SQL/infrastructure remediation;
+it is assigned to a separate GitHub issue with exposure and closure criteria.
 
 ## Safety confirmation
 
-- `docs/normative/v0.6/` was not modified.
-- AI-06 and AI-18 ran only in the disposable Testcontainers database.
-- No migration was created and the FND-002 persistent database was untouched.
-- API and Worker were not connected to PostgreSQL.
-- No business logic, real PII, production provider, secret or deployment was
-  introduced.
+- PR #4's implementation and tests are preserved.
+- No migration or product database upgrade was created.
+- No API or Worker was connected to the persistent database.
+- SEC-001, SEC-002, TEN-001, DBA-001, product providers, and business logic were
+  not started.
+- No merge is performed by this remediation PR.

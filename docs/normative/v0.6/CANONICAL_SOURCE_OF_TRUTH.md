@@ -1,8 +1,8 @@
 # Fuente única de verdad — paquete canónico v0.6
 
-**Identificador de bundle:** `v0.6-full-canonical-sync-2-adr032-033-registered`  
+**Identificador de bundle:** `v0.6-full-canonical-sync-3-arc002-purge-remediation`
 **Fecha de reconstrucción:** 2026-07-21  
-**Estado:** normativa consolidada para revisión cruzada con Claude.
+**Estado:** normativa consolidada y validada localmente; ARC-002 pendiente de CI.
 
 ## Regla de autoridad
 
@@ -10,7 +10,7 @@ Este ZIP completo es la única entrega que debe validarse. No mezclar archivos s
 
 ## Archivos críticos
 
-- `database/AI-06_SCHEMA.sql` SHA-256: `4b5fe5397ff088b63e0c288770903512665c5fe8a8dc7401d7e4d3af64643505`
+- `database/AI-06_SCHEMA.sql` SHA-256: `c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96`
 - `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd`
 
 El SQL canónico contiene:
@@ -23,6 +23,7 @@ El SQL canónico contiene:
 - backoff predeterminado en `settle_*`;
 - `pgcrypto` en `extensions` y PostGIS en `public`;
 - tracking público fail-closed y `order_acceptances` append-only.
+- purga terminal sin privilegio `UPDATE`, con estado y cutoff revalidados en el `DELETE`.
 
 
 ## Referencias de diseño registradas
@@ -40,6 +41,10 @@ sha256sum -c CHECKSUMS_SHA256.txt
 
 `CHECKSUMS_SHA256.txt` cubre todos los archivos funcionales excepto el propio archivo de checksums y `MANIFEST.json`. `MANIFEST.json` registra el inventario consolidado completo.
 
-## Limitación honesta
+## Evidencia de ejecución real
 
-La validación incluida es estática. SQL, funciones RLS, privilegios y concurrencia deben ejecutarse contra PostgreSQL/PostGIS real mediante Testcontainers antes de generar migraciones productivas.
+ARC-002 ejecutó AI-06 seguido de AI-18 en Testcontainers sobre PostgreSQL 18 y
+PostGIS 3.6. Las dos familias de outbox completaron claim, settle, requeue,
+purge real e invocaciones purge concurrentes sin doble conteo. Esta validación
+no autoriza migraciones productivas ni la aplicación de AI-06/AI-18 a la base
+persistente de desarrollo.

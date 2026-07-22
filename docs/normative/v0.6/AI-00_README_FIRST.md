@@ -2,8 +2,8 @@
 
 **Proyecto:** [NOMBRE COMERCIAL PENDIENTE] — plataforma de paquetería local en Culiacán  
 **Versión:** 0.6  
-**Fecha:** 2026-07-20  
-**Estado:** línea base normativa de seguridad y runtime. Sustituye completamente a v0.5.
+**Fecha:** 2026-07-21
+**Estado:** línea base normativa de seguridad y runtime validada en PostgreSQL 18/PostGIS 3.6. Sustituye completamente a v0.5.
 
 ## Propósito
 
@@ -66,5 +66,9 @@ Pueden iniciar con estos contratos: `FND-001`, `ARC-001` y `FND-002`.
 Un entorno reproducible debe completar 20 entregas sintéticas sin pérdida de eventos, fuga tenant ni POD incompleto; recuperar leases abandonados; negar settles obsoletos; producir tracking público minimizado y validar bootstrap/hash/mapeos contra PostgreSQL real.
 ## Identidad de esta entrega consolidada
 
-Este directorio pertenece al bundle `v0.6-full-canonical-sync-2-adr032-033-registered`. Para evitar mezclar copias intermedias, validar primero `CANONICAL_SOURCE_OF_TRUTH.md`, `CLAUDE_VALIDATION_HANDOFF.md`, `MANIFEST.json` y `CHECKSUMS_SHA256.txt`.
+Este directorio pertenece al bundle `v0.6-full-canonical-sync-3-arc002-purge-remediation`. Para evitar mezclar copias intermedias, validar primero `CANONICAL_SOURCE_OF_TRUTH.md`, `CLAUDE_VALIDATION_HANDOFF.md`, `MANIFEST.json` y `CHECKSUMS_SHA256.txt`.
 
+La remediación de ARC-002 está validada localmente y pendiente de los cinco
+jobs de CI antes de marcarse `DONE`: AI-06 y AI-18 se ejecutaron en PostgreSQL
+18/PostGIS 3.6 efímero, incluida purga real y concurrente para ambos lanes.
+Esto no autoriza migraciones ni ejecución contra la base persistente de FND-002.

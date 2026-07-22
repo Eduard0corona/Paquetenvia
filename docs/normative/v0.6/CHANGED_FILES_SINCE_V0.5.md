@@ -1,5 +1,15 @@
 # Archivos consolidados desde v0.5
 
+## Revisión controlada sync 3 para ARC-002
+
+Esta revisión modifica exclusivamente AI-06 para remediar purge y actualiza los
+artefactos de integridad, trazabilidad y validación que dependen de su identidad.
+AI-18 y ADR-030 no cambian. Los ADR-032/033 sólo actualizan la referencia
+hardcodeada al hash canónico de AI-06; su decisión v0.7 no cambia.
+
+El detalle exacto de archivos y hashes vigentes está en `MANIFEST.json` y
+`CHECKSUMS_SHA256.txt`.
+
 Esta lista compara el contenido de v0.5 con la línea base canónica v0.6 antes de agregar los documentos de entrega de este bundle.
 
 - Modificados: **21**

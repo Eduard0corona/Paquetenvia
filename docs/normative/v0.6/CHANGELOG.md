@@ -1,5 +1,17 @@
 # Changelog
 
+## Revisión canónica v0.6 sync 3 — 2026-07-21
+
+- ARC-002 remedia el bloqueo `PARTIAL`; el estado `DONE` queda condicionado a
+  que los cinco jobs del PR pasen.
+- `purge_outbox` y `purge_location_outbox` ya no usan `FOR UPDATE SKIP LOCKED`.
+- El `DELETE` revalida ID, estado terminal y cutoff sobre la fila objetivo.
+- ADR-030 se conserva: maintenance continúa con `SELECT,DELETE`, sin `UPDATE`.
+- AI-18 permanece sin cambios y conserva su checksum.
+- La ejecución canónica se alinea a PostgreSQL 18/PostGIS 3.6.
+- Purga real, límites, idempotencia y concurrencia se validan en Testcontainers.
+- Bundle emitido como `v0.6-full-canonical-sync-3-arc002-purge-remediation`.
+
 ## Registro de decisiones v0.7 — 2026-07-21
 
 - ADR-032 aceptado como referencia de diseño para v0.7: tracking en vivo, `PICKUP_IN_PROGRESS` y verificación segura de entrega.

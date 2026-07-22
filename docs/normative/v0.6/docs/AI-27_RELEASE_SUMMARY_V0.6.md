@@ -1,6 +1,6 @@
 # AI-27 — Resumen de liberación v0.6
 
-**Estado:** NORMATIVE_BASELINE
+**Estado:** NORMATIVE_BASELINE_RUNTIME_VALIDATED_PENDING_CI
 
 v0.6 sustituye a v0.5 como fuente de verdad para código y migraciones. Conserva el monolito modular .NET/Next.js y endurece los bordes de seguridad y operación.
 
@@ -23,4 +23,12 @@ v0.6 sustituye a v0.5 como fuente de verdad para código y migraciones. Conserva
 
 ## Primera verificación de implementación
 
-Aplicar AI-06 y AI-18 en PostgreSQL/PostGIS real, ejecutar funciones bootstrap/outbox, verificar catálogo de privilegios, comparar hashing C#/SQL y recorrer el mapa público de 17 estados.
+ARC-002 completó la primera verificación sobre PostgreSQL 18/PostGIS 3.6
+efímero: AI-06 seguido de AI-18, bootstrap, catálogo de privilegios, RLS,
+hashing C#/SQL, mapa público de 17 estados y lifecycle completo de ambos outbox,
+incluida purga real y concurrente.
+
+El cierre `DONE` de ARC-002 queda pendiente de los cinco jobs del PR.
+
+Esto valida el contrato; no constituye una migración ni una aplicación sobre la
+base persistente de FND-002.
