@@ -931,10 +931,16 @@ BEGIN
     WHERE (status='PROCESSED' AND processed_at < p_processed_before)
        OR (status='DEAD' AND COALESCE(processed_at,created_at) < p_dead_before)
     ORDER BY created_at
-    FOR UPDATE SKIP LOCKED
     LIMIT LEAST(GREATEST(p_batch_size,1),10000)
   ), deleted AS (
-    DELETE FROM platform.outbox_events o USING candidates c WHERE o.id=c.id RETURNING 1
+    DELETE FROM platform.outbox_events o
+    USING candidates c
+    WHERE o.id=c.id
+      AND (
+        (o.status='PROCESSED' AND o.processed_at < p_processed_before)
+        OR (o.status='DEAD' AND COALESCE(o.processed_at,o.created_at) < p_dead_before)
+      )
+    RETURNING 1
   )
   SELECT count(*) INTO v_count FROM deleted;
   RETURN v_count;
@@ -971,10 +977,16 @@ BEGIN
     WHERE (status='PROCESSED' AND processed_at < p_processed_before)
        OR (status='DEAD' AND COALESCE(processed_at,created_at) < p_dead_before)
     ORDER BY created_at
-    FOR UPDATE SKIP LOCKED
     LIMIT LEAST(GREATEST(p_batch_size,1),50000)
   ), deleted AS (
-    DELETE FROM platform.location_outbox_events o USING candidates c WHERE o.id=c.id RETURNING 1
+    DELETE FROM platform.location_outbox_events o
+    USING candidates c
+    WHERE o.id=c.id
+      AND (
+        (o.status='PROCESSED' AND o.processed_at < p_processed_before)
+        OR (o.status='DEAD' AND COALESCE(o.processed_at,o.created_at) < p_dead_before)
+      )
+    RETURNING 1
   )
   SELECT count(*) INTO v_count FROM deleted;
   RETURN v_count;

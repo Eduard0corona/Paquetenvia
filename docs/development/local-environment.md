@@ -25,7 +25,7 @@ No reutilices esas credenciales fuera del equipo local.
 
 | Servicio | Imagen fijada | Puerto interno | Puerto local configurable | Volumen | Healthcheck |
 | --- | --- | ---: | --- | --- | --- |
-| PostgreSQL + PostGIS | `postgis/postgis:17-3.5` | 5432 | `POSTGRES_HOST_PORT` (5432) | `postgres_data` | `pg_isready` |
+| PostgreSQL + PostGIS | `postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d` | 5432 | `POSTGRES_HOST_PORT` (5432) | `postgres_data` | `pg_isready` |
 | Redis con AOF | `redis:8.2.7-alpine` | 6379 | `REDIS_HOST_PORT` (6379) | `redis_data` | `redis-cli PING` autenticado |
 | MinIO API | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | 9000 | `MINIO_API_HOST_PORT` (9000) | `minio_data` | `mc ready local` |
 | MinIO consola | misma imagen | 9001 | `MINIO_CONSOLE_HOST_PORT` (9001) | `minio_data` | mismo servicio |
@@ -33,8 +33,8 @@ No reutilices esas credenciales fuera del equipo local.
 | Mailpit UI/API | misma imagen | 8025 | `MAIL_UI_HOST_PORT` (8025) | `mailpit_data` | mismo servicio |
 
 El bootstrap de MinIO usa `minio/mc:RELEASE.2025-08-13T08-35-41Z`. Todas las
-imágenes conservan además un digest `sha256` en el Compose. Se eligió PostgreSQL
-17 para mantener la ruta de datos tradicional comprobada por la imagen PostGIS;
+imágenes conservan además un digest `sha256` en el Compose. PostgreSQL 18 usa el
+montaje oficial `/var/lib/postgresql`, que contiene el `PGDATA` versionado;
 Redis Alpine reduce el tamaño sin cambiar su persistencia AOF; las versiones de
 MinIO, `mc` y Mailpit son releases explícitos, no canales flotantes.
 
@@ -146,8 +146,10 @@ de levantar recursos y rechaza `latest`, imágenes sin digest, modo privilegiado
 red host, puertos no-loopback, Docker socket, montajes normativos, servicios de
 aplicación o volúmenes ausentes. Después:
 
-1. levanta el entorno dos veces y espera healthchecks;
-2. confirma `postgis` en `public` y `pgcrypto` en `extensions`;
+1. levanta el entorno dos veces, espera healthchecks y exige una sola
+   inicialización sobre volumen limpio (ninguna sobre volumen existente);
+2. confirma PostgreSQL 18, PostGIS 3.6, `postgis` en `public` y `pgcrypto` en
+   `extensions`;
 3. escribe y lee datos reales por PostgreSQL, Redis, MinIO y SMTP/API de Mailpit;
 4. confirma persistencia después de reiniciar cada servicio y después de
    `Down` / `Up`;
@@ -173,6 +175,9 @@ si falla. La limpieza final verifica que no sobrevivan recursos etiquetados.
 - **Credenciales cambiadas tras el primer arranque:** los entrypoints no vuelven
   a inicializar volúmenes existentes. Exporta lo necesario, ejecuta `Reset` y
   vuelve a levantar.
+- **Volumen creado por PostgreSQL 17:** PostgreSQL 18 rechaza correctamente ese
+  layout. Exporta o migra los datos si son necesarios; para datos locales
+  prescindibles, ejecuta `Reset -Force` y vuelve a levantar.
 - **`minio-init` exited (0):** es el estado esperado después de crear o verificar
   el bucket.
 

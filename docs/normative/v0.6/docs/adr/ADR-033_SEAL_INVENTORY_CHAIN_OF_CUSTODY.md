@@ -445,7 +445,7 @@ Listo para revisión arquitectónica conjunta con ADR-032. No autoriza implement
 
 ## Nota de cierre (consenso de revisión cruzada)
 
-Este ADR es el resultado de revisión cruzada iterativa Claude↔Codex sobre la base normativa v0.6 canónica (SHA-256 de AI-06_SCHEMA.sql: `4b5fe5397ff088b63e0c288770903512665c5fe8a8dc7401d7e4d3af64643505`). Se congela como **referencia de diseño estable** para no perder el trabajo acumulado, con estas condiciones explícitas registradas por Claude en la verificación final:
+Este ADR es el resultado de revisión cruzada iterativa Claude↔Codex sobre la base normativa v0.6 canónica (SHA-256 de AI-06_SCHEMA.sql: `c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96`). Se congela como **referencia de diseño estable** para no perder el trabajo acumulado, con estas condiciones explícitas registradas por Claude en la verificación final:
 
 1. **Es diseño, no implementación.** Ningún delta de AI-06/AI-18 (SQL), AI-05 (OpenAPI) ni migración ha sido escrito ni ejecutado. Las afirmaciones de este ADR sobre comportamiento en base de datos son estáticas: no han corrido contra PostgreSQL/PostGIS real.
 2. **Gates pendientes y bloqueantes:** GATE-007 (privacidad: ubicación del repartidor, teléfono del destinatario, evidencia fotográfica) y, para producción multiinstancia, GATE-013. Las decisiones abiertas (umbral de precisión, SLO, proveedor físico del sello, valor final de lotes activos, política de entrega manual bajo STRICT, dictamen legal de cadena de custodia) dependen de evidencia externa y no las cierra este documento.

@@ -1,7 +1,7 @@
 # AI-26 — Informe de validación v0.6
 
-**Fecha:** 2026-07-20  
-**Alcance:** validación estructural, contractual, criptográfica y de integridad del paquete.
+**Fecha:** 2026-07-21
+**Alcance:** validación estructural, contractual, criptográfica, de integridad y ejecución real del paquete.
 
 ## Resultado
 
@@ -24,6 +24,9 @@ La línea base v0.6 pasa las validaciones estáticas incluidas en `tools/validat
 - Escenarios Gherkin v0.6 presentes.
 - Delimitadores SQL `$$` balanceados.
 - Hashes SHA-256 del MANIFEST verificados después de generarlo.
+- Purge real elimina únicamente terminales antiguos, respeta lote y es idempotente.
+- Dos conexiones Worker concurrentes purgan sin doble conteo, deadlock ni lock residual.
+- Maintenance conserva `SELECT,DELETE` sobre ambos lanes y no recibe `UPDATE`.
 
 ## Verificación contra documentación oficial
 
@@ -33,6 +36,14 @@ La línea base v0.6 pasa las validaciones estáticas incluidas en `tools/validat
 - EF Core permite deshabilitar generación de valores mediante `ValueGeneratedNever`.
 - PostGIS permanece normalmente en `public` y su extensión no es relocatable de forma ordinaria.
 
-## Limitación honesta
+## Ejecución real ARC-002
 
-Este entorno no dispone de un servidor PostgreSQL/PostGIS ni Docker/Testcontainers, por lo que no se ejecutaron AI-06 y AI-18 contra una base real. `SEC-002`, `DBA-001` y `ARC-002` exigen esa prueba antes de considerar la primera migración implementada.
+AI-06 y AI-18 se ejecutaron, en ese orden, sobre una base efímera y limpia de
+Testcontainers con PostgreSQL 18/PostGIS 3.6. Las pruebas usan logins runtime
+no-superuser, pooling real y credenciales sintéticas. Bootstrap, extensiones,
+roles, RLS, provisioning, outbox, tracking, aceptación, snapshots y dinero
+pasaron contra PostgreSQL real. Los cinco jobs del PR pasaron en el run
+`29879390854`; ARC-002 queda `DONE`.
+
+La validación no crea migraciones ni aplica los scripts a la base persistente de
+FND-002. `SEC-002` y `DBA-001` permanecen tareas independientes.

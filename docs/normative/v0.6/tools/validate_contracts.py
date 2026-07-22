@@ -177,6 +177,36 @@ def main() -> int:
             errors.append(f"Missing role-model function binding: {function}")
     checks.append("SQL runtime hardening: extensions, acceptance, leases and eight lifecycle functions present")
 
+    purge_contracts = {
+        "purge_outbox": "platform.outbox_events",
+        "purge_location_outbox": "platform.location_outbox_events",
+    }
+    for function, table in purge_contracts.items():
+        function_match = re.search(
+            rf"CREATE OR REPLACE FUNCTION security\.{function}\([\s\S]*?AS \$\$([\s\S]*?)END \$\$;",
+            sql,
+        )
+        if not function_match:
+            errors.append(f"Missing purge body: {function}")
+            continue
+        body = function_match.group(1)
+        if "FOR UPDATE" in body or "SKIP LOCKED" in body:
+            errors.append(f"{function} still requires UPDATE privilege for candidate locking")
+        if f"DELETE FROM {table} o" not in body:
+            errors.append(f"{function} does not delete from its canonical lane")
+        if "o.status='PROCESSED'" not in body or "o.status='DEAD'" not in body:
+            errors.append(f"{function} does not recheck terminal state in the DELETE target")
+        if "o.processed_at < p_processed_before" not in body:
+            errors.append(f"{function} does not recheck the processed cutoff in the DELETE target")
+        if "COALESCE(o.processed_at,o.created_at) < p_dead_before" not in body:
+            errors.append(f"{function} does not recheck the dead cutoff in the DELETE target")
+
+    if "GRANT SELECT,DELETE ON platform.outbox_events,platform.location_outbox_events TO paqueteria_maintenance;" not in role_sql:
+        errors.append("Maintenance no longer has the exact SELECT/DELETE outbox grant")
+    if re.search(r"GRANT[^;]*UPDATE[^;]*TO paqueteria_maintenance", role_sql, re.S):
+        errors.append("Maintenance was granted UPDATE contrary to ADR-030")
+    checks.append("Purge remediation: target predicates rechecked; maintenance remains SELECT/DELETE without row locking")
+
     for line_number, line in enumerate(sql.splitlines(), start=1):
         stripped = line.strip()
         if re.match(r"^[a-z_][a-z0-9_]*_cents[a-z0-9_]*\s+", stripped):

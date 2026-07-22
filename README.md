@@ -6,10 +6,9 @@ marca comercial y los proveedores productivos siguen pendientes de sus gates.
 
 ## Estado actual
 
-La validación ejecutable de **ARC-002** está incorporada, pero permanece
-parcial por una contradicción normativa de privilegios en las funciones de
-purge. Los contratos no afectados se validan de forma estática y contra
-PostgreSQL/PostGIS real y efímero.
+La validación ejecutable de **ARC-002** está **DONE** después de pasar los cinco
+jobs de CI. Los contratos se validan de forma estática y contra PostgreSQL
+18/PostGIS 3.6 real y efímero, incluida purga real y concurrente de ambos outbox.
 
 El repositorio implementa **FND-001**, la plantilla arquitectónica de
 **ARC-001** y el entorno local reproducible de **FND-002**. Incluye la solución
@@ -18,8 +17,9 @@ Blocks pequeños, los módulos vacíos Orders y Pricing, reglas ejecutables de
 aislamiento, el workspace web, infraestructura local y CI.
 
 La implementación vive fuera de `docs/normative/v0.6/`. Esa carpeta contiene la
-línea base normativa v0.6 congelada y es la fuente de verdad: no se modifica,
-reformatea ni regenera como parte del desarrollo.
+línea base normativa v0.6 y es la fuente de verdad. La revisión sync 3 fue
+reemitida mediante una remediación controlada de purge; futuras modificaciones
+siguen requiriendo autorización normativa explícita.
 
 ## Requisitos
 
@@ -109,11 +109,11 @@ git diff --exit-code -- docs/normative/v0.6
 ```
 
 El validador debe terminar en `VALIDATION_OK` y el hash de AI-06 debe ser
-`4b5fe5397ff088b63e0c288770903512665c5fe8a8dc7401d7e4d3af64643505`.
+`c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96`.
 
 ## Contratos runtime ARC-002
 
-ContractTests ejecuta AI-06 y luego AI-18, sin modificarlos, exclusivamente en
+ContractTests ejecuta la revisión canónica de AI-06 y luego AI-18 exclusivamente en
 un PostgreSQL/PostGIS efímero creado por Testcontainers. Requiere Docker y no
 usa la base persistente de FND-002:
 
@@ -124,8 +124,8 @@ dotnet test .\tests\Paqueteria.ContractTests\Paqueteria.ContractTests.csproj
 
 Consulta la [guía de validación ARC-002](docs/development/arc-002-contract-validation.md)
 y el [reporte verificable](docs/development/arc-002-validation-report.md). El
-reporte explica por qué claim, settle, requeue y purge dry-run pasan, mientras
-la eliminación real de purge queda bloqueada hasta una corrección normativa.
+reporte registra claim, settle, requeue, dry-run, purge real, idempotencia y
+concurrencia sin doble conteo.
 
 ARC-002 aporta validación contractual efímera; no crea migraciones ni una
 aplicación funcional.

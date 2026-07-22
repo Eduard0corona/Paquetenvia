@@ -6,6 +6,7 @@ PASS: Internal order statuses: 17 consistent
 PASS: Public status mapping: 17 contract/SQL/SignalR/OpenAPI entries consistent
 PASS: SQL tables: 36; foreign-key targets resolved
 PASS: SQL runtime hardening: extensions, acceptance, leases and eight lifecycle functions present
+PASS: Purge remediation: target predicates rechecked; maintenance remains SELECT/DELETE without row locking
 PASS: Money: SQL bigint cents and OpenAPI int64
 PASS: Role model: ownership normalized; outbox access function-only; maintenance separated
 PASS: Cryptographic test vectors recomputed successfully
@@ -15,3 +16,19 @@ PASS: Manifest entries checked: 72
 VALIDATION_OK
 
 Exit code: 0
+
+$ dotnet test tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --filter Category=PostgreSqlContract
+PostgreSQL: 18.4 (Debian 18.4-1.pgdg13+1)
+PostGIS: 3.6 USE_GEOS=1 USE_PROJ=1 USE_STATS=1
+AI-06 -> AI-18: bootstrap successful
+Purge business/location: real deletion, limits, dry-run and idempotency successful
+Concurrent purge: no double count, deadlock, active-row deletion or residual lock
+Result: 20 passed, 0 failed, 0 skipped
+
+$ GitHub Actions run 29879390854
+Validate normative baseline: passed
+Build and test .NET: passed
+Validate runtime contracts: passed
+Validate web workspace: passed
+Validate local infrastructure: passed
+ARC-002: DONE

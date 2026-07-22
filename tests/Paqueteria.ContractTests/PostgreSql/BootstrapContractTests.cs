@@ -26,8 +26,8 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         Console.WriteLine($"PostgreSQL version: {fixture.PostgreSqlVersion}");
         Console.WriteLine($"PostGIS version: {fixture.PostGisVersion}");
         Console.WriteLine($"AI-06 -> AI-18 bootstrap: {fixture.BootstrapDuration.TotalMilliseconds:F0} ms");
-        Assert.StartsWith("17.", fixture.PostgreSqlVersion, StringComparison.Ordinal);
-        Assert.False(string.IsNullOrWhiteSpace(fixture.PostGisVersion));
+        Assert.StartsWith("18.", fixture.PostgreSqlVersion, StringComparison.Ordinal);
+        Assert.StartsWith("3.6", fixture.PostGisVersion, StringComparison.Ordinal);
         Assert.True(fixture.BootstrapDuration < TimeSpan.FromMinutes(2), $"Bootstrap took {fixture.BootstrapDuration}.");
 
         var schemas = await QueryStringsAsync(
@@ -177,6 +177,9 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
 
         foreach (var lane in new[] { "platform.outbox_events", "platform.location_outbox_events" })
         {
+            Assert.True(await HasTablePrivilegeAsync("paqueteria_maintenance", lane, "SELECT"));
+            Assert.True(await HasTablePrivilegeAsync("paqueteria_maintenance", lane, "DELETE"));
+            Assert.False(await HasTablePrivilegeAsync("paqueteria_maintenance", lane, "UPDATE"));
             foreach (var role in new[] { "paqueteria_app", "paqueteria_worker" })
             {
                 Assert.True(await HasTablePrivilegeAsync(role, lane, "INSERT"));

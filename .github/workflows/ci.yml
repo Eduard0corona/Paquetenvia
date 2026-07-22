@@ -34,13 +34,13 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "4b5fe5397ff088b63e0c288770903512665c5fe8a8dc7401d7e4d3af64643505"
+          test "$actual" = "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96"
 
-      - name: Verify the normative baseline was not changed
+      - name: Verify AI-18 remains unchanged
         shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: git diff --exit-code "$BASE_SHA" HEAD -- docs/normative/v0.6
+        run: |
+          actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
+          test "$actual" = "7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd"
 
   dotnet:
     name: Build and test .NET

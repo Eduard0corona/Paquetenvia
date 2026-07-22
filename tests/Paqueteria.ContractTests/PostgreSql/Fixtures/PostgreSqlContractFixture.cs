@@ -9,8 +9,8 @@ namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
 public sealed class PostgreSqlContractFixture : IAsyncLifetime
 {
-    public const string Image = "postgis/postgis:17-3.5@sha256:404171ea9058c801f405af25d63b3b8e5c9e50f2759e49390dbcc3c7ee533f4d";
-    public const string SchemaSha256 = "4b5fe5397ff088b63e0c288770903512665c5fe8a8dc7401d7e4d3af64643505";
+    public const string Image = "postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d";
+    public const string SchemaSha256 = "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96";
     public const string RolesSha256 = "7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd";
     public const string AppLogin = "paqueteria_app_login_test";
     public const string WorkerLogin = "paqueteria_worker_login_test";
