@@ -193,12 +193,26 @@ public sealed class RlsAndProvisioningContractTests(PostgreSqlContractFixture fi
     [PostgreSqlContractFact]
     public async Task Runtime_logins_cannot_assume_privileged_roles()
     {
-        foreach (var role in new[] { "paqueteria_migrator", "paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance" })
+        foreach (var runtime in new[]
         {
-            await using var connection = await fixture.AppDataSource.OpenConnectionAsync();
-            await using var command = new NpgsqlCommand($"SET ROLE {role}", connection);
-            var exception = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
-            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+            (DataSource: fixture.AppDataSource, OtherRuntimeRole: "paqueteria_worker"),
+            (DataSource: fixture.WorkerDataSource, OtherRuntimeRole: "paqueteria_app"),
+        })
+        {
+            foreach (var role in new[]
+            {
+                runtime.OtherRuntimeRole,
+                "paqueteria_migrator",
+                "paqueteria_bootstrap",
+                "paqueteria_outbox_executor",
+                "paqueteria_maintenance",
+            })
+            {
+                await using var connection = await runtime.DataSource.OpenConnectionAsync();
+                await using var command = new NpgsqlCommand($"SET ROLE {role}", connection);
+                var exception = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+            }
         }
     }
 

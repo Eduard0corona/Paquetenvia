@@ -25,9 +25,14 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
     {
         Console.WriteLine($"PostgreSQL version: {fixture.PostgreSqlVersion}");
         Console.WriteLine($"PostGIS version: {fixture.PostGisVersion}");
-        Console.WriteLine($"AI-06 -> AI-18 bootstrap: {fixture.BootstrapDuration.TotalMilliseconds:F0} ms");
+        Console.WriteLine($"DBA-001 apply status: {fixture.ApplyStatus}");
+        Console.WriteLine($"AI-06 schema: {fixture.SchemaDuration.TotalMilliseconds:F0} ms");
+        Console.WriteLine($"AI-18 roles: {fixture.RolesDuration.TotalMilliseconds:F0} ms");
+        Console.WriteLine($"DBA-001 assertions: {fixture.AssertionsDuration.TotalMilliseconds:F0} ms");
+        Console.WriteLine($"Complete baseline bootstrap: {fixture.BootstrapDuration.TotalMilliseconds:F0} ms");
         Assert.StartsWith("18.", fixture.PostgreSqlVersion, StringComparison.Ordinal);
         Assert.StartsWith("3.6", fixture.PostGisVersion, StringComparison.Ordinal);
+        Assert.Equal(Paqueteria.Infrastructure.Database.Baseline.DatabaseBaselineApplyStatus.Applied, fixture.ApplyStatus);
         Assert.True(fixture.BootstrapDuration < TimeSpan.FromMinutes(2), $"Bootstrap took {fixture.BootstrapDuration}.");
 
         var schemas = await QueryStringsAsync(
@@ -174,6 +179,19 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             "paqueteria_app_login_test->paqueteria_app",
             "paqueteria_worker_login_test->paqueteria_worker",
         ], loginMemberships);
+
+        var loginFlags = await QueryStringsAsync("""
+            SELECT rolname || ':' || rolcanlogin::text || ':' || rolsuper::text || ':' || rolcreatedb::text || ':' ||
+                   rolcreaterole::text || ':' || rolreplication::text || ':' || rolbypassrls::text
+            FROM pg_roles
+            WHERE rolname IN ('paqueteria_app_login_test','paqueteria_worker_login_test')
+            ORDER BY rolname
+            """);
+        Assert.Equal(
+        [
+            "paqueteria_app_login_test:true:false:false:false:false:false",
+            "paqueteria_worker_login_test:true:false:false:false:false:false",
+        ], loginFlags);
 
         foreach (var lane in new[] { "platform.outbox_events", "platform.location_outbox_events" })
         {
