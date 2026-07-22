@@ -267,7 +267,8 @@ public sealed class DatabaseBaselineAssertions
                   AND c.relname NOT IN (
                     'cities',
                     '__ef_migrations_history_identity',
-                    '__ef_migrations_history_organizations'
+                    '__ef_migrations_history_organizations',
+                    '__ef_migrations_history_locations'
                   )
                   AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
                 """,

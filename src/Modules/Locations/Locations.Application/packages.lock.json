@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "locations.domain": {
+        "type": "Project",
+        "dependencies": {
+          "NetTopologySuite": "[2.6.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "paqueteria.application": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Contracts": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "paqueteria.contracts": {
+        "type": "Project"
+      },
+      "paqueteria.domain": {
+        "type": "Project"
+      },
+      "NetTopologySuite": {
+        "type": "CentralTransitive",
+        "requested": "[2.6.0, )",
+        "resolved": "2.6.0",
+        "contentHash": "1B1OTacTd4QtFyBeuIOcThwSSLUdRZU3bSFIwM8vk36XiZlBMi3K36u74e4OqwwHRHUuJC1PhbDx4hyI266X1Q=="
+      }
+    }
+  }
+}
