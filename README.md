@@ -10,6 +10,12 @@ La validación ejecutable de **ARC-002** está **DONE** después de pasar los ci
 jobs de CI. Los contratos se validan de forma estática y contra PostgreSQL
 18/PostGIS 3.6 real y efímero, incluida purga real y concurrente de ambos outbox.
 
+**SEC-001** implementa el módulo Identity, la abstracción `IIdentityProvider`,
+autenticación fail-closed, un mock determinista para Development/Testing,
+sesión stateless, claims tenant-aware y policies de autorización verificadas
+por pruebas HTTP y SignalR. El mock no es productivo y `GATE-002` continúa
+abierto: todavía no se ha elegido ni integrado un proveedor OIDC real.
+
 El repositorio implementa **FND-001**, la plantilla arquitectónica de
 **ARC-001** y el entorno local reproducible de **FND-002**. Incluye la solución
 compilable, API y Worker mínimos, Building
@@ -73,8 +79,19 @@ Consulta la [guía de arquitectura modular](docs/development/module-architecture
 para agregarlo a la solución, registrarlo en el catálogo y validar sus límites.
 
 La API expone únicamente `GET /health/live`. OpenAPI del framework se publica
-solo en Development. El Worker inicia y espera cancelación sin conectarse a
-servicios externos.
+solo en Development. SEC-001 agrega probes internos exclusivamente bajo el
+environment `Testing`; no agrega endpoints públicos de login o identidad. El
+Worker inicia y espera cancelación sin conectarse a servicios externos.
+
+La [guía de autenticación y autorización](docs/development/security-authentication.md)
+documenta los schemes, perfiles sintéticos, claims, sesión, policies y límites.
+Ejecuta su matriz con:
+
+```powershell
+dotnet test .\tests\Paqueteria.UnitTests\Paqueteria.UnitTests.csproj
+dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.csproj
+dotnet test .\tests\Paqueteria.ArchitectureTests\Paqueteria.ArchitectureTests.csproj
+```
 
 ## Frontend
 
@@ -149,8 +166,8 @@ docs/normative/v0.6         Línea base normativa congelada
 
 ## Fuera de alcance
 
-No se implementan tablas, migraciones, RLS, autenticación real, endpoints de
-negocio, outbox funcional, SignalR, tracking, órdenes, pricing, despacho,
+No se implementan tablas, migraciones, RLS, proveedor OIDC real, login, endpoints de
+negocio, outbox funcional, hubs SignalR productivos, tracking, órdenes, pricing, despacho,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
 ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
 reglas de arquitectura; FND-002 aporta solamente dependencias locales.
