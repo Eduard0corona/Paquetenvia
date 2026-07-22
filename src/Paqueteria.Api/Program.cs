@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Identity.Endpoints;
+using Identity.Endpoints.Testing;
+using Identity.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +11,8 @@ builder.Logging.AddJsonConsole();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
+builder.Services.AddIdentityInfrastructure();
+builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
     .AddHealthChecks()
     .AddCheck("process", () => HealthCheckResult.Healthy(), tags: ["live"]);
@@ -26,6 +31,9 @@ if (app.Configuration.GetValue<bool>("Http:UseHttpsRedirection"))
     app.UseHttpsRedirection();
 }
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = registration => registration.Tags.Contains("live"),
@@ -36,7 +44,9 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
             new { status = report.Status == HealthStatus.Healthy ? "healthy" : "unhealthy" },
             context.RequestAborted);
     },
-});
+}).AllowAnonymous();
+
+app.MapIdentityTestProbes(app.Environment);
 
 app.Run();
 
