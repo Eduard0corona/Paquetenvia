@@ -68,7 +68,7 @@ Un entorno reproducible debe completar 20 entregas sintéticas sin pérdida de e
 
 Este directorio pertenece al bundle `v0.6-full-canonical-sync-3-arc002-purge-remediation`. Para evitar mezclar copias intermedias, validar primero `CANONICAL_SOURCE_OF_TRUTH.md`, `CLAUDE_VALIDATION_HANDOFF.md`, `MANIFEST.json` y `CHECKSUMS_SHA256.txt`.
 
-La remediación de ARC-002 está validada localmente y pendiente de los cinco
-jobs de CI antes de marcarse `DONE`: AI-06 y AI-18 se ejecutaron en PostgreSQL
-18/PostGIS 3.6 efímero, incluida purga real y concurrente para ambos lanes.
-Esto no autoriza migraciones ni ejecución contra la base persistente de FND-002.
+ARC-002 está `DONE` después de pasar los cinco jobs de CI: AI-06 y AI-18 se
+ejecutaron en PostgreSQL 18/PostGIS 3.6 efímero, incluida purga real y
+concurrente para ambos lanes. Esto no autoriza migraciones ni ejecución contra
+la base persistente de FND-002.

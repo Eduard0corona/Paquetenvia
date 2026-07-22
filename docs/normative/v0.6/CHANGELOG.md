@@ -2,8 +2,8 @@
 
 ## Revisión canónica v0.6 sync 3 — 2026-07-21
 
-- ARC-002 remedia el bloqueo `PARTIAL`; el estado `DONE` queda condicionado a
-  que los cinco jobs del PR pasen.
+- ARC-002 pasa de `PARTIAL` a `DONE` después de que la remediación normativa y
+  los cinco jobs del PR pasaran.
 - `purge_outbox` y `purge_location_outbox` ya no usan `FOR UPDATE SKIP LOCKED`.
 - El `DELETE` revalida ID, estado terminal y cutoff sobre la fila objetivo.
 - ADR-030 se conserva: maintenance continúa con `SELECT,DELETE`, sin `UPDATE`.

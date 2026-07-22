@@ -4,8 +4,8 @@
 
 ARC-002 executes the v0.6 contracts without adding migrations, application use
 cases, API endpoints, a functional Worker, or production persistence. The purge
-remediation is locally validated. ARC-002 becomes `DONE` only after the five
-pull-request jobs also pass.
+remediation is locally validated. ARC-002 is `DONE` after all five pull-request
+jobs passed in GitHub Actions run `29879390854`.
 
 ## Isolated database
 

@@ -24,3 +24,11 @@ AI-06 -> AI-18: bootstrap successful
 Purge business/location: real deletion, limits, dry-run and idempotency successful
 Concurrent purge: no double count, deadlock, active-row deletion or residual lock
 Result: 20 passed, 0 failed, 0 skipped
+
+$ GitHub Actions run 29879390854
+Validate normative baseline: passed
+Build and test .NET: passed
+Validate runtime contracts: passed
+Validate web workspace: passed
+Validate local infrastructure: passed
+ARC-002: DONE

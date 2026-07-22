@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-07-21 |
 | Branch | `fix/arc-002-purge-contract` |
-| Status | Remediated and locally validated; `DONE` pending five green CI jobs |
+| Status | `DONE` |
 | Image | `postgis/postgis:18-3.6` |
 | OCI index digest | `sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d` |
 | PostgreSQL | `18.4 (Debian 18.4-1.pgdg13+1)` |
@@ -20,7 +20,7 @@
 | Canonical inventory | 72 files verified |
 | Local infrastructure | Clean and existing-volume smoke passed; final Down/Reset left 0 resources |
 | Package audit | .NET clean; pnpm reports one tracked high `sharp` advisory |
-| GitHub Actions | Pending draft PR |
+| GitHub Actions | All five jobs passed in run `29879390854` |
 
 ## Gate evidence
 
@@ -38,7 +38,7 @@
 | Concurrent purge | Pass | Two timed connections remove the exact eligible set without double count, deadlock, active-row loss, or residual transaction |
 | Other runtime contracts | Pass | Bootstrap, roles, RLS, provisioning, lifecycle, tracking, acceptance, snapshots, and money |
 | FND-002 persistence | Pass | Named volume mounts at `/var/lib/postgresql`; smoke preserves data through restart and `Down` |
-| CI completion gate | Pending | ARC-002 remains not-DONE until all five draft-PR jobs pass |
+| CI completion gate | Pass | All five draft-PR jobs passed in run `29879390854` |
 
 ## Controlled normative change
 

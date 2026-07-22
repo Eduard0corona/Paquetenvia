@@ -42,8 +42,8 @@ AI-06 y AI-18 se ejecutaron, en ese orden, sobre una base efímera y limpia de
 Testcontainers con PostgreSQL 18/PostGIS 3.6. Las pruebas usan logins runtime
 no-superuser, pooling real y credenciales sintéticas. Bootstrap, extensiones,
 roles, RLS, provisioning, outbox, tracking, aceptación, snapshots y dinero
-pasaron contra PostgreSQL real. La remediación queda pendiente de los cinco
-jobs del PR antes de declarar ARC-002 `DONE`.
+pasaron contra PostgreSQL real. Los cinco jobs del PR pasaron en el run
+`29879390854`; ARC-002 queda `DONE`.
 
 La validación no crea migraciones ni aplica los scripts a la base persistente de
 FND-002. `SEC-002` y `DBA-001` permanecen tareas independientes.

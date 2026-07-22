@@ -2,7 +2,7 @@
 
 **Identificador de bundle:** `v0.6-full-canonical-sync-3-arc002-purge-remediation`
 **Fecha de reconstrucción:** 2026-07-21  
-**Estado:** normativa consolidada y validada localmente; ARC-002 pendiente de CI.
+**Estado:** normativa consolidada y validada; ARC-002 `DONE`.
 
 ## Regla de autoridad
 

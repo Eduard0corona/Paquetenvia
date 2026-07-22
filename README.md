@@ -6,10 +6,9 @@ marca comercial y los proveedores productivos siguen pendientes de sus gates.
 
 ## Estado actual
 
-La remediación ejecutable de **ARC-002** está validada localmente y pendiente
-de los cinco jobs de CI antes de declararse **DONE**. Los contratos se validan
-de forma estática y contra PostgreSQL 18/PostGIS 3.6 real y efímero, incluida
-purga real y concurrente de ambos outbox.
+La validación ejecutable de **ARC-002** está **DONE** después de pasar los cinco
+jobs de CI. Los contratos se validan de forma estática y contra PostgreSQL
+18/PostGIS 3.6 real y efímero, incluida purga real y concurrente de ambos outbox.
 
 El repositorio implementa **FND-001**, la plantilla arquitectónica de
 **ARC-001** y el entorno local reproducible de **FND-002**. Incluye la solución
