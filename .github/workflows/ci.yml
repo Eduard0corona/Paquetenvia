@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "4b5fe5397ff088b63e0c288770903512665c5fe8a8dc7401d7e4d3af64643505"
+          test "$actual" = "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96"
 
       - name: Verify the normative baseline was not changed
         shell: bash

@@ -129,15 +129,34 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
             Assert.Equal(1, await RequeueAsync(location: false, maxAttempts: 10));
             Assert.Equal("DEAD", await BusinessStatusAsync(poison));
 
+            var activeProcessing = Guid.NewGuid();
+            await ExecuteAdminAsync("""
+                INSERT INTO platform.outbox_events(id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,payload,priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,created_at)
+                VALUES (@id,@org,'{}','arc002.active','Order',@aggregate,'{}',1,'PROCESSING',1,clock_timestamp(),clock_timestamp(),'active-worker',@lease,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '10 days')
+                """, P("id", activeProcessing), P("org", org), P("aggregate", Guid.NewGuid()), P("lease", Guid.NewGuid()));
+
             var dryRun = await PurgeAsync(location: false, dryRun: true, batchSize: 2);
             Assert.Equal(2, dryRun);
+            Assert.Equal(2, await AdminScalarAsync<int>(
+                "SELECT count(*)::integer FROM platform.outbox_events WHERE id IN (@processed,@dead)",
+                P("processed", processed), P("dead", dead)));
             var maintenanceProbe = Guid.NewGuid();
             await InsertBusinessAsProducerAsync(org, maintenanceProbe, "PROCESSED", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(-10), DateTimeOffset.UtcNow.AddDays(-10));
             Assert.Equal(1, await DeleteDirectlyAsMaintenanceAsync("platform.outbox_events", maintenanceProbe));
-            var purgeException = await Assert.ThrowsAsync<PostgresException>(() => PurgeAsync(location: false, dryRun: false, batchSize: 2));
-            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, purgeException.SqlState);
-            Assert.Equal(2, await AdminScalarAsync<int>("SELECT count(*)::integer FROM platform.outbox_events WHERE id IN (@processed,@dead)", P("processed", processed), P("dead", dead)));
+            Assert.Equal(1, await PurgeAsync(location: false, dryRun: false, batchSize: 1));
+            Assert.Equal(1, await AdminScalarAsync<int>(
+                "SELECT count(*)::integer FROM platform.outbox_events WHERE id IN (@processed,@dead)",
+                P("processed", processed), P("dead", dead)));
+            Assert.Equal(1, await PurgeAsync(location: false, dryRun: false, batchSize: 1));
+            Assert.Equal(0, await PurgeAsync(location: false, dryRun: false, batchSize: 100));
+            Assert.Equal(0, await AdminScalarAsync<int>(
+                "SELECT count(*)::integer FROM platform.outbox_events WHERE id IN (@processed,@dead)",
+                P("processed", processed), P("dead", dead)));
             Assert.Equal(1, await AdminScalarAsync<int>("SELECT count(*)::integer FROM platform.outbox_events WHERE id=@future", P("future", future)));
+            Assert.Equal("PROCESSED", await BusinessStatusAsync(first.Id));
+            Assert.Equal("RETRY", await BusinessStatusAsync(stale.Id));
+            Assert.Equal("DEAD", await BusinessStatusAsync(poison));
+            Assert.Equal("PROCESSING", await BusinessStatusAsync(activeProcessing));
 
             var cutoffException = await Assert.ThrowsAsync<PostgresException>(() => PurgeAsync(location: false, dryRun: true, batchSize: 100, invalidCutoff: true));
             Assert.Equal(PostgresErrorCodes.InvalidParameterValue, cutoffException.SqlState);
@@ -155,6 +174,12 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
         await InsertOrganizationAsync(org);
         var first = Guid.NewGuid();
         var duplicatePosition = Guid.NewGuid();
+        var oldProcessed = Guid.NewGuid();
+        var activePending = Guid.NewGuid();
+        var activeRetry = Guid.NewGuid();
+        var activeProcessing = Guid.NewGuid();
+        var recentProcessed = Guid.NewGuid();
+        var recentDead = Guid.NewGuid();
         try
         {
             await InsertLocationAsProducerAsync(org, first, duplicatePosition, "PENDING", DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(-10));
@@ -181,9 +206,34 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
             Assert.Equal("DEAD", await LocationStatusAsync(first));
 
             await ExecuteAdminAsync("UPDATE platform.location_outbox_events SET processed_at=clock_timestamp()-interval '10 days' WHERE id=@id", P("id", first));
-            Assert.Equal(1, await PurgeAsync(location: true, dryRun: true, batchSize: 10));
-            var purgeException = await Assert.ThrowsAsync<PostgresException>(() => PurgeAsync(location: true, dryRun: false, batchSize: 10));
-            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, purgeException.SqlState);
+            await InsertLocationAsProducerAsync(org, oldProcessed, Guid.NewGuid(), "PROCESSED", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(-10), DateTimeOffset.UtcNow.AddDays(-10));
+            await InsertLocationAsProducerAsync(org, activePending, Guid.NewGuid(), "PENDING", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(-10));
+            await InsertLocationAsProducerAsync(org, activeRetry, Guid.NewGuid(), "RETRY", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(-10));
+            await InsertLocationAsProducerAsync(org, recentProcessed, Guid.NewGuid(), "PROCESSED", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+            await InsertLocationAsProducerAsync(org, recentDead, Guid.NewGuid(), "DEAD", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+            await ExecuteAdminAsync("""
+                INSERT INTO platform.location_outbox_events(id,owner_org_id,driver_position_id,topic,payload,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,created_at)
+                VALUES (@id,@org,@position,'arc002.location.active','{}','PROCESSING',1,clock_timestamp(),clock_timestamp(),'active-location-worker',@lease,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '10 days')
+                """, P("id", activeProcessing), P("org", org), P("position", Guid.NewGuid()), P("lease", Guid.NewGuid()));
+
+            Assert.Equal(1, await PurgeAsync(location: true, dryRun: true, batchSize: 1));
+            Assert.Equal(2, await AdminScalarAsync<int>(
+                "SELECT count(*)::integer FROM platform.location_outbox_events WHERE id IN (@dead,@processed)",
+                P("dead", first), P("processed", oldProcessed)));
+            Assert.Equal(1, await PurgeAsync(location: true, dryRun: false, batchSize: 1));
+            Assert.Equal(1, await PurgeAsync(location: true, dryRun: false, batchSize: 1));
+            Assert.Equal(0, await PurgeAsync(location: true, dryRun: false, batchSize: 100));
+            Assert.Equal(0, await AdminScalarAsync<int>(
+                "SELECT count(*)::integer FROM platform.location_outbox_events WHERE id IN (@dead,@processed)",
+                P("dead", first), P("processed", oldProcessed)));
+            Assert.Equal(5, await AdminScalarAsync<int>("""
+                SELECT count(*)::integer FROM platform.location_outbox_events
+                WHERE id IN (@pending,@retry,@processing,@recent_processed,@recent_dead)
+                """, P("pending", activePending), P("retry", activeRetry), P("processing", activeProcessing),
+                P("recent_processed", recentProcessed), P("recent_dead", recentDead)));
+
+            var cutoffException = await Assert.ThrowsAsync<PostgresException>(() => PurgeAsync(location: true, dryRun: true, batchSize: 100, invalidCutoff: true));
+            Assert.Equal(PostgresErrorCodes.InvalidParameterValue, cutoffException.SqlState);
         }
         finally
         {
@@ -213,6 +263,77 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
         }
     }
 
+    [PostgreSqlContractFact]
+    public async Task Two_worker_connections_purge_each_eligible_row_once_without_leaking_locks()
+    {
+        var org = Guid.NewGuid();
+        var eligible = Enumerable.Range(0, 8).Select(_ => Guid.NewGuid()).ToArray();
+        var active = Enumerable.Range(0, 3).Select(_ => Guid.NewGuid()).ToArray();
+        await InsertOrganizationAsync(org);
+        try
+        {
+            for (var index = 0; index < eligible.Length; index++)
+            {
+                var status = index % 2 == 0 ? "PROCESSED" : "DEAD";
+                await InsertBusinessAsProducerAsync(
+                    org,
+                    eligible[index],
+                    status,
+                    DateTimeOffset.UtcNow.AddDays(-10),
+                    DateTimeOffset.UtcNow.AddDays(-10),
+                    DateTimeOffset.UtcNow.AddDays(-10));
+            }
+
+            await InsertBusinessAsProducerAsync(org, active[0], "PENDING", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(-10));
+            await InsertBusinessAsProducerAsync(org, active[1], "RETRY", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(-10));
+            await ExecuteAdminAsync("""
+                INSERT INTO platform.outbox_events(id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,payload,priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,created_at)
+                VALUES (@id,@org,'{}','arc002.concurrent-active','Order',@aggregate,'{}',1,'PROCESSING',1,clock_timestamp(),clock_timestamp(),'concurrent-active-worker',@lease,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '10 days')
+                """, P("id", active[2]), P("org", org), P("aggregate", Guid.NewGuid()), P("lease", Guid.NewGuid()));
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = PurgeOnPreparedConnectionAsync(firstReady, start, timeout.Token);
+            var second = PurgeOnPreparedConnectionAsync(secondReady, start, timeout.Token);
+
+            try
+            {
+                await Task.WhenAll(firstReady.Task, secondReady.Task).WaitAsync(timeout.Token);
+                start.SetResult();
+                var purgeResults = await Task.WhenAll(first, second).WaitAsync(timeout.Token);
+                Assert.All(purgeResults, result => Assert.InRange(result.Deleted, 0, eligible.Length));
+                Assert.Equal(eligible.Length, purgeResults.Sum(result => result.Deleted));
+                Assert.Equal(0, await AdminScalarAsync<int>(
+                    "SELECT count(*)::integer FROM pg_locks WHERE pid=ANY(@pids) AND granted",
+                    new NpgsqlParameter<int[]>("pids", purgeResults.Select(result => result.ProcessId).ToArray())));
+            }
+            catch (Exception exception)
+            {
+                var diagnostics = await fixture.GetContainerDiagnosticsAsync();
+                throw new InvalidOperationException(
+                    $"Concurrent purge failed or timed out. Eligible IDs: {string.Join(',', eligible)}.{Environment.NewLine}{diagnostics}",
+                    exception);
+            }
+
+            Assert.Equal(0, await AdminScalarAsync<int>(
+                "SELECT count(*)::integer FROM platform.outbox_events WHERE id=ANY(@ids)",
+                new NpgsqlParameter<Guid[]>("ids", eligible)));
+            Assert.Equal(active.Length, await AdminScalarAsync<int>(
+                "SELECT count(*)::integer FROM platform.outbox_events WHERE id=ANY(@ids)",
+                new NpgsqlParameter<Guid[]>("ids", active)));
+            Assert.Equal(0, await AdminScalarAsync<int>("""
+                SELECT count(*)::integer FROM pg_stat_activity
+                WHERE datname=current_database() AND state='idle in transaction'
+                """));
+        }
+        finally
+        {
+            await CleanupAsync(org);
+        }
+    }
+
     private const string BusinessInsertSql = """
         INSERT INTO platform.outbox_events(id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,priority,status,attempts,available_at,created_at,processed_at)
         VALUES (@id,@org,'{}','arc002.business','Order',@aggregate,1,'{}',50,@status,0,@available,@created,@processed)
@@ -234,10 +355,17 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
         await tenant.CommitAsync();
     }
 
-    private async Task InsertLocationAsProducerAsync(Guid org, Guid id, Guid position, string status, DateTimeOffset available, DateTimeOffset created)
+    private async Task InsertLocationAsProducerAsync(
+        Guid org,
+        Guid id,
+        Guid position,
+        string status,
+        DateTimeOffset available,
+        DateTimeOffset created,
+        DateTimeOffset? processed = null)
     {
         await using var tenant = await TenantTransaction.BeginAsync(fixture.WorkerDataSource, "paqueteria_worker", Guid.NewGuid(), [org]);
-        await ExecuteAsync(tenant.Connection, tenant.Transaction, LocationInsertSql, LocationParameters(id, org, position, status, available, created));
+        await ExecuteAsync(tenant.Connection, tenant.Transaction, LocationInsertSql, LocationParameters(id, org, position, status, available, created, processed));
         await tenant.CommitAsync();
     }
 
@@ -247,11 +375,45 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
         P("available", available), P("created", created), P("processed", processed ?? (object)DBNull.Value),
     ];
 
-    private static NpgsqlParameter[] LocationParameters(Guid id, Guid org, Guid position, string status, DateTimeOffset available, DateTimeOffset created) =>
+    private static NpgsqlParameter[] LocationParameters(
+        Guid id,
+        Guid org,
+        Guid position,
+        string status,
+        DateTimeOffset available,
+        DateTimeOffset created,
+        DateTimeOffset? processed = null) =>
     [
         P("id", id), P("org", org), P("position", position), P("status", status),
-        P("available", available), P("created", created), P("processed", DBNull.Value),
+        P("available", available), P("created", created), P("processed", processed ?? (object)DBNull.Value),
     ];
+
+    private async Task<PurgeResult> PurgeOnPreparedConnectionAsync(
+        TaskCompletionSource ready,
+        TaskCompletionSource start,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await fixture.WorkerDataSource.OpenConnectionAsync(cancellationToken);
+        var processId = connection.ProcessID;
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var role = new NpgsqlCommand("SET LOCAL ROLE paqueteria_worker", connection, transaction))
+        {
+            await role.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        ready.SetResult();
+        await start.Task.WaitAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT security.purge_outbox(clock_timestamp()-interval '2 days',clock_timestamp()-interval '8 days',100,false)",
+            connection,
+            transaction)
+        {
+            CommandTimeout = 15,
+        };
+        var deleted = ConvertValue<int>(await command.ExecuteScalarAsync(cancellationToken));
+        await transaction.CommitAsync(cancellationToken);
+        return new PurgeResult(deleted, processId);
+    }
 
     private async Task<IReadOnlyList<Claim>> ClaimAsync(bool location, int batchSize, string workerId)
     {
@@ -375,4 +537,6 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
     private static NpgsqlParameter P(string name, object value) => new(name, value);
 
     private sealed record Claim(Guid Id, string Status, int Attempts, string LockedBy, Guid LeaseToken, DateTimeOffset? LeaseExpiresAt);
+
+    private sealed record PurgeResult(int Deleted, int ProcessId);
 }
