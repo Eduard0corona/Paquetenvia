@@ -202,7 +202,7 @@ function Assert-ComposeStaticPolicy {
     }
 
     $requiredVolumes = @{
-        postgres = "/var/lib/postgresql/data"
+        postgres = "/var/lib/postgresql"
         redis = "/data"
         minio = "/data"
         mailpit = "/data"

@@ -199,6 +199,7 @@ try {
     }
 
     $existing = Get-ProjectResourceIds -ProjectName $context.ProjectName
+    $expectPostgresInitialization = $existing.Volumes.Count -eq 0
     if ($existing.Containers.Count -eq 0) {
         Assert-ConfiguredPortsAvailable -Context $context
     }
@@ -209,6 +210,21 @@ try {
 
     # A second up must be harmless and leave all services healthy.
     Start-ComposeEnvironment -Context $context -TimeoutSeconds $TimeoutSeconds
+
+    $postgresLogs = Invoke-DockerCompose `
+        -Context $context `
+        -Arguments @("logs", "--no-color", "postgres") `
+        -CaptureOutput
+    $postgresInitializationCount = [regex]::Matches(
+        $postgresLogs.Output,
+        "PostgreSQL init process complete"
+    ).Count
+    if ($expectPostgresInitialization -and $postgresInitializationCount -ne 1) {
+        throw "A clean PostgreSQL volume must initialize exactly once; found $postgresInitializationCount completions."
+    }
+    if (-not $expectPostgresInitialization -and $postgresInitializationCount -ne 0) {
+        throw "An existing PostgreSQL volume must not reinitialize; found $postgresInitializationCount completions."
+    }
 
     $extensionState = Invoke-PostgresQuery -Context $context -Query @"
 SELECT extname || ':' || nspname
@@ -222,13 +238,14 @@ ORDER BY extname;
         throw "PostgreSQL extensions are not in the required schemas. Found: $($extensions -join ', ')."
     }
     $postgresVersion = Invoke-PostgresQuery -Context $context -Query "SELECT current_setting('server_version');"
-    if ($postgresVersion -notmatch '^17\.') {
-        throw "Unexpected PostgreSQL version '$postgresVersion'; expected the pinned 17.x line."
+    if ($postgresVersion -notmatch '^18\.') {
+        throw "Unexpected PostgreSQL version '$postgresVersion'; expected the pinned 18.x line."
     }
     $postgisVersion = Invoke-PostgresQuery -Context $context -Query "SELECT PostGIS_Version();"
-    if ([string]::IsNullOrWhiteSpace($postgisVersion)) {
-        throw "PostGIS_Version() returned no value."
+    if ($postgisVersion -notmatch '^3\.6') {
+        throw "Unexpected PostGIS version '$postgisVersion'; expected the pinned 3.6 line."
     }
+    Write-Host "Verified PostgreSQL $postgresVersion, PostGIS $postgisVersion, initialization count $postgresInitializationCount."
 
     Invoke-PostgresQuery -Context $context -Query "CREATE SCHEMA $schema; CREATE TABLE $schema.persistence_probe (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO $schema.persistence_probe VALUES (1, '$value');" | Out-Null
     $schemaCreated = $true
