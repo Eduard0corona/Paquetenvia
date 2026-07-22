@@ -8,13 +8,6 @@ open_decisions:
   severity: BLOCKER_FOR_PUBLIC_RELEASE
   decision_needed: nombre y marca validados ante IMPI
   work_allowed: internal code with neutral branding
-- id: GATE-002
-  topic: identity_provider
-  severity: BLOCKER_FOR_STAGING_AUTH
-  options:
-  - managed OIDC
-  - self-hosted OIDC
-  decision_needed: provider, SLA, cost, data region
 - id: GATE-003
   topic: maps_provider
   severity: BLOCKER_FOR_REAL_QUOTES
@@ -88,6 +81,31 @@ open_decisions:
   severity: BLOCKER_FOR_NEW_CITY
   decision_needed: city, service zones, SLA, pricing, legal and operational ownership
   work_allowed: generic city/service-area model and synthetic test configuration
+resolved_decisions:
+- id: GATE-002
+  topic: identity_provider
+  resolved_on: 2026-07-21
+  resolved_by: project_owner
+  decision: AuthCenter (in-house OIDC identity server) as identity provider
+  provider: AuthCenter self-hosted
+  sla: 99.5% monthly committed (Azure App Service platform SLA 99.9%-99.95% as technical ceiling)
+  cost: own Azure infrastructure; no per-active-user licensing
+  data_region: Azure Mexico Central; no international transfer of personal data
+  responsibility_split: AuthCenter authenticates (sub claim); Paqueteria authorizes tenancy via
+    organization_memberships and RLS; AuthCenter role/permission/application claims are ignored
+    for tenant authorization; Paqueteria organizations are never replicated into AuthCenter
+  verified_requirements:
+  - OIDC discovery, JWKS, authorize and token endpoints
+  - access tokens signed RS256; consumers validate against published JWKS and hold no signing material
+  - application fails fast at startup without a valid RSA private key (minimum 2048 bits)
+  - private key custody in Azure Key Vault
+  - 54/54 tests passing, including JWKS-only token validation and startup failure without RSA
+  pending_before_production:
+  - key rotation (key ring with current signing key plus previous verification keys)
+  - rotate the development private key previously embedded in appsettings.Development.json
+  - confirm deployment topology sustains the committed 99.5%
+  reference: docs/gates/GATE-002_RESOLUTION_IDENTITY_PROVIDER.md
+  gate_007_input: data residency defined (Mexico, no international transfer)
 release_gates:
   MVP-0_INTERNAL:
   - mock identity/maps allowed
