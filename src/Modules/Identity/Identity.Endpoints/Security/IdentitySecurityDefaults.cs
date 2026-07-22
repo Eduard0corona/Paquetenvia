@@ -20,11 +20,13 @@ public static class IdentityPolicies
 public static class IdentityClaimTypes
 {
     public const string Subject = "sub";
+    public const string UserId = "urn:paquetenvia:identity:v1:user-id";
     public const string AuthenticationMethodReference = "amr";
     public const string Status = "urn:paquetenvia:identity:v1:status";
     public const string Membership = "urn:paquetenvia:identity:v1:membership";
 
     internal const string SourceSubject = "urn:paquetenvia:identity:v1:source:subject";
+    internal const string SourceUserId = "urn:paquetenvia:identity:v1:source:user-id";
     internal const string SourceStatus = "urn:paquetenvia:identity:v1:source:status";
     internal const string SourceMfa = "urn:paquetenvia:identity:v1:source:mfa";
     internal const string SourceMembership = "urn:paquetenvia:identity:v1:source:membership";

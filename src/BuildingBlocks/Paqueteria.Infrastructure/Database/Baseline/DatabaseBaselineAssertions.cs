@@ -264,7 +264,12 @@ public sealed class DatabaseBaselineAssertions
                 SELECT count(*)::integer
                 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
                 WHERE n.nspname=ANY(@schemas::text[]) AND c.relkind IN ('r','p')
-                  AND c.relname<>'cities' AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+                  AND c.relname NOT IN (
+                    'cities',
+                    '__ef_migrations_history_identity',
+                    '__ef_migrations_history_organizations'
+                  )
+                  AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
                 """,
                 cancellationToken,
                 new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);

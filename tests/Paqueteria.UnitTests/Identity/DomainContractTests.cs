@@ -1,7 +1,5 @@
 using Identity.Application.Bootstrap;
 using Identity.Domain;
-using DomainOrganizationRole = Identity.Domain.OrganizationRole;
-using BootstrapOrganizationRole = Identity.Application.Bootstrap.OrganizationRole;
 
 namespace Paqueteria.UnitTests.Identity;
 
@@ -22,11 +20,11 @@ public sealed class DomainContractTests
     }
 
     [Fact]
-    public void Bootstrap_roles_match_domain_roles()
+    public void Organization_roles_have_one_authoritative_contract_vocabulary()
     {
         Assert.Equal(
-            Enum.GetValues<DomainOrganizationRole>().Select(value => value.ToContractValue()),
-            Enum.GetValues<BootstrapOrganizationRole>().Select(value => value.ToContractValue()));
+            ["PLATFORM_ADMIN", "DISPATCHER", "FINANCE", "ALLY_ADMIN", "ALLY_OPERATOR", "BUSINESS_ADMIN", "BUSINESS_OPERATOR", "DRIVER", "VIEWER"],
+            Enum.GetValues<OrganizationRole>().Select(value => value.ToContractValue()));
     }
 
     [Fact]

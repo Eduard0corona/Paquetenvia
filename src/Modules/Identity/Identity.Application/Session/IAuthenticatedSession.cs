@@ -1,4 +1,5 @@
 using Identity.Application.Bootstrap;
+using Paqueteria.Domain.Tenancy;
 
 namespace Identity.Application.Session;
 
@@ -7,6 +8,8 @@ public interface IAuthenticatedSession
     bool IsAuthenticated { get; }
 
     string? Subject { get; }
+
+    Guid? UserId { get; }
 
     IdentityContextStatus? IdentityStatus { get; }
 

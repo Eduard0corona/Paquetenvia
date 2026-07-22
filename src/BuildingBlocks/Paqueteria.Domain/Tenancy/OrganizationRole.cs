@@ -1,4 +1,4 @@
-namespace Identity.Domain;
+namespace Paqueteria.Domain.Tenancy;
 
 public enum OrganizationRole
 {

@@ -142,9 +142,9 @@ artifacts. DBA-001 stays in the existing `PostgreSqlContract` category used by
 7. Diagnose, restore/recreate when authorized, repeat preflight, then retry the
    entire atomic baseline.
 
-Future module work will use one DbContext and migrations assembly per module,
-expand/contract changes and the migrator credential in the pipeline. API and
-Worker never migrate at startup. A module may not mutate another module's
-tables; cross-module changes require explicit coordination. TEN-001 will add
-functional Identity/Organizations persistence. DBA-001 creates no fictional EF
-snapshots or entities for the other canonical tables.
+TEN-001 now adopts the existing Identity and Organizations tables with one
+DbContext and migrations assembly per module. The baseline still runs first;
+then the independent migrator records the two non-destructive adoption
+migrations in migrator-owned platform histories. API and Worker never migrate
+at startup. See [tenant-context-rls.md](tenant-context-rls.md) for planning,
+history drift, transaction guards and rollback rules.

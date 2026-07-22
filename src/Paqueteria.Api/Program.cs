@@ -6,6 +6,12 @@ using Identity.Infrastructure;
 using Orders.Infrastructure;
 using Orders.Endpoints.Testing;
 using Orders.Endpoints;
+using Organizations.Application.Session;
+using Organizations.Endpoints;
+using Organizations.Endpoints.Tenancy;
+using Organizations.Infrastructure;
+using Organizations.Endpoints.Testing;
+using Paqueteria.Api.Tenancy;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,6 +23,9 @@ builder.Services.AddOpenApi();
 builder.Services.AddIdentityInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddOrdersInfrastructure(builder.Configuration);
 builder.Services.AddOrdersEndpoints();
+builder.Services.AddOrganizationsInfrastructure(builder.Configuration);
+builder.Services.AddOrganizationsEndpoints();
+builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
     .AddHealthChecks()
@@ -37,6 +46,7 @@ if (app.Configuration.GetValue<bool>("Http:UseHttpsRedirection"))
 }
 
 app.UseAuthentication();
+app.UseMiddleware<TenantContextMiddleware>();
 app.UseAuthorization();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
@@ -53,6 +63,8 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 
 app.MapIdentityTestProbes(app.Environment);
 app.MapPublicTrackingTestProbe(app.Environment);
+app.MapOrganizationEndpoints();
+app.MapOrganizationTestProbes(app.Environment);
 
 app.Run();
 

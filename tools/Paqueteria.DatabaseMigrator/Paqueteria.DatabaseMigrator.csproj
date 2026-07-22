@@ -4,5 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Identity\Identity.Infrastructure\Identity.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

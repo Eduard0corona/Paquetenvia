@@ -6,5 +6,14 @@
     <ProjectReference Include="../Identity.Application/Identity.Application.csproj" />
     <ProjectReference Include="../Identity.Domain/Identity.Domain.csproj" />
     <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Domain/Paqueteria.Domain.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
   </ItemGroup>
 </Project>

@@ -36,6 +36,7 @@ public static class IdentityClaimsPrincipalFactory
 
         if (resolution.Context is { } resolved)
         {
+            claims.Add(InternalClaim(IdentityClaimTypes.SourceUserId, resolved.UserId.ToString("D", CultureInfo.InvariantCulture)));
             claims.Add(InternalClaim(IdentityClaimTypes.SourceStatus, resolved.Status.ToContractValue()));
             claims.AddRange(resolved.Memberships.Select(membership =>
                 InternalClaim(IdentityClaimTypes.SourceMembership, SerializeMembership(membership))));
