@@ -3,4 +3,10 @@
     <ProjectReference Include="..\Paqueteria.Application\Paqueteria.Application.csproj" />
     <ProjectReference Include="..\Paqueteria.Domain\Paqueteria.Domain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
 </Project>

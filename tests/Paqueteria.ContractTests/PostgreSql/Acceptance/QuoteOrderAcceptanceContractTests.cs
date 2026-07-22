@@ -185,6 +185,21 @@ public sealed class QuoteOrderAcceptanceContractTests(PostgreSqlContractFixture 
             }
         }
 
+        foreach (var statement in new[]
+        {
+            $"UPDATE orders.order_acceptances SET terms_version='privileged-tamper' WHERE id='{acceptance:D}'",
+            $"DELETE FROM orders.order_events WHERE id='{orderEvent:D}'",
+            $"UPDATE custody.proofs SET object_key='privileged-tamper' WHERE id='{proof:D}'",
+            $"DELETE FROM platform.audit_logs WHERE id='{audit:D}'",
+        })
+        {
+            await using var connection = await fixture.AdminDataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            var exception = await Assert.ThrowsAsync<PostgresException>(
+                () => ExecuteAsync(connection, transaction, statement));
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+        }
+
         await using var foreign = await TenantTransaction.BeginAsync(
             fixture.AppDataSource,
             "paqueteria_app",

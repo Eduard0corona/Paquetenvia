@@ -14,4 +14,7 @@
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
     <PackageReference Include="YamlDotNet" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
+  </ItemGroup>
 </Project>

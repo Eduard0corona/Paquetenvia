@@ -1,8 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
-using System.Text;
 using Npgsql;
-using Paqueteria.ContractTests.Support;
+using Paqueteria.Infrastructure.Database.Baseline;
 using Testcontainers.PostgreSql;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
@@ -10,20 +9,26 @@ namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 public sealed class PostgreSqlContractFixture : IAsyncLifetime
 {
     public const string Image = "postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d";
-    public const string SchemaSha256 = "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96";
-    public const string RolesSha256 = "7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd";
+    public const string SchemaSha256 = CanonicalBaselineContract.SchemaSha256;
+    public const string RolesSha256 = CanonicalBaselineContract.RolesSha256;
     public const string AppLogin = "paqueteria_app_login_test";
     public const string WorkerLogin = "paqueteria_worker_login_test";
 
     private readonly string _adminPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _appPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _workerPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+    private readonly HashSet<string> _isolatedDatabases = new(StringComparer.Ordinal);
     private PostgreSqlContainer? _container;
 
     public NpgsqlDataSource AdminDataSource { get; private set; } = null!;
     public NpgsqlDataSource AppDataSource { get; private set; } = null!;
     public NpgsqlDataSource WorkerDataSource { get; private set; } = null!;
+    public string DeploymentConnectionString { get; private set; } = string.Empty;
     public TimeSpan BootstrapDuration { get; private set; }
+    public TimeSpan SchemaDuration { get; private set; }
+    public TimeSpan RolesDuration { get; private set; }
+    public TimeSpan AssertionsDuration { get; private set; }
+    public DatabaseBaselineApplyStatus ApplyStatus { get; private set; }
     public string PostgreSqlVersion { get; private set; } = string.Empty;
     public string PostGisVersion { get; private set; } = string.Empty;
 
@@ -39,10 +44,18 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
         try
         {
             await _container.StartAsync().ConfigureAwait(false);
-            AdminDataSource = NpgsqlDataSource.Create(WithPooling(_container.GetConnectionString(), "postgres", _adminPassword));
+            DeploymentConnectionString = WithPooling(_container.GetConnectionString(), "postgres", _adminPassword);
+            AdminDataSource = NpgsqlDataSource.Create(DeploymentConnectionString);
 
             var stopwatch = Stopwatch.StartNew();
-            await ApplyNormativeSqlAsync().ConfigureAwait(false);
+            var baseline = await new DatabaseBaselineVerifier().VerifyAsync().ConfigureAwait(false);
+            var deployment = await new DatabaseBaselineDeployer().ApplyAsync(
+                baseline,
+                DeploymentConnectionString).ConfigureAwait(false);
+            ApplyStatus = deployment.Status;
+            SchemaDuration = deployment.Timings.Schema;
+            RolesDuration = deployment.Timings.Roles;
+            AssertionsDuration = deployment.Timings.Assertions;
             await CreateRuntimeLoginsAsync().ConfigureAwait(false);
             stopwatch.Stop();
             BootstrapDuration = stopwatch.Elapsed;
@@ -80,6 +93,11 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
 
         if (AdminDataSource is not null)
         {
+            foreach (var database in _isolatedDatabases.ToArray())
+            {
+                await DropIsolatedDatabaseAsync(database).ConfigureAwait(false);
+            }
+
             await AdminDataSource.DisposeAsync().ConfigureAwait(false);
         }
 
@@ -107,15 +125,33 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
         }
     }
 
-    private async Task ApplyNormativeSqlAsync()
+    public async Task<string> CreateIsolatedDatabaseAsync(string purpose)
     {
-        var schemaPath = RepositoryPaths.Normative("database", "AI-06_SCHEMA.sql");
-        var rolesPath = RepositoryPaths.Normative("database", "AI-18_DATABASE_ROLE_MODEL.sql");
-        Assert.Equal(SchemaSha256, await ComputeSha256Async(schemaPath).ConfigureAwait(false));
-        Assert.Equal(RolesSha256, await ComputeSha256Async(rolesPath).ConfigureAwait(false));
+        var normalizedPurpose = new string(purpose.Where(char.IsAsciiLetterOrDigit).Select(char.ToLowerInvariant).Take(16).ToArray());
+        var database = $"dba001_{normalizedPurpose}_{Guid.NewGuid():N}";
+        await ExecuteAdminScriptAsync($"CREATE DATABASE \"{database}\"").ConfigureAwait(false);
+        _isolatedDatabases.Add(database);
+        var builder = new NpgsqlConnectionStringBuilder(DeploymentConnectionString)
+        {
+            Database = database,
+            Pooling = false,
+            ApplicationName = "Paqueteria.DBA001.ContractTests",
+        };
+        return builder.ConnectionString;
+    }
 
-        await ExecuteAdminScriptAsync(await File.ReadAllTextAsync(schemaPath).ConfigureAwait(false)).ConfigureAwait(false);
-        await ExecuteAdminScriptAsync(await File.ReadAllTextAsync(rolesPath).ConfigureAwait(false)).ConfigureAwait(false);
+    public async Task DropIsolatedDatabaseAsync(string connectionStringOrDatabase)
+    {
+        var database = connectionStringOrDatabase.Contains('=', StringComparison.Ordinal)
+            ? new NpgsqlConnectionStringBuilder(connectionStringOrDatabase).Database
+            : connectionStringOrDatabase;
+        if (string.IsNullOrWhiteSpace(database) || !_isolatedDatabases.Remove(database))
+        {
+            return;
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await ExecuteAdminScriptAsync($"DROP DATABASE IF EXISTS \"{database}\" WITH (FORCE)").ConfigureAwait(false);
     }
 
     private async Task CreateRuntimeLoginsAsync()
@@ -150,11 +186,5 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             ApplicationName = "Paqueteria.ContractTests",
         };
         return builder.ConnectionString;
-    }
-
-    private static async Task<string> ComputeSha256Async(string path)
-    {
-        await using var stream = File.OpenRead(path);
-        return Convert.ToHexString(await SHA256.HashDataAsync(stream).ConfigureAwait(false)).ToLowerInvariant();
     }
 }
