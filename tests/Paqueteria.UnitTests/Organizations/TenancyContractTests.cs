@@ -12,6 +12,8 @@ using Organizations.Application.Provisioning;
 using Organizations.Infrastructure.Provisioning;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
+using Paqueteria.Infrastructure;
+using Paqueteria.Infrastructure.Auditing;
 
 namespace Paqueteria.UnitTests.Organizations;
 
@@ -151,7 +153,9 @@ public sealed class TenancyContractTests
         var provisioner = new PostgreSqlInitialOrganizationProvisioner(
             new DenyInitialOrganizationProvisioningAuthorizer(),
             new NoOpProvisioningFailureInjector(),
-            new TenantTransactionContext<OrganizationsDbContext>(context, state));
+            new TenantTransactionContext<OrganizationsDbContext>(context, state),
+            new PostgreSqlAppendOnlyAuditWriter(state),
+            new SystemClock());
 
         await Assert.ThrowsAsync<InitialOrganizationProvisioningForbiddenException>(() => provisioner.ProvisionAsync(
             new InitialOrganizationProvisioningCommand(

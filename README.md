@@ -205,6 +205,16 @@ Npgsql. Consulta
 para la matriz de trazabilidad, comandos del harness, riesgos residuales y
 rollback. No se agregaron migraciones ni PgBouncer.
 
+## AUD-001
+
+AUD-001 centraliza las escrituras append-only en `platform.audit_logs`, aplica
+redaccion estructurada antes de persistir y conserva accion y auditoria dentro
+de la misma transaccion tenant. Consulta
+[`docs/development/aud-001-append-only-audit.md`](docs/development/aud-001-append-only-audit.md)
+para el contrato, los grants de app/Worker, atomicidad, retry, pruebas y
+rollback. No se agregaron migraciones ni se conecto el proceso Worker a
+PostgreSQL.
+
 ## Fuera de alcance
 
 Fuera del soporte tecnico de Identity/Organizations agregado por TEN-001, no se
