@@ -13,8 +13,13 @@ jobs de CI. Los contratos se validan de forma estática y contra PostgreSQL
 **SEC-001** implementa el módulo Identity, la abstracción `IIdentityProvider`,
 autenticación fail-closed, un mock determinista para Development/Testing,
 sesión stateless, claims tenant-aware y policies de autorización verificadas
-por pruebas HTTP y SignalR. El mock no es productivo y `GATE-002` continúa
-abierto: todavía no se ha elegido ni integrado un proveedor OIDC real.
+por pruebas HTTP y SignalR. El mock no es productivo. `GATE-002` está resuelto
+normativamente; DBA-001 no integra todavía AuthCenter.
+
+**DBA-001** implementa la ruta controlada del baseline de base de datos:
+manifiesto con hashes, migrador independiente, catálogo de 15 schemas,
+assertions de ownership/privilegios y mapeos EF mínimos de ambos outbox. Se
+valida exclusivamente con PostgreSQL 18/PostGIS 3.6 efímero en Testcontainers.
 
 El repositorio implementa **FND-001**, la plantilla arquitectónica de
 **ARC-001** y el entorno local reproducible de **FND-002**. Incluye la solución
@@ -147,6 +152,22 @@ concurrencia sin doble conteo.
 ARC-002 aporta validación contractual efímera; no crea migraciones ni una
 aplicación funcional.
 
+## Baseline de base de datos DBA-001
+
+La herramienta separada verifica AI-06 y AI-18 antes de conectarse. API y
+Worker no aplican migraciones ni usan la credencial privilegiada:
+
+```powershell
+pwsh .\tools\database-baseline.ps1 Verify
+pwsh .\tools\database-baseline.ps1 Plan -ConnectionEnvironment PAQUETERIA_DEPLOYMENT_DB
+pwsh .\tools\database-baseline.ps1 Assert -ConnectionEnvironment PAQUETERIA_DEPLOYMENT_DB
+```
+
+`Apply` requiere una conexión privilegiada en la variable indicada y la opción
+explícita `-ConfirmInitialBaseline`. Consulta la
+[guía DBA-001](docs/development/database-baseline.md) para el flujo completo,
+estados clean/applied/partial, seguridad, pruebas y rollback.
+
 ## Estructura principal
 
 ```text
@@ -166,8 +187,8 @@ docs/normative/v0.6         Línea base normativa congelada
 
 ## Fuera de alcance
 
-No se implementan tablas, migraciones, RLS, proveedor OIDC real, login, endpoints de
-negocio, outbox funcional, hubs SignalR productivos, tracking, órdenes, pricing, despacho,
+No se implementan persistencia funcional, proveedor OIDC real, login, endpoints de
+negocio, Worker de outbox, hubs SignalR productivos, tracking, órdenes, pricing, despacho,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
 ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
 reglas de arquitectura; FND-002 aporta solamente dependencias locales.
