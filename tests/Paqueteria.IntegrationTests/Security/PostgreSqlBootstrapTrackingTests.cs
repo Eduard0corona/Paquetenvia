@@ -13,6 +13,11 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Orders.Application.Tracking;
 using Orders.Infrastructure.Tracking;
+using Microsoft.Extensions.DependencyInjection;
+using Organizations.Application.Auditing;
+using Organizations.Application.OrganizationContexts;
+using Organizations.Infrastructure.Auditing;
+using Organizations.Infrastructure.OrganizationContexts;
 
 namespace Paqueteria.IntegrationTests.Security;
 
@@ -31,6 +36,11 @@ public sealed class PostgreSqlBootstrapTrackingTests(
     {
         Assert.StartsWith("18.", factory.PostgreSqlVersion, StringComparison.Ordinal);
         Assert.StartsWith("3.6", factory.PostGisVersion, StringComparison.Ordinal);
+        using var scope = factory.Services.CreateScope();
+        Assert.IsType<PostgreSqlOrganizationContextReader>(
+            scope.ServiceProvider.GetRequiredService<IOrganizationContextReader>());
+        Assert.IsType<PostgreSqlPlatformAdminTenantActivationAudit>(
+            scope.ServiceProvider.GetRequiredService<IPlatformAdminTenantActivationAudit>());
     }
 
     [Theory]
@@ -111,6 +121,61 @@ public sealed class PostgreSqlBootstrapTrackingTests(
 
         Assert.Equal(HttpStatusCode.OK, activeResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, unresolvedResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Organization_contexts_are_read_through_productive_transactional_RLS()
+    {
+        using var response = await SendBearerAsync(
+            "/api/v1/me/organization-contexts",
+            MockIdentityProfiles.ActiveMultiOrganization);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var contexts = document.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(2, contexts.Length);
+        Assert.Equal("Synthetic Operations", contexts[0].GetProperty("display_name").GetString());
+        Assert.Equal("DISPATCHER", contexts[0].GetProperty("role").GetString());
+        Assert.False(contexts[0].GetProperty("is_default").GetBoolean());
+        Assert.Equal("Synthetic Viewer", contexts[1].GetProperty("display_name").GetString());
+        Assert.Equal("VIEWER", contexts[1].GetProperty("role").GetString());
+        Assert.True(contexts[1].GetProperty("is_default").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Active_identity_without_memberships_receives_an_empty_context_list()
+    {
+        using var response = await SendBearerAsync(
+            "/api/v1/me/organization-contexts",
+            MockIdentityProfiles.ActiveWithoutMemberships);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+        Assert.Equal(0, document.RootElement.GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Platform_admin_activation_is_narrowly_audited_but_viewer_activation_is_not()
+    {
+        var before = await factory.CountTenantActivationAuditsAsync();
+        using (var viewer = new HttpRequestMessage(HttpMethod.Get, "/__tests/tenancy/active"))
+        {
+            viewer.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveViewer);
+            viewer.Headers.Add("X-Organization-Id", PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId.ToString("D"));
+            using var viewerResponse = await _client.SendAsync(viewer);
+            Assert.Equal(HttpStatusCode.OK, viewerResponse.StatusCode);
+        }
+        Assert.Equal(before, await factory.CountTenantActivationAuditsAsync());
+
+        using (var admin = new HttpRequestMessage(HttpMethod.Get, "/__tests/tenancy/platform-admin"))
+        {
+            admin.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActivePlatformAdminMfa);
+            admin.Headers.Add("X-Organization-Id", PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId.ToString("D"));
+            using var adminResponse = await _client.SendAsync(admin);
+            Assert.Equal(HttpStatusCode.NoContent, adminResponse.StatusCode);
+        }
+        Assert.Equal(before + 1, await factory.CountTenantActivationAuditsAsync());
     }
 
     [Fact]
@@ -220,6 +285,8 @@ internal sealed class UnavailableDatabaseWebApplicationFactory : WebApplicationF
                 ["IdentityBootstrap:CommandTimeoutSeconds"] = "1",
                 ["PublicTracking:Provider"] = "PostgreSql",
                 ["PublicTracking:CommandTimeoutSeconds"] = "1",
+                ["Tenancy:Provider"] = "PostgreSql",
+                ["Tenancy:CommandTimeoutSeconds"] = "1",
                 ["ConnectionStrings:Paqueteria"] = "Host=127.0.0.1;Port=1;Database=unavailable;Username=none;Password=none;Timeout=1;Command Timeout=1;Pooling=false",
             }));
     }

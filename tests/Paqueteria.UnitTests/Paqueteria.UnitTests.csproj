@@ -22,5 +22,9 @@
     <ProjectReference Include="..\..\src\Modules\Identity\Identity.Infrastructure\Identity.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Application\Organizations.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Domain\Organizations.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Endpoints\Organizations.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

@@ -18,5 +18,8 @@
     <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Contracts\Paqueteria.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Identity\Identity.Infrastructure\Identity.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Application\Organizations.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

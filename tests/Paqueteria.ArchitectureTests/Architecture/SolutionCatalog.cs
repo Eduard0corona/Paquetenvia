@@ -47,9 +47,18 @@ internal static class SolutionCatalog
         typeof(Identity.Domain.AssemblyReference).Assembly,
         typeof(Identity.Application.AssemblyReference).Assembly,
         typeof(Identity.Infrastructure.AssemblyReference).Assembly,
-        typeof(Identity.Endpoints.AssemblyReference).Assembly);
+        typeof(Identity.Endpoints.AssemblyReference).Assembly,
+        usesSharedDomainContracts: true);
 
-    internal static readonly IReadOnlyList<ModuleDefinition> Modules = [Identity, Orders, Pricing];
+    internal static readonly ModuleDefinition Organizations = Module(
+        "Organizations",
+        typeof(Organizations.Domain.AssemblyReference).Assembly,
+        typeof(Organizations.Application.AssemblyReference).Assembly,
+        typeof(Organizations.Infrastructure.AssemblyReference).Assembly,
+        typeof(Organizations.Endpoints.AssemblyReference).Assembly,
+        usesSharedDomainContracts: true);
+
+    internal static readonly IReadOnlyList<ModuleDefinition> Modules = [Identity, Orders, Pricing, Organizations];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -59,12 +68,17 @@ internal static class SolutionCatalog
         allowed:
         [
             "Paqueteria.Infrastructure",
+            "Paqueteria.Domain",
+            "Identity.Application",
             "Identity.Endpoints",
             "Identity.Infrastructure",
             "Orders.Endpoints",
             "Orders.Infrastructure",
             "Pricing.Endpoints",
             "Pricing.Infrastructure",
+            "Organizations.Endpoints",
+            "Organizations.Infrastructure",
+            "Organizations.Application",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -83,6 +97,7 @@ internal static class SolutionCatalog
         .. Orders.Components,
         .. Pricing.Components,
         .. Identity.Components,
+        .. Organizations.Components,
         Api,
         Worker,
     ];
@@ -100,7 +115,8 @@ internal static class SolutionCatalog
         System.Reflection.Assembly domainAssembly,
         System.Reflection.Assembly applicationAssembly,
         System.Reflection.Assembly infrastructureAssembly,
-        System.Reflection.Assembly endpointsAssembly)
+        System.Reflection.Assembly endpointsAssembly,
+        bool usesSharedDomainContracts = false)
     {
         var domain = Component(
             $"{name}.Domain",
@@ -115,21 +131,27 @@ internal static class SolutionCatalog
             applicationAssembly,
             $"src/Modules/{name}/{name}.Application/{name}.Application.csproj",
             name,
-            ["Paqueteria.Application", $"{name}.Domain"]);
+            usesSharedDomainContracts
+                ? ["Paqueteria.Application", "Paqueteria.Domain", $"{name}.Domain"]
+                : ["Paqueteria.Application", $"{name}.Domain"]);
         var infrastructure = Component(
             $"{name}.Infrastructure",
             ProjectRole.ModuleInfrastructure,
             infrastructureAssembly,
             $"src/Modules/{name}/{name}.Infrastructure/{name}.Infrastructure.csproj",
             name,
-            ["Paqueteria.Infrastructure", $"{name}.Application", $"{name}.Domain"]);
+            usesSharedDomainContracts
+                ? ["Paqueteria.Infrastructure", "Paqueteria.Application", "Paqueteria.Domain", $"{name}.Application", $"{name}.Domain"]
+                : ["Paqueteria.Infrastructure", $"{name}.Application", $"{name}.Domain"]);
         var endpoints = Component(
             $"{name}.Endpoints",
             ProjectRole.ModuleEndpoints,
             endpointsAssembly,
             $"src/Modules/{name}/{name}.Endpoints/{name}.Endpoints.csproj",
             name,
-            [$"{name}.Application"]);
+            usesSharedDomainContracts
+                ? ["Paqueteria.Application", "Paqueteria.Domain", $"{name}.Application"]
+                : [$"{name}.Application"]);
 
         return new ModuleDefinition(
             name,

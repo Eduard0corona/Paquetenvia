@@ -3,6 +3,10 @@ using System.Security.Cryptography;
 using Npgsql;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Testcontainers.PostgreSql;
+using Identity.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Organizations.Infrastructure.Persistence;
+using Paqueteria.Infrastructure.Tenancy;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -56,6 +60,7 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             SchemaDuration = deployment.Timings.Schema;
             RolesDuration = deployment.Timings.Roles;
             AssertionsDuration = deployment.Timings.Assertions;
+            await ApplyAdoptionMigrationsAsync().ConfigureAwait(false);
             await CreateRuntimeLoginsAsync().ConfigureAwait(false);
             stopwatch.Stop();
             BootstrapDuration = stopwatch.Elapsed;
@@ -163,6 +168,45 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             GRANT paqueteria_worker TO {{WorkerLogin}};
             """;
         await ExecuteAdminScriptAsync(sql).ConfigureAwait(false);
+    }
+
+    private async Task ApplyAdoptionMigrationsAsync()
+    {
+        await using (var identityConnection = new NpgsqlConnection(DeploymentConnectionString))
+        {
+            await identityConnection.OpenAsync().ConfigureAwait(false);
+            await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", identityConnection))
+            {
+                await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
+            var identityOptions = new DbContextOptionsBuilder<IdentityDbContext>()
+                .UseNpgsql(identityConnection, postgres =>
+                {
+                    postgres.MigrationsAssembly(typeof(IdentityDbContext).Assembly.FullName);
+                    postgres.MigrationsHistoryTable("__ef_migrations_history_identity", "platform");
+                }).Options;
+            await using var identity = new IdentityDbContext(identityOptions, new TenantDatabaseExecutionState());
+            await identity.Database.MigrateAsync().ConfigureAwait(false);
+        }
+
+        await using var organizationsConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await organizationsConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", organizationsConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var organizationsOptions = new DbContextOptionsBuilder<OrganizationsDbContext>()
+            .UseNpgsql(organizationsConnection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(OrganizationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_organizations", "platform");
+            }).Options;
+        await using var organizations = new OrganizationsDbContext(
+            organizationsOptions,
+            new TenantDatabaseExecutionState());
+        await organizations.Database.MigrateAsync().ConfigureAwait(false);
     }
 
     private async Task ExecuteAdminScriptAsync(string sql)

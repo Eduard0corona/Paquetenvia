@@ -20,6 +20,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     private readonly string _adminPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _appPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private PostgreSqlContainer? _container;
+    private string _adminConnectionString = string.Empty;
     private string _applicationConnectionString = string.Empty;
 
     public string PostgreSqlVersion { get; private set; } = string.Empty;
@@ -37,6 +38,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         await _container.StartAsync();
 
         var adminConnectionString = _container.GetConnectionString();
+        _adminConnectionString = adminConnectionString;
         var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, adminConnectionString);
 
@@ -94,8 +96,20 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 ["IdentityBootstrap:CommandTimeoutSeconds"] = "5",
                 ["PublicTracking:Provider"] = "PostgreSql",
                 ["PublicTracking:CommandTimeoutSeconds"] = "5",
+                ["Tenancy:Provider"] = "PostgreSql",
+                ["Tenancy:CommandTimeoutSeconds"] = "5",
                 ["ConnectionStrings:Paqueteria"] = _applicationConnectionString,
             }));
+    }
+
+    public async Task<int> CountTenantActivationAuditsAsync()
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*)::integer FROM platform.audit_logs WHERE action='TENANT_CONTEXT_ACTIVATED'",
+            connection);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static async Task SeedSyntheticDataAsync(NpgsqlDataSource admin)
