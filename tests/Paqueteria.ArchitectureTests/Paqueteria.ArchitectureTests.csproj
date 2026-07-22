@@ -30,6 +30,10 @@
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Domain\Pricing.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Endpoints\Pricing.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Locations\Locations.Application\Locations.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Locations\Locations.Domain\Locations.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Locations\Locations.Endpoints\Locations.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Locations\Locations.Infrastructure\Locations.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Paqueteria.Api\Paqueteria.Api.csproj" />
     <ProjectReference Include="..\..\src\Paqueteria.Worker\Paqueteria.Worker.csproj" />
     <ProjectReference Include="..\Paqueteria.ArchitectureFixtures\Paqueteria.ArchitectureFixtures.csproj" />

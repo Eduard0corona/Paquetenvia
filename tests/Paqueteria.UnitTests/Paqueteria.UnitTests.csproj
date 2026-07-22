@@ -26,5 +26,8 @@
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Domain\Organizations.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Endpoints\Organizations.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Locations\Locations.Application\Locations.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Locations\Locations.Domain\Locations.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Locations\Locations.Infrastructure\Locations.Infrastructure.csproj" />
   </ItemGroup>
 </Project>
