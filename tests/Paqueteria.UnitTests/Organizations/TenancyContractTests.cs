@@ -41,6 +41,13 @@ public sealed class TenancyContractTests
     }
 
     [Fact]
+    public void Database_execution_context_rejects_null_organization_sets()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            new TenantDatabaseExecutionContext(Guid.NewGuid(), null!));
+    }
+
+    [Fact]
     public void Request_tenant_context_is_immutable_after_selection()
     {
         var context = new RequestTenantContext();

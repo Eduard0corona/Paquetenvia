@@ -71,4 +71,19 @@ public sealed class OrganizationsArchitectureTests
         Assert.Single(definitions);
         Assert.Equal("Paqueteria.Domain", definitions[0].Assembly.GetName().Name);
     }
+
+    [Fact]
+    public void Tenant_transaction_context_uses_typed_parameters_and_never_persistent_role_state()
+    {
+        var source = File.ReadAllText(TestRepository.GetPath(
+            "src/BuildingBlocks/Paqueteria.Infrastructure/Tenancy/TenantTransactionContext.cs"));
+
+        Assert.Contains("@organization_ids::uuid[]::text", source, StringComparison.Ordinal);
+        Assert.Contains("NpgsqlParameter<Guid[]>(\"organization_ids\", NpgsqlDbType.Array | NpgsqlDbType.Uuid)", source, StringComparison.Ordinal);
+        Assert.Contains("TypedValue = executionContext.OrganizationIds.ToArray()", source, StringComparison.Ordinal);
+        Assert.Contains("SET LOCAL ROLE paqueteria_app", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SET ROLE paqueteria_app", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("string.Join", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("$\"SELECT set_config", source, StringComparison.Ordinal);
+    }
 }
