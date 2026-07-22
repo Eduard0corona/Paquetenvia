@@ -42,7 +42,14 @@ internal static class SolutionCatalog
         typeof(Pricing.Infrastructure.AssemblyReference).Assembly,
         typeof(Pricing.Endpoints.AssemblyReference).Assembly);
 
-    internal static readonly IReadOnlyList<ModuleDefinition> Modules = [Orders, Pricing];
+    internal static readonly ModuleDefinition Identity = Module(
+        "Identity",
+        typeof(Identity.Domain.AssemblyReference).Assembly,
+        typeof(Identity.Application.AssemblyReference).Assembly,
+        typeof(Identity.Infrastructure.AssemblyReference).Assembly,
+        typeof(Identity.Endpoints.AssemblyReference).Assembly);
+
+    internal static readonly IReadOnlyList<ModuleDefinition> Modules = [Identity, Orders, Pricing];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -52,6 +59,8 @@ internal static class SolutionCatalog
         allowed:
         [
             "Paqueteria.Infrastructure",
+            "Identity.Endpoints",
+            "Identity.Infrastructure",
             "Orders.Endpoints",
             "Orders.Infrastructure",
             "Pricing.Endpoints",
@@ -73,6 +82,7 @@ internal static class SolutionCatalog
         Infrastructure,
         .. Orders.Components,
         .. Pricing.Components,
+        .. Identity.Components,
         Api,
         Worker,
     ];
