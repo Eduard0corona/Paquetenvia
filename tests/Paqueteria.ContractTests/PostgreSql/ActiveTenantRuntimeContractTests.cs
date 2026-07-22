@@ -15,6 +15,8 @@ using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Domain.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Infrastructure;
+using Paqueteria.Infrastructure.Auditing;
 
 namespace Paqueteria.ContractTests.PostgreSql;
 
@@ -240,7 +242,9 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
                 var provisioner = new PostgreSqlInitialOrganizationProvisioner(
                     new AllowAuthorizer(),
                     new NoOpProvisioningFailureInjector(),
-                    scope.Transaction);
+                    scope.Transaction,
+                    new PostgreSqlAppendOnlyAuditWriter(scope.State),
+                    new SystemClock());
                 try
                 {
                     return (await provisioner.ProvisionAsync(
@@ -286,7 +290,9 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
             var provisioner = new PostgreSqlInitialOrganizationProvisioner(
                 new AllowAuthorizer(),
                 new ThrowAtStage(stage),
-                scope.Transaction);
+                scope.Transaction,
+                new PostgreSqlAppendOnlyAuditWriter(scope.State),
+                new SystemClock());
 
             await Assert.ThrowsAsync<SyntheticProvisioningException>(() => provisioner.ProvisionAsync(
                 new InitialOrganizationProvisioningCommand(

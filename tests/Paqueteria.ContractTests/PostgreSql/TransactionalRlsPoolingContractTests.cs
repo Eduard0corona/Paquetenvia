@@ -9,6 +9,8 @@ using Organizations.Infrastructure.Persistence;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Tenancy;
+using Paqueteria.Infrastructure;
+using Paqueteria.Infrastructure.Auditing;
 
 namespace Paqueteria.ContractTests.PostgreSql;
 
@@ -237,7 +239,10 @@ public sealed class TransactionalRlsPoolingContractTests(PostgreSqlContractFixtu
 
             await using (var privilegedScope = CreateRuntimeScope(dataSource))
             {
-                var audit = new PostgreSqlPlatformAdminTenantActivationAudit(privilegedScope.Transaction);
+                var audit = new PostgreSqlPlatformAdminTenantActivationAudit(
+                    privilegedScope.Transaction,
+                    new PostgreSqlAppendOnlyAuditWriter(privilegedScope.State),
+                    new SystemClock());
                 await audit.RecordAsync(userA, orgA, privilegedRequestId, CancellationToken.None);
             }
             await AssertCleanLeaseAsync(dataSource, backendIds[0]);

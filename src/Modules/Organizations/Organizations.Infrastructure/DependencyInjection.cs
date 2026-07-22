@@ -11,6 +11,10 @@ using Organizations.Infrastructure.Auditing;
 using Organizations.Infrastructure.OrganizationContexts;
 using Organizations.Infrastructure.Persistence;
 using Paqueteria.Infrastructure.Tenancy;
+using Paqueteria.Application;
+using Paqueteria.Application.Auditing;
+using Paqueteria.Infrastructure;
+using Paqueteria.Infrastructure.Auditing;
 using Organizations.Application.Provisioning;
 using Organizations.Infrastructure.Provisioning;
 
@@ -53,6 +57,9 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<TenantTransactionGuardInterceptor>(),
                     serviceProvider.GetRequiredService<TenantSaveChangesGuardInterceptor>()));
         services.AddScoped<TenantTransactionContext<OrganizationsDbContext>>();
+        services.TryAddSingleton<IClock, SystemClock>();
+        services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
+        services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.AddSingleton<DisabledOrganizationContextReader>();
         services.AddSingleton<DisabledPlatformAdminTenantActivationAudit>();
         services.AddScoped<PostgreSqlOrganizationContextReader>();

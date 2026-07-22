@@ -5,6 +5,8 @@ using NpgsqlTypes;
 using Organizations.Application.Provisioning;
 using Organizations.Domain;
 using Organizations.Infrastructure.Persistence;
+using Paqueteria.Application;
+using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Domain.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
@@ -14,7 +16,9 @@ namespace Organizations.Infrastructure.Provisioning;
 public sealed class PostgreSqlInitialOrganizationProvisioner(
     IInitialOrganizationProvisioningAuthorizer authorizer,
     IProvisioningFailureInjector failureInjector,
-    TenantTransactionContext<OrganizationsDbContext> transactionContext)
+    TenantTransactionContext<OrganizationsDbContext> transactionContext,
+    IAppendOnlyAuditWriter auditWriter,
+    IClock clock)
     : IInitialOrganizationProvisioner
 {
     public async Task<InitialOrganizationProvisioningResult> ProvisionAsync(
@@ -32,7 +36,7 @@ public sealed class PostgreSqlInitialOrganizationProvisioner(
         var organizationId = Guid.NewGuid();
         var membershipId = Guid.NewGuid();
         var auditId = Guid.NewGuid();
-        var occurredAt = DateTimeOffset.UtcNow;
+        var occurredAt = clock.UtcNow;
 
         try
         {
@@ -48,7 +52,20 @@ public sealed class PostgreSqlInitialOrganizationProvisioner(
                     await failureInjector.AfterAsync(ProvisioningStage.OrganizationInserted, token);
                     await InsertMembershipAsync(connection, transaction, membershipId, userId, organizationId, command, occurredAt, token);
                     await failureInjector.AfterAsync(ProvisioningStage.MembershipInserted, token);
-                    await InsertAuditAsync(connection, transaction, auditId, userId, organizationId, command.RequestId, occurredAt, token);
+                    await auditWriter.WriteAsync(
+                        connection,
+                        transaction,
+                        new AuditEntry(
+                            auditId,
+                            organizationId,
+                            userId,
+                            "INITIAL_ORGANIZATION_PROVISIONED",
+                            "ORGANIZATION",
+                            organizationId,
+                            command.RequestId,
+                            RedactedAuditPayload.Empty,
+                            occurredAt),
+                        token);
                     await failureInjector.AfterAsync(ProvisioningStage.AuditInserted, token);
                     return new InitialOrganizationProvisioningResult(userId, organizationId, membershipId, auditId);
                 },
@@ -141,27 +158,4 @@ public sealed class PostgreSqlInitialOrganizationProvisioner(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task InsertAuditAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid auditId,
-        Guid userId,
-        Guid organizationId,
-        string? requestId,
-        DateTimeOffset occurredAt,
-        CancellationToken cancellationToken)
-    {
-        const string sql =
-            "INSERT INTO platform.audit_logs " +
-            "(id, org_id, actor_id, action, entity_type, entity_id, request_id, payload_redacted, occurred_at) " +
-            "VALUES (@id, @org_id, @actor_id, 'INITIAL_ORGANIZATION_PROVISIONED', 'ORGANIZATION', @entity_id, @request_id, '{}'::jsonb, @occurred_at);";
-        await using var command = new NpgsqlCommand(sql, connection, transaction);
-        command.Parameters.Add(new NpgsqlParameter<Guid>("id", NpgsqlDbType.Uuid) { TypedValue = auditId });
-        command.Parameters.Add(new NpgsqlParameter<Guid>("org_id", NpgsqlDbType.Uuid) { TypedValue = organizationId });
-        command.Parameters.Add(new NpgsqlParameter<Guid>("actor_id", NpgsqlDbType.Uuid) { TypedValue = userId });
-        command.Parameters.Add(new NpgsqlParameter<Guid>("entity_id", NpgsqlDbType.Uuid) { TypedValue = organizationId });
-        command.Parameters.Add(new NpgsqlParameter<string?>("request_id", NpgsqlDbType.Text) { TypedValue = requestId });
-        command.Parameters.Add(new NpgsqlParameter<DateTimeOffset>("occurred_at", NpgsqlDbType.TimestampTz) { TypedValue = occurredAt });
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
 }
