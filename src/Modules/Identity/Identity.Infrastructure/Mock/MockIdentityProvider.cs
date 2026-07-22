@@ -11,7 +11,7 @@ public sealed class MockIdentityProvider : IIdentityProvider
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrEmpty(credential) ||
-            !MockIdentityProfiles.All.TryGetValue(credential, out var identity))
+            !MockIdentityProfiles.AuthenticationProfiles.TryGetValue(credential, out var identity))
         {
             return ValueTask.FromResult(IdentityAuthenticationResult.Invalid);
         }

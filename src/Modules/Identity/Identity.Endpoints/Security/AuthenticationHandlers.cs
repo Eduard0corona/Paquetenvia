@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Encodings.Web;
 using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -11,15 +12,18 @@ namespace Identity.Endpoints.Security;
 public sealed class MockAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
     private readonly IIdentityProvider _identityProvider;
+    private readonly IIdentityContextResolver _identityContextResolver;
 
     public MockAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
-        IIdentityProvider identityProvider)
+        IIdentityProvider identityProvider,
+        IIdentityContextResolver identityContextResolver)
         : base(options, logger, encoder)
     {
         _identityProvider = identityProvider;
+        _identityContextResolver = identityContextResolver;
     }
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
@@ -39,9 +43,15 @@ public sealed class MockAuthenticationHandler : AuthenticationHandler<Authentica
         }
 
         var result = await _identityProvider.AuthenticateAsync(header.Parameter, Context.RequestAborted);
-        if (!result.IsValid ||
-            result.Identity is null ||
-            !IdentityClaimsPrincipalFactory.TryCreate(result.Identity, out var principal) ||
+        if (!result.IsValid || result.Identity is null)
+        {
+            return AuthenticateResult.Fail("The authentication credential is invalid.");
+        }
+
+        var resolution = await _identityContextResolver.ResolveAsync(
+            result.Identity.Subject,
+            Context.RequestAborted);
+        if (!IdentityClaimsPrincipalFactory.TryCreate(result.Identity, resolution, out var principal) ||
             principal is null)
         {
             return AuthenticateResult.Fail("The authentication credential is invalid.");

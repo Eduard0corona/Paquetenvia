@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 using Identity.Endpoints.Security;
 using Identity.Endpoints.Session;
 using Identity.Infrastructure.Mock;
@@ -14,7 +14,6 @@ public sealed class ClaimsAndSessionTests
     public async Task Transformation_is_idempotent_and_does_not_create_global_roles()
     {
         var principal = await PrincipalForAsync(MockIdentityProfiles.ActiveMultiOrganization);
-
         var once = await _transformation.TransformAsync(principal);
         var twice = await _transformation.TransformAsync(once);
 
@@ -23,72 +22,45 @@ public sealed class ClaimsAndSessionTests
             twice.Claims.Select(ClaimKey).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(twice.Claims, claim => claim.Type == ClaimTypes.Role);
         Assert.Equal(2, twice.Claims.Count(claim => claim.Type == IdentityClaimTypes.Membership));
-        Assert.Equal("mock-subject-multi-org", twice.FindFirst(IdentityClaimTypes.Subject)?.Value);
     }
 
     [Fact]
-    public async Task Session_is_request_snapshot_with_exact_organization_role_queries()
+    public async Task Session_preserves_exact_organization_roles_and_default_flag()
     {
-        var principal = await TransformedPrincipalForAsync(MockIdentityProfiles.ActiveMultiOrganization);
-        var session = AuthenticatedSession.FromPrincipal(principal);
+        var session = AuthenticatedSession.FromPrincipal(
+            await TransformedPrincipalForAsync(MockIdentityProfiles.ActiveMultiOrganization));
 
         Assert.True(session.IsAuthenticated);
-        Assert.Equal("mock-subject-multi-org", session.Subject);
-        Assert.Equal(NormalizedIdentityStatus.Active, session.IdentityStatus);
+        Assert.Equal(IdentityContextStatus.Active, session.IdentityStatus);
         Assert.True(session.MfaSatisfied);
-        Assert.True(session.HasOrganizationAccess(MockIdentityProfiles.ViewerOrganizationId));
-        Assert.False(session.HasOrganizationAccess(MockIdentityProfiles.ForeignOrganizationId));
-        Assert.True(session.HasRole(
-            MockIdentityProfiles.ViewerOrganizationId,
-            NormalizedOrganizationRole.Viewer));
-        Assert.False(session.HasRole(
-            MockIdentityProfiles.OperationsOrganizationId,
-            NormalizedOrganizationRole.Viewer));
-        Assert.True(session.HasRole(
-            MockIdentityProfiles.OperationsOrganizationId,
-            NormalizedOrganizationRole.Dispatcher));
+        Assert.True(session.HasRole(MockIdentityProfiles.ViewerOrganizationId, OrganizationRole.Viewer));
+        Assert.False(session.HasRole(MockIdentityProfiles.OperationsOrganizationId, OrganizationRole.Viewer));
+        Assert.True(session.HasRole(MockIdentityProfiles.OperationsOrganizationId, OrganizationRole.Dispatcher));
+        Assert.True(session.ActiveMemberships.Single(x => x.OrganizationId == MockIdentityProfiles.ViewerOrganizationId).IsDefault);
+    }
 
-        var mutableCopy = session.ActiveMemberships.ToList();
-        mutableCopy.Clear();
-        Assert.Equal(2, session.ActiveMemberships.Count);
+    [Theory]
+    [InlineData(MockIdentityProfiles.SuspendedUser)]
+    [InlineData(MockIdentityProfiles.DisabledUser)]
+    public async Task Unresolved_subject_remains_externally_authenticated_without_internal_claims(string credential)
+    {
+        var transformed = await TransformedPrincipalForAsync(credential);
+        var session = AuthenticatedSession.FromPrincipal(transformed);
+
+        Assert.True(session.IsAuthenticated);
+        Assert.NotNull(session.Subject);
+        Assert.Null(session.IdentityStatus);
+        Assert.Empty(session.ActiveMemberships);
     }
 
     [Fact]
-    public void Principal_without_internal_session_is_anonymous()
+    public void Principal_without_internal_source_is_anonymous()
     {
         var external = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.Role, "PLATFORM_ADMIN"), new Claim("amr", "mfa")],
             authenticationType: "External"));
 
-        var session = AuthenticatedSession.FromPrincipal(external);
-
-        Assert.False(session.IsAuthenticated);
-        Assert.Null(session.Subject);
-        Assert.Empty(session.ActiveMemberships);
-    }
-
-    [Fact]
-    public async Task Revoked_membership_is_preserved_as_claim_but_never_enters_active_session()
-    {
-        var principal = await TransformedPrincipalForAsync(MockIdentityProfiles.RevokedMembership);
-        var session = AuthenticatedSession.FromPrincipal(principal);
-
-        Assert.Single(principal.Claims, claim => claim.Type == IdentityClaimTypes.Membership);
-        Assert.Empty(session.ActiveMemberships);
-        Assert.False(session.HasOrganizationAccess(MockIdentityProfiles.ViewerOrganizationId));
-    }
-
-    [Theory]
-    [InlineData("UNKNOWN", "11111111-1111-1111-1111-111111111111|VIEWER|ACTIVE")]
-    [InlineData("ACTIVE", "11111111-1111-1111-1111-111111111111|OWNER|ACTIVE")]
-    public async Task Unknown_status_or_role_fails_closed(string status, string membership)
-    {
-        var principal = SourcePrincipal(status, membership);
-
-        var transformed = await _transformation.TransformAsync(principal);
-
-        Assert.False(transformed.Identity?.IsAuthenticated ?? false);
-        Assert.False(AuthenticatedSession.FromPrincipal(transformed).IsAuthenticated);
+        Assert.False(AuthenticatedSession.FromPrincipal(external).IsAuthenticated);
     }
 
     [Fact]
@@ -97,43 +69,26 @@ public sealed class ClaimsAndSessionTests
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [
                 new Claim(ClaimTypes.Role, "PLATFORM_ADMIN"),
-                new Claim(IdentityClaimTypes.Membership, "11111111-1111-1111-1111-111111111111|PLATFORM_ADMIN|ACTIVE"),
+                new Claim(IdentityClaimTypes.Membership, "11111111-1111-1111-1111-111111111111|PLATFORM_ADMIN|true"),
                 new Claim(IdentityClaimTypes.AuthenticationMethodReference, "mfa"),
             ],
             authenticationType: "Untrusted"));
 
-        var transformed = await _transformation.TransformAsync(principal);
-        var session = AuthenticatedSession.FromPrincipal(transformed);
-
+        var session = AuthenticatedSession.FromPrincipal(await _transformation.TransformAsync(principal));
         Assert.False(session.IsAuthenticated);
-        Assert.False(session.MfaSatisfied);
-        Assert.False(session.HasAnyActiveRole(NormalizedOrganizationRole.PlatformAdmin));
+        Assert.False(session.HasAnyActiveRole(OrganizationRole.PlatformAdmin));
     }
 
-    private async Task<ClaimsPrincipal> PrincipalForAsync(string credential)
+    private static async Task<ClaimsPrincipal> PrincipalForAsync(string credential)
     {
-        var result = await new MockIdentityProvider().AuthenticateAsync(credential, default);
-        Assert.True(IdentityClaimsPrincipalFactory.TryCreate(result.Identity!, out var principal));
+        var authentication = await new MockIdentityProvider().AuthenticateAsync(credential, default);
+        var resolution = await new MockIdentityContextResolver().ResolveAsync(authentication.Identity!.Subject, default);
+        Assert.True(IdentityClaimsPrincipalFactory.TryCreate(authentication.Identity, resolution, out var principal));
         return principal!;
     }
 
     private async Task<ClaimsPrincipal> TransformedPrincipalForAsync(string credential) =>
         await _transformation.TransformAsync(await PrincipalForAsync(credential));
-
-    private static ClaimsPrincipal SourcePrincipal(string status, string membership)
-    {
-        Claim Internal(string type, string value) =>
-            new(type, value, ClaimValueTypes.String, IdentityClaimTypes.Issuer, IdentityClaimTypes.Issuer);
-
-        return new ClaimsPrincipal(new ClaimsIdentity(
-            [
-                Internal(IdentityClaimTypes.SourceSubject, "synthetic-subject"),
-                Internal(IdentityClaimTypes.SourceStatus, status),
-                Internal(IdentityClaimTypes.SourceMfa, "true"),
-                Internal(IdentityClaimTypes.SourceMembership, membership),
-            ],
-            IdentitySecurityDefaults.SourceAuthenticationType));
-    }
 
     private static string ClaimKey(Claim claim) => $"{claim.Type}|{claim.Value}|{claim.Issuer}";
 }

@@ -16,5 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Contracts\Paqueteria.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
   </ItemGroup>
 </Project>

@@ -1,6 +1,11 @@
 using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 using Identity.Endpoints.Testing;
+using Identity.Infrastructure.Bootstrap;
 using Identity.Infrastructure.Mock;
+using Orders.Application.Tracking;
+using Orders.Infrastructure.Tracking;
+using Paqueteria.Contracts.Tracking;
 using Paqueteria.ArchitectureTests.Architecture;
 
 namespace Paqueteria.ArchitectureTests;
@@ -28,6 +33,46 @@ public sealed class IdentityArchitectureTests
         Assert.DoesNotContain(
             typeof(IIdentityProvider).Assembly.GetReferencedAssemblies(),
             reference => reference.Name?.StartsWith("Microsoft.AspNetCore", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void Bootstrap_and_tracking_ports_are_framework_and_Npgsql_independent()
+    {
+        Assert.Equal("Identity.Application", typeof(IIdentityContextResolver).Assembly.GetName().Name);
+        Assert.Contains(typeof(IIdentityContextResolver), typeof(PostgreSqlIdentityContextResolver).GetInterfaces());
+        Assert.Equal("Identity.Infrastructure", typeof(PostgreSqlIdentityContextResolver).Assembly.GetName().Name);
+        Assert.Equal("Orders.Application", typeof(IPublicTrackingProjectionReader).Assembly.GetName().Name);
+        Assert.Contains(typeof(IPublicTrackingProjectionReader), typeof(PostgreSqlPublicTrackingProjectionReader).GetInterfaces());
+        Assert.Equal("Orders.Infrastructure", typeof(PostgreSqlPublicTrackingProjectionReader).Assembly.GetName().Name);
+
+        foreach (var assembly in new[] { typeof(IIdentityContextResolver).Assembly, typeof(IPublicTrackingProjectionReader).Assembly })
+        {
+            var references = assembly.GetReferencedAssemblies().Select(reference => reference.Name ?? string.Empty);
+            Assert.DoesNotContain(references, name =>
+                name.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("AspNetCore", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
+    public void External_identity_contains_no_tenant_authorization_data()
+    {
+        Assert.Equal(
+            ["MfaSatisfied", "Subject"],
+            typeof(ExternalIdentity).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void Productive_tracking_utilities_have_single_implementations()
+    {
+        Assert.Equal("Paqueteria.Contracts", typeof(TrackingTokenHasher).Assembly.GetName().Name);
+        Assert.Equal("Orders.Application", typeof(PublicOrderStatusPolicy).Assembly.GetName().Name);
+        Assert.Single(
+            SolutionCatalog.All.SelectMany(component => component.Assembly.GetTypes()),
+            type => type.Name == nameof(TrackingTokenHasher));
+        Assert.Single(
+            SolutionCatalog.All.SelectMany(component => component.Assembly.GetTypes()),
+            type => type.Name == nameof(PublicOrderStatusPolicy));
     }
 
     [Fact]

@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 using Identity.Endpoints.Authorization;
 using Identity.Endpoints.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -54,7 +54,7 @@ public static class IdentityTestEndpoints
         var result = await authorizationService.AuthorizeAsync(
             user,
             new OrganizationAuthorizationResource(organizationId),
-            new OrganizationMembershipRequirement(NormalizedOrganizationRole.Viewer));
+            new OrganizationMembershipRequirement(OrganizationRole.Viewer));
 
         return result.Succeeded ? Results.NoContent() : Results.Forbid();
     }

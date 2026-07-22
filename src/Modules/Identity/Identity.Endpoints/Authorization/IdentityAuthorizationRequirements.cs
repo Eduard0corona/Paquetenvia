@@ -1,4 +1,4 @@
-using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 using Identity.Endpoints.Session;
 using Microsoft.AspNetCore.Authorization;
 
@@ -10,10 +10,10 @@ public sealed class ActiveIdentityRequirement : IAuthorizationRequirement;
 
 public sealed class RequireMfaRequirement : IAuthorizationRequirement;
 
-public sealed record AnyActiveOrganizationRoleRequirement(NormalizedOrganizationRole RequiredRole)
+public sealed record AnyActiveOrganizationRoleRequirement(OrganizationRole RequiredRole)
     : IAuthorizationRequirement;
 
-public sealed record OrganizationMembershipRequirement(NormalizedOrganizationRole RequiredRole)
+public sealed record OrganizationMembershipRequirement(OrganizationRole RequiredRole)
     : IAuthorizationRequirement;
 
 public sealed record OrganizationAuthorizationResource(Guid OrganizationId);
@@ -40,7 +40,7 @@ public sealed class ActiveIdentityHandler : AuthorizationHandler<ActiveIdentityR
         ActiveIdentityRequirement requirement)
     {
         var session = AuthenticatedSession.FromPrincipal(context.User);
-        if (session.IsAuthenticated && session.IdentityStatus == NormalizedIdentityStatus.Active)
+        if (session.IsAuthenticated && session.IdentityStatus == IdentityContextStatus.Active)
         {
             context.Succeed(requirement);
         }
@@ -99,7 +99,7 @@ public sealed class OrganizationMembershipHandler
         var session = AuthenticatedSession.FromPrincipal(context.User);
         if (organizationId != Guid.Empty &&
             session.IsAuthenticated &&
-            session.IdentityStatus == NormalizedIdentityStatus.Active &&
+            session.IdentityStatus == IdentityContextStatus.Active &&
             session.HasRole(organizationId, requirement.RequiredRole))
         {
             context.Succeed(requirement);

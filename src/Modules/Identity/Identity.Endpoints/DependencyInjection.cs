@@ -1,5 +1,6 @@
 using Identity.Application.Authentication;
 using Identity.Application.Session;
+using Identity.Application.Bootstrap;
 using Identity.Endpoints.Authorization;
 using Identity.Endpoints.Security;
 using Identity.Endpoints.Session;
@@ -94,11 +95,12 @@ public static class DependencyInjection
                 policy.RequireAuthenticatedUser();
                 policy.AddRequirements(
                     new ActiveIdentityRequirement(),
-                    new AnyActiveOrganizationRoleRequirement(NormalizedOrganizationRole.PlatformAdmin),
+                    new AnyActiveOrganizationRoleRequirement(OrganizationRole.PlatformAdmin),
                     new RequireMfaRequirement());
             });
 
         services.AddSignalR();
+        services.AddExceptionHandler<IdentityTechnicalExceptionHandler>();
         return services;
     }
 }
