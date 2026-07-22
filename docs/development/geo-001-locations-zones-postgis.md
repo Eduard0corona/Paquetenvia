@@ -15,7 +15,8 @@ El modulo modela `City`, `ServiceArea`, `OperatingZone` y `Location`. Expone:
 - `POST /api/v1/locations`
 
 Todos requieren identidad activa y `X-Organization-Id`. El POST tambien exige
-`Idempotency-Key`. La seleccion tenant reutiliza TEN-001/TEN-002: abre una
+`Idempotency-Key`, con un unico valor de 16 a 128 caracteres, sin espacios
+iniciales ni finales. La seleccion tenant reutiliza TEN-001/TEN-002: abre una
 transaccion, configura usuario y organizaciones con parametros tipados y usa
 `SET LOCAL ROLE paqueteria_app`. Los registros de otro tenant no son visibles.
 

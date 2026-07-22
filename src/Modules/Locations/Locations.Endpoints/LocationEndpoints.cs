@@ -214,13 +214,13 @@ public static class LocationEndpoints
     {
         value = string.Empty;
         var values = request.Headers["Idempotency-Key"];
-        if (values.Count != 1 || string.IsNullOrWhiteSpace(values[0]))
+        if (values.Count != 1 || !IdempotencyKeyPolicy.IsValid(values[0]))
         {
             return false;
         }
 
         value = values[0]!;
-        return value.Length <= 200 && value == value.Trim();
+        return true;
     }
 
     private static bool IsValid(CreateLocationRequest request) =>

@@ -54,6 +54,47 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
         Assert.DoesNotContain("pii_key_version", body, StringComparison.OrdinalIgnoreCase);
     }
 
+    public static TheoryData<string?> InvalidIdempotencyKeys => new()
+    {
+        null,
+        string.Empty,
+        "   ",
+        new string('a', 15),
+        new string('a', 129),
+        new string('a', 200),
+        $" {new string('a', 15)}",
+        $"{new string('a', 15)} ",
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidIdempotencyKeys))]
+    public async Task POST_location_rejects_invalid_idempotency_key_before_calling_the_service(string? idempotencyKey)
+    {
+        using var response = await SendCreateLocationAsync(idempotencyKey is null ? null : [idempotencyKey]);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task POST_location_rejects_multiple_idempotency_key_values()
+    {
+        using var response = await SendCreateLocationAsync(
+            [new string('a', 16), new string('b', 16)]);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(17)]
+    [InlineData(128)]
+    public async Task POST_location_accepts_valid_idempotency_key_boundaries(int length)
+    {
+        using var response = await SendCreateLocationAsync([new string('a', length)]);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
     [Fact]
     public async Task Missing_and_cross_tenant_geographic_resources_share_uniform_404()
     {
@@ -100,5 +141,26 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveViewer);
         request.Headers.Add("X-Organization-Id", MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
         return request;
+    }
+
+    private async Task<HttpResponseMessage> SendCreateLocationAsync(string[]? idempotencyKeys)
+    {
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/locations");
+        if (idempotencyKeys is not null)
+        {
+            Assert.True(request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKeys));
+        }
+
+        request.Content = JsonContent.Create(new
+        {
+            city_id = LocationHttpWebApplicationFactory.CityId,
+            service_area_id = LocationHttpWebApplicationFactory.ServiceAreaId,
+            address_text = "Synthetic private address",
+            address_summary = "Synthetic summary",
+            lat = 28.61,
+            lng = -106.09,
+            pii_key_version = "mock-v1",
+        });
+        return await client.SendAsync(request);
     }
 }

@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Text.Json.Serialization;
+using Locations.Application.Locations;
 using Locations.Endpoints;
+using Paqueteria.ContractTests.Support;
 
 namespace Paqueteria.ContractTests;
 
@@ -60,6 +62,20 @@ public sealed class LocationsOpenApiImplementationTests
             Assert.Contains("city_id", block, StringComparison.Ordinal);
             Assert.Contains("service_area_id", block, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void Idempotency_key_policy_matches_the_structured_AI05_contract()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schema = root.Mapping("components").Mapping("parameters").Mapping("IdempotencyKey").Mapping("schema");
+
+        Assert.Equal(IdempotencyKeyPolicy.MinimumLength, int.Parse(schema.Scalar("minLength")));
+        Assert.Equal(IdempotencyKeyPolicy.MaximumLength, int.Parse(schema.Scalar("maxLength")));
+        Assert.False(IdempotencyKeyPolicy.IsValid(new string('a', IdempotencyKeyPolicy.MinimumLength - 1)));
+        Assert.True(IdempotencyKeyPolicy.IsValid(new string('a', IdempotencyKeyPolicy.MinimumLength)));
+        Assert.True(IdempotencyKeyPolicy.IsValid(new string('a', IdempotencyKeyPolicy.MaximumLength)));
+        Assert.False(IdempotencyKeyPolicy.IsValid(new string('a', IdempotencyKeyPolicy.MaximumLength + 1)));
     }
 
     private static void AssertJsonProperties<T>(params string[] expected)

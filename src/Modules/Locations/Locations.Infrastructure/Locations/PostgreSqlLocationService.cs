@@ -414,7 +414,7 @@ public sealed class PostgreSqlLocationService(
     private static void Validate(CreateLocationCommand command)
     {
         if (command.ActorId == Guid.Empty || command.OrganizationId == Guid.Empty || command.CityId == Guid.Empty ||
-            string.IsNullOrWhiteSpace(command.IdempotencyKey) || command.IdempotencyKey.Length > 200 ||
+            !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             string.IsNullOrWhiteSpace(command.AddressText) || command.AddressText.Trim().Length < 8 ||
             string.IsNullOrWhiteSpace(command.AddressSummary) || command.AddressSummary.Length > 180 ||
             string.IsNullOrWhiteSpace(command.PiiKeyVersion) ||
