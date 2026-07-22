@@ -188,9 +188,18 @@ docs/normative/v0.6         Línea base normativa congelada
 .github/workflows           Integración continua
 ```
 
+## TEN-001
+
+TEN-001 agrega el contexto tenant activo, el modulo `Organizations`, adopciones
+EF no destructivas y RLS transaccional. Consulta
+[`docs/development/tenant-context-rls.md`](docs/development/tenant-context-rls.md)
+para el header, autorizacion por organizacion, migrador, provisioning, pruebas y
+rollback.
+
 ## Fuera de alcance
 
-No se implementan persistencia funcional de casos de uso, proveedor OIDC real,
+Fuera del soporte tecnico de Identity/Organizations agregado por TEN-001, no se
+implementan casos de uso comerciales, proveedor OIDC real,
 login, endpoints de negocio, endpoint público de tracking, Worker de outbox,
 hubs SignalR productivos, órdenes, pricing, despacho,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo

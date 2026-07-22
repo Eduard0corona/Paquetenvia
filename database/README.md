@@ -22,3 +22,8 @@ Use `tools/database-baseline.ps1`; see
 `docs/development/database-baseline.md` for preflight, deployment, assertions,
 credential separation and rollback. There is intentionally no destructive
 `down`, `drop` or `reset` command.
+
+TEN-001 adds migrator-owned, independent EF adoption histories for Identity and
+Organizations after this baseline. The migrations assert existing objects and
+do not duplicate or recreate AI-06 SQL. Operational details are in
+[`docs/development/tenant-context-rls.md`](../docs/development/tenant-context-rls.md).

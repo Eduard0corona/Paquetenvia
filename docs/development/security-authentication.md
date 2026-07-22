@@ -92,3 +92,9 @@ API `NOINHERIT`/`NOBYPASSRLS`, siembra datos sinteticos y valida 401, 403, 503,
 MFA, multi-organizacion, SignalR y ausencia de fuga del role state.
 
 Consulta tambien [security-bootstrap-tracking.md](security-bootstrap-tracking.md).
+
+TEN-001 converts the SEC-002 user ID and active membership tuples into a
+request-scoped tenant selection without trusting external tenant claims. Active
+role and MFA checks are evaluated only inside the selected organization; the
+header, database transaction and RLS flow are documented in
+[tenant-context-rls.md](tenant-context-rls.md).

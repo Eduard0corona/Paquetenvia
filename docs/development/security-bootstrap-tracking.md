@@ -103,3 +103,8 @@ dotnet test .\tests\Paqueteria.ArchitectureTests\Paqueteria.ArchitectureTests.cs
 Rollback is code/config rollback only. No migration or persistent data was
 introduced. Keep both providers `Disabled` to fail closed when PostgreSQL is
 not intentionally configured.
+
+TEN-001 consumes only the active membership context returned by
+`security.resolve_identity_context`; it does not broaden bootstrap grants or
+change public tracking. See [tenant-context-rls.md](tenant-context-rls.md) for
+active-organization selection, transaction-local GUCs and FORCE RLS behavior.
