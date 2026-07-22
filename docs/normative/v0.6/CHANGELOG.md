@@ -1,5 +1,13 @@
 # Changelog
 
+## Resolución de gates — 2026-07-21
+
+- GATE-002 (proveedor de identidad) RESUELTO: se adopta AuthCenter, servidor OIDC propio, con SLA comprometido de 99.5%, hospedaje en Azure Mexico Central y custodia de llave en Azure Key Vault.
+- Migración verificada de access tokens a RS256: los consumidores validan contra JWKS público sin poseer material de firma.
+- Separación normativa registrada: AuthCenter autentica, Paquetería autoriza la tenencia por organización.
+- Pendiente antes de producción: rotación de llaves, rotación de la llave de desarrollo previamente embebida y confirmación de topología para el SLA.
+- Actualización únicamente documental: no modifica contratos normativos v0.6, SQL, roles, endpoints ni código.
+
 ## Revisión canónica v0.6 sync 3 — 2026-07-21
 
 - ARC-002 pasa de `PARTIAL` a `DONE` después de que la remediación normativa y
