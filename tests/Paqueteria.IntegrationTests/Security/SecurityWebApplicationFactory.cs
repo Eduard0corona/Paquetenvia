@@ -13,6 +13,7 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<Progra
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Authentication:Provider"] = "Mock",
+                ["IdentityBootstrap:Provider"] = "Mock",
             }));
     }
 }
@@ -28,6 +29,7 @@ internal sealed class EnvironmentWebApplicationFactory(
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Authentication:Provider"] = provider,
+                ["IdentityBootstrap:Provider"] = provider == "Mock" ? "Mock" : "Disabled",
             }));
     }
 }

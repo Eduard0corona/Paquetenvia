@@ -3,6 +3,7 @@ using Npgsql;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.ContractTests.Support;
 using YamlDotNet.RepresentationModel;
+using Orders.Application.Tracking;
 
 namespace Paqueteria.ContractTests.PostgreSql.Tracking;
 
@@ -22,24 +23,22 @@ public sealed class PublicTrackingContractTests(PostgreSqlContractFixture fixtur
                 pair => ((YamlScalarNode)pair.Value).Value!,
                 StringComparer.Ordinal);
 
-        Assert.Equal(17, PublicStatusMappingReference.All.Count);
-        Assert.Equal(
-            normativeMapping.OrderBy(pair => pair.Key, StringComparer.Ordinal),
-            PublicStatusMappingReference.All.OrderBy(pair => pair.Key, StringComparer.Ordinal));
+        Assert.Equal(17, normativeMapping.Count);
+        var policy = new PublicOrderStatusPolicy();
         await using var command = fixture.AdminDataSource.CreateCommand(
             "SELECT security.map_public_order_status(@status)");
         var statusParameter = command.Parameters.Add("status", NpgsqlTypes.NpgsqlDbType.Text);
-        foreach (var mapping in PublicStatusMappingReference.All)
+        foreach (var mapping in normativeMapping)
         {
             statusParameter.Value = mapping.Key;
             Assert.Equal(mapping.Value, await command.ExecuteScalarAsync());
-            Assert.Equal(mapping.Value, PublicStatusMappingReference.Map(mapping.Key));
+            Assert.Equal(mapping.Value, PublicOrderStatusPolicy.ToContractValue(policy.Map(mapping.Key)));
         }
 
         statusParameter.Value = "UNMAPPED_SYNTHETIC_STATE";
         var unmappedStatus = await command.ExecuteScalarAsync();
         Assert.True(unmappedStatus is null or DBNull);
-        Assert.Throws<PublicStatusMappingException>(() => PublicStatusMappingReference.Map("UNMAPPED_SYNTHETIC_STATE"));
+        Assert.Throws<PublicStatusMappingException>(() => policy.Map("UNMAPPED_SYNTHETIC_STATE"));
     }
 
     [PostgreSqlContractFact]

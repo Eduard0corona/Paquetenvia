@@ -48,6 +48,7 @@ public sealed class DatabaseBaselineAssertions
         "append-only triggers",
         "outbox direct grants and lifecycle function grants",
         "forced RLS and sensitive-function PUBLIC revocation",
+        "bootstrap function security and column-level grants",
         "real default-privilege inheritance probes",
     });
 
@@ -183,6 +184,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertFunctionOwnersAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertBootstrapContractsAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -338,6 +342,91 @@ public sealed class DatabaseBaselineAssertions
             JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
             WHERE n.nspname IN ('platform','security') AND owner.rolname<>'paqueteria_migrator'
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid)
+            """,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task AssertBootstrapContractsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH expected(signature,search_path) AS (VALUES
+              ('security.resolve_identity_context(text)','search_path=pg_catalog, identity, organizations, security, pg_temp'),
+              ('security.get_public_tracking_projection(text)','search_path=pg_catalog, extensions, orders, security, pg_temp'))
+            SELECT 'bootstrap function missing or not SECURITY DEFINER: ' || expected.signature
+            FROM expected
+            LEFT JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(expected.signature)
+            WHERE p.oid IS NULL OR NOT p.prosecdef
+            UNION ALL
+            SELECT 'bootstrap function search_path mismatch: ' || expected.signature
+            FROM expected
+            JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(expected.signature)
+            WHERE NOT (expected.search_path=ANY(COALESCE(p.proconfig,ARRAY[]::text[])))
+            UNION ALL
+            SELECT 'bootstrap function contains dynamic SQL EXECUTE: ' || expected.signature
+            FROM expected
+            JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(expected.signature)
+            WHERE p.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+            UNION ALL
+            SELECT 'paqueteria_app cannot execute bootstrap function: ' || expected.signature
+            FROM expected
+            WHERE NOT has_function_privilege('paqueteria_app',expected.signature,'EXECUTE')
+            UNION ALL
+            SELECT 'paqueteria_worker can execute forbidden bootstrap function: ' || expected.signature
+            FROM expected
+            WHERE has_function_privilege('paqueteria_worker',expected.signature,'EXECUTE')
+            """,
+            cancellationToken).ConfigureAwait(false);
+
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH expected(table_schema,table_name,column_name) AS (VALUES
+              ('identity','users','id'),
+              ('identity','users','identity_subject'),
+              ('identity','users','status'),
+              ('organizations','organization_memberships','id'),
+              ('organizations','organization_memberships','user_id'),
+              ('organizations','organization_memberships','organization_id'),
+              ('organizations','organization_memberships','role'),
+              ('organizations','organization_memberships','status'),
+              ('organizations','organization_memberships','is_default'),
+              ('orders','public_tracking_tokens','id'),
+              ('orders','public_tracking_tokens','order_id'),
+              ('orders','public_tracking_tokens','token_hash'),
+              ('orders','public_tracking_tokens','expires_at'),
+              ('orders','public_tracking_tokens','revoked_at'),
+              ('orders','orders','id'),
+              ('orders','orders','public_id'),
+              ('orders','orders','status'),
+              ('orders','order_events','order_id'),
+              ('orders','order_events','public_event_code'),
+              ('orders','order_events','occurred_at')),
+            actual AS (
+              SELECT table_schema,table_name,column_name
+              FROM information_schema.column_privileges
+              WHERE grantee='paqueteria_bootstrap' AND privilege_type='SELECT'
+                AND table_schema IN ('identity','organizations','orders'))
+            SELECT 'missing bootstrap SELECT column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name
+            FROM expected e LEFT JOIN actual a USING(table_schema,table_name,column_name)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected bootstrap SELECT column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'bootstrap has non-SELECT column privilege: ' || table_schema || '.' || table_name || '.' || column_name || ':' || privilege_type
+            FROM information_schema.column_privileges
+            WHERE grantee='paqueteria_bootstrap' AND privilege_type<>'SELECT'
             """,
             cancellationToken).ConfigureAwait(false);
     }

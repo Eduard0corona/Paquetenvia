@@ -10,11 +10,11 @@ La validación ejecutable de **ARC-002** está **DONE** después de pasar los ci
 jobs de CI. Los contratos se validan de forma estática y contra PostgreSQL
 18/PostGIS 3.6 real y efímero, incluida purga real y concurrente de ambos outbox.
 
-**SEC-001** implementa el módulo Identity, la abstracción `IIdentityProvider`,
-autenticación fail-closed, un mock determinista para Development/Testing,
-sesión stateless, claims tenant-aware y policies de autorización verificadas
-por pruebas HTTP y SignalR. El mock no es productivo. `GATE-002` está resuelto
-normativamente; DBA-001 no integra todavía AuthCenter.
+**SEC-002** separa la identidad externa (`sub`/MFA) de la autorización tenant,
+integra el bootstrap y tracking de AI-06 mediante adaptadores Npgsql de mínimo
+privilegio, y aporta `TrackingTokenHasher` y el mapa público de 17 estados. La
+integración HTTP es exclusivamente mediante probes de `Testing`; AuthCenter y
+el endpoint público productivo continúan fuera de alcance.
 
 **DBA-001** implementa la ruta controlada del baseline de base de datos:
 manifiesto con hashes, migrador independiente, catálogo de 15 schemas,
@@ -84,12 +84,15 @@ Consulta la [guía de arquitectura modular](docs/development/module-architecture
 para agregarlo a la solución, registrarlo en el catálogo y validar sus límites.
 
 La API expone únicamente `GET /health/live`. OpenAPI del framework se publica
-solo en Development. SEC-001 agrega probes internos exclusivamente bajo el
-environment `Testing`; no agrega endpoints públicos de login o identidad. El
+solo en Development. SEC-001/SEC-002 agregan probes internos exclusivamente
+bajo el environment `Testing`; no agregan endpoints públicos de login,
+identidad o tracking. El
 Worker inicia y espera cancelación sin conectarse a servicios externos.
 
 La [guía de autenticación y autorización](docs/development/security-authentication.md)
 documenta los schemes, perfiles sintéticos, claims, sesión, policies y límites.
+La [guía SEC-002](docs/development/security-bootstrap-tracking.md) documenta los
+adaptadores PostgreSQL, parsers, roles, tracking, pruebas y rollback.
 Ejecuta su matriz con:
 
 ```powershell
@@ -187,8 +190,9 @@ docs/normative/v0.6         Línea base normativa congelada
 
 ## Fuera de alcance
 
-No se implementan persistencia funcional, proveedor OIDC real, login, endpoints de
-negocio, Worker de outbox, hubs SignalR productivos, tracking, órdenes, pricing, despacho,
+No se implementan persistencia funcional de casos de uso, proveedor OIDC real,
+login, endpoints de negocio, endpoint público de tracking, Worker de outbox,
+hubs SignalR productivos, órdenes, pricing, despacho,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
 ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
 reglas de arquitectura; FND-002 aporta solamente dependencias locales.

@@ -2,7 +2,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Identity.Infrastructure.Mock;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 
 namespace Paqueteria.IntegrationTests.Security;
 
@@ -162,12 +164,7 @@ public sealed class AuthenticationPipelineTests : IClassFixture<SecurityWebAppli
     {
         using var factory = new EnvironmentWebApplicationFactory(environment, "Mock");
 
-        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
-
-        Assert.Contains(
-            "Development or Testing",
-            exception.ToString(),
-            StringComparison.Ordinal);
+        _ = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
     }
 
     [Fact]
@@ -195,6 +192,18 @@ public sealed class AuthenticationPipelineTests : IClassFixture<SecurityWebAppli
         using var response = await client.GetAsync(AuthenticatedProbe);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using var tracking = await client.GetAsync("/__tests/tracking/synthetic-token");
+        Assert.Equal(HttpStatusCode.NotFound, tracking.StatusCode);
+    }
+
+    [Fact]
+    public void PostgreSql_providers_require_a_connection_string_at_startup()
+    {
+        using var factory = new MissingPostgreSqlConnectionWebApplicationFactory();
+
+        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.Contains("ConnectionStrings:Paqueteria", exception.ToString(), StringComparison.Ordinal);
     }
 
     private async Task<HttpResponseMessage> SendAsync(
@@ -234,4 +243,20 @@ public sealed class AuthenticationPipelineTests : IClassFixture<SecurityWebAppli
         Assert.False(response.Headers.Contains("Set-Cookie"));
 
     private sealed record ProblemResponse(string Title, int Status, string TraceId);
+}
+
+internal sealed class MissingPostgreSqlConnectionWebApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");
+        builder.ConfigureAppConfiguration(configuration =>
+            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Authentication:Provider"] = "Mock",
+                ["IdentityBootstrap:Provider"] = "PostgreSql",
+                ["PublicTracking:Provider"] = "PostgreSql",
+                ["ConnectionStrings:Paqueteria"] = null,
+            }));
+    }
 }

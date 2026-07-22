@@ -1,21 +1,26 @@
 using System.Globalization;
 using System.Security.Claims;
 using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 
 namespace Identity.Endpoints.Security;
 
 public static class IdentityClaimsPrincipalFactory
 {
-    public static bool TryCreate(NormalizedIdentity normalizedIdentity, out ClaimsPrincipal? principal)
+    public static bool TryCreate(
+        ExternalIdentity externalIdentity,
+        IdentityContextResolution resolution,
+        out ClaimsPrincipal? principal)
     {
-        ArgumentNullException.ThrowIfNull(normalizedIdentity);
+        ArgumentNullException.ThrowIfNull(externalIdentity);
+        ArgumentNullException.ThrowIfNull(resolution);
 
-        if (string.IsNullOrWhiteSpace(normalizedIdentity.Subject) ||
-            !Enum.IsDefined(normalizedIdentity.Status) ||
-            normalizedIdentity.Memberships.Any(membership =>
-                membership.OrganizationId == Guid.Empty ||
-                !Enum.IsDefined(membership.Role) ||
-                !Enum.IsDefined(membership.Status)))
+        if (string.IsNullOrWhiteSpace(externalIdentity.Subject) ||
+            resolution.Context is { } context &&
+            (context.UserId == Guid.Empty ||
+             context.Status != IdentityContextStatus.Active ||
+             context.Memberships.Any(membership =>
+                 membership.OrganizationId == Guid.Empty || !Enum.IsDefined(membership.Role))))
         {
             principal = null;
             return false;
@@ -23,15 +28,18 @@ public static class IdentityClaimsPrincipalFactory
 
         var claims = new List<Claim>
         {
-            InternalClaim(IdentityClaimTypes.SourceSubject, normalizedIdentity.Subject),
-            InternalClaim(IdentityClaimTypes.SourceStatus, normalizedIdentity.Status.ToContractValue()),
+            InternalClaim(IdentityClaimTypes.SourceSubject, externalIdentity.Subject),
             InternalClaim(
                 IdentityClaimTypes.SourceMfa,
-                normalizedIdentity.MfaSatisfied.ToString(CultureInfo.InvariantCulture)),
+                externalIdentity.MfaSatisfied.ToString(CultureInfo.InvariantCulture)),
         };
 
-        claims.AddRange(normalizedIdentity.Memberships.Select(membership =>
-            InternalClaim(IdentityClaimTypes.SourceMembership, SerializeMembership(membership))));
+        if (resolution.Context is { } resolved)
+        {
+            claims.Add(InternalClaim(IdentityClaimTypes.SourceStatus, resolved.Status.ToContractValue()));
+            claims.AddRange(resolved.Memberships.Select(membership =>
+                InternalClaim(IdentityClaimTypes.SourceMembership, SerializeMembership(membership))));
+        }
 
         principal = new ClaimsPrincipal(new ClaimsIdentity(
             claims,
@@ -41,12 +49,12 @@ public static class IdentityClaimsPrincipalFactory
         return true;
     }
 
-    internal static string SerializeMembership(NormalizedOrganizationMembership membership) =>
+    internal static string SerializeMembership(IdentityContextMembership membership) =>
         string.Join(
             '|',
             membership.OrganizationId.ToString("D", CultureInfo.InvariantCulture),
             membership.Role.ToContractValue(),
-            membership.Status.ToContractValue());
+            membership.IsDefault.ToString(CultureInfo.InvariantCulture));
 
     private static Claim InternalClaim(string type, string value) =>
         new(type, value, ClaimValueTypes.String, IdentityClaimTypes.Issuer, IdentityClaimTypes.Issuer);

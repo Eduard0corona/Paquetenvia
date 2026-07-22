@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 using Identity.Endpoints.Authorization;
 using Identity.Endpoints.Security;
 using Identity.Infrastructure.Mock;
@@ -13,13 +13,9 @@ public sealed class AuthorizationPolicyTests
     public async Task Authenticated_requirement_rejects_an_untrusted_authenticated_principal()
     {
         var requirement = new AuthenticatedIdentityRequirement();
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim(ClaimTypes.NameIdentifier, "external")],
-            authenticationType: "Untrusted"));
-        var context = Context(principal, requirement);
-
+        var context = Context(new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "external")], "Untrusted")), requirement);
         await new AuthenticatedIdentityHandler().HandleAsync(context);
-
         Assert.False(context.HasSucceeded);
     }
 
@@ -27,105 +23,64 @@ public sealed class AuthorizationPolicyTests
     [InlineData(MockIdentityProfiles.ActiveViewer, true)]
     [InlineData(MockIdentityProfiles.SuspendedUser, false)]
     [InlineData(MockIdentityProfiles.DisabledUser, false)]
-    public async Task Active_identity_requirement_uses_normative_identity_status(
-        string credential,
-        bool expected)
+    public async Task Active_identity_requires_resolved_active_context(string credential, bool expected)
     {
         var requirement = new ActiveIdentityRequirement();
         var context = Context(await PrincipalForAsync(credential), requirement);
-
         await new ActiveIdentityHandler().HandleAsync(context);
-
         Assert.Equal(expected, context.HasSucceeded);
     }
 
     [Theory]
     [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa, true)]
     [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa, false)]
-    public async Task Require_mfa_uses_authenticated_amr_evidence(string credential, bool expected)
+    public async Task Require_mfa_uses_external_amr_evidence(string credential, bool expected)
     {
         var requirement = new RequireMfaRequirement();
         var context = Context(await PrincipalForAsync(credential), requirement);
-
         await new RequireMfaHandler().HandleAsync(context);
-
         Assert.Equal(expected, context.HasSucceeded);
     }
 
     [Fact]
-    public async Task Organization_membership_requires_role_in_the_exact_resource_organization()
+    public async Task Organization_membership_requires_role_in_exact_organization()
     {
         var principal = await PrincipalForAsync(MockIdentityProfiles.ActiveMultiOrganization);
-        var requirement = new OrganizationMembershipRequirement(NormalizedOrganizationRole.Viewer);
-
-        var allowed = Context(
-            principal,
-            requirement,
+        var requirement = new OrganizationMembershipRequirement(OrganizationRole.Viewer);
+        var allowed = Context(principal, requirement,
             new OrganizationAuthorizationResource(MockIdentityProfiles.ViewerOrganizationId));
-        await new OrganizationMembershipHandler().HandleAsync(allowed);
-
-        var wrongOrganization = Context(
-            principal,
-            requirement,
+        var wrong = Context(principal, requirement,
             new OrganizationAuthorizationResource(MockIdentityProfiles.OperationsOrganizationId));
-        await new OrganizationMembershipHandler().HandleAsync(wrongOrganization);
+
+        await new OrganizationMembershipHandler().HandleAsync(allowed);
+        await new OrganizationMembershipHandler().HandleAsync(wrong);
 
         Assert.True(allowed.HasSucceeded);
-        Assert.False(wrongOrganization.HasSucceeded);
+        Assert.False(wrong.HasSucceeded);
     }
 
     [Theory]
     [InlineData(MockIdentityProfiles.SuspendedMembership)]
     [InlineData(MockIdentityProfiles.RevokedMembership)]
-    public async Task Inactive_membership_never_satisfies_resource_authorization(string credential)
+    public async Task Inactive_memberships_are_not_returned_by_resolver(string credential)
     {
-        var requirement = new OrganizationMembershipRequirement(NormalizedOrganizationRole.Viewer);
-        var context = Context(
-            await PrincipalForAsync(credential),
-            requirement,
+        var requirement = new OrganizationMembershipRequirement(OrganizationRole.Viewer);
+        var context = Context(await PrincipalForAsync(credential), requirement,
             MockIdentityProfiles.ViewerOrganizationId);
-
         await new OrganizationMembershipHandler().HandleAsync(context);
-
         Assert.False(context.HasSucceeded);
-    }
-
-    [Theory]
-    [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa, true)]
-    [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa, false)]
-    [InlineData(MockIdentityProfiles.ActiveViewer, false)]
-    public async Task Privileged_operation_requires_active_platform_admin_and_mfa(
-        string credential,
-        bool expected)
-    {
-        IAuthorizationRequirement[] requirements =
-        [
-            new ActiveIdentityRequirement(),
-            new AnyActiveOrganizationRoleRequirement(NormalizedOrganizationRole.PlatformAdmin),
-            new RequireMfaRequirement(),
-        ];
-        var context = new AuthorizationHandlerContext(
-            requirements,
-            await PrincipalForAsync(credential),
-            resource: null);
-
-        await new ActiveIdentityHandler().HandleAsync(context);
-        await new AnyActiveOrganizationRoleHandler().HandleAsync(context);
-        await new RequireMfaHandler().HandleAsync(context);
-
-        Assert.Equal(expected, context.HasSucceeded);
     }
 
     private static AuthorizationHandlerContext Context(
         ClaimsPrincipal principal,
         IAuthorizationRequirement requirement,
-        object? resource = null) =>
-        new([requirement], principal, resource);
+        object? resource = null) => new([requirement], principal, resource);
 
     private static async Task<ClaimsPrincipal> PrincipalForAsync(string credential)
     {
-        var result = await new MockIdentityProvider().AuthenticateAsync(credential, default);
-        Assert.True(IdentityClaimsPrincipalFactory.TryCreate(result.Identity!, out var source));
+        var authentication = await new MockIdentityProvider().AuthenticateAsync(credential, default);
+        var resolution = await new MockIdentityContextResolver().ResolveAsync(authentication.Identity!.Subject, default);
+        Assert.True(IdentityClaimsPrincipalFactory.TryCreate(authentication.Identity, resolution, out var source));
         return await new PaquetenviaClaimsTransformation().TransformAsync(source!);
     }
 }

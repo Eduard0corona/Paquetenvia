@@ -1,177 +1,94 @@
-# Autenticación y autorización SEC-001
+# Autenticacion y autorizacion SEC-001/SEC-002
 
-## Alcance
+## Separacion de responsabilidades
 
-SEC-001 agrega una base reemplazable de autenticación y autorización a la API,
-sin elegir un proveedor OIDC productivo. La implementación es stateless y se
-limita a resolver una credencial sintética, normalizar la identidad y construir
-el contexto autenticado de una sola petición.
+La autenticacion externa y la autorizacion interna son contratos distintos.
+`IIdentityProvider` valida una credencial y solo produce `ExternalIdentity`
+(`Subject` y evidencia MFA). No contiene estado de usuario, organizaciones,
+membresias, roles, permisos ni el identificador interno.
 
-`GATE-002` permanece abierto. Por ello no existen issuer, discovery URL, client
-ID, secretos, callbacks, emisión de tokens, refresh tokens, cookies ni sesiones
-persistentes. Tampoco existen usuarios, organizaciones o membresías en EF/Core
-o PostgreSQL.
+`IIdentityContextResolver` toma el `Subject` ya autenticado y resuelve el
+contexto autorizado de Paquetenvia. Su implementacion PostgreSQL invoca
+exclusivamente:
 
-## Módulo Identity
+```sql
+SELECT security.resolve_identity_context(@identity_subject);
+```
 
-El módulo conserva las cuatro capas canónicas:
+AuthCenter fue elegido en GATE-002, pero su issuer, audience, client ID, URLs y
+scopes no estan definidos en el repositorio. SEC-002 no inventa esos valores ni
+agrega conectividad OIDC real. Un adaptador futuro debera producir solo `sub` y
+`amr=mfa`; claims externos de roles, permisos, aplicaciones u organizaciones
+se ignoran para autorizacion tenant.
 
-- `Identity.Domain`: estados y roles normativos puros, sin ASP.NET Core.
-- `Identity.Application`: `IIdentityProvider`, resultado de autenticación,
-  identidad normalizada y `IAuthenticatedSession`, todos independientes de
-  `HttpContext`, `ClaimsPrincipal` y SDK externos.
-- `Identity.Infrastructure`: catálogo de perfiles sintéticos y
-  `MockIdentityProvider`, sin red ni base de datos.
-- `Identity.Endpoints`: schemes ASP.NET Core, transformación de claims, sesión
-  request-scoped, requirements/handlers, respuestas Problem Details y probes
-  exclusivos de Testing.
+## Pipeline y sesion
 
-`Paqueteria.Api` es el composition root. Registra Infrastructure y Endpoints;
-ninguna capa Application o Endpoints referencia Infrastructure.
+```text
+Bearer -> IIdentityProvider -> ExternalIdentity
+       -> IIdentityContextResolver -> contexto interno
+       -> ClaimsPrincipal -> IAuthenticatedSession -> policies
+```
 
-## Proveedor y schemes
+La funcion SQL devuelve `NULL` tanto para subject desconocido como para usuario
+suspendido o deshabilitado. Esos casos son indistinguibles y crean una identidad
+externa autenticada sin status ni memberships; las policies activas responden
+403 generico. Un fallo tecnico o drift del JSON responde 503 generico, nunca
+401/404.
 
-La opción tipada es:
+La sesion es un snapshot inmutable, request-scoped y stateless. No usa cookies,
+Redis, base de datos de sesion, `AsyncLocal`, cache global ni persistencia. Solo
+acepta claims internos `sub`, `amr=mfa`, status y membership. Cada membership
+conserva junto `organization_id`, rol e `is_default`; no existen roles globales
+cross-organization ni seleccion de tenant activo (TEN-001 sigue pendiente).
+
+## Providers y configuracion
 
 ```json
 {
-  "Authentication": {
-    "Provider": "Disabled"
-  }
+  "Authentication": { "Provider": "Disabled" },
+  "IdentityBootstrap": { "Provider": "Disabled", "CommandTimeoutSeconds": 5 },
+  "PublicTracking": { "Provider": "Disabled", "CommandTimeoutSeconds": 5 }
 }
 ```
 
-Los únicos valores admitidos son `Disabled` y `Mock`. El scheme lógico
-`Paquetenvia.Authentication` reenvía a:
+`Authentication` admite `Disabled` y `Mock`. `IdentityBootstrap` admite
+`Disabled`, `Mock` y `PostgreSql`; `PublicTracking` admite `Disabled` y
+`PostgreSql`. Los mocks solo pueden iniciar en Development/Testing. PostgreSQL
+requiere `ConnectionStrings:Paqueteria`; la conexion real se inyecta por
+configuracion externa y nunca se imprime.
 
-- `Paquetenvia.Disabled`: fail-closed; nunca autentica y responde challenge
-  genérico 401.
-- `Paquetenvia.MockOidc`: lee exclusivamente `Authorization: Bearer <perfil>`
-  y consulta `IIdentityProvider`.
+El mock de autenticacion es determinista pero solo elige subject/MFA. El
+`MockIdentityContextResolver` separado contiene las autorizaciones sinteticas y
+no acepta IDs, roles, JSON ni headers aportados por el cliente.
 
-`Mock` se valida al iniciar y solo se acepta con environment `Development` o
-`Testing`. Configurarlo en `Staging` o `Production` detiene el inicio con un
-error explícito. `Disabled` es el valor predeterminado para que la aplicación
-inicie cerrada mientras `GATE-002` siga pendiente.
+## Seguridad PostgreSQL
 
-El bearer sintético selecciona uno de estos perfiles preconstruidos:
+El adaptador usa `NpgsqlDataSource`, parametros tipados, timeout explicito y
+cancelacion. Abre una transaccion, ejecuta `SET LOCAL ROLE paqueteria_app`, llama
+la funcion y confirma. Nunca asume `paqueteria_bootstrap`, establece GUC tenant,
+consulta tablas directamente ni usa SQL dinamico. `SET LOCAL` impide que el rol
+se filtre al pool.
 
-| Credencial | Resultado sintético |
-|---|---|
-| `active-viewer` | identidad ACTIVE, VIEWER sin MFA |
-| `active-platform-admin-mfa` | PLATFORM_ADMIN con MFA |
-| `active-platform-admin-no-mfa` | PLATFORM_ADMIN sin MFA |
-| `active-multi-org` | VIEWER en una organización y DISPATCHER en otra |
-| `suspended-user` | identidad SUSPENDED |
-| `disabled-user` | identidad DISABLED |
-| `suspended-membership` | membresía SUSPENDED |
-| `revoked-membership` | membresía REVOKED |
+El parser exige UUIDs validos, `status=ACTIVE`, arreglo de memberships, roles
+normativos, booleano `is_default`, propiedades exactas y ausencia de duplicados
+organization/role. JSON nulo, incompleto, malformado o desconocido es error
+tecnico fail-closed.
 
-No se aceptan IDs, roles, estados, MFA, permisos o JSON enviados por el cliente.
-No se leen headers `X-User-Role`, `X-Organization-Role`, `X-Is-Admin` ni `X-MFA`.
-La credencial completa y los claims completos no se registran.
+## HTTP, SignalR y pruebas
 
-Para habilitar el adaptador durante desarrollo, sin publicar probes:
+- Credencial ausente o invalida: 401.
+- Subject autenticado sin contexto autorizado: 403.
+- Contexto activo sin capacidad tenant/MFA: 403.
+- PostgreSQL o contrato JSON no disponible: 503.
 
-```powershell
-$env:Authentication__Provider = "Mock"
-dotnet run --project .\src\Paqueteria.Api --environment Development
-Remove-Item Env:\Authentication__Provider
-```
+Las respuestas Problem Details no revelan credenciales, subject, estado interno,
+organizacion, connection string ni JSON. No se establecen cookies. Los probes
+de identidad y SignalR existen solo con environment exacto `Testing`, quedan
+fuera de OpenAPI y no son endpoints productivos.
 
-Los perfiles no son secretos, pero son únicamente datos de desarrollo/prueba.
+La matriz `WebApplicationFactory` ejecuta el baseline mediante
+`DatabaseBaselineDeployer` sobre PostgreSQL 18/PostGIS 3.6 efimero, crea un login
+API `NOINHERIT`/`NOBYPASSRLS`, siembra datos sinteticos y valida 401, 403, 503,
+MFA, multi-organizacion, SignalR y ausencia de fuga del role state.
 
-## Claims internos y sesión
-
-El handler crea primero una identidad fuente normalizada que el cliente no
-puede construir mediante headers. `PaquetenviaClaimsTransformation` valida esa
-fuente y emite:
-
-- `sub`, como identificador OIDC normalizado;
-- `amr=mfa`, solo cuando el proveedor autenticado aportó esa evidencia;
-- `urn:paquetenvia:identity:v1:status`;
-- `urn:paquetenvia:identity:v1:membership`.
-
-El claim de membership conserva en un solo valor interno versionado la tupla
-`organization_id | role | membership_status`. No se crean claims
-`ClaimTypes.Role`: un rol de la organización A nunca se convierte en permiso
-global ni autoriza la organización B. Los valores desconocidos invalidan la
-transformación completa.
-
-La transformación elimina y reconstruye su identidad derivada, por lo que es
-idempotente y no duplica claims cuando ASP.NET Core la ejecuta varias veces.
-Claims arbitrarios de otra identidad o issuer no ingresan a la sesión.
-
-`IAuthenticatedSession` es un snapshot inmutable y scoped de la petición. Solo
-expone subject, estado, MFA y membresías ACTIVE, además de consultas por
-organización y rol exactos. No usa estado estático, `AsyncLocal`, cookies,
-sesión de servidor, Redis, caché global, base de datos ni persistencia entre
-peticiones. No selecciona una organización activa; eso corresponde a TEN-001.
-
-## Policies
-
-- `Identity.Authenticated`: identidad técnicamente autenticada.
-- `Identity.Active`: exige estado `ACTIVE`; `SUSPENDED` y `DISABLED` producen
-  403.
-- `Identity.RequireMfa`: exige `amr=mfa` derivado de la identidad normalizada.
-- `Identity.PrivilegedMfa`: exige identidad ACTIVE, una membresía ACTIVE con
-  `PLATFORM_ADMIN` y MFA.
-- `OrganizationMembershipRequirement`: autorización resource-based que exige
-  una membresía ACTIVE y el rol solicitado en el mismo `organizationId`.
-
-No existe middleware `X-Organization-Id` ni contexto de organización activa.
-Las policies no implementan SEC-002 o TEN-001.
-
-Una autenticación ausente o inválida devuelve 401. Una identidad válida sin
-capacidad, inactiva, sin MFA o con membresía incorrecta devuelve 403. Ambos
-casos usan Problem Details genérico con `status`, título y trace ID; no revelan
-token, estado, rol, organización, perfil mock ni stack trace. `GET /health/live`
-está marcado explícitamente como anónimo.
-
-## Probes y pruebas
-
-Solo el environment exacto `Testing` registra estas rutas, excluidas de
-OpenAPI:
-
-```text
-/__tests/security/authenticated
-/__tests/security/privileged
-/__tests/security/organization/{organizationId}
-/__tests/hubs/security
-```
-
-El hub es interno, no tiene métodos de negocio ni grupos y únicamente valida el
-pipeline de autorización. No representa OperationsHub, DriverHub o TrackingHub.
-Las pruebas ejercitan el endpoint HTTP de `negotiate`; no agregan el cliente
-SignalR.
-
-Ejecuta la matriz de seguridad con:
-
-```powershell
-dotnet test .\tests\Paqueteria.UnitTests\Paqueteria.UnitTests.csproj
-dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.csproj
-dotnet test .\tests\Paqueteria.ArchitectureTests\Paqueteria.ArchitectureTests.csproj
-```
-
-IntegrationTests usa `WebApplicationFactory<Program>` con environment
-`Testing` y `Authentication:Provider=Mock`. Cubre 401, 403, separación de roles
-multi-organización, ausencia de cookie, SignalR, ausencia de probes fuera de
-Testing y rechazo de Mock en ambientes productivos.
-
-## Reemplazo futuro, límites y rollback
-
-Después de resolver `GATE-002`, un adaptador real implementará
-`IIdentityProvider` y producirá el mismo modelo normalizado. El scheme real
-deberá validar issuer, audience, firma y evidencia MFA según la decisión
-aprobada; no debe cambiar las policies ni convertir roles tenant en roles
-globales.
-
-SEC-002 deberá resolver identidad/membresías persistidas. TEN-001 deberá
-seleccionar el contexto activo autorizado. El frontend de login, PKCE, refresh,
-provisioning, RLS y los hubs productivos también quedan pendientes.
-
-Para revertir SEC-001, elimina los cuatro proyectos Identity de la solución,
-sus entradas del catálogo, las referencias del API, las pruebas y esta guía;
-restaura `Program.cs`, `appsettings.json` y README. La reversión no requiere
-migraciones, datos, secretos ni limpieza de sesiones porque SEC-001 no crea
-ninguno.
+Consulta tambien [security-bootstrap-tracking.md](security-bootstrap-tracking.md).

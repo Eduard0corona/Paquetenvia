@@ -313,6 +313,19 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "orders.application": {
+        "type": "Project",
+        "dependencies": {
+          "Orders.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "orders.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
       "paqueteria.application": {
         "type": "Project",
         "dependencies": {

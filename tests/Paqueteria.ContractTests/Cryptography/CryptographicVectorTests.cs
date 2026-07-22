@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Globalization;
+using Paqueteria.Contracts.Tracking;
 
 namespace Paqueteria.ContractTests.Cryptography;
 
@@ -19,18 +20,15 @@ public sealed class CryptographicVectorTests
     [Fact]
     public void Tracking_token_matches_the_permanent_base64url_and_sha256_vector()
     {
-        var raw = Convert.FromHexString("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
-        var token = TrackingTokenReference.Encode(raw);
+        const string token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
+        var hasher = new TrackingTokenHasher();
         Assert.Equal("AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", token);
         Assert.DoesNotContain('=', token);
-        Assert.Equal("eb9f16800c9029ffca85695763d23c3ace71011cf40e9354acd810205e250f87", Convert.ToHexString(TrackingTokenReference.Hash(token)).ToLowerInvariant());
+        Assert.Equal("eb9f16800c9029ffca85695763d23c3ace71011cf40e9354acd810205e250f87", Convert.ToHexString(hasher.HashToken(token)).ToLowerInvariant());
 
-        var mutated = raw.ToArray();
-        mutated[0] ^= 0x01;
-        Assert.NotEqual(TrackingTokenReference.Hash(token), TrackingTokenReference.Hash(TrackingTokenReference.Encode(mutated)));
-        Assert.NotEqual(TrackingTokenReference.Hash(token), TrackingTokenReference.Hash(token + "="));
-        Assert.NotEqual(TrackingTokenReference.Hash(token), TrackingTokenReference.Hash(token.ToLowerInvariant()));
-        Assert.Throws<ArgumentException>(() => TrackingTokenReference.Encode(raw[..^1]));
+        Assert.NotEqual(hasher.HashToken(token), hasher.HashToken("B" + token[1..]));
+        Assert.NotEqual(hasher.HashToken(token), hasher.HashToken(token + "="));
+        Assert.NotEqual(hasher.HashToken(token), hasher.HashToken(token.ToLowerInvariant()));
     }
 
     [Fact]

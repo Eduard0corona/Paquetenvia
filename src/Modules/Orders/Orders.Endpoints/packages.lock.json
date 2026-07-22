@@ -6,7 +6,8 @@
         "type": "Project",
         "dependencies": {
           "Orders.Domain": "[1.0.0, )",
-          "Paqueteria.Application": "[1.0.0, )"
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Contracts": "[1.0.0, )"
         }
       },
       "orders.domain": {

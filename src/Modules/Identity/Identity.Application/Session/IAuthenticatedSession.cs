@@ -1,4 +1,4 @@
-using Identity.Application.Authentication;
+using Identity.Application.Bootstrap;
 
 namespace Identity.Application.Session;
 
@@ -8,15 +8,15 @@ public interface IAuthenticatedSession
 
     string? Subject { get; }
 
-    NormalizedIdentityStatus? IdentityStatus { get; }
+    IdentityContextStatus? IdentityStatus { get; }
 
     bool MfaSatisfied { get; }
 
-    IReadOnlyList<NormalizedOrganizationMembership> ActiveMemberships { get; }
+    IReadOnlyList<IdentityContextMembership> ActiveMemberships { get; }
 
     bool HasOrganizationAccess(Guid organizationId);
 
-    bool HasRole(Guid organizationId, NormalizedOrganizationRole role);
+    bool HasRole(Guid organizationId, OrganizationRole role);
 
-    bool HasAnyActiveRole(NormalizedOrganizationRole role);
+    bool HasAnyActiveRole(OrganizationRole role);
 }

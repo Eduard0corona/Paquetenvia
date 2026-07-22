@@ -15,9 +15,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Domain\Paqueteria.Domain.csproj" />
     <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Contracts\Paqueteria.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Modules\Identity\Identity.Application\Identity.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Identity\Identity.Domain\Identity.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Identity\Identity.Endpoints\Identity.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Identity\Identity.Infrastructure\Identity.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

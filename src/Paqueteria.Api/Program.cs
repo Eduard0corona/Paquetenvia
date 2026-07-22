@@ -3,6 +3,9 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Identity.Endpoints;
 using Identity.Endpoints.Testing;
 using Identity.Infrastructure;
+using Orders.Infrastructure;
+using Orders.Endpoints.Testing;
+using Orders.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,7 +14,9 @@ builder.Logging.AddJsonConsole();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
-builder.Services.AddIdentityInfrastructure();
+builder.Services.AddIdentityInfrastructure(builder.Configuration, builder.Environment);
+builder.Services.AddOrdersInfrastructure(builder.Configuration);
+builder.Services.AddOrdersEndpoints();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
     .AddHealthChecks()
@@ -47,6 +52,7 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 }).AllowAnonymous();
 
 app.MapIdentityTestProbes(app.Environment);
+app.MapPublicTrackingTestProbe(app.Environment);
 
 app.Run();
 
