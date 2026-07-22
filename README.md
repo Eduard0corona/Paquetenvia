@@ -196,6 +196,15 @@ EF no destructivas y RLS transaccional. Consulta
 para el header, autorizacion por organizacion, migrador, provisioning, pruebas y
 rollback.
 
+## TEN-002
+
+TEN-002 agrega evidencia independiente del orden transaccional, retry completo,
+parametro PostgreSQL `uuid[]`, contexto vacio `{}` y aislamiento bajo pooling
+Npgsql. Consulta
+[`docs/development/ten-002-transactional-rls-validation.md`](docs/development/ten-002-transactional-rls-validation.md)
+para la matriz de trazabilidad, comandos del harness, riesgos residuales y
+rollback. No se agregaron migraciones ni PgBouncer.
+
 ## Fuera de alcance
 
 Fuera del soporte tecnico de Identity/Organizations agregado por TEN-001, no se
