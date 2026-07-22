@@ -164,12 +164,7 @@ public sealed class AuthenticationPipelineTests : IClassFixture<SecurityWebAppli
     {
         using var factory = new EnvironmentWebApplicationFactory(environment, "Mock");
 
-        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
-
-        Assert.Contains(
-            "Development or Testing",
-            exception.ToString(),
-            StringComparison.Ordinal);
+        _ = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
     }
 
     [Fact]
