@@ -1,4 +1,7 @@
 # Migraciones
 
-Directorio reservado para migraciones de base de datos aprobadas por tareas
-posteriores. FND-001 no aplica ni genera AI-06 o AI-18 y no contiene migraciones.
+AI-06 y AI-18 se aplican exclusivamente mediante el migrador independiente. Las
+migraciones EF de Identity, Organizations y Locations son adopciones no
+destructivas: validan que los objetos canonicos ya existan y registran un
+historial separado en `platform`. No recrean, alteran ni eliminan tablas del
+baseline.
