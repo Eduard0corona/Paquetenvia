@@ -19,21 +19,35 @@ internal static partial class DatabaseMigratorProgram
             var options = CommandOptions.Parse(arguments);
             var verifier = new DatabaseBaselineVerifier();
             var baseline = await verifier.VerifyAsync(cancellationToken: cancellation.Token).ConfigureAwait(false);
+            var verifiedModules = ModuleMigrationCoordinator.VerifySources();
 
             if (options.Command == "verify")
             {
                 PrintVerifiedBaseline(baseline);
+                PrintModuleMigrations(verifiedModules);
                 return 0;
             }
 
             var connectionString = ReadConnectionString(options.ConnectionEnvironment!);
             var deployer = new DatabaseBaselineDeployer();
+            var moduleMigrations = new ModuleMigrationCoordinator();
             switch (options.Command)
             {
                 case "plan":
                     var plan = await deployer.PlanAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintPlan(plan);
-                    return plan.State.Status == DatabaseBaselineStatus.Partial ? 4 : 0;
+                    IReadOnlyList<ModuleMigrationState> modulePlan;
+                    if (plan.State.Status != DatabaseBaselineStatus.Clean)
+                    {
+                        modulePlan = await moduleMigrations.PlanAsync(connectionString, cancellation.Token);
+                    }
+                    else
+                    {
+                        modulePlan = verifiedModules.Select(module => module with { Status = "PENDING" }).ToArray();
+                    }
+                    PrintModulePlan(modulePlan);
+                    return plan.State.Status == DatabaseBaselineStatus.Partial ||
+                        modulePlan.Any(module => module.Status == "DRIFT") ? 4 : 0;
 
                 case "apply":
                     if (!options.ConfirmInitialBaseline)
@@ -43,12 +57,16 @@ internal static partial class DatabaseMigratorProgram
                     }
 
                     var result = await deployer.ApplyAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                    await moduleMigrations.ApplyAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintApplyResult(result);
+                    PrintModulePlan(await moduleMigrations.AssertAsync(connectionString, cancellation.Token));
                     return 0;
 
                 case "assert":
                     var report = await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                    var moduleReport = await moduleMigrations.AssertAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintAssertionReport(report);
+                    PrintModulePlan(moduleReport);
                     return 0;
 
                 default:
@@ -105,6 +123,22 @@ internal static partial class DatabaseMigratorProgram
         foreach (var step in baseline.Steps)
         {
             Console.WriteLine($"{step.Order:D4} {step.Id} {step.RelativePath} sha256={step.Sha256[..12]}...");
+        }
+    }
+
+    private static void PrintModuleMigrations(IEnumerable<ModuleMigrationState> modules)
+    {
+        foreach (var module in modules)
+        {
+            Console.WriteLine($"{module.Module}: {module.MigrationId} source={module.Status}");
+        }
+    }
+
+    private static void PrintModulePlan(IEnumerable<ModuleMigrationState> modules)
+    {
+        foreach (var module in modules)
+        {
+            Console.WriteLine($"{module.Module}: {module.Status} migration={module.MigrationId} history={module.HistoryTable}");
         }
     }
 

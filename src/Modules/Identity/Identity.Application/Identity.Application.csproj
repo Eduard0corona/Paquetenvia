@@ -2,5 +2,6 @@
   <ItemGroup>
     <ProjectReference Include="../Identity.Domain/Identity.Domain.csproj" />
     <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Domain/Paqueteria.Domain.csproj" />
   </ItemGroup>
 </Project>

@@ -34,13 +34,18 @@ public sealed class PaquetenviaClaimsTransformation : IClaimsTransformation
         out IReadOnlyCollection<Claim> sessionClaims)
     {
         var subjectClaims = TrustedClaims(source, IdentityClaimTypes.SourceSubject).ToArray();
+        var userIdClaims = TrustedClaims(source, IdentityClaimTypes.SourceUserId).ToArray();
         var statusClaims = TrustedClaims(source, IdentityClaimTypes.SourceStatus).ToArray();
         var mfaClaims = TrustedClaims(source, IdentityClaimTypes.SourceMfa).ToArray();
         var membershipClaims = TrustedClaims(source, IdentityClaimTypes.SourceMembership).ToArray();
 
+        var userId = Guid.Empty;
         if (subjectClaims.Length != 1 ||
             string.IsNullOrWhiteSpace(subjectClaims[0].Value) ||
             statusClaims.Length > 1 ||
+            userIdClaims.Length > 1 ||
+            statusClaims.Length == 1 &&
+            (userIdClaims.Length != 1 || !Guid.TryParseExact(userIdClaims[0].Value, "D", out userId) || userId == Guid.Empty) ||
             statusClaims.Length == 1 && statusClaims[0].Value != "ACTIVE" ||
             statusClaims.Length == 0 && membershipClaims.Length != 0 ||
             mfaClaims.Length != 1 ||
@@ -69,6 +74,7 @@ public sealed class PaquetenviaClaimsTransformation : IClaimsTransformation
 
         if (statusClaims.Length == 1)
         {
+            claims.Add(SessionClaim(IdentityClaimTypes.UserId, userId.ToString("D")));
             claims.Add(SessionClaim(IdentityClaimTypes.Status, "ACTIVE"));
         }
 

@@ -11,12 +11,14 @@ public sealed class AuthenticatedSession : IAuthenticatedSession
     private AuthenticatedSession(
         bool isAuthenticated,
         string? subject,
+        Guid? userId,
         IdentityContextStatus? identityStatus,
         bool mfaSatisfied,
         ImmutableArray<IdentityContextMembership> activeMemberships)
     {
         IsAuthenticated = isAuthenticated;
         Subject = subject;
+        UserId = userId;
         IdentityStatus = identityStatus;
         MfaSatisfied = mfaSatisfied;
         ActiveMemberships = activeMemberships;
@@ -24,6 +26,7 @@ public sealed class AuthenticatedSession : IAuthenticatedSession
 
     public bool IsAuthenticated { get; }
     public string? Subject { get; }
+    public Guid? UserId { get; }
     public IdentityContextStatus? IdentityStatus { get; }
     public bool MfaSatisfied { get; }
     public IReadOnlyList<IdentityContextMembership> ActiveMemberships { get; }
@@ -59,6 +62,16 @@ public sealed class AuthenticatedSession : IAuthenticatedSession
             return Anonymous();
         }
 
+        var userIdValues = TrustedValues(identity, IdentityClaimTypes.UserId).ToArray();
+        var userId = Guid.Empty;
+        if (statusValues.Length == 1 &&
+            (userIdValues.Length != 1 ||
+             !Guid.TryParseExact(userIdValues[0], "D", out userId) ||
+             userId == Guid.Empty))
+        {
+            return Anonymous();
+        }
+
         var memberships = ImmutableArray.CreateBuilder<IdentityContextMembership>();
         foreach (var value in TrustedValues(identity, IdentityClaimTypes.Membership))
         {
@@ -76,12 +89,13 @@ public sealed class AuthenticatedSession : IAuthenticatedSession
         return new AuthenticatedSession(
             true,
             subject,
+            statusValues.Length == 1 ? userId : null,
             statusValues.Length == 1 ? IdentityContextStatus.Active : null,
             mfaSatisfied,
             memberships.ToImmutable());
     }
 
-    private static AuthenticatedSession Anonymous() => new(false, null, null, false, []);
+    private static AuthenticatedSession Anonymous() => new(false, null, null, null, false, []);
 
     private static IEnumerable<string> TrustedValues(ClaimsIdentity identity, string type) =>
         identity.Claims

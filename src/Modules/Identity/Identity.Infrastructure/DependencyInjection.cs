@@ -8,6 +8,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Identity.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Paqueteria.Infrastructure.Tenancy;
 
 namespace Identity.Infrastructure;
 
@@ -50,6 +53,26 @@ public static class DependencyInjection
                 IdentityBootstrapProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlIdentityContextResolver>(),
                 _ => serviceProvider.GetRequiredService<DisabledIdentityContextResolver>(),
             });
+
+        if (!string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria")))
+        {
+            services.TryAddScoped<TenantDatabaseExecutionState>();
+            services.TryAddScoped<TenantTransactionGuardInterceptor>();
+            services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
+            services.AddDbContext<IdentityDbContext>((serviceProvider, options) =>
+                options.UseNpgsql(
+                        serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                        postgres =>
+                        {
+                            postgres.MigrationsAssembly(typeof(IdentityDbContext).Assembly.FullName);
+                            postgres.MigrationsHistoryTable("__ef_migrations_history_identity", "platform");
+                            postgres.EnableRetryOnFailure();
+                        })
+                    .AddInterceptors(
+                        serviceProvider.GetRequiredService<TenantTransactionGuardInterceptor>(),
+                        serviceProvider.GetRequiredService<TenantSaveChangesGuardInterceptor>()));
+            services.AddScoped<TenantTransactionContext<IdentityDbContext>>();
+        }
 
         return services;
     }
