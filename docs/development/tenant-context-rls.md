@@ -1,4 +1,4 @@
-# TEN-001 active tenant context and transactional RLS
+# Tenant context and transactional RLS
 
 TEN-001 adds the minimum productive tenant boundary on top of the frozen v0.6
 database baseline. It does not add commercial use cases, change AuthCenter,
@@ -106,6 +106,9 @@ ephemeral Testcontainers database; recreate an authorized empty environment;
 for future production use restore or a controlled forward-fix. A failed
 provisioning transaction rolls itself back.
 
-TEN-002 and TEN-003 remain separate backlog work and were not started. GATE-007
-continues to block the production retention/partition decisions outside this
-tenant-context slice.
+TEN-002 independently verifies the transaction ordering, typed `uuid[]`
+parameter, retry lifecycle and Npgsql pool isolation introduced by TEN-001.
+The complete traceability matrix and reusable harness are documented in
+[`ten-002-transactional-rls-validation.md`](ten-002-transactional-rls-validation.md).
+TEN-003 remains separate and was not started. GATE-007 continues to block the
+production retention/partition decisions outside this tenant-context slice.

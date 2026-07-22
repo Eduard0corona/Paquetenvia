@@ -5,6 +5,7 @@ using Paqueteria.Infrastructure.Database.Baseline;
 using Testcontainers.PostgreSql;
 using Identity.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Organizations.Infrastructure.Persistence;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -35,6 +36,32 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
     public DatabaseBaselineApplyStatus ApplyStatus { get; private set; }
     public string PostgreSqlVersion { get; private set; } = string.Empty;
     public string PostGisVersion { get; private set; } = string.Empty;
+
+    public NpgsqlDataSource CreateAppDataSource(
+        ILoggerFactory? loggerFactory = null,
+        int maxPoolSize = 1,
+        string applicationName = "Paqueteria.TEN002.ContractTests")
+    {
+        if (_container is null)
+        {
+            throw new InvalidOperationException("The PostgreSQL contract fixture has not been initialized.");
+        }
+
+        var connectionString = WithPooling(_container.GetConnectionString(), AppLogin, _appPassword);
+        var connectionStringBuilder = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            MaxPoolSize = maxPoolSize,
+            ApplicationName = applicationName,
+        };
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionStringBuilder.ConnectionString);
+        if (loggerFactory is not null)
+        {
+            dataSourceBuilder.UseLoggerFactory(loggerFactory);
+            dataSourceBuilder.EnableParameterLogging();
+        }
+
+        return dataSourceBuilder.Build();
+    }
 
     public async Task InitializeAsync()
     {
