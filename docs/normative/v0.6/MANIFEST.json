@@ -5,7 +5,7 @@
     "date":  "2026-07-21",
     "status":  "NORMATIVE_BASELINE_CANONICAL_SYNC_RUNTIME_VALIDATED_ARC002_DONE",
     "canonical_sql_sha256":  "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96",
-    "file_count":  72,
+    "file_count":  73,
     "files":  [
                   {
                       "path":  "AI-00_README_FIRST.md",
@@ -34,13 +34,13 @@
                   },
                   {
                       "path":  "CHANGELOG.md",
-                      "bytes":  3615,
-                      "sha256":  "79badd4060300790a1e85e29f2d46c10a39c6aceff05705a60f3d3e98f774289"
+                      "bytes":  4356,
+                      "sha256":  "df3cb42275998d6117ad17d51984b2e4d2e39dc783cba8c201a09edd495e7403"
                   },
                   {
                       "path":  "CHECKSUMS_SHA256.txt",
-                      "bytes":  7341,
-                      "sha256":  "8acd745c3f00986b2b05ac7eee97fbdae9f5e1ec1ae3eda5cae350aea9b3a428"
+                      "bytes":  7459,
+                      "sha256":  "e935d5331c28f3d1653750cb7bc46d95815fe845b4dabd572c52634480fcaee7"
                   },
                   {
                       "path":  "CLAUDE_VALIDATION_HANDOFF.md",
@@ -69,8 +69,8 @@
                   },
                   {
                       "path":  "decision-log.md",
-                      "bytes":  5298,
-                      "sha256":  "6f7222cb8f6dbeb93c786e18bf22bd7dc4141fd540781936c895b6fb062bdf8a"
+                      "bytes":  5592,
+                      "sha256":  "7480bec5e934919684d186d126b58675769922767b7e5848b11afd68e2c764e1"
                   },
                   {
                       "path":  "docs/adr/ADR-001_MODULAR_MONOLITH.md",
@@ -298,6 +298,11 @@
                       "sha256":  "d4623caf0a9d913c8936c97c93db85b543259e3becef990b72ed3facae212957"
                   },
                   {
+                      "path":  "docs/gates/GATE-002_RESOLUTION_IDENTITY_PROVIDER.md",
+                      "bytes":  7681,
+                      "sha256":  "0caf004a234f2bd81c2ddc4233a2f2a6f6ece5db31bb46ca93c828f6076178fe"
+                  },
+                  {
                       "path":  "prototype/index.html",
                       "bytes":  5099,
                       "sha256":  "16e58414996c83e9fbdd3b711b49a1fd22b055d86887d6da24a6417225585b5a"
@@ -329,8 +334,8 @@
                   },
                   {
                       "path":  "specs/AI-10_DECISIONS_AND_GATES.yaml",
-                      "bytes":  6309,
-                      "sha256":  "c47c1262e7a5a669748faa5b97533cb53efe2aa48e9b6e54b8c4d9a8b577a631"
+                      "bytes":  7701,
+                      "sha256":  "fa0b577c5e92a3c5dc6f1cb3a3399997ad397f30e63b265c6606d47bc5579520"
                   },
                   {
                       "path":  "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",
