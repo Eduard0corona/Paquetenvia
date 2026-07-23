@@ -1,6 +1,6 @@
 using System.Globalization;
 using Npgsql;
-using Paqueteria.ContractTests.Cryptography;
+using Paqueteria.Contracts.Legal;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 
 namespace Paqueteria.ContractTests.PostgreSql.Acceptance;
@@ -27,7 +27,7 @@ public sealed class QuoteOrderAcceptanceContractTests(PostgreSqlContractFixture 
             "privacy-2026-07",
             acceptedAt,
             "PWA");
-        var evidenceHash = OrderAcceptanceCanonicalizer.Hash(evidence);
+        var evidenceHash = OrderAcceptanceCanonicalizer.ComputeSha256(evidence);
 
         await using (var tenant = await TenantTransaction.BeginAsync(
             fixture.AppDataSource,

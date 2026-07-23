@@ -82,7 +82,7 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='platform'
-              AND c.relname IN ('__ef_migrations_history_identity','__ef_migrations_history_organizations','__ef_migrations_history_locations','__ef_migrations_history_pricing')
+              AND c.relname IN ('__ef_migrations_history_identity','__ef_migrations_history_organizations','__ef_migrations_history_locations','__ef_migrations_history_pricing','__ef_migrations_history_orders')
             ORDER BY c.relname;
             """);
         await using var reader = await command.ExecuteReaderAsync();
@@ -92,7 +92,7 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
             histories.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(4, histories.Count);
+        Assert.Equal(5, histories.Count);
         Assert.All(histories, history => Assert.Equal("paqueteria_migrator", history.Owner));
 
         await using var runtime = await fixture.AppDataSource.OpenConnectionAsync();
