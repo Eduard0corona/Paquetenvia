@@ -186,7 +186,10 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         value.Contains("Bearer ", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("PRIVATE KEY", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("Password=", StringComparison.OrdinalIgnoreCase) ||
-        value.Contains("Connection String=", StringComparison.OrdinalIgnoreCase);
+        value.Contains("Connection String=", StringComparison.OrdinalIgnoreCase) ||
+        AddressPattern().IsMatch(value) ||
+        CredentialPattern().IsMatch(value) ||
+        CiphertextPattern().IsMatch(value);
 
     [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+", RegexOptions.CultureInvariant)]
     private static partial Regex EmailPattern();
@@ -196,6 +199,19 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
 
     [GeneratedRegex(@"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", RegexOptions.CultureInvariant)]
     private static partial Regex JwtPattern();
+
+    [GeneratedRegex(
+        @"\b(?:calle|avenida|av\.?|boulevard|blvd\.?|carretera|camino|street|st\.?|avenue|ave\.?|road|rd\.?)\s+[\p{L}0-9][\p{L}0-9 .#-]{2,}",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex AddressPattern();
+
+    [GeneratedRegex(
+        @"\b(?:access[_ -]?token|api[_ -]?key|client[_ -]?secret|password|refresh[_ -]?token|secret|token)\s*[:=]\s*\S+",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex CredentialPattern();
+
+    [GeneratedRegex(@"\b(?:ciphertext|encrypted[_ -]?value)\s*[:=]\s*\S+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex CiphertextPattern();
 }
 
 public sealed class AuditRedactionException : Exception

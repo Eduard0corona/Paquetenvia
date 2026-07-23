@@ -10,6 +10,8 @@ public static class MockIdentityProfiles
     public const string ActivePlatformAdminMfa = "active-platform-admin-mfa";
     public const string ActivePlatformAdminNoMfa = "active-platform-admin-no-mfa";
     public const string ActiveMultiOrganization = "active-multi-org";
+    public const string ActiveDispatcher = "active-dispatcher";
+    public const string ActiveDriver = "active-driver";
     public const string SuspendedUser = "suspended-user";
     public const string DisabledUser = "disabled-user";
     public const string SuspendedMembership = "suspended-membership";
@@ -28,6 +30,8 @@ public static class MockIdentityProfiles
             [ActivePlatformAdminMfa] = External("mock-subject-platform-admin-mfa", true),
             [ActivePlatformAdminNoMfa] = External("mock-subject-platform-admin-no-mfa", false),
             [ActiveMultiOrganization] = External("mock-subject-multi-org", true),
+            [ActiveDispatcher] = External("mock-subject-active-dispatcher", false),
+            [ActiveDriver] = External("mock-subject-active-driver", false),
             [SuspendedUser] = External("mock-subject-suspended", true),
             [DisabledUser] = External("mock-subject-disabled", true),
             [SuspendedMembership] = External("mock-subject-suspended-membership", true),
@@ -52,6 +56,12 @@ public static class MockIdentityProfiles
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4",
                 Membership(ViewerOrganizationId, OrganizationRole.Viewer, true),
                 Membership(OperationsOrganizationId, OrganizationRole.Dispatcher, false)),
+            ["mock-subject-active-dispatcher"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10",
+                Membership(ViewerOrganizationId, OrganizationRole.Dispatcher, true)),
+            ["mock-subject-active-driver"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11",
+                Membership(ViewerOrganizationId, OrganizationRole.Driver, true)),
             ["mock-subject-suspended-membership"] = Context(
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa7"),
             ["mock-subject-revoked-membership"] = Context(

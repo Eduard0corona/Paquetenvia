@@ -25,6 +25,9 @@ internal sealed class SyntheticOrderScenario(PostgreSqlContractFixture fixture) 
               VALUES (@org,'ARC-002 Synthetic Organization','ARC-002 Synthetic','BUSINESS');
             INSERT INTO identity.users(id,identity_subject)
               VALUES (@user_id,@subject);
+            INSERT INTO organizations.organization_memberships(
+              id,user_id,organization_id,role,status,is_default)
+              VALUES (gen_random_uuid(),@user_id,@org,'DISPATCHER','ACTIVE',true);
             INSERT INTO locations.cities(id,state_code,name,timezone)
               VALUES (@city,'SI',@city_name,'America/Mazatlan');
             INSERT INTO locations.locations(id,owner_org_id,city_id,point,address_ciphertext,address_summary,pii_key_version) VALUES
@@ -83,8 +86,12 @@ internal sealed class SyntheticOrderScenario(PostgreSqlContractFixture fixture) 
             DELETE FROM platform.outbox_events WHERE owner_org_id=@org;
             DELETE FROM platform.location_outbox_events WHERE owner_org_id=@org;
             DELETE FROM platform.idempotency_keys WHERE owner_org_id=@org;
+            DELETE FROM finance.cod_transactions WHERE owner_org_id=@org OR operator_org_id=@org;
+            DELETE FROM incidents.incidents WHERE owner_org_id=@org OR operator_org_id=@org;
+            DELETE FROM dispatch.assignments WHERE owner_org_id=@org OR operator_org_id=@org;
             DELETE FROM orders.public_tracking_tokens WHERE owner_org_id=@org;
             DELETE FROM custody.proof_upload_sessions WHERE owner_org_id=@org;
+            DELETE FROM drivers.driver_profiles WHERE org_id=@org;
             DELETE FROM orders.package_items WHERE owner_org_id=@org;
             DELETE FROM orders.orders WHERE owner_org_id=@org;
             DELETE FROM pricing.quotes WHERE owner_org_id=@org;

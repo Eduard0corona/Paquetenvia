@@ -65,6 +65,8 @@ jobs:
         run: dotnet build --configuration Release --no-restore
 
       - name: Test
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
         run: dotnet test --configuration Release --no-build --filter "Category!=PostgreSqlContract"
 
   runtime-contracts:
@@ -91,6 +93,8 @@ jobs:
         run: dotnet build ./tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --configuration Release --no-restore
 
       - name: Execute PostgreSQL runtime contracts
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
         run: >-
           dotnet test ./tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj
           --configuration Release

@@ -34,6 +34,10 @@ public static class DependencyInjection
                 "Orders:IdempotencyLifetimeMinutes must be between 1 and 10080.")
             .Validate(options => options.PublicIdCollisionRetryCount is >= 1 and <= 10,
                 "Orders:PublicIdCollisionRetryCount must be between 1 and 10.")
+            .Validate(options => options.ClaimWindowHours is >= 1 and <= 720,
+                "Orders:ClaimWindowHours must be between 1 and 720.")
+            .Validate(options => options.TransitionMetadataMaximumBytes is >= 256 and <= 16_384,
+                "Orders:TransitionMetadataMaximumBytes must be between 256 and 16384.")
             .Validate(options => options.Provider != OrdersProviderKind.PostgreSql ||
                     !string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria")),
                 "Orders:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
@@ -83,14 +87,34 @@ public static class DependencyInjection
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.TryAddSingleton<IOrderPublicIdGenerator, CryptographicOrderPublicIdGenerator>();
         services.TryAddSingleton<IOrderCreationFailureInjector, NoOpOrderCreationFailureInjector>();
+        services.TryAddSingleton<IOrderTransitionFailureInjector, NoOpOrderTransitionFailureInjector>();
+        services.TryAddSingleton<IOrderTransitionAuthorizer, OrderTransitionAuthorizer>();
+        services.TryAddSingleton<OrderTransitionGuardRegistry>();
+        services.TryAddScoped<IOrderTransitionAuthorizationReader, PostgreSqlOrderTransitionAuthorizationReader>();
+        services.TryAddScoped<IOrderTransitionReplayAuthorizationReader,
+            PostgreSqlOrderTransitionReplayAuthorizationReader>();
+        services.TryAddScoped<IOrderQuoteAcceptanceGuardReader, PostgreSqlOrderQuoteAcceptanceGuardReader>();
+        services.TryAddScoped<IOrderAssignmentGuardReader, PostgreSqlOrderAssignmentGuardReader>();
+        services.TryAddScoped<IOrderProofGuardReader, PostgreSqlOrderProofGuardReader>();
+        services.TryAddScoped<IOrderIncidentGuardReader, PostgreSqlOrderIncidentGuardReader>();
+        services.TryAddScoped<IOrderCodGuardReader, PostgreSqlOrderCodGuardReader>();
         services.AddSingleton<DisabledOrderService>();
+        services.AddSingleton<DisabledOrderTransitionService>();
         services.AddScoped<QuoteSnapshotToOrderCoordinator>();
+        services.AddScoped<PostgreSqlOrderTransitionService>();
         services.AddScoped<IOrderService>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<OrdersOptions>>().Value.Provider switch
             {
                 OrdersProviderKind.PostgreSql =>
                     serviceProvider.GetRequiredService<QuoteSnapshotToOrderCoordinator>(),
                 _ => serviceProvider.GetRequiredService<DisabledOrderService>(),
+            });
+        services.AddScoped<IOrderTransitionService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<OrdersOptions>>().Value.Provider switch
+            {
+                OrdersProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlOrderTransitionService>(),
+                _ => serviceProvider.GetRequiredService<DisabledOrderTransitionService>(),
             });
         services.AddScoped<IPublicTrackingProjectionReader>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<PublicTrackingOptions>>().Value.Provider switch

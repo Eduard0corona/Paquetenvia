@@ -62,29 +62,52 @@ public sealed class OrdersArchitectureTests
     }
 
     [Fact]
-    public void Cross_schema_coordination_is_the_single_named_quote_to_order_coordinator()
+    public void Cross_schema_access_is_limited_to_named_coordinators_and_narrow_readers()
     {
         var root = TestRepository.GetPath("src/Modules/Orders");
         var sources = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
             .Select(path => (Path: path, Source: File.ReadAllText(path))).ToArray();
         var pricingReaders = sources.Where(item => item.Source.Contains("pricing.quotes", StringComparison.Ordinal)).ToArray();
-        Assert.Single(pricingReaders);
-        Assert.EndsWith("QuoteSnapshotToOrderCoordinator.cs", pricingReaders[0].Path, StringComparison.Ordinal);
+        Assert.Equal(2, pricingReaders.Length);
+        Assert.Contains(pricingReaders, item =>
+            item.Path.EndsWith("QuoteSnapshotToOrderCoordinator.cs", StringComparison.Ordinal));
+        Assert.Contains(pricingReaders, item =>
+            item.Path.EndsWith("PostgreSqlOrderTransitionReaders.cs", StringComparison.Ordinal));
         Assert.Equal("QuoteSnapshotToOrderCoordinator", typeof(QuoteSnapshotToOrderCoordinator).Name);
-        Assert.DoesNotContain("PricingDbContext", pricingReaders[0].Source, StringComparison.Ordinal);
-        Assert.DoesNotContain("LocationsDbContext", pricingReaders[0].Source, StringComparison.Ordinal);
+        Assert.All(pricingReaders, item =>
+        {
+            Assert.DoesNotContain("PricingDbContext", item.Source, StringComparison.Ordinal);
+            Assert.DoesNotContain("LocationsDbContext", item.Source, StringComparison.Ordinal);
+        });
+
+        var readers = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionReaders.cs"));
+        Assert.DoesNotContain("INSERT INTO", readers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("UPDATE ", readers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DELETE FROM", readers, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void ORD001_contains_no_generic_repository_or_later_state_transition_rules()
+    public void Orders_contains_no_generic_repository_and_state_matrix_lives_only_in_domain()
     {
         var root = TestRepository.GetPath("src/Modules/Orders");
-        var source = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText));
+        var files = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories);
+        var source = string.Join('\n', files.Select(File.ReadAllText));
         Assert.DoesNotContain("Repository<", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("ConfirmOrder", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("AssignOrder", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("DispatchOrder", source, StringComparison.Ordinal);
+        Assert.Single(files, path =>
+            File.ReadAllText(path).Contains("class OrderTransitionMatrix", StringComparison.Ordinal));
+        Assert.EndsWith(
+            Path.Combine("Orders.Domain", "OrderTransition.cs"),
+            files.Single(path => File.ReadAllText(path).Contains(
+                "class OrderTransitionMatrix",
+                StringComparison.Ordinal)),
+            StringComparison.Ordinal);
+
+        var endpoints = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Endpoints/OrderEndpoints.cs"));
+        Assert.DoesNotContain("IOrderTransitionGuard", endpoints, StringComparison.Ordinal);
+        Assert.DoesNotContain("valid_active_quote", endpoints, StringComparison.Ordinal);
+        Assert.DoesNotContain("custody.proofs", endpoints, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -113,6 +136,26 @@ public sealed class OrdersArchitectureTests
         var coordinator = File.ReadAllText(TestRepository.GetPath(
             "src/Modules/Orders/Orders.Infrastructure/Orders/QuoteSnapshotToOrderCoordinator.cs"));
         Assert.DoesNotContain(" RETURNING ", coordinator, StringComparison.OrdinalIgnoreCase);
+        var transition = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionService.cs"));
+        Assert.DoesNotContain(" RETURNING ", transition, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("IHubContext", transition, StringComparison.Ordinal);
+        Assert.DoesNotContain("SignalR", transition, StringComparison.Ordinal);
+        Assert.Contains("AND owner_org_id=@org", transition, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Transition_application_contracts_are_framework_and_infrastructure_independent()
+    {
+        Assert.Equal("Orders.Application", typeof(IOrderTransitionService).Assembly.GetName().Name);
+        Assert.Equal("Orders.Application", typeof(IOrderTransitionGuard).Assembly.GetName().Name);
+        Assert.Equal("Orders.Application", typeof(IOrderTransitionAuthorizer).Assembly.GetName().Name);
+        var references = Names(SolutionCatalog.Orders.Application.Assembly);
+        Assert.DoesNotContain(references, reference =>
+            reference.Contains("EntityFrameworkCore", StringComparison.OrdinalIgnoreCase) ||
+            reference.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) ||
+            reference.Contains("SignalR", StringComparison.OrdinalIgnoreCase) ||
+            reference.Contains("Infrastructure", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string[] Names(System.Reflection.Assembly assembly) =>
