@@ -46,6 +46,10 @@ El formato es `ORD_` más 22 caracteres Base64URL sin padding. Se generan 16 byt
 
 `Paqueteria.Contracts.Legal` implementa `order-acceptance-v1`: JSON compacto UTF-8 sin BOM en orden fijo (`schema_version`, `order_id`, `quote_id`, `owner_org_id`, `actor_id`, `terms_version`, `privacy_version`, `accepted_at_client`, `acceptance_channel`), UUID `D` lowercase, UTC con siete fracciones y canal uppercase.
 
+`ORD-001-DEF-001` exige `acceptance.accepted_at` como dato del cliente. El endpoint y el coordinador interno comparten la misma política: rechazan ausencia, valor `default`, versiones vacías o canal inválido con el conflicto uniforme 409 antes de invocar el servicio o producir cualquier efecto. El servidor no sustituye el timestamp faltante con su reloj: `accepted_at_client` conserva el instante aportado por el cliente y `recorded_at_server` continúa generado separadamente por la aplicación.
+
+El hash idempotente conserva su esquema: normaliza `accepted_at` a UTC, por lo que offsets equivalentes representan el mismo instante y generan el mismo hash; un instante distinto genera otro hash. El actor derivado y los timestamps registrados por el servidor siguen excluidos. El vector legal canónico permanece sin cambios.
+
 ```text
 SHA-256: 2a09176e270ddcc52e0fee157f3d5bd869f36047f7f946daa7caed4816ae0b37
 Base64:  KgkXbicN3MUuD+4Vfz1b2GnzYEf3+Ubap8rtSBauCzc=

@@ -1,7 +1,10 @@
 using System.Reflection;
 using System.Text.Json.Serialization;
+using Orders.Application.Orders;
 using Orders.Endpoints;
 using Paqueteria.Application.Idempotency;
+using Paqueteria.ContractTests.Support;
+using YamlDotNet.RepresentationModel;
 
 namespace Paqueteria.ContractTests;
 
@@ -54,6 +57,34 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Equal(128, IdempotencyKeyPolicy.MaximumLength);
     }
 
+    [Fact]
+    public void AI05_required_order_fields_match_product_DTOs_and_acceptance_policy()
+    {
+        var root = YamlNodes.LoadMapping(
+            RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var createOrder = root.Mapping("components").Mapping("schemas").Mapping("CreateOrderRequest");
+        var acceptance = createOrder.Mapping("properties").Mapping("acceptance");
+
+        Assert.Equal(
+            JsonPropertyNames<CreateOrderRequest>(),
+            RequiredPropertyNames(createOrder));
+        Assert.Equal(
+            JsonPropertyNames<OrderAcceptanceRequest>(),
+            RequiredPropertyNames(acceptance));
+        Assert.False(OrderAcceptanceInputPolicy.IsValid(
+            "terms-synthetic-v1",
+            "privacy-synthetic-v1",
+            default,
+            "WEB"));
+        Assert.True(OrderAcceptanceInputPolicy.IsValid(
+            "terms-synthetic-v1",
+            "privacy-synthetic-v1",
+            DateTimeOffset.Parse(
+                "2026-07-22T12:00:00.1234567Z",
+                System.Globalization.CultureInfo.InvariantCulture),
+            "WEB"));
+    }
+
     private static void AssertJsonProperties<T>(params string[] expected)
     {
         var actual = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -61,6 +92,19 @@ public sealed class OrdersOpenApiImplementationTests
             .Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(expected.Order(StringComparer.Ordinal), actual);
     }
+
+    private static string[] JsonPropertyNames<T>() =>
+        typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(property => property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name)
+            .OfType<string>()
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] RequiredPropertyNames(YamlMappingNode schema) =>
+        schema.Sequence("required").Children
+            .Select(node => Assert.IsType<YamlScalarNode>(node).Value!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
     private static int Count(string value, string fragment) =>
         value.Split(fragment, StringSplitOptions.None).Length - 1;

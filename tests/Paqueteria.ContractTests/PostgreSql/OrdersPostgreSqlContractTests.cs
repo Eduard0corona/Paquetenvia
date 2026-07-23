@@ -172,6 +172,53 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
 
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
+    public async Task Default_acceptance_timestamp_is_rejected_before_any_PostgreSQL_side_effect()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(createOrder: false);
+        var generator = new SequencePublicIdGenerator("ORD_ZZZZZZZZZZZZZZZZZZZZZZ");
+        await using var scope = CreateScope(generator);
+        var command = CreateCommand(scenario, "orders-pg-default-accepted-at") with
+        {
+            Acceptance = new OrderAcceptanceInput(
+                "terms-synthetic-v1",
+                "privacy-synthetic-v1",
+                default,
+                "WEB"),
+        };
+
+        var exception = await Assert.ThrowsAsync<OrderConflictException>(() =>
+            scope.Service.CreateAsync(command, CancellationToken.None));
+
+        Assert.Equal(OrderConflictCode.InvalidRequest, exception.Code);
+        Assert.Equal(0, generator.CallCount);
+        await using var verify = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT q.status,q.consumed_at IS NULL,
+              (SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.orders WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.package_items WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.order_acceptances WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.order_events WHERE owner_org_id=@org),
+              (SELECT count(*) FROM platform.outbox_events WHERE owner_org_id=@org),
+              (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ORDER_CREATED')
+            FROM pricing.quotes q
+            WHERE q.id=@quote;
+            """);
+        verify.Parameters.AddWithValue("org", scenario.OrganizationId);
+        verify.Parameters.AddWithValue("quote", scenario.QuoteId);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("ACTIVE", reader.GetString(0));
+        Assert.True(reader.GetBoolean(1));
+        for (var ordinal = 2; ordinal <= 8; ordinal++)
+        {
+            Assert.Equal(0L, reader.GetInt64(ordinal));
+        }
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
     public async Task Concurrency_hash_conflict_collision_retry_and_migration_contract_hold()
     {
         await using (var sameKeyScenario = new SyntheticOrderScenario(fixture))
@@ -328,6 +375,8 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
     private sealed class SequencePublicIdGenerator(params string[] values) : IOrderPublicIdGenerator
     {
         private int index;
+        internal int CallCount => Volatile.Read(ref index);
+
         public string Create()
         {
             var current = Interlocked.Increment(ref index) - 1;

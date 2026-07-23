@@ -123,3 +123,16 @@ public static class OrderInputPolicy
     public static bool IsAcceptanceChannel(string? value) =>
         value is "WEB" or "PWA" or "ASSISTED" or "API";
 }
+
+public static class OrderAcceptanceInputPolicy
+{
+    public static bool IsValid(
+        string? termsVersion,
+        string? privacyVersion,
+        DateTimeOffset acceptedAt,
+        string? acceptanceChannel) =>
+        !string.IsNullOrWhiteSpace(termsVersion) &&
+        !string.IsNullOrWhiteSpace(privacyVersion) &&
+        acceptedAt != default &&
+        OrderInputPolicy.IsAcceptanceChannel(acceptanceChannel);
+}

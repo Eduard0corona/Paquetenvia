@@ -492,9 +492,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             !OrderInputPolicy.TryParsePayerType(command.PayerType, out _) ||
             command.Acceptance is null ||
-            string.IsNullOrWhiteSpace(command.Acceptance.TermsVersion) ||
-            string.IsNullOrWhiteSpace(command.Acceptance.PrivacyVersion) ||
-            !OrderInputPolicy.IsAcceptanceChannel(command.Acceptance.AcceptanceChannel))
+            !OrderAcceptanceInputPolicy.IsValid(
+                command.Acceptance.TermsVersion,
+                command.Acceptance.PrivacyVersion,
+                command.Acceptance.AcceptedAt,
+                command.Acceptance.AcceptanceChannel))
         {
             throw new OrderConflictException(OrderConflictCode.InvalidRequest);
         }

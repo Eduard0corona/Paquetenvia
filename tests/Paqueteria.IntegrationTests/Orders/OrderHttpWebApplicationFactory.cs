@@ -16,6 +16,12 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal static readonly Guid ExpiredQuoteId = Guid.Parse("81000000-0000-0000-0000-000000000003");
     internal static readonly Guid UsedQuoteId = Guid.Parse("81000000-0000-0000-0000-000000000004");
     internal static readonly Guid ForeignOrderId = Guid.Parse("82000000-0000-0000-0000-000000000001");
+    private readonly StubOrderService orderService = new();
+
+    internal int CreateCallCount => orderService.CreateCallCount;
+    internal CreateOrderCommand? LastCreateCommand => orderService.LastCreateCommand;
+
+    internal void ResetCreateObservations() => orderService.ResetCreateObservations();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -29,7 +35,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IOrderService>();
-            services.AddSingleton<IOrderService, StubOrderService>();
+            services.AddSingleton<IOrderService>(orderService);
         });
     }
 
@@ -39,10 +45,23 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         private readonly ConcurrentDictionary<(Guid Tenant, string Key), StoredResponse> responses = new();
         private readonly ConcurrentDictionary<Guid, OrderResult> orders = new();
         private readonly ConcurrentDictionary<Guid, Guid> quoteOrders = new();
+        private int createCallCount;
+        private CreateOrderCommand? lastCreateCommand;
+
+        internal int CreateCallCount => Volatile.Read(ref createCallCount);
+        internal CreateOrderCommand? LastCreateCommand => Volatile.Read(ref lastCreateCommand);
+
+        internal void ResetCreateObservations()
+        {
+            Interlocked.Exchange(ref createCallCount, 0);
+            Volatile.Write(ref lastCreateCommand, null);
+        }
 
         public Task<OrderResult> CreateAsync(CreateOrderCommand command, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref createCallCount);
+            Volatile.Write(ref lastCreateCommand, command);
             var signature = string.Join('|',
                 command.OrganizationId, command.QuoteId, command.PayerType,
                 command.Acceptance.TermsVersion, command.Acceptance.PrivacyVersion,

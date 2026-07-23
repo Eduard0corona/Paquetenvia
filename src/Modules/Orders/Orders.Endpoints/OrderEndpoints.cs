@@ -173,9 +173,11 @@ public static class OrderEndpoints
         request.QuoteId != Guid.Empty &&
         OrderInputPolicy.IsPayerType(request.PayerType) &&
         request.Acceptance is not null &&
-        !string.IsNullOrWhiteSpace(request.Acceptance.TermsVersion) &&
-        !string.IsNullOrWhiteSpace(request.Acceptance.PrivacyVersion) &&
-        OrderInputPolicy.IsAcceptanceChannel(request.Acceptance.AcceptanceChannel);
+        OrderAcceptanceInputPolicy.IsValid(
+            request.Acceptance.TermsVersion,
+            request.Acceptance.PrivacyVersion,
+            request.Acceptance.AcceptedAt,
+            request.Acceptance.AcceptanceChannel);
 
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
     {

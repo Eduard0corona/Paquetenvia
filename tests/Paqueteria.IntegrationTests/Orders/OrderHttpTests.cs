@@ -10,8 +10,13 @@ namespace Paqueteria.IntegrationTests.Orders;
 public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactory>
 {
     private readonly HttpClient client;
+    private readonly OrderHttpWebApplicationFactory factory;
 
-    public OrderHttpTests(OrderHttpWebApplicationFactory factory) => client = factory.CreateClient();
+    public OrderHttpTests(OrderHttpWebApplicationFactory factory)
+    {
+        this.factory = factory;
+        client = factory.CreateClient();
+    }
 
     [Fact]
     public async Task POST_requires_authentication()
@@ -61,6 +66,99 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         request.Content = ValidBody(Guid.NewGuid(), payerType, channel);
         using var response = await client.SendAsync(request);
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task POST_without_accepted_at_returns_uniform_409_without_invoking_service()
+    {
+        factory.ResetCreateObservations();
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
+        request.Headers.Add("Idempotency-Key", Key());
+        request.Content = JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+            acceptance = new
+            {
+                terms_version = "terms-synthetic-v1",
+                privacy_version = "privacy-synthetic-v1",
+                acceptance_channel = "WEB",
+            },
+        });
+
+        using var response = await client.SendAsync(request);
+
+        await AssertUniformConflictAsync(response);
+        Assert.Equal(0, factory.CreateCallCount);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("public_id", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("quote_id", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task POST_with_default_accepted_at_returns_uniform_409_without_invoking_service()
+    {
+        factory.ResetCreateObservations();
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
+        request.Headers.Add("Idempotency-Key", Key());
+        request.Content = ValidBody(Guid.NewGuid(), acceptedAt: "0001-01-01T00:00:00.0000000Z");
+
+        using var response = await client.SendAsync(request);
+
+        await AssertUniformConflictAsync(response);
+        Assert.Equal(0, factory.CreateCallCount);
+    }
+
+    [Fact]
+    public async Task POST_with_valid_UTC_timestamp_preserves_the_client_instant()
+    {
+        factory.ResetCreateObservations();
+        const string acceptedAt = "2026-07-22T12:00:00.1234567Z";
+        using var response = await CreateAsync(Guid.NewGuid(), Key(), acceptedAt);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(1, factory.CreateCallCount);
+        Assert.Equal(
+            DateTimeOffset.Parse(acceptedAt, System.Globalization.CultureInfo.InvariantCulture),
+            factory.LastCreateCommand!.Acceptance.AcceptedAt);
+    }
+
+    [Fact]
+    public async Task POST_with_equivalent_offsets_reaches_service_as_the_same_UTC_instant()
+    {
+        factory.ResetCreateObservations();
+        using var utcResponse = await CreateAsync(
+            Guid.NewGuid(), Key(), "2026-07-22T12:00:00.1234567Z");
+        var utc = factory.LastCreateCommand!.Acceptance.AcceptedAt;
+        using var offsetResponse = await CreateAsync(
+            Guid.NewGuid(), Key(), "2026-07-22T05:00:00.1234567-07:00");
+        var offset = factory.LastCreateCommand!.Acceptance.AcceptedAt;
+
+        Assert.Equal(HttpStatusCode.Created, utcResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, offsetResponse.StatusCode);
+        Assert.Equal(2, factory.CreateCallCount);
+        Assert.Equal(utc.UtcDateTime, offset.UtcDateTime);
+    }
+
+    [Theory]
+    [InlineData("quote_id")]
+    [InlineData("quote_id_empty")]
+    [InlineData("payer_type")]
+    [InlineData("acceptance")]
+    [InlineData("terms_version")]
+    [InlineData("privacy_version")]
+    [InlineData("acceptance_channel")]
+    public async Task POST_rejects_other_missing_required_fields_without_invoking_service(string missingField)
+    {
+        factory.ResetCreateObservations();
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
+        request.Headers.Add("Idempotency-Key", Key());
+        request.Content = MissingRequiredFieldBody(missingField);
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(0, factory.CreateCallCount);
     }
 
     [Theory]
@@ -199,11 +297,14 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         return json.RootElement.GetProperty("id").GetGuid();
     }
 
-    private Task<HttpResponseMessage> CreateAsync(Guid quoteId, string key)
+    private Task<HttpResponseMessage> CreateAsync(
+        Guid quoteId,
+        string key,
+        string acceptedAt = "2026-07-22T12:00:00.1234567Z")
     {
         var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
         request.Headers.Add("Idempotency-Key", key);
-        request.Content = ValidBody(quoteId);
+        request.Content = ValidBody(quoteId, acceptedAt: acceptedAt);
         return client.SendAsync(request);
     }
 
@@ -222,7 +323,11 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         return request;
     }
 
-    private static JsonContent ValidBody(Guid quoteId, string payerType = "SENDER", string channel = "WEB") =>
+    private static JsonContent ValidBody(
+        Guid quoteId,
+        string payerType = "SENDER",
+        string channel = "WEB",
+        string acceptedAt = "2026-07-22T12:00:00.1234567Z") =>
         JsonContent.Create(new
         {
             quote_id = quoteId,
@@ -231,10 +336,85 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             {
                 terms_version = "terms-synthetic-v1",
                 privacy_version = "privacy-synthetic-v1",
-                accepted_at = "2026-07-22T12:00:00.1234567Z",
+                accepted_at = acceptedAt,
                 acceptance_channel = channel,
             },
         });
+
+    private static JsonContent MissingRequiredFieldBody(string missingField) => missingField switch
+    {
+        "quote_id" => JsonContent.Create(new
+        {
+            payer_type = "SENDER",
+            acceptance = ValidAcceptance(),
+        }),
+        "quote_id_empty" => JsonContent.Create(new
+        {
+            quote_id = Guid.Empty,
+            payer_type = "SENDER",
+            acceptance = ValidAcceptance(),
+        }),
+        "payer_type" => JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            acceptance = ValidAcceptance(),
+        }),
+        "acceptance" => JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+        }),
+        "terms_version" => JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+            acceptance = new
+            {
+                privacy_version = "privacy-synthetic-v1",
+                accepted_at = "2026-07-22T12:00:00.1234567Z",
+                acceptance_channel = "WEB",
+            },
+        }),
+        "privacy_version" => JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+            acceptance = new
+            {
+                terms_version = "terms-synthetic-v1",
+                accepted_at = "2026-07-22T12:00:00.1234567Z",
+                acceptance_channel = "WEB",
+            },
+        }),
+        "acceptance_channel" => JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+            acceptance = new
+            {
+                terms_version = "terms-synthetic-v1",
+                privacy_version = "privacy-synthetic-v1",
+                accepted_at = "2026-07-22T12:00:00.1234567Z",
+            },
+        }),
+        _ => throw new ArgumentOutOfRangeException(nameof(missingField), missingField, null),
+    };
+
+    private static object ValidAcceptance() => new
+    {
+        terms_version = "terms-synthetic-v1",
+        privacy_version = "privacy-synthetic-v1",
+        accepted_at = "2026-07-22T12:00:00.1234567Z",
+        acceptance_channel = "WEB",
+    };
+
+    private static async Task AssertUniformConflictAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(409, body.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("Conflict.", body.RootElement.GetProperty("title").GetString());
+    }
 
     private static string Key() => $"orders-http-{Guid.NewGuid():N}";
 }

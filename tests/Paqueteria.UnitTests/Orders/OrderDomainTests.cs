@@ -110,6 +110,86 @@ public sealed class OrderDomainTests
     }
 
     [Fact]
+    public void Acceptance_policy_rejects_default_and_accepts_UTC_or_offset_timestamps()
+    {
+        Assert.False(OrderAcceptanceInputPolicy.IsValid(
+            "terms-synthetic-v1", "privacy-synthetic-v1", default, "WEB"));
+        Assert.True(OrderAcceptanceInputPolicy.IsValid(
+            "terms-synthetic-v1",
+            "privacy-synthetic-v1",
+            DateTimeOffset.Parse("2026-07-22T12:00:00.1234567Z", System.Globalization.CultureInfo.InvariantCulture),
+            "WEB"));
+        Assert.True(OrderAcceptanceInputPolicy.IsValid(
+            "terms-synthetic-v1",
+            "privacy-synthetic-v1",
+            DateTimeOffset.Parse("2026-07-22T05:00:00.1234567-07:00", System.Globalization.CultureInfo.InvariantCulture),
+            "WEB"));
+    }
+
+    [Fact]
+    public async Task Invalid_internal_acceptance_is_rejected_before_public_ID_or_transaction_side_effects()
+    {
+        var generator = new CountingPublicIdGenerator();
+        var service = new QuoteSnapshotToOrderCoordinator(
+            null!,
+            generator,
+            null!,
+            null!,
+            null!,
+            null!,
+            null!);
+        var invalid = Command(ActorId, "request-default-accepted-at") with
+        {
+            Acceptance = new OrderAcceptanceInput(
+                "terms-synthetic-v1",
+                "privacy-synthetic-v1",
+                default,
+                "WEB"),
+        };
+
+        var exception = await Assert.ThrowsAsync<OrderConflictException>(() =>
+            service.CreateAsync(invalid, CancellationToken.None));
+
+        Assert.Equal(OrderConflictCode.InvalidRequest, exception.Code);
+        Assert.Equal(0, generator.CallCount);
+    }
+
+    [Fact]
+    public void Request_hash_normalizes_equivalent_offsets_and_changes_for_another_instant()
+    {
+        var command = Command(ActorId, "request-hash-offset");
+        var utc = command with
+        {
+            Acceptance = command.Acceptance with
+            {
+                AcceptedAt = DateTimeOffset.Parse(
+                    "2026-07-22T12:00:00.1234567Z",
+                    System.Globalization.CultureInfo.InvariantCulture),
+            },
+        };
+        var offset = command with
+        {
+            Acceptance = command.Acceptance with
+            {
+                AcceptedAt = DateTimeOffset.Parse(
+                    "2026-07-22T05:00:00.1234567-07:00",
+                    System.Globalization.CultureInfo.InvariantCulture),
+            },
+        };
+        var different = utc with
+        {
+            Acceptance = utc.Acceptance with { AcceptedAt = utc.Acceptance.AcceptedAt.AddTicks(1) },
+        };
+
+        Assert.Equal(
+            QuoteSnapshotToOrderCoordinator.ComputeRequestHash(utc),
+            QuoteSnapshotToOrderCoordinator.ComputeRequestHash(offset));
+        Assert.NotEqual(
+            QuoteSnapshotToOrderCoordinator.ComputeRequestHash(utc),
+            QuoteSnapshotToOrderCoordinator.ComputeRequestHash(different));
+    }
+
+    [Fact]
     public void Cursor_round_trips_and_invalid_values_fail_closed()
     {
         var createdAt = new DateTimeOffset(2026, 7, 22, 1, 2, 3, TimeSpan.Zero).AddTicks(4567);
@@ -150,4 +230,15 @@ public sealed class OrderDomainTests
         OrderId, "ORD_AAAAAAAAAAAAAAAAAAAAAA", OrganizationId, null, "DRAFT",
         new MoneyResult("MXN", 3_000_000_000L), 1, Guid.NewGuid(), Guid.NewGuid(), "SAME_DAY",
         QuoteId, Guid.NewGuid(), null, "OCCASIONAL", new MoneyResult("MXN", 3_000_000_000L), null, null);
+
+    private sealed class CountingPublicIdGenerator : IOrderPublicIdGenerator
+    {
+        internal int CallCount { get; private set; }
+
+        public string Create()
+        {
+            CallCount++;
+            return "ORD_AAAAAAAAAAAAAAAAAAAAAA";
+        }
+    }
 }
