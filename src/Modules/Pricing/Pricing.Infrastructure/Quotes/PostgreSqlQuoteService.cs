@@ -42,6 +42,29 @@ public sealed class PostgreSqlQuoteService(
         var serviceType = ParseServiceType(command.ServiceType);
         var inputHash = ComputeInputHash(command);
 
+        QuoteResult? replay;
+        try
+        {
+            replay = await ReserveOrReplayAsync(command, inputHash, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is QuoteValidationException or QuoteServiceUnavailableException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is PostgresException or NpgsqlException or DbUpdateException)
+        {
+            throw new QuoteServiceUnavailableException("The quote idempotency preflight failed safely.", exception);
+        }
+
+        if (replay is not null)
+        {
+            return replay;
+        }
+
         ResolveQuoteLocationResult origin;
         ResolveQuoteLocationResult destination;
         try
@@ -77,102 +100,14 @@ public sealed class PostgreSqlQuoteService(
 
         try
         {
-            return await transactionContext.ExecuteAsync(
-                new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
-                async (dbContext, token) =>
-                {
-                    await dbContext.Database.ExecuteSqlInterpolatedAsync(
-                        $"SELECT pg_advisory_xact_lock(hashtextextended({command.OrganizationId:D} || ':' || {IdempotencyScope} || ':' || {command.IdempotencyKey}, 0));",
-                        token);
-
-                    var existing = await dbContext.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(record =>
-                        record.OwnerOrganizationId == command.OrganizationId &&
-                        record.Scope == IdempotencyScope &&
-                        record.IdempotencyKey == command.IdempotencyKey,
-                        token);
-                    if (existing is not null)
-                    {
-                        if (!CryptographicOperations.FixedTimeEquals(existing.RequestHash, inputHash))
-                        {
-                            throw new QuoteValidationException(QuoteValidationCode.IdempotencyConflict);
-                        }
-
-                        if (existing.ResponseStatus != 201 || string.IsNullOrWhiteSpace(existing.ResponseBody))
-                        {
-                            throw new QuoteServiceUnavailableException("The idempotency record is incomplete.");
-                        }
-
-                        return JsonSerializer.Deserialize<QuoteResult>(existing.ResponseBody, JsonOptions)
-                            ?? throw new QuoteServiceUnavailableException("The idempotency response is invalid.");
-                    }
-
-                    var now = clock.UtcNow;
-                    var (tier, privateTariffId) = await SelectPricingTierAsync(dbContext, command, token);
-                    var rules = await dbContext.TariffRules.AsNoTracking()
-                        .Where(rule => rule.CityId == originLocation.CityId && rule.ServiceType == serviceType)
-                        .ToArrayAsync(token);
-                    var evaluation = new TariffRuleEvaluator().Evaluate(
-                        new TariffEvaluationContext(
-                            command.OrganizationId,
-                            originLocation.CityId,
-                            sharedServiceAreaId,
-                            sharedOperatingZoneId,
-                            tier,
-                            serviceType,
-                            command.ConsolidatedRoute,
-                            now,
-                            privateTariffId),
-                        rules);
-                    ThrowIfFailed(evaluation, command.OrganizationId, originLocation.CityId, serviceType);
-
-                    var selectedRule = evaluation.Rule!;
-                    var expiresAt = QuoteExpirationPolicy.Calculate(
-                        now,
-                        TimeSpan.FromMinutes(options.Value.QuoteLifetimeMinutes),
-                        selectedRule.ActiveTo);
-
-                    var packageSnapshot = CreatePackageSnapshot(command.Packages);
-                    var requestSnapshot = CreateRequestSnapshot(
-                        command,
-                        originLocation,
-                        destinationLocation,
-                        sharedServiceAreaId);
-                    var breakdown = new[]
-                    {
-                        new QuoteBreakdownLine(
-                            "BASE_TARIFF",
-                            selectedRule.Id,
-                            selectedRule.AmountCents,
-                            tier.ToContractValue(),
-                            selectedRule.TaxMode.ToContractValue()),
-                    };
-                    var quote = Quote.Create(
-                        Guid.NewGuid(),
-                        command.OrganizationId,
-                        command.ClientAccountId,
-                        originLocation.CityId,
-                        sharedServiceAreaId,
-                        originLocation.LocationId,
-                        destinationLocation.LocationId,
-                        serviceType,
-                        tier,
-                        command.ConsolidatedRoute,
-                        evaluation,
-                        options.Value.PricingPolicyVersion,
-                        [selectedRule.Id],
-                        JsonSerializer.Serialize(requestSnapshot, JsonOptions),
-                        JsonSerializer.Serialize(packageSnapshot, JsonOptions),
-                        JsonSerializer.Serialize(breakdown, JsonOptions),
-                        inputHash,
-                        expiresAt,
-                        now);
-
-                    var response = ToResult(quote);
-                    var responseJson = JsonSerializer.Serialize(response, JsonOptions);
-                    await InsertQuoteAsync(dbContext, quote, token);
-                    await InsertIdempotencyAsync(dbContext, command, inputHash, responseJson, quote, token);
-                    return response;
-                },
+            return await FinalizeAsync(
+                command,
+                inputHash,
+                serviceType,
+                originLocation,
+                destinationLocation,
+                sharedServiceAreaId,
+                sharedOperatingZoneId,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -188,6 +123,125 @@ public sealed class PostgreSqlQuoteService(
             throw new QuoteServiceUnavailableException("The quote operation failed safely.", exception);
         }
     }
+
+    private Task<QuoteResult?> ReserveOrReplayAsync(
+        CreateQuoteCommand command,
+        byte[] inputHash,
+        CancellationToken cancellationToken) =>
+        transactionContext.ExecuteAsync(
+            new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
+            async (dbContext, token) =>
+            {
+                await AcquireIdempotencyLockAsync(dbContext, command, token);
+                var existing = await FindIdempotencyRecordAsync(dbContext, command, token);
+                if (existing is not null)
+                {
+                    EnsureMatchingHash(existing, inputHash);
+                    return ReadCompletedResponse(existing);
+                }
+
+                var createdAt = clock.UtcNow;
+                await InsertIdempotencyReservationAsync(
+                    dbContext,
+                    command,
+                    inputHash,
+                    createdAt,
+                    CalculateReservationExpiration(createdAt, options.Value),
+                    token);
+                return null;
+            },
+            cancellationToken);
+
+    private Task<QuoteResult> FinalizeAsync(
+        CreateQuoteCommand command,
+        byte[] inputHash,
+        ServiceType serviceType,
+        QuoteLocationResult originLocation,
+        QuoteLocationResult destinationLocation,
+        Guid? sharedServiceAreaId,
+        Guid? sharedOperatingZoneId,
+        CancellationToken cancellationToken) =>
+        transactionContext.ExecuteAsync(
+            new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
+            async (dbContext, token) =>
+            {
+                await AcquireIdempotencyLockAsync(dbContext, command, token);
+                var existing = await FindIdempotencyRecordAsync(dbContext, command, token)
+                    ?? throw new QuoteServiceUnavailableException("The idempotency reservation is missing.");
+                EnsureMatchingHash(existing, inputHash);
+                var completed = ReadCompletedResponse(existing);
+                if (completed is not null)
+                {
+                    return completed;
+                }
+
+                var now = clock.UtcNow;
+                var (tier, privateTariffId) = await SelectPricingTierAsync(dbContext, command, token);
+                var rules = await dbContext.TariffRules.AsNoTracking()
+                    .Where(rule => rule.CityId == originLocation.CityId && rule.ServiceType == serviceType)
+                    .ToArrayAsync(token);
+                var evaluation = new TariffRuleEvaluator().Evaluate(
+                    new TariffEvaluationContext(
+                        command.OrganizationId,
+                        originLocation.CityId,
+                        sharedServiceAreaId,
+                        sharedOperatingZoneId,
+                        tier,
+                        serviceType,
+                        command.ConsolidatedRoute,
+                        now,
+                        privateTariffId),
+                    rules);
+                ThrowIfFailed(evaluation, command.OrganizationId, originLocation.CityId, serviceType);
+
+                var selectedRule = evaluation.Rule!;
+                var expiresAt = QuoteExpirationPolicy.Calculate(
+                    now,
+                    TimeSpan.FromMinutes(options.Value.QuoteLifetimeMinutes),
+                    selectedRule.ActiveTo);
+                var packageSnapshot = CreatePackageSnapshot(command.Packages);
+                var requestSnapshot = CreateRequestSnapshot(
+                    command,
+                    originLocation,
+                    destinationLocation,
+                    sharedServiceAreaId);
+                var breakdown = new[]
+                {
+                    new QuoteBreakdownLine(
+                        "BASE_TARIFF",
+                        selectedRule.Id,
+                        selectedRule.AmountCents,
+                        tier.ToContractValue(),
+                        selectedRule.TaxMode.ToContractValue()),
+                };
+                var quote = Quote.Create(
+                    Guid.NewGuid(),
+                    command.OrganizationId,
+                    command.ClientAccountId,
+                    originLocation.CityId,
+                    sharedServiceAreaId,
+                    originLocation.LocationId,
+                    destinationLocation.LocationId,
+                    serviceType,
+                    tier,
+                    command.ConsolidatedRoute,
+                    evaluation,
+                    options.Value.PricingPolicyVersion,
+                    [selectedRule.Id],
+                    JsonSerializer.Serialize(requestSnapshot, JsonOptions),
+                    JsonSerializer.Serialize(packageSnapshot, JsonOptions),
+                    JsonSerializer.Serialize(breakdown, JsonOptions),
+                    inputHash,
+                    expiresAt,
+                    now);
+
+                var response = ToResult(quote);
+                var responseJson = JsonSerializer.Serialize(response, JsonOptions);
+                await InsertQuoteAsync(dbContext, quote, token);
+                await CompleteIdempotencyReservationAsync(dbContext, command, inputHash, responseJson, quote, token);
+                return response;
+            },
+            cancellationToken);
 
     public async Task<QuoteResult> GetAsync(
         Guid actorId,
@@ -463,7 +517,95 @@ public sealed class PostgreSqlQuoteService(
         command.Parameters.Add(P("created_at", NpgsqlDbType.TimestampTz, quote.CreatedAt));
     }
 
-    private static async Task InsertIdempotencyAsync(
+    private static Task AcquireIdempotencyLockAsync(
+        PricingDbContext dbContext,
+        CreateQuoteCommand command,
+        CancellationToken cancellationToken) =>
+        dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({command.OrganizationId:D} || ':' || {IdempotencyScope} || ':' || {command.IdempotencyKey}, 0));",
+            cancellationToken);
+
+    private static Task<IdempotencyRecord?> FindIdempotencyRecordAsync(
+        PricingDbContext dbContext,
+        CreateQuoteCommand command,
+        CancellationToken cancellationToken) =>
+        dbContext.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(record =>
+            record.OwnerOrganizationId == command.OrganizationId &&
+            record.Scope == IdempotencyScope &&
+            record.IdempotencyKey == command.IdempotencyKey,
+            cancellationToken);
+
+    private static void EnsureMatchingHash(IdempotencyRecord record, byte[] inputHash)
+    {
+        if (!CryptographicOperations.FixedTimeEquals(record.RequestHash, inputHash))
+        {
+            throw new QuoteValidationException(QuoteValidationCode.IdempotencyConflict);
+        }
+    }
+
+    private static QuoteResult? ReadCompletedResponse(IdempotencyRecord record)
+    {
+        if (record.ResponseStatus is null && record.ResponseBody is null && record.ResourceId is null)
+        {
+            return null;
+        }
+
+        if (record.ResponseStatus != 201 ||
+            string.IsNullOrWhiteSpace(record.ResponseBody) ||
+            record.ResourceId is null)
+        {
+            throw new QuoteServiceUnavailableException("The idempotency record is inconsistent.");
+        }
+
+        var response = JsonSerializer.Deserialize<QuoteResult>(record.ResponseBody, JsonOptions)
+            ?? throw new QuoteServiceUnavailableException("The idempotency response is invalid.");
+        if (response.Id != record.ResourceId)
+        {
+            throw new QuoteServiceUnavailableException("The idempotency resource is inconsistent.");
+        }
+
+        return response;
+    }
+
+    internal static DateTimeOffset CalculateReservationExpiration(DateTimeOffset createdAt, PricingOptions pricingOptions)
+    {
+        ArgumentNullException.ThrowIfNull(pricingOptions);
+        var quoteLifetime = TimeSpan.FromMinutes(pricingOptions.QuoteLifetimeMinutes);
+        var operationBuffer = TimeSpan.FromSeconds(checked(pricingOptions.CommandTimeoutSeconds * 3L));
+        return createdAt.Add(quoteLifetime).Add(operationBuffer);
+    }
+
+    private static async Task InsertIdempotencyReservationAsync(
+        PricingDbContext dbContext,
+        CreateQuoteCommand create,
+        byte[] inputHash,
+        DateTimeOffset createdAt,
+        DateTimeOffset expiresAt,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO platform.idempotency_keys(
+              owner_org_id,scope,idempotency_key,request_hash,response_status,response_body,resource_id,created_at,expires_at)
+            VALUES (@owner_org_id,@scope,@idempotency_key,@request_hash,NULL,NULL,NULL,@created_at,@expires_at)
+            """,
+            connection,
+            transaction);
+        command.Parameters.Add(P("owner_org_id", NpgsqlDbType.Uuid, create.OrganizationId));
+        command.Parameters.Add(P("scope", NpgsqlDbType.Text, IdempotencyScope));
+        command.Parameters.Add(P("idempotency_key", NpgsqlDbType.Text, create.IdempotencyKey));
+        command.Parameters.Add(P("request_hash", NpgsqlDbType.Bytea, inputHash));
+        command.Parameters.Add(P("created_at", NpgsqlDbType.TimestampTz, createdAt));
+        command.Parameters.Add(P("expires_at", NpgsqlDbType.TimestampTz, expiresAt));
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            throw new QuoteServiceUnavailableException("The idempotency reservation was not persisted.");
+        }
+    }
+
+    private static async Task CompleteIdempotencyReservationAsync(
         PricingDbContext dbContext,
         CreateQuoteCommand create,
         byte[] inputHash,
@@ -475,9 +617,15 @@ public sealed class PostgreSqlQuoteService(
         var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
         await using var command = new NpgsqlCommand(
             """
-            INSERT INTO platform.idempotency_keys(
-              owner_org_id,scope,idempotency_key,request_hash,response_status,response_body,resource_id,created_at,expires_at)
-            VALUES (@owner_org_id,@scope,@idempotency_key,@request_hash,201,@response_body,@resource_id,@created_at,@expires_at)
+            UPDATE platform.idempotency_keys
+            SET response_status=201,response_body=@response_body,resource_id=@resource_id,expires_at=@expires_at
+            WHERE owner_org_id=@owner_org_id
+              AND scope=@scope
+              AND idempotency_key=@idempotency_key
+              AND request_hash=@request_hash
+              AND response_status IS NULL
+              AND response_body IS NULL
+              AND resource_id IS NULL
             """,
             connection,
             transaction);
@@ -487,9 +635,11 @@ public sealed class PostgreSqlQuoteService(
         command.Parameters.Add(P("request_hash", NpgsqlDbType.Bytea, inputHash));
         command.Parameters.Add(P("response_body", NpgsqlDbType.Jsonb, responseJson));
         command.Parameters.Add(P("resource_id", NpgsqlDbType.Uuid, quote.Id));
-        command.Parameters.Add(P("created_at", NpgsqlDbType.TimestampTz, quote.CreatedAt));
         command.Parameters.Add(P("expires_at", NpgsqlDbType.TimestampTz, quote.ExpiresAt));
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            throw new QuoteServiceUnavailableException("The idempotency reservation was not completed.");
+        }
     }
 
     private static NpgsqlParameter P(string name, NpgsqlDbType type, object? value) => new(name, type)

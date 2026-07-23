@@ -61,7 +61,22 @@ No contienen direccion, referencias, contacto, telefono, ciphertext, headers, se
 
 ## Idempotencia y expiracion
 
-POST usa `platform.idempotency_keys` con scope `PRC-001:CREATE_QUOTE`. Una advisory transaction lock serializa tenant, scope y key. Mismo hash devuelve el response 201 almacenado; hash distinto produce 422. Quote e idempotency row se insertan en una unica transaccion Pricing, y el vencimiento de idempotencia no es anterior al de la quote. Concurrencia genera una quote, dos ubicaciones y un registro. La RLS impide replay cross-tenant.
+POST usa `platform.idempotency_keys` con scope `PRC-001:CREATE_QUOTE`. Desde la correccion `PRC-001-DEF-001`, la clave queda vinculada al SHA-256 canonico antes de cualquier llamada a Locations:
+
+1. una transaccion Pricing corta adquiere el advisory lock de tenant, scope y key;
+2. si no existe fila, inserta y confirma una reserva con hash, timestamps y expiracion, dejando `response_status`, `response_body` y `resource_id` en `NULL`;
+3. si existe, compara el hash en tiempo constante;
+4. un hash diferente produce 422 antes de geocoding, proteccion PII, PostGIS o creacion de ubicaciones;
+5. una respuesta completada con el mismo hash se reproduce sin invocar Locations;
+6. una reserva pendiente con el mismo hash permite reanudar y reutilizar las subclaves deterministas de Locations.
+
+La reserva no contiene request original, direccion, referencias, contacto, telefono ni paquetes. Un fallo de cobertura, tarifa, tax mode, cancelacion u otra validacion posterior puede dejar la reserva incompleta; no se elimina ni cambia su hash. Esto impide que otro body adopte las ubicaciones creadas por el primer intento.
+
+Despues de resolver Locations, la transaccion final vuelve a adquirir el mismo advisory lock, exige la reserva, compara otra vez el hash y vuelve a comprobar si otro intento ya la completo. Si sigue pendiente, evalua la tarifa, inserta la quote y completa la misma fila mediante un `UPDATE` que debe afectar exactamente una fila. Quote y finalizacion confirman o revierten juntas. El `UPDATE` establece status 201, response seguro, `resource_id` y `expires_at = quote.expires_at`; nunca inserta una segunda fila.
+
+La expiracion inicial es la vigencia configurada de quote mas un buffer derivado de tres command timeouts. Es posterior al instante de reserva y cubre la vigencia maxima esperada del flujo acotado. Al completar, se reemplaza por la expiracion efectiva de la quote. No existe purga ni politica general de reutilizacion de claves expiradas.
+
+Concurrencia del mismo hash genera una quote, dos ubicaciones y una fila. Con hashes distintos, el primer hash confirmado gana y los demas fallan antes de Locations. La clave puede repetirse en tenants diferentes porque la PK y el advisory lock incluyen organizacion; RLS impide replay cross-tenant.
 
 `Pricing:QuoteLifetimeMinutes` es una vigencia operativa, positiva y acotada a 24 horas; no es normativa. `expires_at` se acota ademas por `active_to` de la regla. GET oculta con 404 uniforme cotizaciones inexistentes, cross-tenant, `EXPIRED`, `REVOKED` o vencidas. Una cotizacion `USED` sigue visible. No existe job de expiracion.
 
@@ -115,13 +130,13 @@ La matriz completa tambien ejecuta Release con `CI=true`, cada suite por separad
 
 ## Riesgos y rollback
 
-Riesgos residuales: cobertura y tarifas son sinteticas; no existe proveedor geografico real; la proteccion PII productiva debe configurarse; no hay politica fiscal aprobada; no existe seleccion por volumen, pricing inter-city ni expirador. Los gates GATE-003, GATE-007, GATE-010, GATE-011, GATE-014 y GATE-017 permanecen abiertos.
+Riesgos residuales: cobertura y tarifas son sinteticas; no existe proveedor geografico real; la proteccion PII productiva debe configurarse; no hay politica fiscal aprobada; no existe seleccion por volumen, pricing inter-city, expirador ni reutilizacion de reservas vencidas. Una operacion que exceda el buffer configurado puede dejar una reserva con `expires_at` pasado, pero su hash sigue siendo inmutable y no se reutiliza para otro body. Los gates GATE-003, GATE-007, GATE-010, GATE-011, GATE-014 y GATE-017 permanecen abiertos.
 
 Rollback operativo:
 
 1. cambiar `Pricing:Provider` a `Disabled` para detener nuevas cotizaciones de forma fail-closed;
-2. revertir los commits de PRC-001;
+2. revertir el commit correctivo y, si se requiere retirar PRC-001 completo, sus commits originales;
 3. no ejecutar DDL inverso: la migracion de adopcion tiene `Down` intencionalmente vacio y no es propietaria del baseline;
-4. conservar quotes, ubicaciones, idempotency y auditoria existentes para investigacion y retencion conforme a politica.
+4. conservar quotes, ubicaciones, reservas idempotentes y auditoria existentes para investigacion y retencion conforme a politica; no borrar automaticamente reservas incompletas.
 
 No se debe borrar ni alterar manualmente el baseline AI-06/AI-18.

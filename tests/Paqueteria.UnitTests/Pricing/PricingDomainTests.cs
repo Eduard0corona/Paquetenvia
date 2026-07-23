@@ -3,6 +3,7 @@ using Locations.Application.Locations;
 using Paqueteria.Application.Auditing;
 using Pricing.Application.Quotes;
 using Pricing.Domain;
+using Pricing.Infrastructure;
 using Pricing.Infrastructure.Quotes;
 
 namespace Paqueteria.UnitTests.Pricing;
@@ -184,10 +185,33 @@ public sealed class PricingDomainTests
         var command = Command();
         var first = PostgreSqlQuoteService.ComputeInputHash(command);
         var second = PostgreSqlQuoteService.ComputeInputHash(command with { RequestId = "different-non-input-metadata" });
-        var changed = PostgreSqlQuoteService.ComputeInputHash(command with { ConsolidatedRoute = true });
         Assert.Equal(first, second);
-        Assert.NotEqual(first, changed);
+        Assert.NotEqual(first, PostgreSqlQuoteService.ComputeInputHash(command with { ConsolidatedRoute = true }));
+        Assert.NotEqual(first, PostgreSqlQuoteService.ComputeInputHash(command with { ServiceType = "URGENT" }));
+        Assert.NotEqual(first, PostgreSqlQuoteService.ComputeInputHash(command with
+        {
+            Origin = command.Origin with { Lat = command.Origin.Lat + 0.001 },
+        }));
+        Assert.NotEqual(first, PostgreSqlQuoteService.ComputeInputHash(command with
+        {
+            Packages = [command.Packages[0] with { Description = "Different synthetic parcel" }],
+        }));
         Assert.Equal(32, first.Length);
+    }
+
+    [Fact]
+    public void Pending_reservation_expiration_covers_quote_lifetime_and_operation_buffer()
+    {
+        var expiration = PostgreSqlQuoteService.CalculateReservationExpiration(
+            Now,
+            new PricingOptions
+            {
+                QuoteLifetimeMinutes = 30,
+                CommandTimeoutSeconds = 20,
+            });
+
+        Assert.Equal(Now.AddMinutes(31), expiration);
+        Assert.True(expiration > Now.AddMinutes(30));
     }
 
     [Fact]

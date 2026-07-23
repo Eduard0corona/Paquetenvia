@@ -1,7 +1,11 @@
+using System.Data.Common;
+using System.Text.Json;
+using Locations.Application.Locations;
 using Locations.Infrastructure.Geocoding;
 using Locations.Infrastructure.Locations;
 using Locations.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -117,6 +121,209 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
     }
 
     [PostgreSqlContractFact]
+    public async Task Failed_attempt_binds_hash_before_locations_rejects_changed_body_and_resumes_original()
+    {
+        var data = SyntheticPricingData.Create();
+        const string key = "prc001-def001-reservation-01";
+        await SeedAsync(data);
+        await using (var disableTariffs = fixture.AdminDataSource.CreateCommand(
+            "UPDATE pricing.tariff_rules SET status='INACTIVE' WHERE owner_org_id=@org"))
+        {
+            disableTariffs.Parameters.Add(P("org", data.OrganizationId));
+            Assert.Equal(3, await disableTariffs.ExecuteNonQueryAsync());
+        }
+
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 12, applicationName: "PRC001.Def001.Contract");
+        try
+        {
+            await using var scope = CreateScope(appDataSource);
+            var original = CreateCommand(data, key);
+            var originalHash = PostgreSqlQuoteService.ComputeInputHash(original);
+            var failed = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(original, default));
+            Assert.Equal(QuoteValidationCode.NoTariffRule, failed.Code);
+            Assert.Equal(2, scope.LocationResolver.CallCount);
+
+            await AssertPendingReservationAsync(data, key, originalHash, expectedLocations: 2, expectedAudits: 2);
+
+            var changed = original with
+            {
+                Origin = original.Origin with
+                {
+                    AddressText = "Different synthetic origin 900",
+                    Lat = 24.82,
+                },
+                Packages = [original.Packages[0] with { Description = "Different synthetic parcel" }],
+            };
+            scope.LocationResolver.Reset();
+            var conflict = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(changed, default));
+            Assert.Equal(QuoteValidationCode.IdempotencyConflict, conflict.Code);
+            Assert.Equal(0, scope.LocationResolver.CallCount);
+            await AssertPendingReservationAsync(data, key, originalHash, expectedLocations: 2, expectedAudits: 2);
+
+            await using (var enableTariff = fixture.AdminDataSource.CreateCommand(
+                "UPDATE pricing.tariff_rules SET status='ACTIVE' WHERE id=@rule"))
+            {
+                enableTariff.Parameters.Add(P("rule", data.CityRuleId));
+                Assert.Equal(1, await enableTariff.ExecuteNonQueryAsync());
+            }
+
+            scope.LocationResolver.Reset();
+            var resumed = await scope.Service.CreateAsync(original, default);
+            Assert.Equal(2, scope.LocationResolver.CallCount);
+            Assert.Equal([data.CityRuleId], resumed.RuleIds);
+
+            await using (var completed = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT i.request_hash,i.response_status,i.response_body::text,i.resource_id,i.expires_at,
+                       q.expires_at,
+                       (SELECT count(*) FROM pricing.quotes WHERE owner_org_id=@org),
+                       (SELECT count(*) FROM locations.locations WHERE owner_org_id=@org),
+                       (SELECT count(*) FROM platform.idempotency_keys
+                          WHERE owner_org_id=@org AND scope='PRC-001:CREATE_QUOTE' AND idempotency_key=@key),
+                       (SELECT count(*) FROM platform.audit_logs
+                          WHERE org_id=@org AND action='LOCATION_CREATED')
+                FROM platform.idempotency_keys i
+                JOIN pricing.quotes q ON q.id=i.resource_id
+                WHERE i.owner_org_id=@org AND i.scope='PRC-001:CREATE_QUOTE' AND i.idempotency_key=@key;
+                """))
+            {
+                completed.Parameters.Add(P("org", data.OrganizationId));
+                completed.Parameters.Add(new NpgsqlParameter<string>("key", NpgsqlDbType.Text) { TypedValue = key });
+                await using var reader = await completed.ExecuteReaderAsync();
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal(originalHash, reader.GetFieldValue<byte[]>(0));
+                Assert.Equal(201, reader.GetInt32(1));
+                using var response = JsonDocument.Parse(reader.GetString(2));
+                Assert.Equal(resumed.Id, response.RootElement.GetProperty("id").GetGuid());
+                Assert.Equal(resumed.Id, reader.GetGuid(3));
+                Assert.Equal(reader.GetFieldValue<DateTimeOffset>(5), reader.GetFieldValue<DateTimeOffset>(4));
+                Assert.Equal(1, reader.GetInt64(6));
+                Assert.Equal(2, reader.GetInt64(7));
+                Assert.Equal(1, reader.GetInt64(8));
+                Assert.Equal(2, reader.GetInt64(9));
+                Assert.False(await reader.ReadAsync());
+            }
+
+            scope.LocationResolver.Reset();
+            var replay = await scope.Service.CreateAsync(original, default);
+            Assert.Equal(resumed.Id, replay.Id);
+            Assert.Equal(0, scope.LocationResolver.CallCount);
+
+            scope.LocationResolver.Reset();
+            var completedConflict = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(changed, default));
+            Assert.Equal(QuoteValidationCode.IdempotencyConflict, completedConflict.Code);
+            Assert.Equal(0, scope.LocationResolver.CallCount);
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Pending_reservation_conflicts_for_individual_package_service_or_coordinate_changes_before_resolver()
+    {
+        var data = SyntheticPricingData.Create();
+        await SeedAsync(data);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 8, applicationName: "PRC001.Def001.Variants");
+        try
+        {
+            var changes = new Func<CreateQuoteCommand, CreateQuoteCommand>[]
+            {
+                command => command with
+                {
+                    Packages = [command.Packages[0] with { Description = "Changed package only" }],
+                },
+                command => command with { ServiceType = "URGENT" },
+                command => command with { Origin = command.Origin with { Lat = 24.82 } },
+            };
+
+            for (var index = 0; index < changes.Length; index++)
+            {
+                var key = $"prc001-def001-variant-{index:000}";
+                await using var scope = CreateScope(appDataSource, new RejectingQuoteLocationResolver());
+                var original = CreateCommand(data, key);
+                var rejected = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(original, default));
+                Assert.Equal(QuoteValidationCode.OutsideCoverage, rejected.Code);
+                Assert.Equal(2, scope.LocationResolver.CallCount);
+
+                scope.LocationResolver.Reset();
+                var conflict = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(changes[index](original), default));
+                Assert.Equal(QuoteValidationCode.IdempotencyConflict, conflict.Code);
+                Assert.Equal(0, scope.LocationResolver.CallCount);
+                await AssertPendingReservationAsync(
+                    data,
+                    key,
+                    PostgreSqlQuoteService.ComputeInputHash(original),
+                    expectedLocations: 0,
+                    expectedAudits: 0);
+            }
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Cancellation_after_preflight_keeps_incomplete_non_sensitive_reservation()
+    {
+        var data = SyntheticPricingData.Create();
+        const string key = "prc001-def001-cancel-0001";
+        await SeedAsync(data);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 4, applicationName: "PRC001.Def001.Cancel");
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            await using var scope = CreateScope(appDataSource, new CancelingQuoteLocationResolver(cancellation));
+            var command = CreateCommand(data, key);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => scope.Service.CreateAsync(command, cancellation.Token));
+            Assert.Equal(1, scope.LocationResolver.CallCount);
+            await AssertPendingReservationAsync(
+                data,
+                key,
+                PostgreSqlQuoteService.ComputeInputHash(command),
+                expectedLocations: 0,
+                expectedAudits: 0);
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Transient_preflight_retry_does_not_duplicate_reservation()
+    {
+        var data = SyntheticPricingData.Create();
+        const string key = "prc001-def001-retry-0001";
+        var interceptor = new FailFirstAdvisoryLockInterceptor();
+        await SeedAsync(data);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 4, applicationName: "PRC001.Def001.Retry");
+        try
+        {
+            await using var scope = CreateScope(
+                appDataSource,
+                new RejectingQuoteLocationResolver(),
+                interceptor);
+            var command = CreateCommand(data, key);
+            var rejected = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(command, default));
+            Assert.Equal(QuoteValidationCode.OutsideCoverage, rejected.Code);
+            Assert.Equal(2, interceptor.Attempts);
+            await AssertPendingReservationAsync(
+                data,
+                key,
+                PostgreSqlQuoteService.ComputeInputHash(command),
+                expectedLocations: 0,
+                expectedAudits: 0);
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
     public async Task Concurrent_same_key_creates_one_quote_and_two_locations()
     {
         var data = SyntheticPricingData.Create();
@@ -149,6 +356,115 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         finally
         {
             await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Concurrent_different_hashes_choose_one_winner_before_location_side_effects()
+    {
+        var data = SyntheticPricingData.Create();
+        const string key = "prc001-def001-concurrent-hash";
+        await SeedAsync(data);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 16, applicationName: "PRC001.Def001.HashRace");
+        try
+        {
+            var first = CreateCommand(data, key);
+            var second = first with
+            {
+                Packages = [first.Packages[0] with { Description = "Competing synthetic package" }],
+            };
+            var tasks = Enumerable.Range(0, 8).Select(async index =>
+            {
+                await using var scope = CreateScope(appDataSource);
+                try
+                {
+                    return (Result: await scope.Service.CreateAsync(index % 2 == 0 ? first : second, default), Error: (QuoteValidationCode?)null);
+                }
+                catch (QuoteValidationException exception)
+                {
+                    return (Result: (QuoteResult?)null, Error: (QuoteValidationCode?)exception.Code);
+                }
+            });
+            var outcomes = await Task.WhenAll(tasks);
+            var successes = outcomes.Where(outcome => outcome.Result is not null).Select(outcome => outcome.Result!).ToArray();
+            var conflicts = outcomes.Where(outcome => outcome.Error == QuoteValidationCode.IdempotencyConflict).ToArray();
+            Assert.NotEmpty(successes);
+            Assert.NotEmpty(conflicts);
+            Assert.Single(successes.Select(result => result.Id).Distinct());
+            Assert.Equal(8, successes.Length + conflicts.Length);
+
+            await using var counts = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT
+                  (SELECT count(*) FROM pricing.quotes WHERE owner_org_id=@org),
+                  (SELECT count(*) FROM locations.locations WHERE owner_org_id=@org),
+                  (SELECT count(*) FROM platform.idempotency_keys
+                     WHERE owner_org_id=@org AND scope='PRC-001:CREATE_QUOTE' AND idempotency_key=@key),
+                  request_hash
+                FROM platform.idempotency_keys
+                WHERE owner_org_id=@org AND scope='PRC-001:CREATE_QUOTE' AND idempotency_key=@key;
+                """);
+            counts.Parameters.Add(P("org", data.OrganizationId));
+            counts.Parameters.Add(new NpgsqlParameter<string>("key", NpgsqlDbType.Text) { TypedValue = key });
+            await using var reader = await counts.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(1, reader.GetInt64(0));
+            Assert.Equal(2, reader.GetInt64(1));
+            Assert.Equal(1, reader.GetInt64(2));
+            var winningHash = reader.GetFieldValue<byte[]>(3);
+            Assert.True(
+                winningHash.SequenceEqual(PostgreSqlQuoteService.ComputeInputHash(first)) ||
+                winningHash.SequenceEqual(PostgreSqlQuoteService.ComputeInputHash(second)));
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Different_tenants_can_reuse_same_key_without_pooling_leak()
+    {
+        var first = SyntheticPricingData.Create();
+        var second = SyntheticPricingData.Create();
+        const string key = "prc001-def001-shared-tenant-key";
+        await SeedAsync(first);
+        await SeedAsync(second);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 1, applicationName: "PRC001.Def001.TenantPool");
+        try
+        {
+            QuoteResult firstQuote;
+            await using (var firstScope = CreateScope(appDataSource))
+            {
+                firstQuote = await firstScope.Service.CreateAsync(CreateCommand(first, key), default);
+            }
+
+            QuoteResult secondQuote;
+            await using (var secondScope = CreateScope(appDataSource))
+            {
+                secondQuote = await secondScope.Service.CreateAsync(CreateCommand(second, key), default);
+            }
+
+            Assert.NotEqual(firstQuote.Id, secondQuote.Id);
+            await using var counts = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT count(*),count(DISTINCT owner_org_id)
+                FROM platform.idempotency_keys
+                WHERE scope='PRC-001:CREATE_QUOTE' AND idempotency_key=@key
+                  AND owner_org_id IN (@first,@second);
+                """);
+            counts.Parameters.Add(new NpgsqlParameter<string>("key", NpgsqlDbType.Text) { TypedValue = key });
+            counts.Parameters.Add(P("first", first.OrganizationId));
+            counts.Parameters.Add(P("second", second.OrganizationId));
+            await using var reader = await counts.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(2, reader.GetInt64(0));
+            Assert.Equal(2, reader.GetInt64(1));
+        }
+        finally
+        {
+            await CleanupAsync(first);
+            await CleanupAsync(second);
         }
     }
 
@@ -474,7 +790,10 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         Assert.DoesNotContain("RETURNING", insert, StringComparison.OrdinalIgnoreCase);
     }
 
-    private QuoteRuntimeScope CreateScope(NpgsqlDataSource dataSource)
+    private QuoteRuntimeScope CreateScope(
+        NpgsqlDataSource dataSource,
+        IQuoteLocationResolver? resolverOverride = null,
+        DbCommandInterceptor? pricingInterceptor = null)
     {
         var locationState = new TenantDatabaseExecutionState();
         var locationOptions = new DbContextOptionsBuilder<LocationsDbContext>()
@@ -488,16 +807,21 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             new DeterministicMockLocationPiiProtector(),
             new PostgreSqlAppendOnlyAuditWriter(locationState),
             new SystemClock());
+        var countingResolver = new CountingQuoteLocationResolver(resolverOverride ?? locationService);
 
         var pricingState = new TenantDatabaseExecutionState();
-        var pricingOptions = new DbContextOptionsBuilder<PricingDbContext>()
+        var pricingOptionsBuilder = new DbContextOptionsBuilder<PricingDbContext>()
             .UseNpgsql(dataSource, postgres => postgres.EnableRetryOnFailure())
-            .AddInterceptors(new TenantTransactionGuardInterceptor(pricingState), new TenantSaveChangesGuardInterceptor(pricingState))
-            .Options;
-        var pricing = new PricingDbContext(pricingOptions, pricingState);
+            .AddInterceptors(new TenantTransactionGuardInterceptor(pricingState), new TenantSaveChangesGuardInterceptor(pricingState));
+        if (pricingInterceptor is not null)
+        {
+            pricingOptionsBuilder.AddInterceptors(pricingInterceptor);
+        }
+
+        var pricing = new PricingDbContext(pricingOptionsBuilder.Options, pricingState);
         var service = new PostgreSqlQuoteService(
             new TenantTransactionContext<PricingDbContext>(pricing, pricingState),
-            locationService,
+            countingResolver,
             new AuditPayloadRedactor(),
             Options.Create(new PricingOptions
             {
@@ -508,7 +832,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             }),
             new SystemClock(),
             NullLogger<PostgreSqlQuoteService>.Instance);
-        return new QuoteRuntimeScope(locations, pricing, service);
+        return new QuoteRuntimeScope(locations, pricing, service, countingResolver);
     }
 
     private async Task SeedAsync(SyntheticPricingData data)
@@ -520,7 +844,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
               VALUES (@org,'PRC-001 Synthetic Legal','PRC-001 Synthetic','BUSINESS');
             INSERT INTO locations.cities(id,country_code,state_code,name,timezone,status)
-              VALUES (@city,'MX','SIN','Synthetic PRC City','America/Mazatlan','ACTIVE');
+              VALUES (@city,'MX','SIN',@city_name,'America/Mazatlan','ACTIVE');
             INSERT INTO locations.service_areas(id,owner_org_id,city_id,name,polygon,status,created_at)
               VALUES (@area,@org,@city,'Synthetic PRC Area',
                 ST_GeomFromText('MULTIPOLYGON(((-107.6 24.6,-107.2 24.6,-107.2 25.0,-107.6 25.0,-107.6 24.6)))',4326),
@@ -541,6 +865,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         command.Parameters.Add(P("actor", data.ActorId));
         command.Parameters.Add(new NpgsqlParameter<string>("subject", NpgsqlDbType.Text) { TypedValue = $"prc001|{data.ActorId:N}" });
         command.Parameters.Add(P("city", data.CityId));
+        command.Parameters.Add(new NpgsqlParameter<string>("city_name", NpgsqlDbType.Text) { TypedValue = $"Synthetic PRC City {data.CityId:N}" });
         command.Parameters.Add(P("area", data.AreaId));
         command.Parameters.Add(P("zone", data.ZoneId));
         command.Parameters.Add(P("city_rule", data.CityRuleId));
@@ -592,6 +917,51 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         principals.Parameters.Add(P("city", data.CityId));
         principals.Parameters.Add(P("actor", data.ActorId));
         await principals.ExecuteNonQueryAsync();
+    }
+
+    private async Task AssertPendingReservationAsync(
+        SyntheticPricingData data,
+        string key,
+        byte[] expectedHash,
+        long expectedLocations,
+        long expectedAudits)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT i.scope,i.request_hash,i.response_status,i.response_body,i.resource_id,i.created_at,i.expires_at,
+                   to_jsonb(i)::text,
+                   (SELECT count(*) FROM pricing.quotes WHERE owner_org_id=@org),
+                   (SELECT count(*) FROM locations.locations WHERE owner_org_id=@org),
+                   (SELECT count(*) FROM platform.idempotency_keys
+                      WHERE owner_org_id=@org AND scope='PRC-001:CREATE_QUOTE' AND idempotency_key=@key),
+                   (SELECT count(*) FROM platform.audit_logs
+                      WHERE org_id=@org AND action='LOCATION_CREATED')
+            FROM platform.idempotency_keys i
+            WHERE i.owner_org_id=@org AND i.scope='PRC-001:CREATE_QUOTE' AND i.idempotency_key=@key;
+            """);
+        command.Parameters.Add(P("org", data.OrganizationId));
+        command.Parameters.Add(new NpgsqlParameter<string>("key", NpgsqlDbType.Text) { TypedValue = key });
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(PostgreSqlQuoteService.IdempotencyScope, reader.GetString(0));
+        Assert.Equal(expectedHash, reader.GetFieldValue<byte[]>(1));
+        Assert.True(reader.IsDBNull(2));
+        Assert.True(reader.IsDBNull(3));
+        Assert.True(reader.IsDBNull(4));
+        var createdAt = reader.GetFieldValue<DateTimeOffset>(5);
+        var expiresAt = reader.GetFieldValue<DateTimeOffset>(6);
+        Assert.True(expiresAt > createdAt.AddMinutes(30));
+        var reservationJson = reader.GetString(7);
+        Assert.DoesNotContain("Synthetic origin", reservationJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Synthetic Sender", reservationJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("+52667", reservationJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Synthetic gate", reservationJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Synthetic parcel", reservationJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, reader.GetInt64(8));
+        Assert.Equal(expectedLocations, reader.GetInt64(9));
+        Assert.Equal(1, reader.GetInt64(10));
+        Assert.Equal(expectedAudits, reader.GetInt64(11));
+        Assert.False(await reader.ReadAsync());
     }
 
     private static CreateQuoteCommand CreateCommand(SyntheticPricingData data, string key) => new(
@@ -663,14 +1033,79 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
     private sealed class QuoteRuntimeScope(
         LocationsDbContext locations,
         PricingDbContext pricing,
-        PostgreSqlQuoteService service) : IAsyncDisposable
+        PostgreSqlQuoteService service,
+        CountingQuoteLocationResolver locationResolver) : IAsyncDisposable
     {
         internal PostgreSqlQuoteService Service { get; } = service;
+        internal CountingQuoteLocationResolver LocationResolver { get; } = locationResolver;
 
         public async ValueTask DisposeAsync()
         {
             await pricing.DisposeAsync();
             await locations.DisposeAsync();
+        }
+    }
+
+    private sealed class CountingQuoteLocationResolver(IQuoteLocationResolver inner) : IQuoteLocationResolver
+    {
+        private int callCount;
+
+        internal int CallCount => Volatile.Read(ref callCount);
+
+        internal void Reset() => Interlocked.Exchange(ref callCount, 0);
+
+        public Task<ResolveQuoteLocationResult> ResolveAsync(
+            ResolveQuoteLocationCommand command,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref callCount);
+            return inner.ResolveAsync(command, cancellationToken);
+        }
+    }
+
+    private sealed class RejectingQuoteLocationResolver : IQuoteLocationResolver
+    {
+        public Task<ResolveQuoteLocationResult> ResolveAsync(
+            ResolveQuoteLocationCommand command,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ResolveQuoteLocationResult(
+                QuoteLocationResolutionStatus.OutsideCoverage,
+                null));
+        }
+    }
+
+    private sealed class CancelingQuoteLocationResolver(CancellationTokenSource cancellation) : IQuoteLocationResolver
+    {
+        public Task<ResolveQuoteLocationResult> ResolveAsync(
+            ResolveQuoteLocationCommand command,
+            CancellationToken cancellationToken)
+        {
+            cancellation.Cancel();
+            return Task.FromCanceled<ResolveQuoteLocationResult>(cancellation.Token);
+        }
+    }
+
+    private sealed class FailFirstAdvisoryLockInterceptor : DbCommandInterceptor
+    {
+        private int attempts;
+
+        internal int Attempts => Volatile.Read(ref attempts);
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal) &&
+                Interlocked.Increment(ref attempts) == 1)
+            {
+                throw new NpgsqlException("Synthetic PRC-001 preflight transient failure.", new TimeoutException());
+            }
+
+            return ValueTask.FromResult(result);
         }
     }
 }

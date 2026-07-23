@@ -115,6 +115,26 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
     }
 
     [Fact]
+    public async Task POST_failed_attempt_binds_key_and_rejects_changed_body_with_422()
+    {
+        const string key = "quote-http-pending-conflict";
+        using var failed = Authenticated(HttpMethod.Post, "/api/v1/quotes");
+        failed.Headers.Add("Idempotency-Key", key);
+        failed.Content = ValidBody(originAddress: "NO_RULE synthetic address");
+        using var failedResponse = await client.SendAsync(failed);
+        Assert.Equal((HttpStatusCode)422, failedResponse.StatusCode);
+
+        using var changed = Authenticated(HttpMethod.Post, "/api/v1/quotes");
+        changed.Headers.Add("Idempotency-Key", key);
+        changed.Content = ValidBody(
+            originAddress: "Different synthetic address",
+            originLat: 24.82,
+            packageDescription: "Different synthetic parcel");
+        using var changedResponse = await client.SendAsync(changed);
+        Assert.Equal((HttpStatusCode)422, changedResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task Concurrent_POST_returns_one_quote_identity()
     {
         const string key = "quote-http-concurrent-001";
@@ -193,7 +213,9 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
     private static JsonContent ValidBody(
         bool includeCoordinates = true,
         bool consolidated = false,
-        string originAddress = "Synthetic origin 100") => JsonContent.Create(new
+        string originAddress = "Synthetic origin 100",
+        double originLat = 24.8,
+        string packageDescription = "Synthetic parcel") => JsonContent.Create(new
         {
             client_account_id = (Guid?)null,
             origin = new
@@ -201,7 +223,7 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
                 address_text = originAddress,
                 contact_name = "Synthetic Sender",
                 phone = "+526671111111",
-                lat = includeCoordinates ? 24.8 : (double?)null,
+                lat = includeCoordinates ? originLat : (double?)null,
                 lng = includeCoordinates ? -107.4 : (double?)null,
                 references = "Synthetic gate",
             },
@@ -219,7 +241,7 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
             {
                 new
                 {
-                    description = "Synthetic parcel",
+                    description = packageDescription,
                     weight_grams = 1000,
                     declared_value_cents = 5000L,
                     length_mm = 100,

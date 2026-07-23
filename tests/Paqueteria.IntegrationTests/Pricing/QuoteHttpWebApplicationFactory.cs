@@ -40,6 +40,26 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
         public Task<QuoteResult> CreateAsync(CreateQuoteCommand command, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var signature = string.Join('|',
+                command.ClientAccountId,
+                command.Origin.AddressText,
+                command.Origin.Lat,
+                command.Origin.Lng,
+                command.Destination.AddressText,
+                command.Destination.Lat,
+                command.Destination.Lng,
+                command.ServiceType,
+                command.ConsolidatedRoute,
+                command.Packages.Count,
+                string.Join(',', command.Packages.Select(package => package.Description)),
+                command.Packages.Sum(package => package.DeclaredValueCents));
+            var result = Result(Guid.NewGuid(), "ACTIVE");
+            var existing = responses.GetOrAdd(command.IdempotencyKey, (signature, result));
+            if (!string.Equals(existing.Signature, signature, StringComparison.Ordinal))
+            {
+                throw new QuoteValidationException(QuoteValidationCode.IdempotencyConflict);
+            }
+
             var marker = command.Origin.AddressText;
             if (marker.Contains("OUTSIDE", StringComparison.Ordinal) ||
                 marker.Contains("EXCLUDED", StringComparison.Ordinal) ||
@@ -48,21 +68,6 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
                 marker.Contains("TAX_BLOCKED", StringComparison.Ordinal))
             {
                 throw new QuoteValidationException(QuoteValidationCode.NoTariffRule);
-            }
-
-            var signature = string.Join('|',
-                command.ClientAccountId,
-                command.Origin.AddressText,
-                command.Destination.AddressText,
-                command.ServiceType,
-                command.ConsolidatedRoute,
-                command.Packages.Count,
-                command.Packages.Sum(package => package.DeclaredValueCents));
-            var result = Result(Guid.NewGuid(), "ACTIVE");
-            var existing = responses.GetOrAdd(command.IdempotencyKey, (signature, result));
-            if (!string.Equals(existing.Signature, signature, StringComparison.Ordinal))
-            {
-                throw new QuoteValidationException(QuoteValidationCode.IdempotencyConflict);
             }
 
             return Task.FromResult(existing.Result);
