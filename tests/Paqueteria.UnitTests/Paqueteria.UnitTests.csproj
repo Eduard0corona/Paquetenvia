@@ -29,5 +29,8 @@
     <ProjectReference Include="..\..\src\Modules\Locations\Locations.Application\Locations.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Locations\Locations.Domain\Locations.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Locations\Locations.Infrastructure\Locations.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Application\Pricing.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Domain\Pricing.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

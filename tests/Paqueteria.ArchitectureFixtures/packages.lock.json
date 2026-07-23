@@ -12,6 +12,21 @@
         "resolved": "10.0.10",
         "contentHash": "2gLDordUCGf3aNOOuqtTbP5mxhiP9nk6TnvGiE3RnqT891O+Zf/qKu1PIREubs1M16A0SImr4vULBfU5BTDs1Q=="
       },
+      "locations.application": {
+        "type": "Project",
+        "dependencies": {
+          "Locations.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "locations.domain": {
+        "type": "Project",
+        "dependencies": {
+          "NetTopologySuite": "[2.6.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
       "paqueteria.application": {
         "type": "Project",
         "dependencies": {
@@ -52,6 +67,9 @@
       "pricing.infrastructure": {
         "type": "Project",
         "dependencies": {
+          "Locations.Application": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )",
           "Pricing.Application": "[1.0.0, )",
           "Pricing.Domain": "[1.0.0, )"
@@ -75,6 +93,12 @@
         "dependencies": {
           "Microsoft.EntityFrameworkCore": "10.0.10"
         }
+      },
+      "NetTopologySuite": {
+        "type": "CentralTransitive",
+        "requested": "[2.6.0, )",
+        "resolved": "2.6.0",
+        "contentHash": "1B1OTacTd4QtFyBeuIOcThwSSLUdRZU3bSFIwM8vk36XiZlBMi3K36u74e4OqwwHRHUuJC1PhbDx4hyI266X1Q=="
       },
       "Npgsql": {
         "type": "CentralTransitive",

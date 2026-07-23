@@ -4,6 +4,7 @@ using Locations.Infrastructure.Geocoding;
 using Locations.Infrastructure.Locations;
 using Locations.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Paqueteria.Application.Idempotency;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Tenancy;
