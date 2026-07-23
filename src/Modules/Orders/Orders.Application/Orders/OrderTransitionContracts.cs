@@ -252,6 +252,69 @@ public sealed record OrderTransitionAuthorizationSnapshot(
     string? ActiveRole,
     bool HasMatchingDriverAssignment);
 
+public sealed record OrderTransitionReplayAuthorizationSnapshot(
+    int MatchingEventCount,
+    int? AggregateVersion,
+    string? PreviousStatus,
+    string? NewStatus,
+    string? ActiveRole,
+    bool HasMatchingDriverAssignment);
+
+public interface IOrderTransitionReplayAuthorizationReader
+{
+    Task<OrderTransitionReplayAuthorizationSnapshot> ReadAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid actorId,
+        Guid organizationId,
+        Guid orderId,
+        int aggregateVersion,
+        CancellationToken cancellationToken);
+}
+
+public sealed record OrderTransitionReplayEvaluation(
+    bool IsConsistent,
+    OrderStatus Source,
+    OrderStatus Target)
+{
+    public static OrderTransitionReplayEvaluation Inconsistent { get; } =
+        new(false, default, default);
+}
+
+public static class OrderTransitionReplayPolicy
+{
+    public static OrderTransitionReplayEvaluation Evaluate(
+        TransitionOrderCommand command,
+        OrderStatus requestedTarget,
+        OrderResult storedResponse,
+        OrderTransitionReplayAuthorizationSnapshot snapshot)
+    {
+        if (command.ExpectedVersion == int.MaxValue)
+        {
+            return OrderTransitionReplayEvaluation.Inconsistent;
+        }
+
+        var expectedAggregateVersion = command.ExpectedVersion + 1;
+        if (snapshot.MatchingEventCount != 1 ||
+            snapshot.AggregateVersion != expectedAggregateVersion ||
+            !OrderContractValues.TryParseOrderStatus(snapshot.PreviousStatus, out var source) ||
+            !OrderContractValues.TryParseOrderStatus(snapshot.NewStatus, out var target) ||
+            target != requestedTarget ||
+            !OrderTransitionMatrix.AllowedTransitions.TryGetValue(source, out var allowedTargets) ||
+            !allowedTargets.Contains(target) ||
+            storedResponse.Id != command.OrderId ||
+            storedResponse.OwnerOrganizationId != command.OrganizationId ||
+            storedResponse.Version != expectedAggregateVersion ||
+            !OrderContractValues.TryParseOrderStatus(storedResponse.Status, out var responseStatus) ||
+            responseStatus != target)
+        {
+            return OrderTransitionReplayEvaluation.Inconsistent;
+        }
+
+        return new(true, source, target);
+    }
+}
+
 public interface IOrderTransitionAuthorizationReader
 {
     Task<OrderTransitionAuthorizationSnapshot> ReadAsync(

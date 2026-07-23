@@ -8,10 +8,14 @@ namespace Paqueteria.IntegrationTests.Orders;
 
 public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplicationFactory>
 {
+    private readonly OrderHttpWebApplicationFactory factory;
     private readonly HttpClient client;
 
-    public OrderTransitionHttpTests(OrderHttpWebApplicationFactory factory) =>
+    public OrderTransitionHttpTests(OrderHttpWebApplicationFactory factory)
+    {
+        this.factory = factory;
         client = factory.CreateClient();
+    }
 
     [Fact]
     public async Task POST_transition_requires_authentication()
@@ -199,6 +203,84 @@ public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplica
     }
 
     [Fact]
+    public async Task Completed_replay_rechecks_current_role_and_MFA_without_new_effects()
+    {
+        var orderId = await CreateOrderAsync(MockIdentityProfiles.ActivePlatformAdminMfa);
+        var key = Key();
+        using var first = await TransitionAsync(orderId, key, "CANCELLED", 1);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var storedBody = await first.Content.ReadAsStringAsync();
+
+        using var viewer = await TransitionAsync(
+            orderId, key, "CANCELLED", 1, profile: MockIdentityProfiles.ActiveViewer);
+        Assert.Equal(HttpStatusCode.Forbidden, viewer.StatusCode);
+        var viewerBody = await viewer.Content.ReadAsStringAsync();
+        using (var storedJson = JsonDocument.Parse(storedBody))
+        {
+            Assert.DoesNotContain(
+                storedJson.RootElement.GetProperty("public_id").GetString()!,
+                viewerBody,
+                StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain("\"status\":\"CANCELLED\"", viewerBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"version\":2", viewerBody, StringComparison.Ordinal);
+
+        using var adminWithoutMfa = await TransitionAsync(
+            orderId, key, "CANCELLED", 1, profile: MockIdentityProfiles.ActivePlatformAdminNoMfa);
+        Assert.Equal(HttpStatusCode.Forbidden, adminWithoutMfa.StatusCode);
+
+        using var dispatcher = await TransitionAsync(
+            orderId, key, "CANCELLED", 1, profile: MockIdentityProfiles.ActiveDispatcher);
+        Assert.Equal(HttpStatusCode.OK, dispatcher.StatusCode);
+        Assert.Equal(storedBody, await dispatcher.Content.ReadAsStringAsync());
+        Assert.Equal(1, factory.TransitionEffectCount(orderId));
+
+        using var hashConflict = await TransitionAsync(
+            orderId,
+            key,
+            "CANCELLED",
+            1,
+            reason: "a different exact reason",
+            profile: MockIdentityProfiles.ActiveViewer);
+        await AssertConflictAsync(hashConflict);
+        Assert.Equal(1, factory.TransitionEffectCount(orderId));
+    }
+
+    [Fact]
+    public async Task Completed_driver_replay_requires_the_current_exact_active_assignment()
+    {
+        var orderId = await CreateOrderAsync(MockIdentityProfiles.ActivePlatformAdminMfa);
+        using var confirmed = await TransitionAsync(
+            orderId,
+            Key(),
+            "CONFIRMED",
+            1,
+            metadata: new { restricted_goods_acknowledged = true });
+        Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
+        using var ready = await TransitionAsync(orderId, Key(), "READY_FOR_PICKUP", 2);
+        Assert.Equal(HttpStatusCode.OK, ready.StatusCode);
+        using var assigned = await TransitionAsync(orderId, Key(), "ASSIGNED", 3);
+        Assert.Equal(HttpStatusCode.OK, assigned.StatusCode);
+
+        var key = Key();
+        using var original = await TransitionAsync(orderId, key, "AT_PICKUP", 4);
+        Assert.Equal(HttpStatusCode.OK, original.StatusCode);
+        var storedBody = await original.Content.ReadAsStringAsync();
+
+        factory.SetDriverAssignment(orderId, false);
+        using var missing = await TransitionAsync(
+            orderId, key, "AT_PICKUP", 4, profile: MockIdentityProfiles.ActiveDriver);
+        Assert.Equal(HttpStatusCode.Forbidden, missing.StatusCode);
+
+        factory.SetDriverAssignment(orderId, true);
+        using var allowed = await TransitionAsync(
+            orderId, key, "AT_PICKUP", 4, profile: MockIdentityProfiles.ActiveDriver);
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+        Assert.Equal(storedBody, await allowed.Content.ReadAsStringAsync());
+        Assert.Equal(4, factory.TransitionEffectCount(orderId));
+    }
+
+    [Fact]
     public async Task Concurrent_distinct_keys_with_same_expected_version_have_exactly_one_200()
     {
         var orderId = await CreateOrderAsync(MockIdentityProfiles.ActivePlatformAdminMfa);
@@ -261,9 +343,10 @@ public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplica
         string target,
         int expectedVersion,
         string reason = "synthetic cancellation",
-        object? metadata = null)
+        object? metadata = null,
+        string profile = MockIdentityProfiles.ActivePlatformAdminMfa)
     {
-        var request = Authorized(orderId, key, MockIdentityProfiles.ActivePlatformAdminMfa);
+        var request = Authorized(orderId, key, profile);
         request.Content = TransitionBody(target, reason, expectedVersion, metadata);
         return client.SendAsync(request);
     }

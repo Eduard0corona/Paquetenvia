@@ -168,6 +168,241 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
 
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
+    public async Task Completed_replay_uses_original_event_and_current_authorization_without_new_effects()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await using var otherActor = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync();
+        await otherActor.InitializeAsync(createOrder: false);
+        await PrepareConfirmationAsync(scenario);
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO organizations.organization_memberships(
+              id,user_id,organization_id,role,status,is_default)
+            VALUES (gen_random_uuid(),@user,@org,'DISPATCHER','ACTIVE',false);
+            """,
+            SyntheticOrderScenario.P("user", otherActor.UserId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId));
+
+        await using var scope = CreateScope();
+        var original = Command(
+            scenario,
+            OrderStatus.Confirmed,
+            1,
+            "ord002-authorized-replay-0001",
+            """{"restricted_goods_acknowledged":true}""");
+        var stored = await scope.Service.TransitionAsync(original, CancellationToken.None);
+        var advanced = await scope.Service.TransitionAsync(
+            Command(scenario, OrderStatus.ReadyForPickup, 2, "ord002-advance-0001"),
+            CancellationToken.None);
+        Assert.Equal("READY_FOR_PICKUP", advanced.Status);
+        Assert.Equal(3, advanced.Version);
+
+        await scenario.ExecuteAdminAsync(
+            "UPDATE pricing.quotes SET status='ACTIVE',consumed_at=NULL WHERE id=@quote;",
+            SyntheticOrderScenario.P("quote", scenario.QuoteId));
+
+        var replayed = await scope.Service.TransitionAsync(
+            original with { ActorId = otherActor.UserId },
+            CancellationToken.None);
+        Assert.Equal(stored, replayed);
+
+        await scenario.ExecuteAdminAsync(
+            """
+            UPDATE organizations.organization_memberships
+            SET role='VIEWER'
+            WHERE user_id=@user AND organization_id=@org;
+            """,
+            SyntheticOrderScenario.P("user", otherActor.UserId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId));
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(
+                original with { ActorId = otherActor.UserId },
+                CancellationToken.None));
+
+        await scenario.ExecuteAdminAsync(
+            """
+            UPDATE organizations.organization_memberships
+            SET role='PLATFORM_ADMIN'
+            WHERE user_id=@user AND organization_id=@org;
+            """,
+            SyntheticOrderScenario.P("user", otherActor.UserId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId));
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(
+                original with { ActorId = otherActor.UserId, MfaSatisfied = false },
+                CancellationToken.None));
+
+        await AssertArtifactCountsAsync(scenario, 2, 2, 2, 2);
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Completed_driver_replay_requires_current_exact_active_assignment()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await using var foreign = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(OrderStatus.Assigned.ToContractValue());
+        await foreign.InitializeAsync();
+        await using var scope = CreateScope();
+        var command = Command(
+            scenario,
+            OrderStatus.AtPickup,
+            1,
+            "ord002-driver-replay-0001");
+        var stored = await scope.Service.TransitionAsync(command, CancellationToken.None);
+        await scenario.ExecuteAdminAsync(
+            """
+            UPDATE organizations.organization_memberships
+            SET role='DRIVER'
+            WHERE user_id=@user AND organization_id=@org;
+            """,
+            SyntheticOrderScenario.P("user", scenario.UserId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId));
+
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(command, CancellationToken.None));
+
+        var otherDriver = Guid.NewGuid();
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO drivers.driver_profiles(
+              id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
+            VALUES (@driver,@other_user,@org,@city,'OWN','MOTORCYCLE','ACTIVE');
+            INSERT INTO dispatch.assignments(
+              id,order_id,owner_org_id,driver_id,assignment_type,status,cost_cents)
+            VALUES (gen_random_uuid(),@order,@org,@driver,'OWN','ACTIVE',100);
+            """,
+            SyntheticOrderScenario.P("driver", otherDriver),
+            SyntheticOrderScenario.P("other_user", foreign.UserId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId),
+            SyntheticOrderScenario.P("city", scenario.CityId),
+            SyntheticOrderScenario.P("order", scenario.OrderId));
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(command, CancellationToken.None));
+        await DeleteSyntheticDriverAsync(scenario, otherDriver);
+
+        var otherOrderDriver = Guid.NewGuid();
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO drivers.driver_profiles(
+              id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
+            VALUES (@driver,@user,@org,@city,'OWN','MOTORCYCLE','ACTIVE');
+            INSERT INTO dispatch.assignments(
+              id,order_id,owner_org_id,driver_id,assignment_type,status,cost_cents)
+            VALUES (gen_random_uuid(),@other_order,@other_org,@driver,'OWN','ACTIVE',100);
+            """,
+            SyntheticOrderScenario.P("driver", otherOrderDriver),
+            SyntheticOrderScenario.P("user", scenario.UserId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId),
+            SyntheticOrderScenario.P("city", scenario.CityId),
+            SyntheticOrderScenario.P("other_order", foreign.OrderId),
+            SyntheticOrderScenario.P("other_org", foreign.OrganizationId));
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(command, CancellationToken.None));
+        await DeleteSyntheticDriverAsync(scenario, otherOrderDriver);
+
+        var crossTenantDriver = Guid.NewGuid();
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO drivers.driver_profiles(
+              id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
+            VALUES (@driver,@user,@foreign_org,@foreign_city,'OWN','MOTORCYCLE','ACTIVE');
+            INSERT INTO dispatch.assignments(
+              id,order_id,owner_org_id,driver_id,assignment_type,status,cost_cents)
+            VALUES (gen_random_uuid(),@order,@org,@driver,'OWN','ACTIVE',100);
+            """,
+            SyntheticOrderScenario.P("driver", crossTenantDriver),
+            SyntheticOrderScenario.P("user", scenario.UserId),
+            SyntheticOrderScenario.P("foreign_org", foreign.OrganizationId),
+            SyntheticOrderScenario.P("foreign_city", foreign.CityId),
+            SyntheticOrderScenario.P("order", scenario.OrderId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId));
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(command, CancellationToken.None));
+        await DeleteSyntheticDriverAsync(scenario, crossTenantDriver);
+
+        await InsertAssignmentAsync(scenario);
+        Assert.Equal(
+            stored,
+            await scope.Service.TransitionAsync(command, CancellationToken.None));
+
+        await scenario.ExecuteAdminAsync(
+            "UPDATE dispatch.assignments SET status='CANCELLED' WHERE order_id=@order;",
+            SyntheticOrderScenario.P("order", scenario.OrderId));
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(command, CancellationToken.None));
+        await AssertArtifactCountsAsync(scenario, 1, 1, 1, 1);
+
+        await using var prohibited = new SyntheticOrderScenario(fixture);
+        await prohibited.InitializeAsync();
+        await PrepareConfirmationAsync(prohibited);
+        var prohibitedCommand = Command(
+            prohibited,
+            OrderStatus.Confirmed,
+            1,
+            "ord002-driver-prohibited-replay-0001",
+            """{"restricted_goods_acknowledged":true}""");
+        await using var prohibitedScope = CreateScope();
+        await prohibitedScope.Service.TransitionAsync(prohibitedCommand, CancellationToken.None);
+        await prohibited.ExecuteAdminAsync(
+            """
+            UPDATE organizations.organization_memberships
+            SET role='DRIVER'
+            WHERE user_id=@user AND organization_id=@org;
+            """,
+            SyntheticOrderScenario.P("user", prohibited.UserId),
+            SyntheticOrderScenario.P("org", prohibited.OrganizationId));
+        await InsertAssignmentAsync(prohibited);
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            prohibitedScope.Service.TransitionAsync(prohibitedCommand, CancellationToken.None));
+        await AssertArtifactCountsAsync(prohibited, 1, 1, 1, 1);
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Completed_replay_evidence_inconsistency_fails_closed_with_uniform_conflict()
+    {
+        var cases = new[]
+        {
+            (EventVersion: (int?)null, Previous: "DRAFT", New: "CANCELLED", ResourceMatches: true),
+            (EventVersion: (int?)3, Previous: "DRAFT", New: "CANCELLED", ResourceMatches: true),
+            (EventVersion: (int?)2, Previous: "DRAFT", New: "CONFIRMED", ResourceMatches: true),
+            (EventVersion: (int?)2, Previous: "DRAFT", New: "CANCELLED", ResourceMatches: false),
+        };
+
+        foreach (var item in cases)
+        {
+            await using var scenario = new SyntheticOrderScenario(fixture);
+            await scenario.InitializeAsync();
+            var command = Command(
+                scenario,
+                OrderStatus.Cancelled,
+                1,
+                $"ord002-inconsistent-{Guid.NewGuid():N}");
+            await InsertCompletedReplayFixtureAsync(
+                scenario,
+                command,
+                item.EventVersion,
+                item.Previous,
+                item.New,
+                item.ResourceMatches);
+            await using var scope = CreateScope();
+
+            var conflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+                scope.Service.TransitionAsync(command, CancellationToken.None));
+            Assert.Equal(OrderTransitionConflictCode.IdempotencyConflict, conflict.Code);
+            await AssertArtifactCountsAsync(
+                scenario,
+                item.EventVersion is null ? 0 : 1,
+                0,
+                0,
+                1);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
     public async Task Every_injected_stage_rolls_back_order_event_outbox_audit_and_idempotency()
     {
         foreach (var stage in Enum.GetValues<OrderTransitionStage>())
@@ -407,6 +642,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         var service = new PostgreSqlOrderTransitionService(
             new TenantTransactionContext<OrdersDbContext>(context, state),
             new PostgreSqlOrderTransitionAuthorizationReader(),
+            new PostgreSqlOrderTransitionReplayAuthorizationReader(),
             new PostgreSqlOrderQuoteAcceptanceGuardReader(),
             new PostgreSqlOrderAssignmentGuardReader(),
             new PostgreSqlOrderProofGuardReader(),
@@ -530,6 +766,91 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             SyntheticOrderScenario.P("org", scenario.OrganizationId),
             SyntheticOrderScenario.P("city", scenario.CityId),
             SyntheticOrderScenario.P("order", scenario.OrderId));
+    }
+
+    private static Task DeleteSyntheticDriverAsync(
+        SyntheticOrderScenario scenario,
+        Guid driverId) =>
+        scenario.ExecuteAdminAsync(
+            """
+            DELETE FROM dispatch.assignments WHERE driver_id=@driver;
+            DELETE FROM drivers.driver_profiles WHERE id=@driver;
+            """,
+            SyntheticOrderScenario.P("driver", driverId));
+
+    private static async Task InsertCompletedReplayFixtureAsync(
+        SyntheticOrderScenario scenario,
+        TransitionOrderCommand command,
+        int? eventVersion,
+        string previousStatus,
+        string newStatus,
+        bool resourceMatches)
+    {
+        var response = new OrderResult(
+            scenario.OrderId,
+            scenario.PublicOrderId,
+            scenario.OrganizationId,
+            null,
+            OrderStatus.Cancelled.ToContractValue(),
+            new MoneyResult("MXN", scenario.SubtotalCents - scenario.DiscountCents),
+            2,
+            scenario.OriginLocationId,
+            scenario.DestinationLocationId,
+            "SAME_DAY",
+            scenario.QuoteId,
+            scenario.CityId,
+            null,
+            "OCCASIONAL",
+            new MoneyResult("MXN", scenario.TotalCents),
+            null,
+            null);
+        var jsonOptions = new System.Text.Json.JsonSerializerOptions(
+            System.Text.Json.JsonSerializerDefaults.Web)
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower,
+            DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower,
+        };
+        var responseBody = System.Text.Json.JsonSerializer.Serialize(response, jsonOptions);
+        var requestHash = OrderTransitionCanonicalizer.ComputeSha256(
+            command,
+            OrderStatus.Cancelled,
+            NormalizedTransitionMetadata.Empty);
+
+        if (eventVersion is not null)
+        {
+            await scenario.ExecuteAdminAsync(
+                """
+                INSERT INTO orders.order_events(
+                  id,order_id,owner_org_id,aggregate_version,event_type,payload,actor_id,occurred_at)
+                VALUES (
+                  gen_random_uuid(),@order,@org,@version,'ORDER_STATUS_CHANGED',
+                  jsonb_build_object('previous_status',@previous,'new_status',@new),
+                  @actor,clock_timestamp());
+                """,
+                SyntheticOrderScenario.P("order", scenario.OrderId),
+                SyntheticOrderScenario.P("org", scenario.OrganizationId),
+                SyntheticOrderScenario.P("version", eventVersion.Value),
+                SyntheticOrderScenario.P("previous", previousStatus),
+                SyntheticOrderScenario.P("new", newStatus),
+                SyntheticOrderScenario.P("actor", scenario.UserId));
+        }
+
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO platform.idempotency_keys(
+              owner_org_id,scope,idempotency_key,request_hash,response_status,
+              response_body,resource_id,created_at,expires_at)
+            VALUES (
+              @org,'ORD-002:TRANSITION_ORDER',@key,@hash,200,@body::jsonb,
+              @resource,clock_timestamp(),clock_timestamp()+interval '1 hour');
+            """,
+            SyntheticOrderScenario.P("org", scenario.OrganizationId),
+            SyntheticOrderScenario.P("key", command.IdempotencyKey),
+            SyntheticOrderScenario.P("hash", requestHash),
+            SyntheticOrderScenario.P("body", responseBody),
+            SyntheticOrderScenario.P(
+                "resource",
+                resourceMatches ? scenario.OrderId : Guid.NewGuid()));
     }
 
     private static async Task InsertProofAsync(SyntheticOrderScenario scenario, string proofType)

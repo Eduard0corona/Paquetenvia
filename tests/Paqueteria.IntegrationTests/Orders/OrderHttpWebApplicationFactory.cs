@@ -25,6 +25,9 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal TransitionOrderCommand? LastTransitionCommand => orderService.LastTransitionCommand;
 
     internal void ResetCreateObservations() => orderService.ResetCreateObservations();
+    internal void SetDriverAssignment(Guid orderId, bool active) =>
+        orderService.SetDriverAssignment(orderId, active);
+    internal int TransitionEffectCount(Guid orderId) => orderService.TransitionEffectCount(orderId);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -52,6 +55,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         private readonly ConcurrentDictionary<Guid, List<OrderTimelineItem>> timelines = new();
         private readonly ConcurrentDictionary<Guid, Guid> quoteOrders = new();
         private readonly ConcurrentDictionary<(Guid Tenant, string Key), StoredResponse> transitionResponses = new();
+        private readonly ConcurrentDictionary<Guid, byte> activeDriverAssignments = new();
         private int createCallCount;
         private int transitionCallCount;
         private CreateOrderCommand? lastCreateCommand;
@@ -67,6 +71,23 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             Interlocked.Exchange(ref createCallCount, 0);
             Volatile.Write(ref lastCreateCommand, null);
         }
+
+        internal void SetDriverAssignment(Guid orderId, bool active)
+        {
+            if (active)
+            {
+                activeDriverAssignments[orderId] = 0;
+            }
+            else
+            {
+                activeDriverAssignments.TryRemove(orderId, out _);
+            }
+        }
+
+        internal int TransitionEffectCount(Guid orderId) =>
+            timelines.TryGetValue(orderId, out var timeline)
+                ? timeline.Count(item => item.EventType == "ORDER_STATUS_CHANGED")
+                : 0;
 
         public Task<OrderResult> CreateAsync(CreateOrderCommand command, CancellationToken cancellationToken)
         {
@@ -138,18 +159,17 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                             OrderTransitionConflictCode.IdempotencyConflict);
                     }
 
-                    return Task.FromResult(stored.Result);
-                }
-
-                if (!IsAuthorized(command) ||
-                    !orders.TryGetValue(command.OrderId, out var current) ||
-                    current.OwnerOrganizationId != command.OrganizationId)
-                {
-                    if (!IsAuthorized(command))
+                    if (!IsAuthorized(command, stored.Source, stored.Target))
                     {
                         throw new OrderTransitionForbiddenException();
                     }
 
+                    return Task.FromResult(stored.Result);
+                }
+
+                if (!orders.TryGetValue(command.OrderId, out var current) ||
+                    current.OwnerOrganizationId != command.OrganizationId)
+                {
                     throw new OrderTransitionConflictException(OrderTransitionConflictCode.OrderUnavailable);
                 }
 
@@ -158,6 +178,11 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                     !OrderContractValues.TryParseOrderStatus(command.TargetStatus, out var target))
                 {
                     throw new OrderTransitionConflictException(OrderTransitionConflictCode.VersionConflict);
+                }
+
+                if (!IsAuthorized(command, source, target))
+                {
+                    throw new OrderTransitionForbiddenException();
                 }
 
                 var matrix = OrderTransitionMatrix.Evaluate(
@@ -201,7 +226,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                     "ORDER_STATUS_CHANGED",
                     DateTimeOffset.UtcNow));
                 transitionResponses[(command.OrganizationId, command.IdempotencyKey)] =
-                    new StoredResponse(signature, updated);
+                    new StoredResponse(signature, updated, source, target);
                 return Task.FromResult(updated);
             }
         }
@@ -252,7 +277,10 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 timelines[orderId]));
         }
 
-        private static bool IsAuthorized(TransitionOrderCommand command) =>
+        private bool IsAuthorized(
+            TransitionOrderCommand command,
+            OrderStatus source,
+            OrderStatus target) =>
             command.ActorId switch
             {
                 var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2") =>
@@ -261,6 +289,16 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                     command.MfaSatisfied,
                 var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4") =>
                     command.OrganizationId == Identity.Infrastructure.Mock.MockIdentityProfiles.OperationsOrganizationId,
+                var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10") =>
+                    true,
+                var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11") =>
+                    activeDriverAssignments.ContainsKey(command.OrderId) &&
+                    new OrderTransitionAuthorizer().IsAuthorized(new(
+                        "DRIVER",
+                        source,
+                        target,
+                        command.MfaSatisfied,
+                        true)),
                 _ => false,
             };
 
@@ -283,6 +321,10 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             null,
             null);
 
-        private sealed record StoredResponse(string Signature, OrderResult Result);
+        private sealed record StoredResponse(
+            string Signature,
+            OrderResult Result,
+            OrderStatus Source = default,
+            OrderStatus Target = default);
     }
 }

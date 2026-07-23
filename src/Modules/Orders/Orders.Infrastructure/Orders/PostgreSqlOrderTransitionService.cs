@@ -56,6 +56,7 @@ public sealed class DisabledOrderTransitionService : IOrderTransitionService
 public sealed class PostgreSqlOrderTransitionService(
     TenantTransactionContext<OrdersDbContext> transactionContext,
     IOrderTransitionAuthorizationReader authorizationReader,
+    IOrderTransitionReplayAuthorizationReader replayAuthorizationReader,
     IOrderQuoteAcceptanceGuardReader quoteAcceptanceReader,
     IOrderAssignmentGuardReader assignmentReader,
     IOrderProofGuardReader proofReader,
@@ -163,6 +164,41 @@ public sealed class PostgreSqlOrderTransitionService(
             var replay = ReadCompletedResponse(idempotency);
             if (replay is not null)
             {
+                if (command.ExpectedVersion == int.MaxValue)
+                {
+                    throw new OrderTransitionConflictException(
+                        OrderTransitionConflictCode.IdempotencyConflict);
+                }
+
+                var replayAuthorization = await replayAuthorizationReader.ReadAsync(
+                    connection,
+                    transaction,
+                    command.ActorId,
+                    command.OrganizationId,
+                    command.OrderId,
+                    command.ExpectedVersion + 1,
+                    cancellationToken);
+                var replayEvaluation = OrderTransitionReplayPolicy.Evaluate(
+                    command,
+                    target,
+                    replay,
+                    replayAuthorization);
+                if (!replayEvaluation.IsConsistent)
+                {
+                    throw new OrderTransitionConflictException(
+                        OrderTransitionConflictCode.IdempotencyConflict);
+                }
+
+                if (!authorizer.IsAuthorized(new OrderTransitionAuthorizationContext(
+                        replayAuthorization.ActiveRole,
+                        replayEvaluation.Source,
+                        replayEvaluation.Target,
+                        command.MfaSatisfied,
+                        replayAuthorization.HasMatchingDriverAssignment)))
+                {
+                    throw new OrderTransitionForbiddenException();
+                }
+
                 return replay;
             }
         }
@@ -473,14 +509,27 @@ public sealed class PostgreSqlOrderTransitionService(
 
         if (row.ResponseStatus != 200 || string.IsNullOrWhiteSpace(row.ResponseBody) || row.ResourceId is null)
         {
-            throw new OrderTransitionInfrastructureException("The transition idempotency record is inconsistent.");
+            throw new OrderTransitionConflictException(OrderTransitionConflictCode.IdempotencyConflict);
         }
 
-        var result = JsonSerializer.Deserialize<OrderResult>(row.ResponseBody, JsonOptions)
-            ?? throw new OrderTransitionInfrastructureException("The transition replay response is invalid.");
+        OrderResult? result;
+        try
+        {
+            result = JsonSerializer.Deserialize<OrderResult>(row.ResponseBody, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new OrderTransitionConflictException(OrderTransitionConflictCode.IdempotencyConflict);
+        }
+
+        if (result is null)
+        {
+            throw new OrderTransitionConflictException(OrderTransitionConflictCode.IdempotencyConflict);
+        }
+
         return result.Id == row.ResourceId
             ? result
-            : throw new OrderTransitionInfrastructureException("The transition replay resource is inconsistent.");
+            : throw new OrderTransitionConflictException(OrderTransitionConflictCode.IdempotencyConflict);
     }
 
     private async Task InsertIdempotencyReservationAsync(

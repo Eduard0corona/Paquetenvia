@@ -58,6 +58,83 @@ public sealed class PostgreSqlOrderTransitionAuthorizationReader : IOrderTransit
     }
 }
 
+public sealed class PostgreSqlOrderTransitionReplayAuthorizationReader
+    : IOrderTransitionReplayAuthorizationReader
+{
+    public async Task<OrderTransitionReplayAuthorizationSnapshot> ReadAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid actorId,
+        Guid organizationId,
+        Guid orderId,
+        int aggregateVersion,
+        CancellationToken cancellationToken)
+    {
+        await using var command = TransitionReaderCommand.Create(
+            connection,
+            transaction,
+            """
+            WITH matching_events AS (
+              SELECT aggregate_version,payload->>'previous_status' AS previous_status,
+                     payload->>'new_status' AS new_status
+              FROM orders.order_events
+              WHERE order_id=@order
+                AND aggregate_version=@version
+                AND event_type='ORDER_STATUS_CHANGED'
+                AND owner_org_id=@org
+            ),
+            event_evidence AS (
+              SELECT count(*)::integer AS matching_event_count,
+                     min(aggregate_version) AS aggregate_version,
+                     min(previous_status) AS previous_status,
+                     min(new_status) AS new_status
+              FROM matching_events
+            )
+            SELECT e.matching_event_count,e.aggregate_version,e.previous_status,e.new_status,
+              (
+                SELECT m.role
+                FROM organizations.organization_memberships m
+                WHERE m.user_id=@actor AND m.organization_id=@org AND m.status='ACTIVE'
+                ORDER BY CASE m.role
+                  WHEN 'PLATFORM_ADMIN' THEN 0
+                  WHEN 'DISPATCHER' THEN 1
+                  WHEN 'DRIVER' THEN 2
+                  ELSE 3 END, m.role
+                LIMIT 1
+              ),
+              EXISTS (
+                SELECT 1
+                FROM dispatch.assignments a
+                JOIN drivers.driver_profiles d ON d.id=a.driver_id
+                WHERE a.order_id=@order
+                  AND a.status IN ('ACCEPTED','ACTIVE')
+                  AND d.user_id=@actor
+                  AND d.org_id=@org
+                  AND d.status='ACTIVE'
+                  AND (a.owner_org_id=@org OR a.operator_org_id=@org)
+              )
+            FROM event_evidence e
+            """);
+        command.Parameters.Add(TransitionReaderCommand.P("actor", NpgsqlDbType.Uuid, actorId));
+        command.Parameters.Add(TransitionReaderCommand.P("org", NpgsqlDbType.Uuid, organizationId));
+        command.Parameters.Add(TransitionReaderCommand.P("order", NpgsqlDbType.Uuid, orderId));
+        command.Parameters.Add(TransitionReaderCommand.P("version", NpgsqlDbType.Integer, aggregateVersion));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return new(0, null, null, null, null, false);
+        }
+
+        return new(
+            reader.GetInt32(0),
+            reader.IsDBNull(1) ? null : reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetBoolean(5));
+    }
+}
+
 public sealed class PostgreSqlOrderQuoteAcceptanceGuardReader : IOrderQuoteAcceptanceGuardReader
 {
     public async Task<QuoteAcceptanceGuardSnapshot> ReadAsync(

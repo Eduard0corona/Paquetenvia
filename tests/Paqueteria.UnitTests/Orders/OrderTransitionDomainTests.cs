@@ -232,6 +232,65 @@ public sealed class OrderTransitionDomainTests
     }
 
     [Fact]
+    public void Completed_replay_policy_accepts_only_the_exact_original_event_and_response()
+    {
+        var command = Command("safe replay");
+        var response = ReplayResponse(command);
+        var evidence = new OrderTransitionReplayAuthorizationSnapshot(
+            1,
+            2,
+            "DRAFT",
+            "CANCELLED",
+            "DISPATCHER",
+            false);
+
+        var accepted = OrderTransitionReplayPolicy.Evaluate(
+            command,
+            OrderStatus.Cancelled,
+            response,
+            evidence);
+
+        Assert.True(accepted.IsConsistent);
+        Assert.Equal(OrderStatus.Draft, accepted.Source);
+        Assert.Equal(OrderStatus.Cancelled, accepted.Target);
+    }
+
+    [Fact]
+    public void Completed_replay_policy_fails_closed_for_missing_duplicate_or_inconsistent_evidence()
+    {
+        var command = Command("safe replay");
+        var response = ReplayResponse(command);
+        var evidence = new OrderTransitionReplayAuthorizationSnapshot(
+            1,
+            2,
+            "DRAFT",
+            "CANCELLED",
+            "DISPATCHER",
+            false);
+        var cases = new[]
+        {
+            (command, response, evidence with { MatchingEventCount = 0 }),
+            (command, response, evidence with { MatchingEventCount = 2 }),
+            (command, response, evidence with { AggregateVersion = 3 }),
+            (command, response, evidence with { PreviousStatus = "UNKNOWN" }),
+            (command, response, evidence with { PreviousStatus = "CANCELLED" }),
+            (command, response, evidence with { NewStatus = "CONFIRMED" }),
+            (command, response with { Id = Guid.NewGuid() }, evidence),
+            (command, response with { OwnerOrganizationId = Guid.NewGuid() }, evidence),
+            (command, response with { Status = "CONFIRMED" }, evidence),
+            (command, response with { Version = 3 }, evidence),
+            (command with { ExpectedVersion = int.MaxValue }, response, evidence),
+        };
+
+        Assert.All(cases, item =>
+            Assert.False(OrderTransitionReplayPolicy.Evaluate(
+                item.Item1,
+                OrderStatus.Cancelled,
+                item.Item2,
+                item.Item3).IsConsistent));
+    }
+
+    [Fact]
     public void Guard_registry_has_unique_codes_and_deterministic_order()
     {
         var registry = new OrderTransitionGuardRegistry();
@@ -309,6 +368,25 @@ public sealed class OrderTransitionDomainTests
         null,
         false,
         "request-one");
+
+    private static OrderResult ReplayResponse(TransitionOrderCommand command) => new(
+        command.OrderId,
+        "ORD_SYNTHETIC",
+        command.OrganizationId,
+        null,
+        "CANCELLED",
+        new MoneyResult("MXN", 100),
+        2,
+        Guid.Parse("44444444-4444-4444-4444-444444444444"),
+        Guid.Parse("55555555-5555-5555-5555-555555555555"),
+        "SAME_DAY",
+        Guid.Parse("66666666-6666-6666-6666-666666666666"),
+        Guid.Parse("77777777-7777-7777-7777-777777777777"),
+        null,
+        "OCCASIONAL",
+        new MoneyResult("MXN", 100),
+        null,
+        null);
 
     private static OrderTransitionGuardContext BaseGuardContext(OrderStatus source, OrderStatus target) => new()
     {

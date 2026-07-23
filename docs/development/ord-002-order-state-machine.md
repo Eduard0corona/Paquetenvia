@@ -104,7 +104,17 @@ Cada intento usa una conexión, una transacción, `SET LOCAL ROLE paqueteria_app
 
 El scope exacto es `ORD-002:TRANSITION_ORDER`. El SHA-256 canónico incluye tenant, order ID, target exacto normalizado, reason exacto, versión esperada y metadata normalizada. Excluye actor, request ID, headers y tiempo de servidor.
 
-Misma organización, key y hash reproduce el 200 almacenado sin volver a escribir. La misma key con otro hash devuelve 409. Keys distintas con la misma versión compiten bajo el lock de orden: solo una actualiza. El predicado optimista y la unique constraint `(order_id, aggregate_version)` son backstops.
+Misma organización, key y hash puede reproducir el 200 almacenado sin volver a escribir; la autorización no forma parte del hash y siempre se vuelve a comprobar con el actor actual. La misma key con otro hash devuelve 409 antes de cualquier lectura de autorización. Keys distintas con la misma versión compiten bajo el lock de orden: solo una actualiza. El predicado optimista y la unique constraint `(order_id, aggregate_version)` son backstops.
+
+### Replay completado y autorización vigente
+
+`ORD-002-DEF-001` queda corregido mediante esta reautorización obligatoria.
+
+Un replay completado no usa el estado actual de `orders.orders`, porque la orden puede haber avanzado legítimamente después de la transición original. Antes de autorizar, valida de forma fail-closed que existe exactamente un evento append-only con `order_id`, `owner_org_id`, `event_type = ORDER_STATUS_CHANGED` y `aggregate_version = expected_version + 1`; su `previous_status -> new_status` debe ser una arista canónica y `new_status` debe coincidir con el target solicitado. La respuesta guardada debe corresponder al mismo recurso, tenant, estado y versión.
+
+Evidencia ausente, duplicada o incoherente devuelve el mismo 409 de conflicto idempotente. Con evidencia consistente, un reader estrecho obtiene el rol activo y la asignación DRIVER exacta vigentes, y `IOrderTransitionAuthorizer` evalúa la arista histórica original. `VIEWER`, `PLATFORM_ADMIN` sin MFA y `DRIVER` sin asignación activa exacta reciben 403; otro `DISPATCHER`, un admin con MFA o el DRIVER exacto pueden recibir el cuerpo 200 almacenado byte por byte.
+
+Esta rama de replay no bloquea ni actualiza la orden, no reejecuta guards, no incrementa versión y no inserta evento, outbox o auditoría; tampoco modifica la fila idempotente completada.
 
 ## Evento, outbox, auditoría y privacidad
 

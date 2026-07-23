@@ -91,6 +91,8 @@ public static class DependencyInjection
         services.TryAddSingleton<IOrderTransitionAuthorizer, OrderTransitionAuthorizer>();
         services.TryAddSingleton<OrderTransitionGuardRegistry>();
         services.TryAddScoped<IOrderTransitionAuthorizationReader, PostgreSqlOrderTransitionAuthorizationReader>();
+        services.TryAddScoped<IOrderTransitionReplayAuthorizationReader,
+            PostgreSqlOrderTransitionReplayAuthorizationReader>();
         services.TryAddScoped<IOrderQuoteAcceptanceGuardReader, PostgreSqlOrderQuoteAcceptanceGuardReader>();
         services.TryAddScoped<IOrderAssignmentGuardReader, PostgreSqlOrderAssignmentGuardReader>();
         services.TryAddScoped<IOrderProofGuardReader, PostgreSqlOrderProofGuardReader>();
