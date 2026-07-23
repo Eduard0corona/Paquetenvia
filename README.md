@@ -234,6 +234,15 @@ idempotencia, expiracion, RLS y adopcion EF no destructiva. Consulta
 para arquitectura, configuracion, pruebas, riesgos y rollback. El provider queda
 `Disabled` por defecto y no habilita precios ni cobertura reales.
 
+## ORD-001
+
+ORD-001 agrega creación atómica de órdenes desde quotes single-use, consulta
+tenant-scoped, idempotencia, public IDs criptográficos, evidencia legal
+append-only, evento, outbox, auditoría y adopción EF no destructiva. Consulta
+[`docs/development/ord-001-create-query-orders.md`](docs/development/ord-001-create-query-orders.md)
+para arquitectura, lock order, configuración, pruebas, riesgos y rollback. El
+provider queda `Disabled` por defecto y no habilita transiciones ni Worker.
+
 ## Fuera de alcance
 
 Fuera del soporte tecnico de Identity/Organizations, Locations y la cotizacion

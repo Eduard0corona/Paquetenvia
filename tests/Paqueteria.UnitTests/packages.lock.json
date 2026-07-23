@@ -185,7 +185,8 @@
         "type": "Project",
         "dependencies": {
           "Orders.Domain": "[1.0.0, )",
-          "Paqueteria.Application": "[1.0.0, )"
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Contracts": "[1.0.0, )"
         }
       },
       "orders.domain": {
@@ -197,8 +198,11 @@
       "orders.infrastructure": {
         "type": "Project",
         "dependencies": {
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
           "Orders.Application": "[1.0.0, )",
           "Orders.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Contracts": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },

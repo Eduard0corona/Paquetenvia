@@ -26,7 +26,7 @@ internal sealed class SyntheticOrderScenario(PostgreSqlContractFixture fixture) 
             INSERT INTO identity.users(id,identity_subject)
               VALUES (@user_id,@subject);
             INSERT INTO locations.cities(id,state_code,name,timezone)
-              VALUES (@city,'SI','Synthetic City','America/Mazatlan');
+              VALUES (@city,'SI',@city_name,'America/Mazatlan');
             INSERT INTO locations.locations(id,owner_org_id,city_id,point,address_ciphertext,address_summary,pii_key_version) VALUES
               (@origin,@org,@city,public.ST_SetSRID(public.ST_MakePoint(-107.40,24.80),4326),decode('00','hex'),'Synthetic origin','test-v1'),
               (@destination,@org,@city,public.ST_SetSRID(public.ST_MakePoint(-107.39,24.81),4326),decode('01','hex'),'Synthetic destination','test-v1');
@@ -55,6 +55,7 @@ internal sealed class SyntheticOrderScenario(PostgreSqlContractFixture fixture) 
 
         await ExecuteAdminAsync(sql,
             P("org", OrganizationId), P("user_id", UserId), P("subject", $"oidc|arc002|{UserId:N}"), P("city", CityId),
+            P("city_name", $"Synthetic City {CityId:N}"),
             P("origin", OriginLocationId), P("destination", DestinationLocationId), P("quote", QuoteId), P("order", OrderId),
             P("public_id", PublicOrderId), P("subtotal", SubtotalCents), P("discount", DiscountCents), P("tax", TaxCents),
             P("total", TotalCents), P("minimum", MinimumTotalCents), P("input_hash", new byte[32]),
@@ -81,6 +82,7 @@ internal sealed class SyntheticOrderScenario(PostgreSqlContractFixture fixture) 
         await ExecuteAdminAsync("""
             DELETE FROM platform.outbox_events WHERE owner_org_id=@org;
             DELETE FROM platform.location_outbox_events WHERE owner_org_id=@org;
+            DELETE FROM platform.idempotency_keys WHERE owner_org_id=@org;
             DELETE FROM orders.public_tracking_tokens WHERE owner_org_id=@org;
             DELETE FROM custody.proof_upload_sessions WHERE owner_org_id=@org;
             DELETE FROM orders.package_items WHERE owner_org_id=@org;

@@ -33,7 +33,11 @@ internal static class SolutionCatalog
         typeof(Orders.Domain.AssemblyReference).Assembly,
         typeof(Orders.Application.AssemblyReference).Assembly,
         typeof(Orders.Infrastructure.AssemblyReference).Assembly,
-        typeof(Orders.Endpoints.AssemblyReference).Assembly);
+        typeof(Orders.Endpoints.AssemblyReference).Assembly,
+        additionalApplicationReferences: ["Paqueteria.Contracts"],
+        additionalInfrastructureReferences: ["Paqueteria.Application", "Paqueteria.Contracts"],
+        additionalEndpointReferences: ["Organizations.Application", "Organizations.Endpoints", "Paqueteria.Application"],
+        allowedCrossModuleDependencies: ["Organizations"]);
 
     internal static readonly ModuleDefinition Pricing = Module(
         "Pricing",
@@ -133,6 +137,7 @@ internal static class SolutionCatalog
         System.Reflection.Assembly infrastructureAssembly,
         System.Reflection.Assembly endpointsAssembly,
         bool usesSharedDomainContracts = false,
+        string[]? additionalApplicationReferences = null,
         string[]? additionalInfrastructureReferences = null,
         string[]? additionalEndpointReferences = null,
         string[]? allowedCrossModuleDependencies = null)
@@ -150,9 +155,10 @@ internal static class SolutionCatalog
             applicationAssembly,
             $"src/Modules/{name}/{name}.Application/{name}.Application.csproj",
             name,
-            usesSharedDomainContracts
-                ? ["Paqueteria.Application", "Paqueteria.Domain", $"{name}.Domain"]
-                : ["Paqueteria.Application", $"{name}.Domain"]);
+            (usesSharedDomainContracts
+                ? new[] { "Paqueteria.Application", "Paqueteria.Domain", $"{name}.Domain" }
+                : new[] { "Paqueteria.Application", $"{name}.Domain" })
+            .Concat(additionalApplicationReferences ?? []).ToArray());
         var infrastructure = Component(
             $"{name}.Infrastructure",
             ProjectRole.ModuleInfrastructure,

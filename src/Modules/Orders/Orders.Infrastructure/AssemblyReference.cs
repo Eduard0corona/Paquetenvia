@@ -4,8 +4,8 @@ public static class AssemblyReference
 {
     internal static Type[] Dependencies =>
     [
-        typeof(Orders.Application.AssemblyReference),
-        typeof(Orders.Domain.AssemblyReference),
+        typeof(global::Orders.Application.AssemblyReference),
+        typeof(global::Orders.Domain.AssemblyReference),
         typeof(Paqueteria.Infrastructure.AssemblyReference),
     ];
 }
