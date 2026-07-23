@@ -225,12 +225,22 @@ para endpoints, convencion `ST_Covers`, configuracion, gates, pruebas y
 rollback. Los mocks solo funcionan en Development/Testing y no representan
 proveedores productivos.
 
+## PRC-001
+
+PRC-001 agrega el motor basico de cotizacion sintetica: evaluacion determinista
+de tarifas, ubicaciones protegidas de GEO-001, snapshots redactados,
+idempotencia, expiracion, RLS y adopcion EF no destructiva. Consulta
+[`docs/development/prc-001-basic-quote-engine.md`](docs/development/prc-001-basic-quote-engine.md)
+para arquitectura, configuracion, pruebas, riesgos y rollback. El provider queda
+`Disabled` por defecto y no habilita precios ni cobertura reales.
+
 ## Fuera de alcance
 
-Fuera del soporte tecnico de Identity/Organizations y Locations, no se
+Fuera del soporte tecnico de Identity/Organizations, Locations y la cotizacion
+sintetica de PRC-001, no se
 implementan otros casos de uso comerciales, proveedor OIDC real,
 login, endpoints de negocio, endpoint público de tracking, Worker de outbox,
-hubs SignalR productivos, órdenes, pricing, despacho,
+hubs SignalR productivos, órdenes, pricing avanzado, despacho,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
 ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
 reglas de arquitectura; FND-002 aporta solamente dependencias locales.
