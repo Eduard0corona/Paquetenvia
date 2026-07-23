@@ -243,13 +243,22 @@ append-only, evento, outbox, auditoría y adopción EF no destructiva. Consulta
 para arquitectura, lock order, configuración, pruebas, riesgos y rollback. El
 provider queda `Disabled` por defecto y no habilita transiciones ni Worker.
 
+## ORD-002
+
+ORD-002 agrega la máquina de estados autenticada e idempotente de 17 estados y
+30 aristas, versión optimista, autorización por rol/MFA/asignación, guards
+tenant-scoped, evento, outbox y auditoría atómicos. Consulta
+[`docs/development/ord-002-order-state-machine.md`](docs/development/ord-002-order-state-machine.md)
+para la matriz, lock order, redacción, pruebas, riesgos y rollback. El provider
+permanece `Disabled` por defecto y no habilita integraciones futuras ni Worker.
+
 ## Fuera de alcance
 
 Fuera del soporte tecnico de Identity/Organizations, Locations y la cotizacion
 sintetica de PRC-001, no se
 implementan otros casos de uso comerciales, proveedor OIDC real,
-login, endpoints de negocio, endpoint público de tracking, Worker de outbox,
-hubs SignalR productivos, órdenes, pricing avanzado, despacho,
+login, endpoint público de tracking, Worker de outbox,
+hubs SignalR productivos, pricing avanzado, despacho,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
 ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
 reglas de arquitectura; FND-002 aporta solamente dependencias locales.
