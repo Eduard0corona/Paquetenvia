@@ -8,5 +8,6 @@
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Locations\Locations.Infrastructure\Locations.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
   </ItemGroup>
 </Project>
