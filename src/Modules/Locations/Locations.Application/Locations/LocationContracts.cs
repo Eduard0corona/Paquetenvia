@@ -87,6 +87,50 @@ public interface ILocationService
     Task<CreateLocationResult> CreateAsync(CreateLocationCommand command, CancellationToken cancellationToken);
 }
 
+public enum QuoteLocationRole
+{
+    Origin,
+    Destination,
+}
+
+public enum QuoteLocationResolutionStatus
+{
+    Resolved,
+    OutsideCoverage,
+    ExcludedZone,
+    AmbiguousCoverage,
+}
+
+public sealed record ResolveQuoteLocationCommand(
+    Guid ActorId,
+    Guid OrganizationId,
+    string IdempotencySubkey,
+    QuoteLocationRole Role,
+    string AddressText,
+    string ContactName,
+    string Phone,
+    string? References,
+    double Lat,
+    double Lng,
+    string? RequestId);
+
+public sealed record QuoteLocationResult(
+    Guid LocationId,
+    Guid CityId,
+    Guid ServiceAreaId,
+    Guid? OperatingZoneId);
+
+public sealed record ResolveQuoteLocationResult(
+    QuoteLocationResolutionStatus Status,
+    QuoteLocationResult? Location);
+
+public interface IQuoteLocationResolver
+{
+    Task<ResolveQuoteLocationResult> ResolveAsync(
+        ResolveQuoteLocationCommand command,
+        CancellationToken cancellationToken);
+}
+
 public sealed class LocationServiceUnavailableException(string message, Exception? innerException = null)
     : Exception(message, innerException);
 

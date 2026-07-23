@@ -7,5 +7,6 @@ public static class AssemblyReference
         typeof(Pricing.Application.AssemblyReference),
         typeof(Pricing.Domain.AssemblyReference),
         typeof(Paqueteria.Infrastructure.AssemblyReference),
+        typeof(Locations.Application.AssemblyReference),
     ];
 }

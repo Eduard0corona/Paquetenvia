@@ -1,4 +1,4 @@
-namespace Locations.Application.Locations;
+namespace Paqueteria.Application.Idempotency;
 
 public static class IdempotencyKeyPolicy
 {

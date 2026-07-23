@@ -4,5 +4,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Pricing.Application/Pricing.Application.csproj" />
+    <ProjectReference Include="../../Organizations/Organizations.Application/Organizations.Application.csproj" />
+    <ProjectReference Include="../../Organizations/Organizations.Endpoints/Organizations.Endpoints.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
   </ItemGroup>
 </Project>

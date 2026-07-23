@@ -12,7 +12,8 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
         RequestTenantContext tenantContext,
         IPlatformAdminTenantActivationAudit audit)
     {
-        if (httpContext.GetEndpoint()?.Metadata.GetMetadata<RequiresTenantContextMetadata>() is null)
+        var tenantMetadata = httpContext.GetEndpoint()?.Metadata.GetMetadata<RequiresTenantContextMetadata>();
+        if (tenantMetadata is null)
         {
             await next(httpContext);
             return;
@@ -26,7 +27,7 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
 
         if (!TryReadOrganizationId(httpContext.Request, out var organizationId))
         {
-            await WriteProblemAsync(httpContext, StatusCodes.Status400BadRequest, "Invalid organization context.");
+            await WriteProblemAsync(httpContext, tenantMetadata.InvalidContextStatusCode, "Invalid organization context.");
             return;
         }
 
