@@ -37,12 +37,14 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
             Assert.Contains("Identity: PENDING", plan.Output, StringComparison.Ordinal);
             Assert.Contains("Organizations: PENDING", plan.Output, StringComparison.Ordinal);
             Assert.Contains("Locations: PENDING", plan.Output, StringComparison.Ordinal);
+            Assert.Contains("Pricing: PENDING", plan.Output, StringComparison.Ordinal);
 
             var apply = await RunMigratorAsync("apply", environmentName, connectionString, "--confirm-initial-baseline");
             Assert.Equal(0, apply.ExitCode);
             Assert.Contains("Identity: APPLIED", apply.Output, StringComparison.Ordinal);
             Assert.Contains("Organizations: APPLIED", apply.Output, StringComparison.Ordinal);
             Assert.Contains("Locations: APPLIED", apply.Output, StringComparison.Ordinal);
+            Assert.Contains("Pricing: APPLIED", apply.Output, StringComparison.Ordinal);
 
             var reapply = await RunMigratorAsync("apply", environmentName, connectionString, "--confirm-initial-baseline");
             Assert.True(reapply.ExitCode == 0, reapply.Output);
@@ -80,7 +82,7 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='platform'
-              AND c.relname IN ('__ef_migrations_history_identity','__ef_migrations_history_organizations','__ef_migrations_history_locations')
+              AND c.relname IN ('__ef_migrations_history_identity','__ef_migrations_history_organizations','__ef_migrations_history_locations','__ef_migrations_history_pricing')
             ORDER BY c.relname;
             """);
         await using var reader = await command.ExecuteReaderAsync();
@@ -90,7 +92,7 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
             histories.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(3, histories.Count);
+        Assert.Equal(4, histories.Count);
         Assert.All(histories, history => Assert.Equal("paqueteria_migrator", history.Owner));
 
         await using var runtime = await fixture.AppDataSource.OpenConnectionAsync();

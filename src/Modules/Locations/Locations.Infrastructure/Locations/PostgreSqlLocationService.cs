@@ -11,6 +11,7 @@ using NetTopologySuite.Geometries;
 using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
 using DomainLocation = Locations.Domain.Location;
@@ -22,7 +23,7 @@ public sealed class PostgreSqlLocationService(
     IGeocodingProvider geocodingProvider,
     ILocationPiiProtector piiProtector,
     IAppendOnlyAuditWriter auditWriter,
-    IClock clock) : ILocationService, IServiceabilityEvaluator
+    IClock clock) : ILocationService, IServiceabilityEvaluator, IQuoteLocationResolver
 {
     private static readonly GeometryFactory GeometryFactory = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
 
@@ -132,6 +133,155 @@ public sealed class PostgreSqlLocationService(
                 point,
                 token),
             cancellationToken);
+    }
+
+    public async Task<ResolveQuoteLocationResult> ResolveAsync(
+        ResolveQuoteLocationCommand command,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateQuoteLocation(command);
+
+        var safeSummary = command.Role == QuoteLocationRole.Origin
+            ? "Synthetic quote origin"
+            : "Synthetic quote destination";
+        GeocodingResult geocoded;
+        try
+        {
+            geocoded = await geocodingProvider.GeocodeAsync(
+                new GeocodingRequest(command.AddressText, safeSummary, command.Lat, command.Lng),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LocationServiceUnavailableException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new LocationServiceUnavailableException("Quote location resolution failed safely.", exception);
+        }
+
+        var point = GeometryFactory.CreatePoint(new Coordinate(geocoded.Longitude, geocoded.Latitude));
+        var locationId = CreateIdempotentId(command.OrganizationId, command.IdempotencySubkey);
+
+        try
+        {
+            return await transactionContext.ExecuteAsync(
+                new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
+                async (dbContext, token) =>
+                {
+                    await dbContext.Database.ExecuteSqlInterpolatedAsync(
+                        $"SELECT pg_advisory_xact_lock(hashtextextended({command.OrganizationId:D} || ':' || {command.IdempotencySubkey}, 0));",
+                        token);
+
+                    var existing = await dbContext.Locations.AsNoTracking()
+                        .SingleOrDefaultAsync(location => location.Id == locationId, token);
+                    if (existing is not null)
+                    {
+                        return new ResolveQuoteLocationResult(
+                            QuoteLocationResolutionStatus.Resolved,
+                            new QuoteLocationResult(existing.Id, existing.CityId, existing.ServiceAreaId!.Value, existing.OperatingZoneId));
+                    }
+
+                    var areas = await dbContext.ServiceAreas.AsNoTracking()
+                        .Where(area => area.Status == GeographicStatus.Active && area.Polygon.Covers(point))
+                        .OrderBy(area => area.Id)
+                        .Select(area => new { area.Id, area.CityId })
+                        .ToArrayAsync(token);
+                    if (areas.Length == 0)
+                    {
+                        return new ResolveQuoteLocationResult(QuoteLocationResolutionStatus.OutsideCoverage, null);
+                    }
+
+                    if (areas.Length != 1 || !await dbContext.Cities.AsNoTracking()
+                            .AnyAsync(city => city.Id == areas[0].CityId && city.Status == GeographicStatus.Active, token))
+                    {
+                        return new ResolveQuoteLocationResult(QuoteLocationResolutionStatus.AmbiguousCoverage, null);
+                    }
+
+                    var area = areas[0];
+                    var zones = await dbContext.OperatingZones.AsNoTracking()
+                        .Where(zone => zone.ServiceAreaId == area.Id &&
+                            zone.Status == GeographicStatus.Active &&
+                            zone.Polygon.Covers(point))
+                        .OrderBy(zone => zone.Id)
+                        .Select(zone => new { zone.Id, zone.ZoneType })
+                        .ToArrayAsync(token);
+                    if (zones.Any(zone => zone.ZoneType == OperatingZoneType.Excluded))
+                    {
+                        return new ResolveQuoteLocationResult(QuoteLocationResolutionStatus.ExcludedZone, null);
+                    }
+
+                    var applicableZones = zones.Where(zone => zone.ZoneType != OperatingZoneType.Excluded).ToArray();
+                    if (applicableZones.Length > 1)
+                    {
+                        return new ResolveQuoteLocationResult(QuoteLocationResolutionStatus.AmbiguousCoverage, null);
+                    }
+
+                    const string keyVersion = "PRC-001-SYNTHETIC-V1";
+                    var protectedAddress = string.IsNullOrWhiteSpace(command.References)
+                        ? command.AddressText
+                        : $"{command.AddressText}\nReferences: {command.References}";
+                    var entity = new DomainLocation(
+                        locationId,
+                        command.OrganizationId,
+                        area.CityId,
+                        area.Id,
+                        applicableZones.FirstOrDefault()?.Id,
+                        point,
+                        piiProtector.Protect(protectedAddress, keyVersion),
+                        safeSummary,
+                        piiProtector.Protect(command.ContactName, keyVersion),
+                        piiProtector.Protect(command.Phone, keyVersion),
+                        keyVersion,
+                        clock.UtcNow);
+
+                    dbContext.Locations.Add(entity);
+                    await dbContext.SaveChangesAsync(token);
+
+                    var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
+                    var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
+                    await auditWriter.WriteAsync(
+                        connection,
+                        transaction,
+                        new AuditEntry(
+                            Guid.NewGuid(),
+                            command.OrganizationId,
+                            command.ActorId,
+                            "LOCATION_CREATED",
+                            "LOCATION",
+                            locationId,
+                            command.RequestId,
+                            RedactedAuditPayload.Empty,
+                            clock.UtcNow),
+                        token);
+
+                    return new ResolveQuoteLocationResult(
+                        QuoteLocationResolutionStatus.Resolved,
+                        new QuoteLocationResult(entity.Id, entity.CityId, entity.ServiceAreaId!.Value, entity.OperatingZoneId));
+                },
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LocationPiiProtectionUnavailableException)
+        {
+            throw;
+        }
+        catch (LocationServiceUnavailableException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new LocationServiceUnavailableException("Quote location resolution failed safely.", exception);
+        }
     }
 
     public async Task<CreateLocationResult> CreateAsync(
@@ -434,6 +584,23 @@ public sealed class PostgreSqlLocationService(
             double.IsInfinity(latitude) || double.IsInfinity(longitude))
         {
             throw new ArgumentException("The serviceability request is invalid.");
+        }
+    }
+
+    private static void ValidateQuoteLocation(ResolveQuoteLocationCommand command)
+    {
+        if (command.ActorId == Guid.Empty || command.OrganizationId == Guid.Empty ||
+            !IdempotencyKeyPolicy.IsValid(command.IdempotencySubkey) ||
+            !Enum.IsDefined(command.Role) ||
+            string.IsNullOrWhiteSpace(command.AddressText) || command.AddressText.Trim().Length < 8 ||
+            string.IsNullOrWhiteSpace(command.ContactName) ||
+            string.IsNullOrWhiteSpace(command.Phone) ||
+            command.References?.Length > 500 ||
+            command.Lat is < -90 or > 90 || command.Lng is < -180 or > 180 ||
+            double.IsNaN(command.Lat) || double.IsNaN(command.Lng) ||
+            double.IsInfinity(command.Lat) || double.IsInfinity(command.Lng))
+        {
+            throw new ArgumentException("The quote location command is invalid.", nameof(command));
         }
     }
 }

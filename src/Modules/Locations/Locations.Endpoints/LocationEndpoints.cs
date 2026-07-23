@@ -4,6 +4,7 @@ using Locations.Application.Locations;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
 namespace Locations.Endpoints;

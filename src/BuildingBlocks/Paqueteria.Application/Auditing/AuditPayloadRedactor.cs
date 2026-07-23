@@ -188,13 +188,13 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         value.Contains("Password=", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("Connection String=", StringComparison.OrdinalIgnoreCase);
 
-    [GeneratedRegex(@"^[^\s@]+@[^\s@]+\.[^\s@]+$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+", RegexOptions.CultureInvariant)]
     private static partial Regex EmailPattern();
 
-    [GeneratedRegex(@"^\+?[0-9][0-9 ()-]{6,}[0-9]$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])", RegexOptions.CultureInvariant)]
     private static partial Regex PhonePattern();
 
-    [GeneratedRegex(@"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", RegexOptions.CultureInvariant)]
     private static partial Regex JwtPattern();
 }
 

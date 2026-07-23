@@ -106,6 +106,12 @@ public static class DependencyInjection
                 LocationsProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlLocationService>(),
                 _ => serviceProvider.GetRequiredService<DisabledLocationService>(),
             });
+        services.AddScoped<IQuoteLocationResolver>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.Provider switch
+            {
+                LocationsProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlLocationService>(),
+                _ => serviceProvider.GetRequiredService<DisabledLocationService>(),
+            });
 
         return services;
     }

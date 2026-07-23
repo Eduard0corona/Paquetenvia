@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Organizations.Infrastructure.Persistence;
 using Paqueteria.Infrastructure.Tenancy;
 using Locations.Infrastructure.Persistence;
+using Pricing.Infrastructure.Persistence;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -255,6 +256,22 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             locationsOptions,
             new TenantDatabaseExecutionState());
         await locations.Database.MigrateAsync().ConfigureAwait(false);
+
+        await using var pricingConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await pricingConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", pricingConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var pricingOptions = new DbContextOptionsBuilder<PricingDbContext>()
+            .UseNpgsql(pricingConnection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(PricingDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_pricing", "platform");
+            }).Options;
+        await using var pricing = new PricingDbContext(pricingOptions, new TenantDatabaseExecutionState());
+        await pricing.Database.MigrateAsync().ConfigureAwait(false);
     }
 
     private async Task ExecuteAdminScriptAsync(string sql)

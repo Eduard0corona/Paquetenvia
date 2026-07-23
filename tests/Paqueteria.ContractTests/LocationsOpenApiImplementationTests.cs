@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json.Serialization;
 using Locations.Application.Locations;
 using Locations.Endpoints;
+using Paqueteria.Application.Idempotency;
 using Paqueteria.ContractTests.Support;
 
 namespace Paqueteria.ContractTests;

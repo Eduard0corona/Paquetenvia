@@ -268,7 +268,8 @@ public sealed class DatabaseBaselineAssertions
                     'cities',
                     '__ef_migrations_history_identity',
                     '__ef_migrations_history_organizations',
-                    '__ef_migrations_history_locations'
+                    '__ef_migrations_history_locations',
+                    '__ef_migrations_history_pricing'
                   )
                   AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
                 """,

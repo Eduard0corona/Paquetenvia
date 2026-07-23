@@ -40,7 +40,10 @@ internal static class SolutionCatalog
         typeof(Pricing.Domain.AssemblyReference).Assembly,
         typeof(Pricing.Application.AssemblyReference).Assembly,
         typeof(Pricing.Infrastructure.AssemblyReference).Assembly,
-        typeof(Pricing.Endpoints.AssemblyReference).Assembly);
+        typeof(Pricing.Endpoints.AssemblyReference).Assembly,
+        additionalInfrastructureReferences: ["Locations.Application", "Paqueteria.Application"],
+        additionalEndpointReferences: ["Organizations.Application", "Organizations.Endpoints", "Paqueteria.Application"],
+        allowedCrossModuleDependencies: ["Locations", "Organizations"]);
 
     internal static readonly ModuleDefinition Identity = Module(
         "Identity",
@@ -130,6 +133,7 @@ internal static class SolutionCatalog
         System.Reflection.Assembly infrastructureAssembly,
         System.Reflection.Assembly endpointsAssembly,
         bool usesSharedDomainContracts = false,
+        string[]? additionalInfrastructureReferences = null,
         string[]? additionalEndpointReferences = null,
         string[]? allowedCrossModuleDependencies = null)
     {
@@ -155,9 +159,10 @@ internal static class SolutionCatalog
             infrastructureAssembly,
             $"src/Modules/{name}/{name}.Infrastructure/{name}.Infrastructure.csproj",
             name,
-            usesSharedDomainContracts
-                ? ["Paqueteria.Infrastructure", "Paqueteria.Application", "Paqueteria.Domain", $"{name}.Application", $"{name}.Domain"]
-                : ["Paqueteria.Infrastructure", $"{name}.Application", $"{name}.Domain"]);
+            (usesSharedDomainContracts
+                ? new[] { "Paqueteria.Infrastructure", "Paqueteria.Application", "Paqueteria.Domain", $"{name}.Application", $"{name}.Domain" }
+                : new[] { "Paqueteria.Infrastructure", $"{name}.Application", $"{name}.Domain" })
+                .Concat(additionalInfrastructureReferences ?? []).ToArray());
         var endpoints = Component(
             $"{name}.Endpoints",
             ProjectRole.ModuleEndpoints,
