@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Orders.Application.Orders;
 using Organizations.Application.Session;
@@ -41,6 +42,17 @@ public static class OrderEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
+
+        endpoints.MapPost("/api/v1/orders/{orderId:guid}/transitions", TransitionAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("transitionOrder")
+            .WithTags("Orders")
+            .Accepts<TransitionOrderRequest>("application/json")
+            .Produces<OrderResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         return endpoints;
     }
@@ -168,6 +180,69 @@ public static class OrderEndpoints
         }
     }
 
+    private static async Task<IResult> TransitionAsync(
+        Guid orderId,
+        HttpContext httpContext,
+        TransitionOrderRequest request,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        IOrderTransitionService service,
+        CancellationToken cancellationToken)
+    {
+        if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
+            orderId == Guid.Empty ||
+            request is null ||
+            string.IsNullOrWhiteSpace(request.Reason) ||
+            request.Reason.Length > OrderTransitionInputPolicy.MaximumReasonLength ||
+            request.ExpectedVersion < 1 ||
+            !OrderTransitionInputPolicy.IsValidMetadataForTarget(
+                request.TargetStatus,
+                request.Metadata?.GetRawText(),
+                OrderTransitionInputPolicy.DefaultMaximumMetadataUtf8Bytes))
+        {
+            return Conflict();
+        }
+
+        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
+        {
+            return Forbidden();
+        }
+
+        try
+        {
+            var result = await service.TransitionAsync(
+                new TransitionOrderCommand(
+                    actorId,
+                    tenantContext.OrganizationId,
+                    idempotencyKey,
+                    orderId,
+                    request.TargetStatus,
+                    request.Reason,
+                    request.ExpectedVersion,
+                    request.Metadata?.GetRawText(),
+                    session.MfaSatisfied,
+                    httpContext.TraceIdentifier),
+                cancellationToken);
+            return Results.Ok(ToResponse(result));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OrderTransitionForbiddenException)
+        {
+            return Forbidden();
+        }
+        catch (OrderTransitionConflictException)
+        {
+            return Conflict();
+        }
+        catch (OrderTransitionInfrastructureException)
+        {
+            return Conflict();
+        }
+    }
+
     private static bool IsValid(CreateOrderRequest request) =>
         request is not null &&
         request.QuoteId != Guid.Empty &&
@@ -260,6 +335,12 @@ public sealed record OrderAcceptanceRequest(
     [property: JsonPropertyName("privacy_version")] string PrivacyVersion,
     [property: JsonPropertyName("accepted_at")] DateTimeOffset AcceptedAt,
     [property: JsonPropertyName("acceptance_channel")] string AcceptanceChannel);
+
+public sealed record TransitionOrderRequest(
+    [property: JsonPropertyName("target_status")] string? TargetStatus,
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("expected_version")] int ExpectedVersion,
+    [property: JsonPropertyName("metadata")] JsonElement? Metadata);
 
 public sealed record MoneyResponse(
     [property: JsonPropertyName("currency")] string Currency,

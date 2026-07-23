@@ -149,7 +149,7 @@ public sealed class OrdersDbContext(
 
     private static OrderStatus ParseOrderStatus(string value) => value switch
     {
-        "DRAFT" => OrderStatus.Draft,
-        _ => throw new InvalidOperationException("ORD-001 can only materialize DRAFT orders."),
+        _ when OrderContractValues.TryParseOrderStatus(value, out var status) => status,
+        _ => throw new InvalidOperationException("Unknown order status."),
     };
 }
