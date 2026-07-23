@@ -83,8 +83,8 @@ dotnet new paquetenvia-module --name Example --output .\src\Modules\Example
 Consulta la [guía de arquitectura modular](docs/development/module-architecture.md)
 para agregarlo a la solución, registrarlo en el catálogo y validar sus límites.
 
-La API expone únicamente `GET /health/live`. OpenAPI del framework se publica
-solo en Development. SEC-001/SEC-002 agregan probes internos exclusivamente
+La API expone `GET /health/live` y los endpoints de Locations incorporados por
+GEO-001. OpenAPI del framework se publica solo en Development. SEC-001/SEC-002 agregan probes internos exclusivamente
 bajo el environment `Testing`; no agregan endpoints públicos de login,
 identidad o tracking. El
 Worker inicia y espera cancelación sin conectarse a servicios externos.
@@ -215,10 +215,20 @@ para el contrato, los grants de app/Worker, atomicidad, retry, pruebas y
 rollback. No se agregaron migraciones ni se conecto el proceso Worker a
 PostgreSQL.
 
+## GEO-001
+
+GEO-001 agrega el modulo `Locations`, catalogos tenant-scoped, creacion
+idempotente de ubicaciones, geocodificacion manual/mock, proteccion PII
+fail-closed, adopcion EF no destructiva y cobertura real con PostGIS. Consulta
+[`docs/development/geo-001-locations-zones-postgis.md`](docs/development/geo-001-locations-zones-postgis.md)
+para endpoints, convencion `ST_Covers`, configuracion, gates, pruebas y
+rollback. Los mocks solo funcionan en Development/Testing y no representan
+proveedores productivos.
+
 ## Fuera de alcance
 
-Fuera del soporte tecnico de Identity/Organizations agregado por TEN-001, no se
-implementan casos de uso comerciales, proveedor OIDC real,
+Fuera del soporte tecnico de Identity/Organizations y Locations, no se
+implementan otros casos de uso comerciales, proveedor OIDC real,
 login, endpoints de negocio, endpoint público de tracking, Worker de outbox,
 hubs SignalR productivos, órdenes, pricing, despacho,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo

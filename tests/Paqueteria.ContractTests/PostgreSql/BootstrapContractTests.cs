@@ -40,7 +40,7 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             new NpgsqlParameter<string[]>("schemas", ExpectedSchemas));
         Assert.Equal(ExpectedSchemas.Order(StringComparer.Ordinal), schemas);
 
-        Assert.Equal(38, await ScalarAsync<int>("""
+        Assert.Equal(39, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace

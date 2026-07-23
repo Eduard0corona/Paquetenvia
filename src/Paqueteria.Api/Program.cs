@@ -12,6 +12,8 @@ using Organizations.Endpoints.Tenancy;
 using Organizations.Infrastructure;
 using Organizations.Endpoints.Testing;
 using Paqueteria.Api.Tenancy;
+using Locations.Endpoints;
+using Locations.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,6 +27,8 @@ builder.Services.AddOrdersInfrastructure(builder.Configuration);
 builder.Services.AddOrdersEndpoints();
 builder.Services.AddOrganizationsInfrastructure(builder.Configuration);
 builder.Services.AddOrganizationsEndpoints();
+builder.Services.AddLocationsInfrastructure(builder.Configuration, builder.Environment);
+builder.Services.AddLocationsEndpoints();
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
@@ -65,6 +69,7 @@ app.MapIdentityTestProbes(app.Environment);
 app.MapPublicTrackingTestProbe(app.Environment);
 app.MapOrganizationEndpoints();
 app.MapOrganizationTestProbes(app.Environment);
+app.MapLocationEndpoints();
 
 app.Run();
 

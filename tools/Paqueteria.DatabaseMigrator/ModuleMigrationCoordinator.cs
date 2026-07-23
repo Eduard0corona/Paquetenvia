@@ -2,6 +2,8 @@ using Identity.Infrastructure.Persistence;
 using Identity.Infrastructure.Persistence.Migrations;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Locations.Infrastructure.Persistence;
+using Locations.Infrastructure.Persistence.Migrations;
 using Organizations.Infrastructure.Persistence;
 using Organizations.Infrastructure.Persistence.Migrations;
 using Paqueteria.Infrastructure.Database.Baseline;
@@ -21,6 +23,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Identity/Identity.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalIdentityBaseline.cs"),
         ("Organizations", "__ef_migrations_history_organizations", AdoptCanonicalOrganizationsBaseline.MigrationId,
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrganizationsBaseline.cs"),
+        ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
+            "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
     ];
 
     public static IReadOnlyList<ModuleMigrationState> VerifySources()
@@ -87,6 +91,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "Organizations").Status == "PENDING")
         {
             await MigrateOrganizationsAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "Locations").Status == "PENDING")
+        {
+            await MigrateLocationsAsync(connectionString, cancellationToken);
         }
         await AssertAsync(connectionString, cancellationToken);
     }
@@ -182,6 +190,21 @@ internal sealed class ModuleMigrationCoordinator
             })
             .Options;
         await using var context = new OrganizationsDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    private static async Task MigrateLocationsAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<LocationsDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.UseNetTopologySuite();
+                postgres.MigrationsAssembly(typeof(LocationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_locations", "platform");
+            })
+            .Options;
+        await using var context = new LocationsDbContext(options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync(cancellationToken);
     }
 

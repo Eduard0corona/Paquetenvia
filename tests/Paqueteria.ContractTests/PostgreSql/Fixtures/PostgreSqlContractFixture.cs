@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Organizations.Infrastructure.Persistence;
 using Paqueteria.Infrastructure.Tenancy;
+using Locations.Infrastructure.Persistence;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -54,6 +55,7 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             ApplicationName = applicationName,
         };
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionStringBuilder.ConnectionString);
+        dataSourceBuilder.UseNetTopologySuite();
         if (loggerFactory is not null)
         {
             dataSourceBuilder.UseLoggerFactory(loggerFactory);
@@ -234,6 +236,25 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             organizationsOptions,
             new TenantDatabaseExecutionState());
         await organizations.Database.MigrateAsync().ConfigureAwait(false);
+
+        await using var locationsConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await locationsConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", locationsConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var locationsOptions = new DbContextOptionsBuilder<LocationsDbContext>()
+            .UseNpgsql(locationsConnection, postgres =>
+            {
+                postgres.UseNetTopologySuite();
+                postgres.MigrationsAssembly(typeof(LocationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_locations", "platform");
+            }).Options;
+        await using var locations = new LocationsDbContext(
+            locationsOptions,
+            new TenantDatabaseExecutionState());
+        await locations.Database.MigrateAsync().ConfigureAwait(false);
     }
 
     private async Task ExecuteAdminScriptAsync(string sql)

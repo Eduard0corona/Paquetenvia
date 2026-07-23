@@ -2,6 +2,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
@@ -14,6 +18,8 @@
     <ProjectReference Include="..\Modules\Organizations\Organizations.Endpoints\Organizations.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Organizations\Organizations.Application\Organizations.Application.csproj" />
+    <ProjectReference Include="..\Modules\Locations\Locations.Endpoints\Locations.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Locations\Locations.Infrastructure\Locations.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Pricing\Pricing.Endpoints\Pricing.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
   </ItemGroup>

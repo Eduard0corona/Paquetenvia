@@ -58,7 +58,17 @@ internal static class SolutionCatalog
         typeof(Organizations.Endpoints.AssemblyReference).Assembly,
         usesSharedDomainContracts: true);
 
-    internal static readonly IReadOnlyList<ModuleDefinition> Modules = [Identity, Orders, Pricing, Organizations];
+    internal static readonly ModuleDefinition Locations = Module(
+        "Locations",
+        typeof(Locations.Domain.AssemblyReference).Assembly,
+        typeof(Locations.Application.AssemblyReference).Assembly,
+        typeof(Locations.Infrastructure.AssemblyReference).Assembly,
+        typeof(Locations.Endpoints.AssemblyReference).Assembly,
+        usesSharedDomainContracts: true,
+        additionalEndpointReferences: ["Organizations.Application", "Organizations.Endpoints"],
+        allowedCrossModuleDependencies: ["Organizations"]);
+
+    internal static readonly IReadOnlyList<ModuleDefinition> Modules = [Identity, Orders, Pricing, Organizations, Locations];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -79,6 +89,8 @@ internal static class SolutionCatalog
             "Organizations.Endpoints",
             "Organizations.Infrastructure",
             "Organizations.Application",
+            "Locations.Endpoints",
+            "Locations.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -98,6 +110,7 @@ internal static class SolutionCatalog
         .. Pricing.Components,
         .. Identity.Components,
         .. Organizations.Components,
+        .. Locations.Components,
         Api,
         Worker,
     ];
@@ -116,7 +129,9 @@ internal static class SolutionCatalog
         System.Reflection.Assembly applicationAssembly,
         System.Reflection.Assembly infrastructureAssembly,
         System.Reflection.Assembly endpointsAssembly,
-        bool usesSharedDomainContracts = false)
+        bool usesSharedDomainContracts = false,
+        string[]? additionalEndpointReferences = null,
+        string[]? allowedCrossModuleDependencies = null)
     {
         var domain = Component(
             $"{name}.Domain",
@@ -149,9 +164,9 @@ internal static class SolutionCatalog
             endpointsAssembly,
             $"src/Modules/{name}/{name}.Endpoints/{name}.Endpoints.csproj",
             name,
-            usesSharedDomainContracts
-                ? ["Paqueteria.Application", "Paqueteria.Domain", $"{name}.Application"]
-                : [$"{name}.Application"]);
+            (usesSharedDomainContracts
+                ? new[] { "Paqueteria.Application", "Paqueteria.Domain", $"{name}.Application" }
+                : [$"{name}.Application"]).Concat(additionalEndpointReferences ?? []).ToArray());
 
         return new ModuleDefinition(
             name,
@@ -159,7 +174,7 @@ internal static class SolutionCatalog
             application,
             infrastructure,
             endpoints,
-            new HashSet<string>(StringComparer.Ordinal));
+            new HashSet<string>(allowedCrossModuleDependencies ?? [], StringComparer.Ordinal));
     }
 
     private static ProjectComponent Component(

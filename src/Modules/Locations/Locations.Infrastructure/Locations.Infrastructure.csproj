@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Locations.Application/Locations.Application.csproj" />
+    <ProjectReference Include="../Locations.Domain/Locations.Domain.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Domain/Paqueteria.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL.NetTopologySuite" />
+  </ItemGroup>
+</Project>
