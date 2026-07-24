@@ -28,6 +28,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
     IOptions<DispatchDriverEligibilityOptions> driverEligibilityOptions,
     IDispatchAssignmentAuthorizer authorizer,
     IDispatchAuthorizationReader authorizationReader,
+    IAssignmentIdempotencyAccess idempotencyAccess,
     IAssignmentVisibilityResolver visibilityResolver,
     IAssignmentReplayEvidenceReader replayEvidenceReader,
     OrderTransitionGuardRegistry guardRegistry,
@@ -75,8 +76,17 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                     var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
                     var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!
                         .GetDbTransaction();
-                    await AcquireIdempotencyLockAsync(connection, transaction, command, token);
-                    var idempotency = await FindIdempotencyAsync(connection, transaction, command, token);
+                    await EnsureAuthorizedAsync(connection, transaction, command, token);
+                    await idempotencyAccess.AcquireLockAsync(
+                        connection,
+                        transaction,
+                        command,
+                        token);
+                    var idempotency = await idempotencyAccess.FindAsync(
+                        connection,
+                        transaction,
+                        command,
+                        token);
                     if (idempotency is not null)
                     {
                         if (!CryptographicOperations.FixedTimeEquals(
@@ -89,7 +99,6 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         var completed = ReadCompletedResponse(idempotency);
                         if (completed is not null)
                         {
-                            await EnsureAuthorizedAsync(connection, transaction, command, token);
                             var evidence = await replayEvidenceReader.ReadAsync(
                                 connection,
                                 transaction,
@@ -117,7 +126,6 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         throw Conflict(AssignmentConflictCode.IdempotencyConflict);
                     }
 
-                    await EnsureAuthorizedAsync(connection, transaction, command, token);
                     await InsertIdempotencyReservationAsync(
                         connection,
                         transaction,
@@ -393,54 +401,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         return Conflict(AssignmentConflictCode.DriverIneligible);
     }
 
-    private async Task AcquireIdempotencyLockAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        CreateOwnDriverAssignmentCommand assignment,
-        CancellationToken cancellationToken)
-    {
-        await using var command = CreateCommand(
-            connection,
-            transaction,
-            "SELECT pg_advisory_xact_lock(hashtextextended(@lock_key,0));");
-        command.Parameters.Add(P(
-            "lock_key",
-            NpgsqlDbType.Text,
-            $"{assignment.OrganizationId:D}:{IdempotencyScope}:{assignment.IdempotencyKey}"));
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private async Task<IdempotencyRow?> FindIdempotencyAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        CreateOwnDriverAssignmentCommand assignment,
-        CancellationToken cancellationToken)
-    {
-        await using var command = CreateCommand(
-            connection,
-            transaction,
-            """
-            SELECT request_hash,response_status,response_body::text,resource_id
-            FROM platform.idempotency_keys
-            WHERE owner_org_id=@owner AND scope=@scope AND idempotency_key=@key
-            """);
-        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, assignment.OrganizationId));
-        command.Parameters.Add(P("scope", NpgsqlDbType.Text, IdempotencyScope));
-        command.Parameters.Add(P("key", NpgsqlDbType.Text, assignment.IdempotencyKey));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return null;
-        }
-
-        return new(
-            reader.GetFieldValue<byte[]>(0),
-            reader.IsDBNull(1) ? null : reader.GetInt32(1),
-            reader.IsDBNull(2) ? null : reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetGuid(3));
-    }
-
-    private static AssignmentResult? ReadCompletedResponse(IdempotencyRow row)
+    private static AssignmentResult? ReadCompletedResponse(AssignmentIdempotencyRecord row)
     {
         if (row.ResponseStatus is null && row.ResponseBody is null && row.ResourceId is null)
         {
@@ -864,11 +825,5 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             throw new AssignmentInfrastructureException(message);
         }
     }
-
-    private sealed record IdempotencyRow(
-        byte[] RequestHash,
-        int? ResponseStatus,
-        string? ResponseBody,
-        Guid? ResourceId);
 
 }

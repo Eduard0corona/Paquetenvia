@@ -47,6 +47,66 @@ public sealed class PostgreSqlDispatchAuthorizationReader : IDispatchAuthorizati
     }
 }
 
+public sealed class PostgreSqlAssignmentIdempotencyAccess : IAssignmentIdempotencyAccess
+{
+    public async Task AcquireLockAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        CreateOwnDriverAssignmentCommand command,
+        CancellationToken cancellationToken)
+    {
+        await using var query = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtextextended(@lock_key,0));",
+            (NpgsqlConnection)connection,
+            (NpgsqlTransaction)transaction);
+        query.Parameters.Add(P(
+            "lock_key",
+            NpgsqlDbType.Text,
+            $"{command.OrganizationId:D}:{PostgreSqlAssignmentToOrderCoordinator.IdempotencyScope}:{command.IdempotencyKey}"));
+        await query.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<AssignmentIdempotencyRecord?> FindAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        CreateOwnDriverAssignmentCommand command,
+        CancellationToken cancellationToken)
+    {
+        const string sql =
+            """
+            SELECT request_hash,response_status,response_body::text,resource_id
+            FROM platform.idempotency_keys
+            WHERE owner_org_id=@owner AND scope=@scope AND idempotency_key=@key
+            """;
+        await using var query = new NpgsqlCommand(
+            sql,
+            (NpgsqlConnection)connection,
+            (NpgsqlTransaction)transaction);
+        query.Parameters.Add(P("owner", NpgsqlDbType.Uuid, command.OrganizationId));
+        query.Parameters.Add(P(
+            "scope",
+            NpgsqlDbType.Text,
+            PostgreSqlAssignmentToOrderCoordinator.IdempotencyScope));
+        query.Parameters.Add(P("key", NpgsqlDbType.Text, command.IdempotencyKey));
+        await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new(
+            reader.GetFieldValue<byte[]>(0),
+            reader.IsDBNull(1) ? null : reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetGuid(3));
+    }
+
+    private static NpgsqlParameter P(string name, NpgsqlDbType type, object value) => new(name, type)
+    {
+        Value = value,
+    };
+}
+
 public sealed class PostgreSqlAssignmentVisibilityDataReader(
     IDispatchDriverEligibilityReader eligibilityReader) : IAssignmentVisibilityDataReader
 {

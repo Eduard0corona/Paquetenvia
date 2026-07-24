@@ -148,6 +148,30 @@ public interface IDispatchAuthorizationReader
         CancellationToken cancellationToken);
 }
 
+public sealed record AssignmentIdempotencyRecord(
+    byte[] RequestHash,
+    int? ResponseStatus,
+    string? ResponseBody,
+    Guid? ResourceId)
+{
+    public byte[] RequestHash { get; } = RequestHash.ToArray();
+}
+
+public interface IAssignmentIdempotencyAccess
+{
+    Task AcquireLockAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        CreateOwnDriverAssignmentCommand command,
+        CancellationToken cancellationToken);
+
+    Task<AssignmentIdempotencyRecord?> FindAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        CreateOwnDriverAssignmentCommand command,
+        CancellationToken cancellationToken);
+}
+
 public interface IDispatchDriverEligibilityReader
 {
     Task<DriverEligibilitySnapshot?> ReadAsync(
