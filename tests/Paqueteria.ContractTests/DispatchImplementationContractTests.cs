@@ -78,6 +78,14 @@ public sealed class DispatchImplementationContractTests
         Assert.Equal(
             "#/components/responses/DispatchAssignmentConflict",
             responses.Mapping("409").Scalar("$ref"));
+        Assert.Equal("capability-first", assignmentOperation.Scalar("x-authorization-precedence"));
+        Assert.Equal(
+            ["order_packages", "driver_profile_documents"],
+            assignmentOperation.Sequence("x-authorized-visibility-plan")
+                .Children.Cast<YamlScalarNode>().Select(value => value.Value));
+        Assert.Equal(
+            "structural-postgresql-no-artificial-delay",
+            assignmentOperation.Scalar("x-non-enumeration"));
         Assert.Equal(
             ["assignment_type", "cost_cents", "driver_id"],
             RequiredPropertyNames(request));

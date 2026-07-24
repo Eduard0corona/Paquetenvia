@@ -151,30 +151,122 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
     [Fact]
     public async Task POST_uses_uniform_404_for_missing_or_cross_tenant_resources()
     {
-        using var missingOrderRequest = AssignmentRequest(
+        var before = factory.Effects;
+        var cases = new[]
+        {
+            (DispatchHttpWebApplicationFactory.MissingOrderId, Guid.NewGuid()),
+            (DispatchHttpWebApplicationFactory.CrossTenantOrderId, Guid.NewGuid()),
+            (Guid.NewGuid(), DispatchHttpWebApplicationFactory.MissingDriverId),
+            (Guid.NewGuid(), DispatchHttpWebApplicationFactory.CrossTenantDriverId),
+        };
+        var bodies = new List<string>();
+        var mediaTypes = new List<string?>();
+
+        foreach (var (orderId, driverId) in cases)
+        {
+            using var request = AssignmentRequest(
+                orderId,
+                Key(),
+                MockIdentityProfiles.ActiveDispatcher,
+                driverId: driverId);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            mediaTypes.Add(response.Content.Headers.ContentType?.MediaType);
+            bodies.Add(await response.Content.ReadAsStringAsync());
+        }
+
+        Assert.All(mediaTypes, value => Assert.Equal(mediaTypes[0], value));
+        Assert.All(bodies, value => Assert.Equal(bodies[0].Length, value.Length));
+        Assert.Equal(before, factory.Effects);
+        using var problem = JsonDocument.Parse(bodies[0]);
+        Assert.Equal(
+            ["status", "title", "traceId", "type"],
+            problem.RootElement.EnumerateObject()
+                .Select(value => value.Name)
+                .Order(StringComparer.Ordinal));
+        Assert.Equal("Not Found.", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(404, problem.RootElement.GetProperty("status").GetInt32());
+        foreach (var body in bodies)
+        {
+            using var current = JsonDocument.Parse(body);
+            Assert.Equal(
+                problem.RootElement.GetProperty("type").GetString(),
+                current.RootElement.GetProperty("type").GetString());
+            Assert.Equal(
+                problem.RootElement.GetProperty("title").GetString(),
+                current.RootElement.GetProperty("title").GetString());
+            Assert.Equal(
+                problem.RootElement.GetProperty("status").GetInt32(),
+                current.RootElement.GetProperty("status").GetInt32());
+            Assert.False(current.RootElement.TryGetProperty("code", out _));
+            Assert.False(current.RootElement.TryGetProperty("detail", out _));
+            Assert.DoesNotContain("order", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("driver", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("tenant", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("d2000000", body, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task POST_applies_explicit_capability_first_precedence()
+    {
+        foreach (var orderId in new[]
+        {
+            Guid.NewGuid(),
             DispatchHttpWebApplicationFactory.MissingOrderId,
+        })
+        {
+            using var anonymous = AssignmentRequest(orderId, Key(), null);
+            using var response = await client.SendAsync(anonymous);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        foreach (var profile in new[]
+        {
+            MockIdentityProfiles.ActiveViewer,
+            MockIdentityProfiles.ActiveDriver,
+            MockIdentityProfiles.ActivePlatformAdminNoMfa,
+        })
+        {
+            foreach (var (orderId, driverId) in new[]
+            {
+                (Guid.NewGuid(), Guid.NewGuid()),
+                (DispatchHttpWebApplicationFactory.MissingOrderId, Guid.NewGuid()),
+                (Guid.NewGuid(), DispatchHttpWebApplicationFactory.MissingDriverId),
+            })
+            {
+                using var forbidden = AssignmentRequest(
+                    orderId,
+                    Key(),
+                    profile,
+                    driverId: driverId);
+                using var response = await client.SendAsync(forbidden);
+                Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            }
+        }
+
+        foreach (var (orderId, driverId) in new[]
+        {
+            (DispatchHttpWebApplicationFactory.MissingOrderId, Guid.NewGuid()),
+            (Guid.NewGuid(), DispatchHttpWebApplicationFactory.MissingDriverId),
+        })
+        {
+            using var admin = AssignmentRequest(
+                orderId,
+                Key(),
+                MockIdentityProfiles.ActivePlatformAdminMfa,
+                driverId: driverId);
+            using var response = await client.SendAsync(admin);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        using var conflict = AssignmentRequest(
+            DispatchHttpWebApplicationFactory.ConflictOrderId,
             Key(),
             MockIdentityProfiles.ActiveDispatcher);
-        using var missingOrder = await client.SendAsync(missingOrderRequest);
-        Assert.Equal(HttpStatusCode.NotFound, missingOrder.StatusCode);
-
-        using var missingDriverRequest = AssignmentRequest(
-            Guid.NewGuid(),
-            Key(),
-            MockIdentityProfiles.ActiveDispatcher,
-            driverId: DispatchHttpWebApplicationFactory.MissingDriverId);
-        using var missingDriver = await client.SendAsync(missingDriverRequest);
-        Assert.Equal(HttpStatusCode.NotFound, missingDriver.StatusCode);
-
-        var orderBody = await missingOrder.Content.ReadAsStringAsync();
-        var driverBody = await missingDriver.Content.ReadAsStringAsync();
-        using var orderProblem = JsonDocument.Parse(orderBody);
-        using var driverProblem = JsonDocument.Parse(driverBody);
-        Assert.Equal(
-            orderProblem.RootElement.GetProperty("title").GetString(),
-            driverProblem.RootElement.GetProperty("title").GetString());
-        Assert.DoesNotContain("order", orderBody, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("driver", driverBody, StringComparison.OrdinalIgnoreCase);
+        using var conflictResponse = await client.SendAsync(conflict);
+        Assert.Equal(HttpStatusCode.Conflict, conflictResponse.StatusCode);
+        Assert.Contains("CONFLICT", await conflictResponse.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     [Fact]

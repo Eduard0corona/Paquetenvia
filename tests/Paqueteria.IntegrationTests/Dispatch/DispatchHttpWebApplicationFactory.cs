@@ -30,6 +30,12 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         Guid.Parse("d2000000-0000-0000-0000-000000000003");
     internal static readonly Guid MissingDriverId =
         Guid.Parse("d2000000-0000-0000-0000-000000000004");
+    internal static readonly Guid CrossTenantOrderId =
+        Guid.Parse("d2000000-0000-0000-0000-000000000005");
+    internal static readonly Guid CrossTenantDriverId =
+        Guid.Parse("d2000000-0000-0000-0000-000000000006");
+    internal static readonly Guid ConflictOrderId =
+        Guid.Parse("d2000000-0000-0000-0000-000000000007");
 
     internal void SetStops(IReadOnlyList<DriverStopResult> stops) => service.Stops = stops;
     internal int Effects => service.Effects;
@@ -71,9 +77,17 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                 throw new AssignmentForbiddenException();
             }
 
-            if (command.OrderId == MissingOrderId || command.DriverId == MissingDriverId)
+            if (command.OrderId == MissingOrderId ||
+                command.OrderId == CrossTenantOrderId ||
+                command.DriverId == MissingDriverId ||
+                command.DriverId == CrossTenantDriverId)
             {
                 throw new AssignmentNotFoundException();
+            }
+
+            if (command.OrderId == ConflictOrderId)
+            {
+                throw new AssignmentConflictException(AssignmentConflictCode.InvalidOrderState);
             }
 
             var signature =

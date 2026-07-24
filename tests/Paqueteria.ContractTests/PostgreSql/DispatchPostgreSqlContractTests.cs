@@ -33,6 +33,13 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         var command = Command(scenario, costCents: (long)int.MaxValue + 100);
 
         var created = await service.CreateOwnDriverAssignmentAsync(command, default);
+        await scenario.ExecuteAdminAsync(
+            """
+            UPDATE drivers.driver_profiles SET status='SUSPENDED' WHERE id=@driver;
+            UPDATE drivers.driver_documents SET expires_at=@expired WHERE driver_id=@driver;
+            """,
+            P("driver", scenario.DriverId),
+            P("expired", OccurredAt.AddMinutes(-1)));
         var replay = await service.CreateOwnDriverAssignmentAsync(command, default);
 
         Assert.Equal(created, replay);
@@ -99,6 +106,121 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             Assert.Equal(1, outcomes.Count(value => value));
             Assert.Equal(1, outcomes.Count(value => !value));
             Assert.Equal(1L, await CountAssignmentsAsync(differentKeyScenario.OrderId));
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Missing_and_cross_tenant_resources_execute_the_same_visibility_plan_and_roll_back()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        await using var foreign = await DispatchScenario.CreateAsync(fixture);
+        var cases = new[]
+        {
+            Command(scenario) with { OrderId = Guid.NewGuid() },
+            Command(scenario) with { OrderId = foreign.OrderId },
+            Command(scenario) with { DriverId = Guid.NewGuid() },
+            Command(scenario) with { DriverId = foreign.DriverId },
+        };
+
+        foreach (var command in cases)
+        {
+            var reader = new RecordingVisibilityDataReader(
+                new PostgreSqlAssignmentVisibilityDataReader(
+                    new PostgreSqlDispatchDriverEligibilityReader()));
+            var service = CreateAssignmentService(
+                fixture.AppDataSource,
+                visibilityDataReader: reader);
+
+            await Assert.ThrowsAsync<AssignmentNotFoundException>(() =>
+                service.CreateOwnDriverAssignmentAsync(command, default));
+
+            Assert.Equal(DispatchAssignmentVisibilityResolver.StructuralPlan, reader.Calls);
+            await AssertNoAssignmentEffectsAsync(scenario, command.IdempotencyKey);
+            await AssertNoAssignmentEffectsAsync(foreign, command.IdempotencyKey);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Capability_first_precedes_visibility_for_inactive_viewer_and_admin_without_MFA()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var reader = new RecordingVisibilityDataReader(
+            new PostgreSqlAssignmentVisibilityDataReader(
+                new PostgreSqlDispatchDriverEligibilityReader()));
+        var service = CreateAssignmentService(
+            fixture.AppDataSource,
+            visibilityDataReader: reader);
+
+        foreach (var (role, status, mfa) in new[]
+        {
+            ("VIEWER", "ACTIVE", false),
+            ("DISPATCHER", "SUSPENDED", false),
+            ("PLATFORM_ADMIN", "ACTIVE", false),
+        })
+        {
+            await scenario.SetDispatcherMembershipAsync(role, status);
+            foreach (var orderId in new[] { scenario.OrderId, Guid.NewGuid() })
+            {
+                var command = Command(scenario) with
+                {
+                    OrderId = orderId,
+                    MfaSatisfied = mfa,
+                };
+                await Assert.ThrowsAsync<AssignmentForbiddenException>(() =>
+                    service.CreateOwnDriverAssignmentAsync(command, default));
+                await AssertNoAssignmentEffectsAsync(scenario, command.IdempotencyKey);
+            }
+        }
+
+        Assert.Empty(reader.Calls);
+
+        await scenario.SetDispatcherMembershipAsync("PLATFORM_ADMIN", "ACTIVE");
+        var authorizedAdmin = Command(scenario) with
+        {
+            OrderId = Guid.NewGuid(),
+            MfaSatisfied = true,
+        };
+        await Assert.ThrowsAsync<AssignmentNotFoundException>(() =>
+            service.CreateOwnDriverAssignmentAsync(authorizedAdmin, default));
+        Assert.Equal(DispatchAssignmentVisibilityResolver.StructuralPlan, reader.Calls);
+        await AssertNoAssignmentEffectsAsync(scenario, authorizedAdmin.IdempotencyKey);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Visible_resources_preserve_ineligible_expired_and_order_conflict_results()
+    {
+        await using (var ineligible = await DispatchScenario.CreateAsync(fixture))
+        {
+            await ineligible.ExecuteAdminAsync(
+                "UPDATE drivers.driver_profiles SET status='SUSPENDED' WHERE id=@driver",
+                P("driver", ineligible.DriverId));
+            var exception = await Assert.ThrowsAsync<AssignmentConflictException>(() =>
+                CreateAssignmentService(fixture.AppDataSource)
+                    .CreateOwnDriverAssignmentAsync(Command(ineligible), default));
+            Assert.Equal(AssignmentConflictCode.DriverIneligible, exception.Code);
+        }
+
+        await using (var expired = await DispatchScenario.CreateAsync(fixture))
+        {
+            await expired.ExecuteAdminAsync(
+                "UPDATE drivers.driver_documents SET expires_at=@expired WHERE driver_id=@driver",
+                P("expired", OccurredAt),
+                P("driver", expired.DriverId));
+            var exception = await Assert.ThrowsAsync<AssignmentConflictException>(() =>
+                CreateAssignmentService(fixture.AppDataSource)
+                    .CreateOwnDriverAssignmentAsync(Command(expired), default));
+            Assert.Equal(AssignmentConflictCode.DriverDocumentExpired, exception.Code);
+        }
+
+        await using (var invalidState = await DispatchScenario.CreateAsync(fixture))
+        {
+            await invalidState.ExecuteAdminAsync(
+                "UPDATE orders.orders SET status='CONFIRMED' WHERE id=@order",
+                P("order", invalidState.OrderId));
+            var exception = await Assert.ThrowsAsync<AssignmentConflictException>(() =>
+                CreateAssignmentService(fixture.AppDataSource)
+                    .CreateOwnDriverAssignmentAsync(Command(invalidState), default));
+            Assert.Equal(AssignmentConflictCode.InvalidOrderState, exception.Code);
         }
     }
 
@@ -375,7 +497,8 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
 
     private PostgreSqlAssignmentToOrderCoordinator CreateAssignmentService(
         NpgsqlDataSource dataSource,
-        IAssignmentFailureInjector? injector = null)
+        IAssignmentFailureInjector? injector = null,
+        IAssignmentVisibilityDataReader? visibilityDataReader = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -395,7 +518,10 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             Options.Create(EligibilityOptions()),
             new DispatchAssignmentAuthorizer(),
             new PostgreSqlDispatchAuthorizationReader(),
-            new PostgreSqlDispatchDriverEligibilityReader(),
+            new DispatchAssignmentVisibilityResolver(
+                visibilityDataReader ??
+                new PostgreSqlAssignmentVisibilityDataReader(
+                    new PostgreSqlDispatchDriverEligibilityReader())),
             new PostgreSqlAssignmentReplayEvidenceReader(),
             new OrderTransitionGuardRegistry(),
             new PostgreSqlAppendOnlyAuditWriter(state),
@@ -465,6 +591,38 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
+    private async Task AssertNoAssignmentEffectsAsync(
+        DispatchScenario scenario,
+        string idempotencyKey)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT
+              (SELECT status FROM orders.orders WHERE id=@order),
+              (SELECT version FROM orders.orders WHERE id=@order),
+              (SELECT count(*) FROM dispatch.assignments WHERE order_id=@order),
+              (SELECT count(*) FROM orders.order_events WHERE order_id=@order),
+              (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order),
+              (SELECT count(*) FROM platform.audit_logs
+                WHERE org_id=@org AND action IN ('ASSIGNMENT_CREATED','ORDER_STATUS_CHANGED')),
+              (SELECT count(*) FROM platform.idempotency_keys
+                WHERE owner_org_id=@org AND scope='DSP-002:ASSIGN_OWN_DRIVER'
+                  AND idempotency_key=@key);
+            """);
+        command.Parameters.AddWithValue("order", scenario.OrderId);
+        command.Parameters.AddWithValue("org", scenario.OrganizationId);
+        command.Parameters.AddWithValue("key", idempotencyKey);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("READY_FOR_PICKUP", reader.GetString(0));
+        Assert.Equal(1, reader.GetInt32(1));
+        Assert.Equal(0L, reader.GetInt64(2));
+        Assert.Equal(0L, reader.GetInt64(3));
+        Assert.Equal(0L, reader.GetInt64(4));
+        Assert.Equal(0L, reader.GetInt64(5));
+        Assert.Equal(0L, reader.GetInt64(6));
+    }
+
     private async Task AssertAdoptionRejectsAsync(string mutation, string expectedMessage)
     {
         await using var connection = new NpgsqlConnection(fixture.DeploymentConnectionString);
@@ -525,6 +683,49 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
 
     private sealed class SyntheticDispatchFailure(AssignmentTransactionStage stage)
         : Exception($"Synthetic failure at {stage}.");
+
+    private sealed class RecordingVisibilityDataReader(
+        IAssignmentVisibilityDataReader inner) : IAssignmentVisibilityDataReader
+    {
+        public List<string> Calls { get; } = [];
+
+        public async Task<AssignmentOrderVisibilityData> ReadOrderAndPackagesAsync(
+            System.Data.Common.DbConnection connection,
+            System.Data.Common.DbTransaction transaction,
+            Guid organizationId,
+            Guid orderId,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("order_packages");
+            return await inner.ReadOrderAndPackagesAsync(
+                connection,
+                transaction,
+                organizationId,
+                orderId,
+                cancellationToken);
+        }
+
+        public async Task<Drivers.Application.Eligibility.DriverEligibilitySnapshot?>
+            ReadDriverProfileAndDocumentsAsync(
+                System.Data.Common.DbConnection connection,
+                System.Data.Common.DbTransaction transaction,
+                Guid organizationId,
+                Guid driverId,
+                Guid cityId,
+                Guid? serviceAreaId,
+                CancellationToken cancellationToken)
+        {
+            Calls.Add("driver_profile_documents");
+            return await inner.ReadDriverProfileAndDocumentsAsync(
+                connection,
+                transaction,
+                organizationId,
+                driverId,
+                cityId,
+                serviceAreaId,
+                cancellationToken);
+        }
+    }
 
     private sealed class DispatchScenario : IAsyncDisposable
     {
@@ -590,6 +791,18 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
 
         public Task ExecuteAdminAsync(string sql, params NpgsqlParameter[] parameters) =>
             order.ExecuteAdminAsync(sql, parameters);
+
+        public Task SetDispatcherMembershipAsync(string role, string status) =>
+            ExecuteAdminAsync(
+                """
+                UPDATE organizations.organization_memberships
+                SET role=@role,status=@status
+                WHERE user_id=@user AND organization_id=@org;
+                """,
+                P("role", role),
+                P("status", status),
+                P("user", DispatcherUserId),
+                P("org", OrganizationId));
 
         public async ValueTask DisposeAsync()
         {
