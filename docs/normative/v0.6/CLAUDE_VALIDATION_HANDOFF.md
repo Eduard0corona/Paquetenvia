@@ -1,6 +1,6 @@
 # Entrega para validación independiente
 
-Valida únicamente este bundle: `v0.6-full-canonical-sync-5-dsp002-non-enumerable-visibility`.
+Valida únicamente este bundle: `v0.6-full-canonical-sync-6-dsp002-capability-before-state`.
 
 ## Comprobaciones mínimas
 
@@ -25,6 +25,9 @@ Valida únicamente este bundle: `v0.6-full-canonical-sync-5-dsp002-non-enumerabl
 14. Confirmar que los cuatro 404 autorizados ejecutan
     `order_packages -> driver_profile_documents`, sin delays artificiales ni
     causa específica en métricas/logs normales.
+15. Confirmar que la forma inválida puede devolver `INVALID_REQUEST` sin
+    transacción productiva y que todo request válido autoriza antes de lock,
+    lectura idempotente o evidencia de replay.
 
 ## Ejecución real completada por ARC-002
 

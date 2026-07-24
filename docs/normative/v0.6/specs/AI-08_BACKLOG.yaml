@@ -339,6 +339,8 @@ items:
   - POST assignment declara 409 para request, idempotencia, estado, concurrencia, elegibilidad, capacidad y replay inconsistentes
   - recursos ausentes o cross-tenant usan 404 uniforme; actor sin capacidad sobre tenant visible usa 403
   - capability-first niega con 403 al actor sin capacidad Dispatch antes de consultar orden o driver
+  - la validación pura de forma puede devolver 409 INVALID_REQUEST sin abrir transacción productiva; todo request válido autoriza antes de lock/lectura idempotente o evidencia de replay
+  - viewer, driver y PLATFORM_ADMIN sin MFA reciben 403 uniforme para key inexistente, completada, con hash distinto o incompleta
   - el actor autorizado resuelve siempre order_packages y driver_profile_documents antes del 404 uniforme, sin delays artificiales ni causa específica en logs normales
   - route_id puede omitirse o ser null; todo UUID no nulo se rechaza hasta RTE-001
   - el vocabulario global conserva OWN, EXTERNAL y ALLY_CAPACITY, pero DSP-002 habilita únicamente OWN
@@ -346,6 +348,8 @@ items:
   required_tests:
   - unique race test
   - authorization e2e
+  - capability-before-idempotency order and key-state matrix
+  - invalid request does not invoke productive service or PostgreSQL
   - OpenAPI response/nullability/release-capability contract
   - canonical assignment adoption drift tests
   approval_gate: null

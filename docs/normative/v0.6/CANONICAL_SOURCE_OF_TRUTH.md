@@ -1,8 +1,8 @@
 # Fuente única de verdad — paquete canónico v0.6
 
-**Identificador de bundle:** `v0.6-full-canonical-sync-5-dsp002-non-enumerable-visibility`
-**Fecha de reconstrucción:** 2026-07-23
-**Estado:** normativa consolidada y validada; ARC-002, contrato DSP-002 y visibilidad no enumerable `DONE`.
+**Identificador de bundle:** `v0.6-full-canonical-sync-6-dsp002-capability-before-state`
+**Fecha de reconstrucción:** 2026-07-24
+**Estado:** normativa consolidada y validada; ARC-002, contrato DSP-002, visibilidad no enumerable y capability-before-persisted-state `DONE`.
 
 ## Regla de autoridad
 
@@ -53,6 +53,10 @@ sha256sum -c CHECKSUMS_SHA256.txt
 ```
 
 `CHECKSUMS_SHA256.txt` cubre todos los archivos funcionales excepto el propio archivo de checksums y `MANIFEST.json`. `MANIFEST.json` registra el inventario consolidado completo.
+
+DSP-002 distingue validación pura de forma y acceso productivo. Un request
+válido exige capacidad tenant-aware antes de cualquier lock/lectura
+idempotente, evidencia de replay u otros recursos de negocio.
 
 ## Evidencia de ejecución real
 

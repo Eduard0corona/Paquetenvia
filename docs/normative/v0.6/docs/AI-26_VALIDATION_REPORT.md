@@ -119,3 +119,36 @@ Evidencia local:
   varía el `traceId` propio de cada request, sin resource IDs ni causa.
 - Build Debug: 0 warnings, 0 errores.
 - AI-06 y AI-18 conservan los hashes canónicos registrados arriba.
+
+## Capability antes de estado persistido DSP-002
+
+La sincronización
+`v0.6-full-canonical-sync-6-dsp002-capability-before-state` valida
+`DSP-002-CAPABILITY-BEFORE-PERSISTED-STATE`:
+
+- JSON/request/Idempotency-Key inválidos producen `409 INVALID_REQUEST` sin
+  invocar el servicio productivo, abrir transacción ni consultar PostgreSQL.
+- Cada request válido relee una sola vez usuario, membresía, rol y MFA dentro
+  de la transacción tenant-aware.
+- Sólo después de autorizar se adquiere el advisory lock y se lee la fila
+  idempotente; replay evidence y recursos de negocio permanecen posteriores.
+- Viewer, Driver y `PLATFORM_ADMIN` sin MFA reciben 403 uniforme ante key
+  inexistente, completada, con hash distinto o incompleta.
+- Dispatcher y `PLATFORM_ADMIN` con MFA conservan creación/replay 201, hash
+  conflict/fila incompleta/evidencia inconsistente 409 y rollback integral.
+- Un recorder sobre los puertos reales prueba exactamente
+  `authorization -> idempotency_lock -> idempotency_read`; en denegación sólo
+  aparece `authorization`.
+- Hash canónico, schema, migración de adopción, AI-06 y AI-18 no cambian.
+
+Evidencia local:
+
+- Suite .NET: 680 pruebas (277 unitarias, 191 de integración, 71 de
+  arquitectura y 141 de contrato).
+- PostgreSQL 18/PostGIS: 94 contratos, incluida la matriz de estados
+  idempotentes, replay histórico, concurrencia, retry, cancelación, pooling,
+  fault injection y rollback.
+- Endpoint HTTP DSP-002: 29 pruebas; la forma inválida no incrementa el contador
+  de invocaciones del servicio productivo.
+- Builds Debug/Release: 0 warnings, 0 errores.
+- AI-06 y AI-18 conservan sus hashes canónicos.

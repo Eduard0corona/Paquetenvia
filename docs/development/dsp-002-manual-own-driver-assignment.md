@@ -103,14 +103,25 @@ no confía en roles emitidos por AuthCenter.
 - `DISPATCHER`: usuario y membresía activos.
 - cualquier otro rol: denegado.
 
-La precedencia `DSP-002-NON-ENUMERABLE-VISIBILITY` es explícita:
+La precedencia conjunta `DSP-002-NON-ENUMERABLE-VISIBILITY` y
+`DSP-002-CAPABILITY-BEFORE-PERSISTED-STATE` es explícita:
 
 1. autenticación ausente o inválida: 401;
-2. actor autenticado sin capacidad global Dispatch —incluido
-   `PLATFORM_ADMIN` sin MFA—: 403 antes de consultar orden o driver;
-3. actor con capacidad: orden o driver ausente/cross-tenant recibe el mismo
-   404;
-4. recursos visibles con estado, elegibilidad o documento inválido: 409.
+2. validación autenticada puramente sintáctica/estructural inválida: 409
+   `INVALID_REQUEST`, sin invocar el servicio productivo ni abrir transacción;
+3. request válido y actor sin capacidad global Dispatch —incluido
+   `PLATFORM_ADMIN` sin MFA—: 403 antes de lock o lectura idempotente, evidencia
+   de replay, orden, paquetes, driver o documentos;
+4. actor con capacidad y conflicto idempotente: 409 `CONFLICT`;
+5. actor con capacidad y orden o driver ausente/cross-tenant: el mismo 404;
+6. recursos visibles con estado, elegibilidad o documento inválido: 409; una
+   creación o replay válidos: 201.
+
+La validación de forma comprende JSON, campos/tipos, UUIDs no vacíos, OWN,
+`route_id` nulo, costo, propiedades declaradas e Idempotency-Key. No consulta
+PostgreSQL. La lectura tenant-aware de usuario, membresía, rol y MFA es el
+prerrequisito de autorización dentro de la transacción; todo estado productivo
+posterior, incluida idempotencia, queda protegido por esa decisión.
 
 Para actores autorizados, un único resolver ejecuta siempre el plan
 `order_packages -> driver_profile_documents`. El primer paso usa un comando con
@@ -133,16 +144,16 @@ El SHA-256 canónico contiene tenant, order ID, driver ID, tipo uppercase,
 costo `int64` y route nula. Excluye actor, MFA, request ID, tiempo, roles,
 documentos, elegibilidad, estado/versión y PII.
 
-El lock order es:
+Después de una autorización satisfactoria, el lock order es:
 
 1. advisory lock por tenant, scope y key;
 2. `orders.orders FOR UPDATE`.
 
 Misma key y hash devuelve el mismo 201 sin reescrituras. Hash distinto devuelve
-409 antes de autorización. Para replay completado se valida primero
-resource/response, se reautoriza rol y MFA actuales y, sólo para un actor
-autorizado, se lee una fila assignment visible coherente en `ACCEPTED` o
-`ACTIVE` y exactamente un evento histórico
+409 sólo después de autorización. Para replay completado cada request relee
+primero rol y MFA actuales, adquiere el lock, lee la fila, valida hash y
+resource/response, y después lee una fila assignment visible coherente en
+`ACCEPTED` o `ACTIVE` y exactamente un evento histórico
 `READY_FOR_PICKUP|RESCHEDULED -> ASSIGNED` asociado por `assignment_id`.
 
 El replay no reevalúa documentos, capacidad, estado actual ni guards. Una
@@ -151,30 +162,29 @@ dispatcher todavía autorizado.
 
 ## Orden transaccional, paquetes y elegibilidad
 
-Cada intento valida, captura un solo `occurred_at`, normaliza, calcula el hash,
-abre la transacción y aplica el contexto tenant. Dentro de ella:
+Cada intento valida la forma, captura un solo `occurred_at`, normaliza, calcula
+el hash, abre la transacción y aplica el contexto tenant. Dentro de ella:
 
-1. adquiere el advisory lock y lee la fila idempotente;
-2. si el hash difiere, devuelve 409 antes de leer autorización;
-3. si el registro está completado, valida resource/response, relee
-   autorización/MFA y sólo entonces valida assignment/evento histórico y
-   devuelve el 201;
-4. si existe un registro incompleto, devuelve 409 sin mutarlo;
-5. para una request nueva, relee y valida primero la autorización actual;
-6. solo después inserta la reserva idempotente;
-7. ejecuta siempre `order_packages`: bloquea la orden visible con `FOR UPDATE`
+1. relee y valida una sola vez usuario, membresía, rol y MFA actuales;
+2. sólo para el actor autorizado adquiere el advisory lock y lee la fila
+   idempotente;
+3. si el hash difiere o la fila está incompleta, devuelve 409 sin mutarla;
+4. si el registro está completado, valida resource/response y después
+   assignment/evento histórico antes de devolver el mismo 201;
+5. para una request nueva inserta la reserva idempotente;
+6. ejecuta siempre `order_packages`: bloquea la orden visible con `FOR UPDATE`
    y consume el resultset mínimo de paquetes;
-8. ejecuta siempre `driver_profile_documents`: consume perfil,
+7. ejecuta siempre `driver_profile_documents`: consume perfil,
    usuario/membresía/área y documentos;
-9. si orden o driver no es visible, devuelve el mismo 404 y revierte la reserva;
-10. con ambos visibles, valida estado y comprueba assignment activo;
-11. parsea/agrega paquetes y ejecuta `DriverEligibilityPolicy`;
-12. inserta el assignment `OWN/ACCEPTED`;
-13. ejecuta matriz y guards de Orders;
-14. actualiza optimistamente la orden a `ASSIGNED`;
-15. inserta order event, outbox y las dos auditorías;
-16. completa la fila idempotente;
-17. ejecuta el fault-injection point previo a commit y confirma.
+8. si orden o driver no es visible, devuelve el mismo 404 y revierte la reserva;
+9. con ambos visibles, valida estado y comprueba assignment activo;
+10. parsea/agrega paquetes y ejecuta `DriverEligibilityPolicy`;
+11. inserta el assignment `OWN/ACCEPTED`;
+12. ejecuta matriz y guards de Orders;
+13. actualiza optimistamente la orden a `ASSIGNED`;
+14. inserta order event, outbox y las dos auditorías;
+15. completa la fila idempotente;
+16. ejecuta el fault-injection point previo a commit y confirma.
 
 Los únicos estados fuente son `READY_FOR_PICKUP` y `RESCHEDULED`; no se agrega
 una arista. El update exige ID, estado y versión, afecta una fila e incrementa
@@ -241,8 +251,9 @@ Las métricas son `dispatch.assignment.created`, `.conflict`, `.ineligible`,
 `.replay` y `dispatch.driver_stops.count`, sin dimensiones de IDs. Logs solo
 incluyen IDs técnicos, versiones de política, resultado y duración; nunca
 address summary, documentos, hashes, object keys, teléfonos o bodies.
-Los 404 no agregan métrica ni log informativo de causa; no distinguen orden,
-driver, missing o cross-tenant.
+Los 403/404 no agregan métrica ni log informativo de causa; no distinguen
+estado idempotente, orden, driver, missing o cross-tenant. No se registra key,
+hash ni estado de replay para un actor denegado.
 
 Fault injection cubre reserva, lock, paquetes, elegibilidad, assignment,
 update, evento, outbox, auditorías, antes/después de completar idempotencia y
@@ -252,13 +263,14 @@ Rollback operativo:
 
 1. configurar `Dispatch:Provider=Disabled`;
 2. desplegar y verificar fail-closed;
-3. revertir primero los tres commits de visibilidad no enumerable;
-4. revertir después los tres commits de remediación contractual;
-5. si el rollback requerido es de DSP-002 completo, revertir después los tres
+3. revertir primero los tres commits capability-before-persisted-state;
+4. revertir después los tres commits de visibilidad no enumerable;
+5. revertir después los tres commits de remediación contractual;
+6. si el rollback requerido es de DSP-002 completo, revertir después los tres
    commits originales del módulo;
-6. conservar assignments, órdenes/versiones, eventos, outbox, auditorías e
+7. conservar assignments, órdenes/versiones, eventos, outbox, auditorías e
    historial EF;
-7. no ejecutar DDL inverso ni eliminar datos.
+8. no ejecutar DDL inverso ni eliminar datos.
 
 Convenciones reversibles:
 
@@ -269,6 +281,9 @@ Convenciones reversibles:
 - `DSP-002-CONV-004`: paradas directas hasta que exista Routing.
 - `DSP-002-NON-ENUMERABLE-VISIBILITY`: capability-first para actores sin
   capacidad y plan PostgreSQL estructural uniforme para actores autorizados.
+- `DSP-002-CAPABILITY-BEFORE-PERSISTED-STATE`: la forma inválida puede fallar
+  antes de capability sin datos; un request válido autoriza antes de cualquier
+  lock/lectura idempotente, evidencia de replay o recurso de negocio.
 
 Configuración base:
 

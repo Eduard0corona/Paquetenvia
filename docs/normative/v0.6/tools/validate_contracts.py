@@ -174,8 +174,21 @@ def main() -> int:
     }
     if actual_problem_refs != expected_responses:
         errors.append(f"DSP-002 problem response refs drift: {actual_problem_refs}")
-    if assign.get("x-authorization-precedence") != "capability-first":
+    if (
+        assign.get("x-authorization-precedence")
+        != "shape-validation-then-capability-before-persisted-state"
+    ):
         errors.append("DSP-002 authorization precedence drift")
+    if assign.get("x-shape-validation") != "invalid-request-without-productive-transaction":
+        errors.append("DSP-002 request-shape validation precedence drift")
+    if assign.get("x-capability-protected-state") != [
+        "idempotency_lock",
+        "idempotency_record",
+        "replay_evidence",
+        "order_packages",
+        "driver_profile_documents",
+    ]:
+        errors.append("DSP-002 capability-protected state drift")
     if assign.get("x-authorized-visibility-plan") != [
         "order_packages",
         "driver_profile_documents",
@@ -215,7 +228,7 @@ def main() -> int:
     ]:
         errors.append("DSP-002 safe conflict-code set drift")
     checks.append(
-        "DSP-002: capability-first, structural visibility and 201/401/403/404/409 contract"
+        "DSP-002: shape validation, capability-before-state, structural visibility and 201/401/403/404/409 contract"
     )
 
     product = parsed["specs/AI-02_PRODUCT_CONTRACT.yaml"]

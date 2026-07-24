@@ -175,13 +175,24 @@ paths:
         DSP-002 creates only OWN assignments. EXTERNAL and ALLY_CAPACITY remain
         reserved vocabulary and are rejected until their owning backlog items
         are implemented. route_id may be omitted or null; a non-null route is
-        rejected until Routing is implemented. Authentication precedes
-        capability. An authenticated actor without the global Dispatch
-        capability receives 403 before resource visibility is resolved.
+        rejected until Routing is implemented. Pure request-shape validation
+        may return 409 INVALID_REQUEST before capability evaluation and never
+        opens the productive transaction or reads persisted state. For every
+        structurally valid request, current tenant-aware capability is read
+        before the idempotency advisory lock, idempotency record, replay
+        evidence or resource visibility. An actor without the global Dispatch
+        capability therefore receives 403 independently of idempotency state.
         Authorized actors use the same structural PostgreSQL visibility plan
         for missing or cross-tenant order/driver and receive the uniform 404.
         This guarantee uses stable data access, never artificial delays.
-      x-authorization-precedence: capability-first
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - order_packages
+      - driver_profile_documents
       x-authorized-visibility-plan:
       - order_packages
       - driver_profile_documents

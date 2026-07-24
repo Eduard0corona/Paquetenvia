@@ -1,5 +1,18 @@
 # Changelog
 
+## Capability antes de estado persistido DSP-002 — 2026-07-24
+
+- `DSP-002-CAPABILITY-BEFORE-PERSISTED-STATE` separa validación de forma de
+  acceso productivo: `INVALID_REQUEST` puede preceder capability sin abrir la
+  transacción.
+- Todo request válido relee autorización tenant-aware antes del advisory lock,
+  fila idempotente, evidencia de replay o recursos de orden/driver.
+- Viewer, Driver y `PLATFORM_ADMIN` sin MFA reciben el mismo 403 para key
+  inexistente, completada, con hash distinto o incompleta.
+- Dispatcher y admin con MFA conservan creación/replay 201 y conflictos 409.
+- El hash canónico, replay histórico, schema, migraciones, AI-06 y AI-18 no
+  cambian.
+
 ## Visibilidad no enumerable DSP-002 — 2026-07-23
 
 - `DSP-002-NON-ENUMERABLE-VISIBILITY` interpreta AI-04/ADR-023 de forma

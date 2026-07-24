@@ -1,5 +1,12 @@
 # Archivos consolidados desde v0.5
 
+## Revisión controlada sync 6 para precedencia DSP-002
+
+Esta revisión separa validación pura de forma y acceso productivo, y exige
+autorización tenant-aware antes de lock/lectura idempotente, evidencia de
+replay u otros recursos persistidos. Actualiza AI-05, AI-08, AI-10, decisión,
+trazabilidad e integridad. AI-06 y AI-18 no cambian.
+
 ## Revisión controlada sync 5 para visibilidad DSP-002
 
 Esta revisión formaliza capability-first y el plan PostgreSQL estructural
