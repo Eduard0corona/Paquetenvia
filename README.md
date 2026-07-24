@@ -96,6 +96,10 @@ adaptadores PostgreSQL, parsers, roles, tracking, pruebas y rollback.
 La [guía DSP-001](docs/development/dsp-001-own-driver-eligibility.md) describe
 el contrato interno de elegibilidad de flota propia, sus políticas sintéticas,
 aislamiento tenant, migración de adopción y rollback no destructivo.
+La [guía DSP-002](docs/development/dsp-002-manual-own-driver-assignment.md)
+documenta la asignación atómica `OWN/ACCEPTED`, el replay autorizado y la
+proyección privada de paradas sin teléfono.
+
 Ejecuta su matriz con:
 
 ```powershell
@@ -261,7 +265,7 @@ Fuera del soporte tecnico de Identity/Organizations, Locations y la cotizacion
 sintetica de PRC-001, no se
 implementan otros casos de uso comerciales, proveedor OIDC real,
 login, endpoint público de tracking, Worker de outbox,
-hubs SignalR productivos, pricing avanzado, despacho,
+hubs SignalR productivos, pricing avanzado, despacho externo o routing,
 custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
 ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
 reglas de arquitectura; FND-002 aporta solamente dependencias locales.
