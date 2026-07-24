@@ -39,6 +39,24 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
 
     internal void SetStops(IReadOnlyList<DriverStopResult> stops) => service.Stops = stops;
     internal int Effects => service.Effects;
+    internal int Invocations => service.Invocations;
+
+    internal void SeedIdempotency(
+        Guid organizationId,
+        string key,
+        Guid orderId,
+        Guid driverId,
+        long costCents,
+        IdempotencyStubState state,
+        bool matchingSignature = true) =>
+        service.SeedIdempotency(
+            organizationId,
+            key,
+            orderId,
+            driverId,
+            costCents,
+            state,
+            matchingSignature);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -62,15 +80,18 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
     {
         private readonly ConcurrentDictionary<(Guid Tenant, string Key), Stored> stored = new();
         private int effects;
+        private int invocations;
 
         public IReadOnlyList<DriverStopResult> Stops { get; set; } = [];
         public int Effects => Volatile.Read(ref effects);
+        public int Invocations => Volatile.Read(ref invocations);
 
         public Task<AssignmentResult> CreateOwnDriverAssignmentAsync(
             CreateOwnDriverAssignmentCommand command,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref invocations);
             if (command.ActorId == AdminNoMfaId ||
                 (command.ActorId != AdminMfaId && command.ActorId != DispatcherId))
             {
@@ -99,7 +120,17 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                     throw new AssignmentConflictException(AssignmentConflictCode.IdempotencyConflict);
                 }
 
-                return Task.FromResult(existing.Result);
+                if (existing.State == IdempotencyStubState.Incomplete)
+                {
+                    throw new AssignmentConflictException(AssignmentConflictCode.IdempotencyConflict);
+                }
+
+                if (existing.State == IdempotencyStubState.InconsistentEvidence)
+                {
+                    throw new AssignmentConflictException(AssignmentConflictCode.InconsistentReplayEvidence);
+                }
+
+                return Task.FromResult(existing.Result!);
             }
 
             if (command.DriverId == ExpiredDocumentDriverId)
@@ -118,9 +149,30 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                 command.DriverId,
                 "ACCEPTED",
                 new MoneyResult("MXN", command.CostCents!.Value));
-            stored[(command.OrganizationId, command.IdempotencyKey)] = new Stored(signature, result);
+            stored[(command.OrganizationId, command.IdempotencyKey)] =
+                new Stored(signature, result, IdempotencyStubState.Completed);
             Interlocked.Increment(ref effects);
             return Task.FromResult(result);
+        }
+
+        public void SeedIdempotency(
+            Guid organizationId,
+            string key,
+            Guid orderId,
+            Guid driverId,
+            long costCents,
+            IdempotencyStubState state,
+            bool matchingSignature)
+        {
+            var signatureDriver = matchingSignature ? driverId : Guid.NewGuid();
+            var signature = $"{orderId:D}|{signatureDriver:D}|OWN|{costCents}|null";
+            var result = new AssignmentResult(
+                Guid.NewGuid(),
+                orderId,
+                driverId,
+                "ACCEPTED",
+                new MoneyResult("MXN", costCents));
+            stored[(organizationId, key)] = new Stored(signature, result, state);
         }
 
         public Task<IReadOnlyList<DriverStopResult>> ListCurrentDriverStopsAsync(
@@ -134,6 +186,16 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                 : throw new DriverStopsForbiddenException();
         }
 
-        private sealed record Stored(string Signature, AssignmentResult Result);
+        private sealed record Stored(
+            string Signature,
+            AssignmentResult? Result,
+            IdempotencyStubState State);
     }
+}
+
+internal enum IdempotencyStubState
+{
+    Completed,
+    Incomplete,
+    InconsistentEvidence,
 }

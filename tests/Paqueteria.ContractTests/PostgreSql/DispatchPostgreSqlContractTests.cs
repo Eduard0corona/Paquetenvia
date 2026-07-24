@@ -1,3 +1,5 @@
+using System.Data.Common;
+using System.Text.Json;
 using Dispatch.Application.Assignments;
 using Dispatch.Infrastructure;
 using Dispatch.Infrastructure.Assignments;
@@ -184,6 +186,159 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             service.CreateOwnDriverAssignmentAsync(authorizedAdmin, default));
         Assert.Equal(DispatchAssignmentVisibilityResolver.StructuralPlan, reader.Calls);
         await AssertNoAssignmentEffectsAsync(scenario, authorizedAdmin.IdempotencyKey);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Authorized_command_executes_authorization_before_idempotency_lock_and_read_once()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var calls = new List<string>();
+        var service = CreateAssignmentService(
+            fixture.AppDataSource,
+            authorizationReader: new RecordingAuthorizationReader(
+                new PostgreSqlDispatchAuthorizationReader(),
+                calls),
+            idempotencyAccess: new RecordingIdempotencyAccess(
+                new PostgreSqlAssignmentIdempotencyAccess(),
+                calls));
+
+        await service.CreateOwnDriverAssignmentAsync(Command(scenario), default);
+
+        Assert.Equal(
+            ["authorization", "idempotency_lock", "idempotency_read"],
+            calls);
+        Assert.Equal(1, calls.Count(value => value == "authorization"));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Denied_capability_never_observes_or_changes_any_idempotency_state()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        foreach (var (role, mfaSatisfied) in new[]
+        {
+            ("VIEWER", false),
+            ("PLATFORM_ADMIN", false),
+        })
+        {
+            await scenario.SetDispatcherMembershipAsync(role, "ACTIVE");
+            foreach (var state in Enum.GetValues<SeededIdempotencyState>())
+            {
+                var command = Command(scenario) with
+                {
+                    IdempotencyKey = Key(),
+                    MfaSatisfied = mfaSatisfied,
+                };
+                await SeedIdempotencyAsync(command, state);
+                var before = await ReadIdempotencySnapshotAsync(command);
+                var calls = new List<string>();
+                var visibilityReader = new RecordingVisibilityDataReader(
+                    new PostgreSqlAssignmentVisibilityDataReader(
+                        new PostgreSqlDispatchDriverEligibilityReader()));
+                var replayReader = new RecordingReplayEvidenceReader(
+                    new PostgreSqlAssignmentReplayEvidenceReader());
+                var service = CreateAssignmentService(
+                    fixture.AppDataSource,
+                    visibilityDataReader: visibilityReader,
+                    authorizationReader: new RecordingAuthorizationReader(
+                        new PostgreSqlDispatchAuthorizationReader(),
+                        calls),
+                    idempotencyAccess: new RecordingIdempotencyAccess(
+                        new PostgreSqlAssignmentIdempotencyAccess(),
+                        calls),
+                    replayEvidenceReader: replayReader);
+
+                await Assert.ThrowsAsync<AssignmentForbiddenException>(() =>
+                    service.CreateOwnDriverAssignmentAsync(command, default));
+
+                Assert.Equal(["authorization"], calls);
+                Assert.Empty(visibilityReader.Calls);
+                Assert.Empty(replayReader.Calls);
+                Assert.Equal(before, await ReadIdempotencySnapshotAsync(command));
+                await AssertNoAssignmentEffectsAsync(
+                    scenario,
+                    command.IdempotencyKey,
+                    state == SeededIdempotencyState.Missing ? 0 : 1);
+            }
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Authorized_dispatcher_preserves_all_idempotency_and_replay_results()
+    {
+        await using (var missing = await DispatchScenario.CreateAsync(fixture))
+        {
+            var created = await CreateAssignmentService(fixture.AppDataSource)
+                .CreateOwnDriverAssignmentAsync(Command(missing), default);
+            Assert.Equal("ACCEPTED", created.Status);
+        }
+
+        await using (var completed = await DispatchScenario.CreateAsync(fixture))
+        {
+            var command = Command(completed);
+            var created = await CreateAssignmentService(fixture.AppDataSource)
+                .CreateOwnDriverAssignmentAsync(command, default);
+            var calls = new List<string>();
+            var evidenceReader = new RecordingReplayEvidenceReader(
+                new PostgreSqlAssignmentReplayEvidenceReader());
+            var replay = await CreateAssignmentService(
+                    fixture.AppDataSource,
+                    authorizationReader: new RecordingAuthorizationReader(
+                        new PostgreSqlDispatchAuthorizationReader(),
+                        calls),
+                    idempotencyAccess: new RecordingIdempotencyAccess(
+                        new PostgreSqlAssignmentIdempotencyAccess(),
+                        calls),
+                    replayEvidenceReader: evidenceReader)
+                .CreateOwnDriverAssignmentAsync(command, default);
+
+            Assert.Equal(created, replay);
+            Assert.Equal(
+                ["authorization", "idempotency_lock", "idempotency_read"],
+                calls);
+            Assert.Equal(["replay_evidence"], evidenceReader.Calls);
+        }
+
+        await using (var changedHash = await DispatchScenario.CreateAsync(fixture))
+        {
+            var command = Command(changedHash);
+            await CreateAssignmentService(fixture.AppDataSource)
+                .CreateOwnDriverAssignmentAsync(command, default);
+            var conflict = await Assert.ThrowsAsync<AssignmentConflictException>(() =>
+                CreateAssignmentService(fixture.AppDataSource)
+                    .CreateOwnDriverAssignmentAsync(
+                        command with { DriverId = Guid.NewGuid() },
+                        default));
+            Assert.Equal(AssignmentConflictCode.IdempotencyConflict, conflict.Code);
+        }
+
+        await using (var incomplete = await DispatchScenario.CreateAsync(fixture))
+        {
+            var command = Command(incomplete);
+            await SeedIdempotencyAsync(command, SeededIdempotencyState.Incomplete);
+            var before = await ReadIdempotencySnapshotAsync(command);
+            var conflict = await Assert.ThrowsAsync<AssignmentConflictException>(() =>
+                CreateAssignmentService(fixture.AppDataSource)
+                    .CreateOwnDriverAssignmentAsync(command, default));
+            Assert.Equal(AssignmentConflictCode.IdempotencyConflict, conflict.Code);
+            Assert.Equal(before, await ReadIdempotencySnapshotAsync(command));
+            await AssertNoAssignmentEffectsAsync(incomplete, command.IdempotencyKey, 1);
+        }
+
+        await using (var inconsistent = await DispatchScenario.CreateAsync(fixture))
+        {
+            var command = Command(inconsistent);
+            await SeedIdempotencyAsync(command, SeededIdempotencyState.CompletedMatchingHash);
+            var evidenceReader = new RecordingReplayEvidenceReader(
+                new PostgreSqlAssignmentReplayEvidenceReader());
+            var conflict = await Assert.ThrowsAsync<AssignmentConflictException>(() =>
+                CreateAssignmentService(
+                        fixture.AppDataSource,
+                        replayEvidenceReader: evidenceReader)
+                    .CreateOwnDriverAssignmentAsync(command, default));
+            Assert.Equal(AssignmentConflictCode.InconsistentReplayEvidence, conflict.Code);
+            Assert.Equal(["replay_evidence"], evidenceReader.Calls);
+            await AssertNoAssignmentEffectsAsync(inconsistent, command.IdempotencyKey, 1);
+        }
     }
 
     [PostgreSqlContractFact]
@@ -498,7 +653,10 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
     private PostgreSqlAssignmentToOrderCoordinator CreateAssignmentService(
         NpgsqlDataSource dataSource,
         IAssignmentFailureInjector? injector = null,
-        IAssignmentVisibilityDataReader? visibilityDataReader = null)
+        IAssignmentVisibilityDataReader? visibilityDataReader = null,
+        IDispatchAuthorizationReader? authorizationReader = null,
+        IAssignmentIdempotencyAccess? idempotencyAccess = null,
+        IAssignmentReplayEvidenceReader? replayEvidenceReader = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -517,12 +675,13 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             }),
             Options.Create(EligibilityOptions()),
             new DispatchAssignmentAuthorizer(),
-            new PostgreSqlDispatchAuthorizationReader(),
+            authorizationReader ?? new PostgreSqlDispatchAuthorizationReader(),
+            idempotencyAccess ?? new PostgreSqlAssignmentIdempotencyAccess(),
             new DispatchAssignmentVisibilityResolver(
                 visibilityDataReader ??
                 new PostgreSqlAssignmentVisibilityDataReader(
                     new PostgreSqlDispatchDriverEligibilityReader())),
-            new PostgreSqlAssignmentReplayEvidenceReader(),
+            replayEvidenceReader ?? new PostgreSqlAssignmentReplayEvidenceReader(),
             new OrderTransitionGuardRegistry(),
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
@@ -593,7 +752,8 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
 
     private async Task AssertNoAssignmentEffectsAsync(
         DispatchScenario scenario,
-        string idempotencyKey)
+        string idempotencyKey,
+        long expectedIdempotencyRows = 0)
     {
         await using var command = fixture.AdminDataSource.CreateCommand(
             """
@@ -620,7 +780,100 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         Assert.Equal(0L, reader.GetInt64(3));
         Assert.Equal(0L, reader.GetInt64(4));
         Assert.Equal(0L, reader.GetInt64(5));
-        Assert.Equal(0L, reader.GetInt64(6));
+        Assert.Equal(expectedIdempotencyRows, reader.GetInt64(6));
+    }
+
+    private async Task SeedIdempotencyAsync(
+        CreateOwnDriverAssignmentCommand command,
+        SeededIdempotencyState state)
+    {
+        if (state == SeededIdempotencyState.Missing)
+        {
+            return;
+        }
+
+        var requestHash = state == SeededIdempotencyState.CompletedDifferentHash
+            ? Enumerable.Repeat((byte)0xa5, 32).ToArray()
+            : AssignmentCanonicalizer.ComputeSha256(command);
+        var completed = state is
+            SeededIdempotencyState.CompletedMatchingHash or
+            SeededIdempotencyState.CompletedDifferentHash;
+        var resourceId = Guid.NewGuid();
+        var responseBody = JsonSerializer.Serialize(
+            new AssignmentResult(
+                resourceId,
+                command.OrderId,
+                command.DriverId,
+                "ACCEPTED",
+                new Dispatch.Application.Assignments.MoneyResult(
+                    "MXN",
+                    command.CostCents!.Value)),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            });
+        await using var seed = fixture.AdminDataSource.CreateCommand(
+            completed
+                ? """
+                  INSERT INTO platform.idempotency_keys(
+                    owner_org_id,scope,idempotency_key,request_hash,response_status,
+                    response_body,resource_id,created_at,expires_at)
+                  VALUES (@owner,'DSP-002:ASSIGN_OWN_DRIVER',@key,@hash,201,
+                    @body,@resource,@created,@expires)
+                  """
+                : """
+                  INSERT INTO platform.idempotency_keys(
+                    owner_org_id,scope,idempotency_key,request_hash,response_status,
+                    response_body,resource_id,created_at,expires_at)
+                  VALUES (@owner,'DSP-002:ASSIGN_OWN_DRIVER',@key,@hash,NULL,
+                    NULL,NULL,@created,@expires)
+                  """);
+        seed.Parameters.Add(P("owner", command.OrganizationId));
+        seed.Parameters.Add(P("key", command.IdempotencyKey));
+        seed.Parameters.Add(new NpgsqlParameter<byte[]>("hash", NpgsqlDbType.Bytea)
+        {
+            TypedValue = requestHash,
+        });
+        seed.Parameters.Add(P("created", OccurredAt));
+        seed.Parameters.Add(P("expires", OccurredAt.AddDays(1)));
+        if (completed)
+        {
+            seed.Parameters.Add(new NpgsqlParameter<string>("body", NpgsqlDbType.Jsonb)
+            {
+                TypedValue = responseBody,
+            });
+            seed.Parameters.Add(P("resource", resourceId));
+        }
+
+        Assert.Equal(1, await seed.ExecuteNonQueryAsync());
+    }
+
+    private async Task<IdempotencySnapshot?> ReadIdempotencySnapshotAsync(
+        CreateOwnDriverAssignmentCommand command)
+    {
+        await using var query = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT encode(request_hash,'hex'),response_status,response_body::text,
+                   resource_id,created_at,expires_at
+            FROM platform.idempotency_keys
+            WHERE owner_org_id=@owner AND scope='DSP-002:ASSIGN_OWN_DRIVER'
+              AND idempotency_key=@key
+            """);
+        query.Parameters.Add(P("owner", command.OrganizationId));
+        query.Parameters.Add(P("key", command.IdempotencyKey));
+        await using var reader = await query.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return null;
+        }
+
+        return new(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetGuid(3),
+            reader.GetFieldValue<DateTimeOffset>(4),
+            reader.GetFieldValue<DateTimeOffset>(5));
     }
 
     private async Task AssertAdoptionRejectsAsync(string mutation, string expectedMessage)
@@ -668,6 +921,22 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
 
     private static NpgsqlParameter P(string name, object value) => new(name, value);
 
+    private enum SeededIdempotencyState
+    {
+        Missing,
+        CompletedMatchingHash,
+        CompletedDifferentHash,
+        Incomplete,
+    }
+
+    private sealed record IdempotencySnapshot(
+        string RequestHash,
+        int? ResponseStatus,
+        string? ResponseBody,
+        Guid? ResourceId,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset ExpiresAt);
+
     private sealed class FixedClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
@@ -683,6 +952,60 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
 
     private sealed class SyntheticDispatchFailure(AssignmentTransactionStage stage)
         : Exception($"Synthetic failure at {stage}.");
+
+    private sealed class RecordingAuthorizationReader(
+        IDispatchAuthorizationReader inner,
+        List<string> calls) : IDispatchAuthorizationReader
+    {
+        public async Task<DispatchAuthorizationSnapshot> ReadAsync(
+            DbConnection connection,
+            DbTransaction transaction,
+            Guid actorId,
+            Guid organizationId,
+            CancellationToken cancellationToken)
+        {
+            calls.Add("authorization");
+            return await inner.ReadAsync(
+                connection,
+                transaction,
+                actorId,
+                organizationId,
+                cancellationToken);
+        }
+    }
+
+    private sealed class RecordingIdempotencyAccess(
+        IAssignmentIdempotencyAccess inner,
+        List<string> calls) : IAssignmentIdempotencyAccess
+    {
+        public async Task AcquireLockAsync(
+            DbConnection connection,
+            DbTransaction transaction,
+            CreateOwnDriverAssignmentCommand command,
+            CancellationToken cancellationToken)
+        {
+            calls.Add("idempotency_lock");
+            await inner.AcquireLockAsync(
+                connection,
+                transaction,
+                command,
+                cancellationToken);
+        }
+
+        public async Task<AssignmentIdempotencyRecord?> FindAsync(
+            DbConnection connection,
+            DbTransaction transaction,
+            CreateOwnDriverAssignmentCommand command,
+            CancellationToken cancellationToken)
+        {
+            calls.Add("idempotency_read");
+            return await inner.FindAsync(
+                connection,
+                transaction,
+                command,
+                cancellationToken);
+        }
+    }
 
     private sealed class RecordingVisibilityDataReader(
         IAssignmentVisibilityDataReader inner) : IAssignmentVisibilityDataReader
@@ -723,6 +1046,34 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
                 driverId,
                 cityId,
                 serviceAreaId,
+                cancellationToken);
+        }
+    }
+
+    private sealed class RecordingReplayEvidenceReader(
+        IAssignmentReplayEvidenceReader inner) : IAssignmentReplayEvidenceReader
+    {
+        public List<string> Calls { get; } = [];
+
+        public async Task<AssignmentReplayEvidence> ReadAsync(
+            DbConnection connection,
+            DbTransaction transaction,
+            Guid organizationId,
+            Guid assignmentId,
+            Guid orderId,
+            Guid driverId,
+            long costCents,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("replay_evidence");
+            return await inner.ReadAsync(
+                connection,
+                transaction,
+                organizationId,
+                assignmentId,
+                orderId,
+                driverId,
+                costCents,
                 cancellationToken);
         }
     }

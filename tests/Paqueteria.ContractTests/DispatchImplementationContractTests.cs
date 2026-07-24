@@ -78,7 +78,22 @@ public sealed class DispatchImplementationContractTests
         Assert.Equal(
             "#/components/responses/DispatchAssignmentConflict",
             responses.Mapping("409").Scalar("$ref"));
-        Assert.Equal("capability-first", assignmentOperation.Scalar("x-authorization-precedence"));
+        Assert.Equal(
+            "shape-validation-then-capability-before-persisted-state",
+            assignmentOperation.Scalar("x-authorization-precedence"));
+        Assert.Equal(
+            "invalid-request-without-productive-transaction",
+            assignmentOperation.Scalar("x-shape-validation"));
+        Assert.Equal(
+            [
+                "idempotency_lock",
+                "idempotency_record",
+                "replay_evidence",
+                "order_packages",
+                "driver_profile_documents",
+            ],
+            assignmentOperation.Sequence("x-capability-protected-state")
+                .Children.Cast<YamlScalarNode>().Select(value => value.Value));
         Assert.Equal(
             ["order_packages", "driver_profile_documents"],
             assignmentOperation.Sequence("x-authorized-visibility-plan")

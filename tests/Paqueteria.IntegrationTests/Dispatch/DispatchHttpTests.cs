@@ -269,6 +269,166 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         Assert.Contains("CONFLICT", await conflictResponse.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveViewer)]
+    [InlineData(MockIdentityProfiles.ActiveDriver)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa)]
+    public async Task POST_valid_request_denies_non_capability_regardless_of_idempotency_state(
+        string profile)
+    {
+        var beforeEffects = factory.Effects;
+        var orderId = Guid.NewGuid();
+        var driverId = Guid.NewGuid();
+        var cases = new (IdempotencyStubState? State, bool MatchingSignature)[]
+        {
+            (null, true),
+            (IdempotencyStubState.Completed, true),
+            (IdempotencyStubState.Completed, false),
+            (IdempotencyStubState.Incomplete, true),
+        };
+        var bodies = new List<string>();
+
+        foreach (var (state, matchingSignature) in cases)
+        {
+            var key = Key();
+            if (state is { } storedState)
+            {
+                factory.SeedIdempotency(
+                    MockIdentityProfiles.ViewerOrganizationId,
+                    key,
+                    orderId,
+                    driverId,
+                    0,
+                    storedState,
+                    matchingSignature);
+            }
+
+            using var request = AssignmentRequest(
+                orderId,
+                key,
+                profile,
+                driverId: driverId);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            bodies.Add(await response.Content.ReadAsStringAsync());
+        }
+
+        Assert.Equal(beforeEffects, factory.Effects);
+        Assert.All(bodies, body =>
+        {
+            using var problem = JsonDocument.Parse(body);
+            Assert.Equal(
+                ["status", "title", "traceId", "type"],
+                problem.RootElement.EnumerateObject()
+                    .Select(value => value.Name)
+                    .Order(StringComparer.Ordinal));
+            Assert.Equal("Forbidden.", problem.RootElement.GetProperty("title").GetString());
+            Assert.Equal(403, problem.RootElement.GetProperty("status").GetInt32());
+            Assert.DoesNotContain("idempotency", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("hash", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("completed", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("incomplete", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(orderId.ToString("D"), body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(driverId.ToString("D"), body, StringComparison.OrdinalIgnoreCase);
+        });
+        Assert.All(bodies, body => Assert.Equal(bodies[0].Length, body.Length));
+    }
+
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveDispatcher)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa)]
+    public async Task POST_authorized_actor_preserves_idempotency_results(string profile)
+    {
+        var orderId = Guid.NewGuid();
+        var driverId = Guid.NewGuid();
+
+        var replayKey = Key();
+        factory.SeedIdempotency(
+            MockIdentityProfiles.ViewerOrganizationId,
+            replayKey,
+            orderId,
+            driverId,
+            0,
+            IdempotencyStubState.Completed);
+        using (var replayRequest = AssignmentRequest(
+                   orderId,
+                   replayKey,
+                   profile,
+                   driverId: driverId))
+        using (var replay = await client.SendAsync(replayRequest))
+        {
+            Assert.Equal(HttpStatusCode.Created, replay.StatusCode);
+        }
+
+        foreach (var (state, matchingSignature) in new[]
+        {
+            (IdempotencyStubState.Completed, false),
+            (IdempotencyStubState.Incomplete, true),
+            (IdempotencyStubState.InconsistentEvidence, true),
+        })
+        {
+            var key = Key();
+            factory.SeedIdempotency(
+                MockIdentityProfiles.ViewerOrganizationId,
+                key,
+                orderId,
+                driverId,
+                0,
+                state,
+                matchingSignature);
+            using var request = AssignmentRequest(
+                orderId,
+                key,
+                profile,
+                driverId: driverId);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains(
+                "CONFLICT",
+                await response.Content.ReadAsStringAsync(),
+                StringComparison.Ordinal);
+        }
+
+        using var createRequest = AssignmentRequest(
+            Guid.NewGuid(),
+            Key(),
+            profile,
+            driverId: Guid.NewGuid());
+        using var created = await client.SendAsync(createRequest);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+    }
+
+    [Fact]
+    public async Task POST_invalid_shape_precedes_capability_without_invoking_product_service()
+    {
+        var beforeInvocations = factory.Invocations;
+
+        using var invalidBody = AssignmentRequest(
+            Guid.NewGuid(),
+            Key(),
+            MockIdentityProfiles.ActiveViewer,
+            body: "{invalid-json");
+        using var invalidBodyResponse = await client.SendAsync(invalidBody);
+        Assert.Equal(HttpStatusCode.Conflict, invalidBodyResponse.StatusCode);
+        Assert.Contains(
+            "INVALID_REQUEST",
+            await invalidBodyResponse.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        using var invalidKey = AssignmentRequest(
+            Guid.NewGuid(),
+            "short",
+            MockIdentityProfiles.ActiveViewer);
+        using var invalidKeyResponse = await client.SendAsync(invalidKey);
+        Assert.Equal(HttpStatusCode.Conflict, invalidKeyResponse.StatusCode);
+        Assert.Contains(
+            "INVALID_REQUEST",
+            await invalidKeyResponse.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        Assert.Equal(beforeInvocations, factory.Invocations);
+    }
+
     [Fact]
     public async Task POST_returns_exact_safe_201_and_replays_without_effects()
     {
