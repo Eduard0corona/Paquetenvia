@@ -6,6 +6,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" PrivateAssets="all" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Testcontainers.PostgreSql" />
@@ -25,6 +26,9 @@
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Endpoints\Orders.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Application\Dispatch.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Endpoints\Dispatch.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Application\Realtime.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Paqueteria.Api\Paqueteria.Api.csproj" />
   </ItemGroup>
 </Project>

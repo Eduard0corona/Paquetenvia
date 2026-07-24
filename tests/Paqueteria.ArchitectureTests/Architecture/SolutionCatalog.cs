@@ -105,8 +105,24 @@ internal static class SolutionCatalog
         ],
         allowedCrossModuleDependencies: ["Drivers", "Orders", "Organizations"]);
 
+    internal static readonly ModuleDefinition Realtime = Module(
+        "Realtime",
+        typeof(Realtime.Domain.AssemblyReference).Assembly,
+        typeof(Realtime.Application.AssemblyReference).Assembly,
+        typeof(Realtime.Infrastructure.AssemblyReference).Assembly,
+        typeof(Realtime.Endpoints.AssemblyReference).Assembly,
+        usesSharedDomainContracts: true,
+        additionalInfrastructureReferences:
+        [
+            "Realtime.Endpoints",
+            "Orders.Application",
+            "Organizations.Application",
+        ],
+        additionalEndpointReferences: ["Identity.Application"],
+        allowedCrossModuleDependencies: ["Identity", "Orders", "Organizations"]);
+
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
-        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch];
+        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -132,6 +148,8 @@ internal static class SolutionCatalog
             "Drivers.Infrastructure",
             "Dispatch.Endpoints",
             "Dispatch.Infrastructure",
+            "Realtime.Endpoints",
+            "Realtime.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -154,6 +172,7 @@ internal static class SolutionCatalog
         .. Locations.Components,
         .. Drivers.Components,
         .. Dispatch.Components,
+        .. Realtime.Components,
         Api,
         Worker,
     ];
