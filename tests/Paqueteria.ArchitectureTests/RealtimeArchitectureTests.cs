@@ -1,6 +1,8 @@
 using System.Reflection;
 using Microsoft.AspNetCore.SignalR;
 using Paqueteria.ArchitectureTests.Architecture;
+using Paqueteria.Domain.Tenancy;
+using Realtime.Application.Authorization;
 using Realtime.Application.Clients;
 using Realtime.Endpoints.Hubs;
 
@@ -89,6 +91,38 @@ public sealed class RealtimeArchitectureTests
         Assert.DoesNotContain("Organizations.Infrastructure", references);
         Assert.DoesNotContain("Dispatch.Infrastructure", references);
         Assert.DoesNotContain("Drivers.Infrastructure", references);
+    }
+
+    [Fact]
+    public void Operations_role_blocker_cannot_be_silently_implemented_or_mapped()
+    {
+        Assert.Equal(
+            [
+                "PlatformAdmin",
+                "Dispatcher",
+                "Finance",
+                "AllyAdmin",
+                "AllyOperator",
+                "BusinessAdmin",
+                "BusinessOperator",
+                "Driver",
+                "Viewer",
+            ],
+            Enum.GetNames<OrganizationRole>());
+        Assert.True(RealtimeOperationsRolePolicy.IsAllowed(OrganizationRole.PlatformAdmin, true));
+        Assert.False(RealtimeOperationsRolePolicy.IsAllowed(OrganizationRole.PlatformAdmin, false));
+        Assert.True(RealtimeOperationsRolePolicy.IsAllowed(OrganizationRole.Dispatcher, false));
+        Assert.False(RealtimeOperationsRolePolicy.IsAllowed(OrganizationRole.Viewer, true));
+        Assert.False(RealtimeOperationsRolePolicy.IsAllowed(OrganizationRole.Driver, true));
+
+        var productiveSources = Directory.GetFiles(
+                TestRepository.GetPath("src"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Select(File.ReadAllText);
+        Assert.DoesNotContain(
+            productiveSources,
+            source => source.Contains("CUSTOMER_SUPPORT", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AssertHub<THub, TClient>()

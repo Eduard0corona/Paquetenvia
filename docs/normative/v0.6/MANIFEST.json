@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7459,
-      "sha256": "c5fbcab0eb9284fec411d61c3ab00f6b05de2310db6581c3dd6bb5f48e73da97"
+      "sha256": "aafcc7ea22ca3ef14b4dffe3e91a106bfce6b5fbbacb8d4593f9d24d6866f63a"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -69,8 +69,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 6915,
-      "sha256": "07705e2edd300d509b1d7d9f809cd3a9b449cdafb90c9b932b116f9fb74230f5"
+      "bytes": 7274,
+      "sha256": "f1327dc429f7a9938c85bd5f52c92e7c1b61fe92b71ef7cbf8262252b5f4adea"
     },
     {
       "path": "docs/adr/ADR-001_MODULAR_MONOLITH.md",
@@ -334,8 +334,8 @@
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
-      "bytes": 8716,
-      "sha256": "32f460ec5ca81ade185b63fe89d954e0ed500088755b6df923038e7bf6c310b3"
+      "bytes": 10101,
+      "sha256": "0a15d4948a9e213d5f61d11bc37365ea59d2be6f29799fec9c55b2219445c72f"
     },
     {
       "path": "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",

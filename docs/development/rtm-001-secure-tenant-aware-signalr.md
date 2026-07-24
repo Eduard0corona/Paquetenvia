@@ -62,10 +62,23 @@ Tracking.
 
 Operations permite sólo los roles canónicos `PLATFORM_ADMIN` y `DISPATCHER`.
 Platform admin requiere MFA y conserva el puerto de auditoría TEN-001.
-AI-07 también menciona `customer_support` para `/ops/dashboard`, pero ese valor
-no existe en el vocabulario canónico de AI-06/`OrganizationRole`. RTM-001 no
-inventa el enum: esa porción queda bloqueada por contradicción normativa hasta
-una decisión posterior.
+AI-02 declara `customer_support` como actor y AI-07 también lo permite para
+`/ops/dashboard`, pero ese valor no existe en el vocabulario canónico de
+AI-06/`OrganizationRole` ni puede ser interpretado por los parsers actuales.
+La contradicción está formalmente registrada, y permanece abierta, como
+`RTM-001-CUSTOMER-SUPPORT-ROLE` en AI-10. Registrar el bloqueo no resuelve la
+decisión: `CUSTOMER_SUPPORT` continúa denegado y no fue añadido, inferido ni
+mapeado a otro rol.
+
+La jerarquía de AI-00 mantiene AI-02 por encima de AI-07, AI-08 y Markdown,
+mientras AI-06 es el contrato operativo canónico actual para roles
+persistibles. Por eso la implementación no puede resolver silenciosamente el
+conflicto. No se modificaron AI-02, AI-06 ni AI-07. La resolución corresponde
+al project owner y puede requerir un bloque independiente con migración
+normativa y técnica. Mientras tanto, la infraestructura, el transporte y las
+pruebas sintéticas de aislamiento de RTM-001 pueden continuar, pero no se puede
+declarar implementado soporte completo para todos los actores de
+`/ops/dashboard`.
 
 Driver sólo resuelve el perfil OWN activo del usuario y tenant seleccionados.
 La consulta devuelve únicamente driver ID y assignments `ACCEPTED`/`ACTIVE`;
@@ -148,6 +161,30 @@ mapa de versiones de aggregates también acotado. Ignora versiones menores a la
 última aplicada. Un evento SignalR nunca representa aceptación de un comando.
 No se agregan pantallas ni integración productiva.
 
+### Evidencia E2E de reconexión real
+
+`RealtimeReconnectKestrelTests` ejecuta `Paqueteria.Api` sobre Kestrel en un
+puerto efímero y conecta `Microsoft.AspNetCore.SignalR.Client` por WebSockets.
+El test detiene el host, observa `Reconnecting`, reinicia Kestrel en la misma
+dirección y observa `Reconnected`. El mismo contador instrumentado envuelve al
+authorizer PostgreSQL real y demuestra una autorización inicial y una nueva
+autorización después de reconectar. La recepción posterior en
+`org:{organization_id}` prueba que `OnConnectedAsync` recuperó el grupo; una
+publicación para otra organización permanece aislada. Un segundo escenario
+revoca el tracking token durante la interrupción y demuestra que la conexión no
+puede recuperar el grupo autorizado.
+
+`real-reconnect.e2e.ts` ejecuta el wrapper web contra un proceso Kestrel
+controlado, también sobre puerto efímero y WebSockets. Termina realmente el
+proceso para interrumpir el transporte, lo reinicia en el mismo endpoint con un
+snapshot REST avanzado y comprueba que el callback de `base-connection.ts`
+reemplaza las versiones locales. Después valida recuperación de grupo,
+aislamiento cross-tenant, descarte de versión anterior, deduplicación por
+`event_id`, aplicación única de versiones superiores y cierre fail-closed ante
+un sync REST fallido. No se mockea `HubConnection`, no se invoca manualmente
+ningún callback y no se sustituye la reconexión automática por un nuevo
+`start()`.
+
 ## CORS, rate limiting y configuración
 
 CORS tiene policy exclusiva para los hubs, credenciales habilitadas sólo con
@@ -190,9 +227,9 @@ Authorization, tokens, claims, payload, IP completa, IDs, group names ni PII.
 La cobertura incluye contratos AI-12, reflexión de payloads/envelopes y ausencia
 de client methods, autorización y aislamiento con cliente SignalR real,
 audiencias separadas, matriz uniforme de tracking, privacidad, CORS, rate
-limiting, configuración cerrada, reconexión/sync REST/deduplicación web y
-PostgreSQL 18/PostGIS con tenant correcto, cross-tenant, estados suspendidos,
-pooling, retry y cancelación.
+limiting, configuración cerrada, reconexión real/sync REST/deduplicación web y
+PostgreSQL 18/PostGIS con tenant correcto, reautorización, recuperación de
+grupos, cross-tenant, estados suspendidos, pooling, retry y cancelación.
 
 RTM-001 no valida entrega desde outbox. No implementa RTM-002, TRK-001,
 DRV-003, ubicación, ETA, routing, incidents, notifications, external offers,
