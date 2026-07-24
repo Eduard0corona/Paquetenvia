@@ -175,7 +175,17 @@ paths:
         DSP-002 creates only OWN assignments. EXTERNAL and ALLY_CAPACITY remain
         reserved vocabulary and are rejected until their owning backlog items
         are implemented. route_id may be omitted or null; a non-null route is
-        rejected until Routing is implemented.
+        rejected until Routing is implemented. Authentication precedes
+        capability. An authenticated actor without the global Dispatch
+        capability receives 403 before resource visibility is resolved.
+        Authorized actors use the same structural PostgreSQL visibility plan
+        for missing or cross-tenant order/driver and receive the uniform 404.
+        This guarantee uses stable data access, never artificial delays.
+      x-authorization-precedence: capability-first
+      x-authorized-visibility-plan:
+      - order_packages
+      - driver_profile_documents
+      x-non-enumeration: structural-postgresql-no-artificial-delay
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'

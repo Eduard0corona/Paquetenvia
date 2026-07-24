@@ -1,5 +1,18 @@
 # Changelog
 
+## Visibilidad no enumerable DSP-002 — 2026-07-23
+
+- `DSP-002-NON-ENUMERABLE-VISIBILITY` interpreta AI-04/ADR-023 de forma
+  capability-first: un actor sin capacidad recibe 403 antes de resource access.
+- El actor autorizado ejecuta siempre `order_packages` y
+  `driver_profile_documents` antes de decidir el 404 uniforme.
+- Orden/driver missing o cross-tenant comparte componente, plan lógico,
+  Problem Details y rollback sin efectos.
+- No se usan delays, jitter, cronómetros de seguridad, retries ficticios ni
+  consultas deliberadamente costosas.
+- Replay reautoriza antes de leer evidencia y sigue sin reevaluar elegibilidad.
+- AI-06 y AI-18 permanecen byte-identical.
+
 ## Remediación contractual DSP-002 — 2026-07-23
 
 - AI-05 declara 409 para conflictos DSP-002 mediante Problem Details con los

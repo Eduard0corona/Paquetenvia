@@ -1,16 +1,16 @@
 {
   "project": "Paqueteria Culiacan AI Implementation",
   "version": "0.6",
-  "bundle_revision": "v0.6-full-canonical-sync-4-dsp002-contract-remediation",
+  "bundle_revision": "v0.6-full-canonical-sync-5-dsp002-non-enumerable-visibility",
   "date": "2026-07-23",
-  "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_DSP002_REMEDIATED",
+  "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_DSP002_VISIBILITY_REMEDIATED",
   "canonical_sql_sha256": "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96",
   "file_count": 73,
   "files": [
     {
       "path": "AI-00_README_FIRST.md",
-      "bytes": 3971,
-      "sha256": "b026b32c840167fbd55120f45c307b773dc91439cd145997c0e29d791d8f8300"
+      "bytes": 4282,
+      "sha256": "41c6cc530c80675fe510048e778ee8db9da731bd18876cc50be1035299fc24b7"
     },
     {
       "path": "AI-01_AGENT_OPERATING_CONTRACT.md",
@@ -24,33 +24,33 @@
     },
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
-      "bytes": 2733,
-      "sha256": "79abe6a66e48f1252daa78d8664278a759da90e758b18d44899891a946e83e05"
+      "bytes": 2935,
+      "sha256": "e11b3ebbbadde62af720943d0a93930861fb3920cc09a6b4674b9fb452416e43"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
-      "bytes": 3713,
-      "sha256": "5acd3d7f7ba8c01af9dde74bea67a10102775728fa83aa515e633d54364bc38a"
+      "bytes": 3992,
+      "sha256": "503c4718d543196df8843ab90694e910374fce93f49e8f8203a658430d517081"
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 5204,
-      "sha256": "7bfc97f4a36c6d34a74dd8b6ff325f942a2f5911b72afd4ad2bd6cac0db3cf07"
+      "bytes": 5883,
+      "sha256": "5f9e929ae9f968c2b2c16b0af762c87257df35bb299620ca25aa295f6114ff13"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7459,
-      "sha256": "469cb72efa8c498413be69280b3e5af5c4eba5fe71301bf26f1aa34eda0dd8e2"
+      "sha256": "e9de0f9b4a180fd38f7db2e39c1bb83f07d46b1752d71395e4fe989073038c47"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
-      "bytes": 1910,
-      "sha256": "0401b4e4bce93b2098c484f400783e51ab00c9edee7760cbdaa39a6a6a77fff3"
+      "bytes": 2193,
+      "sha256": "f69ca40e0d2a3952fe293e992b8ef3c2eb9cb9f0f055e6cdf2b7ed5b87bb281c"
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 51016,
-      "sha256": "cb009c42fb48034c6bedbfe3e0ff5a6661c6c753c67570ceca9a8ae5ef449b69"
+      "bytes": 51621,
+      "sha256": "37fa619f8a16b48be0ecd5b99b5ed76d85e8dda2060dcd57902b63be4f3d97a6"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -69,8 +69,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 5962,
-      "sha256": "7ffeb82c461a9279b16e56d51dac68152df3970f5a0b2ff0dbd306ab6d73cc6e"
+      "bytes": 6418,
+      "sha256": "ba0ce1f4d96d23440fd8ef2ddb67b47f2e9f5771fc01017687719289b8ad51d6"
     },
     {
       "path": "docs/adr/ADR-001_MODULAR_MONOLITH.md",
@@ -284,13 +284,13 @@
     },
     {
       "path": "docs/AI-25_V0.6_CHANGESET.md",
-      "bytes": 2321,
-      "sha256": "5d825ef176c406d807fc284f5499c6e0f4e98c8238ae8509477edf7fe63f03bc"
+      "bytes": 2858,
+      "sha256": "70559d44cb5e4658ee15fd4907f1a70cc8068f506fb62d47348b6a5c618991c1"
     },
     {
       "path": "docs/AI-26_VALIDATION_REPORT.md",
-      "bytes": 4906,
-      "sha256": "eac4979c969406cc62637dbf8da5a5bd111e106719f1d541aef305b348c07d7c"
+      "bytes": 6518,
+      "sha256": "a57aec0d641eae9dd53971e0e2e119247675c79a12980d0f44aea477ce617eab"
     },
     {
       "path": "docs/AI-27_RELEASE_SUMMARY_V0.6.md",
@@ -329,13 +329,13 @@
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 33134,
-      "sha256": "ce90b714e3c8408beeaa767ce8ef2aa5b1593512f282d47076176d13b4669ada"
+      "bytes": 33404,
+      "sha256": "073ee9c4ca4795b9c6c9768368850d82234d7c9331ceeebd01c5ce2519ef6f9a"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
-      "bytes": 7942,
-      "sha256": "ea024dca8e6c56e8453a75fa2dde188a8cf02a3a1f44aa25e236c09a1f4d7a46"
+      "bytes": 8299,
+      "sha256": "981257dcae89ab200331c745a89dc8fec892f23b5ad3899660b49e417fb07530"
     },
     {
       "path": "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",
@@ -364,8 +364,8 @@
     },
     {
       "path": "tools/validate_contracts.py",
-      "bytes": 18995,
-      "sha256": "339898178602cdd803358fedf073d23b68914da799ceaf6ae8c1ed76dc72b0ee"
+      "bytes": 19525,
+      "sha256": "b89d41de6d488800c85cb3174171932c40fc5d6db0fb085b72e92bae54d60108"
     },
     {
       "path": "VALIDATION_RESULTS.txt",

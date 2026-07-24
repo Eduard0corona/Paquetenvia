@@ -1,5 +1,11 @@
 # Archivos consolidados desde v0.5
 
+## Revisión controlada sync 5 para visibilidad DSP-002
+
+Esta revisión formaliza capability-first y el plan PostgreSQL estructural
+uniforme para orden/driver missing o cross-tenant. Actualiza AI-05, AI-08,
+AI-10, decisión, trazabilidad e integridad. AI-06 y AI-18 no cambian.
+
 ## Revisión controlada sync 4 para DSP-002
 
 Esta revisión alinea AI-05, AI-08 y AI-10 con el comportamiento incremental de

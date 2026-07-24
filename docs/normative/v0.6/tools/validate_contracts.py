@@ -174,6 +174,18 @@ def main() -> int:
     }
     if actual_problem_refs != expected_responses:
         errors.append(f"DSP-002 problem response refs drift: {actual_problem_refs}")
+    if assign.get("x-authorization-precedence") != "capability-first":
+        errors.append("DSP-002 authorization precedence drift")
+    if assign.get("x-authorized-visibility-plan") != [
+        "order_packages",
+        "driver_profile_documents",
+    ]:
+        errors.append("DSP-002 non-enumerable visibility plan drift")
+    if (
+        assign.get("x-non-enumeration")
+        != "structural-postgresql-no-artificial-delay"
+    ):
+        errors.append("DSP-002 non-enumeration mechanism drift")
 
     assignment_request = api["components"]["schemas"]["CreateAssignmentRequest"]
     if assignment_request.get("additionalProperties") is not False:
@@ -202,7 +214,9 @@ def main() -> int:
         "DRIVER_DOCUMENT_EXPIRED",
     ]:
         errors.append("DSP-002 safe conflict-code set drift")
-    checks.append("DSP-002: incremental request and 201/401/403/404/409 response contract")
+    checks.append(
+        "DSP-002: capability-first, structural visibility and 201/401/403/404/409 contract"
+    )
 
     product = parsed["specs/AI-02_PRODUCT_CONTRACT.yaml"]
     domain = parsed["specs/AI-04_DOMAIN_MODEL.yaml"]

@@ -86,3 +86,36 @@ Evidencia local reproducible:
 - Dependencias: 0 vulnerabilidades NuGet directas o transitivas. La auditoría
   web conserva 10 advisories preexistentes (5 high y 5 moderate) fuera del
   alcance de DSP-002.
+
+## Visibilidad no enumerable DSP-002
+
+La sincronización
+`v0.6-full-canonical-sync-5-dsp002-non-enumerable-visibility` valida
+`DSP-002-NON-ENUMERABLE-VISIBILITY`:
+
+- Sin autenticación se devuelve 401.
+- Viewer, Driver, membresía suspendida o `PLATFORM_ADMIN` sin MFA recibe 403
+  antes de consultar orden o driver.
+- Un actor autorizado ejecuta siempre `order_packages` y después
+  `driver_profile_documents`. Cada etapa consume dos resultsets del mismo
+  comando PostgreSQL aunque no exista la fila principal.
+- Orden o driver missing/cross-tenant comparte plan, respuesta 404 y rollback.
+- Estado, inelegibilidad y documento vencido visibles conservan 409 y sus
+  códigos públicos cerrados.
+- Replay reautoriza antes de evidencia y no reevalúa driver, documentos,
+  capacidad ni estado actual.
+- No se usan delays, sleeps, jitter, busy waits, cronómetros de seguridad,
+  retries ficticios ni consultas costosas. No se agregó una prueba temporal:
+  la garantía autoritativa es estructural y evita flakes.
+- Los 404 no crean métrica ni log informativo de causa.
+
+Evidencia local:
+
+- Suite .NET: 671 pruebas (277 unitarias, 185 de integración, 71 de
+  arquitectura y 138 de contrato).
+- PostgreSQL 18/PostGIS: 91 contratos; los cuatro 404 ejecutan el mismo catálogo
+  y revierten idempotencia, orden, assignment, evento, outbox y auditoría.
+- HTTP: mismo content type, propiedades, `type/title/status` y longitud; sólo
+  varía el `traceId` propio de cada request, sin resource IDs ni causa.
+- Build Debug: 0 warnings, 0 errores.
+- AI-06 y AI-18 conservan los hashes canónicos registrados arriba.

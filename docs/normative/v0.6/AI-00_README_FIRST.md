@@ -3,7 +3,7 @@
 **Proyecto:** [NOMBRE COMERCIAL PENDIENTE] — plataforma de paquetería local en Culiacán  
 **Versión:** 0.6  
 **Fecha:** 2026-07-23
-**Estado:** línea base normativa de seguridad/runtime y contrato incremental DSP-002 validados en PostgreSQL 18/PostGIS 3.6. Sustituye completamente a v0.5.
+**Estado:** línea base normativa de seguridad/runtime, contrato incremental DSP-002 y visibilidad no enumerable validados en PostgreSQL 18/PostGIS 3.6. Sustituye completamente a v0.5.
 
 ## Propósito
 
@@ -66,7 +66,7 @@ Pueden iniciar con estos contratos: `FND-001`, `ARC-001` y `FND-002`.
 Un entorno reproducible debe completar 20 entregas sintéticas sin pérdida de eventos, fuga tenant ni POD incompleto; recuperar leases abandonados; negar settles obsoletos; producir tracking público minimizado y validar bootstrap/hash/mapeos contra PostgreSQL real.
 ## Identidad de esta entrega consolidada
 
-Este directorio pertenece al bundle `v0.6-full-canonical-sync-4-dsp002-contract-remediation`. Para evitar mezclar copias intermedias, validar primero `CANONICAL_SOURCE_OF_TRUTH.md`, `CLAUDE_VALIDATION_HANDOFF.md`, `MANIFEST.json` y `CHECKSUMS_SHA256.txt`.
+Este directorio pertenece al bundle `v0.6-full-canonical-sync-5-dsp002-non-enumerable-visibility`. Para evitar mezclar copias intermedias, validar primero `CANONICAL_SOURCE_OF_TRUTH.md`, `CLAUDE_VALIDATION_HANDOFF.md`, `MANIFEST.json` y `CHECKSUMS_SHA256.txt`.
 
 ARC-002 está `DONE` después de pasar los cinco jobs de CI: AI-06 y AI-18 se
 ejecutaron en PostgreSQL 18/PostGIS 3.6 efímero, incluida purga real y
@@ -76,3 +76,8 @@ la base persistente de FND-002.
 DSP-002 formaliza en AI-05 su matriz 201/401/403/404/409, `route_id` nullable
 pero no nulo durante este incremento y `OWN` como única capacidad habilitada.
 La adopción valida el AI-06 existente sin modificar su schema canónico.
+
+DSP-002 aplica capability-first antes de cualquier consulta de recurso para
+actores sin capacidad. Los actores autorizados ejecutan siempre
+`order_packages -> driver_profile_documents` antes del 404 uniforme, sin
+retrasos artificiales ni observabilidad específica de la causa.

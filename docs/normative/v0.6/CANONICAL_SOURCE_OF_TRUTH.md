@@ -1,8 +1,8 @@
 # Fuente única de verdad — paquete canónico v0.6
 
-**Identificador de bundle:** `v0.6-full-canonical-sync-4-dsp002-contract-remediation`
+**Identificador de bundle:** `v0.6-full-canonical-sync-5-dsp002-non-enumerable-visibility`
 **Fecha de reconstrucción:** 2026-07-23
-**Estado:** normativa consolidada y validada; ARC-002 y remediación contractual DSP-002 `DONE`.
+**Estado:** normativa consolidada y validada; ARC-002, contrato DSP-002 y visibilidad no enumerable `DONE`.
 
 ## Regla de autoridad
 
@@ -31,6 +31,9 @@ AI-05 declara para DSP-002:
 - Problem Details 409 con códigos públicos cerrados;
 - `route_id` ausente o `null` hasta RTE-001;
 - vocabulario global de assignment conservado y únicamente `OWN` habilitado.
+- capability-first para actores sin capacidad Dispatch;
+- resolución autorizada estable `order_packages -> driver_profile_documents`,
+  sin delays artificiales, antes de un único 404.
 
 AI-06 y AI-18 no cambian en esta revisión. La migración de adopción de Dispatch
 es la responsable de detectar drift contra el catálogo canónico existente.

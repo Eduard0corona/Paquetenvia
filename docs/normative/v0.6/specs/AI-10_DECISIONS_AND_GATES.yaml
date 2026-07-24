@@ -171,3 +171,4 @@ technical_decisions:
   money_storage: bigint cents / OpenAPI int64
   provisioning: application-generated UUIDs pre-authorized only inside transaction-local RLS context
   dispatch_dsp002_incremental_contract: POST assignment uses 201/401/403/404/409; route_id is nullable but only omission/null is enabled until RTE-001; OWN is enabled while EXTERNAL remains reserved for EXT-001 and ALLY_CAPACITY for ALY-004
+  dispatch_dsp002_non_enumerable_visibility: capability-first returns 403 before resource access for actors without global Dispatch capability; authorized actors always execute order_packages then driver_profile_documents and return one uniform 404 for missing/cross-tenant order or driver; artificial delay and cause-specific normal logging are prohibited
