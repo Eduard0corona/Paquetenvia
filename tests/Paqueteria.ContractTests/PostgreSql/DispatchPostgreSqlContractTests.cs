@@ -2,6 +2,7 @@ using Dispatch.Application.Assignments;
 using Dispatch.Infrastructure;
 using Dispatch.Infrastructure.Assignments;
 using Dispatch.Infrastructure.Persistence;
+using Dispatch.Infrastructure.Persistence.Migrations;
 using Dispatch.Infrastructure.Stops;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -199,6 +200,12 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
     [PostgreSqlContractFact]
     public async Task Dispatch_adoption_RLS_history_and_partial_index_are_canonical()
     {
+        await using (var canonical = fixture.AdminDataSource.CreateCommand(
+                         AdoptCanonicalDispatchAssignmentsBaseline.AdoptionSql))
+        {
+            await canonical.ExecuteNonQueryAsync();
+        }
+
         await using (var connection = new NpgsqlConnection(fixture.DeploymentConnectionString))
         {
             await connection.OpenAsync();
@@ -252,6 +259,118 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             empty.Transaction);
         Assert.Equal(0L, await emptyQuery.ExecuteScalarAsync());
         await empty.RollbackAsync();
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_missing_cost_check()
+    {
+        await AssertAdoptionRejectsAsync(
+            "ALTER TABLE dispatch.assignments DROP CONSTRAINT assignments_cost_cents_check",
+            "cost_cents non-negative check");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_incorrect_cost_check()
+    {
+        await AssertAdoptionRejectsAsync(
+            """
+            ALTER TABLE dispatch.assignments DROP CONSTRAINT assignments_cost_cents_check;
+            ALTER TABLE dispatch.assignments
+              ADD CONSTRAINT assignments_cost_cents_check CHECK (cost_cents >= -1);
+            """,
+            "cost_cents non-negative check");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_missing_foreign_key()
+    {
+        await AssertAdoptionRejectsAsync(
+            "ALTER TABLE dispatch.assignments DROP CONSTRAINT assignments_order_id_fkey",
+            "exactly five canonical foreign keys");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_foreign_key_on_the_wrong_local_column()
+    {
+        await AssertAdoptionRejectsAsync(
+            """
+            ALTER TABLE dispatch.assignments DROP CONSTRAINT assignments_owner_org_id_fkey;
+            ALTER TABLE dispatch.assignments
+              ADD CONSTRAINT assignments_owner_org_id_fkey
+              FOREIGN KEY (driver_id) REFERENCES organizations.organizations(id) NOT VALID;
+            """,
+            "owner_org_id");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_foreign_key_to_the_wrong_table_or_referenced_column()
+    {
+        await AssertAdoptionRejectsAsync(
+            """
+            ALTER TABLE dispatch.assignments DROP CONSTRAINT assignments_owner_org_id_fkey;
+            ALTER TABLE dispatch.assignments
+              ADD CONSTRAINT assignments_owner_org_id_fkey
+              FOREIGN KEY (owner_org_id) REFERENCES identity.users(id) NOT VALID;
+            """,
+            "owner_org_id");
+        await AssertAdoptionRejectsAsync(
+            """
+            ALTER TABLE dispatch.assignments DROP CONSTRAINT assignments_order_id_fkey;
+            ALTER TABLE dispatch.assignments
+              ADD CONSTRAINT assignments_order_id_fkey
+              FOREIGN KEY (order_id) REFERENCES orders.orders(quote_id) NOT VALID;
+            """,
+            "order_id");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_noncanonical_foreign_key_actions()
+    {
+        await AssertAdoptionRejectsAsync(
+            """
+            ALTER TABLE dispatch.assignments DROP CONSTRAINT assignments_route_id_fkey;
+            ALTER TABLE dispatch.assignments
+              ADD CONSTRAINT assignments_route_id_fkey
+              FOREIGN KEY (route_id) REFERENCES routes.routes(id) ON DELETE CASCADE;
+            """,
+            "route_id");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_partial_index_with_a_different_predicate()
+    {
+        await AssertAdoptionRejectsAsync(
+            """
+            DROP INDEX dispatch.one_active_assignment_per_order;
+            CREATE UNIQUE INDEX one_active_assignment_per_order
+              ON dispatch.assignments(order_id)
+              WHERE status='ACCEPTED';
+            """,
+            "active assignment index");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_RLS_or_FORCE_RLS_disabled()
+    {
+        await AssertAdoptionRejectsAsync(
+            "ALTER TABLE dispatch.assignments DISABLE ROW LEVEL SECURITY",
+            "RLS configuration");
+        await AssertAdoptionRejectsAsync(
+            "ALTER TABLE dispatch.assignments NO FORCE ROW LEVEL SECURITY",
+            "RLS configuration");
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Adoption_rejects_incorrect_tenant_policy()
+    {
+        await AssertAdoptionRejectsAsync(
+            """
+            DROP POLICY assignments_tenant ON dispatch.assignments;
+            CREATE POLICY assignments_tenant ON dispatch.assignments
+              USING (security.app_allowed_org(owner_org_id))
+              WITH CHECK (security.app_allowed_org(owner_org_id));
+            """,
+            "assignments_tenant policy");
     }
 
     private PostgreSqlAssignmentToOrderCoordinator CreateAssignmentService(
@@ -344,6 +463,32 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             "SELECT count(*) FROM dispatch.assignments WHERE order_id=@order");
         command.Parameters.AddWithValue("order", orderId);
         return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task AssertAdoptionRejectsAsync(string mutation, string expectedMessage)
+    {
+        await using var connection = new NpgsqlConnection(fixture.DeploymentConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        try
+        {
+            await using (var mutate = new NpgsqlCommand(mutation, connection, transaction))
+            {
+                await mutate.ExecuteNonQueryAsync();
+            }
+
+            await using var adopt = new NpgsqlCommand(
+                AdoptCanonicalDispatchAssignmentsBaseline.AdoptionSql,
+                connection,
+                transaction);
+            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                adopt.ExecuteNonQueryAsync());
+            Assert.Contains(expectedMessage, exception.MessageText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await transaction.RollbackAsync();
+        }
     }
 
     private static async Task<bool> ExecuteOutcomeAsync(

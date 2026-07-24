@@ -78,6 +78,7 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         $$"""{"driver_id":"{{Guid.NewGuid():D}}","assignment_type":"OWN"}""",
         $$"""{"driver_id":"{{Guid.NewGuid():D}}","assignment_type":"OWN","cost_cents":-1}""",
         $$"""{"driver_id":"{{Guid.NewGuid():D}}","assignment_type":"OWN","cost_cents":0,"route_id":"{{Guid.NewGuid():D}}"}""",
+        $$"""{"driver_id":"{{Guid.NewGuid():D}}","assignment_type":"OWN","cost_cents":0,"route_id":42}""",
         $$"""{"driver_id":"{{Guid.NewGuid():D}}","assignment_type":"OWN","cost_cents":0,"unknown":true}""",
         $$"""{"driver_id":"{{Guid.NewGuid():D}}","assignment_type":"OWN","cost_cents":9223372036854775808}""",
     };
@@ -104,6 +105,76 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
             MockIdentityProfiles.ActiveDispatcher);
         using var response = await client.SendAsync(request);
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task POST_accepts_route_id_absent_or_null_and_rejects_non_null_or_invalid_values()
+    {
+        var driverId = Guid.NewGuid();
+        var absentBody =
+            $$"""{"driver_id":"{{driverId:D}}","assignment_type":"OWN","cost_cents":0}""";
+        using var absentRequest = AssignmentRequest(
+            Guid.NewGuid(),
+            Key(),
+            MockIdentityProfiles.ActiveDispatcher,
+            body: absentBody);
+        using var absent = await client.SendAsync(absentRequest);
+        Assert.Equal(HttpStatusCode.Created, absent.StatusCode);
+
+        var nullBody =
+            $$"""{"driver_id":"{{driverId:D}}","assignment_type":"OWN","cost_cents":0,"route_id":null}""";
+        using var nullRequest = AssignmentRequest(
+            Guid.NewGuid(),
+            Key(),
+            MockIdentityProfiles.ActiveDispatcher,
+            body: nullBody);
+        using var explicitNull = await client.SendAsync(nullRequest);
+        Assert.Equal(HttpStatusCode.Created, explicitNull.StatusCode);
+
+        foreach (var rejectedBody in new[]
+        {
+            $$"""{"driver_id":"{{driverId:D}}","assignment_type":"OWN","cost_cents":0,"route_id":"{{Guid.NewGuid():D}}"}""",
+            $$"""{"driver_id":"{{driverId:D}}","assignment_type":"OWN","cost_cents":0,"route_id":false}""",
+        })
+        {
+            using var rejectedRequest = AssignmentRequest(
+                Guid.NewGuid(),
+                Key(),
+                MockIdentityProfiles.ActiveDispatcher,
+                body: rejectedBody);
+            using var rejected = await client.SendAsync(rejectedRequest);
+            Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
+            Assert.Contains("INVALID_REQUEST", await rejected.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task POST_uses_uniform_404_for_missing_or_cross_tenant_resources()
+    {
+        using var missingOrderRequest = AssignmentRequest(
+            DispatchHttpWebApplicationFactory.MissingOrderId,
+            Key(),
+            MockIdentityProfiles.ActiveDispatcher);
+        using var missingOrder = await client.SendAsync(missingOrderRequest);
+        Assert.Equal(HttpStatusCode.NotFound, missingOrder.StatusCode);
+
+        using var missingDriverRequest = AssignmentRequest(
+            Guid.NewGuid(),
+            Key(),
+            MockIdentityProfiles.ActiveDispatcher,
+            driverId: DispatchHttpWebApplicationFactory.MissingDriverId);
+        using var missingDriver = await client.SendAsync(missingDriverRequest);
+        Assert.Equal(HttpStatusCode.NotFound, missingDriver.StatusCode);
+
+        var orderBody = await missingOrder.Content.ReadAsStringAsync();
+        var driverBody = await missingDriver.Content.ReadAsStringAsync();
+        using var orderProblem = JsonDocument.Parse(orderBody);
+        using var driverProblem = JsonDocument.Parse(driverBody);
+        Assert.Equal(
+            orderProblem.RootElement.GetProperty("title").GetString(),
+            driverProblem.RootElement.GetProperty("title").GetString());
+        Assert.DoesNotContain("order", orderBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("driver", driverBody, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

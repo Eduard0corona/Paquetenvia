@@ -26,6 +26,10 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         Guid.Parse("d2000000-0000-0000-0000-000000000001");
     internal static readonly Guid IneligibleDriverId =
         Guid.Parse("d2000000-0000-0000-0000-000000000002");
+    internal static readonly Guid MissingOrderId =
+        Guid.Parse("d2000000-0000-0000-0000-000000000003");
+    internal static readonly Guid MissingDriverId =
+        Guid.Parse("d2000000-0000-0000-0000-000000000004");
 
     internal void SetStops(IReadOnlyList<DriverStopResult> stops) => service.Stops = stops;
     internal int Effects => service.Effects;
@@ -65,6 +69,11 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                 (command.ActorId != AdminMfaId && command.ActorId != DispatcherId))
             {
                 throw new AssignmentForbiddenException();
+            }
+
+            if (command.OrderId == MissingOrderId || command.DriverId == MissingDriverId)
+            {
+                throw new AssignmentNotFoundException();
             }
 
             var signature =

@@ -58,12 +58,26 @@ public sealed class DispatchImplementationContractTests
     {
         var root = YamlNodes.LoadMapping(
             RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var assignmentOperation = root.Mapping("paths")
+            .Mapping("/orders/{orderId}/assignments")
+            .Mapping("post");
+        var responses = assignmentOperation.Mapping("responses");
         var schemas = root.Mapping("components").Mapping("schemas");
         var request = schemas.Mapping("CreateAssignmentRequest");
         var assignment = schemas.Mapping("Assignment");
         var money = schemas.Mapping("Money");
         var stop = schemas.Mapping("DriverStop");
+        var conflict = schemas.Mapping("DispatchAssignmentConflictProblem");
 
+        Assert.Equal(
+            ["201", "401", "403", "404", "409"],
+            responses.Children.Keys.Cast<YamlScalarNode>().Select(value => value.Value));
+        Assert.Equal(
+            "#/components/responses/UniformNotFound",
+            responses.Mapping("404").Scalar("$ref"));
+        Assert.Equal(
+            "#/components/responses/DispatchAssignmentConflict",
+            responses.Mapping("409").Scalar("$ref"));
         Assert.Equal(
             ["assignment_type", "cost_cents", "driver_id"],
             RequiredPropertyNames(request));
@@ -80,11 +94,32 @@ public sealed class DispatchImplementationContractTests
             request.Mapping("properties").Mapping("assignment_type").Sequence("enum")
                 .Children.Cast<YamlScalarNode>().Select(value => value.Value));
         Assert.Equal(
+            ["OWN"],
+            request.Mapping("properties").Mapping("assignment_type")
+                .Sequence("x-dsp-002-enabled-values")
+                .Children.Cast<YamlScalarNode>().Select(value => value.Value));
+        var reservedTypes = request.Mapping("properties").Mapping("assignment_type")
+            .Mapping("x-reserved-for");
+        Assert.Equal("EXT-001", reservedTypes.Scalar("EXTERNAL"));
+        Assert.Equal("ALY-004", reservedTypes.Scalar("ALLY_CAPACITY"));
+        var routeId = request.Mapping("properties").Mapping("route_id");
+        Assert.Equal(
+            ["string", "null"],
+            routeId.Sequence("type").Children.Cast<YamlScalarNode>().Select(value => value.Value));
+        Assert.Equal("uuid", routeId.Scalar("format"));
+        Assert.Equal("omitted-or-null-only", routeId.Scalar("x-dsp-002-support"));
+        Assert.Equal("false", request.Scalar("additionalProperties"));
+        Assert.Equal(
             ["PICKUP", "DELIVERY", "RETURN"],
             stop.Mapping("properties").Mapping("stop_type").Sequence("enum")
                 .Children.Cast<YamlScalarNode>().Select(value => value.Value));
         Assert.Equal("int64", request.Mapping("properties").Mapping("cost_cents").Scalar("format"));
         Assert.Equal("MXN", money.Mapping("properties").Mapping("currency").Scalar("const"));
+        Assert.Equal("409", conflict.Mapping("properties").Mapping("status").Scalar("const"));
+        Assert.Equal(
+            ["INVALID_REQUEST", "CONFLICT", "DRIVER_INELIGIBLE", "DRIVER_DOCUMENT_EXPIRED"],
+            conflict.Mapping("properties").Mapping("code").Sequence("enum")
+                .Children.Cast<YamlScalarNode>().Select(value => value.Value));
     }
 
     [Fact]
