@@ -396,6 +396,37 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "drivers.application": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "drivers.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "drivers.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Application": "[1.0.0, )"
+        }
+      },
+      "drivers.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Application": "[1.0.0, )",
+          "Drivers.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "identity.application": {
         "type": "Project",
         "dependencies": {
@@ -536,6 +567,7 @@
       "paqueteria.api": {
         "type": "Project",
         "dependencies": {
+          "Drivers.Infrastructure": "[1.0.0, )",
           "Identity.Application": "[1.0.0, )",
           "Identity.Endpoints": "[1.0.0, )",
           "Identity.Infrastructure": "[1.0.0, )",

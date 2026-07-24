@@ -75,7 +75,16 @@ internal static class SolutionCatalog
         additionalEndpointReferences: ["Organizations.Application", "Organizations.Endpoints"],
         allowedCrossModuleDependencies: ["Organizations"]);
 
-    internal static readonly IReadOnlyList<ModuleDefinition> Modules = [Identity, Orders, Pricing, Organizations, Locations];
+    internal static readonly ModuleDefinition Drivers = Module(
+        "Drivers",
+        typeof(Drivers.Domain.AssemblyReference).Assembly,
+        typeof(Drivers.Application.AssemblyReference).Assembly,
+        typeof(Drivers.Infrastructure.AssemblyReference).Assembly,
+        typeof(Drivers.Endpoints.AssemblyReference).Assembly,
+        additionalInfrastructureReferences: ["Paqueteria.Application"]);
+
+    internal static readonly IReadOnlyList<ModuleDefinition> Modules =
+        [Identity, Orders, Pricing, Organizations, Locations, Drivers];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -98,6 +107,7 @@ internal static class SolutionCatalog
             "Organizations.Application",
             "Locations.Endpoints",
             "Locations.Infrastructure",
+            "Drivers.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -118,6 +128,7 @@ internal static class SolutionCatalog
         .. Identity.Components,
         .. Organizations.Components,
         .. Locations.Components,
+        .. Drivers.Components,
         Api,
         Worker,
     ];

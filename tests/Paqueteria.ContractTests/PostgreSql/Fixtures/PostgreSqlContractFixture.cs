@@ -11,6 +11,7 @@ using Paqueteria.Infrastructure.Tenancy;
 using Locations.Infrastructure.Persistence;
 using Pricing.Infrastructure.Persistence;
 using Orders.Infrastructure.Persistence;
+using Drivers.Infrastructure.Persistence;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -257,6 +258,24 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             locationsOptions,
             new TenantDatabaseExecutionState());
         await locations.Database.MigrateAsync().ConfigureAwait(false);
+
+        await using var driversConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await driversConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", driversConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var driversOptions = new DbContextOptionsBuilder<DriversDbContext>()
+            .UseNpgsql(driversConnection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
+            }).Options;
+        await using var drivers = new DriversDbContext(
+            driversOptions,
+            new TenantDatabaseExecutionState());
+        await drivers.Database.MigrateAsync().ConfigureAwait(false);
 
         await using var pricingConnection = new NpgsqlConnection(DeploymentConnectionString);
         await pricingConnection.OpenAsync().ConfigureAwait(false);
