@@ -23,6 +23,8 @@
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Endpoints\Pricing.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Endpoints\Orders.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Application\Dispatch.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Endpoints\Dispatch.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Paqueteria.Api\Paqueteria.Api.csproj" />
   </ItemGroup>
 </Project>

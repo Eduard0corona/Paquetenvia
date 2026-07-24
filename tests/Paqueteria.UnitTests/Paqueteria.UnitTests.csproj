@@ -23,6 +23,9 @@
     <ProjectReference Include="..\..\src\Modules\Drivers\Drivers.Application\Drivers.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Drivers\Drivers.Domain\Drivers.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Drivers\Drivers.Infrastructure\Drivers.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Application\Dispatch.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Domain\Dispatch.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Application\Organizations.Application.csproj" />

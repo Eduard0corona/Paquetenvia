@@ -527,12 +527,47 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "dispatch.application": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatch.Domain": "[1.0.0, )",
+          "Drivers.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "dispatch.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "dispatch.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatch.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "dispatch.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatch.Application": "[1.0.0, )",
+          "Dispatch.Domain": "[1.0.0, )",
+          "Drivers.Application": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Orders.Application": "[1.0.0, )",
+          "Orders.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "drivers.application": {
         "type": "Project",
         "dependencies": {
           "Drivers.Domain": "[1.0.0, )",
-          "Paqueteria.Application": "[1.0.0, )",
-          "Paqueteria.Domain": "[1.0.0, )"
+          "Paqueteria.Application": "[1.0.0, )"
         }
       },
       "drivers.domain": {
@@ -548,7 +583,6 @@
           "Drivers.Domain": "[1.0.0, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
           "Paqueteria.Application": "[1.0.0, )",
-          "Paqueteria.Domain": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
@@ -692,6 +726,8 @@
       "paqueteria.api": {
         "type": "Project",
         "dependencies": {
+          "Dispatch.Endpoints": "[1.0.0, )",
+          "Dispatch.Infrastructure": "[1.0.0, )",
           "Drivers.Infrastructure": "[1.0.0, )",
           "Identity.Application": "[1.0.0, )",
           "Identity.Endpoints": "[1.0.0, )",
