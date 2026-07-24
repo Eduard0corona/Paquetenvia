@@ -134,7 +134,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         transaction,
                         command.OrganizationId,
                         command.OrderId,
-                        token) ?? throw new AssignmentForbiddenException();
+                        token) ?? throw new AssignmentNotFoundException();
                     await failureInjector.OnStageAsync(AssignmentTransactionStage.OrderLocked, token);
 
                     if (!OrderContractValues.TryParseOrderStatus(order.Status, out var source) ||
@@ -178,7 +178,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         token);
                     if (snapshot is null)
                     {
-                        throw new AssignmentForbiddenException();
+                        throw new AssignmentNotFoundException();
                     }
 
                     var eligibility = DriverEligibilityPolicy.Evaluate(

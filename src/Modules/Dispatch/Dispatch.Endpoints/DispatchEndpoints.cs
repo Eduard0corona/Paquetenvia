@@ -31,6 +31,7 @@ public static class DispatchEndpoints
             .Produces<AssignmentResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
 
         endpoints.MapGet("/api/v1/driver/me/stops", ListMyStopsAsync)
@@ -112,6 +113,10 @@ public static class DispatchEndpoints
         catch (AssignmentForbiddenException)
         {
             return Forbidden();
+        }
+        catch (AssignmentNotFoundException)
+        {
+            return NotFound();
         }
         catch (AssignmentConflictException exception)
         {
@@ -198,6 +203,9 @@ public static class DispatchEndpoints
 
     private static IResult Forbidden() =>
         Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");
+
+    private static IResult NotFound() =>
+        Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found.");
 }
 
 public sealed record CreateAssignmentRequest(

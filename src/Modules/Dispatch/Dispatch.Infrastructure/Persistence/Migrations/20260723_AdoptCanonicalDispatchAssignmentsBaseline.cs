@@ -9,15 +9,21 @@ public sealed class AdoptCanonicalDispatchAssignmentsBaseline : Migration
 {
     public const string MigrationId = "20260723_AdoptCanonicalDispatchAssignmentsBaseline";
 
-    protected override void Up(MigrationBuilder migrationBuilder) => migrationBuilder.Sql(
+    public const string AdoptionSql =
         """
         DO $adoption$
         DECLARE
           actual_columns text[];
           assignment_check_count integer;
           status_check_count integer;
+          cost_check_count integer;
+          canonical_cost_check_count integer;
           canonical_foreign_keys integer;
-          canonical_index text;
+          matching_foreign_key_count integer;
+          canonical_index_count integer;
+          assignment_policy_count integer;
+          total_assignment_policy_count integer;
+          expected_foreign_key record;
         BEGIN
           IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='dispatch')
              OR to_regclass('dispatch.assignments') IS NULL THEN
@@ -46,45 +52,115 @@ public sealed class AdoptCanonicalDispatchAssignmentsBaseline : Migration
           END IF;
 
           SELECT count(*) INTO assignment_check_count
-          FROM pg_constraint
-          WHERE conrelid='dispatch.assignments'::regclass AND contype='c'
-            AND pg_get_constraintdef(oid) LIKE '%assignment_type%'
-            AND pg_get_constraintdef(oid) LIKE '%OWN%'
-            AND pg_get_constraintdef(oid) LIKE '%EXTERNAL%'
-            AND pg_get_constraintdef(oid) LIKE '%ALLY_CAPACITY%';
+          FROM pg_constraint constraint_row
+          JOIN pg_attribute column_row
+            ON column_row.attrelid=constraint_row.conrelid
+           AND column_row.attname='assignment_type'
+          WHERE constraint_row.conrelid='dispatch.assignments'::regclass
+            AND constraint_row.contype='c'
+            AND constraint_row.convalidated
+            AND constraint_row.conkey=ARRAY[column_row.attnum]::smallint[]
+            AND pg_get_constraintdef(constraint_row.oid)=
+              'CHECK ((assignment_type = ANY (ARRAY[''OWN''::text, ''EXTERNAL''::text, ''ALLY_CAPACITY''::text])))';
           SELECT count(*) INTO status_check_count
-          FROM pg_constraint
-          WHERE conrelid='dispatch.assignments'::regclass AND contype='c'
-            AND pg_get_constraintdef(oid) LIKE '%status%'
-            AND pg_get_constraintdef(oid) LIKE '%OFFERED%'
-            AND pg_get_constraintdef(oid) LIKE '%ACCEPTED%'
-            AND pg_get_constraintdef(oid) LIKE '%ACTIVE%'
-            AND pg_get_constraintdef(oid) LIKE '%COMPLETED%'
-            AND pg_get_constraintdef(oid) LIKE '%CANCELLED%';
+          FROM pg_constraint constraint_row
+          JOIN pg_attribute column_row
+            ON column_row.attrelid=constraint_row.conrelid
+           AND column_row.attname='status'
+          WHERE constraint_row.conrelid='dispatch.assignments'::regclass
+            AND constraint_row.contype='c'
+            AND constraint_row.convalidated
+            AND constraint_row.conkey=ARRAY[column_row.attnum]::smallint[]
+            AND pg_get_constraintdef(constraint_row.oid)=
+              'CHECK ((status = ANY (ARRAY[''OFFERED''::text, ''ACCEPTED''::text, ''ACTIVE''::text, ''COMPLETED''::text, ''CANCELLED''::text])))';
           IF assignment_check_count <> 1 OR status_check_count <> 1 THEN
-            RAISE EXCEPTION 'canonical assignment enum checks are missing';
+            RAISE EXCEPTION 'canonical assignment enum checks are missing or inconsistent';
+          END IF;
+
+          SELECT
+            count(*),
+            count(*) FILTER (
+              WHERE constraint_row.convalidated
+                AND pg_get_constraintdef(constraint_row.oid)='CHECK ((cost_cents >= 0))')
+          INTO cost_check_count, canonical_cost_check_count
+          FROM pg_constraint constraint_row
+          JOIN pg_attribute column_row
+            ON column_row.attrelid=constraint_row.conrelid
+           AND column_row.attname='cost_cents'
+          WHERE constraint_row.conrelid='dispatch.assignments'::regclass
+            AND constraint_row.contype='c'
+            AND constraint_row.conkey=ARRAY[column_row.attnum]::smallint[];
+          IF cost_check_count <> 1 OR canonical_cost_check_count <> 1 THEN
+            RAISE EXCEPTION 'canonical cost_cents non-negative check is missing or inconsistent';
           END IF;
 
           SELECT count(*) INTO canonical_foreign_keys
           FROM pg_constraint
-          WHERE conrelid='dispatch.assignments'::regclass AND contype='f'
-            AND confrelid IN (
-              'orders.orders'::regclass,
-              'organizations.organizations'::regclass,
-              'drivers.driver_profiles'::regclass,
-              'routes.routes'::regclass
-            );
+          WHERE conrelid='dispatch.assignments'::regclass AND contype='f';
           IF canonical_foreign_keys <> 5 THEN
-            RAISE EXCEPTION 'canonical assignment foreign keys are missing';
+            RAISE EXCEPTION 'dispatch.assignments must have exactly five canonical foreign keys';
           END IF;
 
-          SELECT pg_get_indexdef(indexrelid) INTO canonical_index
-          FROM pg_index
-          WHERE indexrelid=to_regclass('dispatch.one_active_assignment_per_order');
-          IF canonical_index IS NULL
-             OR canonical_index NOT LIKE '%UNIQUE INDEX one_active_assignment_per_order%'
-             OR canonical_index NOT LIKE '%(order_id)%'
-             OR canonical_index NOT LIKE '%status = ANY (ARRAY[''ACCEPTED''::text, ''ACTIVE''::text])%' THEN
+          FOR expected_foreign_key IN
+            SELECT *
+            FROM (VALUES
+              ('order_id', 'orders.orders', 'id'),
+              ('owner_org_id', 'organizations.organizations', 'id'),
+              ('operator_org_id', 'organizations.organizations', 'id'),
+              ('driver_id', 'drivers.driver_profiles', 'id'),
+              ('route_id', 'routes.routes', 'id')
+            ) AS canonical(local_column, referenced_table, referenced_column)
+          LOOP
+            SELECT count(*) INTO matching_foreign_key_count
+            FROM pg_constraint constraint_row
+            JOIN pg_attribute local_column
+              ON local_column.attrelid=constraint_row.conrelid
+             AND local_column.attname=expected_foreign_key.local_column
+            JOIN pg_attribute referenced_column
+              ON referenced_column.attrelid=constraint_row.confrelid
+             AND referenced_column.attname=expected_foreign_key.referenced_column
+            WHERE constraint_row.conrelid='dispatch.assignments'::regclass
+              AND constraint_row.contype='f'
+              AND constraint_row.conkey=ARRAY[local_column.attnum]::smallint[]
+              AND constraint_row.confrelid=expected_foreign_key.referenced_table::regclass
+              AND constraint_row.confkey=ARRAY[referenced_column.attnum]::smallint[]
+              AND cardinality(constraint_row.conkey)=1
+              AND cardinality(constraint_row.confkey)=1
+              AND constraint_row.confupdtype='a'
+              AND constraint_row.confdeltype='a'
+              AND constraint_row.confmatchtype='s'
+              AND NOT constraint_row.condeferrable
+              AND NOT constraint_row.condeferred
+              AND constraint_row.convalidated;
+            IF matching_foreign_key_count <> 1 THEN
+              RAISE EXCEPTION
+                'canonical foreign key %.% -> %(%) is missing or inconsistent',
+                'dispatch.assignments',
+                expected_foreign_key.local_column,
+                expected_foreign_key.referenced_table,
+                expected_foreign_key.referenced_column;
+            END IF;
+          END LOOP;
+
+          SELECT count(*) INTO canonical_index_count
+          FROM pg_index index_row
+          JOIN pg_class index_class ON index_class.oid=index_row.indexrelid
+          JOIN pg_namespace index_namespace ON index_namespace.oid=index_class.relnamespace
+          JOIN pg_attribute order_column
+            ON order_column.attrelid=index_row.indrelid
+           AND order_column.attname='order_id'
+          WHERE index_row.indrelid='dispatch.assignments'::regclass
+            AND index_namespace.nspname='dispatch'
+            AND index_class.relname='one_active_assignment_per_order'
+            AND index_row.indisunique
+            AND index_row.indisvalid
+            AND index_row.indisready
+            AND index_row.indnkeyatts=1
+            AND index_row.indnatts=1
+            AND index_row.indkey[0]=order_column.attnum
+            AND pg_get_expr(index_row.indpred,index_row.indrelid)=
+              '(status = ANY (ARRAY[''ACCEPTED''::text, ''ACTIVE''::text]))';
+          IF canonical_index_count <> 1 THEN
             RAISE EXCEPTION 'canonical active assignment index is missing or inconsistent';
           END IF;
 
@@ -92,21 +168,33 @@ public sealed class AdoptCanonicalDispatchAssignmentsBaseline : Migration
             SELECT 1 FROM pg_class
             WHERE oid='dispatch.assignments'::regclass
               AND relrowsecurity AND relforcerowsecurity
-          ) OR NOT EXISTS (
-            SELECT 1 FROM pg_policies
-            WHERE schemaname='dispatch' AND tablename='assignments'
-              AND policyname='assignments_tenant'
-              AND cmd='ALL'
-              AND qual LIKE '%app_allowed_org(owner_org_id)%'
-              AND qual LIKE '%app_allowed_org(operator_org_id)%'
-              AND with_check LIKE '%app_allowed_org(owner_org_id)%'
-              AND with_check LIKE '%app_allowed_org(operator_org_id)%'
           ) THEN
             RAISE EXCEPTION 'canonical assignment RLS configuration is missing';
           END IF;
+
+          SELECT count(*) INTO total_assignment_policy_count
+          FROM pg_policies
+          WHERE schemaname='dispatch' AND tablename='assignments';
+          SELECT count(*) INTO assignment_policy_count
+          FROM pg_policies
+            WHERE schemaname='dispatch' AND tablename='assignments'
+              AND policyname='assignments_tenant'
+              AND permissive='PERMISSIVE'
+              AND roles=ARRAY['public'::name]
+              AND cmd='ALL'
+              AND regexp_replace(qual,'\s+','','g')=
+                '(security.app_allowed_org(owner_org_id)ORsecurity.app_allowed_org(operator_org_id))'
+              AND regexp_replace(with_check,'\s+','','g')=
+                '(security.app_allowed_org(owner_org_id)ORsecurity.app_allowed_org(operator_org_id))';
+          IF total_assignment_policy_count <> 1 OR assignment_policy_count <> 1 THEN
+            RAISE EXCEPTION 'canonical assignments_tenant policy is missing or inconsistent';
+          END IF;
         END
         $adoption$;
-        """);
+        """;
+
+    protected override void Up(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.Sql(AdoptionSql);
 
     protected override void Down(MigrationBuilder migrationBuilder)
     {

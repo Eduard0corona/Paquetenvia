@@ -65,6 +65,14 @@ public sealed class AssignmentForbiddenException : Exception
     }
 }
 
+public sealed class AssignmentNotFoundException : Exception
+{
+    public AssignmentNotFoundException()
+        : base("The assignment resource is missing or inaccessible.")
+    {
+    }
+}
+
 public sealed class AssignmentInfrastructureException(string message, Exception? innerException = null)
     : Exception(message, innerException);
 
