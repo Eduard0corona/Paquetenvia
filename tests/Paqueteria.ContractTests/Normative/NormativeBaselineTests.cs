@@ -77,6 +77,38 @@ public sealed class NormativeBaselineTests
     }
 
     [Fact]
+    public void Customer_support_contradiction_remains_an_open_fail_closed_decision()
+    {
+        var decisions = YamlNodes.LoadMapping(
+            RepositoryPaths.Normative("specs", "AI-10_DECISIONS_AND_GATES.yaml"));
+        var openDecision = Assert.Single(
+            decisions.Sequence("open_decisions").Children
+                .Cast<YamlMappingNode>(),
+            node => node.Scalar("id") == "RTM-001-CUSTOMER-SUPPORT-ROLE");
+        Assert.Equal(
+            "BLOCKER_FOR_CUSTOMER_SUPPORT_CAPABILITY",
+            openDecision.Scalar("severity"));
+        Assert.Contains(
+            "customer_support remains denied",
+            Scalars(openDecision.Sequence("work_allowed")));
+        Assert.Contains(
+            "mapping customer_support to DISPATCHER",
+            Scalars(openDecision.Sequence("prohibited_until_decision")));
+
+        var resolvedIds = decisions.Sequence("resolved_decisions").Children
+            .Cast<YamlMappingNode>()
+            .Select(node => node.Scalar("id"));
+        Assert.DoesNotContain("RTM-001-CUSTOMER-SUPPORT-ROLE", resolvedIds);
+
+        var guide = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "docs",
+            "development",
+            "rtm-001-secure-tenant-aware-signalr.md"));
+        Assert.Contains("RTM-001-CUSTOMER-SUPPORT-ROLE", guide, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Internal_and_public_status_vocabularies_are_consistent_across_yaml_openapi_and_signalr()
     {
         var product = YamlNodes.LoadMapping(RepositoryPaths.Normative("specs", "AI-02_PRODUCT_CONTRACT.yaml"));

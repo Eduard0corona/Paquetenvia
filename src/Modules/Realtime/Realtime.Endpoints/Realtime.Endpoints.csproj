@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Realtime.Application/Realtime.Application.csproj" />
+    <ProjectReference Include="../../Identity/Identity.Application/Identity.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Domain/Paqueteria.Domain.csproj" />
+  </ItemGroup>
+</Project>

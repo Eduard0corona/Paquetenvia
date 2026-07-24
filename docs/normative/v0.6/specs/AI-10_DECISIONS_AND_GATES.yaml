@@ -81,6 +81,34 @@ open_decisions:
   severity: BLOCKER_FOR_NEW_CITY
   decision_needed: city, service zones, SLA, pricing, legal and operational ownership
   work_allowed: generic city/service-area model and synthetic test configuration
+- id: RTM-001-CUSTOMER-SUPPORT-ROLE
+  topic: customer_support_role
+  severity: BLOCKER_FOR_CUSTOMER_SUPPORT_CAPABILITY
+  contradiction:
+  - AI-02 declares customer_support as a product actor
+  - AI-07 allows customer_support on /ops/dashboard
+  - AI-06 membership role vocabulary does not contain CUSTOMER_SUPPORT
+  - OrganizationRole and current parsers cannot represent CUSTOMER_SUPPORT
+  authority_hierarchy:
+  - AI-02 has higher authority than AI-07, AI-08, or Markdown documentation
+  - AI-06 is the current canonical operational contract for persistable membership roles
+  - the contradiction requires a project owner product decision
+  - implementation must not resolve the contradiction silently
+  work_allowed:
+  - OperationsHub may authorize PLATFORM_ADMIN with MFA
+  - OperationsHub may authorize DISPATCHER
+  - customer_support remains denied
+  - synthetic infrastructure and isolation tests may continue
+  prohibited_until_decision:
+  - adding CUSTOMER_SUPPORT to the enum
+  - adding CUSTOMER_SUPPORT to AI-06
+  - mapping customer_support to VIEWER
+  - mapping customer_support to DISPATCHER
+  - inferring capabilities from AuthCenter claims
+  decision_needed:
+  - add CUSTOMER_SUPPORT as a canonical organization role with explicit capabilities
+  - defer/remove customer_support from MVP-0 contracts
+  - explicitly assign the actor's responsibilities to an existing role
 resolved_decisions:
 - id: GATE-002
   topic: identity_provider

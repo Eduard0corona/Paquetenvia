@@ -38,5 +38,8 @@
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Application\Pricing.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Domain\Pricing.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Application\Realtime.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "paqueteria.application": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Contracts": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "paqueteria.contracts": {
+        "type": "Project"
+      },
+      "paqueteria.domain": {
+        "type": "Project"
+      },
+      "realtime.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

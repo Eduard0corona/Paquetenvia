@@ -12,6 +12,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
 {
     public const string Image = "postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d";
     public const string ValidTrackingToken = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
+    public const string ValidPublicOrderId = "ORD_abcdefghijklmnopqrstuv";
     public const string ExpiredTrackingToken = "expired-token-sec002-000000000000";
     public const string RevokedTrackingToken = "revoked-token-sec002-000000000000";
     public static readonly Guid ViewerOrganizationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
@@ -112,6 +113,21 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         return Convert.ToInt32(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    internal async Task RevokeValidTrackingTokenAsync()
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE orders.public_tracking_tokens
+            SET revoked_at=clock_timestamp()
+            WHERE token_hash=extensions.digest(pg_catalog.convert_to(@token,'UTF8'),'sha256')
+            """,
+            connection);
+        command.Parameters.AddWithValue("token", ValidTrackingToken);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
     private static async Task SeedSyntheticDataAsync(NpgsqlDataSource admin)
     {
         await using var command = admin.CreateCommand("""
@@ -145,7 +161,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
             INSERT INTO pricing.quotes(id,owner_org_id,city_id,origin_location_id,destination_location_id,service_type,pricing_tier,consolidated_route,subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot,currency,pricing_policy_version,request_snapshot_redacted,package_snapshot,breakdown,input_hash,status,expires_at)
               VALUES ('55555555-5555-5555-5555-555555555555','11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333','44444444-4444-4444-4444-444444444441','44444444-4444-4444-4444-444444444442','SAME_DAY','OCCASIONAL',false,10000,0,0,10000,10000,'MXN','sec002-v1','{}','[]','{}',decode(repeat('00',32),'hex'),'ACTIVE',clock_timestamp()+interval '1 day');
             INSERT INTO orders.orders(id,public_id,quote_id,owner_org_id,city_id,origin_location_id,destination_location_id,service_type,pricing_tier,consolidated_route,payer_type,status,subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot,currency,pricing_policy_version,package_snapshot,cod_expected_cents,version)
-              VALUES ('66666666-6666-6666-6666-666666666666','SEC002-PUBLIC-001','55555555-5555-5555-5555-555555555555','11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333','44444444-4444-4444-4444-444444444441','44444444-4444-4444-4444-444444444442','SAME_DAY','OCCASIONAL',false,'SENDER','DELIVERING',10000,0,0,10000,10000,'MXN','sec002-v1','[]',0,1);
+              VALUES ('66666666-6666-6666-6666-666666666666','ORD_abcdefghijklmnopqrstuv','55555555-5555-5555-5555-555555555555','11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333','44444444-4444-4444-4444-444444444441','44444444-4444-4444-4444-444444444442','SAME_DAY','OCCASIONAL',false,'SENDER','DELIVERING',10000,0,0,10000,10000,'MXN','sec002-v1','[]',0,1);
             INSERT INTO orders.public_tracking_tokens(id,order_id,owner_org_id,token_hash,expires_at,revoked_at) VALUES
               (gen_random_uuid(),'66666666-6666-6666-6666-666666666666','11111111-1111-1111-1111-111111111111',extensions.digest(pg_catalog.convert_to('AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA','UTF8'),'sha256'),clock_timestamp()+interval '1 day',NULL),
               (gen_random_uuid(),'66666666-6666-6666-6666-666666666666','11111111-1111-1111-1111-111111111111',extensions.digest(pg_catalog.convert_to('expired-token-sec002-000000000000','UTF8'),'sha256'),clock_timestamp()-interval '1 second',NULL),

@@ -4,6 +4,12 @@
 
 See `specs/AI-10_DECISIONS_AND_GATES.yaml`.
 
+- `RTM-001-CUSTOMER-SUPPORT-ROLE` — Contradicción pendiente: AI-02/AI-07
+  requieren `customer_support`, pero AI-06 y `OrganizationRole` no permiten
+  representarlo. RTM-001 mantiene fail-closed y sólo autoriza
+  `PLATFORM_ADMIN` con MFA y `DISPATCHER` hasta decisión del project owner.
+  Esta entrada registra el bloqueo; no es una decisión aprobada.
+
 ## Entries
 
 | Date | ID | Type | Decision | Impacted files | Approved by |

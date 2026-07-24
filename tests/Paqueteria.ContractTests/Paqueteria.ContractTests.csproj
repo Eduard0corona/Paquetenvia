@@ -28,6 +28,9 @@
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Domain\Dispatch.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Endpoints\Dispatch.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Application\Realtime.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Identity\Identity.Infrastructure\Identity.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Application\Organizations.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Realtime.Application/Realtime.Application.csproj" />
+    <ProjectReference Include="../Realtime.Domain/Realtime.Domain.csproj" />
+    <ProjectReference Include="../Realtime.Endpoints/Realtime.Endpoints.csproj" />
+    <ProjectReference Include="../../Orders/Orders.Application/Orders.Application.csproj" />
+    <ProjectReference Include="../../Organizations/Organizations.Application/Organizations.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Domain/Paqueteria.Domain.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+</Project>

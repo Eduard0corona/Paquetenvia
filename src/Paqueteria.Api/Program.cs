@@ -19,6 +19,8 @@ using Locations.Endpoints;
 using Locations.Infrastructure;
 using Pricing.Endpoints;
 using Pricing.Infrastructure;
+using Realtime.Endpoints;
+using Realtime.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,6 +41,8 @@ builder.Services.AddLocationsInfrastructure(builder.Configuration, builder.Envir
 builder.Services.AddLocationsEndpoints();
 builder.Services.AddPricingInfrastructure(builder.Configuration);
 builder.Services.AddPricingEndpoints();
+builder.Services.AddRealtimeInfrastructure(builder.Configuration, builder.Environment);
+builder.Services.AddRealtimeEndpoints(builder.Configuration);
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
@@ -48,6 +52,8 @@ builder.Services
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseRouting();
+app.UseCors();
 
 if (app.Environment.IsDevelopment())
 {
@@ -59,7 +65,10 @@ if (app.Configuration.GetValue<bool>("Http:UseHttpsRedirection"))
     app.UseHttpsRedirection();
 }
 
+app.UseRealtimePrivateAccessTokens();
 app.UseAuthentication();
+app.UseRateLimiter();
+app.UseRealtimeConnectionGate();
 app.UseMiddleware<TenantContextMiddleware>();
 app.UseAuthorization();
 
@@ -83,6 +92,7 @@ app.MapLocationEndpoints();
 app.MapQuoteEndpoints();
 app.MapOrderEndpoints();
 app.MapDispatchEndpoints();
+app.MapRealtimeHubs();
 
 app.Run();
 
