@@ -4,6 +4,8 @@ using Identity.Endpoints;
 using Identity.Endpoints.Testing;
 using Identity.Infrastructure;
 using Drivers.Infrastructure;
+using Dispatch.Endpoints;
+using Dispatch.Infrastructure;
 using Orders.Infrastructure;
 using Orders.Endpoints.Testing;
 using Orders.Endpoints;
@@ -27,6 +29,8 @@ builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddIdentityInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddDriversInfrastructure(builder.Configuration);
+builder.Services.AddDispatchInfrastructure(builder.Configuration);
+builder.Services.AddDispatchEndpoints();
 builder.Services.AddOrdersInfrastructure(builder.Configuration);
 builder.Services.AddOrdersEndpoints();
 builder.Services.AddOrganizationsInfrastructure(builder.Configuration);
@@ -78,6 +82,7 @@ app.MapOrganizationTestProbes(app.Environment);
 app.MapLocationEndpoints();
 app.MapQuoteEndpoints();
 app.MapOrderEndpoints();
+app.MapDispatchEndpoints();
 
 app.Run();
 

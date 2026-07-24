@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Dispatch.Application/Dispatch.Application.csproj" />
+    <ProjectReference Include="../Dispatch.Domain/Dispatch.Domain.csproj" />
+    <ProjectReference Include="../../Drivers/Drivers.Application/Drivers.Application.csproj" />
+    <ProjectReference Include="../../Orders/Orders.Application/Orders.Application.csproj" />
+    <ProjectReference Include="../../Orders/Orders.Domain/Orders.Domain.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+</Project>
