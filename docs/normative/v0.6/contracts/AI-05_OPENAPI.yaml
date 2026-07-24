@@ -171,6 +171,32 @@ paths:
       tags:
       - Dispatch
       operationId: assignDriver
+      description: >-
+        DSP-002 creates only OWN assignments. EXTERNAL and ALLY_CAPACITY remain
+        reserved vocabulary and are rejected until their owning backlog items
+        are implemented. route_id may be omitted or null; a non-null route is
+        rejected until Routing is implemented. Pure request-shape validation
+        may return 409 INVALID_REQUEST before capability evaluation and never
+        opens the productive transaction or reads persisted state. For every
+        structurally valid request, current tenant-aware capability is read
+        before the idempotency advisory lock, idempotency record, replay
+        evidence or resource visibility. An actor without the global Dispatch
+        capability therefore receives 403 independently of idempotency state.
+        Authorized actors use the same structural PostgreSQL visibility plan
+        for missing or cross-tenant order/driver and receive the uniform 404.
+        This guarantee uses stable data access, never artificial delays.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - order_packages
+      - driver_profile_documents
+      x-authorized-visibility-plan:
+      - order_packages
+      - driver_profile_documents
+      x-non-enumeration: structural-postgresql-no-artificial-delay
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -192,6 +218,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/DispatchAssignmentConflict'
   /external-offers:
     post:
       tags:
@@ -733,6 +763,15 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/Problem'
+    DispatchAssignmentConflict:
+      description: >-
+        DSP-002 request, idempotency, state, concurrency, eligibility, capacity
+        or replay-evidence conflict. Internal rejection evidence and PII are
+        never exposed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/DispatchAssignmentConflictProblem'
     NotFound:
       description: Not found or inaccessible
       content:
@@ -1101,6 +1140,7 @@ components:
           additionalProperties: true
     CreateAssignmentRequest:
       type: object
+      additionalProperties: false
       required:
       - driver_id
       - assignment_type
@@ -1111,17 +1151,34 @@ components:
           format: uuid
         assignment_type:
           type: string
+          description: >-
+            Global assignment vocabulary. DSP-002 enables only OWN. EXTERNAL is
+            reserved for EXT-001 and ALLY_CAPACITY for ALY-004; either reserved
+            value produces a DSP-002 conflict until its owning capability is
+            implemented.
           enum:
           - OWN
           - EXTERNAL
           - ALLY_CAPACITY
+          x-dsp-002-enabled-values:
+          - OWN
+          x-reserved-for:
+            EXTERNAL: EXT-001
+            ALLY_CAPACITY: ALY-004
         cost_cents:
           type: integer
           minimum: 0
           format: int64
         route_id:
-          type: string
+          type:
+          - string
+          - 'null'
           format: uuid
+          description: >-
+            Optional global route reference. DSP-002 accepts only omission or
+            null and rejects every non-null UUID until RTE-001 implements
+            Routing.
+          x-dsp-002-support: omitted-or-null-only
     Assignment:
       type: object
       required:
@@ -1351,6 +1408,33 @@ components:
           items:
             type: object
             additionalProperties: true
+    DispatchAssignmentConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - INVALID_REQUEST
+          - CONFLICT
+          - DRIVER_INELIGIBLE
+          - DRIVER_DOCUMENT_EXPIRED
     AuditLog:
       type: object
       required:

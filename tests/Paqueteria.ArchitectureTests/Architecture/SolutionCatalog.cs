@@ -83,8 +83,30 @@ internal static class SolutionCatalog
         typeof(Drivers.Endpoints.AssemblyReference).Assembly,
         additionalInfrastructureReferences: ["Paqueteria.Application"]);
 
+    internal static readonly ModuleDefinition Dispatch = Module(
+        "Dispatch",
+        typeof(Dispatch.Domain.AssemblyReference).Assembly,
+        typeof(Dispatch.Application.AssemblyReference).Assembly,
+        typeof(Dispatch.Infrastructure.AssemblyReference).Assembly,
+        typeof(Dispatch.Endpoints.AssemblyReference).Assembly,
+        additionalApplicationReferences: ["Drivers.Application"],
+        additionalInfrastructureReferences:
+        [
+            "Paqueteria.Application",
+            "Drivers.Application",
+            "Orders.Application",
+            "Orders.Domain",
+        ],
+        additionalEndpointReferences:
+        [
+            "Organizations.Application",
+            "Organizations.Endpoints",
+            "Paqueteria.Application",
+        ],
+        allowedCrossModuleDependencies: ["Drivers", "Orders", "Organizations"]);
+
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
-        [Identity, Orders, Pricing, Organizations, Locations, Drivers];
+        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -108,6 +130,8 @@ internal static class SolutionCatalog
             "Locations.Endpoints",
             "Locations.Infrastructure",
             "Drivers.Infrastructure",
+            "Dispatch.Endpoints",
+            "Dispatch.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -129,6 +153,7 @@ internal static class SolutionCatalog
         .. Organizations.Components,
         .. Locations.Components,
         .. Drivers.Components,
+        .. Dispatch.Components,
         Api,
         Worker,
     ];

@@ -14,6 +14,8 @@
     <ProjectReference Include="..\Modules\Identity\Identity.Endpoints\Identity.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Identity\Identity.Infrastructure\Identity.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Drivers\Drivers.Infrastructure\Drivers.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Dispatch\Dispatch.Endpoints\Dispatch.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Dispatch\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Endpoints\Orders.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Organizations\Organizations.Endpoints\Organizations.Endpoints.csproj" />

@@ -1,6 +1,6 @@
 # Entrega para validación independiente
 
-Valida únicamente este bundle: `v0.6-full-canonical-sync-3-arc002-purge-remediation`.
+Valida únicamente este bundle: `v0.6-full-canonical-sync-6-dsp002-capability-before-state`.
 
 ## Comprobaciones mínimas
 
@@ -14,6 +14,20 @@ Valida únicamente este bundle: `v0.6-full-canonical-sync-3-arc002-purge-remedia
 7. Confirmar que ambos `purge_*` omiten `FOR UPDATE SKIP LOCKED` y vuelven a comprobar estado terminal y cutoff en el `DELETE` objetivo.
 8. Confirmar que AI-18 conserva su hash y que maintenance mantiene exactamente `SELECT,DELETE`, sin `UPDATE`.
 9. Confirmar que ADR-032 y ADR-033 conservan el estado `ACEPTADO como referencia de diseño para v0.7`; sólo se actualiza su referencia al hash canónico de AI-06.
+10. Confirmar que `assignDriver` declara 201/401/403/404/409, usa el Problem
+    Details DSP-002 para 409 y conserva 404 uniforme para recursos ausentes o
+    cross-tenant.
+11. Confirmar que `route_id` es nullable pero solo permite ausencia/null hasta
+    RTE-001, y que únicamente `OWN` está habilitado en DSP-002.
+12. Confirmar que AI-06 y AI-18 conservan sus hashes canónicos.
+13. Confirmar capability-first antes de resource access para actores sin
+    capacidad Dispatch.
+14. Confirmar que los cuatro 404 autorizados ejecutan
+    `order_packages -> driver_profile_documents`, sin delays artificiales ni
+    causa específica en métricas/logs normales.
+15. Confirmar que la forma inválida puede devolver `INVALID_REQUEST` sin
+    transacción productiva y que todo request válido autoriza antes de lock,
+    lectura idempotente o evidencia de replay.
 
 ## Ejecución real completada por ARC-002
 

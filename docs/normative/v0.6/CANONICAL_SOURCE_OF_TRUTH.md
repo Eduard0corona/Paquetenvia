@@ -1,8 +1,8 @@
 # Fuente única de verdad — paquete canónico v0.6
 
-**Identificador de bundle:** `v0.6-full-canonical-sync-3-arc002-purge-remediation`
-**Fecha de reconstrucción:** 2026-07-21  
-**Estado:** normativa consolidada y validada; ARC-002 `DONE`.
+**Identificador de bundle:** `v0.6-full-canonical-sync-6-dsp002-capability-before-state`
+**Fecha de reconstrucción:** 2026-07-24
+**Estado:** normativa consolidada y validada; ARC-002, contrato DSP-002, visibilidad no enumerable y capability-before-persisted-state `DONE`.
 
 ## Regla de autoridad
 
@@ -25,6 +25,19 @@ El SQL canónico contiene:
 - tracking público fail-closed y `order_acceptances` append-only.
 - purga terminal sin privilegio `UPDATE`, con estado y cutoff revalidados en el `DELETE`.
 
+AI-05 declara para DSP-002:
+
+- respuestas 201/401/403/404/409;
+- Problem Details 409 con códigos públicos cerrados;
+- `route_id` ausente o `null` hasta RTE-001;
+- vocabulario global de assignment conservado y únicamente `OWN` habilitado.
+- capability-first para actores sin capacidad Dispatch;
+- resolución autorizada estable `order_packages -> driver_profile_documents`,
+  sin delays artificiales, antes de un único 404.
+
+AI-06 y AI-18 no cambian en esta revisión. La migración de adopción de Dispatch
+es la responsable de detectar drift contra el catálogo canónico existente.
+
 
 ## Referencias de diseño registradas
 
@@ -40,6 +53,10 @@ sha256sum -c CHECKSUMS_SHA256.txt
 ```
 
 `CHECKSUMS_SHA256.txt` cubre todos los archivos funcionales excepto el propio archivo de checksums y `MANIFEST.json`. `MANIFEST.json` registra el inventario consolidado completo.
+
+DSP-002 distingue validación pura de forma y acceso productivo. Un request
+válido exige capacidad tenant-aware antes de cualquier lock/lectura
+idempotente, evidencia de replay u otros recursos de negocio.
 
 ## Evidencia de ejecución real
 

@@ -1,0 +1,69 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "dispatch.application": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatch.Domain": "[1.0.0, )",
+          "Drivers.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "dispatch.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "drivers.application": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "drivers.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.application": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "paqueteria.application": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Contracts": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "paqueteria.contracts": {
+        "type": "Project"
+      },
+      "paqueteria.domain": {
+        "type": "Project"
+      }
+    }
+  }
+}
