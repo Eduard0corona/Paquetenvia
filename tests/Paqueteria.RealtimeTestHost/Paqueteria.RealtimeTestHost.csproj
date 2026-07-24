@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Application\Realtime.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />
+  </ItemGroup>
+</Project>

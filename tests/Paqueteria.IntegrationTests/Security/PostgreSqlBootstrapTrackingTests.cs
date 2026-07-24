@@ -190,7 +190,9 @@ public sealed class PostgreSqlBootstrapTrackingTests(
         var root = json.RootElement;
         Assert.Equal(["estimated_window", "public_id", "public_status", "timeline"],
             root.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
-        Assert.Equal("SEC002-PUBLIC-001", root.GetProperty("public_id").GetString());
+        Assert.Equal(
+            PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId,
+            root.GetProperty("public_id").GetString());
         Assert.Equal("OUT_FOR_DELIVERY", root.GetProperty("public_status").GetString());
         Assert.Equal(2, root.GetProperty("timeline").GetArrayLength());
         var raw = root.GetRawText();

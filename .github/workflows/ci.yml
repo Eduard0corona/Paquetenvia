@@ -170,6 +170,47 @@ jobs:
       - name: Build
         run: pnpm --dir apps/web build
 
+  realtime-e2e:
+    name: Validate real SignalR reconnect
+    runs-on: ubuntu-latest
+    env:
+      PAQUETERIA_TEST_HOST_DLL: ${{ github.workspace }}/tests/Paqueteria.RealtimeTestHost/bin/Release/net10.0/Paqueteria.RealtimeTestHost.dll
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Restore controlled host
+        run: dotnet restore ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --locked-mode
+
+      - name: Build controlled host
+        run: dotnet build ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --configuration Release --no-restore
+
+      - name: Install web dependencies
+        run: pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Execute real reconnect lifecycle
+        run: pnpm --dir apps/web test:realtime-e2e
+
   infrastructure:
     name: Validate local infrastructure
     runs-on: ubuntu-latest

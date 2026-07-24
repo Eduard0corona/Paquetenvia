@@ -119,6 +119,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Realtime.Endpoints", "src\M
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Realtime.Infrastructure", "src\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj", "{EF927A6A-D6BC-4CEB-ADA4-A2C54EA4EA27}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Paqueteria.RealtimeTestHost", "tests\Paqueteria.RealtimeTestHost\Paqueteria.RealtimeTestHost.csproj", "{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -669,6 +671,18 @@ Global
 		{EF927A6A-D6BC-4CEB-ADA4-A2C54EA4EA27}.Release|x64.Build.0 = Release|Any CPU
 		{EF927A6A-D6BC-4CEB-ADA4-A2C54EA4EA27}.Release|x86.ActiveCfg = Release|Any CPU
 		{EF927A6A-D6BC-4CEB-ADA4-A2C54EA4EA27}.Release|x86.Build.0 = Release|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Debug|x64.Build.0 = Debug|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Debug|x86.Build.0 = Debug|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Release|x64.ActiveCfg = Release|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Release|x64.Build.0 = Release|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Release|x86.ActiveCfg = Release|Any CPU
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -729,5 +743,6 @@ Global
 		{C2743253-9711-4079-BFA2-3F489BF2253D} = {EF0F585A-0B38-C4B1-0E02-F2A83540D143}
 		{449D55EB-6557-4D74-8342-8D78DB8C0FD0} = {EF0F585A-0B38-C4B1-0E02-F2A83540D143}
 		{EF927A6A-D6BC-4CEB-ADA4-A2C54EA4EA27} = {EF0F585A-0B38-C4B1-0E02-F2A83540D143}
+		{CBA235B0-7126-412F-BEBF-A5E8F7CDA2A7} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

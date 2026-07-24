@@ -49,7 +49,12 @@ export function buildManagedConnection(
     .configureLogging(LogLevel.Warning)
     .build();
 
-  connection.onreconnected(async () => {
+  connection.onreconnecting((error) => {
+    options.onReconnecting?.(error);
+  });
+
+  connection.onreconnected(async (connectionId) => {
+    options.onReconnected?.(connectionId);
     try {
       await resynchronizeAfterReconnect(guard, options.resynchronizeFromRest);
     } catch (error: unknown) {

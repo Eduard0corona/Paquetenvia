@@ -4,6 +4,7 @@ import { realtimeEventTypes } from "./event-types";
 
 const signalr = vi.hoisted(() => {
   let reconnectHandler: (() => Promise<void>) | undefined;
+  let reconnectingHandler: ((error?: Error) => void) | undefined;
   const stop = vi.fn(async () => undefined);
   return {
     stop,
@@ -12,12 +13,18 @@ const signalr = vi.hoisted(() => {
     register(handler: () => Promise<void>) {
       reconnectHandler = handler;
     },
+    registerReconnecting(handler: (error?: Error) => void) {
+      reconnectingHandler = handler;
+    },
     async reconnect() {
       if (reconnectHandler === undefined) {
         throw new Error("Reconnect callback was not registered.");
       }
 
       await reconnectHandler();
+    },
+    reconnecting(error?: Error) {
+      reconnectingHandler?.(error);
     },
   };
 });
@@ -44,6 +51,8 @@ vi.mock("@microsoft/signalr", () => ({
         state: "Disconnected",
         start: signalr.start,
         stop: signalr.stop,
+        onreconnecting: (handler: (error?: Error) => void) =>
+          signalr.registerReconnecting(handler),
         onreconnected: (handler: () => Promise<void>) => signalr.register(handler),
       };
     }
@@ -77,18 +86,26 @@ describe("managed SignalR reconnect lifecycle", () => {
     const synchronize = vi.fn(async () => ({
       aggregate_versions: { [aggregateId]: 5 },
     }));
+    const onReconnecting = vi.fn();
+    const onReconnected = vi.fn();
     const built = buildManagedConnection("https://api.synthetic.local/hubs/tracking", {
       baseUrl: "https://api.synthetic.local",
       tokenFactory: async () => "ephemeral-token",
       resynchronizeFromRest: synchronize,
+      onReconnecting,
+      onReconnected,
     });
     expect(built.guard.shouldApply(
       event("22222222-2222-2222-2222-222222222222", 1),
     )).toBe(true);
 
+    const transportError = new Error("controlled transport interruption");
+    signalr.reconnecting(transportError);
     await signalr.reconnect();
 
     expect(signalr.reconnectDelays).toEqual([0, 2_000, 10_000, 30_000]);
+    expect(onReconnecting).toHaveBeenCalledWith(transportError);
+    expect(onReconnected).toHaveBeenCalledOnce();
     expect(synchronize).toHaveBeenCalledOnce();
     expect(built.guard.shouldApply(
       event("33333333-3333-3333-3333-333333333333", 4),

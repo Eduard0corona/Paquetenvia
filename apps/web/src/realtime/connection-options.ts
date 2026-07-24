@@ -13,6 +13,8 @@ export interface BaseRealtimeConnectionOptions {
   readonly tokenFactory: RealtimeTokenFactory;
   readonly resynchronizeFromRest: RestResynchronizer;
   readonly reconnectDelaysMilliseconds?: readonly number[];
+  readonly onReconnecting?: (error?: Error) => void;
+  readonly onReconnected?: (connectionId?: string) => void;
   readonly onResynchronizationError?: (error: unknown) => void;
 }
 
