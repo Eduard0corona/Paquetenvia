@@ -93,6 +93,9 @@ La [guía de autenticación y autorización](docs/development/security-authentic
 documenta los schemes, perfiles sintéticos, claims, sesión, policies y límites.
 La [guía SEC-002](docs/development/security-bootstrap-tracking.md) documenta los
 adaptadores PostgreSQL, parsers, roles, tracking, pruebas y rollback.
+La [guía DSP-001](docs/development/dsp-001-own-driver-eligibility.md) describe
+el contrato interno de elegibilidad de flota propia, sus políticas sintéticas,
+aislamiento tenant, migración de adopción y rollback no destructivo.
 Ejecuta su matriz con:
 
 ```powershell
