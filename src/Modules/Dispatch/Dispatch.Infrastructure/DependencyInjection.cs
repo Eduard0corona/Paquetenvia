@@ -82,6 +82,8 @@ public static class DependencyInjection
         services.TryAddSingleton<IAssignmentFailureInjector, NoOpAssignmentFailureInjector>();
         services.TryAddScoped<IDispatchAuthorizationReader, PostgreSqlDispatchAuthorizationReader>();
         services.TryAddScoped<IDispatchDriverEligibilityReader, PostgreSqlDispatchDriverEligibilityReader>();
+        services.TryAddScoped<IAssignmentVisibilityDataReader, PostgreSqlAssignmentVisibilityDataReader>();
+        services.TryAddScoped<IAssignmentVisibilityResolver, DispatchAssignmentVisibilityResolver>();
         services.TryAddScoped<IAssignmentReplayEvidenceReader, PostgreSqlAssignmentReplayEvidenceReader>();
         services.AddSingleton<DisabledAssignmentService>();
         services.AddSingleton<DisabledDriverStopsQuery>();

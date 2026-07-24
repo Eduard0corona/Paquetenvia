@@ -157,6 +157,93 @@ public interface IDispatchDriverEligibilityReader
         CancellationToken cancellationToken);
 }
 
+public sealed record AssignmentVisibilityOrder(
+    Guid Id,
+    Guid OwnerOrganizationId,
+    Guid? OperatorOrganizationId,
+    Guid CityId,
+    Guid? ServiceAreaId,
+    string Status,
+    int Version);
+
+public sealed record AssignmentVisibilityPackage(
+    int WeightGrams,
+    string DimensionsJson);
+
+public sealed record AssignmentOrderVisibilityData(
+    AssignmentVisibilityOrder? Order,
+    IReadOnlyList<AssignmentVisibilityPackage> Packages)
+{
+    public IReadOnlyList<AssignmentVisibilityPackage> Packages { get; } = Packages.ToArray();
+}
+
+public sealed record AssignmentVisibilityResolution(
+    AssignmentVisibilityOrder? Order,
+    IReadOnlyList<AssignmentVisibilityPackage> Packages,
+    DriverEligibilitySnapshot? Driver)
+{
+    public IReadOnlyList<AssignmentVisibilityPackage> Packages { get; } = Packages.ToArray();
+    public bool IsVisible => Order is not null && Driver is not null;
+}
+
+public interface IAssignmentVisibilityDataReader
+{
+    Task<AssignmentOrderVisibilityData> ReadOrderAndPackagesAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid organizationId,
+        Guid orderId,
+        CancellationToken cancellationToken);
+
+    Task<DriverEligibilitySnapshot?> ReadDriverProfileAndDocumentsAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid organizationId,
+        Guid driverId,
+        Guid cityId,
+        Guid? serviceAreaId,
+        CancellationToken cancellationToken);
+}
+
+public interface IAssignmentVisibilityResolver
+{
+    Task<AssignmentVisibilityResolution> ResolveAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        CreateOwnDriverAssignmentCommand command,
+        CancellationToken cancellationToken);
+}
+
+public sealed class DispatchAssignmentVisibilityResolver(
+    IAssignmentVisibilityDataReader dataReader) : IAssignmentVisibilityResolver
+{
+    public static IReadOnlyList<string> StructuralPlan { get; } =
+        ["order_packages", "driver_profile_documents"];
+
+    public async Task<AssignmentVisibilityResolution> ResolveAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        CreateOwnDriverAssignmentCommand command,
+        CancellationToken cancellationToken)
+    {
+        var order = await dataReader.ReadOrderAndPackagesAsync(
+            connection,
+            transaction,
+            command.OrganizationId,
+            command.OrderId,
+            cancellationToken);
+        var driver = await dataReader.ReadDriverProfileAndDocumentsAsync(
+            connection,
+            transaction,
+            command.OrganizationId,
+            command.DriverId,
+            order.Order?.CityId ?? Guid.Empty,
+            order.Order?.ServiceAreaId,
+            cancellationToken);
+        return new(order.Order, order.Packages, driver);
+    }
+}
+
 public sealed record AssignmentReplayEvidence(
     int MatchingAssignmentCount,
     Guid? AssignmentId,

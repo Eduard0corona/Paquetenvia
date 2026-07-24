@@ -28,7 +28,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
     IOptions<DispatchDriverEligibilityOptions> driverEligibilityOptions,
     IDispatchAssignmentAuthorizer authorizer,
     IDispatchAuthorizationReader authorizationReader,
-    IDispatchDriverEligibilityReader eligibilityReader,
+    IAssignmentVisibilityResolver visibilityResolver,
     IAssignmentReplayEvidenceReader replayEvidenceReader,
     OrderTransitionGuardRegistry guardRegistry,
     IAppendOnlyAuditWriter auditWriter,
@@ -89,6 +89,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         var completed = ReadCompletedResponse(idempotency);
                         if (completed is not null)
                         {
+                            await EnsureAuthorizedAsync(connection, transaction, command, token);
                             var evidence = await replayEvidenceReader.ReadAsync(
                                 connection,
                                 transaction,
@@ -108,7 +109,6 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                                 throw Conflict(AssignmentConflictCode.InconsistentReplayEvidence);
                             }
 
-                            await EnsureAuthorizedAsync(connection, transaction, command, token);
                             ReplayCounter.Add(1);
                             LogResult(command, completed.Id, "replay", stopwatch.Elapsed);
                             return completed;
@@ -129,12 +129,18 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         AssignmentTransactionStage.IdempotencyReserved,
                         token);
 
-                    var order = await ReadOrderForUpdateAsync(
+                    var visibility = await visibilityResolver.ResolveAsync(
                         connection,
                         transaction,
-                        command.OrganizationId,
-                        command.OrderId,
-                        token) ?? throw new AssignmentNotFoundException();
+                        command,
+                        token);
+                    if (!visibility.IsVisible)
+                    {
+                        throw new AssignmentNotFoundException();
+                    }
+
+                    var order = visibility.Order!;
+                    var snapshot = visibility.Driver!;
                     await failureInjector.OnStageAsync(AssignmentTransactionStage.OrderLocked, token);
 
                     if (!OrderContractValues.TryParseOrderStatus(order.Status, out var source) ||
@@ -155,7 +161,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         throw Conflict(AssignmentConflictCode.ActiveAssignmentExists);
                     }
 
-                    var packages = await ReadPackagesAsync(connection, transaction, order.Id, token);
+                    var packages = ParsePackages(visibility.Packages);
                     await failureInjector.OnStageAsync(AssignmentTransactionStage.PackagesRead, token);
                     if (!PackageCapacityAggregator.TryAggregate(packages, out var capacity) ||
                         capacity is null)
@@ -171,16 +177,6 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         order.ServiceAreaId,
                         capacity,
                         occurredAt);
-                    var snapshot = await eligibilityReader.ReadAsync(
-                        connection,
-                        transaction,
-                        eligibilityCommand,
-                        token);
-                    if (snapshot is null)
-                    {
-                        throw new AssignmentNotFoundException();
-                    }
-
                     var eligibility = DriverEligibilityPolicy.Evaluate(
                         eligibilityCommand,
                         snapshot,
@@ -495,37 +491,6 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Idempotency reservation failed.");
     }
 
-    private async Task<OrderRow?> ReadOrderForUpdateAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid organizationId,
-        Guid orderId,
-        CancellationToken cancellationToken)
-    {
-        await using var command = CreateCommand(
-            connection,
-            transaction,
-            """
-            SELECT id,owner_org_id,operator_org_id,city_id,service_area_id,status,version
-            FROM orders.orders
-            WHERE id=@id AND (owner_org_id=@organization_id OR operator_org_id=@organization_id)
-            FOR UPDATE
-            """);
-        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, orderId));
-        command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, organizationId));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken)
-            ? new(
-                reader.GetGuid(0),
-                reader.GetGuid(1),
-                reader.IsDBNull(2) ? null : reader.GetGuid(2),
-                reader.GetGuid(3),
-                reader.IsDBNull(4) ? null : reader.GetGuid(4),
-                reader.GetString(5),
-                reader.GetInt32(6))
-            : null;
-    }
-
     private async Task<bool> HasActiveAssignmentAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -545,28 +510,14 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
-    private async Task<IReadOnlyList<PackageCapacityItem>> ReadPackagesAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid orderId,
-        CancellationToken cancellationToken)
+    private static IReadOnlyList<PackageCapacityItem> ParsePackages(
+        IReadOnlyList<AssignmentVisibilityPackage> rows)
     {
-        await using var command = CreateCommand(
-            connection,
-            transaction,
-            """
-            SELECT weight_grams,dimensions_mm::text
-            FROM orders.package_items
-            WHERE order_id=@order_id
-            ORDER BY id
-            """);
-        command.Parameters.Add(P("order_id", NpgsqlDbType.Uuid, orderId));
         var packages = new List<PackageCapacityItem>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        foreach (var row in rows)
         {
             if (!TryReadDimensions(
-                    reader.GetString(1),
+                    row.DimensionsJson,
                     out var length,
                     out var width,
                     out var height))
@@ -574,7 +525,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                 throw Conflict(AssignmentConflictCode.CapacityInsufficient);
             }
 
-            packages.Add(new PackageCapacityItem(reader.GetInt32(0), length, width, height));
+            packages.Add(new PackageCapacityItem(row.WeightGrams, length, width, height));
         }
 
         return packages;
@@ -656,7 +607,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
     private async Task<int> UpdateOrderAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        OrderRow order,
+        AssignmentVisibilityOrder order,
         OrderStatus source,
         int newVersion,
         DateTimeOffset occurredAt,
@@ -682,7 +633,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid eventId,
-        OrderRow order,
+        AssignmentVisibilityOrder order,
         Guid assignmentId,
         OrderStatus source,
         int newVersion,
@@ -722,7 +673,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid outboxId,
-        OrderRow order,
+        AssignmentVisibilityOrder order,
         OrderStatus source,
         int newVersion,
         DateTimeOffset occurredAt,
@@ -804,7 +755,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         CreateOwnDriverAssignmentCommand command,
-        OrderRow order,
+        AssignmentVisibilityOrder order,
         Guid assignmentId,
         OrderStatus source,
         int newVersion,
@@ -920,12 +871,4 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         string? ResponseBody,
         Guid? ResourceId);
 
-    private sealed record OrderRow(
-        Guid Id,
-        Guid OwnerOrganizationId,
-        Guid? OperatorOrganizationId,
-        Guid CityId,
-        Guid? ServiceAreaId,
-        string Status,
-        int Version);
 }

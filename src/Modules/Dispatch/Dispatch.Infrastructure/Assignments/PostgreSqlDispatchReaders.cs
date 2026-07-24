@@ -47,6 +47,95 @@ public sealed class PostgreSqlDispatchAuthorizationReader : IDispatchAuthorizati
     }
 }
 
+public sealed class PostgreSqlAssignmentVisibilityDataReader(
+    IDispatchDriverEligibilityReader eligibilityReader) : IAssignmentVisibilityDataReader
+{
+    public async Task<AssignmentOrderVisibilityData> ReadOrderAndPackagesAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid organizationId,
+        Guid orderId,
+        CancellationToken cancellationToken)
+    {
+        const string sql =
+            """
+            SELECT id,owner_org_id,operator_org_id,city_id,service_area_id,status,version
+            FROM orders.orders
+            WHERE id=@order_id
+              AND (owner_org_id=@organization_id OR operator_org_id=@organization_id)
+            FOR UPDATE;
+
+            SELECT package.weight_grams,package.dimensions_mm::text
+            FROM orders.package_items package
+            JOIN orders.orders visible_order ON visible_order.id=package.order_id
+            WHERE package.order_id=@order_id
+              AND (visible_order.owner_org_id=@organization_id
+                   OR visible_order.operator_org_id=@organization_id)
+            ORDER BY package.id;
+            """;
+        await using var command = new NpgsqlCommand(
+            sql,
+            (NpgsqlConnection)connection,
+            (NpgsqlTransaction)transaction);
+        command.Parameters.Add(P("order_id", NpgsqlDbType.Uuid, orderId));
+        command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, organizationId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+        AssignmentVisibilityOrder? order = null;
+        if (await reader.ReadAsync(cancellationToken))
+        {
+            order = new(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.IsDBNull(2) ? null : reader.GetGuid(2),
+                reader.GetGuid(3),
+                reader.IsDBNull(4) ? null : reader.GetGuid(4),
+                reader.GetString(5),
+                reader.GetInt32(6));
+        }
+
+        if (!await reader.NextResultAsync(cancellationToken))
+        {
+            throw new AssignmentInfrastructureException(
+                "Assignment visibility package result is missing.");
+        }
+
+        var packages = new List<AssignmentVisibilityPackage>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            packages.Add(new(reader.GetInt32(0), reader.GetString(1)));
+        }
+
+        return new(order, packages);
+    }
+
+    public Task<DriverEligibilitySnapshot?> ReadDriverProfileAndDocumentsAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid organizationId,
+        Guid driverId,
+        Guid cityId,
+        Guid? serviceAreaId,
+        CancellationToken cancellationToken) =>
+        eligibilityReader.ReadAsync(
+            connection,
+            transaction,
+            new EvaluateOwnDriverEligibilityCommand(
+                Guid.Empty,
+                organizationId,
+                driverId,
+                cityId,
+                serviceAreaId,
+                new DriverCapacityRequirement(0, 0, 0, null, null, null),
+                DateTimeOffset.UnixEpoch),
+            cancellationToken);
+
+    private static NpgsqlParameter P(string name, NpgsqlDbType type, object? value) => new(name, type)
+    {
+        Value = value ?? DBNull.Value,
+    };
+}
+
 public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverEligibilityReader
 {
     public async Task<DriverEligibilitySnapshot?> ReadAsync(
@@ -55,7 +144,7 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
         EvaluateOwnDriverEligibilityCommand eligibility,
         CancellationToken cancellationToken)
     {
-        const string profileSql =
+        const string sql =
             """
             SELECT p.id,p.org_id,p.user_id,p.home_city_id,p.driver_type,p.vehicle_type,p.status,
                    u.status,
@@ -75,83 +164,74 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                    ) END
             FROM drivers.driver_profiles p
             LEFT JOIN identity.users u ON u.id=p.user_id
-            WHERE p.id=@driver_id AND p.org_id=@organization_id
-            """;
-        var npgsqlConnection = (NpgsqlConnection)connection;
-        var npgsqlTransaction = (NpgsqlTransaction)transaction;
+            WHERE p.id=@driver_id AND p.org_id=@organization_id;
 
-        Guid driverId;
-        Guid organizationId;
-        Guid userId;
-        Guid homeCityId;
-        string driverType;
-        string vehicleType;
-        string profileStatus;
-        string? userStatus;
-        bool membershipActive;
-        bool? serviceAreaEligible;
-
-        await using (var profile = new NpgsqlCommand(profileSql, npgsqlConnection, npgsqlTransaction))
-        {
-            profile.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, eligibility.DriverId));
-            profile.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, eligibility.OrganizationId));
-            profile.Parameters.Add(P("service_area_id", NpgsqlDbType.Uuid, eligibility.ServiceAreaId));
-            profile.Parameters.Add(P("city_id", NpgsqlDbType.Uuid, eligibility.CityId));
-            await using var reader = await profile.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-            {
-                return null;
-            }
-
-            driverId = reader.GetGuid(0);
-            organizationId = reader.GetGuid(1);
-            userId = reader.GetGuid(2);
-            homeCityId = reader.GetGuid(3);
-            driverType = reader.GetString(4);
-            vehicleType = reader.GetString(5);
-            profileStatus = reader.GetString(6);
-            userStatus = reader.IsDBNull(7) ? null : reader.GetString(7);
-            membershipActive = reader.GetBoolean(8);
-            serviceAreaEligible = reader.IsDBNull(9) ? null : reader.GetBoolean(9);
-        }
-
-        const string documentsSql =
-            """
             SELECT DISTINCT ON (document_type)
                    document_type,status,object_key,sha256,expires_at
             FROM drivers.driver_documents
             WHERE driver_id=@driver_id AND org_id=@organization_id
             ORDER BY document_type,created_at DESC,id DESC
             """;
-        var documents = new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal);
-        await using (var command = new NpgsqlCommand(documentsSql, npgsqlConnection, npgsqlTransaction))
+        await using var command = new NpgsqlCommand(
+            sql,
+            (NpgsqlConnection)connection,
+            (NpgsqlTransaction)transaction);
+        command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, eligibility.DriverId));
+        command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, eligibility.OrganizationId));
+        command.Parameters.Add(P("service_area_id", NpgsqlDbType.Uuid, eligibility.ServiceAreaId));
+        command.Parameters.Add(P("city_id", NpgsqlDbType.Uuid, eligibility.CityId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+        DriverProfileRow? profile = null;
+        if (await reader.ReadAsync(cancellationToken))
         {
-            command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, eligibility.DriverId));
-            command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, eligibility.OrganizationId));
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                var type = reader.GetString(0);
-                documents[type] = new DriverDocumentSnapshot(
-                    type,
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.GetFieldValue<byte[]>(3),
-                    reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4));
-            }
+            profile = new(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.GetGuid(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.GetBoolean(8),
+                reader.IsDBNull(9) ? null : reader.GetBoolean(9));
+        }
+
+        if (!await reader.NextResultAsync(cancellationToken))
+        {
+            throw new AssignmentInfrastructureException(
+                "Assignment visibility driver-document result is missing.");
+        }
+
+        var documents = new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var type = reader.GetString(0);
+            documents[type] = new DriverDocumentSnapshot(
+                type,
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetFieldValue<byte[]>(3),
+                reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4));
+        }
+
+        if (profile is null)
+        {
+            return null;
         }
 
         return new DriverEligibilitySnapshot(
-            driverId,
-            organizationId,
-            userId,
-            homeCityId,
-            driverType,
-            vehicleType,
-            profileStatus,
-            userStatus,
-            membershipActive,
-            serviceAreaEligible,
+            profile.DriverId,
+            profile.OrganizationId,
+            profile.UserId,
+            profile.HomeCityId,
+            profile.DriverType,
+            profile.VehicleType,
+            profile.ProfileStatus,
+            profile.UserStatus,
+            profile.MembershipActive,
+            profile.ServiceAreaEligible,
             documents);
     }
 
@@ -159,6 +239,18 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
     {
         Value = value ?? DBNull.Value,
     };
+
+    private sealed record DriverProfileRow(
+        Guid DriverId,
+        Guid OrganizationId,
+        Guid UserId,
+        Guid HomeCityId,
+        string DriverType,
+        string VehicleType,
+        string ProfileStatus,
+        string? UserStatus,
+        bool MembershipActive,
+        bool? ServiceAreaEligible);
 }
 
 public sealed class PostgreSqlAssignmentReplayEvidenceReader : IAssignmentReplayEvidenceReader
