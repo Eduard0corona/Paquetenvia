@@ -1,8 +1,8 @@
 # Fuente única de verdad — paquete canónico v0.6
 
-**Identificador de bundle:** `v0.6-full-canonical-sync-3-arc002-purge-remediation`
-**Fecha de reconstrucción:** 2026-07-21  
-**Estado:** normativa consolidada y validada; ARC-002 `DONE`.
+**Identificador de bundle:** `v0.6-full-canonical-sync-4-dsp002-contract-remediation`
+**Fecha de reconstrucción:** 2026-07-23
+**Estado:** normativa consolidada y validada; ARC-002 y remediación contractual DSP-002 `DONE`.
 
 ## Regla de autoridad
 
@@ -24,6 +24,16 @@ El SQL canónico contiene:
 - `pgcrypto` en `extensions` y PostGIS en `public`;
 - tracking público fail-closed y `order_acceptances` append-only.
 - purga terminal sin privilegio `UPDATE`, con estado y cutoff revalidados en el `DELETE`.
+
+AI-05 declara para DSP-002:
+
+- respuestas 201/401/403/404/409;
+- Problem Details 409 con códigos públicos cerrados;
+- `route_id` ausente o `null` hasta RTE-001;
+- vocabulario global de assignment conservado y únicamente `OWN` habilitado.
+
+AI-06 y AI-18 no cambian en esta revisión. La migración de adopción de Dispatch
+es la responsable de detectar drift contra el catálogo canónico existente.
 
 
 ## Referencias de diseño registradas

@@ -336,9 +336,16 @@ items:
   - una asignación activa por orden
   - costo obligatorio
   - ASSIGNED auditado
+  - POST assignment declara 409 para request, idempotencia, estado, concurrencia, elegibilidad, capacidad y replay inconsistentes
+  - recursos ausentes o cross-tenant usan 404 uniforme; actor sin capacidad sobre tenant visible usa 403
+  - route_id puede omitirse o ser null; todo UUID no nulo se rechaza hasta RTE-001
+  - el vocabulario global conserva OWN, EXTERNAL y ALLY_CAPACITY, pero DSP-002 habilita únicamente OWN
+  - EXTERNAL permanece reservado para EXT-001 y ALLY_CAPACITY para ALY-004
   required_tests:
   - unique race test
   - authorization e2e
+  - OpenAPI response/nullability/release-capability contract
+  - canonical assignment adoption drift tests
   approval_gate: null
 - id: RTM-001
   epic: Realtime

@@ -37,7 +37,9 @@ owner u operator y el índice parcial único
 La migración única
 `20260723_AdoptCanonicalDispatchAssignmentsBaseline` usa
 `platform.__ef_migrations_history_dispatch`. Verifica schema, tabla, columnas,
-PK, checks, cinco FKs, índice, RLS, FORCE RLS y policy
+PK, checks exactos de enums y `cost_cents >= 0`, y las cinco FKs por columna
+local, tabla/columna referenciada, cardinalidad y acciones `NO ACTION`.
+También valida el índice parcial exacto, RLS, FORCE RLS y la única policy
 `assignments_tenant`. No crea, altera ni elimina objetos; `Down` es
 deliberadamente no destructivo. El migrador la ejecuta después de Drivers y
 Orders. API y Worker no migran al iniciar; Worker no referencia Dispatch.
@@ -64,6 +66,11 @@ Request:
 ser nulo. Propiedades desconocidas, tipos fuera de alcance o UUID vacíos
 producen conflicto uniforme.
 
+AI-05 conserva el vocabulario global `OWN`, `EXTERNAL`, `ALLY_CAPACITY`, pero
+declara que DSP-002 habilita únicamente `OWN`. `EXTERNAL` permanece reservado
+para EXT-001 y `ALLY_CAPACITY` para ALY-004. AI-05 declara `route_id` nullable:
+ausencia o `null` son válidos; todo valor no nulo se rechaza hasta RTE-001.
+
 Response 201 de creación o replay:
 
 ```json
@@ -82,6 +89,11 @@ Response 201 de creación o replay:
 No expone owner/operator, route, versión, actor, timestamps, documentos,
 capacidad, direcciones, teléfono ni otra PII.
 
+La matriz normativa es 201/401/403/404/409. El 404 uniforme cubre orden o
+conductor ausente/cross-tenant. El 409 usa Problem Details con uno de los
+códigos públicos `INVALID_REQUEST`, `CONFLICT`, `DRIVER_INELIGIBLE` o
+`DRIVER_DOCUMENT_EXPIRED`; nunca expone el motivo interno.
+
 ## Autorización, owner y operator
 
 La autorización relee usuario y membresía internos dentro de la transacción;
@@ -91,8 +103,9 @@ no confía en roles emitidos por AuthCenter.
 - `DISPATCHER`: usuario y membresía activos.
 - cualquier otro rol: denegado.
 
-Orden o driver ausente, extranjero o no visible recibe 403 indistinguible.
-Actor visible sin capacidad recibe 403. Configuración Disabled falla cerrado.
+Orden o driver ausente, extranjero o no visible recibe 404 indistinguible.
+Actor visible sin capacidad recibe 403. Configuración Disabled falla cerrado
+con 403 porque no existe capacidad operativa habilitada.
 
 La orden conserva `owner_org_id`. Cuando el tenant activo es el owner,
 `assignment.operator_org_id` es nulo; cuando coincide con el operator ya
@@ -124,20 +137,26 @@ dispatcher todavía autorizado.
 
 ## Orden transaccional, paquetes y elegibilidad
 
-Cada intento captura un solo `occurred_at`, aplica contexto tenant y ejecuta:
+Cada intento valida, captura un solo `occurred_at`, normaliza, calcula el hash,
+abre la transacción y aplica el contexto tenant. Dentro de ella:
 
-1. validación, normalización y hash;
-2. lock, lectura y reserva idempotente;
-3. autorización interna;
-4. lock de orden, visibilidad y estado;
-5. comprobación de assignment activo;
-6. lectura y agregación de `orders.package_items`;
-7. lectura del driver y `DriverEligibilityPolicy`;
-8. INSERT de assignment `OWN/ACCEPTED`;
-9. matriz y guards de Orders;
-10. update optimista a `ASSIGNED`;
-11. order event, outbox y dos auditorías;
-12. finalización idempotente y commit.
+1. adquiere el advisory lock y lee la fila idempotente;
+2. si el hash difiere, devuelve 409 antes de leer autorización;
+3. si el registro está completado, valida resource/response, assignment y
+   evento histórico; después relee autorización/MFA y devuelve el 201;
+4. si existe un registro incompleto, devuelve 409 sin mutarlo;
+5. para una request nueva, relee y valida primero la autorización actual;
+6. solo después inserta la reserva idempotente;
+7. bloquea la orden con `FOR UPDATE`, verifica visibilidad, tenant y estado;
+8. comprueba que no exista assignment activo;
+9. lee y agrega `orders.package_items`;
+10. lee el driver y ejecuta `DriverEligibilityPolicy`;
+11. inserta el assignment `OWN/ACCEPTED`;
+12. ejecuta matriz y guards de Orders;
+13. actualiza optimistamente la orden a `ASSIGNED`;
+14. inserta order event, outbox y las dos auditorías;
+15. completa la fila idempotente;
+16. ejecuta el fault-injection point previo a commit y confirma.
 
 Los únicos estados fuente son `READY_FOR_PICKUP` y `RESCHEDULED`; no se agrega
 una arista. El update exige ID, estado y versión, afecta una fila e incrementa
@@ -213,14 +232,17 @@ Rollback operativo:
 
 1. configurar `Dispatch:Provider=Disabled`;
 2. desplegar y verificar fail-closed;
-3. revertir los tres commits;
-4. conservar assignments, órdenes/versiones, eventos, outbox, auditorías e
+3. revertir primero los tres commits de remediación contractual;
+4. si el rollback requerido es de DSP-002 completo, revertir después los tres
+   commits originales del módulo;
+5. conservar assignments, órdenes/versiones, eventos, outbox, auditorías e
    historial EF;
-5. no ejecutar DDL inverso ni eliminar datos.
+6. no ejecutar DDL inverso ni eliminar datos.
 
 Convenciones reversibles:
 
-- `DSP-002-CONV-001`: 409 uniforme aunque AI-05 aún no lo enumera.
+- `DSP-002-CONV-001`: 409 uniforme, formalizado en AI-05 por la remediación
+  contractual `DSP-002-CONTRACT-REMEDIATION`.
 - `DSP-002-CONV-002`: assignment inicia `ACCEPTED`, no `ACTIVE`.
 - `DSP-002-CONV-003`: route ID solo nulo; Routing no se implementa.
 - `DSP-002-CONV-004`: paradas directas hasta que exista Routing.
@@ -239,5 +261,6 @@ Configuración base:
 PostgreSQL exige también `Drivers:Provider=PostgreSql`; `ValidateOnStart`
 rechaza la combinación insegura.
 
-GATE-007 y GATE-010 siguen abiertos. No se usan documentos ni PII reales. No se
-modifica AI-05 ni `docs/normative/v0.6`. El issue #5 permanece abierto.
+GATE-007 y GATE-010 siguen abiertos. No se usan documentos ni PII reales.
+AI-05, AI-08 y el decision log se actualizaron de forma controlada, sin cambiar
+AI-06 ni AI-18. El issue #5 permanece abierto.

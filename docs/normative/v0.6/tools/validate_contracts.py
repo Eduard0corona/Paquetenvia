@@ -38,6 +38,53 @@ def collect_refs(value: Any, output: list[str]) -> None:
             collect_refs(child, output)
 
 
+def write_integrity() -> None:
+    manifest_path = ROOT / "MANIFEST.json"
+    checksums_path = ROOT / "CHECKSUMS_SHA256.txt"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    checksum_files = sorted(
+        path
+        for path in ROOT.rglob("*")
+        if path.is_file()
+        and path not in {manifest_path, checksums_path}
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    )
+    checksum_lines = [
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(ROOT).as_posix()}"
+        for path in checksum_files
+    ]
+    checksums_path.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8", newline="\n")
+
+    identity_files = sorted(
+        path
+        for path in ROOT.rglob("*")
+        if path.is_file()
+        and path != manifest_path
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    )
+    manifest["canonical_sql_sha256"] = hashlib.sha256(
+        (ROOT / "database/AI-06_SCHEMA.sql").read_bytes()
+    ).hexdigest()
+    manifest["file_count"] = len(identity_files)
+    manifest["files"] = [
+        {
+            "path": path.relative_to(ROOT).as_posix(),
+            "bytes": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+        for path in identity_files
+    ]
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    print(f"INTEGRITY_WRITTEN: {len(identity_files)} files")
+
+
 def main() -> int:
     errors: list[str] = []
     checks: list[str] = []
@@ -101,6 +148,61 @@ def main() -> int:
     checks.append(
         f"OpenAPI: {len(api['paths'])} paths, {len(api['components']['schemas'])} schemas, {len(refs)} refs"
     )
+
+    assign = api["paths"]["/orders/{orderId}/assignments"]["post"]
+    expected_responses = {
+        "401": "#/components/responses/Unauthorized",
+        "403": "#/components/responses/Forbidden",
+        "404": "#/components/responses/UniformNotFound",
+        "409": "#/components/responses/DispatchAssignmentConflict",
+    }
+    actual_responses = {str(status): response for status, response in assign["responses"].items()}
+    if list(actual_responses) != ["201", "401", "403", "404", "409"]:
+        errors.append(f"DSP-002 response status matrix drift: {list(actual_responses)}")
+    if (
+        actual_responses.get("201", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+        .get("$ref")
+        != "#/components/schemas/Assignment"
+    ):
+        errors.append("DSP-002 201 response schema drift")
+    actual_problem_refs = {
+        status: actual_responses.get(status, {}).get("$ref")
+        for status in expected_responses
+    }
+    if actual_problem_refs != expected_responses:
+        errors.append(f"DSP-002 problem response refs drift: {actual_problem_refs}")
+
+    assignment_request = api["components"]["schemas"]["CreateAssignmentRequest"]
+    if assignment_request.get("additionalProperties") is not False:
+        errors.append("DSP-002 request must reject undeclared properties")
+    assignment_type = assignment_request["properties"]["assignment_type"]
+    if assignment_type.get("enum") != ["OWN", "EXTERNAL", "ALLY_CAPACITY"]:
+        errors.append("DSP-002 global assignment_type enum drift")
+    if assignment_type.get("x-dsp-002-enabled-values") != ["OWN"]:
+        errors.append("DSP-002 enabled assignment_type values drift")
+    if assignment_type.get("x-reserved-for") != {
+        "EXTERNAL": "EXT-001",
+        "ALLY_CAPACITY": "ALY-004",
+    }:
+        errors.append("DSP-002 reserved assignment_type ownership drift")
+    route_id = assignment_request["properties"]["route_id"]
+    if route_id.get("type") != ["string", "null"] or route_id.get("format") != "uuid":
+        errors.append("DSP-002 route_id must remain nullable UUID")
+    if route_id.get("x-dsp-002-support") != "omitted-or-null-only":
+        errors.append("DSP-002 route_id incremental support drift")
+
+    dispatch_conflict = api["components"]["schemas"]["DispatchAssignmentConflictProblem"]
+    if dispatch_conflict["properties"]["code"].get("enum") != [
+        "INVALID_REQUEST",
+        "CONFLICT",
+        "DRIVER_INELIGIBLE",
+        "DRIVER_DOCUMENT_EXPIRED",
+    ]:
+        errors.append("DSP-002 safe conflict-code set drift")
+    checks.append("DSP-002: incremental request and 201/401/403/404/409 response contract")
 
     product = parsed["specs/AI-02_PRODUCT_CONTRACT.yaml"]
     domain = parsed["specs/AI-04_DOMAIN_MODEL.yaml"]
@@ -279,6 +381,19 @@ def main() -> int:
         errors.append("Unbalanced SQL dollar delimiters")
     checks.append("SQL dollar delimiters balanced")
 
+    checksums_path = ROOT / "CHECKSUMS_SHA256.txt"
+    checksum_entries = []
+    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+        digest, relative = line.split("  ", maxsplit=1)
+        checksum_entries.append((digest, relative))
+        path = ROOT / relative
+        if not path.exists():
+            errors.append(f"Checksum file missing: {relative}")
+            continue
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            errors.append(f"Checksum mismatch: {relative}")
+    checks.append(f"Checksum entries checked: {len(checksum_entries)}")
+
     manifest_path = ROOT / "MANIFEST.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -303,4 +418,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--write-integrity"]:
+        write_integrity()
+        raise SystemExit(0)
+    if sys.argv[1:]:
+        print("Usage: validate_contracts.py [--write-integrity]", file=sys.stderr)
+        raise SystemExit(2)
     raise SystemExit(main())

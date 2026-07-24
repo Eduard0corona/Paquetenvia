@@ -1,5 +1,21 @@
 # Changelog
 
+## Remediación contractual DSP-002 — 2026-07-23
+
+- AI-05 declara 409 para conflictos DSP-002 mediante Problem Details con los
+  códigos públicos `INVALID_REQUEST`, `CONFLICT`, `DRIVER_INELIGIBLE` y
+  `DRIVER_DOCUMENT_EXPIRED`.
+- La matriz de `assignDriver` queda 201/401/403/404/409 conforme a AI-04 y
+  ADR-023; orden o conductor ausente/cross-tenant usa 404 uniforme.
+- `route_id` es nullable, pero DSP-002 solo admite ausencia o `null` hasta
+  RTE-001.
+- El vocabulario global conserva `OWN`, `EXTERNAL`, `ALLY_CAPACITY`; DSP-002
+  habilita solo `OWN`, EXT-001 reserva `EXTERNAL` y ALY-004 reserva
+  `ALLY_CAPACITY`.
+- AI-06 y AI-18 permanecen intactos. La adopción de Dispatch se endurece para
+  rechazar drift de checks, FKs, acciones, índice parcial, RLS y policy.
+- La decisión queda registrada como `DSP-002-CONTRACT-REMEDIATION`.
+
 ## Resolución de gates — 2026-07-21
 
 - GATE-002 (proveedor de identidad) RESUELTO: se adopta AuthCenter, servidor OIDC propio, con SLA comprometido de 99.5%, hospedaje en Azure Mexico Central y custodia de llave en Azure Key Vault.
