@@ -337,6 +337,43 @@
           "Pricing.Domain": "[1.0.0, )"
         }
       },
+      "realtime.application": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Realtime.Domain": "[1.0.0, )"
+        }
+      },
+      "realtime.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "realtime.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Identity.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Realtime.Application": "[1.0.0, )"
+        }
+      },
+      "realtime.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Npgsql": "[10.0.3, )",
+          "Orders.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )",
+          "Realtime.Application": "[1.0.0, )",
+          "Realtime.Domain": "[1.0.0, )",
+          "Realtime.Endpoints": "[1.0.0, )"
+        }
+      },
       "Microsoft.EntityFrameworkCore": {
         "type": "CentralTransitive",
         "requested": "[10.0.10, )",
