@@ -103,6 +103,31 @@
           "Npgsql": "10.0.3"
         }
       },
+      "drivers.application": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "drivers.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "drivers.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Application": "[1.0.0, )",
+          "Drivers.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "identity.application": {
         "type": "Project",
         "dependencies": {

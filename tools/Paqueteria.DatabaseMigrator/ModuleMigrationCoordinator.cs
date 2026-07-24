@@ -12,6 +12,8 @@ using Pricing.Infrastructure.Persistence;
 using Pricing.Infrastructure.Persistence.Migrations;
 using Orders.Infrastructure.Persistence;
 using Orders.Infrastructure.Persistence.Migrations;
+using Drivers.Infrastructure.Persistence;
+using Drivers.Infrastructure.Persistence.Migrations;
 
 internal sealed record ModuleMigrationState(
     string Module,
@@ -29,6 +31,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrganizationsBaseline.cs"),
         ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
+        ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriversBaseline.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDriversBaseline.cs"),
         ("Pricing", "__ef_migrations_history_pricing", AdoptCanonicalPricingBaseline.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs"),
         ("Orders", "__ef_migrations_history_orders", AdoptCanonicalOrdersBaseline.MigrationId,
@@ -103,6 +107,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "Locations").Status == "PENDING")
         {
             await MigrateLocationsAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "Drivers").Status == "PENDING")
+        {
+            await MigrateDriversAsync(connectionString, cancellationToken);
         }
         if (before.Single(state => state.Module == "Pricing").Status == "PENDING")
         {
@@ -235,6 +243,20 @@ internal sealed class ModuleMigrationCoordinator
             })
             .Options;
         await using var context = new PricingDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    private static async Task MigrateDriversAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<DriversDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
+            })
+            .Options;
+        await using var context = new DriversDbContext(options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync(cancellationToken);
     }
 

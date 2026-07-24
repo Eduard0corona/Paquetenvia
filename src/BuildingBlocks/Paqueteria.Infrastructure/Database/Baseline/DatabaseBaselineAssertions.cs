@@ -269,6 +269,7 @@ public sealed class DatabaseBaselineAssertions
                     '__ef_migrations_history_identity',
                     '__ef_migrations_history_organizations',
                     '__ef_migrations_history_locations',
+                    '__ef_migrations_history_drivers',
                     '__ef_migrations_history_pricing',
                     '__ef_migrations_history_orders'
                   )
