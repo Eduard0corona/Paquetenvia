@@ -98,11 +98,12 @@ public sealed class DriverLocationHttpTests : IClassFixture<DriverLocationHttpWe
     public async Task POST_preserves_order_and_exact_mixed_counts()
     {
         var id = Guid.NewGuid();
+        var rejectedId = Guid.NewGuid();
         var json = $$"""
             {"positions":[
               {"client_event_id":"{{id:D}}","lat":24.8091,"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:00Z"},
               {"client_event_id":"{{id:D}}","lat":24.8092,"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:01Z"},
-              {"client_event_id":"{{Guid.NewGuid():D}}","lat":91,"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:02Z"}
+              {"client_event_id":"{{rejectedId:D}}","lat":91,"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:02Z"}
             ]}
             """;
         using var request = Request(MockIdentityProfiles.ActiveDriver, json);
@@ -115,10 +116,72 @@ public sealed class DriverLocationHttpTests : IClassFixture<DriverLocationHttpWe
         var items = document.RootElement.GetProperty("items").EnumerateArray().ToArray();
         Assert.Equal(["ACCEPTED", "DUPLICATE", "REJECTED"],
             items.Select(item => item.GetProperty("status").GetString()));
+        Assert.Equal([id, id, rejectedId],
+            items.Select(item => item.GetProperty("client_event_id").GetGuid()));
+        Assert.Equal([id, id, rejectedId], factory.LastClientEventIds);
         Assert.Equal(
             items[0].GetProperty("position_id").GetGuid(),
             items[1].GetProperty("position_id").GetGuid());
         Assert.Equal("INVALID_COORDINATES", items[2].GetProperty("error_code").GetString());
+    }
+
+    [Fact]
+    public async Task POST_rejects_missing_malformed_and_noncanonical_event_ids_before_service()
+    {
+        var canonical = Guid.NewGuid();
+        var before = factory.Invocations;
+        var invalidBodies = new[]
+        {
+            "",
+            """{"positions":[{"lat":24.8091,"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:00Z"}]}""",
+            """{"positions":[{"client_event_id":null,"lat":24.8091,"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:00Z"}]}""",
+            BodyWithRawEventId("\"\""),
+            BodyWithRawEventId("\"   \""),
+            BodyWithRawEventId("\"not-a-uuid\""),
+            BodyWithRawEventId("\"abc\""),
+            BodyWithRawEventId("\"123\""),
+            BodyWithRawEventId($"\"{{{canonical:D}}}\""),
+            BodyWithRawEventId($"\"{canonical:N}\""),
+            $$"""{"positions":[{{Point(Guid.NewGuid(), 24.8091)}},{{PointWithRawEventId("\"not-a-uuid\"", 24.8092)}}]}""",
+        };
+
+        foreach (var body in invalidBodies)
+        {
+            using var request = Request(MockIdentityProfiles.ActiveDriver, body);
+            using var response = await client.SendAsync(request);
+            await AssertInvalidRequestAsync(response);
+        }
+
+        using (var request = Request(MockIdentityProfiles.ActiveDriver))
+        {
+            request.Content!.Headers.ContentType = new("text/plain");
+            using var response = await client.SendAsync(request);
+            await AssertInvalidRequestAsync(response);
+        }
+
+        Assert.Equal(before, factory.Invocations);
+    }
+
+    [Fact]
+    public async Task POST_preserves_canonical_empty_uuid_as_item_level_rejection()
+    {
+        var before = factory.Invocations;
+        using var request = Request(MockIdentityProfiles.ActiveDriver, Body(Guid.Empty));
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, document.RootElement.GetProperty("accepted_count").GetInt32());
+        Assert.Equal(0, document.RootElement.GetProperty("duplicate_count").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("rejected_count").GetInt32());
+        var item = Assert.Single(document.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(Guid.Empty, item.GetProperty("client_event_id").GetGuid());
+        Assert.Equal(JsonValueKind.Null, item.GetProperty("position_id").ValueKind);
+        Assert.Equal("REJECTED", item.GetProperty("status").GetString());
+        Assert.False(item.GetProperty("duplicate").GetBoolean());
+        Assert.Equal("INVALID_CLIENT_EVENT_ID", item.GetProperty("error_code").GetString());
+        Assert.Equal(before + 1, factory.Invocations);
+        Assert.Equal([Guid.Empty], factory.LastClientEventIds);
     }
 
     [Fact]
@@ -191,9 +254,21 @@ public sealed class DriverLocationHttpTests : IClassFixture<DriverLocationHttpWe
         using var firstRequest = Request(MockIdentityProfiles.ActiveDriver);
         using var first = await limitedClient.SendAsync(firstRequest);
         Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
-        using var secondRequest = Request(MockIdentityProfiles.ActiveDriver);
+        Assert.Equal(1, limited.Invocations);
+
+        using var secondRequest = Request(
+            MockIdentityProfiles.ActiveDriver,
+            Body(DriverLocationHttpWebApplicationFactory.MissingProfileEventId));
         using var second = await limitedClient.SendAsync(secondRequest);
         Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        Assert.Equal(1, limited.Invocations);
+        var body = await second.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("profile", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("event", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            DriverLocationHttpWebApplicationFactory.MissingProfileEventId.ToString("D"),
+            body,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static HttpRequestMessage Request(
@@ -223,6 +298,26 @@ public sealed class DriverLocationHttpTests : IClassFixture<DriverLocationHttpWe
 
     private static string Body(Guid id) => $$"""{"positions":[{{Point(id, 24.8091)}}]}""";
 
+    private static string BodyWithRawEventId(string rawEventId) =>
+        $$"""{"positions":[{{PointWithRawEventId(rawEventId, 24.8091)}}]}""";
+
     private static string Point(Guid id, double latitude) =>
         $$"""{"client_event_id":"{{id:D}}","lat":{{latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}},"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:00Z"}""";
+
+    private static string PointWithRawEventId(string rawEventId, double latitude) =>
+        $$"""{"client_event_id":{{rawEventId}},"lat":{{latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}},"lng":-107.394,"accuracy_m":8.5,"captured_at":"2026-07-24T20:00:00Z"}""";
+
+    private static async Task AssertInvalidRequestAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(409, document.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("Conflict.", document.RootElement.GetProperty("title").GetString());
+        Assert.Equal("INVALID_REQUEST", document.RootElement.GetProperty("code").GetString());
+        Assert.Equal(
+            "https://tools.ietf.org/html/rfc9110#section-15.5.10",
+            document.RootElement.GetProperty("type").GetString());
+        Assert.False(document.RootElement.TryGetProperty("detail", out _));
+    }
 }

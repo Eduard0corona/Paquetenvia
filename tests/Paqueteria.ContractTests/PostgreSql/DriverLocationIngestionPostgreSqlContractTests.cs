@@ -110,6 +110,37 @@ public sealed class DriverLocationIngestionPostgreSqlContractTests(PostgreSqlCon
     }
 
     [PostgreSqlContractFact]
+    public async Task Canonical_empty_event_id_is_rejected_without_position_or_outbox()
+    {
+        var scenario = await SeedAsync();
+        try
+        {
+            await using var scope = CreateScope(CapturedAt.AddMinutes(5));
+            var result = await scope.Service.PublishAsync(
+                Command(scenario, Point(Guid.Empty, CapturedAt)),
+                default);
+
+            var item = Assert.Single(result.Items);
+            Assert.Equal(Guid.Empty, item.ClientEventId);
+            Assert.Equal(DriverLocationItemStatus.Rejected, item.Status);
+            Assert.Equal(DriverLocationRejectionCodes.InvalidClientEventId, item.ErrorCode);
+            Assert.Null(item.PositionId);
+            Assert.False(item.Duplicate);
+            Assert.Equal(0, result.PublishedCount);
+            Assert.Equal(0L, await ScalarAdminAsync(
+                "SELECT count(*) FROM drivers.driver_positions WHERE driver_id=@driver",
+                Uuid("driver", scenario.DriverId)));
+            Assert.Equal(0L, await ScalarAdminAsync(
+                "SELECT count(*) FROM platform.location_outbox_events WHERE owner_org_id=@org",
+                Uuid("org", scenario.OrganizationId)));
+        }
+        finally
+        {
+            await CleanupAsync(scenario);
+        }
+    }
+
+    [PostgreSqlContractFact]
     public async Task Publication_policy_is_deterministic_for_distance_silence_and_out_of_order_batches()
     {
         var scenario = await SeedAsync();
@@ -142,10 +173,10 @@ public sealed class DriverLocationIngestionPostgreSqlContractTests(PostgreSqlCon
             {
                 publication.Add(reader.GetGuid(0), reader.GetBoolean(1));
             }
-            Assert.True(publication[values[2].ClientEventId!.Value]);
-            Assert.False(publication[values[3].ClientEventId!.Value]);
-            Assert.True(publication[values[1].ClientEventId!.Value]);
-            Assert.True(publication[values[0].ClientEventId!.Value]);
+            Assert.True(publication[values[2].ClientEventId]);
+            Assert.False(publication[values[3].ClientEventId]);
+            Assert.True(publication[values[1].ClientEventId]);
+            Assert.True(publication[values[0].ClientEventId]);
         }
         finally
         {

@@ -37,6 +37,7 @@ public sealed class DriverLocationHttpWebApplicationFactory : WebApplicationFact
     }
 
     internal int Invocations => service.Invocations;
+    internal IReadOnlyList<Guid> LastClientEventIds => service.LastClientEventIds;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -61,8 +62,10 @@ public sealed class DriverLocationHttpWebApplicationFactory : WebApplicationFact
     {
         private readonly ConcurrentDictionary<Guid, Guid> positions = new();
         private int invocations;
+        private Guid[] lastClientEventIds = [];
 
         public int Invocations => Volatile.Read(ref invocations);
+        public IReadOnlyList<Guid> LastClientEventIds => Volatile.Read(ref lastClientEventIds);
 
         public Task<DriverLocationBatchResult> PublishAsync(
             PublishDriverLocationBatchCommand command,
@@ -70,14 +73,16 @@ public sealed class DriverLocationHttpWebApplicationFactory : WebApplicationFact
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref invocations);
+            Volatile.Write(
+                ref lastClientEventIds,
+                command.Positions.Select(value => value.ClientEventId).ToArray());
             if (command.ActorId != DriverActorId)
             {
                 throw new DriverLocationForbiddenException();
             }
 
             if (command.Positions.Any(value =>
-                    value.ClientEventId is { } id &&
-                    InaccessibleProfileEventIds.Contains(id)))
+                    InaccessibleProfileEventIds.Contains(value.ClientEventId)))
             {
                 throw new DriverLocationNotFoundException();
             }
