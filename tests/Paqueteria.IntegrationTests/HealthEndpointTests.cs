@@ -29,5 +29,18 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
         Assert.Equal("healthy", body?.Status);
     }
 
+    [Fact]
+    public async Task Ready_health_reports_disabled_outbox_dispatch_explicitly()
+    {
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var response = await _client.GetAsync("/health/ready", cancellationSource.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<HealthResponse>(
+            cancellationToken: cancellationSource.Token);
+        Assert.Equal("degraded", body?.Status);
+    }
+
     private sealed record HealthResponse(string Status);
 }

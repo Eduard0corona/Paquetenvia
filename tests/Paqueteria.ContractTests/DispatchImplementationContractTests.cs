@@ -40,7 +40,12 @@ public sealed class DispatchImplementationContractTests
         AssertJsonProperties<AssignmentResponse>("cost", "driver_id", "id", "order_id", "status");
         AssertJsonProperties<MoneyResponse>("amount_cents", "currency");
         AssertJsonProperties<DriverStopResponse>(
-            "address_summary", "order_public_id", "status", "stop_type");
+            "address_summary",
+            "aggregate_version",
+            "order_id",
+            "order_public_id",
+            "status",
+            "stop_type");
 
         var stopNames = typeof(DriverStopResponse).GetProperties()
             .Select(property => property.Name)
@@ -109,7 +114,14 @@ public sealed class DispatchImplementationContractTests
             RequiredPropertyNames(assignment));
         Assert.Equal(["amount_cents", "currency"], RequiredPropertyNames(money));
         Assert.Equal(
-            ["address_summary", "order_public_id", "status", "stop_type"],
+            [
+                "address_summary",
+                "aggregate_version",
+                "order_id",
+                "order_public_id",
+                "status",
+                "stop_type",
+            ],
             RequiredPropertyNames(stop));
 
         Assert.Equal(

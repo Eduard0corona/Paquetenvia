@@ -14,14 +14,17 @@ namespace Paqueteria.IntegrationTests.Realtime;
 internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _connectionString;
+    private readonly string? _workerConnectionString;
     private readonly RealtimeAuthorizationRecorder _recorder;
 
     internal RealtimeKestrelWebApplicationFactory(
         string connectionString,
         RealtimeAuthorizationRecorder recorder,
-        int port = 0)
+        int port = 0,
+        string? workerConnectionString = null)
     {
         _connectionString = connectionString;
+        _workerConnectionString = workerConnectionString;
         _recorder = recorder;
         UseKestrel(port);
     }
@@ -63,6 +66,12 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 ["Realtime:ReconnectDelaysMilliseconds:0"] = "0",
                 ["Realtime:ReconnectDelaysMilliseconds:1"] = "100",
                 ["ConnectionStrings:Paqueteria"] = _connectionString,
+                ["Realtime:OutboxDispatcher:Provider"] =
+                    _workerConnectionString is null ? "Disabled" : "PostgreSql",
+                ["Realtime:OutboxDispatcher:WorkerId"] = "rtm002-integration",
+                ["Realtime:OutboxDispatcher:Business:PollIntervalMilliseconds"] = "50",
+                ["Realtime:OutboxDispatcher:Location:PollIntervalMilliseconds"] = "50",
+                ["ConnectionStrings:PaqueteriaWorker"] = _workerConnectionString,
             }));
         builder.ConfigureServices(services =>
         {

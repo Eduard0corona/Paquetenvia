@@ -523,7 +523,13 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
 
         factory.SetStops(
         [
-            new DriverStopResult("ORD_SYNTHETIC", "DELIVERY", "IN_TRANSIT", "Synthetic summary"),
+            new DriverStopResult(
+                Guid.Parse("00000000-0000-0000-0000-000000000701"),
+                12,
+                "ORD_SYNTHETIC",
+                "DELIVERY",
+                "IN_TRANSIT",
+                "Synthetic summary"),
         ]);
         using var driver = StopRequest(MockIdentityProfiles.ActiveDriver);
         using var driverResponse = await client.SendAsync(driver);
@@ -532,7 +538,14 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         using var json = JsonDocument.Parse(body);
         var stop = Assert.Single(json.RootElement.EnumerateArray().ToArray());
         Assert.Equal(
-            ["address_summary", "order_public_id", "status", "stop_type"],
+            [
+                "address_summary",
+                "aggregate_version",
+                "order_id",
+                "order_public_id",
+                "status",
+                "stop_type",
+            ],
             stop.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
         Assert.DoesNotContain("contact_token", body, StringComparison.Ordinal);
         Assert.DoesNotContain("phone", body, StringComparison.OrdinalIgnoreCase);

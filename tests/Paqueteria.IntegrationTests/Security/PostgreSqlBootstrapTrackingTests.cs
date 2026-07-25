@@ -188,12 +188,14 @@ public sealed class PostgreSqlBootstrapTrackingTests(
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = json.RootElement;
-        Assert.Equal(["estimated_window", "public_id", "public_status", "timeline"],
+        Assert.Equal(
+            ["aggregate_version", "estimated_window", "public_id", "public_status", "timeline"],
             root.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal(
             PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId,
             root.GetProperty("public_id").GetString());
         Assert.Equal("OUT_FOR_DELIVERY", root.GetProperty("public_status").GetString());
+        Assert.Equal(1, root.GetProperty("aggregate_version").GetInt64());
         Assert.Equal(2, root.GetProperty("timeline").GetArrayLength());
         var raw = root.GetRawText();
         Assert.DoesNotContain("secret", raw, StringComparison.OrdinalIgnoreCase);

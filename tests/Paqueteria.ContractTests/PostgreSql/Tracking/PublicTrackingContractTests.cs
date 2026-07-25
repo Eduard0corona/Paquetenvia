@@ -75,6 +75,7 @@ public sealed class PublicTrackingContractTests(PostgreSqlContractFixture fixtur
             var root = projection.RootElement;
             Assert.Equal(scenario.PublicOrderId, root.GetProperty("public_id").GetString());
             Assert.Equal("OUT_FOR_DELIVERY", root.GetProperty("public_status").GetString());
+            Assert.True(root.GetProperty("aggregate_version").GetInt32() >= 1);
             var timeline = root.GetProperty("timeline").EnumerateArray().ToArray();
             Assert.Equal(2, timeline.Length);
             Assert.Equal("PICKED_UP", timeline[0].GetProperty("code").GetString());

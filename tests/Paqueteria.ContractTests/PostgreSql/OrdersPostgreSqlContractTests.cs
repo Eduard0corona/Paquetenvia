@@ -299,7 +299,12 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             }).Options;
         await using var context = new OrdersDbContext(options, state);
         Assert.Empty(await context.Database.GetPendingMigrationsAsync());
-        Assert.Single(await context.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(
+            [
+                Orders.Infrastructure.Persistence.Migrations.AdoptCanonicalOrdersBaseline.MigrationId,
+                Orders.Infrastructure.Persistence.Migrations.AddRealtimeResynchronizationCursor.MigrationId,
+            ],
+            await context.Database.GetAppliedMigrationsAsync());
 
         var cancelled = new CancellationToken(canceled: true);
         await using var cancellationScenario = new SyntheticOrderScenario(fixture);
