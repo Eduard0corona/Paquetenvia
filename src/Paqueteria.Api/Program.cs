@@ -44,6 +44,7 @@ builder.Services.AddLocationsEndpoints();
 builder.Services.AddPricingInfrastructure(builder.Configuration);
 builder.Services.AddPricingEndpoints();
 builder.Services.AddRealtimeInfrastructure(builder.Configuration, builder.Environment);
+builder.Services.AddRealtimeOutboxDispatchers(builder.Configuration);
 builder.Services.AddRealtimeEndpoints(builder.Configuration);
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
@@ -82,6 +83,24 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
         context.Response.ContentType = "application/json";
         await context.Response.WriteAsJsonAsync(
             new { status = report.Status == HealthStatus.Healthy ? "healthy" : "unhealthy" },
+            context.RequestAborted);
+    },
+}).AllowAnonymous();
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready"),
+    ResponseWriter = static async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        var status = report.Status switch
+        {
+            HealthStatus.Healthy => "healthy",
+            HealthStatus.Degraded => "degraded",
+            _ => "unhealthy",
+        };
+        await context.Response.WriteAsJsonAsync(
+            new { status },
             context.RequestAborted);
     },
 }).AllowAnonymous();

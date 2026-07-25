@@ -60,16 +60,23 @@ public sealed class RealtimeArchitectureTests
     }
 
     [Fact]
-    public void Realtime_contains_no_outbox_consumer_business_state_or_mutable_connection_singleton()
+    public void Realtime_dispatchers_use_canonical_functions_without_mutable_authoritative_state()
     {
         var sourceFiles = Directory.GetFiles(
             TestRepository.GetPath("src/Modules/Realtime"),
             "*.cs",
             SearchOption.AllDirectories);
         var source = string.Join('\n', sourceFiles.Select(File.ReadAllText));
-        Assert.DoesNotContain("claim_outbox", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("settle_outbox", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("location_outbox_events", source, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("security.claim_outbox", source, StringComparison.Ordinal);
+        Assert.Contains("security.settle_outbox", source, StringComparison.Ordinal);
+        Assert.Contains("security.requeue_stale_outbox", source, StringComparison.Ordinal);
+        Assert.Contains("security.claim_location_outbox", source, StringComparison.Ordinal);
+        Assert.Contains("security.settle_location_outbox", source, StringComparison.Ordinal);
+        Assert.Contains("security.requeue_stale_location_outbox", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("UPDATE platform.outbox_events", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DELETE FROM platform.outbox_events", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("UPDATE platform.location_outbox_events", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DELETE FROM platform.location_outbox_events", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Dictionary<string", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ConcurrentDictionary", source, StringComparison.Ordinal);
 
