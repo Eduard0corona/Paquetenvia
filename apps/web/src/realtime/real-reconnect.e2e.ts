@@ -34,10 +34,6 @@ describe("real managed SignalR reconnect", () => {
     let localVersion = 0;
     let tokenFactoryCount = 0;
     let restSynchronizationCount = 0;
-    let reconnectingState: HubConnectionState | undefined;
-    const connectionReference: {
-      current?: ReturnType<typeof createOperationsConnection>;
-    } = {};
     const reconnecting = deferred<void>();
     const reconnected = deferred<void>();
     const synchronized = deferred<void>();
@@ -55,7 +51,6 @@ describe("real managed SignalR reconnect", () => {
         },
         reconnectDelaysMilliseconds: reconnectDelays,
         onReconnecting: () => {
-          reconnectingState = connectionReference.current?.state;
           lifecycle.push("Reconnecting");
           reconnecting.resolve();
         },
@@ -81,7 +76,6 @@ describe("real managed SignalR reconnect", () => {
         },
       },
     );
-    connectionReference.current = connection;
 
     try {
       await connection.start();
@@ -94,16 +88,23 @@ describe("real managed SignalR reconnect", () => {
       await host.stop();
       hosts.delete(host);
       await reconnecting.promiseWithTimeout(10_000);
-      expect(reconnectingState).toBe(HubConnectionState.Reconnecting);
+      await waitFor(
+        () => connection.state === HubConnectionState.Reconnecting,
+        10_000,
+        "connection to remain reconnecting after the old host exits",
+      );
+      expect(connection.state).toBe(HubConnectionState.Reconnecting);
 
       host = await startHost(port, 5);
       hosts.add(host);
       await reconnected.promiseWithTimeout(15_000);
       await synchronized.promiseWithTimeout(5_000);
       await waitFor(
-        () => connection.state === HubConnectionState.Connected,
+        () =>
+          connection.state === HubConnectionState.Connected &&
+          localVersion === 5,
         5_000,
-        "managed connection to report its recovered state",
+        "managed connection to report its recovered state and REST snapshot",
       );
       expect(connection.state).toBe(HubConnectionState.Connected);
       expect(lifecycle.length).toBeGreaterThanOrEqual(2);
