@@ -34,6 +34,13 @@ Hay dos loops, opciones y límites de concurrencia separados:
 - **location**: `platform.location_outbox_events`, batch 25, concurrencia 8,
   poll 500 ms, lease 120 s y máximo 5 intentos.
 
+El tamaño enviado a cada función de claim es
+`min(BatchSize, MaximumConcurrency)`. Por tanto, un ciclo nunca toma más filas
+que slots que puede iniciar inmediatamente. La configuración reserva cinco
+segundos internos para settle y exige, independientemente en cada lane,
+`LeaseSeconds >= PublishTimeoutSeconds + 5`; una combinación insegura falla
+durante startup.
+
 Ambos usan únicamente las funciones canónicas:
 
 ```text
@@ -45,8 +52,13 @@ La conexión usa una credencial login sintética separada y
 `SET LOCAL ROLE paqueteria_worker`. No hay `INSERT`, `UPDATE` o `DELETE`
 directo sobre outbox desde los consumidores. Cada claim se confirma antes de
 publicar. El settle exige el lease token; perderlo se registra y nunca se
-simula éxito. En shutdown no se reclaman batches nuevos y el publish en curso
-queda acotado por timeout.
+simula éxito: un `false` incrementa `lease_lost`, no registra un settlement
+exitoso y deja el lifecycle canónico gobernar la fila. En shutdown no se
+reclaman batches nuevos ni se inicia otro elemento ya reclamado. Los elementos
+iniciados reciben una ventana de drenado acotada a publish timeout más el
+margen de settle; después se cancelan y el lease queda disponible para
+expiración y requeue canónico. Si la publicación concluye dentro de esa ventana,
+el settle todavía usa un token vigente.
 
 Fallos de schema, payload, topic o evidencia son permanentes y terminan
 `DEAD`. Fallos transitorios de PostgreSQL/SignalR y timeouts terminan `RETRY`
@@ -106,6 +118,17 @@ Una revocación antes del consumo elimina la audiencia Driver. Tracking nunca
 recibe coordenadas, estado interno, driver ID, token o PII. Location se publica
 exclusivamente a Operations.
 
+La autorización de assignment produce una sola fila lógica. La membresía no se
+resuelve con un join abierto ni con la primera fila: usa un `EXISTS` exacto para
+el mismo usuario y organización con `role='DRIVER'` y `status='ACTIVE'`.
+También exige assignment `OWN` en estado `ACCEPTED`/`ACTIVE`, perfil `OWN`
+activo en la misma organización y usuario activo. Una membresía `VIEWER`
+adicional, en cualquier orden de inserción, no cambia el resultado. El evento y
+su versión persistidos anclan el contenido histórico de `AssignmentChanged`;
+el estado actual de assignment sólo decide si todavía se permite la audiencia
+Driver. Así, una cancelación posterior omite Driver sin convertir la entrega a
+Operations en poison.
+
 ## At-least-once, deduplicación y resincronización
 
 El settle ocurre después del envío. Una caída entre envío y settle puede
@@ -139,8 +162,13 @@ edad, duración de batch y duración de publicación. Sus tags son de baja
 cardinalidad: lane, event type, audience, outcome y error class. Logs y métricas
 no incluyen payload, tokens, coordenadas, IDs, grupos ni PII.
 
-Health comprueba configuración SignalR/InProcess, conexión Worker, existencia
-de las seis funciones necesarias y EXECUTE de claim sin reclamar filas.
+Readiness abre una transacción corta, aplica
+`SET LOCAL ROLE paqueteria_worker`, ejecuta sólo introspección y hace rollback.
+Comprueba `current_user`, `NOBYPASSRLS`, existencia y privilegio `EXECUTE` de
+las seis firmas canónicas: claim, settle y requeue stale para business y
+location. No reclama filas, no crea leases y no ejecuta settle ni requeue.
+Falta de cualquier firma/permiso o `BYPASSRLS` produce `unhealthy`; provider
+Disabled permanece `degraded`.
 
 ## Pruebas
 
@@ -155,6 +183,28 @@ La cobertura incluye:
 - contratos AI-05/06/12/18/24, arquitectura y ausencia de DML directo;
 - deduplicación, versiones y resincronización web;
 - reconexión real existente sin degradarla.
+
+La aceptación final añade evidencia real, no llamadas directas al publisher:
+
+- un failure injector de prueba interrumpe business después de publicar y antes
+  de settle; el lease vence, `requeue_stale_outbox` recupera la misma fila, las
+  dos entregas conservan el mismo `event_id`, el navegador aplica una sola vez
+  y la fila termina `PROCESSED`;
+- DriverHub recibe status y assignment para un usuario `DRIVER + VIEWER`;
+  otro driver y un viewer sin DRIVER no reciben. Suspender la membresía o
+  cancelar la assignment después de producir la fila omite Driver, registra
+  `driver_audience_skipped`, mantiene Operations y termina `PROCESSED`;
+- una posición confirmada con `publish_realtime=true` atraviesa el consumer de
+  location y llega sólo a Operations del tenant, con payload exacto,
+  `aggregate_id=driver_id` y cursor UTC-ms; otro tenant, DriverHub y TrackingHub
+  no reciben, y logs/métricas no contienen coordenadas;
+- poison business termina `DEAD` mientras location válido termina
+  `PROCESSED`, y el escenario inverso obtiene el mismo aislamiento con métricas
+  separadas por lane;
+- el navegador carga inicialmente `/api/v1/orders`, observa un reinicio físico
+  `Reconnecting -> Reconnected`, reemplaza por completo su mapa
+  `order_id -> aggregate_version` con otro snapshot REST real de Operations y
+  descarta después un outbox retrasado de versión anterior.
 
 ## Rollback y límites
 
@@ -171,6 +221,7 @@ La migración tiene `Down` no destructivo para evitar reinstalar silenciosamente
 un contrato normativo antiguo.
 
 Los límites deliberados son una sola instancia, dispatcher co-localizado,
-backplane InProcess y ausencia de broker durable. GATE-007, GATE-010,
+backplane InProcess, ausencia de broker durable y ausencia de renovación de
+lease. GATE-007, GATE-010,
 GATE-013, GATE-014, issue #5 y `RTM-001-CUSTOMER-SUPPORT-ROLE` permanecen
 abiertos.
