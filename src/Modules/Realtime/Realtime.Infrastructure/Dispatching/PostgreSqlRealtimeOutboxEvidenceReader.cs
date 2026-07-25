@@ -70,8 +70,14 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                              AND p.driver_type='OWN'
                              AND p.status='ACTIVE'
                              AND u.status='ACTIVE'
-                             AND m.role='DRIVER'
-                             AND m.status='ACTIVE'
+                             AND EXISTS (
+                               SELECT 1
+                               FROM organizations.organization_memberships m
+                               WHERE m.user_id=p.user_id
+                                 AND m.organization_id=p.org_id
+                                 AND m.role='DRIVER'
+                                 AND m.status='ACTIVE'
+                             )
                            ) AS driver_authorized
                     FROM dispatch.assignments a
                     JOIN orders.orders o
@@ -83,8 +89,6 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                      AND e.payload->>'assignment_id'=@assignment_text
                     LEFT JOIN drivers.driver_profiles p ON p.id=a.driver_id
                     LEFT JOIN identity.users u ON u.id=p.user_id
-                    LEFT JOIN organizations.organization_memberships m
-                      ON m.user_id=p.user_id AND m.organization_id=p.org_id
                     WHERE a.id=@assignment_id AND a.owner_org_id=@owner
                     """;
                 await using var command = new NpgsqlCommand(sql, connection, transaction);

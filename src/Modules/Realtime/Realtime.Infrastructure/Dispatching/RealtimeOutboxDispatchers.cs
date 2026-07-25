@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Realtime.Application.Configuration;
+using Realtime.Application.Dispatching;
 
 namespace Realtime.Infrastructure.Dispatching;
 
@@ -59,10 +60,10 @@ internal sealed class BusinessOutboxDispatcher(
                             options.Value.StaleRequeueIntervalSeconds);
                     }
 
-                    var messages = await store.ClaimBusinessAsync(
+                    var messages = await RealtimeOutboxClaiming.ClaimBusinessAsync(
+                        store,
                         options.Value.WorkerId,
-                        lane.BatchSize,
-                        TimeSpan.FromSeconds(lane.LeaseSeconds),
+                        lane,
                         stoppingToken);
                     telemetry.Claimed(
                         "business",
@@ -74,15 +75,11 @@ internal sealed class BusinessOutboxDispatcher(
                         continue;
                     }
 
-                    await Parallel.ForEachAsync(
+                    await RealtimeOutboxBatchDrain.ProcessAsync(
                         messages,
-                        new ParallelOptions
-                        {
-                            MaxDegreeOfParallelism = lane.MaximumConcurrency,
-                            CancellationToken = CancellationToken.None,
-                        },
-                        (message, token) => new ValueTask(
-                            processor.ProcessBusinessAsync(message, token)));
+                        stoppingToken,
+                        OutboxDispatcherPolicy.DrainTimeout(options.Value),
+                        processor.ProcessBusinessAsync);
                     logger.LogInformation(
                         "realtime_outbox_batch_completed lane={Lane} outcome={Outcome}",
                         "business",
@@ -166,10 +163,10 @@ internal sealed class LocationOutboxDispatcher(
                             options.Value.StaleRequeueIntervalSeconds);
                     }
 
-                    var messages = await store.ClaimLocationAsync(
+                    var messages = await RealtimeOutboxClaiming.ClaimLocationAsync(
+                        store,
                         options.Value.WorkerId,
-                        lane.BatchSize,
-                        TimeSpan.FromSeconds(lane.LeaseSeconds),
+                        lane,
                         stoppingToken);
                     telemetry.Claimed(
                         "location",
@@ -181,15 +178,11 @@ internal sealed class LocationOutboxDispatcher(
                         continue;
                     }
 
-                    await Parallel.ForEachAsync(
+                    await RealtimeOutboxBatchDrain.ProcessAsync(
                         messages,
-                        new ParallelOptions
-                        {
-                            MaxDegreeOfParallelism = lane.MaximumConcurrency,
-                            CancellationToken = CancellationToken.None,
-                        },
-                        (message, token) => new ValueTask(
-                            processor.ProcessLocationAsync(message, token)));
+                        stoppingToken,
+                        OutboxDispatcherPolicy.DrainTimeout(options.Value),
+                        processor.ProcessLocationAsync);
                     logger.LogInformation(
                         "realtime_outbox_batch_completed lane={Lane} outcome={Outcome}",
                         "location",
@@ -216,5 +209,59 @@ internal sealed class LocationOutboxDispatcher(
                 "location",
                 "postgresql");
         }
+    }
+}
+
+internal static class RealtimeOutboxClaiming
+{
+    public static Task<IReadOnlyList<ClaimedBusinessOutboxMessage>> ClaimBusinessAsync(
+        IRealtimeOutboxStore store,
+        string workerId,
+        OutboxLaneOptions lane,
+        CancellationToken cancellationToken) =>
+        store.ClaimBusinessAsync(
+            workerId,
+            OutboxDispatcherPolicy.EffectiveClaimSize(lane),
+            TimeSpan.FromSeconds(lane.LeaseSeconds),
+            cancellationToken);
+
+    public static Task<IReadOnlyList<ClaimedLocationOutboxMessage>> ClaimLocationAsync(
+        IRealtimeOutboxStore store,
+        string workerId,
+        OutboxLaneOptions lane,
+        CancellationToken cancellationToken) =>
+        store.ClaimLocationAsync(
+            workerId,
+            OutboxDispatcherPolicy.EffectiveClaimSize(lane),
+            TimeSpan.FromSeconds(lane.LeaseSeconds),
+            cancellationToken);
+}
+
+internal static class RealtimeOutboxBatchDrain
+{
+    public static async Task ProcessAsync<T>(
+        IReadOnlyList<T> messages,
+        CancellationToken stoppingToken,
+        TimeSpan drainTimeout,
+        Func<T, CancellationToken, Task> process)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(drainTimeout, TimeSpan.Zero);
+
+        using var drain = new CancellationTokenSource();
+        using var registration = stoppingToken.Register(() => drain.CancelAfter(drainTimeout));
+        var started = new List<Task>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            started.Add(process(message, drain.Token));
+        }
+
+        await Task.WhenAll(started);
     }
 }

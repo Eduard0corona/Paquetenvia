@@ -46,6 +46,8 @@ public sealed class OutboxLaneOptions
 
 public static class OutboxDispatcherOptionsValidator
 {
+    public const int SettlementSafetyMarginSeconds = 5;
+
     public static bool IsValid(OutboxDispatcherOptions? options)
     {
         if (options is null ||
@@ -61,14 +63,33 @@ public static class OutboxDispatcherOptionsValidator
             return false;
         }
 
-        return IsValidLane(options.Business) && IsValidLane(options.Location);
+        return IsValidLane(options.Business, options.PublishTimeoutSeconds) &&
+            IsValidLane(options.Location, options.PublishTimeoutSeconds);
     }
 
-    private static bool IsValidLane(OutboxLaneOptions? lane) =>
+    private static bool IsValidLane(OutboxLaneOptions? lane, int publishTimeoutSeconds) =>
         lane is not null &&
         lane.BatchSize is >= 1 and <= 100 &&
         lane.MaximumConcurrency is >= 1 and <= 32 &&
         lane.PollIntervalMilliseconds is >= 50 and <= 60_000 &&
         lane.LeaseSeconds is >= 15 and <= 600 &&
-        lane.MaximumAttempts is >= 1 and <= 100;
+        lane.MaximumAttempts is >= 1 and <= 100 &&
+        lane.LeaseSeconds >= publishTimeoutSeconds + SettlementSafetyMarginSeconds;
+}
+
+public static class OutboxDispatcherPolicy
+{
+    public static int EffectiveClaimSize(OutboxLaneOptions lane)
+    {
+        ArgumentNullException.ThrowIfNull(lane);
+        return Math.Min(lane.BatchSize, lane.MaximumConcurrency);
+    }
+
+    public static TimeSpan DrainTimeout(OutboxDispatcherOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return TimeSpan.FromSeconds(
+            options.PublishTimeoutSeconds +
+            OutboxDispatcherOptionsValidator.SettlementSafetyMarginSeconds);
+    }
 }

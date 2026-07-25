@@ -183,6 +183,29 @@ public interface IRealtimeOutboxEvidenceReader
         CancellationToken cancellationToken);
 }
 
+public enum RealtimeOutboxLane
+{
+    Business,
+    Location,
+}
+
+public enum RealtimeOutboxCheckpoint
+{
+    AfterAllAudiencesPublishedBeforeSettle,
+}
+
+public interface IRealtimeOutboxFailureInjector
+{
+    ValueTask OnCheckpointAsync(
+        RealtimeOutboxLane lane,
+        Guid outboxId,
+        RealtimeOutboxCheckpoint checkpoint,
+        CancellationToken cancellationToken);
+}
+
+public sealed class RealtimeOutboxInjectedFailureException()
+    : Exception("A controlled realtime outbox test checkpoint interrupted processing.");
+
 public sealed class OutboxMessageException(string errorCode) : Exception(errorCode)
 {
     public string ErrorCode { get; } = errorCode;

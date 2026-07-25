@@ -38,7 +38,14 @@ internal sealed class RealtimeOutboxHealthCheck(
             await using var command = new NpgsqlCommand(
                 """
                 SELECT
-                  to_regprocedure('security.claim_outbox(text,integer,interval)') IS NOT NULL
+                  current_user='paqueteria_worker'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_roles
+                    WHERE rolname=current_user
+                      AND rolbypassrls=false
+                  )
+                  AND to_regprocedure('security.claim_outbox(text,integer,interval)') IS NOT NULL
                   AND to_regprocedure('security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)') IS NOT NULL
                   AND to_regprocedure('security.requeue_stale_outbox(interval,integer,integer)') IS NOT NULL
                   AND to_regprocedure('security.claim_location_outbox(text,integer,interval)') IS NOT NULL
@@ -51,6 +58,22 @@ internal sealed class RealtimeOutboxHealthCheck(
                   AND has_function_privilege(
                     current_user,
                     'security.claim_location_outbox(text,integer,interval)',
+                    'EXECUTE')
+                  AND has_function_privilege(
+                    current_user,
+                    'security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)',
+                    'EXECUTE')
+                  AND has_function_privilege(
+                    current_user,
+                    'security.requeue_stale_outbox(interval,integer,integer)',
+                    'EXECUTE')
+                  AND has_function_privilege(
+                    current_user,
+                    'security.settle_location_outbox(uuid,uuid,text,text,timestamp with time zone)',
+                    'EXECUTE')
+                  AND has_function_privilege(
+                    current_user,
+                    'security.requeue_stale_location_outbox(interval,integer,integer)',
                     'EXECUTE');
                 """,
                 connection,

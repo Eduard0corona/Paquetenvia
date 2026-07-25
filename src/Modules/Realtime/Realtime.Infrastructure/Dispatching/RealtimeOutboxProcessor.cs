@@ -12,6 +12,7 @@ internal sealed class RealtimeOutboxProcessor(
     IRealtimeOutboxStore store,
     IRealtimeOutboxEvidenceReader evidence,
     IRealtimePublisher publisher,
+    IRealtimeOutboxFailureInjector failureInjector,
     PublicOrderStatusPolicy publicStatusPolicy,
     IOptions<OutboxDispatcherOptions> options,
     RealtimeOutboxTelemetry telemetry)
@@ -56,7 +57,16 @@ internal sealed class RealtimeOutboxProcessor(
                 }
 
                 telemetry.Published(lane, EventType(parsed));
+                await failureInjector.OnCheckpointAsync(
+                    RealtimeOutboxLane.Business,
+                    message.Id,
+                    RealtimeOutboxCheckpoint.AfterAllAudiencesPublishedBeforeSettle,
+                    cancellationToken);
                 await SettleBusinessAsync(message, "PROCESSED", null, null, cancellationToken);
+            }
+            catch (RealtimeOutboxInjectedFailureException)
+            {
+                throw;
             }
             catch (OutboxMessageException exception)
             {
@@ -138,7 +148,16 @@ internal sealed class RealtimeOutboxProcessor(
 
                 telemetry.AudienceDelivered(lane, eventType, "operations", "published");
                 telemetry.Published(lane, eventType);
+                await failureInjector.OnCheckpointAsync(
+                    RealtimeOutboxLane.Location,
+                    message.Id,
+                    RealtimeOutboxCheckpoint.AfterAllAudiencesPublishedBeforeSettle,
+                    cancellationToken);
                 await SettleLocationAsync(message, "PROCESSED", null, null, cancellationToken);
+            }
+            catch (RealtimeOutboxInjectedFailureException)
+            {
+                throw;
             }
             catch (OutboxMessageException exception)
             {
@@ -302,7 +321,6 @@ internal sealed class RealtimeOutboxProcessor(
             persisted.OrderId != value.OrderId ||
             persisted.DriverId != value.DriverId ||
             persisted.OwnerOrganizationId != value.OwnerOrganizationId ||
-            persisted.Status != value.AssignmentStatus ||
             persisted.OrderVersion != value.AggregateVersion ||
             persisted.OccurredAt != value.OccurredAt)
         {

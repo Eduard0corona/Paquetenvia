@@ -117,6 +117,7 @@ public static class DependencyInjection
             configuration.GetConnectionString("PaqueteriaWorker") ?? string.Empty));
         services.AddSingleton<IRealtimeOutboxStore, PostgreSqlRealtimeOutboxStore>();
         services.AddSingleton<IRealtimeOutboxEvidenceReader, PostgreSqlRealtimeOutboxEvidenceReader>();
+        services.TryAddSingleton<IRealtimeOutboxFailureInjector, NoOpRealtimeOutboxFailureInjector>();
         services.AddSingleton<PublicOrderStatusPolicy>();
         services.AddSingleton<RealtimeOutboxTelemetry>();
         services.AddSingleton<RealtimeOutboxProcessor>();
