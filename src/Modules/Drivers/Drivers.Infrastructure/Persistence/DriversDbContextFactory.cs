@@ -13,6 +13,7 @@ public sealed class DriversDbContextFactory : IDesignTimeDbContextFactory<Driver
         var options = new DbContextOptionsBuilder<DriversDbContext>()
             .UseNpgsql(connectionString, postgres =>
             {
+                postgres.UseNetTopologySuite();
                 postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
                 postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
             })

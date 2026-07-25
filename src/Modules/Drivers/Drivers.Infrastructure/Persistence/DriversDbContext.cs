@@ -68,6 +68,41 @@ public sealed class DriversDbContext(
         document.HasIndex(value => new { value.DriverId, value.Status, value.ExpiresAt })
             .HasDatabaseName("driver_documents_eligibility_idx");
         document.HasQueryFilter(value => tenantState.OrganizationIds.Contains(value.OrganizationId));
+
+        var position = modelBuilder.Entity<DriverPositionRecord>();
+        position.ToTable("driver_positions", "drivers");
+        position.HasKey(value => value.Id);
+        position.Property(value => value.Id).HasColumnName("id").ValueGeneratedNever();
+        position.Property(value => value.DriverId).HasColumnName("driver_id").ValueGeneratedNever();
+        position.Property(value => value.OrganizationId).HasColumnName("org_id").ValueGeneratedNever();
+        position.Property(value => value.CityId).HasColumnName("city_id").ValueGeneratedNever();
+        position.Property(value => value.ClientEventId).HasColumnName("client_event_id").ValueGeneratedNever();
+        position.Property(value => value.Point).HasColumnName("point")
+            .HasColumnType("geometry(Point,4326)").IsRequired().ValueGeneratedNever();
+        position.Property(value => value.AccuracyMeters).HasColumnName("accuracy_m")
+            .HasColumnType("numeric(8,2)").ValueGeneratedNever();
+        position.Property(value => value.HeadingDegrees).HasColumnName("heading_degrees")
+            .HasColumnType("numeric(6,2)").ValueGeneratedNever();
+        position.Property(value => value.SpeedMetersPerSecond).HasColumnName("speed_mps")
+            .HasColumnType("numeric(8,2)").ValueGeneratedNever();
+        position.Property(value => value.CapturedAt).HasColumnName("captured_at")
+            .HasColumnType("timestamp with time zone").ValueGeneratedNever();
+        position.Property(value => value.ReceivedAt).HasColumnName("received_at")
+            .HasColumnType("timestamp with time zone").ValueGeneratedNever();
+        position.Property(value => value.PublishRealtime).HasColumnName("publish_realtime")
+            .ValueGeneratedNever();
+        position.HasOne<DriverProfile>().WithMany().HasForeignKey(value => value.DriverId)
+            .OnDelete(DeleteBehavior.NoAction);
+        position.HasIndex(value => new { value.DriverId, value.ClientEventId })
+            .IsUnique().HasDatabaseName("driver_positions_driver_event_key");
+        position.HasIndex(value => new { value.OrganizationId, value.DriverId, value.CapturedAt })
+            .IsDescending(false, false, true)
+            .HasDatabaseName("driver_positions_tenant_time_idx");
+        position.HasIndex(value => value.CapturedAt)
+            .HasMethod("brin").HasDatabaseName("driver_positions_captured_brin");
+        position.HasIndex(value => value.Point)
+            .HasMethod("gist").HasDatabaseName("driver_positions_point_gix");
+        position.HasQueryFilter(value => tenantState.OrganizationIds.Contains(value.OrganizationId));
     }
 
     private static DriverType ParseDriverType(string value) => value switch

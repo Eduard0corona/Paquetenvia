@@ -33,8 +33,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrganizationsBaseline.cs"),
         ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
-        ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriversBaseline.MigrationId,
-            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDriversBaseline.cs"),
+        ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
         ("Pricing", "__ef_migrations_history_pricing", AdoptCanonicalPricingBaseline.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs"),
         ("Orders", "__ef_migrations_history_orders", AdoptCanonicalOrdersBaseline.MigrationId,
@@ -71,6 +71,12 @@ internal sealed class ModuleMigrationCoordinator
                 contract.MigrationId,
                 "VERIFIED"));
         }
+
+        VerifyAdoptionSource(
+            root,
+            "Drivers",
+            AdoptCanonicalDriversBaseline.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDriversBaseline.cs");
 
         return result;
     }
@@ -193,8 +199,39 @@ internal sealed class ModuleMigrationCoordinator
             ids.Add(reader.GetString(0));
         }
 
-        var status = ids.Count == 1 && ids[0] == contract.MigrationId ? "APPLIED" : "DRIFT";
+        var expectedIds = contract.Module == "Drivers"
+            ? new[] { AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId }
+            : new[] { contract.MigrationId };
+        var status = ids.SequenceEqual(expectedIds, StringComparer.Ordinal)
+            ? "APPLIED"
+            : ids.Count < expectedIds.Length &&
+                ids.SequenceEqual(expectedIds.Take(ids.Count), StringComparer.Ordinal)
+                ? "PENDING"
+                : "DRIFT";
         return new ModuleMigrationState(contract.Module, $"platform.{contract.HistoryTable}", contract.MigrationId, status);
+    }
+
+    private static void VerifyAdoptionSource(
+        string root,
+        string module,
+        string migrationId,
+        string sourcePath)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException($"{module} adoption migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) ||
+            source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) ||
+            source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) ||
+            source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal))
+        {
+            throw new BaselineVerificationException(
+                $"{module} adoption migration is destructive or has an unexpected identifier.");
+        }
     }
 
     private static async Task MigrateIdentityAsync(string connectionString, CancellationToken cancellationToken)
@@ -260,6 +297,7 @@ internal sealed class ModuleMigrationCoordinator
         var options = new DbContextOptionsBuilder<DriversDbContext>()
             .UseNpgsql(connection, postgres =>
             {
+                postgres.UseNetTopologySuite();
                 postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
                 postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
             })
