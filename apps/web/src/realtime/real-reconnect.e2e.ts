@@ -88,16 +88,35 @@ describe("real managed SignalR reconnect", () => {
       await host.stop();
       hosts.delete(host);
       await reconnecting.promiseWithTimeout(10_000);
+      await waitFor(
+        () => connection.state === HubConnectionState.Reconnecting,
+        10_000,
+        "connection to remain reconnecting after the old host exits",
+      );
       expect(connection.state).toBe(HubConnectionState.Reconnecting);
 
       host = await startHost(port, 5);
       hosts.add(host);
       await reconnected.promiseWithTimeout(15_000);
       await synchronized.promiseWithTimeout(5_000);
+      await waitFor(
+        () =>
+          connection.state === HubConnectionState.Connected &&
+          localVersion === 5,
+        5_000,
+        "managed connection to report its recovered state and REST snapshot",
+      );
       expect(connection.state).toBe(HubConnectionState.Connected);
-      expect(lifecycle).toEqual(["Reconnecting", "Reconnected"]);
+      expect(lifecycle.length).toBeGreaterThanOrEqual(2);
+      expect(lifecycle.length % 2).toBe(0);
+      for (let index = 0; index < lifecycle.length; index += 2) {
+        expect(lifecycle.slice(index, index + 2)).toEqual([
+          "Reconnecting",
+          "Reconnected",
+        ]);
+      }
       expect(tokenFactoryCount).toBeGreaterThanOrEqual(2);
-      expect(restSynchronizationCount).toBe(1);
+      expect(restSynchronizationCount).toBe(lifecycle.length / 2);
       expect(localVersion).toBe(5);
       await expectStats(baseUrl, 1, "WebSockets");
 

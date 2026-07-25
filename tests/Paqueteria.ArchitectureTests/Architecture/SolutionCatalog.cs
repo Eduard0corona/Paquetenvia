@@ -81,7 +81,9 @@ internal static class SolutionCatalog
         typeof(Drivers.Application.AssemblyReference).Assembly,
         typeof(Drivers.Infrastructure.AssemblyReference).Assembly,
         typeof(Drivers.Endpoints.AssemblyReference).Assembly,
-        additionalInfrastructureReferences: ["Paqueteria.Application"]);
+        additionalInfrastructureReferences: ["Paqueteria.Application"],
+        additionalEndpointReferences: ["Organizations.Application", "Organizations.Endpoints", "Paqueteria.Application"],
+        allowedCrossModuleDependencies: ["Organizations"]);
 
     internal static readonly ModuleDefinition Dispatch = Module(
         "Dispatch",
@@ -145,6 +147,7 @@ internal static class SolutionCatalog
             "Organizations.Application",
             "Locations.Endpoints",
             "Locations.Infrastructure",
+            "Drivers.Endpoints",
             "Drivers.Infrastructure",
             "Dispatch.Endpoints",
             "Dispatch.Infrastructure",

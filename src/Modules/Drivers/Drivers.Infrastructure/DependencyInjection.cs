@@ -1,5 +1,7 @@
 using Drivers.Application.Eligibility;
+using Drivers.Application.Locations;
 using Drivers.Infrastructure.Eligibility;
+using Drivers.Infrastructure.Locations;
 using Drivers.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -32,12 +34,20 @@ public static class DependencyInjection
             .Validate(options => options.Provider != DriversProviderKind.PostgreSql ||
                 IsComplete(options.Eligibility),
                 "Drivers:Eligibility must define a valid document and capacity policy for every vehicle type.")
+            .Validate(options => options.Provider != DriversProviderKind.PostgreSql ||
+                IsValid(options.LocationTelemetry),
+                "Drivers:LocationTelemetry is invalid.")
             .ValidateOnStart();
 
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "A PostgreSQL drivers provider requires a configured connection string.")));
+        services.TryAddSingleton(serviceProvider =>
+        {
+            var builder = new NpgsqlDataSourceBuilder(
+                serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
+                ?? throw new InvalidOperationException(
+                    "A PostgreSQL drivers provider requires a configured connection string."));
+            builder.UseNetTopologySuite();
+            return builder.Build();
+        });
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
@@ -49,6 +59,7 @@ public static class DependencyInjection
                     postgres =>
                     {
                         postgres.CommandTimeout(options.CommandTimeoutSeconds);
+                        postgres.UseNetTopologySuite();
                         postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
                         postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
                         postgres.EnableRetryOnFailure();
@@ -58,6 +69,18 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<TenantSaveChangesGuardInterceptor>());
         });
         services.AddScoped<TenantTransactionContext<DriversDbContext>>();
+        services.TryAddSingleton<Paqueteria.Application.IClock, Paqueteria.Infrastructure.SystemClock>();
+        services.TryAddSingleton<IDriverLocationAuthorizer, DriverLocationAuthorizer>();
+        services.TryAddSingleton<IDriverLocationFailureInjector, NoOpDriverLocationFailureInjector>();
+        services.AddSingleton<DisabledDriverLocationIngestionService>();
+        services.AddScoped<PostgreSqlDriverLocationIngestionService>();
+        services.AddScoped<IDriverLocationIngestionService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<DriversOptions>>().Value.Provider switch
+            {
+                DriversProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlDriverLocationIngestionService>(),
+                _ => serviceProvider.GetRequiredService<DisabledDriverLocationIngestionService>(),
+            });
         services.AddSingleton<DisabledDriverEligibilityService>();
         services.AddScoped<PostgreSqlDriverEligibilityService>();
         services.AddScoped<IDriverEligibilityService>(serviceProvider =>
@@ -102,4 +125,6 @@ public static class DependencyInjection
         value.MaximumLengthMillimeters > 0 &&
         value.MaximumWidthMillimeters > 0 &&
         value.MaximumHeightMillimeters > 0;
+
+    private static bool IsValid(DriverLocationTelemetryOptions value) => value.IsValid();
 }

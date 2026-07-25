@@ -448,7 +448,10 @@
       "drivers.endpoints": {
         "type": "Project",
         "dependencies": {
-          "Drivers.Application": "[1.0.0, )"
+          "Drivers.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
         }
       },
       "drivers.infrastructure": {
@@ -457,6 +460,7 @@
           "Drivers.Application": "[1.0.0, )",
           "Drivers.Domain": "[1.0.0, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL.NetTopologySuite": "[10.0.3, )",
           "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
@@ -603,6 +607,7 @@
         "dependencies": {
           "Dispatch.Endpoints": "[1.0.0, )",
           "Dispatch.Infrastructure": "[1.0.0, )",
+          "Drivers.Endpoints": "[1.0.0, )",
           "Drivers.Infrastructure": "[1.0.0, )",
           "Identity.Application": "[1.0.0, )",
           "Identity.Endpoints": "[1.0.0, )",

@@ -6,13 +6,34 @@
         "type": "Project",
         "dependencies": {
           "Drivers.Domain": "[1.0.0, )",
-          "Paqueteria.Application": "[1.0.0, )",
-          "Paqueteria.Domain": "[1.0.0, )"
+          "Paqueteria.Application": "[1.0.0, )"
         }
       },
       "drivers.domain": {
         "type": "Project",
         "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.application": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Domain": "[1.0.0, )"
         }
       },

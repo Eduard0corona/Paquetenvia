@@ -419,6 +419,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/DriverLocationInvalidRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
   /quotes/{quoteId}:
@@ -792,6 +798,24 @@ components:
             $ref: '#/components/schemas/Problem'
     UniformNotFound:
       description: Missing, cross-tenant, expired or revoked resource. Response must not reveal existence.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    DriverLocationInvalidRequest:
+      description: Structurally invalid driver location batch. The stable problem code is INVALID_REQUEST.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/DriverLocationInvalidRequestProblem'
+    TooManyRequests:
+      description: Request rejected by rate limiting
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: Required provider or infrastructure dependency is unavailable
       content:
         application/problem+json:
           schema:
@@ -1408,6 +1432,29 @@ components:
           items:
             type: object
             additionalProperties: true
+    DriverLocationInvalidRequestProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          const: INVALID_REQUEST
     DispatchAssignmentConflictProblem:
       type: object
       required:

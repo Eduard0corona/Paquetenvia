@@ -15,6 +15,26 @@ public sealed class DriversOptions
     public DriversProviderKind Provider { get; set; } = DriversProviderKind.Disabled;
     public int CommandTimeoutSeconds { get; set; } = 30;
     public DriverEligibilityOptions Eligibility { get; set; } = new();
+    public DriverLocationTelemetryOptions LocationTelemetry { get; set; } = new();
+}
+
+public sealed class DriverLocationTelemetryOptions
+{
+    public int MinimumPublishIntervalSeconds { get; set; } = 10;
+    public double MinimumPublishDistanceMeters { get; set; } = 25d;
+    public int MaximumSilenceSeconds { get; set; } = 60;
+
+    internal Drivers.Domain.Location.DriverLocationPublicationOptions ToPolicy() => new(
+        TimeSpan.FromSeconds(MinimumPublishIntervalSeconds),
+        MinimumPublishDistanceMeters,
+        TimeSpan.FromSeconds(MaximumSilenceSeconds));
+
+    public bool IsValid() =>
+        MinimumPublishIntervalSeconds is >= 1 and <= 300 &&
+        double.IsFinite(MinimumPublishDistanceMeters) &&
+        MinimumPublishDistanceMeters is > 0d and <= 1000d &&
+        MaximumSilenceSeconds >= MinimumPublishIntervalSeconds &&
+        MaximumSilenceSeconds <= 3600;
 }
 
 public sealed class DriverEligibilityOptions
