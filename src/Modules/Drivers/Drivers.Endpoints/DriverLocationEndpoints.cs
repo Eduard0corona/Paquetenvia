@@ -32,7 +32,6 @@ public static class DriverLocationEndpoints
             .RequireRateLimiting(DriverLocationEndpointOptions.RateLimitPolicy)
             .WithName("publishDriverLocation")
             .WithTags("Driver")
-            .Accepts<DriverLocationBatchRequest>("application/json")
             .Produces<DriverLocationBatchResponse>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -51,6 +50,11 @@ public static class DriverLocationEndpoints
         IOptions<DriverLocationEndpointOptions> endpointOptions,
         CancellationToken cancellationToken)
     {
+        if (!httpContext.Request.HasJsonContentType())
+        {
+            return Conflict();
+        }
+
         if (httpContext.Request.ContentLength is { } contentLength &&
             contentLength > endpointOptions.Value.MaximumRequestBodyBytes)
         {
@@ -77,13 +81,21 @@ public static class DriverLocationEndpoints
         {
             return Conflict();
         }
-
         if (request?.Positions is not { Count: >= 1 and <= 20 } ||
             request.ExtensionData is { Count: > 0 } ||
             request.Positions.Any(position =>
                 position is null || position.ExtensionData is { Count: > 0 }))
         {
             return Conflict();
+        }
+
+        var positions = new DriverLocationPointInput[request.Positions.Count];
+        for (var index = 0; index < request.Positions.Count; index++)
+        {
+            if (!TryToInput(request.Positions[index]!, out positions[index]))
+            {
+                return Conflict();
+            }
         }
 
         if (!session.IsActive ||
@@ -93,7 +105,6 @@ public static class DriverLocationEndpoints
             return Forbidden();
         }
 
-        var positions = request.Positions.Select(value => ToInput(value!)).ToArray();
         try
         {
             var result = await service.PublishAsync(
@@ -126,31 +137,39 @@ public static class DriverLocationEndpoints
         }
     }
 
-    private static DriverLocationPointInput ToInput(DriverLocationPointRequest request)
+    private static bool TryToInput(
+        DriverLocationPointRequest request,
+        out DriverLocationPointInput input)
     {
-        var hasClientEventId = Guid.TryParseExact(
+        if (!Guid.TryParseExact(
             request.ClientEventId,
             "D",
-            out var clientEventId);
+            out var clientEventId))
+        {
+            input = default!;
+            return false;
+        }
+
         var hasCapturedAt = DateTimeOffset.TryParseExact(
             request.CapturedAt,
             "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK",
             CultureInfo.InvariantCulture,
             DateTimeStyles.None,
             out var capturedAt);
-        return new(
-            hasClientEventId ? clientEventId : null,
+        input = new(
+            clientEventId,
             request.Latitude,
             request.Longitude,
             request.AccuracyMeters,
             hasCapturedAt ? capturedAt : null,
             request.HeadingDegrees,
             request.SpeedMetersPerSecond);
+        return true;
     }
 
     private static DriverLocationBatchResponse ToResponse(DriverLocationBatchResult result) => new(
         result.Items.Select(item => new DriverLocationItemResponse(
-            item.ClientEventId ?? Guid.Empty,
+            item.ClientEventId,
             item.PositionId,
             item.Status switch
             {

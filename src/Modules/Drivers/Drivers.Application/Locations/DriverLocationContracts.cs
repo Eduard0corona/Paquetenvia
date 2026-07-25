@@ -1,7 +1,7 @@
 namespace Drivers.Application.Locations;
 
 public sealed record DriverLocationPointInput(
-    Guid? ClientEventId,
+    Guid ClientEventId,
     double? Latitude,
     double? Longitude,
     double? AccuracyMeters,
@@ -22,7 +22,7 @@ public enum DriverLocationItemStatus
 }
 
 public sealed record DriverLocationItemResult(
-    Guid? ClientEventId,
+    Guid ClientEventId,
     Guid? PositionId,
     DriverLocationItemStatus Status,
     string? ErrorCode)

@@ -152,12 +152,11 @@ public sealed class PostgreSqlDriverLocationIngestionService(
         {
             var validation = validations[index];
             var suppliedEventId = command.Positions[index].ClientEventId;
-            if (suppliedEventId is { } repeatedEventId &&
-                repeatedEventId != Guid.Empty &&
-                known.TryGetValue(repeatedEventId, out var repeatedPositionId))
+            if (suppliedEventId != Guid.Empty &&
+                known.TryGetValue(suppliedEventId, out var repeatedPositionId))
             {
                 items[index] = new DriverLocationItemResult(
-                    repeatedEventId,
+                    suppliedEventId,
                     repeatedPositionId,
                     DriverLocationItemStatus.Duplicate,
                     null);

@@ -107,7 +107,7 @@ public sealed class DriverLocationPolicyTests
         [
             new(id, Guid.NewGuid(), DriverLocationItemStatus.Accepted, null),
             new(id, Guid.NewGuid(), DriverLocationItemStatus.Duplicate, null),
-            new(null, null, DriverLocationItemStatus.Rejected, DriverLocationRejectionCodes.InvalidClientEventId),
+            new(Guid.Empty, null, DriverLocationItemStatus.Rejected, DriverLocationRejectionCodes.InvalidClientEventId),
         ], 1);
         Assert.Equal(1, result.AcceptedCount);
         Assert.Equal(1, result.DuplicateCount);
