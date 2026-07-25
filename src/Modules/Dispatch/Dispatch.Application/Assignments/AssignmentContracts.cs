@@ -188,7 +188,8 @@ public sealed record AssignmentVisibilityOrder(
     Guid CityId,
     Guid? ServiceAreaId,
     string Status,
-    int Version);
+    int Version,
+    string PublicId = "");
 
 public sealed record AssignmentVisibilityPackage(
     int WeightGrams,
@@ -326,6 +327,8 @@ public enum AssignmentTransactionStage
     OrderUpdated,
     EventInserted,
     OutboxInserted,
+    TimelineOutboxInserted,
+    AssignmentOutboxInserted,
     AssignmentAuditInserted,
     TransitionAuditInserted,
     BeforeIdempotencyCompletion,

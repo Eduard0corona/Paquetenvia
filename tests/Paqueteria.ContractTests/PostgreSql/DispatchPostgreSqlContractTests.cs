@@ -59,6 +59,10 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
               (SELECT version FROM orders.orders WHERE id=@order),
               (SELECT count(*) FROM orders.order_events WHERE order_id=@order AND event_type='ORDER_STATUS_CHANGED'),
               (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order AND topic='orders.status-changed'),
+              (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order AND topic='orders.timeline-event-added'),
+              (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order AND topic='dispatch.assignment-changed'),
+              (SELECT count(DISTINCT id) FROM platform.outbox_events WHERE aggregate_id=@order
+                AND topic IN ('orders.status-changed','orders.timeline-event-added','dispatch.assignment-changed')),
               (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ASSIGNMENT_CREATED'),
               (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ORDER_STATUS_CHANGED'),
               (SELECT count(*) FROM platform.idempotency_keys
@@ -77,7 +81,10 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         Assert.Equal(1L, reader.GetInt64(6));
         Assert.Equal(1L, reader.GetInt64(7));
         Assert.Equal(1L, reader.GetInt64(8));
-        Assert.Equal(1L, reader.GetInt64(9));
+        Assert.Equal(3L, reader.GetInt64(9));
+        Assert.Equal(1L, reader.GetInt64(10));
+        Assert.Equal(1L, reader.GetInt64(11));
+        Assert.Equal(1L, reader.GetInt64(12));
     }
 
     [PostgreSqlContractFact]
