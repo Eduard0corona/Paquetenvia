@@ -33,6 +33,13 @@ required `positions` array with 1–20 items. Each item contains
 client. Unknown properties and malformed or out-of-range batch shapes follow
 the repository's uniform `409 INVALID_REQUEST` convention.
 
+The complete productive response set is `202`, `401`, `403`, `404`, `409`,
+`429`, and `503`. AI-05 declares this exact set. `409` is a stable Problem
+Details response with `code=INVALID_REQUEST`; it does not expose parser details.
+`503` fails closed when the Drivers provider is disabled or PostgreSQL
+infrastructure fails, without exposing exceptions, SQL, connection details, or
+stack traces.
+
 The request requires a valid OIDC identity and `X-Organization-Id`. The existing
 tenant middleware verifies the active internal identity and active membership.
 Inside the productive PostgreSQL transaction, authorization is read again from
@@ -59,6 +66,26 @@ The three counters are computed from the returned items. No HTTP
 `Idempotency-Key` is used.
 
 ## Validation and canonical mapping
+
+Batch shape and item telemetry are deliberately classified at different
+boundaries. Missing `positions`, a count outside 1â€“20, null items, unknown
+properties, malformed JSON, an oversized body, and a missing, null, empty,
+whitespace, malformed, or non-canonical `client_event_id` reject the complete
+request as `409 INVALID_REQUEST`. The endpoint accepts only an exact UUID `D`
+form through `Guid.TryParseExact`; it does not trim or substitute input. This
+structural validation completes before the ingestion service is invoked, so it
+opens no transaction, reads no profile or deduplication data, takes no advisory
+lock, and produces no persistence effects, persistence metrics, or productive
+ingestion logs.
+
+A canonical empty UUID is structurally valid but semantically invalid. It
+continues into item validation and returns `202` with its exact empty UUID,
+`status=REJECTED`, `position_id=null`, `duplicate=false`, and
+`error_code=INVALID_CLIENT_EVENT_ID`. Invalid coordinates, accuracy, heading,
+speed, and captured time remain item-level `202 REJECTED` results. Application
+commands and results carry non-null `Guid` values, and response mapping returns
+that same value without a `Guid.Empty` fallback or any other invented
+identifier.
 
 Latitude and longitude must be finite and within `[-90,90]` and `[-180,180]`.
 Accuracy and speed are finite, non-negative, and bounded by `numeric(8,2)`;
@@ -163,7 +190,17 @@ fixtures inspect rows.
 `Drivers:LocationIngestion` configures a fixed-window batch limit and maximum
 body size (synthetic defaults: 30 batches/60 seconds and 32 KiB). The queue is
 disabled. Partitions use a one-way hash of authenticated subject, with hashed IP
-only as the anonymous fallback; tokens are never partition keys.
+only as the anonymous fallback; tokens are never partition keys and the
+partition key is never logged.
+
+Rate limiting is an anti-abuse boundary. `UseRateLimiter()` runs after identity
+authentication but before `TenantContextMiddleware` and endpoint authorization.
+Once an identity or network-fallback partition exhausts its quota, `429` may
+preempt the normal functional `401`, `403`, or `404` response. This protection
+does not query PostgreSQL, profile data, driver data, event existence, or
+deduplication and therefore is not a deduplication oracle. It does not alter the
+service's internal precedence: capability authorization, then OWN profile
+resolution, then deduplication.
 
 Metrics cover batches, accepted/duplicate/rejected positions, rejection code,
 selected/suppressed publication, persistence failures, and duration. Labels are
@@ -184,13 +221,17 @@ device data, background tracking, geofencing, map, or public coordinate flow.
 Unit tests cover field validation, UTC normalization, exact boundaries,
 Haversine vectors, publication decisions, counters, options, and stable codes.
 HTTP tests cover authentication/tenant/capability, uniform 404, 1/20/21 batch
-shapes, order, mixed outcomes, rate limiting, and Disabled provider.
+shapes, order, mixed outcomes, malformed and non-canonical event IDs, exact
+empty-UUID rejection, full-batch rejection before service invocation,
+rate-limit preemption without a service call, and Disabled provider.
 PostgreSQL 18/PostGIS tests cover geometry/SRID, coordinates, numeric/UTC
 storage, RLS/FORCE RLS, insert-only outbox privileges, payload/lifecycle,
-throttling, replay deduplication, cross-DbContext concurrency, all failure
-checkpoints, cancellation, adoption history, and zero pending migrations.
+empty-UUID no-write behavior, throttling, replay deduplication, cross-DbContext
+concurrency, all failure checkpoints, cancellation, adoption history, and zero
+pending migrations.
 Architecture and contract tests keep Drivers isolated from Realtime and Worker
-and compare the implementation to AI-05/AI-06/AI-12.
+and compare the exact operation, request, response schema, and seven response
+statuses to AI-05 while retaining AI-06/AI-12 protections.
 
 Operational rollback first sets `Drivers:Provider=Disabled`, which fails closed
 without simulating success or producing outbox. Code commits may then be

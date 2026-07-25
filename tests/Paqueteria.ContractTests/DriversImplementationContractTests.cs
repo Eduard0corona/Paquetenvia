@@ -1,8 +1,10 @@
+using Drivers.Application.Locations;
 using Drivers.Domain;
 using Drivers.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.ContractTests.Support;
+using YamlDotNet.RepresentationModel;
 
 namespace Paqueteria.ContractTests;
 
@@ -81,6 +83,110 @@ public sealed class DriversImplementationContractTests
     }
 
     [Fact]
+    public void Driver_location_AI05_operation_has_the_exact_request_response_and_status_contract()
+    {
+        var root = YamlNodes.LoadMapping(
+            RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var operation = root.Mapping("paths")
+            .Mapping("/driver/me/location-updates")
+            .Mapping("post");
+        Assert.Equal("publishDriverLocation", operation.Scalar("operationId"));
+
+        var responses = operation.Mapping("responses");
+        Assert.Equal(
+            ["202", "401", "403", "404", "409", "429", "503"],
+            responses.Children.Keys
+                .Cast<YamlScalarNode>()
+                .Select(value => value.Value!)
+                .Order(StringComparer.Ordinal));
+        Assert.Equal(
+            "#/components/responses/DriverLocationInvalidRequest",
+            responses.Mapping("409").Scalar("$ref"));
+        Assert.Equal(
+            "#/components/responses/TooManyRequests",
+            responses.Mapping("429").Scalar("$ref"));
+        Assert.Equal(
+            "#/components/responses/ServiceUnavailable",
+            responses.Mapping("503").Scalar("$ref"));
+
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var batch = schemas.Mapping("DriverLocationBatchRequest");
+        Assert.Contains("positions", Required(batch));
+        var positions = batch.Mapping("properties").Mapping("positions");
+        Assert.Equal("array", positions.Scalar("type"));
+        Assert.Equal("1", positions.Scalar("minItems"));
+        Assert.Equal("20", positions.Scalar("maxItems"));
+        Assert.Equal(
+            "#/components/schemas/DriverLocationPoint",
+            positions.Mapping("items").Scalar("$ref"));
+
+        var point = schemas.Mapping("DriverLocationPoint");
+        Assert.Contains("client_event_id", Required(point));
+        var requestId = point.Mapping("properties").Mapping("client_event_id");
+        Assert.Equal("string", requestId.Scalar("type"));
+        Assert.Equal("uuid", requestId.Scalar("format"));
+
+        var result = schemas.Mapping("DriverLocationResult");
+        Assert.Contains("client_event_id", Required(result));
+        Assert.Contains("duplicate", Required(result));
+        var responseId = result.Mapping("properties").Mapping("client_event_id");
+        Assert.Equal("string", responseId.Scalar("type"));
+        Assert.Equal("uuid", responseId.Scalar("format"));
+        var positionIdTypes = result.Mapping("properties").Mapping("position_id")
+            .Sequence("type").Children.Cast<YamlScalarNode>().Select(value => value.Value);
+        Assert.Equal(["string", "null"], positionIdTypes);
+        var status = result.Mapping("properties").Mapping("status");
+        Assert.Equal(
+            ["ACCEPTED", "DUPLICATE", "REJECTED"],
+            status.Sequence("enum").Children.Cast<YamlScalarNode>().Select(value => value.Value));
+        var errorTypes = result.Mapping("properties").Mapping("error_code")
+            .Sequence("type").Children.Cast<YamlScalarNode>().Select(value => value.Value);
+        Assert.Equal(["string", "null"], errorTypes);
+
+        var invalidProblem = schemas.Mapping("DriverLocationInvalidRequestProblem");
+        Assert.Contains("code", Required(invalidProblem));
+        Assert.Equal(
+            "INVALID_REQUEST",
+            invalidProblem.Mapping("properties").Mapping("code").Scalar("const"));
+        Assert.Equal(
+            "409",
+            invalidProblem.Mapping("properties").Mapping("status").Scalar("const"));
+    }
+
+    [Fact]
+    public void Driver_location_identifier_types_and_boundary_mapping_cannot_silently_substitute_values()
+    {
+        Assert.Equal(
+            typeof(Guid),
+            typeof(DriverLocationPointInput).GetProperty(nameof(DriverLocationPointInput.ClientEventId))!.PropertyType);
+        Assert.Equal(
+            typeof(Guid),
+            typeof(DriverLocationItemResult).GetProperty(nameof(DriverLocationItemResult.ClientEventId))!.PropertyType);
+
+        var endpointSource = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Drivers", "Drivers.Endpoints", "DriverLocationEndpoints.cs"));
+        Assert.Contains("Guid.TryParseExact(", endpointSource, StringComparison.Ordinal);
+        Assert.Contains("\"D\"", endpointSource, StringComparison.Ordinal);
+        Assert.Contains("if (!TryToInput(", endpointSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("item.ClientEventId ?? Guid.Empty", endpointSource, StringComparison.Ordinal);
+
+        var applicationSource = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Drivers", "Drivers.Application", "Locations",
+            "DriverLocationContracts.cs"));
+        Assert.DoesNotContain("string ClientEventId", applicationSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("string? ClientEventId", applicationSource, StringComparison.Ordinal);
+
+        var domainSource = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Drivers", "Drivers.Domain", "Location",
+            "DriverLocationPolicy.cs"));
+        Assert.DoesNotContain("System.Text.Json", domainSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("JsonPropertyName", domainSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Location_ingestion_uses_the_dedicated_insert_only_outbox_without_realtime()
     {
         var infrastructureDirectory = Path.Combine(
@@ -117,6 +223,12 @@ public sealed class DriversImplementationContractTests
 
         return count;
     }
+
+    private static string[] Required(YamlMappingNode schema) =>
+        schema.Sequence("required").Children
+            .Cast<YamlScalarNode>()
+            .Select(value => value.Value!)
+            .ToArray();
 
     private static void AssertColumns<TEntity>(
         Microsoft.EntityFrameworkCore.Metadata.IModel model,
