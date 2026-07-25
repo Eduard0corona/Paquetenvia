@@ -34,6 +34,7 @@ describe("real managed SignalR reconnect", () => {
     let localVersion = 0;
     let tokenFactoryCount = 0;
     let restSynchronizationCount = 0;
+    let reconnectingState: HubConnectionState | undefined;
     const reconnecting = deferred<void>();
     const reconnected = deferred<void>();
     const synchronized = deferred<void>();
@@ -41,7 +42,8 @@ describe("real managed SignalR reconnect", () => {
     const currentApplied = deferred<void>();
     const higherApplied = deferred<void>();
 
-    const connection = createOperationsConnection(
+    let connection: ReturnType<typeof createOperationsConnection>;
+    connection = createOperationsConnection(
       {
         baseUrl,
         organizationId: organizationA,
@@ -51,6 +53,7 @@ describe("real managed SignalR reconnect", () => {
         },
         reconnectDelaysMilliseconds: reconnectDelays,
         onReconnecting: () => {
+          reconnectingState = connection.state;
           lifecycle.push("Reconnecting");
           reconnecting.resolve();
         },
@@ -88,7 +91,7 @@ describe("real managed SignalR reconnect", () => {
       await host.stop();
       hosts.delete(host);
       await reconnecting.promiseWithTimeout(10_000);
-      expect(connection.state).toBe(HubConnectionState.Reconnecting);
+      expect(reconnectingState).toBe(HubConnectionState.Reconnecting);
 
       host = await startHost(port, 5);
       hosts.add(host);
