@@ -56,6 +56,12 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                   (SELECT count(*) FROM platform.outbox_events x
                     WHERE x.aggregate_id=o.id AND x.aggregate_version=2
                       AND x.topic='orders.status-changed' AND x.status='PENDING' AND x.attempts=0),
+                  (SELECT count(*) FROM platform.outbox_events x
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                      AND x.topic='orders.timeline-event-added' AND x.status='PENDING' AND x.attempts=0),
+                  (SELECT count(DISTINCT id) FROM platform.outbox_events x
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                      AND x.topic IN ('orders.status-changed','orders.timeline-event-added')),
                   (SELECT count(*) FROM platform.audit_logs a
                     WHERE a.entity_id=o.id AND a.action='ORDER_STATUS_CHANGED'),
                   (SELECT count(*) FROM platform.idempotency_keys i
@@ -64,7 +70,8 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                   (SELECT payload::text FROM orders.order_events e
                     WHERE e.order_id=o.id AND e.aggregate_version=2),
                   (SELECT payload::text FROM platform.outbox_events x
-                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2),
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                      AND x.topic='orders.status-changed'),
                   (SELECT payload_redacted::text FROM platform.audit_logs a
                     WHERE a.entity_id=o.id AND a.action='ORDER_STATUS_CHANGED')
                 FROM orders.orders o WHERE o.id=@order;
@@ -79,8 +86,10 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             Assert.Equal(OrderPublicEventCodePolicy.Map(target), reader.IsDBNull(3) ? null : reader.GetString(3));
             Assert.Equal(1L, reader.GetInt64(4));
             Assert.Equal(1L, reader.GetInt64(5));
-            Assert.Equal(1L, reader.GetInt64(6));
-            foreach (var ordinal in new[] { 7, 8, 9 })
+            Assert.Equal(2L, reader.GetInt64(6));
+            Assert.Equal(1L, reader.GetInt64(7));
+            Assert.Equal(1L, reader.GetInt64(8));
+            foreach (var ordinal in new[] { 9, 10, 11 })
             {
                 var json = reader.GetString(ordinal);
                 Assert.DoesNotContain("hidden@example.test", json, StringComparison.OrdinalIgnoreCase);
@@ -141,7 +150,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 first.Service.TransitionAsync(command, CancellationToken.None),
                 second.Service.TransitionAsync(command, CancellationToken.None));
             Assert.Equal(results[0], results[1]);
-            await AssertArtifactCountsAsync(replayScenario, 1, 1, 1, 1);
+            await AssertArtifactCountsAsync(replayScenario, 1, 2, 1, 1);
 
             var conflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
                 first.Service.TransitionAsync(
@@ -162,7 +171,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                     concurrencyScenario, OrderStatus.Cancelled, 1, "ord002-distinct-key-0002")));
             Assert.Equal(1, outcomes.Count(value => value));
             Assert.Equal(1, outcomes.Count(value => !value));
-            await AssertArtifactCountsAsync(concurrencyScenario, 1, 1, 1, 1);
+            await AssertArtifactCountsAsync(concurrencyScenario, 1, 2, 1, 1);
         }
     }
 
@@ -233,7 +242,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 original with { ActorId = otherActor.UserId, MfaSatisfied = false },
                 CancellationToken.None));
 
-        await AssertArtifactCountsAsync(scenario, 2, 2, 2, 2);
+        await AssertArtifactCountsAsync(scenario, 2, 4, 2, 2);
     }
 
     [PostgreSqlContractFact]
@@ -332,7 +341,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             SyntheticOrderScenario.P("order", scenario.OrderId));
         await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
             scope.Service.TransitionAsync(command, CancellationToken.None));
-        await AssertArtifactCountsAsync(scenario, 1, 1, 1, 1);
+        await AssertArtifactCountsAsync(scenario, 1, 2, 1, 1);
 
         await using var prohibited = new SyntheticOrderScenario(fixture);
         await prohibited.InitializeAsync();
@@ -356,7 +365,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         await InsertAssignmentAsync(prohibited);
         await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
             prohibitedScope.Service.TransitionAsync(prohibitedCommand, CancellationToken.None));
-        await AssertArtifactCountsAsync(prohibited, 1, 1, 1, 1);
+        await AssertArtifactCountsAsync(prohibited, 1, 2, 1, 1);
     }
 
     [PostgreSqlContractFact]

@@ -24,6 +24,7 @@ public enum OrderTransitionStage
     OrderUpdated,
     EventInserted,
     OutboxInserted,
+    TimelineOutboxInserted,
     AuditInserted,
     BeforeIdempotencyCompletion,
 }
@@ -72,6 +73,7 @@ public sealed class PostgreSqlOrderTransitionService(
 {
     internal const string IdempotencyScope = "ORD-002:TRANSITION_ORDER";
     internal const string OutboxTopic = "orders.status-changed";
+    internal const string TimelineOutboxTopic = "orders.timeline-event-added";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -367,10 +369,11 @@ public sealed class PostgreSqlOrderTransitionService(
         await failureInjector.OnStageAsync(OrderTransitionStage.OrderUpdated, cancellationToken);
         var reasonRedacted = RedactReason(command.Reason!);
         var publicEventCode = OrderPublicEventCodePolicy.Map(target);
+        var eventId = Guid.NewGuid();
         await InsertEventAsync(
             connection,
             transaction,
-            Guid.NewGuid(),
+            eventId,
             order,
             command.ActorId,
             source,
@@ -384,18 +387,39 @@ public sealed class PostgreSqlOrderTransitionService(
             cancellationToken);
         await failureInjector.OnStageAsync(OrderTransitionStage.EventInserted, cancellationToken);
 
+        var driverAudience = await ReadDriverAudienceCandidateAsync(
+            connection,
+            transaction,
+            order.OwnerOrganizationId,
+            order.Id,
+            cancellationToken);
         await InsertOutboxAsync(
             connection,
             transaction,
             Guid.NewGuid(),
+            eventId,
             order,
             source,
             target,
             newVersion,
             publicEventCode,
+            driverAudience,
             occurredAt,
             cancellationToken);
         await failureInjector.OnStageAsync(OrderTransitionStage.OutboxInserted, cancellationToken);
+        await InsertTimelineOutboxAsync(
+            connection,
+            transaction,
+            Guid.NewGuid(),
+            eventId,
+            order,
+            target,
+            newVersion,
+            occurredAt,
+            cancellationToken);
+        await failureInjector.OnStageAsync(
+            OrderTransitionStage.TimelineOutboxInserted,
+            cancellationToken);
 
         var auditPayload = JsonSerializer.SerializeToElement(new
         {
@@ -715,11 +739,13 @@ public sealed class PostgreSqlOrderTransitionService(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid outboxId,
+        Guid orderEventId,
         OrderRow order,
         OrderStatus source,
         OrderStatus target,
         int newVersion,
         string? publicEventCode,
+        DriverAudienceCandidate? driverAudience,
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
@@ -729,11 +755,16 @@ public sealed class PostgreSqlOrderTransitionService(
         }, JsonOptions);
         var payload = JsonSerializer.Serialize(new
         {
+            schema_version = "order-status-changed-v1",
+            order_event_id = orderEventId,
             order_id = order.Id,
+            public_order_id = order.PublicId,
             previous_status = source.ToContractValue(),
             new_status = target.ToContractValue(),
             occurred_at = occurredAt,
             public_event_code = publicEventCode,
+            authorized_driver_id = driverAudience?.DriverId,
+            assignment_id = driverAudience?.AssignmentId,
         }, JsonOptions);
         await using var command = CreateCommand(
             connection,
@@ -756,6 +787,101 @@ public sealed class PostgreSqlOrderTransitionService(
         command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "The transition outbox event was not inserted.");
+    }
+
+    private async Task InsertTimelineOutboxAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid outboxId,
+        Guid orderEventId,
+        OrderRow order,
+        OrderStatus target,
+        int newVersion,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        var tenantContext = JsonSerializer.Serialize(new
+        {
+            organization_ids = new[] { order.OwnerOrganizationId },
+        }, JsonOptions);
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema_version = "order-timeline-event-added-v1",
+            order_id = order.Id,
+            timeline_event_id = orderEventId,
+            category = "ORDER_STATUS",
+            summary = $"Order status changed to {target.ToContractValue()}.",
+            occurred_at = occurredAt,
+        }, JsonOptions);
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
+              priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
+              last_error,created_at,processed_at)
+            VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+            """);
+        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, outboxId));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
+        command.Parameters.Add(P("tenant", NpgsqlDbType.Jsonb, tenantContext));
+        command.Parameters.Add(P("topic", NpgsqlDbType.Text, TimelineOutboxTopic));
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, order.Id));
+        command.Parameters.Add(P("version", NpgsqlDbType.Integer, newVersion));
+        command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
+        command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        RequireOne(
+            await command.ExecuteNonQueryAsync(cancellationToken),
+            "The transition timeline outbox event was not inserted.");
+    }
+
+    private async Task<DriverAudienceCandidate?> ReadDriverAudienceCandidateAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid ownerOrganizationId,
+        Guid orderId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            SELECT a.id,a.driver_id
+            FROM dispatch.assignments a
+            JOIN drivers.driver_profiles p
+              ON p.id=a.driver_id
+             AND p.org_id=a.owner_org_id
+             AND p.driver_type='OWN'
+             AND p.status='ACTIVE'
+            JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
+            JOIN organizations.organization_memberships m
+              ON m.user_id=p.user_id
+             AND m.organization_id=p.org_id
+             AND m.role='DRIVER'
+             AND m.status='ACTIVE'
+            WHERE a.order_id=@order
+              AND a.owner_org_id=@owner
+              AND a.status IN ('ACCEPTED','ACTIVE')
+            """);
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        var result = new DriverAudienceCandidate(reader.GetGuid(0), reader.GetGuid(1));
+        if (await reader.ReadAsync(cancellationToken))
+        {
+            throw new OrderTransitionInfrastructureException(
+                "More than one current driver audience candidate exists.");
+        }
+
+        return result;
     }
 
     private async Task CompleteIdempotencyAsync(
@@ -856,6 +982,8 @@ public sealed class PostgreSqlOrderTransitionService(
         int? ResponseStatus,
         string? ResponseBody,
         Guid? ResourceId);
+
+    private sealed record DriverAudienceCandidate(Guid AssignmentId, Guid DriverId);
 
     private sealed record OrderRow(
         Guid Id,
