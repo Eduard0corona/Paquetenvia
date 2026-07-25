@@ -17,6 +17,8 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     public const string RevokedTrackingToken = "revoked-token-sec002-000000000000";
     public static readonly Guid ViewerOrganizationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     public static readonly Guid OperationsOrganizationId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    public static readonly Guid ActiveDriverId = Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddd11");
+    public static readonly Guid SecondaryDriverId = Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddd12");
 
     private readonly string _adminPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _appPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
@@ -137,8 +139,10 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
-    internal async Task<(Guid OutboxId, int AggregateVersion)> EnqueueRealtimeStatusAsync(
-        bool isPublic = true)
+    internal async Task<(Guid OutboxId, int AggregateVersion, Guid OrderEventId)>
+        EnqueueRealtimeStatusAsync(
+        bool isPublic = true,
+        bool available = true)
     {
         var eventId = Guid.NewGuid();
         var outboxId = Guid.NewGuid();
@@ -198,7 +202,10 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 'public_event_code',@public_event_code,
                 'authorized_driver_id',NULL,
                 'assignment_id',NULL),
-              50,'PENDING',0,clock_timestamp(),clock_timestamp());
+              50,'PENDING',0,
+              CASE WHEN @available THEN clock_timestamp()
+                   ELSE clock_timestamp()+interval '1 hour' END,
+              clock_timestamp());
             """,
             connection);
         command.Parameters.AddWithValue("event_id", eventId);
@@ -206,9 +213,65 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         command.Parameters.AddWithValue("aggregate_version", aggregateVersion);
         command.Parameters.AddWithValue("previous_status", previousStatus);
         command.Parameters.AddWithValue("new_status", newStatus);
+        command.Parameters.AddWithValue("available", available);
         command.Parameters.Add(new NpgsqlParameter<string?>("public_event_code", publicEventCode));
         await command.ExecuteNonQueryAsync();
-        return (outboxId, aggregateVersion);
+        return (outboxId, aggregateVersion, eventId);
+    }
+
+    internal async Task MakeBusinessOutboxAvailableAsync(Guid outboxId)
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE platform.outbox_events
+            SET available_at=clock_timestamp()
+            WHERE id=@id AND status='PENDING'
+            """,
+            connection);
+        command.Parameters.AddWithValue("id", outboxId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    internal async Task<Guid> EnqueueDelayedStatusFromEvidenceAsync(Guid orderEventId)
+    {
+        var outboxId = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
+              aggregate_version,payload,priority,status,attempts,available_at,created_at)
+            SELECT
+              @outbox_id,e.owner_org_id,
+              jsonb_build_object(
+                'organization_ids',jsonb_build_array(e.owner_org_id::text)),
+              'orders.status-changed','Order',e.order_id,e.aggregate_version,
+              jsonb_build_object(
+                'schema_version','order-status-changed-v1',
+                'order_event_id',e.id,
+                'order_id',e.order_id,
+                'public_order_id',o.public_id,
+                'previous_status',e.payload->>'previous_status',
+                'new_status',e.payload->>'new_status',
+                'occurred_at',e.occurred_at,
+                'public_event_code',e.public_event_code,
+                'authorized_driver_id',NULL,
+                'assignment_id',NULL),
+              50,'PENDING',0,clock_timestamp(),clock_timestamp()
+            FROM orders.order_events e
+            JOIN orders.orders o
+              ON o.id=e.order_id AND o.owner_org_id=e.owner_org_id
+            WHERE e.id=@event_id
+              AND e.event_type='ORDER_STATUS_CHANGED'
+            """,
+            connection);
+        command.Parameters.AddWithValue("outbox_id", outboxId);
+        command.Parameters.AddWithValue("event_id", orderEventId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        return outboxId;
     }
 
     internal async Task<string?> ReadOutboxStatusAsync(Guid outboxId)
@@ -236,10 +299,37 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
             : (null, null);
     }
 
-    internal async Task<Guid> EnqueueRealtimeLocationAsync()
+    internal async Task<OutboxDeliveryState?> ReadOutboxDeliveryStateAsync(Guid outboxId)
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT status,attempts,lease_token,lease_expires_at,last_error
+            FROM platform.outbox_events
+            WHERE id=@id
+            """,
+            connection);
+        command.Parameters.AddWithValue("id", outboxId);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync()
+            ? new(
+                reader.GetString(0),
+                reader.GetInt32(1),
+                reader.IsDBNull(2) ? null : reader.GetGuid(2),
+                reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4))
+            : null;
+    }
+
+    internal async Task<Guid> EnqueueRealtimeLocationAsync() =>
+        (await EnqueueRealtimeLocationEvidenceAsync()).OutboxId;
+
+    internal async Task<LocationOutboxScenario> EnqueueRealtimeLocationEvidenceAsync()
     {
         var positionId = Guid.NewGuid();
         var outboxId = Guid.NewGuid();
+        var capturedAt = new DateTimeOffset(2026, 7, 25, 3, 1, 0, TimeSpan.Zero);
         await using var connection = new NpgsqlConnection(_adminConnectionString);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
@@ -255,7 +345,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
               @client_event_id,
               public.ST_SetSRID(public.ST_MakePoint(-107.40,24.80),4326),
               5.25,
-              '2026-07-25T03:01:00Z',
+              @captured_at,
               clock_timestamp(),
               true);
             INSERT INTO platform.location_outbox_events(
@@ -273,15 +363,23 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 'lat',24.80,
                 'lng',-107.40,
                 'accuracy_m',5.25,
-                'captured_at','2026-07-25T03:01:00+00:00'),
+                'captured_at',@captured_at),
               'PENDING',0,clock_timestamp(),clock_timestamp());
             """,
             connection);
         command.Parameters.AddWithValue("position_id", positionId);
         command.Parameters.AddWithValue("client_event_id", Guid.NewGuid());
         command.Parameters.AddWithValue("outbox_id", outboxId);
+        command.Parameters.AddWithValue("captured_at", capturedAt);
         await command.ExecuteNonQueryAsync();
-        return outboxId;
+        return new(
+            outboxId,
+            positionId,
+            Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddd10"),
+            capturedAt,
+            24.80,
+            -107.40,
+            5.25);
     }
 
     internal async Task<string?> ReadLocationOutboxStatusAsync(Guid outboxId)
@@ -293,6 +391,607 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
             connection);
         command.Parameters.AddWithValue("id", outboxId);
         return await command.ExecuteScalarAsync() as string;
+    }
+
+    internal async Task<(string? Status, string? LastError)> ReadLocationOutboxResultAsync(
+        Guid outboxId)
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT status,last_error FROM platform.location_outbox_events WHERE id=@id",
+            connection);
+        command.Parameters.AddWithValue("id", outboxId);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync()
+            ? (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1))
+            : (null, null);
+    }
+
+    internal async Task<AssignmentEvidenceScenario> CreateAssignmentEvidenceScenarioAsync(
+        bool includeDriverMembership = true,
+        bool includeViewerMembership = false,
+        bool driverMembershipFirst = true,
+        string driverMembershipStatus = "ACTIVE",
+        string assignmentType = "OWN",
+        string assignmentStatus = "ACTIVE",
+        string profileStatus = "ACTIVE",
+        string userStatus = "ACTIVE")
+    {
+        var userId = Guid.NewGuid();
+        var driverId = Guid.NewGuid();
+        var assignmentId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var versionCommand = new NpgsqlCommand(
+            """
+            SELECT COALESCE(max(aggregate_version),0)::integer + 1
+            FROM orders.order_events
+            WHERE order_id='66666666-6666-6666-6666-666666666666'
+            """,
+            connection,
+            transaction);
+        var aggregateVersion = Convert.ToInt32(
+            await versionCommand.ExecuteScalarAsync(),
+            System.Globalization.CultureInfo.InvariantCulture);
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO identity.users(id,identity_subject,status)
+            VALUES (@user_id,@subject,@user_status);
+            INSERT INTO drivers.driver_profiles(
+              id,user_id,org_id,driver_type,vehicle_type,status,home_city_id)
+            VALUES (
+              @driver_id,@user_id,
+              '11111111-1111-1111-1111-111111111111',
+              'OWN','MOTORCYCLE',@profile_status,
+              '33333333-3333-3333-3333-333333333333');
+            INSERT INTO dispatch.assignments(
+              id,order_id,owner_org_id,operator_org_id,driver_id,route_id,
+              assignment_type,status,cost_cents,accepted_at,created_at)
+            VALUES (
+              @assignment_id,
+              '66666666-6666-6666-6666-666666666666',
+              '11111111-1111-1111-1111-111111111111',
+              NULL,@driver_id,NULL,@assignment_type,@assignment_status,0,
+              CASE WHEN @assignment_status IN ('ACCEPTED','ACTIVE')
+                THEN clock_timestamp() ELSE NULL END,
+              clock_timestamp());
+            INSERT INTO orders.order_events(
+              id,order_id,owner_org_id,aggregate_version,event_type,
+              public_event_code,payload,occurred_at)
+            VALUES (
+              @event_id,
+              '66666666-6666-6666-6666-666666666666',
+              '11111111-1111-1111-1111-111111111111',
+              @aggregate_version,'ORDER_STATUS_CHANGED',NULL,
+              jsonb_build_object(
+                'previous_status','READY_FOR_PICKUP',
+                'new_status','ASSIGNED',
+                'assignment_id',@assignment_id::text),
+              @occurred_at);
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("subject", $"rtm002-evidence-{userId:D}");
+        command.Parameters.AddWithValue("user_status", userStatus);
+        command.Parameters.AddWithValue("driver_id", driverId);
+        command.Parameters.AddWithValue("profile_status", profileStatus);
+        command.Parameters.AddWithValue("assignment_id", assignmentId);
+        command.Parameters.AddWithValue("assignment_type", assignmentType);
+        command.Parameters.AddWithValue("assignment_status", assignmentStatus);
+        command.Parameters.AddWithValue("event_id", eventId);
+        command.Parameters.AddWithValue("aggregate_version", aggregateVersion);
+        var occurredAt = new DateTimeOffset(
+            2026,
+            7,
+            25,
+            6,
+            aggregateVersion % 60,
+            0,
+            TimeSpan.Zero);
+        command.Parameters.AddWithValue("occurred_at", occurredAt);
+        await command.ExecuteNonQueryAsync();
+
+        var memberships = new List<(string Role, string Status)>();
+        if (includeDriverMembership)
+        {
+            memberships.Add(("DRIVER", driverMembershipStatus));
+        }
+
+        if (includeViewerMembership)
+        {
+            var viewer = ("VIEWER", "ACTIVE");
+            if (driverMembershipFirst)
+            {
+                memberships.Add(viewer);
+            }
+            else
+            {
+                memberships.Insert(0, viewer);
+            }
+        }
+
+        foreach (var membership in memberships)
+        {
+            await using var membershipCommand = new NpgsqlCommand(
+                """
+                INSERT INTO organizations.organization_memberships(
+                  id,user_id,organization_id,role,status,is_default)
+                VALUES (
+                  gen_random_uuid(),@user_id,
+                  '11111111-1111-1111-1111-111111111111',
+                  @role,@status,false)
+                """,
+                connection,
+                transaction);
+            membershipCommand.Parameters.AddWithValue("user_id", userId);
+            membershipCommand.Parameters.AddWithValue("role", membership.Role);
+            membershipCommand.Parameters.AddWithValue("status", membership.Status);
+            await membershipCommand.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+        return new(
+            assignmentId,
+            driverId,
+            aggregateVersion,
+            occurredAt);
+    }
+
+    internal async Task RetireAssignmentEvidenceScenarioAsync(Guid assignmentId)
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE dispatch.assignments
+            SET status='CANCELLED',accepted_at=NULL
+            WHERE id=@assignment_id
+              AND status IN ('ACCEPTED','ACTIVE')
+            """,
+            connection);
+        command.Parameters.AddWithValue("assignment_id", assignmentId);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    internal async Task<DriverAudienceOutboxScenario> CreateDriverAudienceOutboxScenarioAsync(
+        bool available = false)
+    {
+        var assignmentId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var statusOutboxId = Guid.NewGuid();
+        var assignmentOutboxId = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var aggregateVersion = await NextOrderVersionAsync(connection, transaction);
+        var occurredAt = RealtimeOccurredAt(aggregateVersion);
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE dispatch.assignments
+            SET status='CANCELLED',accepted_at=NULL
+            WHERE order_id='66666666-6666-6666-6666-666666666666'
+              AND status IN ('ACCEPTED','ACTIVE');
+            INSERT INTO dispatch.assignments(
+              id,order_id,owner_org_id,operator_org_id,driver_id,route_id,
+              assignment_type,status,cost_cents,accepted_at,created_at)
+            VALUES (
+              @assignment_id,
+              '66666666-6666-6666-6666-666666666666',
+              '11111111-1111-1111-1111-111111111111',
+              NULL,@driver_id,NULL,'OWN','ACCEPTED',0,clock_timestamp(),clock_timestamp());
+            UPDATE orders.orders
+            SET status='ASSIGNED',version=@aggregate_version
+            WHERE id='66666666-6666-6666-6666-666666666666';
+            INSERT INTO orders.order_events(
+              id,order_id,owner_org_id,aggregate_version,event_type,
+              public_event_code,payload,occurred_at)
+            VALUES (
+              @event_id,
+              '66666666-6666-6666-6666-666666666666',
+              '11111111-1111-1111-1111-111111111111',
+              @aggregate_version,'ORDER_STATUS_CHANGED',NULL,
+              jsonb_build_object(
+                'previous_status','READY_FOR_PICKUP',
+                'new_status','ASSIGNED',
+                'assignment_id',@assignment_id::text),
+              @occurred_at);
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
+              aggregate_version,payload,priority,status,attempts,available_at,created_at)
+            VALUES
+              (
+                @status_outbox_id,
+                '11111111-1111-1111-1111-111111111111',
+                '{"organization_ids":["11111111-1111-1111-1111-111111111111"]}',
+                'orders.status-changed','Order',
+                '66666666-6666-6666-6666-666666666666',@aggregate_version,
+                jsonb_build_object(
+                  'schema_version','order-status-changed-v1',
+                  'order_event_id',@event_id,
+                  'order_id','66666666-6666-6666-6666-666666666666',
+                  'public_order_id','ORD_abcdefghijklmnopqrstuv',
+                  'previous_status','READY_FOR_PICKUP',
+                  'new_status','ASSIGNED',
+                  'occurred_at',@occurred_at,
+                  'public_event_code',NULL,
+                  'authorized_driver_id',@driver_id,
+                  'assignment_id',@assignment_id),
+                50,'PENDING',0,
+                CASE WHEN @available THEN clock_timestamp()
+                     ELSE clock_timestamp()+interval '1 hour' END,
+                clock_timestamp()),
+              (
+                @assignment_outbox_id,
+                '11111111-1111-1111-1111-111111111111',
+                '{"organization_ids":["11111111-1111-1111-1111-111111111111"]}',
+                'dispatch.assignment-changed','Order',
+                '66666666-6666-6666-6666-666666666666',@aggregate_version,
+                jsonb_build_object(
+                  'schema_version','assignment-changed-v1',
+                  'order_id','66666666-6666-6666-6666-666666666666',
+                  'assignment_id',@assignment_id,
+                  'driver_id',@driver_id,
+                  'assignment_status','ACCEPTED',
+                  'occurred_at',@occurred_at),
+                50,'PENDING',0,
+                CASE WHEN @available THEN clock_timestamp()
+                     ELSE clock_timestamp()+interval '1 hour' END,
+                clock_timestamp());
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("assignment_id", assignmentId);
+        command.Parameters.AddWithValue("driver_id", ActiveDriverId);
+        command.Parameters.AddWithValue("event_id", eventId);
+        command.Parameters.AddWithValue("status_outbox_id", statusOutboxId);
+        command.Parameters.AddWithValue("assignment_outbox_id", assignmentOutboxId);
+        command.Parameters.AddWithValue("aggregate_version", aggregateVersion);
+        command.Parameters.AddWithValue("occurred_at", occurredAt);
+        command.Parameters.AddWithValue("available", available);
+        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+        return new(
+            assignmentId,
+            ActiveDriverId,
+            statusOutboxId,
+            assignmentOutboxId,
+            aggregateVersion,
+            occurredAt);
+    }
+
+    internal async Task<(Guid OutboxId, int AggregateVersion)> EnqueueDriverStatusAsync(
+        Guid assignmentId,
+        bool available = false)
+    {
+        var eventId = Guid.NewGuid();
+        var outboxId = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var aggregateVersion = await NextOrderVersionAsync(connection, transaction);
+        var occurredAt = RealtimeOccurredAt(aggregateVersion);
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE orders.orders
+            SET status='ASSIGNED',version=@aggregate_version
+            WHERE id='66666666-6666-6666-6666-666666666666';
+            INSERT INTO orders.order_events(
+              id,order_id,owner_org_id,aggregate_version,event_type,
+              public_event_code,payload,occurred_at)
+            VALUES (
+              @event_id,
+              '66666666-6666-6666-6666-666666666666',
+              '11111111-1111-1111-1111-111111111111',
+              @aggregate_version,'ORDER_STATUS_CHANGED',NULL,
+              jsonb_build_object(
+                'previous_status','READY_FOR_PICKUP',
+                'new_status','ASSIGNED'),
+              @occurred_at);
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
+              aggregate_version,payload,priority,status,attempts,available_at,created_at)
+            VALUES (
+              @outbox_id,
+              '11111111-1111-1111-1111-111111111111',
+              '{"organization_ids":["11111111-1111-1111-1111-111111111111"]}',
+              'orders.status-changed','Order',
+              '66666666-6666-6666-6666-666666666666',@aggregate_version,
+              jsonb_build_object(
+                'schema_version','order-status-changed-v1',
+                'order_event_id',@event_id,
+                'order_id','66666666-6666-6666-6666-666666666666',
+                'public_order_id','ORD_abcdefghijklmnopqrstuv',
+                'previous_status','READY_FOR_PICKUP',
+                'new_status','ASSIGNED',
+                'occurred_at',@occurred_at,
+                'public_event_code',NULL,
+                'authorized_driver_id',@driver_id,
+                'assignment_id',@assignment_id),
+              50,'PENDING',0,
+              CASE WHEN @available THEN clock_timestamp()
+                   ELSE clock_timestamp()+interval '1 hour' END,
+              clock_timestamp());
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("event_id", eventId);
+        command.Parameters.AddWithValue("outbox_id", outboxId);
+        command.Parameters.AddWithValue("assignment_id", assignmentId);
+        command.Parameters.AddWithValue("driver_id", ActiveDriverId);
+        command.Parameters.AddWithValue("aggregate_version", aggregateVersion);
+        command.Parameters.AddWithValue("occurred_at", occurredAt);
+        command.Parameters.AddWithValue("available", available);
+        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+        return (outboxId, aggregateVersion);
+    }
+
+    internal async Task<DriverAssignmentOutboxScenario> CreateDriverAssignmentOutboxScenarioAsync(
+        bool available = false)
+    {
+        var assignmentId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var outboxId = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var aggregateVersion = await NextOrderVersionAsync(connection, transaction);
+        var occurredAt = RealtimeOccurredAt(aggregateVersion);
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE dispatch.assignments
+            SET status='CANCELLED',accepted_at=NULL
+            WHERE order_id='66666666-6666-6666-6666-666666666666'
+              AND status IN ('ACCEPTED','ACTIVE');
+            INSERT INTO dispatch.assignments(
+              id,order_id,owner_org_id,operator_org_id,driver_id,route_id,
+              assignment_type,status,cost_cents,accepted_at,created_at)
+            VALUES (
+              @assignment_id,
+              '66666666-6666-6666-6666-666666666666',
+              '11111111-1111-1111-1111-111111111111',
+              NULL,@driver_id,NULL,'OWN','ACCEPTED',0,clock_timestamp(),clock_timestamp());
+            INSERT INTO orders.order_events(
+              id,order_id,owner_org_id,aggregate_version,event_type,
+              public_event_code,payload,occurred_at)
+            VALUES (
+              @event_id,
+              '66666666-6666-6666-6666-666666666666',
+              '11111111-1111-1111-1111-111111111111',
+              @aggregate_version,'ORDER_STATUS_CHANGED',NULL,
+              jsonb_build_object(
+                'previous_status','READY_FOR_PICKUP',
+                'new_status','ASSIGNED',
+                'assignment_id',@assignment_id::text),
+              @occurred_at);
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
+              aggregate_version,payload,priority,status,attempts,available_at,created_at)
+            VALUES (
+              @outbox_id,
+              '11111111-1111-1111-1111-111111111111',
+              '{"organization_ids":["11111111-1111-1111-1111-111111111111"]}',
+              'dispatch.assignment-changed','Order',
+              '66666666-6666-6666-6666-666666666666',@aggregate_version,
+              jsonb_build_object(
+                'schema_version','assignment-changed-v1',
+                'order_id','66666666-6666-6666-6666-666666666666',
+                'assignment_id',@assignment_id,
+                'driver_id',@driver_id,
+                'assignment_status','ACCEPTED',
+                'occurred_at',@occurred_at),
+              50,'PENDING',0,
+              CASE WHEN @available THEN clock_timestamp()
+                   ELSE clock_timestamp()+interval '1 hour' END,
+              clock_timestamp());
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("assignment_id", assignmentId);
+        command.Parameters.AddWithValue("driver_id", ActiveDriverId);
+        command.Parameters.AddWithValue("event_id", eventId);
+        command.Parameters.AddWithValue("outbox_id", outboxId);
+        command.Parameters.AddWithValue("aggregate_version", aggregateVersion);
+        command.Parameters.AddWithValue("occurred_at", occurredAt);
+        command.Parameters.AddWithValue("available", available);
+        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+        return new(assignmentId, ActiveDriverId, outboxId, aggregateVersion, occurredAt);
+    }
+
+    internal async Task SetActiveDriverMembershipStatusAsync(string status)
+    {
+        if (status is not ("ACTIVE" or "SUSPENDED"))
+        {
+            throw new ArgumentException("Only ACTIVE or SUSPENDED is supported.", nameof(status));
+        }
+
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE organizations.organization_memberships
+            SET status=@status
+            WHERE user_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11'
+              AND organization_id='11111111-1111-1111-1111-111111111111'
+              AND role='DRIVER'
+            """,
+            connection);
+        command.Parameters.AddWithValue("status", status);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    internal async Task SetAssignmentStatusAsync(Guid assignmentId, string status)
+    {
+        if (status is not ("ACCEPTED" or "ACTIVE" or "CANCELLED"))
+        {
+            throw new ArgumentException("The assignment status is not supported.", nameof(status));
+        }
+
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE dispatch.assignments
+            SET status=@status,
+                accepted_at=CASE WHEN @status IN ('ACCEPTED','ACTIVE')
+                  THEN COALESCE(accepted_at,clock_timestamp()) ELSE NULL END
+            WHERE id=@assignment_id
+            """,
+            connection);
+        command.Parameters.AddWithValue("status", status);
+        command.Parameters.AddWithValue("assignment_id", assignmentId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    internal Task<Guid> EnqueueBusinessPoisonAsync() =>
+        EnqueuePoisonAsync(location: false);
+
+    internal Task<Guid> EnqueueLocationPoisonAsync() =>
+        EnqueuePoisonAsync(location: true);
+
+    private async Task<Guid> EnqueuePoisonAsync(bool location)
+    {
+        var outboxId = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            location
+                ? """
+                  INSERT INTO platform.location_outbox_events(
+                    id,owner_org_id,driver_position_id,topic,payload,status,attempts,
+                    available_at,created_at)
+                  VALUES (
+                    @outbox_id,
+                    '11111111-1111-1111-1111-111111111111',
+                    gen_random_uuid(),
+                    'drivers.location-updated',
+                    '{"schema_version":"invalid"}',
+                    'PENDING',0,clock_timestamp(),clock_timestamp())
+                  """
+                : """
+                  INSERT INTO platform.outbox_events(
+                    id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
+                    aggregate_version,payload,priority,status,attempts,available_at,created_at)
+                  VALUES (
+                    @outbox_id,
+                    '11111111-1111-1111-1111-111111111111',
+                    '{"organization_ids":["11111111-1111-1111-1111-111111111111"]}',
+                    'orders.status-changed','Order',
+                    '66666666-6666-6666-6666-666666666666',1,
+                    '{"schema_version":"invalid"}',
+                    50,'PENDING',0,clock_timestamp(),clock_timestamp())
+                  """,
+            connection);
+        command.Parameters.AddWithValue("outbox_id", outboxId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        return outboxId;
+    }
+
+    private static async Task<int> NextOrderVersionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT COALESCE(max(aggregate_version),0)::integer + 1
+            FROM orders.order_events
+            WHERE order_id='66666666-6666-6666-6666-666666666666'
+            """,
+            connection,
+            transaction);
+        return Convert.ToInt32(
+            await command.ExecuteScalarAsync(),
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static DateTimeOffset RealtimeOccurredAt(int aggregateVersion) =>
+        new(2026, 7, 25, 8, aggregateVersion % 60, 0, TimeSpan.Zero);
+
+    internal async Task SetOutboxFunctionExecuteAsync(string signature, bool granted)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "security.claim_outbox(text,integer,interval)",
+            "security.settle_outbox(uuid,uuid,text,text,timestamptz)",
+            "security.requeue_stale_outbox(interval,integer,integer)",
+            "security.claim_location_outbox(text,integer,interval)",
+            "security.settle_location_outbox(uuid,uuid,text,text,timestamptz)",
+            "security.requeue_stale_location_outbox(interval,integer,integer)",
+        };
+        if (!allowed.Contains(signature))
+        {
+            throw new ArgumentException("The function signature is not allow-listed.", nameof(signature));
+        }
+
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            granted
+                ? $"GRANT EXECUTE ON FUNCTION {signature} TO paqueteria_worker"
+                : $"REVOKE EXECUTE ON FUNCTION {signature} FROM paqueteria_worker",
+            connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    internal async Task SetWorkerBypassRlsAsync(bool enabled)
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            $"ALTER ROLE paqueteria_worker {(enabled ? "BYPASSRLS" : "NOBYPASSRLS")}",
+            connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    internal async Task SetWorkerRoleMembershipAsync(bool granted)
+    {
+        NpgsqlConnection.ClearAllPools();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            granted
+                ? "GRANT paqueteria_worker TO paqueteria_sec002_worker"
+                : "REVOKE paqueteria_worker FROM paqueteria_sec002_worker",
+            connection);
+        await command.ExecuteNonQueryAsync();
+        NpgsqlConnection.ClearAllPools();
+    }
+
+    internal async Task<string> ReadOutboxStateSnapshotAsync()
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT jsonb_build_object(
+              'business',COALESCE((
+                SELECT jsonb_object_agg(status,row_count)
+                FROM (
+                  SELECT status,count(*) AS row_count
+                  FROM platform.outbox_events
+                  GROUP BY status
+                  ORDER BY status
+                ) business_states
+              ),'{}'::jsonb),
+              'location',COALESCE((
+                SELECT jsonb_object_agg(status,row_count)
+                FROM (
+                  SELECT status,count(*) AS row_count
+                  FROM platform.location_outbox_events
+                  GROUP BY status
+                  ORDER BY status
+                ) location_states
+              ),'{}'::jsonb)
+            )::text
+            """,
+            connection);
+        return (string)(await command.ExecuteScalarAsync()
+            ?? throw new InvalidOperationException("The outbox snapshot was not returned."));
     }
 
     private static async Task SeedSyntheticDataAsync(NpgsqlDataSource admin)
@@ -311,7 +1010,9 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
               ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa7','mock-subject-suspended-membership','ACTIVE'),
               ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa8','mock-subject-revoked-membership','ACTIVE'),
               ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9','mock-subject-no-memberships','ACTIVE'),
-              ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10','mock-subject-rtm002-driver','ACTIVE');
+              ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10','mock-subject-rtm002-driver','ACTIVE'),
+              ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11','mock-subject-active-driver','ACTIVE'),
+              ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa12','mock-subject-secondary-driver','ACTIVE');
             INSERT INTO organizations.organization_memberships(id,user_id,organization_id,role,status,is_default) VALUES
               (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1','11111111-1111-1111-1111-111111111111','VIEWER','ACTIVE',true),
               (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2','11111111-1111-1111-1111-111111111111','PLATFORM_ADMIN','ACTIVE',true),
@@ -320,7 +1021,10 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
               (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4','22222222-2222-2222-2222-222222222222','DISPATCHER','ACTIVE',false),
               (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa7','11111111-1111-1111-1111-111111111111','VIEWER','SUSPENDED',false),
               (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa8','11111111-1111-1111-1111-111111111111','VIEWER','REVOKED',false),
-              (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10','11111111-1111-1111-1111-111111111111','DRIVER','ACTIVE',false);
+              (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10','11111111-1111-1111-1111-111111111111','DRIVER','ACTIVE',false),
+              (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11','11111111-1111-1111-1111-111111111111','DRIVER','ACTIVE',false),
+              (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11','11111111-1111-1111-1111-111111111111','VIEWER','ACTIVE',false),
+              (gen_random_uuid(),'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa12','11111111-1111-1111-1111-111111111111','DRIVER','ACTIVE',false);
 
             INSERT INTO locations.cities(id,state_code,name,timezone)
               VALUES ('33333333-3333-3333-3333-333333333333','SI','Synthetic City','America/Mazatlan');
@@ -329,6 +1033,18 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
               VALUES (
                 'dddddddd-dddd-dddd-dddd-dddddddddd10',
                 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10',
+                '11111111-1111-1111-1111-111111111111',
+                'OWN','MOTORCYCLE','ACTIVE',
+                '33333333-3333-3333-3333-333333333333'),
+                (
+                'dddddddd-dddd-dddd-dddd-dddddddddd11',
+                'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11',
+                '11111111-1111-1111-1111-111111111111',
+                'OWN','MOTORCYCLE','ACTIVE',
+                '33333333-3333-3333-3333-333333333333'),
+                (
+                'dddddddd-dddd-dddd-dddd-dddddddddd12',
+                'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa12',
                 '11111111-1111-1111-1111-111111111111',
                 'OWN','MOTORCYCLE','ACTIVE',
                 '33333333-3333-3333-3333-333333333333');
@@ -351,4 +1067,41 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         command.CommandTimeout = 30;
         await command.ExecuteNonQueryAsync();
     }
+
+    internal sealed record AssignmentEvidenceScenario(
+        Guid AssignmentId,
+        Guid DriverId,
+        int AggregateVersion,
+        DateTimeOffset OccurredAt);
+
+    internal sealed record DriverAudienceOutboxScenario(
+        Guid AssignmentId,
+        Guid DriverId,
+        Guid StatusOutboxId,
+        Guid AssignmentOutboxId,
+        int AggregateVersion,
+        DateTimeOffset OccurredAt);
+
+    internal sealed record DriverAssignmentOutboxScenario(
+        Guid AssignmentId,
+        Guid DriverId,
+        Guid OutboxId,
+        int AggregateVersion,
+        DateTimeOffset OccurredAt);
+
+    internal sealed record LocationOutboxScenario(
+        Guid OutboxId,
+        Guid DriverPositionId,
+        Guid DriverId,
+        DateTimeOffset CapturedAt,
+        double Lat,
+        double Lng,
+        double AccuracyM);
+
+    internal sealed record OutboxDeliveryState(
+        string Status,
+        int Attempts,
+        Guid? LeaseToken,
+        DateTimeOffset? LeaseExpiresAt,
+        string? LastError);
 }

@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Realtime.Application.Configuration;
 using Realtime.Application.Dispatching;
 using Realtime.Application.Events;
+using Realtime.Infrastructure.Dispatching;
 
 namespace Paqueteria.UnitTests.Realtime;
 
@@ -154,6 +155,135 @@ public sealed class RealtimeOutboxTests
         Assert.False(OutboxDispatcherOptionsValidator.IsValid(valid));
     }
 
+    [Theory]
+    [InlineData(5, 8, 5)]
+    [InlineData(100, 1, 1)]
+    [InlineData(100, 8, 8)]
+    [InlineData(8, 8, 8)]
+    public void Effective_claim_size_never_exceeds_immediate_slots(
+        int batchSize,
+        int maximumConcurrency,
+        int expected)
+    {
+        var lane = new OutboxLaneOptions
+        {
+            BatchSize = batchSize,
+            MaximumConcurrency = maximumConcurrency,
+        };
+
+        Assert.Equal(expected, OutboxDispatcherPolicy.EffectiveClaimSize(lane));
+    }
+
+    [Theory]
+    [InlineData(true, 10, 15, true)]
+    [InlineData(true, 10, 14, false)]
+    [InlineData(false, 10, 15, true)]
+    [InlineData(false, 10, 14, false)]
+    [InlineData(true, 60, 60, false)]
+    [InlineData(true, 60, 65, true)]
+    [InlineData(false, 60, 60, false)]
+    [InlineData(false, 60, 65, true)]
+    public void Lease_validation_is_independent_and_reserves_settlement_margin(
+        bool businessLane,
+        int publishTimeoutSeconds,
+        int leaseSeconds,
+        bool expected)
+    {
+        var options = new OutboxDispatcherOptions
+        {
+            PublishTimeoutSeconds = publishTimeoutSeconds,
+        };
+        options.Business.LeaseSeconds = publishTimeoutSeconds +
+            OutboxDispatcherOptionsValidator.SettlementSafetyMarginSeconds;
+        options.Location.LeaseSeconds = publishTimeoutSeconds +
+            OutboxDispatcherOptionsValidator.SettlementSafetyMarginSeconds;
+        if (businessLane)
+        {
+            options.Business.LeaseSeconds = leaseSeconds;
+        }
+        else
+        {
+            options.Location.LeaseSeconds = leaseSeconds;
+        }
+
+        Assert.Equal(expected, OutboxDispatcherOptionsValidator.IsValid(options));
+    }
+
+    [Theory]
+    [InlineData(100, 1, 1)]
+    [InlineData(100, 8, 8)]
+    public async Task Claiming_passes_only_the_effective_size_to_each_lane(
+        int batchSize,
+        int maximumConcurrency,
+        int expected)
+    {
+        var store = new RecordingOutboxStore();
+        var lane = new OutboxLaneOptions
+        {
+            BatchSize = batchSize,
+            MaximumConcurrency = maximumConcurrency,
+            LeaseSeconds = 65,
+        };
+
+        await RealtimeOutboxClaiming.ClaimBusinessAsync(store, "worker", lane, default);
+        await RealtimeOutboxClaiming.ClaimLocationAsync(store, "worker", lane, default);
+
+        Assert.Equal(expected, store.BusinessClaimSize);
+        Assert.Equal(expected, store.LocationClaimSize);
+    }
+
+    [Fact]
+    public async Task Shutdown_stops_scheduling_but_allows_started_work_to_drain()
+    {
+        using var stopping = new CancellationTokenSource();
+        var started = new List<int>();
+        var firstCanFinish = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var processing = RealtimeOutboxBatchDrain.ProcessAsync(
+            [1, 2],
+            stopping.Token,
+            TimeSpan.FromSeconds(1),
+            (message, token) =>
+            {
+                started.Add(message);
+                if (message == 1)
+                {
+                    stopping.Cancel();
+                    return firstCanFinish.Task.WaitAsync(token);
+                }
+
+                return Task.CompletedTask;
+            });
+
+        Assert.Equal([1], started);
+        firstCanFinish.SetResult();
+        await processing;
+        Assert.Equal([1], started);
+    }
+
+    [Fact]
+    public async Task Shutdown_cancels_incomplete_started_work_after_the_drain_window()
+    {
+        using var stopping = new CancellationTokenSource();
+        var started = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var processing = RealtimeOutboxBatchDrain.ProcessAsync(
+            [1],
+            stopping.Token,
+            TimeSpan.FromMilliseconds(50),
+            async (_, token) =>
+            {
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            });
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        stopping.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
+    }
+
     [Fact]
     public void Envelope_does_not_serialize_an_audience()
     {
@@ -190,4 +320,60 @@ public sealed class RealtimeOutboxTests
             OccurredAt.AddMinutes(2),
             OccurredAt,
             OccurredAt);
+
+    private sealed class RecordingOutboxStore : IRealtimeOutboxStore
+    {
+        public int BusinessClaimSize { get; private set; }
+        public int LocationClaimSize { get; private set; }
+
+        public Task<IReadOnlyList<ClaimedBusinessOutboxMessage>> ClaimBusinessAsync(
+            string workerId,
+            int batchSize,
+            TimeSpan lease,
+            CancellationToken cancellationToken)
+        {
+            BusinessClaimSize = batchSize;
+            return Task.FromResult<IReadOnlyList<ClaimedBusinessOutboxMessage>>([]);
+        }
+
+        public Task<IReadOnlyList<ClaimedLocationOutboxMessage>> ClaimLocationAsync(
+            string workerId,
+            int batchSize,
+            TimeSpan lease,
+            CancellationToken cancellationToken)
+        {
+            LocationClaimSize = batchSize;
+            return Task.FromResult<IReadOnlyList<ClaimedLocationOutboxMessage>>([]);
+        }
+
+        public Task<bool> SettleBusinessAsync(
+            Guid id,
+            Guid leaseToken,
+            string status,
+            string? errorCode,
+            DateTimeOffset? availableAt,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+
+        public Task<bool> SettleLocationAsync(
+            Guid id,
+            Guid leaseToken,
+            string status,
+            string? errorCode,
+            DateTimeOffset? availableAt,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+
+        public Task<int> RequeueStaleBusinessAsync(
+            int batchSize,
+            int maximumAttempts,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(0);
+
+        public Task<int> RequeueStaleLocationAsync(
+            int batchSize,
+            int maximumAttempts,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(0);
+    }
 }

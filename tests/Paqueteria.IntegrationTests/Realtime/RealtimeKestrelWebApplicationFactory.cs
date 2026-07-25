@@ -5,7 +5,9 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Realtime.Application.Authorization;
+using Realtime.Application.Dispatching;
 using Realtime.Application.Observability;
 using Realtime.Infrastructure.Authorization;
 
@@ -15,16 +17,22 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
 {
     private readonly string _connectionString;
     private readonly string? _workerConnectionString;
+    private readonly IRealtimeOutboxFailureInjector? _failureInjector;
+    private readonly ILoggerProvider? _logProvider;
     private readonly RealtimeAuthorizationRecorder _recorder;
 
     internal RealtimeKestrelWebApplicationFactory(
         string connectionString,
         RealtimeAuthorizationRecorder recorder,
         int port = 0,
-        string? workerConnectionString = null)
+        string? workerConnectionString = null,
+        IRealtimeOutboxFailureInjector? failureInjector = null,
+        ILoggerProvider? logProvider = null)
     {
         _connectionString = connectionString;
         _workerConnectionString = workerConnectionString;
+        _failureInjector = failureInjector;
+        _logProvider = logProvider;
         _recorder = recorder;
         UseKestrel(port);
     }
@@ -45,6 +53,11 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+        if (_logProvider is not null)
+        {
+            builder.ConfigureLogging(logging => logging.AddProvider(_logProvider));
+        }
+
         builder.ConfigureAppConfiguration(configuration =>
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -53,6 +66,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 ["IdentityBootstrap:CommandTimeoutSeconds"] = "5",
                 ["PublicTracking:Provider"] = "PostgreSql",
                 ["PublicTracking:CommandTimeoutSeconds"] = "5",
+                ["Orders:Provider"] = "PostgreSql",
+                ["Orders:CommandTimeoutSeconds"] = "5",
                 ["Tenancy:Provider"] = "PostgreSql",
                 ["Tenancy:CommandTimeoutSeconds"] = "5",
                 ["Realtime:Provider"] = "SignalR",
@@ -70,7 +85,10 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                     _workerConnectionString is null ? "Disabled" : "PostgreSql",
                 ["Realtime:OutboxDispatcher:WorkerId"] = "rtm002-integration",
                 ["Realtime:OutboxDispatcher:Business:PollIntervalMilliseconds"] = "50",
+                ["Realtime:OutboxDispatcher:Business:LeaseSeconds"] = "15",
                 ["Realtime:OutboxDispatcher:Location:PollIntervalMilliseconds"] = "50",
+                ["Realtime:OutboxDispatcher:Location:LeaseSeconds"] = "15",
+                ["Realtime:OutboxDispatcher:StaleRequeueIntervalSeconds"] = "1",
                 ["ConnectionStrings:PaqueteriaWorker"] = _workerConnectionString,
             }));
         builder.ConfigureServices(services =>
@@ -79,6 +97,12 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
             services.RemoveAll<IRealtimeConnectionAuthorizer>();
             services.RemoveAll<IRealtimeTelemetry>();
             services.AddSingleton<IRealtimeTelemetry>(_recorder);
+            if (_failureInjector is not null)
+            {
+                services.RemoveAll<IRealtimeOutboxFailureInjector>();
+                services.AddSingleton(_failureInjector);
+            }
+
             services.AddScoped<IRealtimeConnectionAuthorizer>(provider =>
                 new RecordingRealtimeConnectionAuthorizer(
                     provider.GetRequiredService<PostgreSqlRealtimeConnectionAuthorizer>(),
@@ -169,6 +193,51 @@ internal sealed class RealtimeAuthorizationRecorder : IRealtimeTelemetry
         public void Dispose()
         {
         }
+    }
+}
+
+internal sealed class OneShotRealtimeOutboxFailureInjector(
+    RealtimeOutboxLane targetLane) : IRealtimeOutboxFailureInjector
+{
+    private readonly TaskCompletionSource _interrupted = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _injected;
+    private string? _targetOutboxId;
+
+    internal void Arm(Guid outboxId)
+    {
+        if (outboxId == Guid.Empty ||
+            Interlocked.CompareExchange(
+                ref _targetOutboxId,
+                outboxId.ToString("D"),
+                null) is not null)
+        {
+            throw new InvalidOperationException("The failure injector can only be armed once.");
+        }
+    }
+
+    internal Task WaitForInterruptionAsync(TimeSpan timeout) =>
+        _interrupted.Task.WaitAsync(timeout);
+
+    public ValueTask OnCheckpointAsync(
+        RealtimeOutboxLane lane,
+        Guid outboxId,
+        RealtimeOutboxCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        if (lane == targetLane &&
+            string.Equals(
+                outboxId.ToString("D"),
+                Volatile.Read(ref _targetOutboxId),
+                StringComparison.Ordinal) &&
+            checkpoint == RealtimeOutboxCheckpoint.AfterAllAudiencesPublishedBeforeSettle &&
+            Interlocked.CompareExchange(ref _injected, 1, 0) == 0)
+        {
+            _interrupted.TrySetResult();
+            throw new RealtimeOutboxInjectedFailureException();
+        }
+
+        return ValueTask.CompletedTask;
     }
 }
 
