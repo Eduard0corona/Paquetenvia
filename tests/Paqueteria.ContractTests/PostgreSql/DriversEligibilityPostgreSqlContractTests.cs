@@ -182,6 +182,7 @@ public sealed class DriversEligibilityPostgreSqlContractTests(PostgreSqlContract
             var options = new DbContextOptionsBuilder<DriversDbContext>()
                 .UseNpgsql(connection, postgres =>
                 {
+                    postgres.UseNetTopologySuite();
                     postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
                     postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
                 }).Options;
@@ -197,17 +198,26 @@ public sealed class DriversEligibilityPostgreSqlContractTests(PostgreSqlContract
             JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='platform';
             """);
         await using var reader = await command.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
-        Assert.Equal("20260723_AdoptCanonicalDriversBaseline", reader.GetString(0));
-        Assert.Equal("paqueteria_migrator", reader.GetString(1));
-        Assert.False(await reader.ReadAsync());
+        var migrations = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            migrations.Add(reader.GetString(0));
+            Assert.Equal("paqueteria_migrator", reader.GetString(1));
+        }
+        Assert.Equal(
+            ["20260723_AdoptCanonicalDriversBaseline", "20260725000156_AdoptCanonicalDriverPositions"],
+            migrations.Order(StringComparer.Ordinal));
     }
 
     private PostgreSqlDriverEligibilityService CreateService(NpgsqlDataSource dataSource)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DriversDbContext>()
-            .UseNpgsql(dataSource, postgres => postgres.EnableRetryOnFailure())
+            .UseNpgsql(dataSource, postgres =>
+            {
+                postgres.UseNetTopologySuite();
+                postgres.EnableRetryOnFailure();
+            })
             .AddInterceptors(
                 new TenantTransactionGuardInterceptor(state),
                 new TenantSaveChangesGuardInterceptor(state))

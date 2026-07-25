@@ -270,6 +270,7 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
         var driversOptions = new DbContextOptionsBuilder<DriversDbContext>()
             .UseNpgsql(driversConnection, postgres =>
             {
+                postgres.UseNetTopologySuite();
                 postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
                 postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
             }).Options;
