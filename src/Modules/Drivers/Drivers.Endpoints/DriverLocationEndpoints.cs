@@ -26,7 +26,9 @@ public static class DriverLocationEndpoints
     {
         endpoints.MapPost("/api/v1/driver/me/location-updates", PublishAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
-            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireTenantContext(
+                StatusCodes.Status403Forbidden,
+                StatusCodes.Status401Unauthorized)
             .RequireRateLimiting(DriverLocationEndpointOptions.RateLimitPolicy)
             .WithName("publishDriverLocation")
             .WithTags("Driver")

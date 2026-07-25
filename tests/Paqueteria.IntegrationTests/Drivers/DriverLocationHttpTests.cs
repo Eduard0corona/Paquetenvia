@@ -35,7 +35,7 @@ public sealed class DriverLocationHttpTests : IClassFixture<DriverLocationHttpWe
         using (var request = Request(MockIdentityProfiles.SuspendedUser))
         using (var response = await client.SendAsync(request))
         {
-            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         }
 
         using (var request = Request(MockIdentityProfiles.ActiveDriver, includeTenant: false))

@@ -31,9 +31,18 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
             return;
         }
 
-        if (!session.IsActive ||
-            session.UserId is not { } userId ||
-            !session.HasOrganizationAccess(organizationId))
+        if (!session.IsActive || session.UserId is not { } userId)
+        {
+            await WriteProblemAsync(
+                httpContext,
+                tenantMetadata.InactiveIdentityStatusCode,
+                tenantMetadata.InactiveIdentityStatusCode == StatusCodes.Status401Unauthorized
+                    ? "Unauthorized."
+                    : "Forbidden.");
+            return;
+        }
+
+        if (!session.HasOrganizationAccess(organizationId))
         {
             await WriteProblemAsync(httpContext, StatusCodes.Status403Forbidden, "Forbidden.");
             return;
