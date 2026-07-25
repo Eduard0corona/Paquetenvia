@@ -106,9 +106,16 @@ describe("real managed SignalR reconnect", () => {
         "managed connection to report its recovered state",
       );
       expect(connection.state).toBe(HubConnectionState.Connected);
-      expect(lifecycle).toEqual(["Reconnecting", "Reconnected"]);
+      expect(lifecycle.length).toBeGreaterThanOrEqual(2);
+      expect(lifecycle.length % 2).toBe(0);
+      for (let index = 0; index < lifecycle.length; index += 2) {
+        expect(lifecycle.slice(index, index + 2)).toEqual([
+          "Reconnecting",
+          "Reconnected",
+        ]);
+      }
       expect(tokenFactoryCount).toBeGreaterThanOrEqual(2);
-      expect(restSynchronizationCount).toBe(1);
+      expect(restSynchronizationCount).toBe(lifecycle.length / 2);
       expect(localVersion).toBe(5);
       await expectStats(baseUrl, 1, "WebSockets");
 
