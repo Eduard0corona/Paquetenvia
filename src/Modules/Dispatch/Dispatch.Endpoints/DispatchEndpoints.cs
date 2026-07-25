@@ -148,6 +148,8 @@ public static class DispatchEndpoints
                 tenantContext.OrganizationId,
                 cancellationToken);
             return Results.Ok(stops.Select(value => new DriverStopResponse(
+                value.OrderId,
+                value.AggregateVersion,
                 value.OrderPublicId,
                 value.StopType,
                 value.Status,
@@ -230,6 +232,8 @@ public sealed record AssignmentResponse(
     [property: JsonPropertyName("cost")] MoneyResponse Cost);
 
 public sealed record DriverStopResponse(
+    [property: JsonPropertyName("order_id")] Guid OrderId,
+    [property: JsonPropertyName("aggregate_version")] long AggregateVersion,
     [property: JsonPropertyName("order_public_id")] string OrderPublicId,
     [property: JsonPropertyName("stop_type")] string StopType,
     [property: JsonPropertyName("status")] string Status,

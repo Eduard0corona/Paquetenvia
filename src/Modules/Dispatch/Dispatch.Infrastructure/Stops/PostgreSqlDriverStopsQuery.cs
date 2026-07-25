@@ -102,7 +102,7 @@ public sealed class PostgreSqlDriverStopsQuery(
     {
         const string sql =
             """
-            SELECT o.public_id,o.status,origin.address_summary,destination.address_summary,
+            SELECT o.id,o.version,o.public_id,o.status,origin.address_summary,destination.address_summary,
                    (
                      EXISTS (
                        SELECT 1 FROM custody.proofs p
@@ -139,18 +139,20 @@ public sealed class PostgreSqlDriverStopsQuery(
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            var status = reader.GetString(1);
-            var projection = DriverStopPolicy.Project(status, reader.GetBoolean(4));
+            var status = reader.GetString(3);
+            var projection = DriverStopPolicy.Project(status, reader.GetBoolean(6));
             if (!projection.Included)
             {
                 continue;
             }
 
             stops.Add(new DriverStopResult(
-                reader.GetString(0),
+                reader.GetGuid(0),
+                reader.GetInt32(1),
+                reader.GetString(2),
                 projection.StopType.ToContractValue(),
                 status,
-                projection.UseOriginAddress ? reader.GetString(2) : reader.GetString(3)));
+                projection.UseOriginAddress ? reader.GetString(4) : reader.GetString(5)));
         }
 
         return stops;

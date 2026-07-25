@@ -4,7 +4,7 @@
   "bundle_revision": "v0.6-full-canonical-sync-6-dsp002-capability-before-state",
   "date": "2026-07-24",
   "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_DSP002_CAPABILITY_BEFORE_STATE",
-  "canonical_sql_sha256": "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96",
+  "canonical_sql_sha256": "7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163",
   "file_count": 73,
   "files": [
     {
@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7459,
-      "sha256": "ae679a810dd715345f6748ddf45248cb5d667332d1e0cb4a148cef65b3234092"
+      "sha256": "ce0216ab1d2629830ec4bc636c27dec954eaff32e7a49bcf724e8b965cc19f67"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -49,8 +49,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 53619,
-      "sha256": "df15b5a1d519fd1f30b7701db38b17050a4ccc53d399f1961a97dea99d96a79b"
+      "bytes": 53944,
+      "sha256": "b245e1879efc61c9a8392682b635181e555ec3b0f4f9b31b5668d87859bc1de5"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -59,18 +59,18 @@
     },
     {
       "path": "database/AI-06_SCHEMA.sql",
-      "bytes": 54824,
-      "sha256": "c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96"
+      "bytes": 54860,
+      "sha256": "7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163"
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 11086,
-      "sha256": "7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd"
+      "bytes": 11094,
+      "sha256": "38f0bf14fdb3ad723232d83121cda705f91363b14ed722c0c2f2f3d7189046dd"
     },
     {
       "path": "decision-log.md",
-      "bytes": 7274,
-      "sha256": "f1327dc429f7a9938c85bd5f52c92e7c1b61fe92b71ef7cbf8262252b5f4adea"
+      "bytes": 8332,
+      "sha256": "7a579157dca58965d4219bf18dc8f01015a1882a722409c792e7167ffd5d29e4"
     },
     {
       "path": "docs/adr/ADR-001_MODULAR_MONOLITH.md",

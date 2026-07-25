@@ -1,6 +1,8 @@
 namespace Dispatch.Application.Stops;
 
 public sealed record DriverStopResult(
+    Guid OrderId,
+    long AggregateVersion,
     string OrderPublicId,
     string StopType,
     string Status,
