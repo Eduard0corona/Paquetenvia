@@ -122,7 +122,14 @@ public sealed class RealtimeOutboxPlaywrightTests(
                     transport: signalR.HttpTransportType.WebSockets,
                     skipNegotiation: true,
                   })
-                .withAutomaticReconnect([0, 250, 1000, 2000, 5000, 10000])
+                .withAutomaticReconnect({
+                  nextRetryDelayInMilliseconds: context =>
+                    context.elapsedMilliseconds >= 120000
+                      ? null
+                      : context.previousRetryCount === 0
+                        ? 0
+                        : Math.min(context.previousRetryCount * 1000, 5000),
+                })
                 .build();
               operations.onreconnecting(() => text("lifecycle", "Reconnecting"));
               operations.onreconnected(async () => {
@@ -151,7 +158,14 @@ public sealed class RealtimeOutboxPlaywrightTests(
                   transport: signalR.HttpTransportType.WebSockets,
                   skipNegotiation: true,
                 })
-                .withAutomaticReconnect([0, 250, 1000, 2000, 5000, 10000])
+                .withAutomaticReconnect({
+                  nextRetryDelayInMilliseconds: context =>
+                    context.elapsedMilliseconds >= 120000
+                      ? null
+                      : context.previousRetryCount === 0
+                        ? 0
+                        : Math.min(context.previousRetryCount * 1000, 5000),
+                })
                 .build();
               tracking.on("PublicOrderStatusChanged", message => {
                 increment("tracking-deliveries");
