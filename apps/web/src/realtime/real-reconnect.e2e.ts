@@ -100,6 +100,11 @@ describe("real managed SignalR reconnect", () => {
       hosts.add(host);
       await reconnected.promiseWithTimeout(15_000);
       await synchronized.promiseWithTimeout(5_000);
+      await waitFor(
+        () => connection.state === HubConnectionState.Connected,
+        5_000,
+        "managed connection to report its recovered state",
+      );
       expect(connection.state).toBe(HubConnectionState.Connected);
       expect(lifecycle).toEqual(["Reconnecting", "Reconnected"]);
       expect(tokenFactoryCount).toBeGreaterThanOrEqual(2);
