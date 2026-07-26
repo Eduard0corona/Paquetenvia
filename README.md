@@ -106,6 +106,9 @@ finalización append-only y descarga firmada interna.
 La [guía DRV-001](docs/development/drv-001-driver-stops-pwa.md) documenta la
 lista y detalle móvil read-only, su caché IndexedDB tenant-safe, resincronización
 REST señalada por DriverHub, pruebas Playwright y rollback del shell PWA.
+La [guía DRV-002](docs/development/drv-002-offline-events-pod.md) documenta la
+cola offline particionada, proyección local, POD con upload firmado,
+sincronización idempotente, pruebas de navegador y rollback de IndexedDB v2.
 
 Ejecuta su matriz con:
 
