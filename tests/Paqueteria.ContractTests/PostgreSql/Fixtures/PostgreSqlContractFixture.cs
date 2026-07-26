@@ -13,6 +13,7 @@ using Pricing.Infrastructure.Persistence;
 using Orders.Infrastructure.Persistence;
 using Drivers.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence;
+using Custody.Infrastructure.Persistence;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -328,6 +329,25 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             dispatchOptions,
             new TenantDatabaseExecutionState());
         await dispatch.Database.MigrateAsync().ConfigureAwait(false);
+
+        await using var custodyConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await custodyConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", custodyConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var custodyOptions = new DbContextOptionsBuilder<CustodyDbContext>()
+            .UseNpgsql(custodyConnection, postgres =>
+            {
+                postgres.UseNetTopologySuite();
+                postgres.MigrationsAssembly(typeof(CustodyDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_custody", "platform");
+            }).Options;
+        await using var custody = new CustodyDbContext(
+            custodyOptions,
+            new TenantDatabaseExecutionState());
+        await custody.Database.MigrateAsync().ConfigureAwait(false);
     }
 
     private async Task ExecuteAdminScriptAsync(string sql)

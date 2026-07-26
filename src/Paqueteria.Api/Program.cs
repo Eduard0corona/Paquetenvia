@@ -22,6 +22,8 @@ using Pricing.Endpoints;
 using Pricing.Infrastructure;
 using Realtime.Endpoints;
 using Realtime.Infrastructure;
+using Custody.Endpoints;
+using Custody.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -46,6 +48,7 @@ builder.Services.AddPricingEndpoints();
 builder.Services.AddRealtimeInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddRealtimeOutboxDispatchers(builder.Configuration);
 builder.Services.AddRealtimeEndpoints(builder.Configuration);
+builder.Services.AddCustodyInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
@@ -115,6 +118,7 @@ app.MapOrderEndpoints();
 app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapRealtimeHubs();
+app.MapProofEndpoints();
 
 app.Run();
 

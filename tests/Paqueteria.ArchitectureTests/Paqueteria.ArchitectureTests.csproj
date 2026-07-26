@@ -26,6 +26,10 @@
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Domain\Dispatch.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Endpoints\Dispatch.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Dispatch\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Custody\Custody.Application\Custody.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Custody\Custody.Domain\Custody.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Custody\Custody.Endpoints\Custody.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Application\Realtime.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Domain\Realtime.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />

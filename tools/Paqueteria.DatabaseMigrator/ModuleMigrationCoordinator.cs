@@ -16,6 +16,8 @@ using Drivers.Infrastructure.Persistence;
 using Drivers.Infrastructure.Persistence.Migrations;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
+using Custody.Infrastructure.Persistence;
+using Custody.Infrastructure.Persistence.Migrations;
 
 internal sealed record ModuleMigrationState(
     string Module,
@@ -41,6 +43,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260725010000_AddRealtimeResynchronizationCursor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
+        ("Custody", "__ef_migrations_history_custody", AdoptCanonicalCustodyProofsBaseline.MigrationId,
+            "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260725_AdoptCanonicalCustodyProofsBaseline.cs"),
     ];
 
     public static IReadOnlyList<ModuleMigrationState> VerifySources()
@@ -138,6 +142,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "Dispatch").Status == "PENDING")
         {
             await MigrateDispatchAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "Custody").Status == "PENDING")
+        {
+            await MigrateCustodyAsync(connectionString, cancellationToken);
         }
         await AssertAsync(connectionString, cancellationToken);
     }
@@ -341,6 +349,21 @@ internal sealed class ModuleMigrationCoordinator
             })
             .Options;
         await using var context = new DispatchDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    private static async Task MigrateCustodyAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<CustodyDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.UseNetTopologySuite();
+                postgres.MigrationsAssembly(typeof(CustodyDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_custody", "platform");
+            })
+            .Options;
+        await using var context = new CustodyDbContext(options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync(cancellationToken);
     }
 

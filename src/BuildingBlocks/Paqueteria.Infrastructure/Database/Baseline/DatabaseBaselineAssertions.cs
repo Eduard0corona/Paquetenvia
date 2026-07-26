@@ -272,7 +272,8 @@ public sealed class DatabaseBaselineAssertions
                     '__ef_migrations_history_drivers',
                     '__ef_migrations_history_pricing',
                     '__ef_migrations_history_orders',
-                    '__ef_migrations_history_dispatch'
+                    '__ef_migrations_history_dispatch',
+                    '__ef_migrations_history_custody'
                   )
                   AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
                 """,

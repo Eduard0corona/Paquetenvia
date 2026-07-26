@@ -84,6 +84,11 @@
         "resolved": "3.1.5",
         "contentHash": "tKi7dSTwP4m5m9eXPM2Ime4Kn7xNf4x4zT9sdLO/G4hZVnQCRiMTWoSZqI/pYTVeI27oPPqHBKYI/DjJ9GsYgA=="
       },
+      "AWSSDK.Core": {
+        "type": "Transitive",
+        "resolved": "4.0.100.8",
+        "contentHash": "xnuBVLQBmYQXsDZJ9mq2UDSFZm3xgO5oUb4/UR8p0UO7tG6heDhsLLI1NzZhIVAKyfW0tXg9hn9a/ek018TOVw=="
+      },
       "BouncyCastle.Cryptography": {
         "type": "Transitive",
         "resolved": "2.6.2",
@@ -616,6 +621,40 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "custody.application": {
+        "type": "Project",
+        "dependencies": {
+          "Custody.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "custody.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "custody.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Custody.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "custody.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "AWSSDK.S3": "[4.0.101.4, )",
+          "Custody.Application": "[1.0.0, )",
+          "Custody.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL.NetTopologySuite": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "dispatch.application": {
         "type": "Project",
         "dependencies": {
@@ -825,6 +864,8 @@
       "paqueteria.api": {
         "type": "Project",
         "dependencies": {
+          "Custody.Endpoints": "[1.0.0, )",
+          "Custody.Infrastructure": "[1.0.0, )",
           "Dispatch.Endpoints": "[1.0.0, )",
           "Dispatch.Infrastructure": "[1.0.0, )",
           "Drivers.Endpoints": "[1.0.0, )",
@@ -941,6 +982,15 @@
           "Realtime.Application": "[1.0.0, )",
           "Realtime.Domain": "[1.0.0, )",
           "Realtime.Endpoints": "[1.0.0, )"
+        }
+      },
+      "AWSSDK.S3": {
+        "type": "CentralTransitive",
+        "requested": "[4.0.101.4, )",
+        "resolved": "4.0.101.4",
+        "contentHash": "TYFuatWECzCbj/Lu1SsANucgpU/Br5YJ5Padl3YEdNJGfZqAcx3QemJw2BUopAsYTJ3e7TFpWhpNWha3dB9/dw==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.0.100.8, 5.0.0)"
         }
       },
       "Microsoft.AspNetCore.OpenApi": {

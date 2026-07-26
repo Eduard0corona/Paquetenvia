@@ -264,6 +264,9 @@ ORDER BY extname;
         -Actual (Invoke-MinioCommand -Context $context -Command 'printf "%s" "$SMOKE_VALUE" | mc pipe "smoke/$MINIO_BUCKET/$SMOKE_OBJECT" >/dev/null && mc cat "smoke/$MINIO_BUCKET/$SMOKE_OBJECT"' -Variables @{ SMOKE_OBJECT = $minioObject; SMOKE_VALUE = $value }) `
         -Description "MinIO write/read"
     $minioObjectCreated = $true
+    Assert-Equal -Expected "private" `
+        -Actual (Invoke-MinioCommand -Context $context -Command 'permission="$(mc anonymous get "smoke/$MINIO_BUCKET")" && case "$permission" in *private*) printf private ;; *) printf "%s" "$permission"; exit 1 ;; esac') `
+        -Description "MinIO bucket privacy"
 
     $mailpitBaseUri = "http://127.0.0.1:$($context.Environment['MAIL_UI_HOST_PORT'])"
     Send-SmokeEmail -Port ([int]$context.Environment["MAIL_SMTP_HOST_PORT"]) -Subject $mailSubject -Body $value
@@ -340,7 +343,7 @@ ORDER BY extname;
     $mailMessageId = $null
 
     $succeeded = $true
-    Write-Host "FND-002 smoke test passed: health, APIs, restart persistence, down persistence, diagnostics, and cleanup behavior."
+    Write-Host "FND-002 smoke test passed: health, private object storage, APIs, restart persistence, down persistence, diagnostics, and cleanup behavior."
 }
 catch {
     $failure = $_
