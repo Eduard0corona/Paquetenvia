@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Amazon.S3.Model;
 using Custody.Application.ProofUploads;
 using Custody.Infrastructure;
 using Identity.Infrastructure.Mock;
@@ -15,7 +18,7 @@ namespace Paqueteria.IntegrationTests.Driver;
 [Collection(DriverOfflineOperationsRealCollection.Name)]
 public sealed class DriverOfflineOperationsRealPipelineTests(
     PostgreSqlSecurityWebApplicationFactory database,
-    MinioProofStorageFixture minio)
+    CorsCapableS3Fixture storage)
 {
     private static readonly byte[] SyntheticPng =
         [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -24,19 +27,20 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
 
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
-    public async Task Real_postgres_minio_api_worker_and_browser_complete_the_offline_chain()
+    public async Task Real_postgres_s3_api_worker_and_browser_complete_the_offline_chain()
     {
         var assignment = await database.CreateDriverAudienceOutboxScenarioAsync(
             available: false);
         var nextPort = DriverStopsNextServer.ReservePort();
         var nextOrigin = $"http://127.0.0.1:{nextPort}";
-        var proofSettings = ProofSettings(minio.Endpoint);
+        var proofSettings = storage.CreateProofStorageConfiguration();
         await using var api = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             new RealtimeAuthorizationRecorder(),
             workerConnectionString: database.WorkerConnectionString,
             allowedOrigin: nextOrigin,
             enableDispatch: true,
+            enableDriverApiCors: true,
             configurationOverrides: proofSettings);
         var apiAddress = api.Start();
         await using var web = await DriverStopsNextServer.StartAsync(
@@ -46,17 +50,32 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             database.WorkerConnectionString,
             proofSettings);
 
-        using var playwright = await Playwright.CreateAsync();
-        await using var browser = await playwright.Chromium.LaunchAsync(
-            new BrowserTypeLaunchOptions
-            {
-                Headless = true,
-                Args = ["--disable-web-security"],
-            });
-        await using var context = await browser.NewContextAsync();
-        var page = await context.NewPageAsync();
-        await page.AddInitScriptAsync(
-            $$"""
+        var allowedOrigin = new Uri(nextOrigin);
+        await storage.ConfigureBrowserCorsAsync(allowedOrigin);
+        try
+        {
+            CorsCapableS3Fixture.AssertExactBrowserCorsPolicy(
+                Assert.IsType<CORSConfiguration>(
+                    await storage.ReadBrowserCorsAsync()),
+                allowedOrigin);
+
+            using var playwright = await Playwright.CreateAsync();
+            await using var browser = await playwright.Chromium.LaunchAsync(
+                new BrowserTypeLaunchOptions { Headless = true });
+            await using var context = await browser.NewContextAsync();
+            var page = await context.NewPageAsync();
+            var requests = new ConcurrentQueue<BrowserRequestObservation>();
+            var responses = new ConcurrentQueue<BrowserResponseObservation>();
+            var requestsById =
+                new ConcurrentDictionary<string, BrowserRequestObservation>();
+            var cdp = await context.NewCDPSessionAsync(page);
+            cdp.Event("Network.requestWillBeSent").OnEvent += (_, payload) =>
+                ObserveCdpRequest(payload, requestsById, requests);
+            cdp.Event("Network.responseReceived").OnEvent += (_, payload) =>
+                ObserveCdpResponse(payload, requestsById, responses);
+            await cdp.SendAsync("Network.enable");
+            await page.AddInitScriptAsync(
+                $$"""
             window.__paquetenviaDriverSession = {
               organizationId: "{{PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId:D}}",
               cacheNamespace: "opaque-drv002-real-pipeline",
@@ -64,105 +83,148 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             };
             """);
 
-        var orderId = await ReadAssignedOrderIdAsync();
-        await page.GotoAsync(
-            new Uri(web.BaseAddress, $"/driver/stops/{orderId:D}").AbsoluteUri);
-        await page.GetByText(
-                PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId,
-                new() { Exact = true })
-            .WaitForAsync();
-        await EnsureServiceWorkerControlAsync(page);
-        await context.SetOfflineAsync(true);
-        try
-        {
-            await AssertOfflineOriginsAsync(
-                page,
-                new Uri(apiAddress, "/health/live").AbsoluteUri,
-                new Uri(web.BaseAddress, "/not-a-driver-shell").AbsoluteUri,
-                minio.Endpoint);
-            await page.GetByRole(
-                    AriaRole.Button,
-                    new() { Name = "Llegué a recolección" })
-                .ClickAsync();
-            await EnqueueProofAsync(
-                page,
-                "Confirmar recolección",
-                "pickup-real-synthetic.png");
-            await page.GetByRole(
-                    AriaRole.Button,
-                    new() { Name = "Iniciar traslado" })
-                .ClickAsync();
-            await page.GetByRole(
-                    AriaRole.Button,
-                    new() { Name = "Llegué al destino" })
-                .ClickAsync();
-            await EnqueueProofAsync(
-                page,
-                "Confirmar entrega",
-                "delivery-real-synthetic.jpg",
-                "image/jpeg",
-                SyntheticJpeg);
-            await WaitForOperationCountAsync(page, 5);
-            await WaitForProofCountAsync(page, 2);
-            var beforeReload = await ReadOperationIdentityAsync(page);
-            await page.ReloadAsync();
-            await page.GetByText("5 acciones en el dispositivo", new() { Exact = false })
+            var orderId = await ReadAssignedOrderIdAsync();
+            await page.GotoAsync(
+                new Uri(web.BaseAddress, $"/driver/stops/{orderId:D}").AbsoluteUri);
+            await page.GetByText(
+                    PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId,
+                    new() { Exact = true })
                 .WaitForAsync();
-            Assert.Equal(beforeReload, await ReadOperationIdentityAsync(page));
-            await WaitForProofCountAsync(page, 2);
-        }
-        finally
-        {
-            await context.SetOfflineAsync(false);
-        }
-        await page.WaitForFunctionAsync("() => navigator.onLine === true");
+            await EnsureServiceWorkerControlAsync(page);
+            await context.SetOfflineAsync(true);
+            try
+            {
+                await AssertOfflineOriginsAsync(
+                    page,
+                    new Uri(apiAddress, "/health/live").AbsoluteUri,
+                    new Uri(web.BaseAddress, "/not-a-driver-shell").AbsoluteUri,
+                    storage.Endpoint);
+                await page.GetByRole(
+                        AriaRole.Button,
+                        new() { Name = "Llegué a recolección" })
+                    .ClickAsync();
+                await EnqueueProofAsync(
+                    page,
+                    "Confirmar recolección",
+                    "pickup-real-synthetic.png");
+                await page.GetByRole(
+                        AriaRole.Button,
+                        new() { Name = "Iniciar traslado" })
+                    .ClickAsync();
+                await page.GetByRole(
+                        AriaRole.Button,
+                        new() { Name = "Llegué al destino" })
+                    .ClickAsync();
+                await EnqueueProofAsync(
+                    page,
+                    "Confirmar entrega",
+                    "delivery-real-synthetic.jpg",
+                    "image/jpeg",
+                    SyntheticJpeg);
+                await WaitForOperationCountAsync(page, 5);
+                await WaitForProofCountAsync(page, 2);
+                var beforeReload = await ReadOperationIdentityAsync(page);
+                await page.ReloadAsync();
+                await page.GetByText("5 acciones en el dispositivo", new() { Exact = false })
+                    .WaitForAsync();
+                Assert.Equal(beforeReload, await ReadOperationIdentityAsync(page));
+                await WaitForProofCountAsync(page, 2);
+            }
+            finally
+            {
+                await context.SetOfflineAsync(false);
+            }
+            await page.WaitForFunctionAsync("() => navigator.onLine === true");
 
-        await page.GetByRole(
-                AriaRole.Button,
-                new() { Name = "Sincronizar ahora" })
-            .ClickAsync();
-        await WaitForOperationStatusAsync(page, "WAITING_VALIDATION");
-
-        using var workerCancellation = new CancellationTokenSource();
-        var workerLoop = ProcessProofsUntilCancelledAsync(
-            worker,
-            workerCancellation.Token);
-        try
-        {
             await page.GetByRole(
                     AriaRole.Button,
                     new() { Name = "Sincronizar ahora" })
                 .ClickAsync();
-            await WaitForOperationCountAsync(page, 0);
-            await WaitForProofCountAsync(page, 0);
-        }
-        finally
-        {
-            workerCancellation.Cancel();
-            await workerLoop;
-        }
+            await WaitForOperationStatusAsync(page, "WAITING_VALIDATION");
 
-        var evidence = await ReadPipelineEvidenceAsync(
-            orderId,
-            assignment.AggregateVersion);
-        Assert.Equal("DELIVERED", evidence.Status);
-        Assert.Equal(2, evidence.Proofs);
-        Assert.Equal(2, evidence.ConsumedSessions);
-        Assert.Equal(5, evidence.TransitionEvents);
-        Assert.Equal(9, evidence.IdempotencyRows);
-        Assert.Equal(
-            [
-                "AT_PICKUP",
+            using var workerCancellation = new CancellationTokenSource();
+            var workerLoop = ProcessProofsUntilCancelledAsync(
+                worker,
+                workerCancellation.Token);
+            try
+            {
+                await page.GetByRole(
+                        AriaRole.Button,
+                        new() { Name = "Sincronizar ahora" })
+                    .ClickAsync();
+                await WaitForOperationCountAsync(page, 0);
+                await WaitForProofCountAsync(page, 0);
+            }
+            finally
+            {
+                workerCancellation.Cancel();
+                await workerLoop;
+            }
+
+            var evidence = await ReadPipelineEvidenceAsync(
+                orderId,
+                assignment.AggregateVersion);
+            Assert.Equal("DELIVERED", evidence.Status);
+            Assert.Equal(2, evidence.Proofs);
+            Assert.Equal(2, evidence.ConsumedSessions);
+            Assert.Equal(5, evidence.TransitionEvents);
+            Assert.Equal(9, evidence.IdempotencyRows);
+            Assert.Equal(0, evidence.DuplicateIdempotencyRows);
+            Assert.Equal(
+                [
+                    "AT_PICKUP",
                 "PICKED_UP",
                 "IN_TRANSIT",
                 "DELIVERING",
                 "DELIVERED",
             ],
-            evidence.TargetStatuses);
-        Assert.Equal(2, evidence.ClientCaptureTimes.Count);
-        Assert.All(
-            evidence.ClientCaptureTimes,
-            timestamp => Assert.Equal(TimeSpan.Zero, timestamp.Offset));
+                evidence.TargetStatuses);
+            Assert.Equal(2, evidence.ClientCaptureTimes.Count);
+            Assert.All(
+                evidence.ClientCaptureTimes,
+                timestamp => Assert.Equal(TimeSpan.Zero, timestamp.Offset));
+
+            var storageOrigin = new Uri(storage.Endpoint).GetLeftPart(UriPartial.Authority);
+            var apiOrigin = apiAddress.GetLeftPart(UriPartial.Authority);
+            var successfulPreflights = responses
+                .Where(response =>
+                    response.TargetOrigin == storageOrigin
+                    && response.Method == "OPTIONS"
+                    && response.Status is >= 200 and < 300)
+                .ToArray();
+            var successfulUploads = responses
+                .Where(response =>
+                    response.TargetOrigin == storageOrigin
+                    && response.Method == "PUT"
+                    && response.Status is >= 200 and < 300)
+                .ToArray();
+            Assert.NotEmpty(successfulPreflights);
+            Assert.NotEmpty(successfulUploads);
+            Assert.All(
+                successfulPreflights,
+                response => Assert.Equal(nextOrigin, response.BrowserOrigin));
+            Assert.Contains(
+                responses,
+                response =>
+                    response.TargetOrigin == apiOrigin
+                    && response.Status is >= 200 and < 300);
+            Assert.Contains(
+                requests,
+                request =>
+                    request.TargetOrigin == storageOrigin
+                    && request.Method == "OPTIONS"
+                    && request.BrowserOrigin == nextOrigin);
+            Console.WriteLine(
+                "Browser CORS evidence: OPTIONS 2xx={0}; PUT 2xx={1}",
+                successfulPreflights.Length,
+                successfulUploads.Length);
+        }
+        finally
+        {
+            await storage.ClearBrowserCorsAsync();
+        }
+
+        Assert.Null(await storage.ReadBrowserCorsAsync());
     }
 
     private async Task<Guid> ReadAssignedOrderIdAsync()
@@ -199,6 +261,9 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                  AND e.event_type='ORDER_STATUS_CHANGED'),
               (SELECT count(*)::integer FROM platform.idempotency_keys i
                WHERE i.owner_org_id=o.owner_org_id AND i.idempotency_key LIKE 'drv2-%'),
+              (SELECT count(*)::integer - count(DISTINCT i.idempotency_key)::integer
+               FROM platform.idempotency_keys i
+               WHERE i.owner_org_id=o.owner_org_id AND i.idempotency_key LIKE 'drv2-%'),
               ARRAY(
                 SELECT e.payload->>'new_status'
                 FROM orders.order_events e
@@ -224,8 +289,9 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             reader.GetInt32(2),
             reader.GetInt32(3),
             reader.GetInt32(4),
-            reader.GetFieldValue<string[]>(5),
-            reader.GetFieldValue<DateTimeOffset[]>(6));
+            reader.GetInt32(5),
+            reader.GetFieldValue<string[]>(6),
+            reader.GetFieldValue<DateTimeOffset[]>(7));
     }
 
     private static async Task ProcessProofsUntilCancelledAsync(
@@ -274,29 +340,6 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         return services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
-
-    private static IReadOnlyDictionary<string, string?> ProofSettings(
-        string endpoint) =>
-        new Dictionary<string, string?>
-        {
-            ["ProofStorage:Provider"] = "S3Compatible",
-            ["ProofStorage:ThreatScanner"] = "Synthetic",
-            ["ProofStorage:ServiceUrl"] = endpoint,
-            ["ProofStorage:PublicPresignUrl"] = endpoint,
-            ["ProofStorage:Region"] = "us-east-1",
-            ["ProofStorage:Bucket"] = MinioProofStorageFixture.Bucket,
-            ["ProofStorage:ForcePathStyle"] = "true",
-            ["ProofStorage:UploadUrlLifetimeMinutes"] = "15",
-            ["ProofStorage:DownloadUrlLifetimeMinutes"] = "5",
-            ["ProofStorage:SessionLifetimeMinutes"] = "30",
-            ["ProofStorage:ProcessingIntervalSeconds"] = "1",
-            ["ProofStorage:StaleValidationSeconds"] = "60",
-            ["ProofStorage:MaximumConcurrency"] = "2",
-            ["ProofStorage:MaximumBytes"] = "1048576",
-            ["ProofStorage:MaximumTextBytes"] = "4096",
-            ["ProofStorage:QuarantinePrefix"] = "quarantine/",
-            ["ProofStorage:FinalPrefix"] = "proofs/",
-        };
 
     private static async Task EnqueueProofAsync(
         IPage page,
@@ -490,6 +533,91 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         Assert.All(inaccessible, Assert.True);
     }
 
+    private static void ObserveCdpRequest(
+        JsonElement? payload,
+        ConcurrentDictionary<string, BrowserRequestObservation> requestsById,
+        ConcurrentQueue<BrowserRequestObservation> observations)
+    {
+        if (payload is not { } value ||
+            !value.TryGetProperty("requestId", out var requestIdElement) ||
+            !value.TryGetProperty("request", out var request) ||
+            !request.TryGetProperty("url", out var urlElement) ||
+            !request.TryGetProperty("method", out var methodElement))
+        {
+            return;
+        }
+
+        if (!TryReadObservedOrigins(
+                urlElement.GetString(),
+                request.TryGetProperty("headers", out var headers) ? headers : null,
+                out var targetOrigin,
+                out var browserOrigin))
+        {
+            return;
+        }
+
+        var observation = new BrowserRequestObservation(
+            methodElement.GetString() ?? string.Empty,
+            targetOrigin,
+            browserOrigin);
+        var requestId = requestIdElement.GetString();
+        if (!string.IsNullOrEmpty(requestId))
+        {
+            requestsById[requestId] = observation;
+        }
+        observations.Enqueue(observation);
+    }
+
+    private static void ObserveCdpResponse(
+        JsonElement? payload,
+        ConcurrentDictionary<string, BrowserRequestObservation> requestsById,
+        ConcurrentQueue<BrowserResponseObservation> observations)
+    {
+        if (payload is not { } value ||
+            !value.TryGetProperty("requestId", out var requestIdElement) ||
+            !value.TryGetProperty("response", out var response) ||
+            !response.TryGetProperty("status", out var statusElement) ||
+            requestIdElement.GetString() is not { } requestId ||
+            !requestsById.TryGetValue(requestId, out var request))
+        {
+            return;
+        }
+
+        observations.Enqueue(
+            new BrowserResponseObservation(
+                request.Method,
+                request.TargetOrigin,
+                request.BrowserOrigin,
+                statusElement.GetInt32()));
+    }
+
+    private static bool TryReadObservedOrigins(
+        string? url,
+        JsonElement? headers,
+        out string targetOrigin,
+        out string? browserOrigin)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            targetOrigin = string.Empty;
+            browserOrigin = null;
+            return false;
+        }
+
+        targetOrigin = uri.GetLeftPart(UriPartial.Authority);
+        browserOrigin = headers is { ValueKind: JsonValueKind.Object } headerObject
+            ? headerObject
+                .EnumerateObject()
+                .Where(header => string.Equals(
+                    header.Name,
+                    "origin",
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(header => header.Value.GetString())
+                .SingleOrDefault()
+            : null;
+        return true;
+    }
+
     private sealed class TestHostEnvironment : IHostEnvironment
     {
         public string EnvironmentName { get; set; } = "Testing";
@@ -505,14 +633,26 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         int ConsumedSessions,
         int TransitionEvents,
         int IdempotencyRows,
+        int DuplicateIdempotencyRows,
         IReadOnlyList<string> TargetStatuses,
         IReadOnlyList<DateTimeOffset> ClientCaptureTimes);
+
+    private sealed record BrowserRequestObservation(
+        string Method,
+        string TargetOrigin,
+        string? BrowserOrigin);
+
+    private sealed record BrowserResponseObservation(
+        string Method,
+        string TargetOrigin,
+        string? BrowserOrigin,
+        int Status);
 }
 
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class DriverOfflineOperationsRealCollection :
     ICollectionFixture<PostgreSqlSecurityWebApplicationFactory>,
-    ICollectionFixture<MinioProofStorageFixture>
+    ICollectionFixture<CorsCapableS3Fixture>
 {
     public const string Name = "Driver offline operations real pipeline";
 }

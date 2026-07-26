@@ -210,6 +210,57 @@ El Service Worker no abre IndexedDB, no procesa mutaciones, no guarda responses
 POD y no registra Background Sync. La página controlada es la única dueña del
 scheduler.
 
+## DRV-002-DEF-001: CORS real para el upload firmado
+
+El pipeline de aceptación anterior lanzaba Chromium con
+`--disable-web-security`. Aunque demostraba la lógica de la cola, Custody y el
+almacenamiento, no demostraba que un navegador con same-origin policy pudiera
+ejercer el grant firmado. Un `PUT` cross-origin con `Content-Type` y metadata
+firmada `x-amz-meta-*` requiere un preflight CORS real.
+
+MinIO Community devolvió `NotImplemented` al intentar configurar CORS por
+bucket mediante `PutBucketCors`. Ese resultado no se ocultó ni se sustituyó por
+una simulación de `OPTIONS`, un fallback global o CORS abierto. MinIO continúa
+siendo el backend local y de pruebas de POD-001, `SecureProofUpload`, Custody y
+el Compose existente.
+
+DRV-002 usa exclusivamente en su harness CORS un Ceph RADOS Gateway separado,
+fijado por versión y digest. La prueba de capacidad automatizada crea un bucket
+privado y comprueba `PutBucketCors`, lectura exacta, `DeleteBucketCors`, URL
+firmada generada con AWSSDK.S3, `PUT` directo, lectura posterior y conservación
+exacta de toda la metadata. No se adquirió MinIO AIStor ni otra dependencia
+comercial, y Ceph RGW no se declara como proveedor productivo elegido.
+
+La política temporal del bucket contiene únicamente:
+
+- el origen Next exacto, con esquema y puerto;
+- método `PUT`;
+- headers `content-type`, `x-amz-meta-session-id`,
+  `x-amz-meta-order-id`, `x-amz-meta-owner-org-id`,
+  `x-amz-meta-requested-by`, `x-amz-meta-proof-type`,
+  `x-amz-meta-size-bytes` y `x-amz-meta-sha256`;
+- `MaxAgeSeconds` de 300.
+
+No contiene wildcard, credenciales, `GET`, `POST`, `DELETE`, lectura pública ni
+ACL pública. El fixture vuelve a leer y compara la regla exacta antes de abrir
+Chromium. Al terminar elimina CORS, objetos, bucket y contenedor, y restaura las
+variables AWS previas aun si el escenario falla.
+
+Chromium se lanza únicamente con `Headless = true`. La aceptación observa por
+CDP metadatos seguros del `OPTIONS` y del `PUT` reales, sin registrar la query
+firmada, object key, headers, token, hash ni bytes, y no intercepta ni simula
+las solicitudes. Una aserción estructural impide argumentos que deshabiliten
+CORS, same-origin policy, site isolation o mixed-content protection en los
+escenarios Driver.
+
+La URL firmada concede autorización sobre un objeto; CORS determina si un
+navegador de un origen concreto puede ejercer esa autorización. Una firma
+válida no reemplaza CORS. En producción, la infraestructura externa debe
+configurar en su proveedor real cada origen PWA aprobado de forma exacta,
+únicamente `PUT` y los headers firmados necesarios, sin wildcard. DRV-002 no
+configura automáticamente infraestructura ni almacenamiento productivos.
+GATE-007 continúa bloqueando evidencia real de producción.
+
 ## Pruebas y CI
 
 Vitest cubre contrato/runtime parser, idempotencia y timestamps, proyección,
@@ -228,9 +279,10 @@ La categoría `DriverOfflineOperationsPwa` ejecuta Chromium real y cubre:
 - limpieza fail-closed para 401, 403 y 404;
 - respuesta perdida después de PUT, Proof 201 y Transition 200, con las mismas
   keys y sin duplicados;
-- un pipeline real con PostgreSQL/PostGIS, API Kestrel, Next, MinIO, Worker y
-  Chromium que termina en `DELIVERED`, dos proofs consumidos, cinco eventos y
-  nueve registros idempotentes.
+- un pipeline real con PostgreSQL/PostGIS, API Kestrel, Next, Ceph RGW aislado
+  para CORS, Worker, DriverHub y Chromium con seguridad normal que observa
+  preflight y upload 2xx, y termina en `DELIVERED`, dos proofs, dos sesiones
+  consumidas, cinco eventos, nueve registros idempotentes y cero duplicados.
 
 Son once escenarios de navegador en la categoría. El harness serializa el
 servidor Next entre procesos de test y libera el lock al terminar; esto no

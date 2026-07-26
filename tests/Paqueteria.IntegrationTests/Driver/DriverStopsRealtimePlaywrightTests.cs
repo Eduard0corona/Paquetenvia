@@ -23,7 +23,8 @@ public sealed class DriverStopsRealtimePlaywrightTests(
             recorder,
             workerConnectionString: database.WorkerConnectionString,
             allowedOrigin: nextOrigin,
-            enableDispatch: true);
+            enableDispatch: true,
+            enableDriverApiCors: true);
         var apiAddress = api.Start();
         await using var web = await DriverStopsNextServer.StartAsync(
             apiAddress.GetLeftPart(UriPartial.Authority),
@@ -31,11 +32,7 @@ public sealed class DriverStopsRealtimePlaywrightTests(
 
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await playwright.Chromium.LaunchAsync(
-            new BrowserTypeLaunchOptions
-            {
-                Headless = true,
-                Args = ["--disable-web-security"],
-            });
+            new BrowserTypeLaunchOptions { Headless = true });
         await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
         {
             ViewportSize = new ViewportSize { Width = 390, Height = 844 },

@@ -3,6 +3,7 @@ using Drivers.Infrastructure.Locations;
 using Dispatch.Application.Stops;
 using Dispatch.Infrastructure.Stops;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Realtime.Application.Authorization;
 using Realtime.Application.Dispatching;
 using Realtime.Application.Observability;
+using Realtime.Endpoints;
 using Realtime.Infrastructure.Authorization;
 
 namespace Paqueteria.IntegrationTests.Realtime;
@@ -26,6 +28,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     private readonly RealtimeAuthorizationRecorder _recorder;
     private readonly string _allowedOrigin;
     private readonly bool _enableDispatch;
+    private readonly bool _enableDriverApiCors;
     private readonly IReadOnlyDictionary<string, string?> _configurationOverrides;
 
     internal RealtimeKestrelWebApplicationFactory(
@@ -37,6 +40,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         ILoggerProvider? logProvider = null,
         string allowedOrigin = "http://127.0.0.1",
         bool enableDispatch = false,
+        bool enableDriverApiCors = false,
         IReadOnlyDictionary<string, string?>? configurationOverrides = null)
     {
         _connectionString = connectionString;
@@ -46,6 +50,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         _recorder = recorder;
         _allowedOrigin = allowedOrigin;
         _enableDispatch = enableDispatch;
+        _enableDriverApiCors = enableDriverApiCors;
         _configurationOverrides =
             configurationOverrides ?? new Dictionary<string, string?>();
         UseKestrel(port);
@@ -114,6 +119,36 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         });
         builder.ConfigureServices(services =>
         {
+            if (_enableDriverApiCors)
+            {
+                services.PostConfigure<CorsOptions>(options =>
+                {
+                    options.AddDefaultPolicy(policy =>
+                        policy
+                            .WithOrigins(_allowedOrigin)
+                            .WithMethods("GET", "POST")
+                            .WithHeaders(
+                                "Authorization",
+                                "Content-Type",
+                                "Idempotency-Key",
+                                "X-Organization-Id",
+                                "X-SignalR-User-Agent")
+                            .AllowCredentials());
+                    options.AddPolicy(
+                        RealtimeEndpointDefaults.CorsPolicy,
+                        policy =>
+                            policy
+                                .WithOrigins(_allowedOrigin)
+                                .WithMethods("GET", "POST")
+                                .WithHeaders(
+                                    "Authorization",
+                                    "Content-Type",
+                                    "X-Requested-With",
+                                    "X-SignalR-User-Agent")
+                                .AllowCredentials());
+                });
+            }
+
             services.AddSingleton(_recorder);
             services.RemoveAll<IRealtimeConnectionAuthorizer>();
             services.RemoveAll<IRealtimeTelemetry>();
