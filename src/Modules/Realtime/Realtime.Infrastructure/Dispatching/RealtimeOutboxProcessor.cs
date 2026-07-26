@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Orders.Application.Tracking;
+using Paqueteria.Application;
 using Realtime.Application.Configuration;
 using Realtime.Application.Dispatching;
 using Realtime.Application.Events;
@@ -127,7 +128,9 @@ internal sealed class RealtimeOutboxProcessor(
                     persisted.DriverPositionId != parsed.DriverPositionId ||
                     persisted.OwnerOrganizationId != parsed.OwnerOrganizationId ||
                     persisted.DriverId != parsed.DriverId ||
-                    persisted.CapturedAt != parsed.CapturedAt ||
+                    !UtcMicrosecondPrecision.AreEqual(
+                        persisted.CapturedAt,
+                        parsed.CapturedAt) ||
                     !SameCoordinate(persisted.Lat, parsed.Lat) ||
                     !SameCoordinate(persisted.Lng, parsed.Lng) ||
                     !SameCoordinate(persisted.AccuracyM, parsed.AccuracyM))
@@ -289,7 +292,9 @@ internal sealed class RealtimeOutboxProcessor(
             persisted.OwnerOrganizationId != value.OwnerOrganizationId ||
             persisted.AggregateVersion != value.AggregateVersion ||
             persisted.EventType != "ORDER_STATUS_CHANGED" ||
-            persisted.OccurredAt != value.OccurredAt ||
+            !UtcMicrosecondPrecision.AreEqual(
+                persisted.OccurredAt,
+                value.OccurredAt) ||
             value.Summary != RealtimeOutboxParser.TimelineSummary(persisted.NewStatus))
         {
             throw new OutboxMessageException(RealtimeOutboxErrorCodes.InvalidPayload);
@@ -322,7 +327,9 @@ internal sealed class RealtimeOutboxProcessor(
             persisted.DriverId != value.DriverId ||
             persisted.OwnerOrganizationId != value.OwnerOrganizationId ||
             persisted.OrderVersion != value.AggregateVersion ||
-            persisted.OccurredAt != value.OccurredAt)
+            !UtcMicrosecondPrecision.AreEqual(
+                persisted.OccurredAt,
+                value.OccurredAt))
         {
             throw new OutboxMessageException(RealtimeOutboxErrorCodes.InvalidPayload);
         }
@@ -378,7 +385,9 @@ internal sealed class RealtimeOutboxProcessor(
             persisted.PreviousStatus != previousStatus ||
             persisted.NewStatus != newStatus ||
             persisted.PublicEventCode != publicEventCode ||
-            persisted.OccurredAt != occurredAt ||
+            !UtcMicrosecondPrecision.AreEqual(
+                persisted.OccurredAt,
+                occurredAt) ||
             persisted.PublicOrderId != publicOrderId)
         {
             throw new OutboxMessageException(RealtimeOutboxErrorCodes.InvalidPayload);

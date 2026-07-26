@@ -173,6 +173,10 @@ public sealed class PostgreSqlDriverLocationIngestionService(
                 continue;
             }
 
+            location = location with
+            {
+                CapturedAt = UtcMicrosecondPrecision.Normalize(location.CapturedAt),
+            };
             var positionId = Guid.NewGuid();
             known.Add(location.ClientEventId, positionId);
             items[index] = new DriverLocationItemResult(
@@ -208,7 +212,7 @@ public sealed class PostgreSqlDriverLocationIngestionService(
             }
         }
 
-        var receivedAt = clock.UtcNow.ToUniversalTime();
+        var receivedAt = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
         foreach (var pending in newPositions.OrderBy(value => value.OriginalIndex))
         {
             await InsertPositionAsync(

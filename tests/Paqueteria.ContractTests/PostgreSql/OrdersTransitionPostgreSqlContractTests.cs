@@ -6,6 +6,7 @@ using Orders.Domain;
 using Orders.Infrastructure;
 using Orders.Infrastructure.Orders;
 using Orders.Infrastructure.Persistence;
+using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure;
@@ -17,6 +18,75 @@ namespace Paqueteria.ContractTests.PostgreSql;
 [Collection(PostgreSqlContractCollection.Name)]
 public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Transition_canonicalizes_shared_timestamp_before_any_persistence()
+    {
+        var raw = DateTimeOffset.Parse(
+            "2026-07-25T18:00:00.1234567Z",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var canonical = UtcMicrosecondPrecision.Normalize(raw);
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync();
+        await using var scope = CreateScope(raw);
+        var key = "ord002-microsecond-precision-0001";
+
+        var result = await scope.Service.TransitionAsync(
+            Command(scenario, OrderStatus.Cancelled, 1, key),
+            CancellationToken.None);
+
+        Assert.Equal(2, result.Version);
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT o.updated_at,
+              (SELECT occurred_at FROM orders.order_events
+                WHERE order_id=o.id AND aggregate_version=2),
+              (SELECT created_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.status-changed'),
+              (SELECT available_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.status-changed'),
+              (SELECT payload->>'occurred_at' FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.status-changed'),
+              (SELECT created_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.timeline-event-added'),
+              (SELECT available_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.timeline-event-added'),
+              (SELECT payload->>'occurred_at' FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.timeline-event-added'),
+              (SELECT occurred_at FROM platform.audit_logs
+                WHERE entity_id=o.id AND action='ORDER_STATUS_CHANGED'),
+              (SELECT created_at FROM platform.idempotency_keys
+                WHERE owner_org_id=o.owner_org_id
+                  AND scope='ORD-002:TRANSITION_ORDER'
+                  AND idempotency_key=@key)
+            FROM orders.orders o
+            WHERE o.id=@order
+            """);
+        command.Parameters.AddWithValue("order", scenario.OrderId);
+        command.Parameters.AddWithValue("key", key);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        foreach (var ordinal in new[] { 0, 1, 2, 3, 5, 6, 8, 9 })
+        {
+            Assert.Equal(canonical, reader.GetFieldValue<DateTimeOffset>(ordinal));
+        }
+
+        foreach (var ordinal in new[] { 4, 7 })
+        {
+            var payloadTimestamp = DateTimeOffset.Parse(
+                reader.GetString(ordinal),
+                System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(canonical, payloadTimestamp);
+            Assert.Equal(0, payloadTimestamp.UtcTicks % 10);
+        }
+    }
+
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
     public async Task Every_normative_edge_commits_exactly_one_version_event_outbox_audit_and_idempotency()
@@ -418,7 +488,8 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         {
             await using var scenario = new SyntheticOrderScenario(fixture);
             await scenario.InitializeAsync();
-            await using var scope = CreateScope(new ThrowAtTransitionStage(stage));
+            await using var scope = CreateScope(
+                failureInjector: new ThrowAtTransitionStage(stage));
 
             await Assert.ThrowsAsync<InjectedTransitionFailure>(() =>
                 scope.Service.TransitionAsync(
@@ -638,7 +709,9 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 CancellationToken.None));
     }
 
-    private TransitionScope CreateScope(IOrderTransitionFailureInjector? failureInjector = null)
+    private TransitionScope CreateScope(
+        DateTimeOffset? now = null,
+        IOrderTransitionFailureInjector? failureInjector = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<OrdersDbContext>()
@@ -670,7 +743,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 ClaimWindowHours = 72,
                 TransitionMetadataMaximumBytes = 4_096,
             }),
-            new SystemClock());
+            now is { } utcNow ? new FixedClock(utcNow) : new SystemClock());
         return new TransitionScope(context, service);
     }
 
@@ -1027,4 +1100,9 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
 
     private sealed class InjectedTransitionFailure(OrderTransitionStage stage)
         : Exception($"Injected transition failure at {stage}.");
+
+    private sealed class FixedClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Paqueteria.Application;
 using Realtime.Application.Configuration;
 using Realtime.Application.Dispatching;
 using Realtime.Application.Events;
@@ -93,6 +94,98 @@ public sealed class RealtimeOutboxTests
 
         Assert.IsType<ParsedOrderTimelineEventAdded>(timeline);
         Assert.IsType<ParsedAssignmentChanged>(assignment);
+    }
+
+    [Fact]
+    public void Parsers_and_envelopes_canonicalize_all_shared_timestamps_to_microseconds()
+    {
+        var raw = OccurredAt.AddTicks(7);
+        var canonical = UtcMicrosecondPrecision.Normalize(raw);
+        var status = Assert.IsType<ParsedOrderStatusChanged>(
+            RealtimeOutboxParser.Parse(Business(
+                RealtimeOutboxTopics.OrderStatusChanged,
+                JsonSerializer.Serialize(new
+                {
+                    schema_version = "order-status-changed-v1",
+                    order_event_id = OrderEventId,
+                    order_id = OrderId,
+                    public_order_id = "ORD_abcdefghijklmnopqrstuv",
+                    previous_status = "IN_TRANSIT",
+                    new_status = "DELIVERING",
+                    occurred_at = raw,
+                    public_event_code = "OUT_FOR_DELIVERY",
+                    authorized_driver_id = DriverId,
+                    assignment_id = AssignmentId,
+                }))));
+        var timeline = Assert.IsType<ParsedOrderTimelineEventAdded>(
+            RealtimeOutboxParser.Parse(Business(
+                RealtimeOutboxTopics.OrderTimelineEventAdded,
+                JsonSerializer.Serialize(new
+                {
+                    schema_version = "order-timeline-event-added-v1",
+                    order_id = OrderId,
+                    timeline_event_id = OrderEventId,
+                    category = "ORDER_STATUS",
+                    summary = "Order status changed to DELIVERING.",
+                    occurred_at = raw,
+                }))));
+        var assignment = Assert.IsType<ParsedAssignmentChanged>(
+            RealtimeOutboxParser.Parse(Business(
+                RealtimeOutboxTopics.AssignmentChanged,
+                JsonSerializer.Serialize(new
+                {
+                    schema_version = "assignment-changed-v1",
+                    order_id = OrderId,
+                    assignment_id = AssignmentId,
+                    driver_id = DriverId,
+                    assignment_status = "ACCEPTED",
+                    occurred_at = raw,
+                }))));
+        var location = RealtimeOutboxParser.Parse(Location(
+            JsonSerializer.Serialize(new
+            {
+                schema_version = "driver-location-updated-v1",
+                driver_position_id = OrderEventId,
+                driver_id = DriverId,
+                lat = 24.809064,
+                lng = -107.394011,
+                accuracy_m = 7.5,
+                captured_at = raw,
+            })));
+
+        Assert.Equal(canonical, status.OccurredAt);
+        Assert.Equal(canonical, timeline.OccurredAt);
+        Assert.Equal(canonical, assignment.OccurredAt);
+        Assert.Equal(canonical, location.CapturedAt);
+        Assert.Equal(0, canonical.UtcTicks % 10);
+
+        var statusEnvelope = RealtimeOutboxEnvelopeFactory.Status(status);
+        var timelineEnvelope = RealtimeOutboxEnvelopeFactory.Timeline(timeline);
+        var assignmentEnvelope = RealtimeOutboxEnvelopeFactory.Assignment(assignment);
+        var locationEnvelope = RealtimeOutboxEnvelopeFactory.Location(location);
+        Assert.Equal(statusEnvelope.OccurredAt, statusEnvelope.Payload.OccurredAt);
+        Assert.Equal(timelineEnvelope.OccurredAt, timelineEnvelope.Payload.OccurredAt);
+        Assert.Equal(assignmentEnvelope.OccurredAt, assignmentEnvelope.Payload.OccurredAt);
+        Assert.Equal(locationEnvelope.OccurredAt, locationEnvelope.Payload.CapturedAt);
+    }
+
+    [Fact]
+    public void Parser_rejects_non_utc_timestamp_instead_of_converting_it()
+    {
+        var exception = Assert.Throws<OutboxMessageException>(() =>
+            RealtimeOutboxParser.Parse(Business(
+                RealtimeOutboxTopics.OrderTimelineEventAdded,
+                JsonSerializer.Serialize(new
+                {
+                    schema_version = "order-timeline-event-added-v1",
+                    order_id = OrderId,
+                    timeline_event_id = OrderEventId,
+                    category = "ORDER_STATUS",
+                    summary = "Order status changed to DELIVERING.",
+                    occurred_at = OccurredAt.ToOffset(TimeSpan.FromHours(-7)),
+                }))));
+
+        Assert.Equal(RealtimeOutboxErrorCodes.InvalidPayload, exception.ErrorCode);
     }
 
     [Theory]
@@ -314,6 +407,19 @@ public sealed class RealtimeOutboxTests
             "Order",
             OrderId,
             12,
+            payload,
+            1,
+            Guid.Parse("00000000-0000-0000-0000-000000000807"),
+            OccurredAt.AddMinutes(2),
+            OccurredAt,
+            OccurredAt);
+
+    private static ClaimedLocationOutboxMessage Location(string payload) =>
+        new(
+            EventId,
+            OrganizationId,
+            OrderEventId,
+            RealtimeOutboxTopics.DriverLocationUpdated,
             payload,
             1,
             Guid.Parse("00000000-0000-0000-0000-000000000807"),

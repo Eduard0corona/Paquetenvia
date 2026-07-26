@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Paqueteria.Application;
 
 namespace Realtime.Application.Dispatching;
 
@@ -391,7 +392,7 @@ public static class RealtimeOutboxParser
             throw InvalidPayload();
         }
 
-        return parsed;
+        return UtcMicrosecondPrecision.Normalize(parsed);
     }
 
     private static OutboxMessageException InvalidPayload() =>

@@ -65,7 +65,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             throw Conflict(AssignmentConflictCode.InvalidRequest);
         }
 
-        var occurredAt = clock.UtcNow;
+        var occurredAt = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
         var requestHash = AssignmentCanonicalizer.ComputeSha256(command);
         var stopwatch = Stopwatch.StartNew();
 

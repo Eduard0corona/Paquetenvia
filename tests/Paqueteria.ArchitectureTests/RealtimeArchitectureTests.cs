@@ -101,6 +101,47 @@ public sealed class RealtimeArchitectureTests
     }
 
     [Fact]
+    public void Shared_utc_microsecond_precision_is_single_and_used_by_all_realtime_producers()
+    {
+        var sourceRoot = TestRepository.GetPath("src");
+        var policyFiles = Directory.GetFiles(
+            sourceRoot,
+            "UtcMicrosecondPrecision.cs",
+            SearchOption.AllDirectories);
+        Assert.Single(policyFiles);
+        Assert.Contains(
+            Path.Combine("BuildingBlocks", "Paqueteria.Application"),
+            policyFiles[0],
+            StringComparison.Ordinal);
+
+        var policy = File.ReadAllText(policyFiles[0]);
+        Assert.Contains("value.UtcTicks - value.UtcTicks % 10", policy, StringComparison.Ordinal);
+        Assert.Contains("value.Offset != TimeSpan.Zero", policy, StringComparison.Ordinal);
+        Assert.DoesNotContain("Round(", policy, StringComparison.Ordinal);
+        Assert.DoesNotContain("TicksPerMillisecond", policy, StringComparison.Ordinal);
+
+        foreach (var relativePath in new[]
+                 {
+                     "src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionService.cs",
+                     "src/Modules/Dispatch/Dispatch.Infrastructure/Assignments/PostgreSqlAssignmentToOrderCoordinator.cs",
+                     "src/Modules/Drivers/Drivers.Infrastructure/Locations/PostgreSqlDriverLocationIngestionService.cs",
+                     "src/Modules/Realtime/Realtime.Application/Dispatching/RealtimeOutboxParser.cs",
+                 })
+        {
+            Assert.Contains(
+                "UtcMicrosecondPrecision.Normalize",
+                File.ReadAllText(TestRepository.GetPath(relativePath)),
+                StringComparison.Ordinal);
+        }
+
+        var processor = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Realtime/Realtime.Infrastructure/Dispatching/RealtimeOutboxProcessor.cs"));
+        Assert.Contains("UtcMicrosecondPrecision.AreEqual", processor, StringComparison.Ordinal);
+        Assert.DoesNotContain("persisted.OccurredAt !=", processor, StringComparison.Ordinal);
+        Assert.DoesNotContain("persisted.CapturedAt !=", processor, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Operations_role_blocker_cannot_be_silently_implemented_or_mapped()
     {
         Assert.Equal(

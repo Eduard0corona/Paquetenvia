@@ -100,6 +100,7 @@ public sealed class PostgreSqlOrderTransitionService(
             throw new OrderTransitionConflictException(OrderTransitionConflictCode.InvalidRequest);
         }
 
+        var occurredAt = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
         var requestHash = OrderTransitionCanonicalizer.ComputeSha256(command, target, metadata);
         try
         {
@@ -111,6 +112,7 @@ public sealed class PostgreSqlOrderTransitionService(
                     target,
                     metadata,
                     requestHash,
+                    occurredAt,
                     token),
                 cancellationToken);
         }
@@ -149,6 +151,7 @@ public sealed class PostgreSqlOrderTransitionService(
         OrderStatus target,
         NormalizedTransitionMetadata metadata,
         byte[] requestHash,
+        DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
         var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
@@ -206,14 +209,13 @@ public sealed class PostgreSqlOrderTransitionService(
         }
         else
         {
-            var reservedAt = clock.UtcNow;
             await InsertIdempotencyReservationAsync(
                 connection,
                 transaction,
                 command,
                 requestHash,
-                reservedAt,
-                reservedAt.AddMinutes(options.Value.IdempotencyLifetimeMinutes),
+                occurredAt,
+                occurredAt.AddMinutes(options.Value.IdempotencyLifetimeMinutes),
                 cancellationToken);
             await failureInjector.OnStageAsync(OrderTransitionStage.ReservationCreated, cancellationToken);
         }
@@ -237,7 +239,6 @@ public sealed class PostgreSqlOrderTransitionService(
             throw new OrderTransitionConflictException(OrderTransitionConflictCode.VersionConflict);
         }
 
-        var occurredAt = clock.UtcNow;
         var state = OrderTransitionMatrix.Evaluate(
             source,
             target,
