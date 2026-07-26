@@ -148,3 +148,11 @@ then the independent migrator records the two non-destructive adoption
 migrations in migrator-owned platform histories. API and Worker never migrate
 at startup. See [tenant-context-rls.md](tenant-context-rls.md) for planning,
 history drift, transaction guards and rollback rules.
+
+POD-001 agrega `CustodyDbContext` y la adopción
+`20260725_AdoptCanonicalCustodyProofsBaseline` en
+`platform.__ef_migrations_history_custody`. Se ejecuta después de Dispatch y
+solo comprueba las tablas canónicas de sesiones/Proof, RLS forzado, políticas,
+índices y trigger append-only; no contiene DDL de negocio. Consulta
+[pod-001-secure-proof-upload.md](pod-001-secure-proof-upload.md) para el flujo,
+planificación y rollback conservador.

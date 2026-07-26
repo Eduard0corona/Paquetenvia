@@ -23,8 +23,8 @@ valida exclusivamente con PostgreSQL 18/PostGIS 3.6 efímero en Testcontainers.
 
 El repositorio implementa **FND-001**, la plantilla arquitectónica de
 **ARC-001** y el entorno local reproducible de **FND-002**. Incluye la solución
-compilable, API y Worker mínimos, Building
-Blocks pequeños, los módulos vacíos Orders y Pricing, reglas ejecutables de
+compilable, API y Worker, Building Blocks pequeños, módulos con cuatro capas
+canónicas, reglas ejecutables de
 aislamiento, el workspace web, infraestructura local y CI.
 
 La implementación vive fuera de `docs/normative/v0.6/`. Esa carpeta contiene la
@@ -83,11 +83,12 @@ dotnet new paquetenvia-module --name Example --output .\src\Modules\Example
 Consulta la [guía de arquitectura modular](docs/development/module-architecture.md)
 para agregarlo a la solución, registrarlo en el catálogo y validar sus límites.
 
-La API expone `GET /health/live` y los endpoints de Locations incorporados por
-GEO-001. OpenAPI del framework se publica solo en Development. SEC-001/SEC-002 agregan probes internos exclusivamente
+La API expone `GET /health/live`, `GET /health/ready` y los endpoints de los
+módulos registrados. OpenAPI del framework se publica solo en Development. SEC-001/SEC-002 agregan probes internos exclusivamente
 bajo el environment `Testing`; no agregan endpoints públicos de login,
-identidad o tracking. El
-Worker inicia y espera cancelación sin conectarse a servicios externos.
+identidad o tracking. El Worker hospeda procesos registrados; POD-001 agrega la
+validación de cuarentena y promoción de evidencia cuando `ProofStorage` está
+habilitado.
 
 La [guía de autenticación y autorización](docs/development/security-authentication.md)
 documenta los schemes, perfiles sintéticos, claims, sesión, policies y límites.
@@ -99,6 +100,9 @@ aislamiento tenant, migración de adopción y rollback no destructivo.
 La [guía DSP-002](docs/development/dsp-002-manual-own-driver-assignment.md)
 documenta la asignación atómica `OWN/ACCEPTED`, el replay autorizado y la
 proyección privada de paradas sin teléfono.
+La [guía POD-001](docs/development/pod-001-secure-proof-upload.md) documenta
+sesiones de upload firmado, cuarentena privada, validación del Worker,
+finalización append-only y descarga firmada interna.
 
 Ejecuta su matriz con:
 

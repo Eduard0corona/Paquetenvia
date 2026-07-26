@@ -39,7 +39,8 @@ Redis Alpine reduce el tamaño sin cambiar su persistencia AOF; las versiones de
 MinIO, `mc` y Mailpit son releases explícitos, no canales flotantes.
 
 `minio-init` es un contenedor efímero e idempotente: espera a MinIO, crea el
-bucket configurado si falta y finaliza con código cero. Todos los puertos se
+bucket configurado si falta, fuerza acceso anónimo `none` y finaliza con
+código cero. Todos los puertos se
 publican solo en loopback. La red bridge y los nombres de recursos quedan
 acotados por `COMPOSE_PROJECT_NAME`.
 
@@ -60,7 +61,8 @@ cambies la imagen fijada sin una revisión explícita de compatibilidad PostGIS.
 | `POSTGRES_HOST_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Puerto y bootstrap local de PostgreSQL. |
 | `REDIS_HOST_PORT`, `REDIS_PASSWORD` | Puerto y autenticación local de Redis. |
 | `MINIO_API_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT` | Puertos S3 y consola. |
-| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_BUCKET` | Bootstrap local de MinIO. |
+| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_BUCKET` | Bootstrap local del bucket privado de MinIO. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Alias locales para el adaptador S3 de POD-001; no usar fuera de desarrollo. |
 | `MAIL_SMTP_HOST_PORT`, `MAIL_UI_HOST_PORT` | Puertos SMTP y UI/API de Mailpit. |
 
 Con los valores de ejemplo, la consola MinIO está en
@@ -68,6 +70,11 @@ Con los valores de ejemplo, la consola MinIO está en
 `.env.local`. Mailpit se inspecciona en `http://127.0.0.1:8025`; aplicaciones
 locales pueden enviar únicamente al mock `127.0.0.1:1025`. Si cambias un puerto,
 la URL cambia de forma correspondiente.
+
+Las variables `ProofStorage__*` y `AWS_*` del ejemplo permiten ejecutar API y
+Worker desde el host con POD-001. MinIO y `ThreatScanner=Synthetic` son
+exclusivamente locales/de prueba; consulta la
+[guía POD-001](pod-001-secure-proof-upload.md) antes de habilitar el flujo.
 
 ## Operación diaria
 
@@ -150,7 +157,8 @@ aplicación o volúmenes ausentes. Después:
    inicialización sobre volumen limpio (ninguna sobre volumen existente);
 2. confirma PostgreSQL 18, PostGIS 3.6, `postgis` en `public` y `pgcrypto` en
    `extensions`;
-3. escribe y lee datos reales por PostgreSQL, Redis, MinIO y SMTP/API de Mailpit;
+3. escribe y lee datos reales por PostgreSQL, Redis, MinIO y SMTP/API de Mailpit,
+   y comprueba que el bucket MinIO permanece privado;
 4. confirma persistencia después de reiniciar cada servicio y después de
    `Down` / `Up`;
 5. detiene Redis intencionalmente y exige un error de health con diagnóstico;
