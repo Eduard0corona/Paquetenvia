@@ -26,6 +26,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     private readonly RealtimeAuthorizationRecorder _recorder;
     private readonly string _allowedOrigin;
     private readonly bool _enableDispatch;
+    private readonly IReadOnlyDictionary<string, string?> _configurationOverrides;
 
     internal RealtimeKestrelWebApplicationFactory(
         string connectionString,
@@ -35,7 +36,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         IRealtimeOutboxFailureInjector? failureInjector = null,
         ILoggerProvider? logProvider = null,
         string allowedOrigin = "http://127.0.0.1",
-        bool enableDispatch = false)
+        bool enableDispatch = false,
+        IReadOnlyDictionary<string, string?>? configurationOverrides = null)
     {
         _connectionString = connectionString;
         _workerConnectionString = workerConnectionString;
@@ -44,6 +46,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         _recorder = recorder;
         _allowedOrigin = allowedOrigin;
         _enableDispatch = enableDispatch;
+        _configurationOverrides =
+            configurationOverrides ?? new Dictionary<string, string?>();
         UseKestrel(port);
     }
 
@@ -69,7 +73,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         }
 
         builder.ConfigureAppConfiguration(configuration =>
-            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            var settings = new Dictionary<string, string?>
             {
                 ["Authentication:Provider"] = "Mock",
                 ["IdentityBootstrap:Provider"] = "PostgreSql",
@@ -100,7 +105,13 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 ["Realtime:OutboxDispatcher:Location:LeaseSeconds"] = "15",
                 ["Realtime:OutboxDispatcher:StaleRequeueIntervalSeconds"] = "1",
                 ["ConnectionStrings:PaqueteriaWorker"] = _workerConnectionString,
-            }));
+            };
+            foreach (var pair in _configurationOverrides)
+            {
+                settings[pair.Key] = pair.Value;
+            }
+            configuration.AddInMemoryCollection(settings);
+        });
         builder.ConfigureServices(services =>
         {
             services.AddSingleton(_recorder);

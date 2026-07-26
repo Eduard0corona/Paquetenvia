@@ -140,6 +140,21 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
+    internal async Task RestoreValidTrackingTokenAsync()
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE orders.public_tracking_tokens
+            SET revoked_at=NULL
+            WHERE token_hash=extensions.digest(pg_catalog.convert_to(@token,'UTF8'),'sha256')
+            """,
+            connection);
+        command.Parameters.AddWithValue("token", ValidTrackingToken);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
     internal async Task<(
         Guid OutboxId,
         int AggregateVersion,

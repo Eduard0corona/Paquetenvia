@@ -4,9 +4,13 @@ import { describe, expect, it } from "vitest";
 import type { DriverSession } from "../session/driver-session";
 import {
   createDriverCachePartition,
+  DriverDatabaseVersion,
+  DriverOfflineOperationsStoreName,
+  DriverProofBlobsStoreName,
   DriverStopsDatabaseName,
   DriverStopsSchemaVersion,
   DriverStopsStoreName,
+  DriverSyncLeasesStoreName,
 } from "./driver-stops-cache";
 
 const baseSession: DriverSession = {
@@ -44,7 +48,7 @@ describe("driver stop cache partition", () => {
     expect(partition.key).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
-  it("uses one native IndexedDB database/store and schema version", () => {
+  it("upgrades the existing database to v2 without changing snapshot schema", () => {
     const source = readFileSync(
       resolve(process.cwd(), "src/driver/cache/driver-stops-cache.ts"),
       "utf8",
@@ -52,7 +56,15 @@ describe("driver stop cache partition", () => {
     expect(DriverStopsDatabaseName).toBe("paquetenvia-driver-stops-v1");
     expect(DriverStopsStoreName).toBe("snapshots");
     expect(DriverStopsSchemaVersion).toBe(1);
+    expect(DriverDatabaseVersion).toBe(2);
+    expect(DriverOfflineOperationsStoreName).toBe("operations");
+    expect(DriverProofBlobsStoreName).toBe("proof_blobs");
+    expect(DriverSyncLeasesStoreName).toBe("sync_leases");
     expect(source).toContain("indexedDB.open");
+    expect(source).toContain('createIndex("by_partition_order"');
+    expect(source).toContain('createIndex("by_partition_status"');
+    expect(source).toContain('createIndex("by_partition_next_attempt"');
+    expect(source).toContain('createIndex("by_partition_created"');
     expect(source).not.toContain("localStorage");
     expect(source).not.toContain("sessionStorage");
   });
