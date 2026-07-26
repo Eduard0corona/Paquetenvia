@@ -42,5 +42,6 @@
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Domain\Pricing.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Endpoints\Pricing.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

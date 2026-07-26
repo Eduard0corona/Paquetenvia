@@ -71,7 +71,7 @@ jobs:
           dotnet test
           --configuration Release
           --no-build
-          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery"
+          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload"
 
   runtime-contracts:
     name: Validate runtime contracts
@@ -93,8 +93,14 @@ jobs:
       - name: Restore locked contract dependencies
         run: dotnet restore ./tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --locked-mode
 
+      - name: Restore locked secure proof dependencies
+        run: dotnet restore ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj --locked-mode
+
       - name: Build contract tests
         run: dotnet build ./tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --configuration Release --no-restore
+
+      - name: Build secure proof tests
+        run: dotnet build ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj --configuration Release --no-restore
 
       - name: Execute PostgreSQL runtime contracts
         env:
@@ -105,6 +111,17 @@ jobs:
           --no-build
           --filter "Category=PostgreSqlContract"
           --logger "trx;LogFileName=runtime-contracts.trx"
+          --results-directory ./TestResults/runtime-contracts
+
+      - name: Execute secure proof runtime contracts
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
+        run: >-
+          dotnet test ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=SecureProofUpload"
+          --logger "trx;LogFileName=secure-proof-runtime.trx"
           --results-directory ./TestResults/runtime-contracts
 
       - name: Capture Testcontainers diagnostics

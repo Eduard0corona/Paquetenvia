@@ -123,8 +123,23 @@ internal static class SolutionCatalog
         additionalEndpointReferences: ["Identity.Application"],
         allowedCrossModuleDependencies: ["Identity", "Orders", "Organizations"]);
 
+    internal static readonly ModuleDefinition Custody = Module(
+        "Custody",
+        typeof(Custody.Domain.AssemblyReference).Assembly,
+        typeof(Custody.Application.AssemblyReference).Assembly,
+        typeof(Custody.Infrastructure.AssemblyReference).Assembly,
+        typeof(Custody.Endpoints.AssemblyReference).Assembly,
+        additionalInfrastructureReferences: ["Paqueteria.Application"],
+        additionalEndpointReferences:
+        [
+            "Organizations.Application",
+            "Organizations.Endpoints",
+            "Paqueteria.Application",
+        ],
+        allowedCrossModuleDependencies: ["Organizations"]);
+
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
-        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime];
+        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -153,6 +168,8 @@ internal static class SolutionCatalog
             "Dispatch.Infrastructure",
             "Realtime.Endpoints",
             "Realtime.Infrastructure",
+            "Custody.Endpoints",
+            "Custody.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -160,7 +177,13 @@ internal static class SolutionCatalog
         ProjectRole.WorkerRoot,
         typeof(Paqueteria.Worker.AssemblyReference).Assembly,
         "src/Paqueteria.Worker/Paqueteria.Worker.csproj",
-        allowed: ["Paqueteria.Infrastructure", "Orders.Infrastructure", "Pricing.Infrastructure"]);
+        allowed:
+        [
+            "Paqueteria.Infrastructure",
+            "Orders.Infrastructure",
+            "Pricing.Infrastructure",
+            "Custody.Infrastructure",
+        ]);
 
     internal static IReadOnlyList<ProjectComponent> All { get; } =
     [
@@ -176,6 +199,7 @@ internal static class SolutionCatalog
         .. Drivers.Components,
         .. Dispatch.Components,
         .. Realtime.Components,
+        .. Custody.Components,
         Api,
         Worker,
     ];
