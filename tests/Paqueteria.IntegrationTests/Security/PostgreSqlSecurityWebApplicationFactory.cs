@@ -139,16 +139,30 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
-    internal async Task<(Guid OutboxId, int AggregateVersion, Guid OrderEventId)>
+    internal async Task<(
+        Guid OutboxId,
+        int AggregateVersion,
+        Guid OrderEventId,
+        DateTimeOffset OccurredAt)>
         EnqueueRealtimeStatusAsync(
         bool isPublic = true,
-        bool available = true)
+        bool available = true,
+        int payloadAdditionalTicks = 0)
     {
         var eventId = Guid.NewGuid();
         var outboxId = Guid.NewGuid();
         var previousStatus = isPublic ? "IN_TRANSIT" : "DELIVERING";
         var newStatus = isPublic ? "DELIVERING" : "CLOSED";
         var publicEventCode = isPublic ? "OUT_FOR_DELIVERY" : null;
+        var occurredAt = new DateTimeOffset(
+            2026,
+            7,
+            25,
+            3,
+            0,
+            0,
+            TimeSpan.Zero).AddTicks(1_234_560);
+        var payloadOccurredAt = occurredAt.AddTicks(payloadAdditionalTicks);
         await using var connection = new NpgsqlConnection(_adminConnectionString);
         await connection.OpenAsync();
         await using var versionCommand = new NpgsqlCommand(
@@ -179,7 +193,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
               jsonb_build_object(
                 'previous_status',@previous_status,
                 'new_status',@new_status),
-              '2026-07-25T03:00:00Z');
+              @occurred_at);
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
               aggregate_version,payload,priority,status,attempts,available_at,created_at)
@@ -198,7 +212,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 'public_order_id','ORD_abcdefghijklmnopqrstuv',
                 'previous_status',@previous_status,
                 'new_status',@new_status,
-                'occurred_at','2026-07-25T03:00:00+00:00',
+                'occurred_at',@payload_occurred_at,
                 'public_event_code',@public_event_code,
                 'authorized_driver_id',NULL,
                 'assignment_id',NULL),
@@ -214,9 +228,13 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         command.Parameters.AddWithValue("previous_status", previousStatus);
         command.Parameters.AddWithValue("new_status", newStatus);
         command.Parameters.AddWithValue("available", available);
+        command.Parameters.AddWithValue("occurred_at", occurredAt);
+        command.Parameters.AddWithValue(
+            "payload_occurred_at",
+            payloadOccurredAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
         command.Parameters.Add(new NpgsqlParameter<string?>("public_event_code", publicEventCode));
         await command.ExecuteNonQueryAsync();
-        return (outboxId, aggregateVersion, eventId);
+        return (outboxId, aggregateVersion, eventId, occurredAt);
     }
 
     internal async Task MakeBusinessOutboxAvailableAsync(Guid outboxId)
@@ -274,6 +292,74 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         return outboxId;
     }
 
+    internal async Task<(Guid OutboxId, DateTimeOffset OccurredAt)>
+        EnqueueHistoricalTimelineAsync(
+        Guid orderEventId,
+        int payloadAdditionalTicks)
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        Guid orderId;
+        Guid ownerOrganizationId;
+        int aggregateVersion;
+        DateTimeOffset occurredAt;
+        string newStatus;
+        await using (var evidence = new NpgsqlCommand(
+                         """
+                         SELECT order_id,owner_org_id,aggregate_version,occurred_at,
+                                payload->>'new_status'
+                         FROM orders.order_events
+                         WHERE id=@event_id
+                           AND event_type='ORDER_STATUS_CHANGED'
+                         """,
+                         connection))
+        {
+            evidence.Parameters.AddWithValue("event_id", orderEventId);
+            await using var reader = await evidence.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            orderId = reader.GetGuid(0);
+            ownerOrganizationId = reader.GetGuid(1);
+            aggregateVersion = reader.GetInt32(2);
+            occurredAt = reader.GetFieldValue<DateTimeOffset>(3);
+            newStatus = reader.GetString(4);
+        }
+
+        var outboxId = Guid.NewGuid();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
+              aggregate_version,payload,priority,status,attempts,available_at,created_at)
+            VALUES (
+              @outbox_id,@owner_org_id,
+              jsonb_build_object(
+                'organization_ids',jsonb_build_array(@owner_org_id::text)),
+              'orders.timeline-event-added','Order',@order_id,@aggregate_version,
+              jsonb_build_object(
+                'schema_version','order-timeline-event-added-v1',
+                'order_id',@order_id,
+                'timeline_event_id',@event_id,
+                'category','ORDER_STATUS',
+                'summary','Order status changed to ' || @new_status || '.',
+                'occurred_at',@payload_occurred_at),
+              50,'PENDING',0,clock_timestamp(),clock_timestamp())
+            """,
+            connection);
+        command.Parameters.AddWithValue("outbox_id", outboxId);
+        command.Parameters.AddWithValue("owner_org_id", ownerOrganizationId);
+        command.Parameters.AddWithValue("order_id", orderId);
+        command.Parameters.AddWithValue("aggregate_version", aggregateVersion);
+        command.Parameters.AddWithValue("event_id", orderEventId);
+        command.Parameters.AddWithValue("new_status", newStatus);
+        command.Parameters.AddWithValue(
+            "payload_occurred_at",
+            occurredAt.AddTicks(payloadAdditionalTicks).ToString(
+                "O",
+                System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        return (outboxId, occurredAt);
+    }
+
     internal async Task<string?> ReadOutboxStatusAsync(Guid outboxId)
     {
         await using var connection = new NpgsqlConnection(_adminConnectionString);
@@ -325,11 +411,20 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     internal async Task<Guid> EnqueueRealtimeLocationAsync() =>
         (await EnqueueRealtimeLocationEvidenceAsync()).OutboxId;
 
-    internal async Task<LocationOutboxScenario> EnqueueRealtimeLocationEvidenceAsync()
+    internal async Task<LocationOutboxScenario> EnqueueRealtimeLocationEvidenceAsync(
+        int payloadAdditionalTicks = 0)
     {
         var positionId = Guid.NewGuid();
         var outboxId = Guid.NewGuid();
-        var capturedAt = new DateTimeOffset(2026, 7, 25, 3, 1, 0, TimeSpan.Zero);
+        var capturedAt = new DateTimeOffset(
+            2026,
+            7,
+            25,
+            3,
+            1,
+            0,
+            TimeSpan.Zero).AddTicks(1_234_560);
+        var payloadCapturedAt = capturedAt.AddTicks(payloadAdditionalTicks);
         await using var connection = new NpgsqlConnection(_adminConnectionString);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
@@ -363,7 +458,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 'lat',24.80,
                 'lng',-107.40,
                 'accuracy_m',5.25,
-                'captured_at',@captured_at),
+                'captured_at',@payload_captured_at),
               'PENDING',0,clock_timestamp(),clock_timestamp());
             """,
             connection);
@@ -371,6 +466,9 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         command.Parameters.AddWithValue("client_event_id", Guid.NewGuid());
         command.Parameters.AddWithValue("outbox_id", outboxId);
         command.Parameters.AddWithValue("captured_at", capturedAt);
+        command.Parameters.AddWithValue(
+            "payload_captured_at",
+            payloadCapturedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
         await command.ExecuteNonQueryAsync();
         return new(
             outboxId,
@@ -406,6 +504,38 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         return await reader.ReadAsync()
             ? (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1))
             : (null, null);
+    }
+
+    internal async Task<LocationOutboxScenario> ReadHttpLocationScenarioAsync(
+        Guid clientEventId)
+    {
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT o.id,p.id,p.driver_id,p.captured_at,
+                   public.ST_Y(p.point),public.ST_X(p.point),p.accuracy_m
+            FROM drivers.driver_positions p
+            JOIN platform.location_outbox_events o ON o.driver_position_id=p.id
+            WHERE p.client_event_id=@client_event_id
+              AND p.org_id='11111111-1111-1111-1111-111111111111'
+            """,
+            connection);
+        command.Parameters.AddWithValue("client_event_id", clientEventId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var scenario = new LocationOutboxScenario(
+            reader.GetGuid(0),
+            reader.GetGuid(1),
+            reader.GetGuid(2),
+            reader.GetFieldValue<DateTimeOffset>(3),
+            reader.GetDouble(4),
+            reader.GetDouble(5),
+            Convert.ToDouble(
+                reader.GetDecimal(6),
+                System.Globalization.CultureInfo.InvariantCulture));
+        Assert.False(await reader.ReadAsync());
+        return scenario;
     }
 
     internal async Task<AssignmentEvidenceScenario> CreateAssignmentEvidenceScenarioAsync(
@@ -558,7 +688,8 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     }
 
     internal async Task<DriverAudienceOutboxScenario> CreateDriverAudienceOutboxScenarioAsync(
-        bool available = false)
+        bool available = false,
+        int payloadAdditionalTicks = 0)
     {
         var assignmentId = Guid.NewGuid();
         var eventId = Guid.NewGuid();
@@ -569,6 +700,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         await using var transaction = await connection.BeginTransactionAsync();
         var aggregateVersion = await NextOrderVersionAsync(connection, transaction);
         var occurredAt = RealtimeOccurredAt(aggregateVersion);
+        var payloadOccurredAt = occurredAt.AddTicks(payloadAdditionalTicks);
         await using var command = new NpgsqlCommand(
             """
             UPDATE dispatch.assignments
@@ -616,7 +748,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                   'public_order_id','ORD_abcdefghijklmnopqrstuv',
                   'previous_status','READY_FOR_PICKUP',
                   'new_status','ASSIGNED',
-                  'occurred_at',@occurred_at,
+                  'occurred_at',@payload_occurred_at,
                   'public_event_code',NULL,
                   'authorized_driver_id',@driver_id,
                   'assignment_id',@assignment_id),
@@ -636,7 +768,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                   'assignment_id',@assignment_id,
                   'driver_id',@driver_id,
                   'assignment_status','ACCEPTED',
-                  'occurred_at',@occurred_at),
+                  'occurred_at',@payload_occurred_at),
                 50,'PENDING',0,
                 CASE WHEN @available THEN clock_timestamp()
                      ELSE clock_timestamp()+interval '1 hour' END,
@@ -651,12 +783,16 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         command.Parameters.AddWithValue("assignment_outbox_id", assignmentOutboxId);
         command.Parameters.AddWithValue("aggregate_version", aggregateVersion);
         command.Parameters.AddWithValue("occurred_at", occurredAt);
+        command.Parameters.AddWithValue(
+            "payload_occurred_at",
+            payloadOccurredAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("available", available);
         await command.ExecuteNonQueryAsync();
         await transaction.CommitAsync();
         return new(
             assignmentId,
             ActiveDriverId,
+            eventId,
             statusOutboxId,
             assignmentOutboxId,
             aggregateVersion,
@@ -910,7 +1046,14 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     }
 
     private static DateTimeOffset RealtimeOccurredAt(int aggregateVersion) =>
-        new(2026, 7, 25, 8, aggregateVersion % 60, 0, TimeSpan.Zero);
+        new DateTimeOffset(
+            2026,
+            7,
+            25,
+            8,
+            aggregateVersion % 60,
+            0,
+            TimeSpan.Zero).AddTicks(1_234_560);
 
     internal async Task SetOutboxFunctionExecuteAsync(string signature, bool granted)
     {
@@ -1077,6 +1220,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     internal sealed record DriverAudienceOutboxScenario(
         Guid AssignmentId,
         Guid DriverId,
+        Guid OrderEventId,
         Guid StatusOutboxId,
         Guid AssignmentOutboxId,
         int AggregateVersion,

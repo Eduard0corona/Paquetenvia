@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Identity.Infrastructure.Mock;
@@ -22,7 +25,8 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
     public async Task Real_driver_hub_receives_authorized_status_and_assignment_and_skips_revoked()
     {
         await database.SetActiveDriverMembershipStatusAsync("ACTIVE");
-        var scenario = await database.CreateDriverAudienceOutboxScenarioAsync();
+        var scenario = await database.CreateDriverAudienceOutboxScenarioAsync(
+            payloadAdditionalTicks: 7);
         using var metrics = new OutboxMetricProbe();
         var recorder = new RealtimeAuthorizationRecorder();
         await using var host = new RealtimeKestrelWebApplicationFactory(
@@ -42,6 +46,8 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
             MockIdentityProfiles.ActiveViewer);
         var operationStatuses = new MessageCollector<RealtimeEnvelope<OrderStatusChangedPayload>>();
         var operationAssignments = new MessageCollector<RealtimeEnvelope<AssignmentChangedPayload>>();
+        var operationTimeline =
+            new MessageCollector<RealtimeEnvelope<OrderTimelineEventAddedPayload>>();
         var authorizedStatuses = new MessageCollector<RealtimeEnvelope<OrderStatusChangedPayload>>();
         var authorizedAssignments = new MessageCollector<RealtimeEnvelope<AssignmentChangedPayload>>();
         var otherStatuses = new MessageCollector<RealtimeEnvelope<OrderStatusChangedPayload>>();
@@ -52,6 +58,9 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         operations.On<RealtimeEnvelope<AssignmentChangedPayload>>(
             "AssignmentChanged",
             operationAssignments.Add);
+        operations.On<RealtimeEnvelope<OrderTimelineEventAddedPayload>>(
+            "OrderTimelineEventAdded",
+            operationTimeline.Add);
         authorizedDriver.On<RealtimeEnvelope<OrderStatusChangedPayload>>(
             "OrderStatusChanged",
             authorizedStatuses.Add);
@@ -84,13 +93,35 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
                 value => value.EventId == scenario.AssignmentOutboxId);
             var driverAssignment = await authorizedAssignments.WaitForAsync(
                 value => value.EventId == scenario.AssignmentOutboxId);
+            var historicalTimeline = await database.EnqueueHistoricalTimelineAsync(
+                scenario.OrderEventId,
+                payloadAdditionalTicks: 7);
+            var timeline = await operationTimeline.WaitForAsync(
+                value => value.EventId == historicalTimeline.OutboxId);
 
             Assert.Equal(scenario.DriverId, driverAssignment.Payload.DriverId);
             Assert.Equal(scenario.AssignmentId, driverAssignment.Payload.AssignmentId);
             Assert.Equal(operationStatus, driverStatus);
             Assert.Equal(operationAssignment, driverAssignment);
+            Assert.Equal(scenario.OccurredAt, operationStatus.OccurredAt);
+            Assert.Equal(operationStatus.OccurredAt, operationStatus.Payload.OccurredAt);
+            Assert.Equal(scenario.OccurredAt, operationAssignment.OccurredAt);
+            Assert.Equal(operationAssignment.OccurredAt, operationAssignment.Payload.OccurredAt);
+            Assert.Equal(historicalTimeline.OccurredAt, timeline.OccurredAt);
+            Assert.Equal(timeline.OccurredAt, timeline.Payload.OccurredAt);
+            Assert.All(
+                new[]
+                {
+                    operationStatus.OccurredAt,
+                    operationAssignment.OccurredAt,
+                    timeline.OccurredAt,
+                },
+                value => Assert.Equal(0, value.UtcTicks % 10));
             Assert.Equal("PROCESSED", await WaitForBusinessTerminalAsync(scenario.StatusOutboxId));
             Assert.Equal("PROCESSED", await WaitForBusinessTerminalAsync(scenario.AssignmentOutboxId));
+            Assert.Equal(
+                "PROCESSED",
+                await WaitForBusinessTerminalAsync(historicalTimeline.OutboxId));
             await AssertStableCountAsync(otherStatuses, 0);
             await AssertStableCountAsync(otherAssignments, 0);
 
@@ -181,7 +212,31 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         Assert.True(await recorder.WaitForNextTrackingAcceptedAsync(TimeSpan.FromSeconds(5)));
         await Task.Delay(100);
 
-        var scenario = await database.EnqueueRealtimeLocationEvidenceAsync();
+        var clientEventId = Guid.NewGuid();
+        var body =
+            $$"""
+              {"positions":[{
+                "client_event_id":"{{clientEventId:D}}",
+                "lat":24.809064,
+                "lng":-107.394011,
+                "accuracy_m":7.5,
+                "captured_at":"2026-07-25T18:00:00.1234567Z"
+              }]}
+              """;
+        using var http = new HttpClient { BaseAddress = baseAddress };
+        using (var request = DriverLocationRequest(body))
+        using (var response = await http.SendAsync(request))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            using var responseJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Equal(
+                "ACCEPTED",
+                responseJson.RootElement.GetProperty("items")[0]
+                    .GetProperty("status").GetString());
+        }
+
+        var scenario = await database.ReadHttpLocationScenarioAsync(clientEventId);
         var terminal = await WaitForLocationTerminalAsync(scenario.OutboxId);
         var result = await database.ReadLocationOutboxResultAsync(scenario.OutboxId);
         Assert.True(
@@ -201,6 +256,12 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         Assert.Equal(scenario.Lng, message.Payload.Lng, 6);
         Assert.Equal(scenario.AccuracyM, message.Payload.AccuracyM, 6);
         Assert.Equal(scenario.CapturedAt, message.Payload.CapturedAt);
+        Assert.Equal(0, message.OccurredAt.UtcTicks % 10);
+        Assert.Equal(
+            DateTimeOffset.Parse(
+                "2026-07-25T18:00:00.1234560Z",
+                System.Globalization.CultureInfo.InvariantCulture),
+            message.OccurredAt);
         await AssertStableCountAsync(foreign, 0);
         await AssertStableCountAsync(driverLeak, 0);
         await AssertStableCountAsync(trackingLeak, 0);
@@ -219,6 +280,33 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
                 message.Contains(
                     scenario.AccuracyM.ToString("R", invariant),
                     StringComparison.Ordinal));
+
+        using (var duplicate = DriverLocationRequest(body))
+        using (var duplicateResponse = await http.SendAsync(duplicate))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, duplicateResponse.StatusCode);
+            using var responseJson = JsonDocument.Parse(
+                await duplicateResponse.Content.ReadAsStringAsync());
+            Assert.Equal(
+                "DUPLICATE",
+                responseJson.RootElement.GetProperty("items")[0]
+                    .GetProperty("status").GetString());
+        }
+
+        var corruptBusiness = await database.EnqueueRealtimeStatusAsync(
+            isPublic: false,
+            payloadAdditionalTicks: 10);
+        var corruptLocation = await database.EnqueueRealtimeLocationEvidenceAsync(
+            payloadAdditionalTicks: 10);
+        Assert.Equal("DEAD", await WaitForBusinessTerminalAsync(corruptBusiness.OutboxId));
+        Assert.Equal("DEAD", await WaitForLocationTerminalAsync(corruptLocation.OutboxId));
+        Assert.Equal(
+            RealtimeOutboxErrorCodes.InvalidPayload,
+            (await database.ReadOutboxResultAsync(corruptBusiness.OutboxId)).LastError);
+        Assert.Equal(
+            RealtimeOutboxErrorCodes.InvalidPayload,
+            (await database.ReadLocationOutboxResultAsync(corruptLocation.OutboxId)).LastError);
+        await AssertStableCountAsync(delivered, 1);
     }
 
     [Fact]
@@ -335,6 +423,21 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
                 options.AccessTokenProvider = () => Task.FromResult<string?>(
                     PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken);
             }));
+
+    private static HttpRequestMessage DriverLocationRequest(string body)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/v1/driver/me/location-updates");
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            MockIdentityProfiles.ActiveDriver);
+        request.Headers.Add(
+            "X-Organization-Id",
+            PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId.ToString("D"));
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return request;
+    }
 
     private static HubConnection Configure(IHubConnectionBuilder builder)
     {

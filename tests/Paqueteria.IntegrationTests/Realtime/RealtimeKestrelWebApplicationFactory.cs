@@ -1,3 +1,5 @@
+using Drivers.Application.Locations;
+using Drivers.Infrastructure.Locations;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -103,6 +105,9 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 services.AddSingleton(_failureInjector);
             }
 
+            services.RemoveAll<IDriverLocationIngestionService>();
+            services.AddScoped<IDriverLocationIngestionService>(provider =>
+                provider.GetRequiredService<PostgreSqlDriverLocationIngestionService>());
             services.AddScoped<IRealtimeConnectionAuthorizer>(provider =>
                 new RecordingRealtimeConnectionAuthorizer(
                     provider.GetRequiredService<PostgreSqlRealtimeConnectionAuthorizer>(),

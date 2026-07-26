@@ -73,6 +73,8 @@ public sealed class RealtimeOutboxPlaywrightTests(
                 trackingVersion: 0,
                 operationsEventIds: [],
                 trackingEventIds: [],
+                operationsTimestamps: [],
+                trackingTimestamps: [],
               };
               const text = (id, value) => {
                 document.getElementById(id).textContent = String(value);
@@ -139,6 +141,10 @@ public sealed class RealtimeOutboxPlaywrightTests(
               operations.on("OrderStatusChanged", message => {
                 increment("operations-deliveries");
                 state.operationsEventIds.push(message.event_id);
+                state.operationsTimestamps.push([
+                  message.occurred_at,
+                  message.payload.occurred_at,
+                ]);
                 const knownVersion =
                   state.operationsVersions.get(message.aggregate_id) ?? 0;
                 if (seenOperations.has(message.event_id) ||
@@ -170,6 +176,10 @@ public sealed class RealtimeOutboxPlaywrightTests(
               tracking.on("PublicOrderStatusChanged", message => {
                 increment("tracking-deliveries");
                 state.trackingEventIds.push(message.event_id);
+                state.trackingTimestamps.push([
+                  message.occurred_at,
+                  message.payload.occurred_at,
+                ]);
                 if (seenTracking.has(message.event_id) ||
                     message.aggregate_version <= state.trackingVersion) return;
                 seenTracking.add(message.event_id);
@@ -204,7 +214,9 @@ public sealed class RealtimeOutboxPlaywrightTests(
         Assert.True(await recorder.WaitForNextTrackingAcceptedAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal("1", await page.Locator("#operations-sync-count").TextContentAsync());
 
-        var publicEvent = await database.EnqueueRealtimeStatusAsync(available: false);
+        var publicEvent = await database.EnqueueRealtimeStatusAsync(
+            available: false,
+            payloadAdditionalTicks: 7);
         failureInjector.Arm(publicEvent.OutboxId);
         await database.MakeBusinessOutboxAvailableAsync(publicEvent.OutboxId);
         await page.WaitForFunctionAsync(
@@ -242,9 +254,31 @@ public sealed class RealtimeOutboxPlaywrightTests(
             operationsEventIds,
             value => Assert.Equal(publicEvent.OutboxId.ToString("D"), value));
         Assert.Equal(operationsEventIds, trackingEventIds);
+        var operationsTimestamps = await page.EvaluateAsync<string[][]>(
+            "() => window.rtm002.state.operationsTimestamps");
+        var trackingTimestamps = await page.EvaluateAsync<string[][]>(
+            "() => window.rtm002.state.trackingTimestamps");
+        Assert.Equal(2, operationsTimestamps.Length);
+        Assert.Equal(2, trackingTimestamps.Length);
+        Assert.All(
+            operationsTimestamps.Concat(trackingTimestamps),
+            value =>
+            {
+                var envelope = DateTimeOffset.Parse(
+                    value[0],
+                    System.Globalization.CultureInfo.InvariantCulture);
+                var payload = DateTimeOffset.Parse(
+                    value[1],
+                    System.Globalization.CultureInfo.InvariantCulture);
+                Assert.Equal(publicEvent.OccurredAt, envelope);
+                Assert.Equal(envelope, payload);
+                Assert.Equal(TimeSpan.Zero, envelope.Offset);
+                Assert.Equal(0, envelope.UtcTicks % 10);
+            });
         var processedAfterRedelivery = await WaitForProcessedStateAsync(publicEvent.OutboxId);
         Assert.Equal(2, processedAfterRedelivery.Attempts);
         Assert.Null(processedAfterRedelivery.LeaseToken);
+        Assert.Null(processedAfterRedelivery.LastError);
 
         var privateEvent = await database.EnqueueRealtimeStatusAsync(isPublic: false);
         await page.WaitForFunctionAsync(
@@ -382,4 +416,5 @@ public sealed class RealtimeOutboxPlaywrightTests(
     }
 
     private sealed record HealthResponse(string Status);
+
 }
