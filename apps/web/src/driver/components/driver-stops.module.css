@@ -1,0 +1,270 @@
+.shell {
+  width: min(100%, 46rem);
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(2rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+}
+
+.header {
+  padding: 1rem 0 1.25rem;
+}
+
+.header h1 {
+  margin: 0.2rem 0 0.45rem;
+  font-size: clamp(2rem, 10vw, 3.2rem);
+  line-height: 1;
+}
+
+.eyebrow,
+.cardLabel {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.intro {
+  max-width: 34rem;
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.connection {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 1rem;
+  color: #334e68;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.connectionMark {
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  background: #16a34a;
+}
+
+.connection.offline {
+  color: #92400e;
+}
+
+.connection.offline .connectionMark {
+  background: #f59e0b;
+}
+
+.stopList {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stopCard,
+.detail,
+.statusPanel {
+  overflow-wrap: anywhere;
+  border: 1px solid #bcccdc;
+  border-radius: 1rem;
+  background: #fff;
+  box-shadow: 0 0.75rem 2rem rgb(16 42 67 / 8%);
+}
+
+.stopCard {
+  padding: 1rem;
+}
+
+.cardHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.cardHeading h2,
+.detail h2,
+.statusPanel h2 {
+  margin: 0.2rem 0 0;
+  color: var(--ink);
+  font-size: 1.3rem;
+  line-height: 1.25;
+}
+
+.badge {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  border: 1px solid #7dd3c7;
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  background: #e6fffa;
+  color: #115e59;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.stopFacts,
+.detailFacts {
+  display: grid;
+  gap: 0.8rem;
+  margin: 1rem 0;
+}
+
+.stopFacts div,
+.detailFacts div {
+  min-width: 0;
+}
+
+.stopFacts dt,
+.detailFacts dt {
+  color: #627d98;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.stopFacts dd,
+.detailFacts dd {
+  margin: 0.2rem 0 0;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.primaryLink,
+.secondaryLink,
+.retryButton {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.primaryLink {
+  width: 100%;
+  background: var(--accent);
+  color: #fff;
+}
+
+.secondaryLink {
+  border: 2px solid var(--accent);
+  padding: 0.65rem 1rem;
+  color: var(--accent-dark);
+}
+
+.retryButton {
+  margin-top: 1rem;
+  border: 0;
+  padding: 0.7rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.primaryLink:hover,
+.retryButton:hover {
+  background: var(--accent-dark);
+}
+
+.primaryLink:focus-visible,
+.secondaryLink:focus-visible,
+.retryButton:focus-visible,
+.detail h2:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 3px;
+}
+
+.offlineBanner {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 1rem;
+  border: 1px solid #f59e0b;
+  border-radius: 0.8rem;
+  padding: 0.85rem;
+  background: #fffbeb;
+  color: #78350f;
+  font-size: 0.9rem;
+}
+
+.detail,
+.statusPanel {
+  padding: clamp(1rem, 5vw, 1.5rem);
+}
+
+.detailFacts {
+  margin: 1.4rem 0;
+}
+
+.statusPanel div {
+  display: grid;
+  margin-top: 0.65rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.loading {
+  display: grid;
+  gap: 1rem;
+}
+
+.skeleton {
+  height: 10rem;
+  border-radius: 1rem;
+  background: linear-gradient(100deg, #d9e2ec 20%, #f0f4f8 50%, #d9e2ec 80%);
+  background-size: 220% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position-x: -220%;
+  }
+}
+
+@media (min-width: 42rem) {
+  .shell {
+    padding-top: 2rem;
+  }
+
+  .stopCard {
+    padding: 1.35rem;
+  }
+
+  .stopFacts,
+  .detailFacts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (orientation: landscape) and (max-height: 36rem) {
+  .header {
+    padding-top: 0;
+  }
+
+  .stopList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}

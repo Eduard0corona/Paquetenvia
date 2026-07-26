@@ -1,8 +1,8 @@
 {
-  "name": "Paquetenvia",
+  "name": "Paquetenvia Repartidor",
   "short_name": "Paquetenvia",
-  "description": "Plataforma local de paquetería.",
-  "start_url": "/",
+  "description": "Paradas asignadas y operación móvil de última milla",
+  "start_url": "/driver/stops",
   "display": "standalone",
   "background_color": "#f0f4f8",
   "theme_color": "#102a43",
