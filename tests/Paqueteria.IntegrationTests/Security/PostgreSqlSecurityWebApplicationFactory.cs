@@ -30,6 +30,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
 
     public string PostgreSqlVersion { get; private set; } = string.Empty;
     public string PostGisVersion { get; private set; } = string.Empty;
+    internal string AdminConnectionString => _adminConnectionString;
     public string ApplicationConnectionString => _applicationConnectionString;
     public string WorkerConnectionString => _workerConnectionString;
 

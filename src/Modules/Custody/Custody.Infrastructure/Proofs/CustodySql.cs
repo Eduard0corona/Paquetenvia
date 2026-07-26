@@ -60,6 +60,9 @@ internal static class CustodySql
                     AND m.role='DRIVER'
                     AND d.driver_type='OWN' AND d.status='ACTIVE'
                     AND a.assignment_type='OWN'
+                    AND a.owner_org_id=o.owner_org_id
+                    AND a.operator_org_id IS NOT DISTINCT FROM o.operator_org_id
+                    AND (a.owner_org_id=@organization OR a.operator_org_id=@organization)
                     AND a.status IN ('ACCEPTED','ACTIVE'))
               ) AS authorized
             FROM orders.orders o

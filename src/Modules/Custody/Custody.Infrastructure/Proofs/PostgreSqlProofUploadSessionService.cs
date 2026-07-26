@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -57,13 +58,25 @@ public sealed class PostgreSqlProofUploadSessionService(
             new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
             async (dbContext, token) =>
             {
+                var order = await CustodySql.ReadAuthorizedOrderAsync(
+                    dbContext,
+                    command.OrderId,
+                    command.ActorId,
+                    command.OrganizationId,
+                    command.MfaSatisfied,
+                    token) ?? throw new ProofNotFoundException();
                 await CustodySql.AcquireIdempotencyLockAsync(
                     dbContext,
                     command.OrganizationId,
                     IdempotencyScope,
                     command.IdempotencyKey,
                     token);
-                var replay = await ReadReplayAsync(dbContext, command, requestHash, token);
+                var replay = await ReadReplayAsync(
+                    dbContext,
+                    command,
+                    order.OwnerOrganizationId,
+                    requestHash,
+                    token);
                 if (replay is not null)
                 {
                     return replay;
@@ -74,13 +87,6 @@ public sealed class PostgreSqlProofUploadSessionService(
                     throw new ProofStorageUnavailableException();
                 }
 
-                var order = await CustodySql.ReadAuthorizedOrderAsync(
-                    dbContext,
-                    command.OrderId,
-                    command.ActorId,
-                    command.OrganizationId,
-                    command.MfaSatisfied,
-                    token) ?? throw new ProofNotFoundException();
                 if (!ProofContract.IsAllowedOrderState(proofType, order.Status))
                 {
                     throw new ProofConflictException("ORDER_STATE_NOT_ALLOWED");
@@ -146,6 +152,7 @@ public sealed class PostgreSqlProofUploadSessionService(
     private static async Task<ProofUploadSessionResult?> ReadReplayAsync(
         CustodyDbContext context,
         CreateProofUploadSessionCommand create,
+        Guid ownerOrganizationId,
         byte[] requestHash,
         CancellationToken cancellationToken)
     {
@@ -173,14 +180,151 @@ public sealed class PostgreSqlProofUploadSessionService(
             throw new ProofConflictException("IDEMPOTENCY_CONFLICT");
         }
 
-        if (reader.IsDBNull(1) || reader.IsDBNull(2) || reader.IsDBNull(3))
+        if (reader.IsDBNull(1) ||
+            reader.GetInt32(1) != 201 ||
+            reader.IsDBNull(2) ||
+            reader.IsDBNull(3))
         {
-            throw new ProofConflictException("IDEMPOTENCY_IN_PROGRESS");
+            throw CorruptReplay();
         }
 
-        var result = JsonSerializer.Deserialize<ProofUploadSessionResult>(reader.GetString(2), JsonOptions)
-            ?? throw new ProofConflictException("IDEMPOTENCY_CORRUPT");
-        return result.Id == reader.GetGuid(3) ? result : throw new ProofConflictException("IDEMPOTENCY_CORRUPT");
+        var responseBody = reader.GetString(2);
+        var resourceId = reader.GetGuid(3);
+        await reader.DisposeAsync();
+        ProofUploadSessionResult result;
+        try
+        {
+            using var responseDocument = JsonDocument.Parse(responseBody);
+            if (!HasExactResponseShape(responseDocument.RootElement))
+            {
+                throw CorruptReplay();
+            }
+
+            result = JsonSerializer.Deserialize<ProofUploadSessionResult>(responseBody, JsonOptions)
+                ?? throw CorruptReplay();
+        }
+        catch (JsonException)
+        {
+            throw CorruptReplay();
+        }
+
+        if (result.Id == Guid.Empty ||
+            result.Id != resourceId ||
+            result.OrderId != create.OrderId ||
+            !string.Equals(
+                result.ObjectKey,
+                ProofObjectKeys.Quarantine(ownerOrganizationId, create.OrderId, result.Id),
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(result.UploadUrl) ||
+            !Uri.TryCreate(result.UploadUrl, UriKind.Absolute, out _) ||
+            result.RequiredHeaders is null ||
+            result.RequiredHeaders.Count == 0 ||
+            result.RequiredHeaders.Any(header =>
+                string.IsNullOrWhiteSpace(header.Key) ||
+                string.IsNullOrWhiteSpace(header.Value)) ||
+            result.ExpiresAt == default ||
+            !string.Equals(result.Status, "CREATED", StringComparison.Ordinal))
+        {
+            throw CorruptReplay();
+        }
+
+        await using var sessionCommand = new NpgsqlCommand(
+            """
+            SELECT id,order_id,owner_org_id,object_key_quarantine,
+                   expected_content_type,maximum_bytes,requested_by
+            FROM custody.proof_upload_sessions
+            WHERE id=@session
+            """,
+            connection,
+            transaction);
+        sessionCommand.Parameters.Add(CustodySql.P("session", NpgsqlDbType.Uuid, result.Id));
+        await using var sessionReader = await sessionCommand.ExecuteReaderAsync(cancellationToken);
+        if (!await sessionReader.ReadAsync(cancellationToken) ||
+            sessionReader.GetGuid(0) != result.Id ||
+            sessionReader.GetGuid(1) != create.OrderId ||
+            sessionReader.GetGuid(2) != ownerOrganizationId ||
+            !string.Equals(sessionReader.GetString(3), result.ObjectKey, StringComparison.Ordinal) ||
+            !string.Equals(sessionReader.GetString(4), create.ContentType, StringComparison.Ordinal) ||
+            sessionReader.GetInt64(5) != create.SizeBytes ||
+            !HasExactRequiredHeaders(
+                result.RequiredHeaders,
+                create,
+                ownerOrganizationId,
+                result.Id,
+                sessionReader.GetGuid(6)) ||
+            await sessionReader.ReadAsync(cancellationToken))
+        {
+            throw CorruptReplay();
+        }
+
+        return result;
+    }
+
+    private static ProofConflictException CorruptReplay() =>
+        new("IDEMPOTENCY_CORRUPT");
+
+    private static bool HasExactResponseShape(JsonElement response)
+    {
+        if (response.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var expected = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "id",
+            "orderId",
+            "objectKey",
+            "uploadUrl",
+            "requiredHeaders",
+            "expiresAt",
+            "status",
+        };
+        var properties = response.EnumerateObject().Select(property => property.Name).ToArray();
+        return properties.Length == expected.Count &&
+            properties.All(expected.Contains);
+    }
+
+    private static bool HasExactRequiredHeaders(
+        IReadOnlyDictionary<string, string> headers,
+        CreateProofUploadSessionCommand create,
+        Guid ownerOrganizationId,
+        Guid sessionId,
+        Guid requestedBy)
+    {
+        var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Type"] = create.ContentType,
+            [$"x-amz-meta-{S3CompatibleProofObjectStorage.SessionIdMetadata}"] =
+                sessionId.ToString("D"),
+            [$"x-amz-meta-{S3CompatibleProofObjectStorage.OrderIdMetadata}"] =
+                create.OrderId.ToString("D"),
+            [$"x-amz-meta-{S3CompatibleProofObjectStorage.OwnerOrganizationIdMetadata}"] =
+                ownerOrganizationId.ToString("D"),
+            [$"x-amz-meta-{S3CompatibleProofObjectStorage.RequestedByMetadata}"] =
+                requestedBy.ToString("D"),
+            [$"x-amz-meta-{S3CompatibleProofObjectStorage.ProofTypeMetadata}"] =
+                create.ProofType,
+            [$"x-amz-meta-{S3CompatibleProofObjectStorage.SizeBytesMetadata}"] =
+                create.SizeBytes.ToString(CultureInfo.InvariantCulture),
+        };
+        if (create.Sha256 is not null)
+        {
+            expected[$"x-amz-meta-{S3CompatibleProofObjectStorage.Sha256Metadata}"] =
+                Convert.ToHexString(create.Sha256).ToLowerInvariant();
+        }
+
+        return headers.Count == expected.Count &&
+            expected.All(expectedHeader =>
+                headers.Count(header =>
+                    string.Equals(
+                        header.Key,
+                        expectedHeader.Key,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        header.Value,
+                        expectedHeader.Value,
+                        StringComparison.Ordinal)) == 1);
     }
 
     private static async Task InsertReservationAsync(

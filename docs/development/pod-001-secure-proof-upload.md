@@ -99,6 +99,41 @@ La autorización se reevalúa contra usuarios y membresías `ACTIVE`:
 Una denegación explícita devuelve `403`; un recurso no visible por RLS conserva
 el `404` uniforme. El servicio interno de descarga aplica la misma regla.
 
+### POD-001-DEF-001: autorización antes del replay
+
+Una URL firmada, su object key, expiración y headers requeridos son estado
+protegido. Estar autenticado no basta: la membresía tenant activa permite
+seleccionar el contexto, la capability actual autoriza la operación sobre la
+orden y solo después la idempotencia decide si existe un replay.
+
+La creación de sesiones aplica esta precedencia dentro de una transacción
+tenant con `SET LOCAL ROLE` y contexto RLS:
+
+1. shape o `Idempotency-Key` inválida: `409 INVALID_REQUEST`;
+2. orden tenant-visible pero capability actual inválida: `403`;
+3. orden inexistente o cross-tenant: `404` uniforme;
+4. actor autorizado con la misma key y hash diferente:
+   `409 IDEMPOTENCY_CONFLICT`;
+5. actor autorizado con la misma key y hash: el mismo `201` almacenado.
+
+`ReadAuthorizedOrderAsync` se ejecuta antes del advisory lock, de la fila
+idempotente y de cualquier respuesta almacenada. El actor, MFA, roles y
+assignment no forman parte del hash: otro `DISPATCHER` activo del mismo tenant
+puede reproducir la sesión, pero un `PLATFORM_ADMIN` necesita MFA actual y un
+`DRIVER` necesita perfil `OWN/ACTIVE`, membresía `DRIVER/ACTIVE` y assignment
+tenant-consistente `ACCEPTED` o `ACTIVE` para esa orden. Una assignment
+`CANCELLED` o `COMPLETED` revoca el replay.
+
+El replay no firma otra URL, no extiende expiraciones, no cambia el lifecycle
+y no agrega sesiones, grants, auditorías o filas idempotentes. Puede devolver
+el resultado histórico aunque la sesión ya no esté en `CREATED`.
+
+Antes de devolverlo se valida de forma fail-closed el status HTTP almacenado,
+resource ID, order ID, key canónica, URL, shape y headers exactos, junto con la
+sesión tenant-visible, su owner, orden, content type y tamaño. Evidencia
+ausente o inconsistente produce un `409` uniforme sin revelar el campo
+corrupto.
+
 | Evidencia | Estado permitido de la orden | Content types |
 | --- | --- | --- |
 | `PICKUP_PHOTO` | `AT_PICKUP` | `image/jpeg`, `image/png` |
@@ -194,6 +229,9 @@ La categoría runtime levanta MinIO fijado por digest y PostgreSQL/PostGIS real.
 Comprueba bucket privado, metadata firmada, promoción idempotente, rechazo de
 sobrescritura TOCTOU, pipeline de Worker, finalización única, auditoría,
 append-only, descarga autorizada/no autorizada y limpieza recuperable.
+También cubre replays HTTP y PostgreSQL/MinIO con autorización actual,
+precedencia `403/404/409`, MFA, assignments vigentes/revocadas, cero efectos,
+vigencia del grant y corrupción sintética de evidencia persistida.
 
 ## Migración y rollback
 
