@@ -115,6 +115,171 @@
   text-align: center;
 }
 
+.pendingBadge {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  border: 2px dashed #7c3aed;
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  background: #f5f3ff;
+  color: #5b21b6;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.queueSummary,
+.actions,
+.conflict {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  border: 1px solid #a5b4fc;
+  border-radius: 0.8rem;
+  padding: 1rem;
+  background: #eef2ff;
+  color: var(--ink);
+}
+
+.queueSummary h2,
+.conflict h3,
+.queueSummary p,
+.conflict dl {
+  margin: 0;
+}
+
+.actions {
+  margin-top: 1rem;
+  background: #f8fafc;
+}
+
+.actions legend {
+  padding: 0 0.35rem;
+  font-weight: 800;
+}
+
+.actions input[type="file"] {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #829ab1;
+  border-radius: 0.55rem;
+  padding: 0.55rem;
+  background: #fff;
+}
+
+.queueSummary button,
+.actions button,
+.conflictActions button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 0.7rem;
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.queueSummary button:disabled,
+.actions button:disabled,
+.conflictActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.queueSummary button:focus-visible,
+.actions button:focus-visible,
+.actions input:focus-visible,
+.conflictActions button:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 3px;
+}
+
+.liveMessage {
+  min-height: 1.4rem;
+}
+
+.conflict {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.conflict dl {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.conflict dt {
+  color: #78350f;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.conflict dd {
+  margin: 0.15rem 0 0;
+}
+
+.conflictActions {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.confirmationDialog {
+  position: fixed;
+  z-index: 20;
+  inset: 50% auto auto 50%;
+  width: min(32rem, calc(100vw - 2rem));
+  margin: 0;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--accent);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  background: #fff;
+  box-shadow: 0 1.25rem 4rem rgb(15 23 42 / 28%);
+  color: var(--ink);
+}
+
+.confirmationDialog::backdrop {
+  background: rgb(15 23 42 / 52%);
+}
+
+.confirmationDialog h4,
+.confirmationDialog p {
+  margin: 0 0 1rem;
+}
+
+.dialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.dialogActions button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 0.7rem;
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.dialogActions button:last-child {
+  border: 2px solid var(--accent);
+  background: #fff;
+  color: var(--accent-dark);
+}
+
+.dialogActions button:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 3px;
+}
+
 .stopFacts,
 .detailFacts {
   display: grid;

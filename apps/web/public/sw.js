@@ -1,4 +1,4 @@
-const CACHE_NAME = "paquetenvia-driver-shell-v2";
+const CACHE_NAME = "paquetenvia-driver-shell-v3";
 const DRIVER_STOPS_SHELL_KEY = "/driver/stops";
 const OWNED_CACHE_PREFIXES = [
   "paquetenvia-driver-shell-",

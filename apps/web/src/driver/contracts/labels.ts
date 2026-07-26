@@ -1,3 +1,4 @@
+import type { DriverOperationalStatus } from "../offline/operation-contract";
 import type { DriverStop } from "./driver-stop";
 
 const typeLabels: Readonly<Record<DriverStop["stop_type"], string>> = {
@@ -6,7 +7,9 @@ const typeLabels: Readonly<Record<DriverStop["stop_type"], string>> = {
   RETURN: "Devolución",
 };
 
-const statusLabels: Readonly<Record<DriverStop["status"], string>> = {
+type DriverDisplayStatus = DriverStop["status"] | DriverOperationalStatus;
+
+const statusLabels: Readonly<Record<DriverDisplayStatus, string>> = {
   ASSIGNED: "Asignada",
   AT_PICKUP: "En punto de recolección",
   PICKED_UP: "Recolectada",
@@ -15,12 +18,13 @@ const statusLabels: Readonly<Record<DriverStop["status"], string>> = {
   FAILED_ATTEMPT: "Intento fallido",
   RESCHEDULED: "Reprogramada",
   RETURNING: "En devolución",
+  DELIVERED: "Entregada",
 };
 
 export function driverStopTypeLabel(value: DriverStop["stop_type"]): string {
   return typeLabels[value];
 }
 
-export function driverStopStatusLabel(value: DriverStop["status"]): string {
+export function driverStopStatusLabel(value: DriverDisplayStatus): string {
   return statusLabels[value];
 }
