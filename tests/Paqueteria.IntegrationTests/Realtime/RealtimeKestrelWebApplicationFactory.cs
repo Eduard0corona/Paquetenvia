@@ -1,5 +1,7 @@
 using Drivers.Application.Locations;
 using Drivers.Infrastructure.Locations;
+using Dispatch.Application.Stops;
+using Dispatch.Infrastructure.Stops;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -22,6 +24,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     private readonly IRealtimeOutboxFailureInjector? _failureInjector;
     private readonly ILoggerProvider? _logProvider;
     private readonly RealtimeAuthorizationRecorder _recorder;
+    private readonly string _allowedOrigin;
+    private readonly bool _enableDispatch;
 
     internal RealtimeKestrelWebApplicationFactory(
         string connectionString,
@@ -29,13 +33,17 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         int port = 0,
         string? workerConnectionString = null,
         IRealtimeOutboxFailureInjector? failureInjector = null,
-        ILoggerProvider? logProvider = null)
+        ILoggerProvider? logProvider = null,
+        string allowedOrigin = "http://127.0.0.1",
+        bool enableDispatch = false)
     {
         _connectionString = connectionString;
         _workerConnectionString = workerConnectionString;
         _failureInjector = failureInjector;
         _logProvider = logProvider;
         _recorder = recorder;
+        _allowedOrigin = allowedOrigin;
+        _enableDispatch = enableDispatch;
         UseKestrel(port);
     }
 
@@ -74,7 +82,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 ["Tenancy:CommandTimeoutSeconds"] = "5",
                 ["Realtime:Provider"] = "SignalR",
                 ["Realtime:Backplane"] = "InProcess",
-                ["Realtime:AllowedOrigins:0"] = "http://127.0.0.1",
+                ["Realtime:AllowedOrigins:0"] = _allowedOrigin,
                 ["Realtime:ConnectionPermitLimit"] = "100",
                 ["Realtime:ConnectionWindowSeconds"] = "300",
                 ["Realtime:AuthorizationCommandTimeoutSeconds"] = "5",
@@ -108,6 +116,12 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
             services.RemoveAll<IDriverLocationIngestionService>();
             services.AddScoped<IDriverLocationIngestionService>(provider =>
                 provider.GetRequiredService<PostgreSqlDriverLocationIngestionService>());
+            if (_enableDispatch)
+            {
+                services.RemoveAll<IDriverStopsQuery>();
+                services.AddScoped<IDriverStopsQuery>(provider =>
+                    provider.GetRequiredService<PostgreSqlDriverStopsQuery>());
+            }
             services.AddScoped<IRealtimeConnectionAuthorizer>(provider =>
                 new RecordingRealtimeConnectionAuthorizer(
                     provider.GetRequiredService<PostgreSqlRealtimeConnectionAuthorizer>(),
