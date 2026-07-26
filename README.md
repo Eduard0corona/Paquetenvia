@@ -103,6 +103,9 @@ proyección privada de paradas sin teléfono.
 La [guía POD-001](docs/development/pod-001-secure-proof-upload.md) documenta
 sesiones de upload firmado, cuarentena privada, validación del Worker,
 finalización append-only y descarga firmada interna.
+La [guía DRV-001](docs/development/drv-001-driver-stops-pwa.md) documenta la
+lista y detalle móvil read-only, su caché IndexedDB tenant-safe, resincronización
+REST señalada por DriverHub, pruebas Playwright y rollback del shell PWA.
 
 Ejecuta su matriz con:
 
