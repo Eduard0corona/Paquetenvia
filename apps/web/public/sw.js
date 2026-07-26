@@ -1,4 +1,5 @@
-const CACHE_NAME = "paquetenvia-driver-shell-v1";
+const CACHE_NAME = "paquetenvia-driver-shell-v2";
+const DRIVER_STOPS_SHELL_KEY = "/driver/stops";
 const OWNED_CACHE_PREFIXES = [
   "paquetenvia-driver-shell-",
   "paquetenvia-foundation-",
@@ -43,7 +44,7 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (request.mode === "navigate" && isDriverStopsNavigation(url)) {
-    event.respondWith(networkFirst(request));
+    event.respondWith(driverStopsNetworkFirst(request));
     return;
   }
 
@@ -80,7 +81,9 @@ function hasSignedUrlParameters(url) {
 function isDriverStopsNavigation(url) {
   return (
     url.origin === self.location.origin &&
-    /^\/driver\/stops(?:\/[0-9a-f-]{36})?\/?$/.test(url.pathname)
+    /^\/driver\/stops(?:\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\/?$/.test(
+      url.pathname,
+    )
   );
 }
 
@@ -93,22 +96,34 @@ function isStaticAsset(url) {
   );
 }
 
-async function networkFirst(request) {
+async function driverStopsNetworkFirst(request) {
   const cache = await caches.open(CACHE_NAME);
   try {
     const response = await fetch(request);
     if (isSafeCacheableResponse(response)) {
       await cache.put(request, response.clone());
+      if (isDriverStopsListNavigation(new URL(request.url))) {
+        await cache.put(DRIVER_STOPS_SHELL_KEY, response.clone());
+      }
     }
     return response;
   } catch {
     const cached = await cache.match(request);
     if (cached) return cached;
+    const shell = await cache.match(DRIVER_STOPS_SHELL_KEY);
+    if (shell) return shell;
     return new Response("Offline", {
       status: 503,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }
+}
+
+function isDriverStopsListNavigation(url) {
+  return (
+    url.origin === self.location.origin &&
+    /^\/driver\/stops\/?$/.test(url.pathname)
+  );
 }
 
 async function cacheFirst(request) {

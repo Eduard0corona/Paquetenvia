@@ -1,6 +1,7 @@
 "use client";
 
-import Link from "next/link";
+/* eslint-disable @next/next/no-html-link-for-pages -- document navigation lets the Service Worker resolve offline shells */
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveDriverApiBaseUrl } from "../api/api-base-url";
 import { createDriverStopsApi } from "../api/driver-stops-api";
@@ -10,6 +11,11 @@ import {
   driverStopTypeLabel,
 } from "../contracts/labels";
 import { defaultDriverStopsRealtimeFactory } from "../realtime/driver-stops-realtime";
+import {
+  findDriverStopForRoute,
+  parseDriverStopsPathname,
+  type DriverStopsRoute,
+} from "../routing/driver-stops-route";
 import {
   driverSessionChangedEvent,
   readBrowserDriverSession,
@@ -31,11 +37,10 @@ const unavailableState: DriverStopsViewState = Object.freeze({
   refreshing: false,
 });
 
-export function DriverStopsExperience({
-  detailOrderId,
-}: Readonly<{ detailOrderId?: string }>) {
+export function DriverStopsExperience() {
   const [session, setSession] = useState<DriverSession | null>(null);
   const [state, setState] = useState<DriverStopsViewState>(unavailableState);
+  const [route, setRoute] = useState<DriverStopsRoute | null>(null);
   const controllerRef = useRef<DriverStopsController | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const identity = sessionIdentity(session);
@@ -46,6 +51,14 @@ export function DriverStopsExperience({
     window.addEventListener(driverSessionChangedEvent, refreshSession);
     return () =>
       window.removeEventListener(driverSessionChangedEvent, refreshSession);
+  }, []);
+
+  useEffect(() => {
+    const refreshRoute = () =>
+      setRoute(parseDriverStopsPathname(window.location.pathname));
+    refreshRoute();
+    window.addEventListener("popstate", refreshRoute);
+    return () => window.removeEventListener("popstate", refreshRoute);
   }, []);
 
   useEffect(() => {
@@ -82,22 +95,19 @@ export function DriverStopsExperience({
   }, [identity, session]);
 
   useEffect(() => {
-    if (detailOrderId && state.phase !== "loading") {
+    if (route && route.kind !== "list" && state.phase !== "loading") {
       headingRef.current?.focus({ preventScroll: false });
     }
-  }, [detailOrderId, state.phase]);
+  }, [route, state.phase]);
 
   const stop = useMemo(
-    () =>
-      detailOrderId
-        ? state.stops.find((candidate) => candidate.order_id === detailOrderId)
-        : undefined,
-    [detailOrderId, state.stops],
+    () => findDriverStopForRoute(route, state.stops),
+    [route, state.stops],
   );
 
   const retry = () => void controllerRef.current?.retry();
 
-  if (!session || state.phase === "session-unavailable") {
+  if (!route || !session || state.phase === "session-unavailable") {
     return (
       <DriverShell>
         <StatusPanel title="Sesión no disponible">
@@ -171,16 +181,24 @@ export function DriverStopsExperience({
         state={state}
         offline={dataIsOffline || state.realtime === "offline"}
       />
-      {detailOrderId ? (
+      {route.kind === "detail" ? (
         <StopDetail
-          orderId={detailOrderId}
+          orderId={route.orderId}
           stop={stop}
           headingRef={headingRef}
           synchronizedAt={state.synchronizedAt}
           offline={dataIsOffline}
         />
-      ) : (
+      ) : route.kind === "list" ? (
         <StopList state={state} retry={retry} />
+      ) : (
+        <StopDetail
+          orderId={null}
+          stop={undefined}
+          headingRef={headingRef}
+          synchronizedAt={state.synchronizedAt}
+          offline={dataIsOffline}
+        />
       )}
     </DriverShell>
   );
@@ -278,12 +296,12 @@ function StopList({
                 <dd>{state.phase === "offline" ? "Información guardada" : "Actualizada"}</dd>
               </div>
             </dl>
-            <Link
+            <a
               className={styles.primaryLink}
               href={`/driver/stops/${stop.order_id}`}
             >
               Ver detalle
-            </Link>
+            </a>
           </li>
         ))}
       </ul>
@@ -298,7 +316,7 @@ function StopDetail({
   synchronizedAt,
   offline,
 }: Readonly<{
-  orderId: string;
+  orderId: string | null;
   stop: DriverStopsViewState["stops"][number] | undefined;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   synchronizedAt: string | null;
@@ -313,9 +331,9 @@ function StopDetail({
         <p>
           La parada no existe o ya no está visible en tu organización actual.
         </p>
-        <Link className={styles.secondaryLink} href="/driver/stops">
+        <a className={styles.secondaryLink} href="/driver/stops">
           Volver a mis paradas
-        </Link>
+        </a>
       </section>
     );
   }
@@ -354,9 +372,9 @@ function StopDetail({
             <dd>{offline ? "Sin conexión" : "En línea"}</dd>
           </div>
         </dl>
-        <Link className={styles.secondaryLink} href="/driver/stops">
+        <a className={styles.secondaryLink} href="/driver/stops">
           Volver a mis paradas
-        </Link>
+        </a>
       </article>
     </>
   );

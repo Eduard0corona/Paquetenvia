@@ -6,7 +6,7 @@ const source = readFileSync(resolve(process.cwd(), "public/sw.js"), "utf8");
 
 describe("driver Service Worker policy", () => {
   it("uses a versioned driver-owned cache", () => {
-    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v1"');
+    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v2"');
     expect(source).toContain('"paquetenvia-driver-shell-"');
   });
 
@@ -24,9 +24,28 @@ describe("driver Service Worker policy", () => {
   });
 
   it("uses network-first driver shells and cache-first static assets", () => {
-    expect(source).toContain("networkFirst(request)");
+    expect(source).toContain("driverStopsNetworkFirst(request)");
     expect(source).toContain("cacheFirst(request)");
     expect(source).toContain('url.pathname.startsWith("/_next/static/")');
+  });
+
+  it("stores the list response as the reusable canonical shell", () => {
+    expect(source).toContain(
+      'const DRIVER_STOPS_SHELL_KEY = "/driver/stops"',
+    );
+    expect(source).toContain("isDriverStopsListNavigation(new URL(request.url))");
+    expect(source).toContain(
+      "await cache.put(DRIVER_STOPS_SHELL_KEY, response.clone())",
+    );
+  });
+
+  it("falls back from an exact navigation to the canonical shell", () => {
+    const exactLookup = source.indexOf("await cache.match(request)");
+    const shellLookup = source.indexOf(
+      "await cache.match(DRIVER_STOPS_SHELL_KEY)",
+    );
+    expect(exactLookup).toBeGreaterThan(-1);
+    expect(shellLookup).toBeGreaterThan(exactLookup);
   });
 
   it("never precaches authenticated stop data", () => {

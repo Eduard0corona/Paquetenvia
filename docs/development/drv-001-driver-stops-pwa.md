@@ -33,6 +33,8 @@ La frontera `apps/web/src/driver/` separa:
 - `realtime/`: adaptación del cliente DriverHub existente;
 - `components/`: lista, detalle y estados accesibles;
 - `telemetry/`: puerto de baja cardinalidad deshabilitado por defecto.
+- `routing/`: parser estricto del pathname y selección del stop de la partición
+  activa.
 
 Los componentes no acceden directamente a `fetch`, IndexedDB ni SignalR. El
 controlador coordina esos puertos y conserva REST como autoridad.
@@ -130,12 +132,41 @@ retención temporal del snapshot no se presenta como una decisión legal.
 
 ## Service Worker
 
-El cache propio versionado es `paquetenvia-driver-shell-v1`.
+### DRV-001-DEF-001
 
-- Navegaciones bajo `/driver/stops`: network-first con fallback al shell
-  visitado.
+La prueba original sólo abortaba la API: el servidor Next continuaba accesible
+y podía resolver una ruta dinámica nunca visitada. Eso demostraba fallback de
+datos, pero no navegación con el navegador realmente offline.
+
+La corrección usa un shell cliente genérico para `/driver/stops` y
+`/driver/stops/[id]`. Ambas páginas montan el mismo componente sin pasar el ID
+desde el servidor. Ya hidratado, el cliente interpreta exclusivamente
+`window.location.pathname` mediante un parser puro que acepta la lista o un
+UUID canónico, con slash final opcional. Segmentos adicionales, UUID no
+canónico, encoded slash, traversal, query/hash como parte del ID y otras rutas
+producen el mismo not-found sin consultar otra partición.
+
+“Ver detalle” y “Volver a mis paradas” son anchors de documento completo. No
+dependen de `next/link`, prefetch, estado en memoria del router ni RSC remoto.
+
+El cache propio versionado es `paquetenvia-driver-shell-v2` y su key canónica
+es `/driver/stops`.
+
+- Navegaciones válidas bajo `/driver/stops`: network-first; ante fallo se busca
+  primero la respuesta exacta y después el shell canónico de la lista.
+- La respuesta online de la lista se guarda también bajo la key canónica. Una
+  ruta de detalle exacta puede existir, pero no es requisito y no se precachean
+  UUIDs.
 - Manifest y assets estáticos versionados: cache-first.
 - Datos: siempre IndexedDB, nunca Cache API.
+
+El primer documento que registra el Service Worker no queda necesariamente
+bajo su control. La validación espera `navigator.serviceWorker.ready`, recarga
+online, confirma `navigator.serviceWorker.controller` y comprueba que los
+chunks estáticos y el shell canónico están en Cache API antes de desconectar.
+El shell es presentación genérica: no contiene public ID, UUID ni
+`address_summary`. IndexedDB particionado continúa siendo la única fuente de
+datos offline.
 
 Son network-only las rutas `/api/v1/**`, `/hubs/**`, autenticación, requests con
 `Authorization`, URLs firmadas, respuestas con `Set-Cookie`, proof objects,
@@ -177,13 +208,25 @@ seguras y buckets `0`, `1`, `2-5`, `6-20`, `21+`.
 
 Vitest cubre parser, DTO/OpenAPI, cliente REST, URL pública, sesión, partición,
 cache, controlador, realtime, etiquetas, telemetría y reglas estructurales del
-Service Worker.
+Service Worker. También cubre el parser de path, selección exclusivamente
+dentro de los stops actuales, anchors de documento y que ambas páginas usan el
+mismo shell sin prop server-side.
 
 La categoría .NET `DriverStopsPwa` ejecuta Chromium real contra un servidor
-Next real. Cubre la matriz móvil, teclado, detalle, vacío, offline, cambio de
-organización, 401/403 y contrato inválido. Un caso adicional usa PostgreSQL,
-API Kestrel, outbox y DriverHub reales para probar señal, debounce y segunda
-lectura REST.
+Next real. Cubre la matriz móvil, teclado, detalle, vacío, cambio de
+organización, 401/403 y contrato inválido. Para DRV-001-DEF-001 espera control
+del Service Worker y persistencia IndexedDB, demuestra que el detalle nunca se
+visitó y no tiene entrada exacta, pone el browser context offline y prueba:
+
+- inaccesibilidad real de Next/origin y API;
+- apertura del detalle desde el shell canónico e IndexedDB;
+- recarga del detalle todavía offline;
+- historial del navegador y enlace de regreso todavía offline;
+- not-found para un UUID ausente;
+- snapshots A y B aislados y una nueva sesión/organización sin datos.
+
+Un caso adicional usa PostgreSQL, API Kestrel, outbox y DriverHub reales para
+probar señal, debounce y segunda lectura REST.
 
 Ejecución local:
 

@@ -382,7 +382,7 @@ jobs:
           --with-deps
           chromium
 
-      - name: Execute mobile, offline and real DriverHub flows
+      - name: Execute mobile, browser-offline and real DriverHub flows
         env:
           MSBUILDDISABLENODEREUSE: "1"
         run: >-
