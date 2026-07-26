@@ -59,6 +59,10 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
               (SELECT version FROM orders.orders WHERE id=@order),
               (SELECT count(*) FROM orders.order_events WHERE order_id=@order AND event_type='ORDER_STATUS_CHANGED'),
               (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order AND topic='orders.status-changed'),
+              (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order AND topic='orders.timeline-event-added'),
+              (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order AND topic='dispatch.assignment-changed'),
+              (SELECT count(DISTINCT id) FROM platform.outbox_events WHERE aggregate_id=@order
+                AND topic IN ('orders.status-changed','orders.timeline-event-added','dispatch.assignment-changed')),
               (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ASSIGNMENT_CREATED'),
               (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ORDER_STATUS_CHANGED'),
               (SELECT count(*) FROM platform.idempotency_keys
@@ -77,7 +81,101 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         Assert.Equal(1L, reader.GetInt64(6));
         Assert.Equal(1L, reader.GetInt64(7));
         Assert.Equal(1L, reader.GetInt64(8));
-        Assert.Equal(1L, reader.GetInt64(9));
+        Assert.Equal(3L, reader.GetInt64(9));
+        Assert.Equal(1L, reader.GetInt64(10));
+        Assert.Equal(1L, reader.GetInt64(11));
+        Assert.Equal(1L, reader.GetInt64(12));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Coordinator_canonicalizes_one_shared_timestamp_across_assignment_and_order()
+    {
+        var raw = DateTimeOffset.Parse(
+            "2026-07-25T18:00:00.1234567Z",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var canonical = UtcMicrosecondPrecision.Normalize(raw);
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var service = CreateAssignmentService(fixture.AppDataSource, now: raw);
+        var command = Command(
+            scenario,
+            idempotencyKey: "dsp002-microsecond-precision-0001");
+
+        var created = await service.CreateOwnDriverAssignmentAsync(command, default);
+        var replay = await service.CreateOwnDriverAssignmentAsync(command, default);
+
+        Assert.Equal(created, replay);
+        await using var query = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT a.created_at,a.accepted_at,o.updated_at,e.occurred_at,
+              (SELECT created_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.status-changed'),
+              (SELECT available_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.status-changed'),
+              (SELECT payload->>'occurred_at' FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.status-changed'),
+              (SELECT created_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.timeline-event-added'),
+              (SELECT available_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.timeline-event-added'),
+              (SELECT payload->>'occurred_at' FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='orders.timeline-event-added'),
+              (SELECT created_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='dispatch.assignment-changed'),
+              (SELECT available_at FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='dispatch.assignment-changed'),
+              (SELECT payload->>'occurred_at' FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic='dispatch.assignment-changed'),
+              (SELECT count(*) FROM platform.audit_logs
+                WHERE org_id=@org
+                  AND action IN ('ASSIGNMENT_CREATED','ORDER_STATUS_CHANGED')
+                  AND occurred_at<>@canonical),
+              (SELECT created_at FROM platform.idempotency_keys
+                WHERE owner_org_id=@org
+                  AND scope='DSP-002:ASSIGN_OWN_DRIVER'
+                  AND idempotency_key=@key),
+              (SELECT count(DISTINCT id) FROM platform.outbox_events
+                WHERE aggregate_id=o.id AND aggregate_version=2
+                  AND topic IN (
+                    'orders.status-changed',
+                    'orders.timeline-event-added',
+                    'dispatch.assignment-changed'))
+            FROM dispatch.assignments a
+            JOIN orders.orders o ON o.id=a.order_id
+            JOIN orders.order_events e
+              ON e.order_id=o.id AND e.aggregate_version=2
+            WHERE a.id=@assignment
+            """);
+        query.Parameters.AddWithValue("assignment", created.Id);
+        query.Parameters.AddWithValue("org", scenario.OrganizationId);
+        query.Parameters.AddWithValue("canonical", canonical);
+        query.Parameters.AddWithValue("key", command.IdempotencyKey);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        foreach (var ordinal in new[] { 0, 1, 2, 3, 4, 5, 7, 8, 10, 11, 14 })
+        {
+            Assert.Equal(canonical, reader.GetFieldValue<DateTimeOffset>(ordinal));
+        }
+
+        foreach (var ordinal in new[] { 6, 9, 12 })
+        {
+            var payloadTimestamp = DateTimeOffset.Parse(
+                reader.GetString(ordinal),
+                System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(canonical, payloadTimestamp);
+            Assert.Equal(0, payloadTimestamp.UtcTicks % 10);
+        }
+
+        Assert.Equal(0L, reader.GetInt64(13));
+        Assert.Equal(3L, reader.GetInt64(15));
     }
 
     [PostgreSqlContractFact]
@@ -656,7 +754,8 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         IAssignmentVisibilityDataReader? visibilityDataReader = null,
         IDispatchAuthorizationReader? authorizationReader = null,
         IAssignmentIdempotencyAccess? idempotencyAccess = null,
-        IAssignmentReplayEvidenceReader? replayEvidenceReader = null)
+        IAssignmentReplayEvidenceReader? replayEvidenceReader = null,
+        DateTimeOffset? now = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -686,7 +785,7 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
             injector ?? new NoOpAssignmentFailureInjector(),
-            new FixedClock(OccurredAt),
+            new FixedClock(now ?? OccurredAt),
             NullLogger<PostgreSqlAssignmentToOrderCoordinator>.Instance);
     }
 

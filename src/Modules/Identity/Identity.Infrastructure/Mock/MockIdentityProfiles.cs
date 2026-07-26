@@ -12,6 +12,7 @@ public static class MockIdentityProfiles
     public const string ActiveMultiOrganization = "active-multi-org";
     public const string ActiveDispatcher = "active-dispatcher";
     public const string ActiveDriver = "active-driver";
+    public const string SecondaryDriver = "secondary-driver";
     public const string SuspendedUser = "suspended-user";
     public const string DisabledUser = "disabled-user";
     public const string SuspendedMembership = "suspended-membership";
@@ -32,6 +33,7 @@ public static class MockIdentityProfiles
             [ActiveMultiOrganization] = External("mock-subject-multi-org", true),
             [ActiveDispatcher] = External("mock-subject-active-dispatcher", false),
             [ActiveDriver] = External("mock-subject-active-driver", false),
+            [SecondaryDriver] = External("mock-subject-secondary-driver", false),
             [SuspendedUser] = External("mock-subject-suspended", true),
             [DisabledUser] = External("mock-subject-disabled", true),
             [SuspendedMembership] = External("mock-subject-suspended-membership", true),
@@ -61,6 +63,9 @@ public static class MockIdentityProfiles
                 Membership(ViewerOrganizationId, OrganizationRole.Dispatcher, true)),
             ["mock-subject-active-driver"] = Context(
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11",
+                Membership(ViewerOrganizationId, OrganizationRole.Driver, true)),
+            ["mock-subject-secondary-driver"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa12",
                 Membership(ViewerOrganizationId, OrganizationRole.Driver, true)),
             ["mock-subject-suspended-membership"] = Context(
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa7"),

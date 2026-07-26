@@ -5,4 +5,5 @@ export * from "./driver-connection";
 export * from "./envelope";
 export * from "./event-types";
 export * from "./operations-connection";
+export * from "./resynchronization";
 export * from "./tracking-connection";

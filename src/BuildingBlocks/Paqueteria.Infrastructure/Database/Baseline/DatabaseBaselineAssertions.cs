@@ -418,6 +418,7 @@ public sealed class DatabaseBaselineAssertions
               ('orders','orders','id'),
               ('orders','orders','public_id'),
               ('orders','orders','status'),
+              ('orders','orders','version'),
               ('orders','order_events','order_id'),
               ('orders','order_events','public_event_code'),
               ('orders','order_events','occurred_at')),

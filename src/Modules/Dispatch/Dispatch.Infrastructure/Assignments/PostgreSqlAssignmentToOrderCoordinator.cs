@@ -41,6 +41,8 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
     public const string IdempotencyScope = "DSP-002:ASSIGN_OWN_DRIVER";
     public const string CoordinationFlow = "assignment_to_order_status_event";
     private const string OutboxTopic = "orders.status-changed";
+    private const string TimelineOutboxTopic = "orders.timeline-event-added";
+    private const string AssignmentOutboxTopic = "dispatch.assignment-changed";
     private const string InternalReason = "MANUAL_OWN_DRIVER_ASSIGNMENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -63,7 +65,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             throw Conflict(AssignmentConflictCode.InvalidRequest);
         }
 
-        var occurredAt = clock.UtcNow;
+        var occurredAt = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
         var requestHash = AssignmentCanonicalizer.ComputeSha256(command);
         var stopwatch = Stopwatch.StartNew();
 
@@ -200,7 +202,9 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
 
                     var assignmentId = Guid.NewGuid();
                     var eventId = Guid.NewGuid();
-                    var outboxId = Guid.NewGuid();
+                    var statusOutboxId = Guid.NewGuid();
+                    var timelineOutboxId = Guid.NewGuid();
+                    var assignmentOutboxId = Guid.NewGuid();
                     Guid? operatorOrganizationId;
                     try
                     {
@@ -280,13 +284,39 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                     await InsertOutboxAsync(
                         connection,
                         transaction,
-                        outboxId,
+                        statusOutboxId,
+                        eventId,
                         order,
+                        assignmentId,
+                        command.DriverId,
                         source,
                         newVersion,
                         occurredAt,
                         token);
                     await failureInjector.OnStageAsync(AssignmentTransactionStage.OutboxInserted, token);
+                    await InsertTimelineOutboxAsync(
+                        connection,
+                        transaction,
+                        timelineOutboxId,
+                        eventId,
+                        order,
+                        newVersion,
+                        occurredAt,
+                        token);
+                    await failureInjector.OnStageAsync(
+                        AssignmentTransactionStage.TimelineOutboxInserted,
+                        token);
+                    await InsertAssignmentOutboxAsync(
+                        connection,
+                        transaction,
+                        assignmentOutboxId,
+                        assignment,
+                        newVersion,
+                        occurredAt,
+                        token);
+                    await failureInjector.OnStageAsync(
+                        AssignmentTransactionStage.AssignmentOutboxInserted,
+                        token);
                     await WriteAssignmentAuditAsync(
                         connection,
                         transaction,
@@ -634,7 +664,10 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid outboxId,
+        Guid orderEventId,
         AssignmentVisibilityOrder order,
+        Guid assignmentId,
+        Guid driverId,
         OrderStatus source,
         int newVersion,
         DateTimeOffset occurredAt,
@@ -646,11 +679,16 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         }, JsonOptions);
         var payload = JsonSerializer.Serialize(new
         {
+            schema_version = "order-status-changed-v1",
+            order_event_id = orderEventId,
             order_id = order.Id,
+            public_order_id = order.PublicId,
             previous_status = source.ToContractValue(),
             new_status = "ASSIGNED",
             occurred_at = occurredAt,
             public_event_code = (string?)null,
+            authorized_driver_id = driverId,
+            assignment_id = assignmentId,
         }, JsonOptions);
         await using var command = CreateCommand(
             connection,
@@ -673,6 +711,97 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Outbox insert failed.");
+    }
+
+    private async Task InsertTimelineOutboxAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid outboxId,
+        Guid orderEventId,
+        AssignmentVisibilityOrder order,
+        int newVersion,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        var tenantContext = JsonSerializer.Serialize(new
+        {
+            organization_ids = new[] { order.OwnerOrganizationId },
+        }, JsonOptions);
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema_version = "order-timeline-event-added-v1",
+            order_id = order.Id,
+            timeline_event_id = orderEventId,
+            category = "ORDER_STATUS",
+            summary = "Order status changed to ASSIGNED.",
+            occurred_at = occurredAt,
+        }, JsonOptions);
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
+              priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
+              last_error,created_at,processed_at)
+            VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+            """);
+        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, outboxId));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
+        command.Parameters.Add(P("tenant", NpgsqlDbType.Jsonb, tenantContext));
+        command.Parameters.Add(P("topic", NpgsqlDbType.Text, TimelineOutboxTopic));
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, order.Id));
+        command.Parameters.Add(P("version", NpgsqlDbType.Integer, newVersion));
+        command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
+        command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Timeline outbox insert failed.");
+    }
+
+    private async Task InsertAssignmentOutboxAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid outboxId,
+        Assignment assignment,
+        int newVersion,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        var tenantContext = JsonSerializer.Serialize(new
+        {
+            organization_ids = new[] { assignment.OwnerOrganizationId },
+        }, JsonOptions);
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema_version = "assignment-changed-v1",
+            order_id = assignment.OrderId,
+            assignment_id = assignment.Id,
+            driver_id = assignment.DriverId,
+            assignment_status = assignment.Status.ToContractValue(),
+            occurred_at = occurredAt,
+        }, JsonOptions);
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
+              priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
+              last_error,created_at,processed_at)
+            VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+            """);
+        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, outboxId));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, assignment.OwnerOrganizationId));
+        command.Parameters.Add(P("tenant", NpgsqlDbType.Jsonb, tenantContext));
+        command.Parameters.Add(P("topic", NpgsqlDbType.Text, AssignmentOutboxTopic));
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, assignment.OrderId));
+        command.Parameters.Add(P("version", NpgsqlDbType.Integer, newVersion));
+        command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
+        command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Assignment outbox insert failed.");
     }
 
     private async Task WriteAssignmentAuditAsync(

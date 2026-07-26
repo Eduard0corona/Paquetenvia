@@ -43,6 +43,7 @@ public static class PublicTrackingTestEndpoints
         {
             public_id = projection.PublicId,
             public_status = PublicOrderStatusPolicy.ToContractValue(projection.PublicStatus),
+            aggregate_version = projection.AggregateVersion,
             estimated_window = projection.EstimatedWindow,
             timeline = projection.Timeline.Select(item => new
             {

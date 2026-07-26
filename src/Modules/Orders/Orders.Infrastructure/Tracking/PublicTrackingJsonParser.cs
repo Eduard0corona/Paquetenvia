@@ -12,7 +12,13 @@ public static class PublicTrackingJsonParser
         {
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
-            RequireObjectWithProperties(root, "public_id", "public_status", "estimated_window", "timeline");
+            RequireObjectWithProperties(
+                root,
+                "public_id",
+                "public_status",
+                "aggregate_version",
+                "estimated_window",
+                "timeline");
 
             var publicIdElement = root.GetProperty("public_id");
             if (publicIdElement.ValueKind != JsonValueKind.String ||
@@ -22,6 +28,14 @@ public static class PublicTrackingJsonParser
             }
 
             var publicStatus = ParsePublicStatus(root.GetProperty("public_status"));
+            var aggregateVersionElement = root.GetProperty("aggregate_version");
+            if (aggregateVersionElement.ValueKind != JsonValueKind.Number ||
+                !aggregateVersionElement.TryGetInt64(out var aggregateVersion) ||
+                aggregateVersion < 1)
+            {
+                throw InvalidContract("aggregate_version must be a positive integer.");
+            }
+
             var estimatedWindow = ParseEstimatedWindow(root.GetProperty("estimated_window"));
             var timelineElement = root.GetProperty("timeline");
             if (timelineElement.ValueKind != JsonValueKind.Array)
@@ -48,7 +62,12 @@ public static class PublicTrackingJsonParser
                 timeline.Add(new PublicTrackingTimelineItem(code, occurredAt));
             }
 
-            return new PublicTrackingProjection(publicIdElement.GetString()!, publicStatus, estimatedWindow, timeline);
+            return new PublicTrackingProjection(
+                publicIdElement.GetString()!,
+                publicStatus,
+                aggregateVersion,
+                estimatedWindow,
+                timeline);
         }
         catch (PublicTrackingInfrastructureException)
         {

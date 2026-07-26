@@ -694,6 +694,7 @@ BEGIN
   SELECT jsonb_build_object(
     'public_id', o.public_id,
     'public_status', security.map_public_order_status(o.status),
+    'aggregate_version', o.version,
     'estimated_window', NULL,
     'timeline', COALESCE((
       SELECT jsonb_agg(

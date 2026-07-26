@@ -3,11 +3,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using Orders.Application.Tracking;
 using Realtime.Application.Authorization;
 using Realtime.Application.Configuration;
+using Realtime.Application.Dispatching;
 using Realtime.Application.Observability;
 using Realtime.Application.Publishing;
 using Realtime.Infrastructure.Authorization;
+using Realtime.Infrastructure.Dispatching;
 using Realtime.Infrastructure.Observability;
 using Realtime.Infrastructure.Publishing;
 
@@ -77,6 +80,53 @@ public static class DependencyInjection
                 : provider.GetRequiredService<DisabledRealtimePublisher>());
         services.AddHealthChecks()
             .AddCheck<RealtimeHealthCheck>("realtime_configuration", tags: ["ready"]);
+        return services;
+    }
+
+    public static IServiceCollection AddRealtimeOutboxDispatchers(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddOptions<OutboxDispatcherOptions>()
+            .Bind(configuration.GetSection(OutboxDispatcherOptions.SectionName))
+            .Validate(
+                OutboxDispatcherOptionsValidator.IsValid,
+                "Realtime:OutboxDispatcher contains an invalid bounded option.")
+            .Validate(
+                options => options.Provider != OutboxDispatcherProviderKind.PostgreSql ||
+                    string.Equals(
+                        configuration["Realtime:Provider"],
+                        "SignalR",
+                        StringComparison.OrdinalIgnoreCase),
+                "Realtime:OutboxDispatcher:Provider=PostgreSql requires Realtime:Provider=SignalR.")
+            .Validate(
+                options => options.Provider != OutboxDispatcherProviderKind.PostgreSql ||
+                    string.Equals(
+                        configuration["Realtime:Backplane"],
+                        "InProcess",
+                        StringComparison.OrdinalIgnoreCase),
+                "Realtime:OutboxDispatcher:Provider=PostgreSql requires Realtime:Backplane=InProcess while GATE-013 is open.")
+            .Validate(
+                options => options.Provider != OutboxDispatcherProviderKind.PostgreSql ||
+                    !string.IsNullOrWhiteSpace(
+                        configuration.GetConnectionString("PaqueteriaWorker")),
+                "Realtime:OutboxDispatcher:Provider=PostgreSql requires ConnectionStrings:PaqueteriaWorker.")
+            .ValidateOnStart();
+
+        services.AddSingleton(_ => new RealtimeWorkerConnectionFactory(
+            configuration.GetConnectionString("PaqueteriaWorker") ?? string.Empty));
+        services.AddSingleton<IRealtimeOutboxStore, PostgreSqlRealtimeOutboxStore>();
+        services.AddSingleton<IRealtimeOutboxEvidenceReader, PostgreSqlRealtimeOutboxEvidenceReader>();
+        services.TryAddSingleton<IRealtimeOutboxFailureInjector, NoOpRealtimeOutboxFailureInjector>();
+        services.AddSingleton<PublicOrderStatusPolicy>();
+        services.AddSingleton<RealtimeOutboxTelemetry>();
+        services.AddSingleton<RealtimeOutboxProcessor>();
+        services.AddHostedService<BusinessOutboxDispatcher>();
+        services.AddHostedService<LocationOutboxDispatcher>();
+        services.AddHealthChecks()
+            .AddCheck<RealtimeOutboxHealthCheck>(
+                "realtime_outbox_dispatcher",
+                tags: ["ready"]);
         return services;
     }
 

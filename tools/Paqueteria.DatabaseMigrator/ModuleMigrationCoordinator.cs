@@ -37,8 +37,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
         ("Pricing", "__ef_migrations_history_pricing", AdoptCanonicalPricingBaseline.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs"),
-        ("Orders", "__ef_migrations_history_orders", AdoptCanonicalOrdersBaseline.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrdersBaseline.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddRealtimeResynchronizationCursor.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260725010000_AddRealtimeResynchronizationCursor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
     ];
@@ -77,6 +77,11 @@ internal sealed class ModuleMigrationCoordinator
             "Drivers",
             AdoptCanonicalDriversBaseline.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDriversBaseline.cs");
+        VerifyAdoptionSource(
+            root,
+            "Orders",
+            AdoptCanonicalOrdersBaseline.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrdersBaseline.cs");
 
         return result;
     }
@@ -199,9 +204,14 @@ internal sealed class ModuleMigrationCoordinator
             ids.Add(reader.GetString(0));
         }
 
-        var expectedIds = contract.Module == "Drivers"
-            ? new[] { AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId }
-            : new[] { contract.MigrationId };
+        string[] expectedIds = contract.Module switch
+        {
+            "Drivers" =>
+                [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
+            "Orders" =>
+                [AdoptCanonicalOrdersBaseline.MigrationId, AddRealtimeResynchronizationCursor.MigrationId],
+            _ => [contract.MigrationId],
+        };
         var status = ids.SequenceEqual(expectedIds, StringComparer.Ordinal)
             ? "APPLIED"
             : ids.Count < expectedIds.Length &&

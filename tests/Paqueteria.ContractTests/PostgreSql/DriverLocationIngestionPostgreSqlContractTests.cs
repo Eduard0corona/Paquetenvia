@@ -110,6 +110,60 @@ public sealed class DriverLocationIngestionPostgreSqlContractTests(PostgreSqlCon
     }
 
     [PostgreSqlContractFact]
+    public async Task Location_persistence_and_outbox_truncate_captured_and_received_timestamps()
+    {
+        var rawCaptured = DateTimeOffset.Parse(
+            "2026-07-25T18:00:00.1234567Z",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var rawReceived = rawCaptured.AddMinutes(5);
+        var canonicalCaptured = UtcMicrosecondPrecision.Normalize(rawCaptured);
+        var canonicalReceived = UtcMicrosecondPrecision.Normalize(rawReceived);
+        var scenario = await SeedAsync();
+        try
+        {
+            await using var scope = CreateScope(rawReceived);
+            var eventId = Guid.NewGuid();
+            var created = await scope.Service.PublishAsync(
+                Command(scenario, Point(eventId, rawCaptured)),
+                default);
+            var replay = await scope.Service.PublishAsync(
+                Command(scenario, Point(eventId, rawCaptured)),
+                default);
+
+            Assert.Equal(DriverLocationItemStatus.Accepted, created.Items[0].Status);
+            Assert.Equal(DriverLocationItemStatus.Duplicate, replay.Items[0].Status);
+            Assert.Equal(created.Items[0].PositionId, replay.Items[0].PositionId);
+            await using var command = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT p.captured_at,p.received_at,
+                       o.payload->>'captured_at',o.created_at,o.available_at
+                FROM drivers.driver_positions p
+                JOIN platform.location_outbox_events o ON o.driver_position_id=p.id
+                WHERE p.driver_id=@driver AND p.client_event_id=@event
+                """);
+            command.Parameters.AddWithValue("driver", scenario.DriverId);
+            command.Parameters.AddWithValue("event", eventId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(canonicalCaptured, reader.GetFieldValue<DateTimeOffset>(0));
+            Assert.Equal(canonicalReceived, reader.GetFieldValue<DateTimeOffset>(1));
+            Assert.Equal(
+                canonicalCaptured,
+                DateTimeOffset.Parse(
+                    reader.GetString(2),
+                    System.Globalization.CultureInfo.InvariantCulture));
+            Assert.Equal(canonicalReceived, reader.GetFieldValue<DateTimeOffset>(3));
+            Assert.Equal(canonicalReceived, reader.GetFieldValue<DateTimeOffset>(4));
+            Assert.Equal(0, canonicalCaptured.UtcTicks % 10);
+            Assert.False(await reader.ReadAsync());
+        }
+        finally
+        {
+            await CleanupAsync(scenario);
+        }
+    }
+
+    [PostgreSqlContractFact]
     public async Task Canonical_empty_event_id_is_rejected_without_position_or_outbox()
     {
         var scenario = await SeedAsync();

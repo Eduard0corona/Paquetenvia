@@ -26,17 +26,21 @@ public sealed record PublicTrackingProjection
     public PublicTrackingProjection(
         string publicId,
         PublicOrderStatus publicStatus,
+        long aggregateVersion,
         IReadOnlyDictionary<string, string?>? estimatedWindow,
         IEnumerable<PublicTrackingTimelineItem> timeline)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(aggregateVersion, 1);
         PublicId = publicId;
         PublicStatus = publicStatus;
+        AggregateVersion = aggregateVersion;
         EstimatedWindow = estimatedWindow?.ToImmutableDictionary(StringComparer.Ordinal);
         Timeline = timeline.ToImmutableArray();
     }
 
     public string PublicId { get; }
     public PublicOrderStatus PublicStatus { get; }
+    public long AggregateVersion { get; }
     public IReadOnlyDictionary<string, string?>? EstimatedWindow { get; }
     public ImmutableArray<PublicTrackingTimelineItem> Timeline { get; }
 }

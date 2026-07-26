@@ -128,7 +128,7 @@ GRANT SELECT (id,user_id,organization_id,role,status,is_default)
   ON organizations.organization_memberships TO paqueteria_bootstrap;
 GRANT SELECT (id,order_id,token_hash,expires_at,revoked_at)
   ON orders.public_tracking_tokens TO paqueteria_bootstrap;
-GRANT SELECT (id,public_id,status) ON orders.orders TO paqueteria_bootstrap;
+GRANT SELECT (id,public_id,status,version) ON orders.orders TO paqueteria_bootstrap;
 GRANT SELECT (order_id,public_event_code,occurred_at) ON orders.order_events TO paqueteria_bootstrap;
 
 ALTER FUNCTION security.resolve_identity_context(text) OWNER TO paqueteria_bootstrap;

@@ -69,11 +69,13 @@ public sealed class TrackingContractTests
     {
         var projection = PublicTrackingJsonParser.Parse("""
             {"timeline":[{"occurred_at":"2026-07-22T12:00:00Z","code":"PICKED_UP"}],
-             "estimated_window":null,"public_status":"IN_TRANSIT","public_id":"PKG-001"}
+             "estimated_window":null,"aggregate_version":12,
+             "public_status":"IN_TRANSIT","public_id":"PKG-001"}
             """);
 
         Assert.Equal("PKG-001", projection.PublicId);
         Assert.Equal(PublicOrderStatus.InTransit, projection.PublicStatus);
+        Assert.Equal(12, projection.AggregateVersion);
         Assert.Null(projection.EstimatedWindow);
         Assert.Equal(PublicTimelineEventCode.PickedUp, Assert.Single(projection.Timeline).Code);
     }

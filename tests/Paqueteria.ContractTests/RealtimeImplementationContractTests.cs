@@ -132,7 +132,11 @@ public sealed class RealtimeImplementationContractTests
         Assert.Contains("RealtimeEndpointDefaults.TrackingPath", gateSource, StringComparison.Ordinal);
         Assert.Contains("UseRealtimePrivateAccessTokens();", programSource, StringComparison.Ordinal);
         Assert.Contains("UseRealtimeConnectionGate();", programSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("outbox", programSource, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AddRealtimeOutboxDispatchers", programSource, StringComparison.Ordinal);
+        var workerSource = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Paqueteria.Worker", "Program.cs"));
+        Assert.DoesNotContain("Realtime", workerSource, StringComparison.Ordinal);
     }
 
     [Fact]

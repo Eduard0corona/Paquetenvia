@@ -21,6 +21,82 @@ public sealed class RealtimeReconnectKestrelTests(
         Guid.Parse("77777777-7777-7777-7777-777777777777");
 
     [Fact]
+    public async Task PostgreSql_dispatcher_claims_committed_status_and_publishes_only_authorized_group()
+    {
+        var recorder = new RealtimeAuthorizationRecorder();
+        await using var host = new RealtimeKestrelWebApplicationFactory(
+            database.ApplicationConnectionString,
+            recorder,
+            workerConnectionString: database.WorkerConnectionString);
+        var baseAddress = host.Start();
+        await using var authorized = CreateOperationsConnection(
+            baseAddress,
+            PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,
+            () => Task.FromResult<string?>(MockIdentityProfiles.ActivePlatformAdminMfa));
+        await using var foreign = CreateOperationsConnection(
+            baseAddress,
+            PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+            () => Task.FromResult<string?>(MockIdentityProfiles.ActiveMultiOrganization));
+        var received = Completion<RealtimeEnvelope<OrderStatusChangedPayload>>();
+        var locationReceived = Completion<RealtimeEnvelope<DriverLocationUpdatedPayload>>();
+        var leaked = Completion<RealtimeEnvelope<OrderStatusChangedPayload>>();
+        authorized.On(
+            "OrderStatusChanged",
+            (RealtimeEnvelope<OrderStatusChangedPayload> message) =>
+                received.TrySetResult(message));
+        authorized.On(
+            "DriverLocationUpdated",
+            (RealtimeEnvelope<DriverLocationUpdatedPayload> message) =>
+                locationReceived.TrySetResult(message));
+        foreign.On(
+            "OrderStatusChanged",
+            (RealtimeEnvelope<OrderStatusChangedPayload> message) =>
+                leaked.TrySetResult(message));
+        await authorized.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(await recorder.WaitForNextOperationsAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await recorder.WaitForNextOperationsAcceptedAsync(TimeSpan.FromSeconds(5)));
+        await foreign.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(await recorder.WaitForNextOperationsAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await recorder.WaitForNextOperationsAcceptedAsync(TimeSpan.FromSeconds(5)));
+
+        var enqueued = await database.EnqueueRealtimeStatusAsync();
+        var terminal = await WaitForOutboxResultAsync(enqueued.OutboxId);
+        Assert.True(
+            terminal.Status == "PROCESSED",
+            $"Business outbox settled as {terminal.Status}: {terminal.LastError}");
+        var delivered = await received.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(enqueued.OutboxId, delivered.EventId);
+        Assert.Equal(enqueued.AggregateVersion, delivered.AggregateVersion);
+        Assert.Equal("DELIVERING", delivered.Payload.NewStatus);
+        await AssertNotCompletedAsync(leaked.Task, TimeSpan.FromMilliseconds(400));
+        var status = await WaitForProcessedAsync(enqueued.OutboxId);
+        Assert.Equal("PROCESSED", status);
+
+        var locationOutboxId = await database.EnqueueRealtimeLocationAsync();
+        var deliveredLocation = await locationReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(locationOutboxId, deliveredLocation.EventId);
+        Assert.Equal("PROCESSED", await WaitForLocationProcessedAsync(locationOutboxId));
+    }
+
+    private async Task<(string? Status, string? LastError)> WaitForOutboxResultAsync(Guid id)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!timeout.IsCancellationRequested)
+        {
+            var result = await database.ReadOutboxResultAsync(id);
+            if (result.Status is "PROCESSED" or "DEAD" or "RETRY")
+            {
+                return result;
+            }
+
+            await Task.Delay(50, timeout.Token);
+        }
+
+        throw new TimeoutException("The business outbox row did not settle.");
+    }
+
+    [Fact]
     public async Task Operations_real_reconnect_reauthorizes_PostgreSql_recovers_group_and_syncs_missed_state()
     {
         var recorder = new RealtimeAuthorizationRecorder();
@@ -212,11 +288,20 @@ public sealed class RealtimeReconnectKestrelTests(
     private static HubConnection CreateOperationsConnection(
         Uri baseAddress,
         Func<Task<string?>> tokenFactory) =>
+        CreateOperationsConnection(
+            baseAddress,
+            PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+            tokenFactory);
+
+    private static HubConnection CreateOperationsConnection(
+        Uri baseAddress,
+        Guid organizationId,
+        Func<Task<string?>> tokenFactory) =>
         Configure(new HubConnectionBuilder()
             .WithUrl(
                 new Uri(
                     baseAddress,
-                    $"/hubs/operations?organization_id={PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId:D}"),
+                    $"/hubs/operations?organization_id={organizationId:D}"),
                 options =>
                 {
                     options.Transports = HttpTransportType.WebSockets;
@@ -230,6 +315,44 @@ public sealed class RealtimeReconnectKestrelTests(
                     TimeSpan.FromSeconds(2),
                     TimeSpan.FromSeconds(5),
                 ]));
+
+    private async Task<string?> WaitForProcessedAsync(Guid outboxId)
+    {
+        var timeout = DateTimeOffset.UtcNow.AddSeconds(10);
+        string? status;
+        do
+        {
+            status = await database.ReadOutboxStatusAsync(outboxId);
+            if (status == "PROCESSED")
+            {
+                return status;
+            }
+
+            await Task.Delay(100);
+        }
+        while (DateTimeOffset.UtcNow < timeout);
+
+        return status;
+    }
+
+    private async Task<string?> WaitForLocationProcessedAsync(Guid outboxId)
+    {
+        var timeout = DateTimeOffset.UtcNow.AddSeconds(10);
+        string? status;
+        do
+        {
+            status = await database.ReadLocationOutboxStatusAsync(outboxId);
+            if (status == "PROCESSED")
+            {
+                return status;
+            }
+
+            await Task.Delay(100);
+        }
+        while (DateTimeOffset.UtcNow < timeout);
+
+        return status;
+    }
 
     private static HubConnection CreateTrackingConnection(
         Uri baseAddress,

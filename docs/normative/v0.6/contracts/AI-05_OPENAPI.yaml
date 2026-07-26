@@ -1290,11 +1290,20 @@ components:
     DriverStop:
       type: object
       required:
+      - order_id
+      - aggregate_version
       - order_public_id
       - stop_type
       - status
       - address_summary
       properties:
+        order_id:
+          type: string
+          format: uuid
+        aggregate_version:
+          type: integer
+          format: int64
+          minimum: 1
         order_public_id:
           type: string
         stop_type:
@@ -2109,12 +2118,17 @@ components:
       required:
       - public_id
       - public_status
+      - aggregate_version
       - timeline
       properties:
         public_id:
           type: string
         public_status:
           $ref: '#/components/schemas/PublicOrderStatus'
+        aggregate_version:
+          type: integer
+          format: int64
+          minimum: 1
         estimated_window:
           type:
           - object

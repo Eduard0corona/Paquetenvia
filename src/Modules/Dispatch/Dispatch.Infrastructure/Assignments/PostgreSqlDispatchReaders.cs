@@ -119,7 +119,7 @@ public sealed class PostgreSqlAssignmentVisibilityDataReader(
     {
         const string sql =
             """
-            SELECT id,owner_org_id,operator_org_id,city_id,service_area_id,status,version
+            SELECT id,owner_org_id,operator_org_id,city_id,service_area_id,status,version,public_id
             FROM orders.orders
             WHERE id=@order_id
               AND (owner_org_id=@organization_id OR operator_org_id=@organization_id)
@@ -151,7 +151,8 @@ public sealed class PostgreSqlAssignmentVisibilityDataReader(
                 reader.GetGuid(3),
                 reader.IsDBNull(4) ? null : reader.GetGuid(4),
                 reader.GetString(5),
-                reader.GetInt32(6));
+                reader.GetInt32(6),
+                reader.GetString(7));
         }
 
         if (!await reader.NextResultAsync(cancellationToken))
