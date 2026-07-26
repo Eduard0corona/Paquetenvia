@@ -95,6 +95,34 @@ ORD-002 persiste dos filas en la misma transacción que el cambio:
 status y timeline. DSP-002 persiste tres: status, timeline y assignment. Un
 rollback o replay idempotente no deja efectos parciales ni crea IDs nuevos.
 
+## Canonical UTC microsecond precision
+
+.NET representa `DateTimeOffset` con ticks de 100 ns y puede conservar siete
+dígitos fraccionarios. PostgreSQL `timestamptz` conserva microsegundos. Sin una
+regla común, el JSON del outbox podía contener `.1234567Z` mientras la evidencia
+persistida representaba `.123456Z`, provocando falsos
+`DEAD / INVALID_PAYLOAD` al comparar ambos valores exactamente.
+
+`Paqueteria.Application.UtcMicrosecondPrecision` es la única política
+canónica. Exige offset UTC y trunca, nunca redondea, `UtcTicks` al múltiplo
+inferior de diez. La operación es determinista e idempotente:
+`.1234561Z`, `.1234565Z` y `.1234569Z` se convierten en `.1234560Z`.
+
+ORD-002 y DSP-002 normalizan una sola lectura de `IClock.UtcNow` antes de
+reservar idempotencia o persistir. Ese mismo instante alimenta estado,
+assignment, eventos, outbox, auditorías y finalización idempotente. DRV-003
+normaliza el `captured_at` ya validado antes de ordenar, deduplicar, evaluar
+publicación o construir `PendingPosition`; también normaliza `received_at`.
+Posición, payload location y cursor consumen el valor canónico.
+
+El parser RTM-002 rechaza offsets no UTC y normaliza status, timeline,
+assignment y location antes de construir los parsed records y sus envelopes.
+La validación de evidencia usa igualdad de microsegundo canónico. Esto permite
+procesar filas anteriores cuya columna tenga `.123456Z` y cuyo JSON conserve
+`.1234567Z`, pero una diferencia real como `.123456Z` frente a `.123457Z`
+continúa terminando `DEAD / INVALID_PAYLOAD`. No hay tolerancia en
+milisegundos, rounding, DDL, migración, backfill ni reescritura histórica.
+
 ## Evidencia y audiencias
 
 Antes de publicar, el consumidor vuelve a leer evidencia mínima persistida con
@@ -174,7 +202,9 @@ Disabled permanece `degraded`.
 
 La cobertura incluye:
 
-- parsers exactos, schema/topic poison, UTC-ms, retries y opciones;
+- parsers exactos, schema/topic poison, UTC a microsegundos, retries y opciones;
+- truncamiento del séptimo dígito, no-rounding, UTC estricto, idempotencia,
+  monotonía y límites de segundo/minuto/día;
 - productores ORD-002/DSP-002, conteo de filas, IDs distintos y rollback;
 - lifecycle, ownership, grants, NOBYPASSRLS, pooling y migraciones en
   PostgreSQL 18/PostGIS 3.6;
@@ -195,7 +225,8 @@ La aceptación final añade evidencia real, no llamadas directas al publisher:
   cancelar la assignment después de producir la fila omite Driver, registra
   `driver_audience_skipped`, mantiene Operations y termina `PROCESSED`;
 - una posición confirmada con `publish_realtime=true` atraviesa el consumer de
-  location y llega sólo a Operations del tenant, con payload exacto,
+  location desde un request HTTP real con séptimo dígito y llega sólo a
+  Operations del tenant, con payload exacto y timestamp canónico,
   `aggregate_id=driver_id` y cursor UTC-ms; otro tenant, DriverHub y TrackingHub
   no reciben, y logs/métricas no contienen coordenadas;
 - poison business termina `DEAD` mientras location válido termina
@@ -205,6 +236,12 @@ La aceptación final añade evidencia real, no llamadas directas al publisher:
   `Reconnecting -> Reconnected`, reemplaza por completo su mapa
   `order_id -> aggregate_version` con otro snapshot REST real de Operations y
   descarta después un outbox retrasado de versión anterior.
+
+Los escenarios históricos cubren status, timeline, assignment y location con
+representaciones distintas dentro del mismo microsegundo y settlement
+`PROCESSED`. Casos business y location separados exactamente un microsegundo
+se rechazan con `DEAD / INVALID_PAYLOAD`. La redelivery real conserva tanto el
+`event_id` como el timestamp canónico y el navegador aplica una sola vez.
 
 ## Rollback y límites
 

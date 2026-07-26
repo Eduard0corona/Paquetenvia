@@ -65,6 +65,14 @@ A structurally valid batch returns `202` with items in request order:
 The three counters are computed from the returned items. No HTTP
 `Idempotency-Key` is used.
 
+After structural and domain validation, Infrastructure canonicalizes
+`captured_at` once with `Paqueteria.Application.UtcMicrosecondPrecision`.
+The UTC value is truncated, never rounded, to PostgreSQL microsecond precision
+before ordering, deduplication, publication policy, persistence, location
+outbox construction, and cursor calculation. Persisted `received_at` is
+canonicalized by the same shared policy. A repeated `client_event_id` keeps the
+existing position and does not create another outbox row.
+
 ## Validation and canonical mapping
 
 Batch shape and item telemetry are deliberately classified at different

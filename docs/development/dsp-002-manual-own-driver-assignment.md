@@ -11,6 +11,13 @@ ORD-002-DEF-001 y DSP-001. Reutiliza el contexto transaccional tenant, RLS,
 `DriverEligibilityPolicy` y los contratos de capacidad de Drivers. No invoca
 los servicios PostgreSQL de Orders o Drivers porque abrirían otra transacción.
 
+El coordinador captura y normaliza una sola vez `IClock.UtcNow` con
+`Paqueteria.Application.UtcMicrosecondPrecision`. Assignment, elegibilidad
+temporal, actualización/evento de orden, las tres filas de outbox, ambas
+auditorías y la reserva/finalización idempotente reutilizan el mismo instante
+UTC truncado a microsegundos. Un replay conserva los IDs y no crea filas
+nuevas; no se aplica rounding ni una tolerancia temporal abierta.
+
 ## Arquitectura, propiedad y adopción
 
 El módulo tiene cuatro proyectos:

@@ -13,6 +13,14 @@ No implementa despacho, captura de pruebas, incidencias, COD, settlements, track
 
 La matriz y las reglas temporales existen en un solo lugar: `OrderTransitionMatrix`. Los endpoints no contienen aristas ni guards. Las lecturas de Pricing, Dispatch, Drivers, Custody, Incidents y Finance no escriben en esos schemas.
 
+ORD-002 captura `IClock.UtcNow` una sola vez y lo normaliza mediante
+`Paqueteria.Application.UtcMicrosecondPrecision` antes de abrir la unidad de
+persistencia. El valor UTC truncado a microsegundos se reutiliza en reserva
+idempotente, evaluación de estado/guards, `updated_at`, evento, status/timeline
+outbox, auditoría y respuesta derivada. Esto mantiene coherentes PostgreSQL y
+JSON cuando el reloj original contiene un séptimo dígito fraccionario, sin
+redondear ni alterar transiciones, versiones o IDs.
+
 ## Estados, aristas y terminales
 
 Las únicas aristas permitidas son:
