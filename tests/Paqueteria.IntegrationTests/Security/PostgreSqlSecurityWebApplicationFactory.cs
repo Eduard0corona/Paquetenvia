@@ -2,7 +2,10 @@ using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
+using Paqueteria.Contracts.Tracking;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Testcontainers.PostgreSql;
 
@@ -27,6 +30,17 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     private string _adminConnectionString = string.Empty;
     private string _applicationConnectionString = string.Empty;
     private string _workerConnectionString = string.Empty;
+    private readonly TrackingTokenHasher? _trackingTokenHasher;
+
+    public PostgreSqlSecurityWebApplicationFactory()
+    {
+    }
+
+    internal PostgreSqlSecurityWebApplicationFactory(
+        TrackingTokenHasher trackingTokenHasher)
+    {
+        _trackingTokenHasher = trackingTokenHasher;
+    }
 
     public string PostgreSqlVersion { get; private set; } = string.Empty;
     public string PostGisVersion { get; private set; } = string.Empty;
@@ -109,10 +123,20 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 ["IdentityBootstrap:CommandTimeoutSeconds"] = "5",
                 ["PublicTracking:Provider"] = "PostgreSql",
                 ["PublicTracking:CommandTimeoutSeconds"] = "5",
+                ["PublicTracking:LookupPermitLimit"] = "1000",
+                ["PublicTracking:AllowedOrigins:0"] = "https://tracking.synthetic.local",
                 ["Tenancy:Provider"] = "PostgreSql",
                 ["Tenancy:CommandTimeoutSeconds"] = "5",
                 ["ConnectionStrings:Paqueteria"] = _applicationConnectionString,
             }));
+        if (_trackingTokenHasher is not null)
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<TrackingTokenHasher>();
+                services.AddSingleton(_trackingTokenHasher);
+            });
+        }
     }
 
     public async Task<int> CountTenantActivationAuditsAsync()

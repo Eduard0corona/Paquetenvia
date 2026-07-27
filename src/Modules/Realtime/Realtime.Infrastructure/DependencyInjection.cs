@@ -40,6 +40,8 @@ public static class DependencyInjection
                 "Realtime:AuthorizationRetryCount must be between 1 and 3.")
             .Validate(options => options.MaximumDriverAssignmentGroups is >= 1 and <= 500,
                 "Realtime:MaximumDriverAssignmentGroups must be between 1 and 500.")
+            .Validate(options => options.TrackingMaximumConnectionLifetimeSeconds is >= 5 and <= 300,
+                "Realtime:TrackingMaximumConnectionLifetimeSeconds must be between 5 and 300.")
             .Validate(options => IsValidReconnectPolicy(options.ReconnectDelaysMilliseconds),
                 "Realtime:ReconnectDelaysMilliseconds must be bounded and start at zero.")
             .Validate(options => options.Provider != RealtimeProviderKind.SignalR ||

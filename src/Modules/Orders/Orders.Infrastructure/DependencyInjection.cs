@@ -14,6 +14,7 @@ using Paqueteria.Application.Auditing;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Tenancy;
+using Paqueteria.Contracts.Tracking;
 
 namespace Orders.Infrastructure;
 
@@ -51,13 +52,31 @@ public static class DependencyInjection
                 "PublicTracking:Provider must be Disabled or PostgreSql.")
             .Validate(options => options.CommandTimeoutSeconds is >= 1 and <= 60,
                 "PublicTracking:CommandTimeoutSeconds must be between 1 and 60.")
+            .Validate(options => double.IsFinite(options.TokenLifetimeHours) &&
+                    options.TokenLifetimeHours >= 5d / 60d &&
+                    options.TokenLifetimeHours <= 24d * 30d,
+                "PublicTracking:TokenLifetimeHours must be between 5 minutes and 30 days.")
+            .Validate(options => options.TokenCollisionRetryCount is >= 1 and <= 10,
+                "PublicTracking:TokenCollisionRetryCount must be between 1 and 10.")
+            .Validate(options => options.LookupPermitLimit is >= 1 and <= 1_000,
+                "PublicTracking:LookupPermitLimit must be between 1 and 1000.")
+            .Validate(options => options.LookupWindowSeconds is >= 1 and <= 300,
+                "PublicTracking:LookupWindowSeconds must be between 1 and 300.")
+            .Validate(options => AreValidOrigins(options.AllowedOrigins),
+                "PublicTracking:AllowedOrigins must contain distinct absolute HTTP(S) origins.")
             .Validate(options => options.Provider != PublicTrackingProviderKind.PostgreSql ||
                     !string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria")),
                 "PublicTracking:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
             .ValidateOnStart();
 
         services.AddSingleton<DisabledPublicTrackingProjectionReader>();
+        services.AddSingleton<DisabledPublicTrackingTokenService>();
+        services.AddSingleton<PublicTrackingTelemetry>();
+        services.AddSingleton<IPublicTrackingTelemetry>(serviceProvider =>
+            serviceProvider.GetRequiredService<PublicTrackingTelemetry>());
         services.AddScoped<PostgreSqlPublicTrackingProjectionReader>();
+        services.AddScoped<PostgreSqlPublicTrackingTokenService>();
+        services.TryAddSingleton<TrackingTokenHasher>();
         services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
             serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
             ?? throw new InvalidOperationException(
@@ -122,7 +141,32 @@ public static class DependencyInjection
                 PublicTrackingProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlPublicTrackingProjectionReader>(),
                 _ => serviceProvider.GetRequiredService<DisabledPublicTrackingProjectionReader>(),
             });
+        services.AddScoped<IPublicTrackingTokenService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<PublicTrackingOptions>>().Value.Provider switch
+            {
+                PublicTrackingProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlPublicTrackingTokenService>(),
+                _ => serviceProvider.GetRequiredService<DisabledPublicTrackingTokenService>(),
+            });
 
         return services;
+    }
+
+    private static bool AreValidOrigins(IReadOnlyCollection<string>? origins)
+    {
+        if (origins is null ||
+            origins.Count != origins.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+        {
+            return false;
+        }
+
+        return origins.All(static origin =>
+            !origin.Contains('*', StringComparison.Ordinal) &&
+            Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
+            uri.Scheme is "http" or "https" &&
+            string.IsNullOrEmpty(uri.UserInfo) &&
+            uri.AbsolutePath == "/" &&
+            string.IsNullOrEmpty(uri.Query) &&
+            string.IsNullOrEmpty(uri.Fragment));
     }
 }

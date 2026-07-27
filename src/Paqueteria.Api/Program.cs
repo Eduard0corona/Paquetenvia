@@ -38,7 +38,7 @@ builder.Services.AddDriversEndpoints(builder.Configuration);
 builder.Services.AddDispatchInfrastructure(builder.Configuration);
 builder.Services.AddDispatchEndpoints();
 builder.Services.AddOrdersInfrastructure(builder.Configuration);
-builder.Services.AddOrdersEndpoints();
+builder.Services.AddOrdersEndpoints(builder.Configuration);
 builder.Services.AddOrganizationsInfrastructure(builder.Configuration);
 builder.Services.AddOrganizationsEndpoints();
 builder.Services.AddLocationsInfrastructure(builder.Configuration, builder.Environment);
@@ -59,6 +59,7 @@ var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseRouting();
+app.UsePublicTrackingResponseHeaders();
 app.UseCors();
 
 if (app.Environment.IsDevelopment())
@@ -115,6 +116,7 @@ app.MapOrganizationTestProbes(app.Environment);
 app.MapLocationEndpoints();
 app.MapQuoteEndpoints();
 app.MapOrderEndpoints();
+app.MapPublicTrackingEndpoints();
 app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapRealtimeHubs();

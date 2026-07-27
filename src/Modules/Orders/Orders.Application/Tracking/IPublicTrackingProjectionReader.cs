@@ -87,4 +87,9 @@ public sealed class PublicTrackingOptions
     public const string SectionName = "PublicTracking";
     public PublicTrackingProviderKind Provider { get; set; } = PublicTrackingProviderKind.Disabled;
     public int CommandTimeoutSeconds { get; set; } = 5;
+    public double TokenLifetimeHours { get; set; } = 168;
+    public int TokenCollisionRetryCount { get; set; } = 3;
+    public string[] AllowedOrigins { get; set; } = [];
+    public int LookupPermitLimit { get; set; } = 60;
+    public int LookupWindowSeconds { get; set; } = 60;
 }

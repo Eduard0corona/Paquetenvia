@@ -9,7 +9,8 @@ namespace Orders.Infrastructure.Tracking;
 public sealed class PostgreSqlPublicTrackingProjectionReader(
     NpgsqlDataSource dataSource,
     IOptions<PublicTrackingOptions> options,
-    ILogger<PostgreSqlPublicTrackingProjectionReader> logger) : IPublicTrackingProjectionReader
+    ILogger<PostgreSqlPublicTrackingProjectionReader> logger,
+    IPublicTrackingTelemetry telemetry) : IPublicTrackingProjectionReader
 {
     private const string Query = "SELECT security.get_public_tracking_projection(@token);";
 
@@ -44,11 +45,13 @@ public sealed class PostgreSqlPublicTrackingProjectionReader(
             await transaction.CommitAsync(cancellationToken);
             if (value is null or DBNull)
             {
+                telemetry.LookupCompleted("not_found");
                 return PublicTrackingLookupResult.NotFound;
             }
 
             var projection = PublicTrackingJsonParser.Parse(
                 Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!);
+            telemetry.LookupCompleted("found");
             return PublicTrackingLookupResult.Found(projection);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -57,6 +60,7 @@ public sealed class PostgreSqlPublicTrackingProjectionReader(
         }
         catch (PublicTrackingInfrastructureException)
         {
+            telemetry.LookupFailed("projection_contract_invalid");
             logger.LogError("Public tracking returned data that violates the expected contract.");
             throw;
         }

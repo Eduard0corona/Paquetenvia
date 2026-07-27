@@ -13,8 +13,8 @@ jobs de CI. Los contratos se validan de forma estática y contra PostgreSQL
 **SEC-002** separa la identidad externa (`sub`/MFA) de la autorización tenant,
 integra el bootstrap y tracking de AI-06 mediante adaptadores Npgsql de mínimo
 privilegio, y aporta `TrackingTokenHasher` y el mapa público de 17 estados. La
-integración HTTP es exclusivamente mediante probes de `Testing`; AuthCenter y
-el endpoint público productivo continúan fuera de alcance.
+integración inicial conserva probes de `Testing`; TRK-001 agrega el endpoint
+público productivo y el shell web sin ampliar los contratos normativos.
 
 **DBA-001** implementa la ruta controlada del baseline de base de datos:
 manifiesto con hashes, migrador independiente, catálogo de 15 schemas,
@@ -84,9 +84,10 @@ Consulta la [guía de arquitectura modular](docs/development/module-architecture
 para agregarlo a la solución, registrarlo en el catálogo y validar sus límites.
 
 La API expone `GET /health/live`, `GET /health/ready` y los endpoints de los
-módulos registrados. OpenAPI del framework se publica solo en Development. SEC-001/SEC-002 agregan probes internos exclusivamente
-bajo el environment `Testing`; no agregan endpoints públicos de login,
-identidad o tracking. El Worker hospeda procesos registrados; POD-001 agrega la
+módulos registrados. OpenAPI del framework se publica solo en Development.
+SEC-001/SEC-002 agregan probes internos exclusivamente bajo `Testing`; TRK-001
+expone `GET /api/v1/tracking/{token}` sin agregar login o identidad públicos.
+El Worker hospeda procesos registrados; POD-001 agrega la
 validación de cuarentena y promoción de evidencia cuando `ProofStorage` está
 habilitado.
 
@@ -109,6 +110,9 @@ REST señalada por DriverHub, pruebas Playwright y rollback del shell PWA.
 La [guía DRV-002](docs/development/drv-002-offline-events-pod.md) documenta la
 cola offline particionada, proyección local, POD con upload firmado,
 sincronización idempotente, pruebas de navegador y rollback de IndexedDB v2.
+La [guía TRK-001](docs/development/trk-001-public-tracking.md) documenta el
+servicio interno de tokens, endpoint anónimo, página `/track/{token}`,
+privacidad, SignalR como señal, pruebas reales y rollback sin DDL.
 
 Ejecuta su matriz con:
 

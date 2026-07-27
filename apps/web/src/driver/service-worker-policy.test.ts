@@ -6,7 +6,7 @@ const source = readFileSync(resolve(process.cwd(), "public/sw.js"), "utf8");
 
 describe("driver Service Worker policy", () => {
   it("uses a versioned driver-owned cache", () => {
-    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v3"');
+    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v4"');
     expect(source).toContain('"paquetenvia-driver-shell-"');
   });
 
