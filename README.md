@@ -113,6 +113,10 @@ sincronización idempotente, pruebas de navegador y rollback de IndexedDB v2.
 La [guía TRK-001](docs/development/trk-001-public-tracking.md) documenta el
 servicio interno de tokens, endpoint anónimo, página `/track/{token}`,
 privacidad, SignalR como señal, pruebas reales y rollback sin DDL.
+La [guía OBS-001](docs/development/obs-001-dispatch-dashboard.md) documenta el
+módulo Reporting, endpoint operativo aditivo, dashboard y detalle read-only,
+RLS, REST como autoridad, vista de posiciones sin mapas, pruebas reales y
+rollback sin DDL.
 
 Ejecuta su matriz con:
 
