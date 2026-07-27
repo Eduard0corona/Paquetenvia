@@ -56,40 +56,59 @@ export function createOperationsApi(
     parser: (value: unknown) => unknown,
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const timeout = AbortSignal.timeout(timeoutMilliseconds);
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(
+      () =>
+        timeoutController.abort(
+          new DOMException("The operations request timed out.", "TimeoutError"),
+        ),
+      timeoutMilliseconds,
+    );
     const combined = signal
-      ? AbortSignal.any([signal, timeout])
-      : AbortSignal.any([timeout]);
-    const token = await session.getAccessToken();
-    if (typeof token !== "string" || token.length < 1 || token.length > 8192) {
-      throw new OperationsApiError("unauthorized");
-    }
-    const url = new URL(path, base);
-    url.search = search.toString();
-    let response: Response;
+      ? AbortSignal.any([signal, timeoutController.signal])
+      : timeoutController.signal;
     try {
-      response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "X-Organization-Id": session.organizationId,
-          Accept: "application/json",
-        },
-        cache: "no-store",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-        signal: combined,
-      });
-    } catch (error: unknown) {
-      if (combined.aborted) throw error;
-      throw new OperationsApiError("network");
+      const token = await waitForAbort(
+        () => session.getAccessToken(),
+        combined,
+      );
+      throwIfAborted(combined);
+      if (typeof token !== "string" || token.length < 1 || token.length > 8192) {
+        throw new OperationsApiError("unauthorized");
+      }
+      const url = new URL(path, base);
+      url.search = search.toString();
+      let response: Response;
+      try {
+        throwIfAborted(combined);
+        response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "X-Organization-Id": session.organizationId,
+            Accept: "application/json",
+          },
+          cache: "no-store",
+          credentials: "omit",
+          referrerPolicy: "no-referrer",
+          signal: combined,
+        });
+      } catch {
+        if (combined.aborted) throw abortReason(combined);
+        throw new OperationsApiError("network");
+      }
+      throwIfAborted(combined);
+      if (!response.ok) throw classify(response.status);
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        throw new OperationsApiError("invalid");
+      }
+      const body = await waitForAbort(() => response.json(), combined);
+      throwIfAborted(combined);
+      return parser(body);
+    } finally {
+      clearTimeout(timeoutId);
     }
-    if (!response.ok) throw classify(response.status);
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.toLowerCase().includes("application/json")) {
-      throw new OperationsApiError("invalid");
-    }
-    return parser(await response.json());
   }
 
   return {
@@ -138,6 +157,52 @@ export function buildOperationsDashboardSearch(
     search.set("unassigned", String(filters.unassigned));
   append(search, "cursor", filters.cursor);
   return search;
+}
+
+function waitForAbort<T>(
+  operation: () => T | PromiseLike<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(abortReason(signal));
+      return;
+    }
+
+    let value: T | PromiseLike<T>;
+    try {
+      value = operation();
+    } catch (error: unknown) {
+      reject(error);
+      return;
+    }
+
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(abortReason(signal)));
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    Promise.resolve(value).then(
+      (result) => finish(() => resolve(result)),
+      (error: unknown) => finish(() => reject(error)),
+    );
+  });
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortReason(signal);
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return (
+    signal.reason ??
+    new DOMException("The operations request was aborted.", "AbortError")
+  );
 }
 
 function append(search: URLSearchParams, name: string, value?: string): void {
