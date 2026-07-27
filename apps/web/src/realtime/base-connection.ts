@@ -57,6 +57,7 @@ export function buildManagedConnection(
     options.onReconnected?.(connectionId);
     try {
       await resynchronizeAfterReconnect(guard, options.resynchronizeFromRest);
+      options.onResynchronized?.();
     } catch (error: unknown) {
       options.onResynchronizationError?.(error);
       await connection.stop();
