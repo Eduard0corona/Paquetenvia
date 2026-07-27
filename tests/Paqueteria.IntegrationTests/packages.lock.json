@@ -887,7 +887,9 @@
           "Pricing.Endpoints": "[1.0.0, )",
           "Pricing.Infrastructure": "[1.0.0, )",
           "Realtime.Endpoints": "[1.0.0, )",
-          "Realtime.Infrastructure": "[1.0.0, )"
+          "Realtime.Infrastructure": "[1.0.0, )",
+          "Reporting.Endpoints": "[1.0.0, )",
+          "Reporting.Infrastructure": "[1.0.0, )"
         }
       },
       "paqueteria.application": {
@@ -982,6 +984,41 @@
           "Realtime.Application": "[1.0.0, )",
           "Realtime.Domain": "[1.0.0, )",
           "Realtime.Endpoints": "[1.0.0, )"
+        }
+      },
+      "reporting.application": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Reporting.Domain": "[1.0.0, )"
+        }
+      },
+      "reporting.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "reporting.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Reporting.Application": "[1.0.0, )"
+        }
+      },
+      "reporting.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Npgsql": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )",
+          "Reporting.Application": "[1.0.0, )",
+          "Reporting.Domain": "[1.0.0, )"
         }
       },
       "AWSSDK.S3": {

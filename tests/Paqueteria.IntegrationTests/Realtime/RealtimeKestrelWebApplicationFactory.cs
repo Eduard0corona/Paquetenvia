@@ -90,6 +90,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 ["Orders:CommandTimeoutSeconds"] = "5",
                 ["Tenancy:Provider"] = "PostgreSql",
                 ["Tenancy:CommandTimeoutSeconds"] = "5",
+                ["OperationsDashboard:Provider"] = "PostgreSql",
+                ["OperationsDashboard:CommandTimeoutSeconds"] = "5",
                 ["Realtime:Provider"] = "SignalR",
                 ["Realtime:Backplane"] = "InProcess",
                 ["Realtime:AllowedOrigins:0"] = _allowedOrigin,

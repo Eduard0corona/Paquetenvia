@@ -127,6 +127,8 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 ["PublicTracking:AllowedOrigins:0"] = "https://tracking.synthetic.local",
                 ["Tenancy:Provider"] = "PostgreSql",
                 ["Tenancy:CommandTimeoutSeconds"] = "5",
+                ["OperationsDashboard:Provider"] = "PostgreSql",
+                ["OperationsDashboard:CommandTimeoutSeconds"] = "5",
                 ["ConnectionStrings:Paqueteria"] = _applicationConnectionString,
             }));
         if (_trackingTokenHasher is not null)
