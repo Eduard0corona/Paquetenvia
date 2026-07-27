@@ -30,5 +30,7 @@
     <ProjectReference Include="..\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

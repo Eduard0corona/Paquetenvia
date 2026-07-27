@@ -24,6 +24,8 @@ using Realtime.Endpoints;
 using Realtime.Infrastructure;
 using Custody.Endpoints;
 using Custody.Infrastructure;
+using Reporting.Endpoints;
+using Reporting.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -49,6 +51,8 @@ builder.Services.AddRealtimeInfrastructure(builder.Configuration, builder.Enviro
 builder.Services.AddRealtimeOutboxDispatchers(builder.Configuration);
 builder.Services.AddRealtimeEndpoints(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(builder.Configuration, builder.Environment);
+builder.Services.AddReportingInfrastructure(builder.Configuration);
+builder.Services.AddReportingEndpoints();
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
@@ -121,6 +125,7 @@ app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapRealtimeHubs();
 app.MapProofEndpoints();
+app.MapOperationsDashboardEndpoints();
 
 app.Run();
 
