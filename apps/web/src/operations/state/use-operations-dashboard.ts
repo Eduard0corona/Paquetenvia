@@ -5,6 +5,7 @@ import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import type {
   OperationsDashboardFilters,
   OperationsDashboardOrder,
+  OperationsDashboardResponse,
   OperationsOrganizationContext,
 } from "../contracts/operations-dashboard";
 import {
@@ -22,6 +23,11 @@ import {
   noOpOperationsTelemetry,
   type OperationsDashboardTelemetry,
 } from "../telemetry/operations-telemetry";
+import {
+  AuthoritativeRefreshCoordinator,
+  RefreshScopeChangedError,
+  type RefreshRequirement,
+} from "./authoritative-refresh-coordinator";
 
 type ConnectionState =
   | "Sin sesión"
@@ -74,8 +80,10 @@ export function useOperationsDashboard(
   const abortRef = useRef<AbortController | null>(null);
   const filtersRef = useRef(filters);
   const itemsRef = useRef(items);
-  const inFlightRef = useRef(false);
-  const pendingRefreshRef = useRef(false);
+  const refreshCoordinatorRef = useRef(
+    new AuthoritativeRefreshCoordinator<OperationsDashboardResponse>(),
+  );
+  const refreshScopeRef = useRef(0);
   const operationsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenCursorsRef = useRef(new Set<string>());
@@ -90,6 +98,8 @@ export function useOperationsDashboard(
   }, []);
 
   const clearForSessionChange = useCallback(async () => {
+    refreshScopeRef.current += 1;
+    refreshCoordinatorRef.current.cancel();
     abortRef.current?.abort();
     abortRef.current = null;
     clearTimers();
@@ -108,72 +118,94 @@ export function useOperationsDashboard(
   }, [clearTimers]);
 
   const performLoad = useCallback(
-    async (mode: "replace" | "append", trigger: string) => {
+    async (
+      mode: "replace" | "append",
+      trigger: string,
+      requirement: RefreshRequirement = "normal",
+    ): Promise<OperationsDashboardResponse | null> => {
       const api = apiRef.current;
       const session = sessionRef.current;
-      if (api === null || session === null || document.hidden) return;
-      if (inFlightRef.current) {
-        pendingRefreshRef.current = true;
-        return;
-      }
-      inFlightRef.current = true;
-      telemetry.refreshTriggered(trigger);
-      const controller = new AbortController();
-      abortRef.current?.abort();
-      abortRef.current = controller;
-      if (mode === "replace") setLoading(true);
-      else setLoadingMore(true);
+      const scope = refreshScopeRef.current;
+      if (
+        api === null ||
+        session === null ||
+        (requirement === "normal" && document.hidden)
+      )
+        return null;
+
       try {
-        const requestFilters =
-          mode === "append" && nextCursorRef.current !== null
-            ? { ...filtersRef.current, cursor: nextCursorRef.current }
-            : { ...filtersRef.current, cursor: undefined };
-        const response = await api.list(requestFilters, controller.signal);
-        if (sessionRef.current !== session) return;
-        if (
-          response.next_cursor !== null &&
-          seenCursorsRef.current.has(response.next_cursor)
-        ) {
-          throw new Error("Cursor cycle.");
-        }
-        if (response.next_cursor !== null)
-          seenCursorsRef.current.add(response.next_cursor);
-        const merged =
-          mode === "append"
-            ? mergeOperationsOrders(itemsRef.current, response.items)
-            : [...response.items];
-        setItems(merged);
-        itemsRef.current = merged;
-        setNextCursor(response.next_cursor);
-        nextCursorRef.current = response.next_cursor;
-        setLastUpdated(new Date(response.generated_at));
-        setError(null);
-        setAccessUnavailable(false);
-        telemetry.lookupCompleted("rest");
+        return await refreshCoordinatorRef.current.request({
+          requirement,
+          isCurrent: () =>
+            refreshScopeRef.current === scope &&
+            sessionRef.current === session &&
+            apiRef.current === api,
+          execute: async (signal) => {
+            telemetry.refreshTriggered(trigger);
+            if (mode === "replace") setLoading(true);
+            else setLoadingMore(true);
+            try {
+              const requestFilters =
+                mode === "append" && nextCursorRef.current !== null
+                  ? { ...filtersRef.current, cursor: nextCursorRef.current }
+                  : { ...filtersRef.current, cursor: undefined };
+              return await api.list(requestFilters, signal);
+            } finally {
+              if (mode === "replace") setLoading(false);
+              else setLoadingMore(false);
+            }
+          },
+          apply: (response) => {
+            if (
+              mode === "append" &&
+              response.next_cursor !== null &&
+              seenCursorsRef.current.has(response.next_cursor)
+            ) {
+              throw new Error("Cursor cycle.");
+            }
+            if (mode === "replace") seenCursorsRef.current.clear();
+            if (response.next_cursor !== null)
+              seenCursorsRef.current.add(response.next_cursor);
+            const merged =
+              mode === "append"
+                ? mergeOperationsOrders(itemsRef.current, response.items)
+                : [...response.items];
+            setItems(merged);
+            itemsRef.current = merged;
+            setNextCursor(response.next_cursor);
+            nextCursorRef.current = response.next_cursor;
+            setLastUpdated(new Date(response.generated_at));
+            setError(null);
+            setAccessUnavailable(false);
+            telemetry.lookupCompleted("rest");
+          },
+        });
       } catch (caught: unknown) {
-        if (controller.signal.aborted) return;
+        if (caught instanceof RefreshScopeChangedError) {
+          if (requirement === "mandatory-reconnect") throw caught;
+          return null;
+        }
         const category =
           caught instanceof OperationsApiError ? caught.category : "contract";
         telemetry.lookupFailed(category);
         if (category === "unauthorized" || category === "forbidden") {
           setItems([]);
           itemsRef.current = [];
+          setNextCursor(null);
+          nextCursorRef.current = null;
+          seenCursorsRef.current.clear();
+          setLastUpdated(null);
           setAccessUnavailable(true);
           setConnection("Sin conexión");
-          await connectionRef.current?.stop().catch(() => undefined);
-          connectionRef.current = null;
+          if (requirement === "normal") {
+            await connectionRef.current?.stop().catch(() => undefined);
+            connectionRef.current = null;
+          }
         } else {
           setError("No fue posible actualizar las operaciones.");
         }
-      } finally {
-        if (abortRef.current === controller) abortRef.current = null;
-        inFlightRef.current = false;
-        setLoading(false);
-        setLoadingMore(false);
-        if (pendingRefreshRef.current) {
-          pendingRefreshRef.current = false;
-          window.dispatchEvent(new Event("paquetenvia:operations-coalesced"));
-        }
+        if (requirement === "mandatory-reconnect") throw caught;
+        return null;
       }
     },
     [telemetry],
@@ -229,10 +261,15 @@ export function useOperationsDashboard(
         resynchronize: async () => {
           if (readOperationsSession() !== session)
             throw new Error("Session changed.");
-          await performLoad("replace", "reconnect");
+          const response = await performLoad(
+            "replace",
+            "reconnect",
+            "mandatory-reconnect",
+          );
+          if (response === null) throw new Error("Session changed.");
           return {
             aggregate_versions: Object.fromEntries(
-              itemsRef.current.map((item) => [
+              response.items.map((item) => [
                 item.order_id,
                 item.aggregate_version,
               ]),
@@ -240,14 +277,17 @@ export function useOperationsDashboard(
           };
         },
         reconnecting: () => {
+          if (sessionRef.current !== session) return;
           setConnection("Reconectando");
           telemetry.realtimeStateChanged("reconnecting");
         },
         connected: () => {
+          if (sessionRef.current !== session) return;
           setConnection("Conectada");
           telemetry.realtimeStateChanged("connected");
         },
         unavailable: () => {
+          if (sessionRef.current !== session) return;
           setConnection("Sin conexión");
           telemetry.realtimeStateChanged("unavailable");
         },
@@ -291,13 +331,6 @@ export function useOperationsDashboard(
   }, [startSession]);
 
   useEffect(() => {
-    const coalesced = () => void performLoad("replace", "coalesced");
-    window.addEventListener("paquetenvia:operations-coalesced", coalesced);
-    return () =>
-      window.removeEventListener("paquetenvia:operations-coalesced", coalesced);
-  }, [performLoad]);
-
-  useEffect(() => {
     const onVisibility = () => {
       if (!document.hidden) void performLoad("replace", "visibility");
     };
@@ -314,6 +347,7 @@ export function useOperationsDashboard(
 
   useEffect(
     () => () => {
+      refreshCoordinatorRef.current.cancel();
       abortRef.current?.abort();
       clearTimers();
       void connectionRef.current?.stop();
@@ -329,7 +363,8 @@ export function useOperationsDashboard(
       seenCursorsRef.current.clear();
       setNextCursor(null);
       nextCursorRef.current = null;
-      abortRef.current?.abort();
+      refreshScopeRef.current += 1;
+      refreshCoordinatorRef.current.cancel();
       void performLoad("replace", "filter");
     },
     [performLoad, telemetry],

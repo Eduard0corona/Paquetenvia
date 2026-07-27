@@ -92,10 +92,26 @@ payload muta el snapshot: REST/PostgreSQL siempre reemplaza el estado. Debounce
 es 250 ms para negocio y 500 ms para ubicación; una señal durante una lectura
 genera como máximo una lectura adicional.
 
-Al reconectar se verifica sesión, se relee REST y sólo después se marca
-`Conectada`. Polling corre cada 30 segundos, pausa al ocultar el documento y
-refresca al volver visible. Al cambiar organización se abortan requests, se
-detiene el Hub y se limpia A antes de cargar B.
+Dashboard y detalle comparten un coordinador single-flight que distingue
+refresh normal de `mandatory-reconnect`. Se eligió serializar y forzar una
+segunda lectura: una request normal iniciada antes del reconnect puede terminar,
+pero nunca satisface la resincronización; la lectura obligatoria comienza
+después y tiene prioridad sobre la única lectura normal adicional agrupada.
+
+En dashboard, la respuesta obligatoria reemplaza la primera página, limpia
+páginas y cursores anteriores y produce `aggregate_versions` directamente de
+sus items. En detalle, `GET /api/v1/orders/{orderId}` y la proyección filtrada
+se completan juntos, se exige exactamente un item y las versiones proceden de
+esa proyección exacta. La promesa sólo resuelve tras aplicar el snapshot con la
+misma sesión y organización.
+
+Al reconectar sólo se marca `Conectada` después de la lectura obligatoria,
+validación, aplicación y reemplazo del guard. Cualquier 401, 403, 404 de
+detalle, 5xx, fallo de red/timeout/contrato o cambio de sesión rechaza la
+resincronización; SignalR pasa a `Sin conexión` y detiene el Hub. Polling corre
+cada 30 segundos, pausa al ocultar el documento y refresca al volver visible.
+Al cambiar organización se cancelan requests, se detiene el Hub y se limpia A
+antes de cargar B.
 
 Todas las fechas usan `America/Mazatlan`. Posiciones utiliza únicamente puntos
 persistidos visibles, normalizados en SVG interno, con referencia, captura y
@@ -125,10 +141,14 @@ lista semánticas, `time datetime`, aria-live/aria-busy, foco visible, targets d
 - `OperationsDashboardPostgreSql`: PostgreSQL/PostGIS real, RLS, autorización,
   aislamiento, filtros, respuesta/headers y privacidad.
 - Vitest: parsers, API/filtros, labels/zona horaria, SW, CSP, almacenamiento y
-  acciones.
+  acciones; deferreds cubren single-flight, request previa, lectura obligatoria,
+  snapshot exacto, cambio de sesión, fallo y el par de detalle.
 - `OperationsDashboardPwa`: PostgreSQL, Kestrel, Worker/outbox, OperationsHub,
   Next y Chromium reales; transición, ubicación, REST refresh, tenant switch,
-  reconnect, detalle, privacidad y ausencia de requests cartográficos.
+  reconnect, detalle, privacidad y ausencia de requests cartográficos. Una
+  compuerta de transporte retrasa una request real previa, comprueba una segunda
+  lectura posterior al reconnect y un provider `Disabled` prueba el 503 sin
+  mostrar `Conectada`.
 - `Validate operations dashboard` hace restore locked, build, frozen install,
   Chromium, ambas categorías, resultados sólo al fallar y cleanup.
 

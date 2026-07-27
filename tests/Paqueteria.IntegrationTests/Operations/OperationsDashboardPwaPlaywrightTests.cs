@@ -33,6 +33,9 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 enableDriverApiCors: true,
                 configurationOverrides: DashboardConfiguration());
         RealtimeKestrelWebApplicationFactory? restoredApi = null;
+        RealtimeKestrelWebApplicationFactory? unavailableApi = null;
+        var releasePriorDashboardRequest =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             var apiAddress = api.Start();
@@ -213,11 +216,41 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                     AriaRole.Button,
                     new() { Name = "Lista", Exact = true })
                 .ClickAsync();
-            var requestCountBeforeReconnect = DashboardRequestCount(requests);
+            var delayNextDashboardRequest = 1;
+            var delayedDashboardRequestStarted =
+                new TaskCompletionSource<DateTimeOffset>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            var routedDashboardRequests =
+                new ConcurrentQueue<DateTimeOffset>();
+            await page.RouteAsync(
+                "**/api/v1/operations/dashboard**",
+                async route =>
+                {
+                    var startedAt = DateTimeOffset.UtcNow;
+                    routedDashboardRequests.Enqueue(startedAt);
+                    if (Interlocked.Exchange(
+                            ref delayNextDashboardRequest,
+                            0) == 1)
+                    {
+                        delayedDashboardRequestStarted.TrySetResult(startedAt);
+                        await releasePriorDashboardRequest.Task;
+                    }
+                    await route.ContinueAsync();
+                });
+            await page.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Actualizar", Exact = true })
+                .ClickAsync();
+            var priorRequestStartedAt =
+                await delayedDashboardRequestStarted.Task.WaitAsync(
+                    TimeSpan.FromSeconds(10));
             var apiPort = apiAddress.Port;
             await api.DisposeAsync();
             api = null;
             await page.GetByText("Reconectando", new() { Exact = true }).WaitForAsync();
+            var reconnectObservedAt = DateTimeOffset.UtcNow;
+            var latestStatusEvent =
+                await database.EnqueueRealtimeStatusAsync(isPublic: false);
             restoredApi = new RealtimeKestrelWebApplicationFactory(
                 database.ApplicationConnectionString,
                 recorder,
@@ -227,9 +260,31 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 enableDriverApiCors: true,
                 configurationOverrides: DashboardConfiguration());
             Assert.Equal(apiAddress, restoredApi.Start());
+            Assert.Equal(
+                "PROCESSED",
+                await WaitForOutboxAsync(database, latestStatusEvent.OutboxId));
+            Assert.False(
+                await page.GetByText("Conectada", new() { Exact = true })
+                    .IsVisibleAsync());
+            releasePriorDashboardRequest.TrySetResult();
+            await WaitForRoutedDashboardRequestsAsync(
+                routedDashboardRequests,
+                count: 2);
+            var reconnectRequests = routedDashboardRequests.ToArray();
+            Assert.Equal(2, reconnectRequests.Length);
+            Assert.Equal(priorRequestStartedAt, reconnectRequests[0]);
+            Assert.True(
+                reconnectRequests[1] >= reconnectObservedAt,
+                $"Mandatory REST started at {reconnectRequests[1]:O}, " +
+                $"before reconnect was observed at {reconnectObservedAt:O}.");
+            await page.Locator(".opsOrderCard .opsStatus")
+                .GetByText("Cerrada", new() { Exact = true })
+                .WaitForAsync(new LocatorWaitForOptions { Timeout = 30_000 });
             await page.GetByText("Conectada", new() { Exact = true }).WaitForAsync(
                 new LocatorWaitForOptions { Timeout = 30_000 });
-            await WaitForDashboardRequestAsync(requests, requestCountBeforeReconnect);
+            Assert.Equal(
+                2,
+                routedDashboardRequests.Count);
 
             var documentsBeforeDetail = requests.Count(
                 request => request.ResourceType == "document");
@@ -305,9 +360,41 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                         "/api/v1/operations/dashboard",
                         StringComparison.Ordinal) ||
                     value.Contains("/hubs/operations", StringComparison.Ordinal));
+
+            await page.EvaluateAsync(
+                """
+                () => {
+                  window.__operationsConnectionTransitions = [];
+                  const status = document.querySelector(
+                    ".opsHeaderStatus span:first-child");
+                  new MutationObserver(() => {
+                    window.__operationsConnectionTransitions.push(
+                      status?.textContent?.trim() ?? "");
+                  }).observe(status, { childList: true, subtree: true });
+                }
+                """);
+            await restoredApi.DisposeAsync();
+            restoredApi = null;
+            await page.GetByText("Reconectando", new() { Exact = true }).WaitForAsync();
+            unavailableApi = new RealtimeKestrelWebApplicationFactory(
+                database.ApplicationConnectionString,
+                recorder,
+                apiPort,
+                database.WorkerConnectionString,
+                allowedOrigin: nextOrigin,
+                enableDriverApiCors: true,
+                configurationOverrides: DashboardConfiguration("Disabled"));
+            Assert.Equal(apiAddress, unavailableApi.Start());
+            await page.GetByText("Sin conexión", new() { Exact = true }).WaitForAsync(
+                new LocatorWaitForOptions { Timeout = 30_000 });
+            await Task.Delay(1_000);
+            var failureTransitions = await page.EvaluateAsync<string[]>(
+                "() => window.__operationsConnectionTransitions");
+            Assert.DoesNotContain("Conectada", failureTransitions);
         }
         finally
         {
+            releasePriorDashboardRequest.TrySetResult();
             if (api is not null)
             {
                 await api.DisposeAsync();
@@ -316,13 +403,18 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             {
                 await restoredApi.DisposeAsync();
             }
+            if (unavailableApi is not null)
+            {
+                await unavailableApi.DisposeAsync();
+            }
         }
     }
 
-    private static IReadOnlyDictionary<string, string?> DashboardConfiguration() =>
+    private static IReadOnlyDictionary<string, string?> DashboardConfiguration(
+        string provider = "PostgreSql") =>
         new Dictionary<string, string?>
         {
-            ["OperationsDashboard:Provider"] = "PostgreSql",
+            ["OperationsDashboard:Provider"] = provider,
             ["OperationsDashboard:CommandTimeoutSeconds"] = "5",
             ["OperationsDashboard:DefaultPageSize"] = "50",
             ["OperationsDashboard:MaximumPageSize"] = "100",
@@ -430,6 +522,23 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             await Task.Delay(50);
         }
         Assert.Fail("The dashboard did not refresh through REST.");
+    }
+
+    private static async Task WaitForRoutedDashboardRequestsAsync(
+        ConcurrentQueue<DateTimeOffset> requests,
+        int count)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (requests.Count >= count)
+            {
+                return;
+            }
+            await Task.Delay(50);
+        }
+        Assert.Fail(
+            $"Expected {count} routed dashboard requests, observed {requests.Count}.");
     }
 
     private static async Task<string?> WaitForOutboxAsync(

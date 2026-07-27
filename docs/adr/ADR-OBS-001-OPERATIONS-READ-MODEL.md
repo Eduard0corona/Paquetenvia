@@ -46,6 +46,19 @@ OperationsHub se deduplican y disparan refresh con debounce de 250 ms; ubicació
 usa 500 ms. Reconexión, polling y cambio de organización también vuelven a
 leer REST. Todo estado vive en memoria de la pestaña.
 
+Dashboard y detalle usan un coordinador single-flight común. Un refresh normal
+puede agrupar señales y ejecutar como máximo una lectura adicional. El refresh
+obligatorio de reconnect tiene prioridad y aplica la estrategia de serializar y
+forzar una segunda lectura: espera la request previa, pero siempre inicia otra
+lectura REST asociada a la sesión y organización vigentes.
+
+El snapshot de versiones del dashboard se deriva de los items de esa respuesta
+obligatoria exacta. El detalle completa conjuntamente orden y proyección
+filtrada, exige un item y deriva las versiones de esa misma proyección. Sólo
+después de validar y aplicar se reemplaza el guard y se informa `Conectada`.
+Errores REST, red, timeout, contrato o cambio de sesión rechazan la
+resincronización, informan `Sin conexión` y detienen el Hub.
+
 La vista `Posiciones` normaliza puntos en un panel interno sin proveedor
 cartográfico, tiles, geolocalización del navegador o requests externas.
 GATE-003 permanece abierto.
@@ -55,6 +68,8 @@ GATE-003 permanece abierto.
 - El endpoint es aditivo y todavía no forma parte de AI-05 normativo.
 - No se agrega DDL, migración, tabla, vista, índice, producer ni paquete.
 - La lectura combina módulos sin transferir autoridad de escritura a Reporting.
+- La carrera reconnect/request previa y el fallo 503 se verifican sobre el
+  pipeline real; las variantes del coordinador se cubren con deferreds.
 - `Disabled` devuelve 503 genérico y degrada readiness.
 - Las posiciones exactas sólo aparecen a operaciones autorizadas.
 - La UI no asigna conductores ni implementa ofertas, rutas o incidencias.

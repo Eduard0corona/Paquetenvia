@@ -17,6 +17,17 @@ import {
   subscribeToOperationsSession,
   type OperationsSession,
 } from "../session/operations-session";
+import {
+  AuthoritativeRefreshCoordinator,
+  RefreshScopeChangedError,
+  type RefreshRequirement,
+} from "./authoritative-refresh-coordinator";
+
+interface OrderDetailRefreshResult {
+  readonly detail: OperationsOrderDetail;
+  readonly projection: OperationsDashboardOrder;
+  readonly generatedAt: string;
+}
 
 export interface OperationsOrderDetailState {
   readonly order: OperationsOrderDetail | null;
@@ -48,65 +59,82 @@ export function useOperationsOrderDetail(
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const sessionRef = useRef<OperationsSession | null>(null);
   const connectionRef = useRef<ManagedRealtimeConnection | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inFlightRef = useRef(false);
-  const pendingRef = useRef(false);
-  const projectionRef = useRef(projection);
+  const refreshCoordinatorRef = useRef(
+    new AuthoritativeRefreshCoordinator<OrderDetailRefreshResult>(),
+  );
+  const refreshScopeRef = useRef(0);
   const blockedRef = useRef(false);
   const load = useCallback(
-    async (api: OperationsDashboardApi, session: OperationsSession) => {
-      if (inFlightRef.current) {
-        pendingRef.current = true;
-        return;
-      }
-      inFlightRef.current = true;
-      const controller = new AbortController();
-      abortRef.current?.abort();
-      abortRef.current = controller;
-      setLoading(true);
+    async (
+      api: OperationsDashboardApi,
+      session: OperationsSession,
+      requirement: RefreshRequirement = "normal",
+    ): Promise<OrderDetailRefreshResult | null> => {
+      const scope = refreshScopeRef.current;
       try {
-        const [detail, page] = await Promise.all([
-          api.getOrder(orderId, controller.signal),
-          api.list({ orderId }, controller.signal),
-        ]);
-        if (sessionRef.current !== session) return;
-        if (page.items.length !== 1) throw new OperationsApiError("not_found");
-        setOrder(detail);
-        setProjection(page.items[0]);
-        projectionRef.current = page.items[0];
-        setNotFound(false);
-        setAccessUnavailable(false);
-        setError(null);
-        setLastUpdated(new Date(page.generated_at));
+        return await refreshCoordinatorRef.current.request({
+          requirement,
+          isCurrent: () =>
+            refreshScopeRef.current === scope &&
+            sessionRef.current === session &&
+            apiRef.current === api,
+          execute: async (signal) => {
+            setLoading(true);
+            try {
+              const [detail, page] = await Promise.all([
+                api.getOrder(orderId, signal),
+                api.list({ orderId }, signal),
+              ]);
+              if (page.items.length === 0)
+                throw new OperationsApiError("not_found");
+              if (page.items.length !== 1)
+                throw new OperationsApiError("invalid");
+              return {
+                detail,
+                projection: page.items[0],
+                generatedAt: page.generated_at,
+              };
+            } finally {
+              setLoading(false);
+            }
+          },
+          apply: (result) => {
+            setOrder(result.detail);
+            setProjection(result.projection);
+            setNotFound(false);
+            setAccessUnavailable(false);
+            setError(null);
+            setLastUpdated(new Date(result.generatedAt));
+          },
+        });
       } catch (caught: unknown) {
-        if (controller.signal.aborted) return;
+        if (caught instanceof RefreshScopeChangedError) {
+          if (requirement === "mandatory-reconnect") throw caught;
+          return null;
+        }
         const category =
           caught instanceof OperationsApiError ? caught.category : "unavailable";
         if (category === "not_found") {
           setNotFound(true);
           setOrder(null);
           setProjection(null);
+          setLastUpdated(null);
         } else if (category === "unauthorized" || category === "forbidden") {
           blockedRef.current = true;
           setAccessUnavailable(true);
           setOrder(null);
           setProjection(null);
-          await connectionRef.current?.stop().catch(() => undefined);
-          connectionRef.current = null;
+          setLastUpdated(null);
+          if (requirement === "normal") {
+            await connectionRef.current?.stop().catch(() => undefined);
+            connectionRef.current = null;
+          }
         } else {
           setError("No fue posible actualizar la orden.");
         }
-      } finally {
-        if (abortRef.current === controller) abortRef.current = null;
-        inFlightRef.current = false;
-        setLoading(false);
-        if (pendingRef.current) {
-          pendingRef.current = false;
-          window.dispatchEvent(
-            new Event("paquetenvia:operations-detail-coalesced"),
-          );
-        }
+        if (requirement === "mandatory-reconnect") throw caught;
+        return null;
       }
     },
     [orderId],
@@ -126,7 +154,8 @@ export function useOperationsOrderDetail(
   );
 
   const start = useCallback(async () => {
-    abortRef.current?.abort();
+    refreshScopeRef.current += 1;
+    refreshCoordinatorRef.current.cancel();
     if (timerRef.current !== null) clearTimeout(timerRef.current);
     await connectionRef.current?.stop().catch(() => undefined);
     connectionRef.current = null;
@@ -153,16 +182,25 @@ export function useOperationsOrderDetail(
       refreshLocation: () => schedule(500),
       resynchronize: async () => {
         if (readOperationsSession() !== session) throw new Error("Session changed.");
-        await load(api, session);
-        const item = projectionRef.current;
+        const result = await load(api, session, "mandatory-reconnect");
+        if (result === null) throw new Error("Session changed.");
         return {
-          aggregate_versions:
-            item === null ? {} : { [item.order_id]: item.aggregate_version },
+          aggregate_versions: {
+            [result.projection.order_id]: result.projection.aggregate_version,
+          },
         };
       },
-      reconnecting: () => setConnectionState("Reconectando"),
-      connected: () => setConnectionState("Conectada"),
-      unavailable: () => setConnectionState("Sin conexión"),
+      reconnecting: () => {
+        if (sessionRef.current === session)
+          setConnectionState("Reconectando");
+      },
+      connected: () => {
+        if (sessionRef.current === session) setConnectionState("Conectada");
+      },
+      unavailable: () => {
+        if (sessionRef.current === session)
+          setConnectionState("Sin conexión");
+      },
     });
     connectionRef.current = realtime;
     try {
@@ -183,23 +221,6 @@ export function useOperationsOrderDetail(
   }, [start]);
 
   useEffect(() => {
-    const coalesced = () => {
-      const api = apiRef.current;
-      const session = sessionRef.current;
-      if (api !== null && session !== null) void load(api, session);
-    };
-    window.addEventListener(
-      "paquetenvia:operations-detail-coalesced",
-      coalesced,
-    );
-    return () =>
-      window.removeEventListener(
-        "paquetenvia:operations-detail-coalesced",
-        coalesced,
-      );
-  }, [load]);
-
-  useEffect(() => {
     const onVisible = () => {
       if (document.hidden) return;
       const api = apiRef.current;
@@ -218,7 +239,7 @@ export function useOperationsOrderDetail(
 
   useEffect(
     () => () => {
-      abortRef.current?.abort();
+      refreshCoordinatorRef.current.cancel();
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       void connectionRef.current?.stop();
     },
