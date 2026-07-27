@@ -45,6 +45,50 @@ describe("DRV-001 OpenAPI alignment", () => {
   });
 });
 
+describe("DRV-002 existing OpenAPI alignment", () => {
+  it.each([
+    ["/driver/me/stops:", "listMyStops"],
+    ["/orders/{orderId}/transitions:", "transitionOrder"],
+    ["/orders/{orderId}/proof-upload-sessions:", "createProofUploadSession"],
+    ["/orders/{orderId}/proofs:", "finalizeProof"],
+  ])("uses the existing %s operation", (path, operationId) => {
+    const start = openApi.indexOf(`  ${path}`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(openApi.slice(start, start + 1_500)).toContain(
+      `operationId: ${operationId}`,
+    );
+  });
+
+  it("keeps transition and proof request field names exact", () => {
+    const transition = sliceBetween(
+      openApi,
+      "    TransitionRequest:",
+      "    CreateAssignmentRequest:",
+    );
+    for (const field of [
+      "target_status",
+      "reason",
+      "expected_version",
+      "metadata",
+    ]) {
+      expect(transition).toContain(`${field}:`);
+    }
+    const finalization = sliceBetween(
+      openApi,
+      "    FinalizeProofRequest:",
+      "    DriverLocationPoint:",
+    );
+    for (const field of [
+      "upload_session_id",
+      "proof_type",
+      "captured_at",
+      "sha256",
+    ]) {
+      expect(finalization).toContain(`${field}:`);
+    }
+  });
+});
+
 function sliceBetween(source: string, start: string, end: string): string {
   const startIndex = source.indexOf(start);
   const endIndex = source.indexOf(end, startIndex + start.length);

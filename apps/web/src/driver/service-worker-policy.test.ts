@@ -6,7 +6,7 @@ const source = readFileSync(resolve(process.cwd(), "public/sw.js"), "utf8");
 
 describe("driver Service Worker policy", () => {
   it("uses a versioned driver-owned cache", () => {
-    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v2"');
+    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v3"');
     expect(source).toContain('"paquetenvia-driver-shell-"');
   });
 
@@ -64,5 +64,13 @@ describe("driver Service Worker policy", () => {
   it("does not cache Set-Cookie or opaque responses", () => {
     expect(source).toContain('response.headers.has("Set-Cookie")');
     expect(source).toContain('response.type !== "opaque"');
+  });
+
+  it("leaves mutations, proof uploads and queue ownership to the active page", () => {
+    expect(source).toContain('request.method !== "GET"');
+    expect(source).not.toContain('addEventListener("sync"');
+    expect(source).not.toContain("SyncManager");
+    expect(source).not.toContain("indexedDB");
+    expect(source).not.toContain("Authorization: Bearer");
   });
 });

@@ -101,6 +101,32 @@ export class DriverStopsController {
     await this.refresh("manual");
   }
 
+  public async refreshForSync(
+    signal?: AbortSignal,
+  ): Promise<readonly DriverStop[]> {
+    if (this.disposed || !this.partition) return [];
+    const stops = await this.options.api.listStops(signal);
+    await this.acceptAuthoritativeStops(stops);
+    return stops;
+  }
+
+  public async revokeAccess(
+    category: "unauthorized" | "forbidden",
+  ): Promise<void> {
+    await this.stopRealtime();
+    this.abortController?.abort();
+    if (this.partition) {
+      await this.options.cache.clearPartition(this.partition).catch(() => undefined);
+    }
+    this.setState({
+      phase: category,
+      stops: [],
+      synchronizedAt: null,
+      realtime: "offline",
+      refreshing: false,
+    });
+  }
+
   public scheduleRefresh(): void {
     if (this.disposed || this.refreshTimer !== null) {
       return;
@@ -149,21 +175,7 @@ export class DriverStopsController {
       if (this.disposed || request.signal.aborted) {
         return [];
       }
-      const synchronizedAt = this.now().toISOString();
-      const snapshot: DriverStopsSnapshot = Object.freeze({
-        schemaVersion: DriverStopsSchemaVersion,
-        synchronizedAt,
-        stops,
-      });
-      await this.options.cache.replaceSnapshot(this.partition, snapshot);
-      this.options.telemetry.loadCompleted("rest", driverStopCountBucket(stops.length));
-      this.setState({
-        phase: stops.length === 0 ? "empty" : "ready",
-        stops,
-        synchronizedAt,
-        realtime: "updated",
-        refreshing: false,
-      });
+      await this.acceptAuthoritativeStops(stops);
       await this.ensureRealtime();
       return stops;
     } catch (error) {
@@ -189,17 +201,7 @@ export class DriverStopsController {
       return;
     }
     if (error.category === "unauthorized" || error.category === "forbidden") {
-      await this.stopRealtime();
-      if (this.partition) {
-        await this.options.cache.clearPartition(this.partition).catch(() => undefined);
-      }
-      this.setState({
-        phase: error.category,
-        stops: [],
-        synchronizedAt: null,
-        realtime: "offline",
-        refreshing: false,
-      });
+      await this.revokeAccess(error.category);
       return;
     }
     if (error.category === "invalid-contract") {
@@ -248,6 +250,30 @@ export class DriverStopsController {
         refreshing: false,
       });
     }
+  }
+
+  private async acceptAuthoritativeStops(
+    stops: readonly DriverStop[],
+  ): Promise<void> {
+    if (!this.partition || this.disposed) return;
+    const synchronizedAt = this.now().toISOString();
+    const snapshot: DriverStopsSnapshot = Object.freeze({
+      schemaVersion: DriverStopsSchemaVersion,
+      synchronizedAt,
+      stops,
+    });
+    await this.options.cache.replaceSnapshot(this.partition, snapshot);
+    this.options.telemetry.loadCompleted(
+      "rest",
+      driverStopCountBucket(stops.length),
+    );
+    this.setState({
+      phase: stops.length === 0 ? "empty" : "ready",
+      stops,
+      synchronizedAt,
+      realtime: "updated",
+      refreshing: false,
+    });
   }
 
   private async ensureRealtime(): Promise<void> {

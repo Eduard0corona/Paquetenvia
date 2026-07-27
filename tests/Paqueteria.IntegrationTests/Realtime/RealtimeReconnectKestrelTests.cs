@@ -272,17 +272,24 @@ public sealed class RealtimeReconnectKestrelTests(
         await reconnecting.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await database.RevokeValidTrackingTokenAsync();
 
-        await using var restoredHost = new RealtimeKestrelWebApplicationFactory(
-            database.ApplicationConnectionString,
-            recorder,
-            port);
-        restoredHost.Start();
+        try
+        {
+            await using var restoredHost = new RealtimeKestrelWebApplicationFactory(
+                database.ApplicationConnectionString,
+                recorder,
+                port);
+            restoredHost.Start();
 
-        await closed.Task.WaitAsync(TimeSpan.FromSeconds(15));
-        Assert.False(reconnected.Task.IsCompleted);
-        Assert.Equal(HubConnectionState.Disconnected, connection.State);
-        Assert.True(recorder.TrackingCount > initialAuthorizationCount);
-        Assert.True(Volatile.Read(ref tokenFactoryCount) >= 2);
+            await closed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.False(reconnected.Task.IsCompleted);
+            Assert.Equal(HubConnectionState.Disconnected, connection.State);
+            Assert.True(recorder.TrackingCount > initialAuthorizationCount);
+            Assert.True(Volatile.Read(ref tokenFactoryCount) >= 2);
+        }
+        finally
+        {
+            await database.RestoreValidTrackingTokenAsync();
+        }
     }
 
     private static HubConnection CreateOperationsConnection(

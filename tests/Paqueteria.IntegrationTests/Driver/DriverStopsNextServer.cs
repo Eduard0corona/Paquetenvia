@@ -10,12 +10,18 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     private static readonly SemaphoreSlim ServerGate = new(1, 1);
     private readonly Process _process;
     private readonly StringBuilder _output;
+    private readonly FileStream _crossProcessLease;
 
-    private DriverStopsNextServer(Process process, Uri baseAddress, StringBuilder output)
+    private DriverStopsNextServer(
+        Process process,
+        Uri baseAddress,
+        StringBuilder output,
+        FileStream crossProcessLease)
     {
         _process = process;
         BaseAddress = baseAddress;
         _output = output;
+        _crossProcessLease = crossProcessLease;
     }
 
     internal Uri BaseAddress { get; }
@@ -32,12 +38,18 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         int? requestedPort = null)
     {
         await ServerGate.WaitAsync();
+        FileStream? crossProcessLease = null;
         try
         {
-            return await StartOwnedAsync(apiBaseUrl, requestedPort);
+            crossProcessLease = await AcquireCrossProcessLeaseAsync();
+            return await StartOwnedAsync(
+                apiBaseUrl,
+                requestedPort,
+                crossProcessLease);
         }
         catch
         {
+            crossProcessLease?.Dispose();
             ServerGate.Release();
             throw;
         }
@@ -45,7 +57,8 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
 
     private static async Task<DriverStopsNextServer> StartOwnedAsync(
         string? apiBaseUrl,
-        int? requestedPort)
+        int? requestedPort,
+        FileStream crossProcessLease)
     {
         var root = FindRepositoryRoot();
         var web = Path.Combine(root, "apps", "web");
@@ -108,7 +121,11 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                         timeout.Token);
                     if (response.IsSuccessStatusCode)
                     {
-                        return new DriverStopsNextServer(process, address, output);
+                        return new DriverStopsNextServer(
+                            process,
+                            address,
+                            output,
+                            crossProcessLease);
                     }
                 }
                 catch (HttpRequestException)
@@ -141,6 +158,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         finally
         {
             _process.Dispose();
+            _crossProcessLease.Dispose();
             ServerGate.Release();
         }
     }
@@ -185,6 +203,36 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
             }
         }
         throw new FileNotFoundException($"{fileName} was not found on PATH.");
+    }
+
+    private static async Task<FileStream> AcquireCrossProcessLeaseAsync()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            "paquetenvia-driver-next-server.lock");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        while (true)
+        {
+            try
+            {
+                return new FileStream(
+                    path,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.None);
+            }
+            catch (IOException) when (!timeout.IsCancellationRequested)
+            {
+                await Task.Delay(200, timeout.Token);
+            }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    "Timed out waiting for the isolated Next.js test server lease.");
+            }
+        }
     }
 
     private static void TryTerminate(Process process)

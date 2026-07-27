@@ -7,7 +7,13 @@ import type { DriverSession } from "../session/driver-session";
 
 export const DriverStopsDatabaseName = "paquetenvia-driver-stops-v1";
 export const DriverStopsStoreName = "snapshots";
-export const DriverStopsSchemaVersion = 1 as const;
+export const DriverDatabaseVersion = 2 as const;
+export const DriverStopsSnapshotSchemaVersion = 1 as const;
+/** @deprecated Use DriverStopsSnapshotSchemaVersion for persisted snapshots. */
+export const DriverStopsSchemaVersion = DriverStopsSnapshotSchemaVersion;
+export const DriverOfflineOperationsStoreName = "operations";
+export const DriverProofBlobsStoreName = "proof_blobs";
+export const DriverSyncLeasesStoreName = "sync_leases";
 
 export interface DriverCachePartition {
   readonly key: string;
@@ -56,9 +62,9 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
   public async readSnapshot(
     partition: DriverCachePartition,
   ): Promise<DriverStopsSnapshot | null> {
-    const database = await openDatabase();
+    const database = await openDriverDatabase();
     try {
-      const record = await request<PersistedSnapshot | undefined>(
+      const record = await driverDatabaseRequest<PersistedSnapshot | undefined>(
         database
           .transaction(DriverStopsStoreName, "readonly")
           .objectStore(DriverStopsStoreName)
@@ -81,7 +87,7 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
       { ...snapshot, partitionKey: partition.key },
       partition.key,
     );
-    const database = await openDatabase();
+    const database = await openDriverDatabase();
     try {
       const transaction = database.transaction(DriverStopsStoreName, "readwrite");
       transaction.objectStore(DriverStopsStoreName).put({
@@ -89,18 +95,18 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
         ...validated,
         stops: validated.stops.map((stop) => ({ ...stop })),
       } satisfies PersistedSnapshot);
-      await transactionCompleted(transaction);
+      await driverDatabaseTransactionCompleted(transaction);
     } finally {
       database.close();
     }
   }
 
   public async clearPartition(partition: DriverCachePartition): Promise<void> {
-    const database = await openDatabase();
+    const database = await openDriverDatabase();
     try {
       const transaction = database.transaction(DriverStopsStoreName, "readwrite");
       transaction.objectStore(DriverStopsStoreName).delete(partition.key);
-      await transactionCompleted(transaction);
+      await driverDatabaseTransactionCompleted(transaction);
     } finally {
       database.close();
     }
@@ -153,12 +159,47 @@ function isUtcTimestamp(value: string): boolean {
   return Number.isFinite(parsed) && value.endsWith("Z");
 }
 
-function openDatabase(): Promise<IDBDatabase> {
+export function openDriverDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const open = indexedDB.open(DriverStopsDatabaseName, DriverStopsSchemaVersion);
+    const open = indexedDB.open(DriverStopsDatabaseName, DriverDatabaseVersion);
     open.onupgradeneeded = () => {
       if (!open.result.objectStoreNames.contains(DriverStopsStoreName)) {
         open.result.createObjectStore(DriverStopsStoreName, {
+          keyPath: "partitionKey",
+        });
+      }
+      if (!open.result.objectStoreNames.contains(DriverOfflineOperationsStoreName)) {
+        const operations = open.result.createObjectStore(
+          DriverOfflineOperationsStoreName,
+          { keyPath: ["partitionKey", "id"] },
+        );
+        operations.createIndex("by_partition", "partitionKey");
+        operations.createIndex("by_partition_order", [
+          "partitionKey",
+          "orderId",
+        ]);
+        operations.createIndex("by_partition_status", [
+          "partitionKey",
+          "status",
+        ]);
+        operations.createIndex("by_partition_next_attempt", [
+          "partitionKey",
+          "nextAttemptAt",
+        ]);
+        operations.createIndex("by_partition_created", [
+          "partitionKey",
+          "createdAt",
+          "id",
+        ]);
+      }
+      if (!open.result.objectStoreNames.contains(DriverProofBlobsStoreName)) {
+        const blobs = open.result.createObjectStore(DriverProofBlobsStoreName, {
+          keyPath: ["partitionKey", "operationId"],
+        });
+        blobs.createIndex("by_partition", "partitionKey");
+      }
+      if (!open.result.objectStoreNames.contains(DriverSyncLeasesStoreName)) {
+        open.result.createObjectStore(DriverSyncLeasesStoreName, {
           keyPath: "partitionKey",
         });
       }
@@ -169,14 +210,16 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-function request<T>(value: IDBRequest<T>): Promise<T> {
+export function driverDatabaseRequest<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     value.onsuccess = () => resolve(value.result);
     value.onerror = () => reject(new DriverStopsCacheError());
   });
 }
 
-function transactionCompleted(transaction: IDBTransaction): Promise<void> {
+export function driverDatabaseTransactionCompleted(
+  transaction: IDBTransaction,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(new DriverStopsCacheError());

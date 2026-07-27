@@ -4,15 +4,31 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveDriverApiBaseUrl } from "../api/api-base-url";
-import { createDriverStopsApi } from "../api/driver-stops-api";
+import {
+  createDriverStopsApi,
+  DriverStopsApiError,
+} from "../api/driver-stops-api";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
 import {
   driverStopStatusLabel,
   driverStopTypeLabel,
 } from "../contracts/labels";
+import {
+  createDriverSyncApi,
+  DriverSyncApiError,
+} from "../offline/driver-sync-api";
+import {
+  nextDriverOperationKind,
+  projectDriverOperations,
+  type ProjectedDriverStop,
+} from "../offline/operation-projection";
+import type {
+  DriverOfflineOperation,
+  DriverOperationKind,
+  DriverOperationalStatus,
+} from "../offline/operation-contract";
 import { defaultDriverStopsRealtimeFactory } from "../realtime/driver-stops-realtime";
 import {
-  findDriverStopForRoute,
   parseDriverStopsPathname,
   type DriverStopsRoute,
 } from "../routing/driver-stops-route";
@@ -22,6 +38,10 @@ import {
   sessionIdentity,
   type DriverSession,
 } from "../session/driver-session";
+import {
+  DriverOperationsController,
+  type DriverOperationsState,
+} from "../state/driver-operations-controller";
 import {
   DriverStopsController,
   type DriverStopsViewState,
@@ -36,12 +56,24 @@ const unavailableState: DriverStopsViewState = Object.freeze({
   realtime: "offline",
   refreshing: false,
 });
+const unavailableOperationsState: DriverOperationsState = Object.freeze({
+  operations: [],
+  loading: true,
+  mutating: false,
+  message: null,
+});
 
 export function DriverStopsExperience() {
   const [session, setSession] = useState<DriverSession | null>(null);
   const [state, setState] = useState<DriverStopsViewState>(unavailableState);
+  const [operationsState, setOperationsState] = useState<DriverOperationsState>(
+    unavailableOperationsState,
+  );
   const [route, setRoute] = useState<DriverStopsRoute | null>(null);
   const controllerRef = useRef<DriverStopsController | null>(null);
+  const operationsControllerRef = useRef<DriverOperationsController | null>(
+    null,
+  );
   const headingRef = useRef<HTMLHeadingElement>(null);
   const identity = sessionIdentity(session);
 
@@ -63,33 +95,67 @@ export function DriverStopsExperience() {
 
   useEffect(() => {
     let active = true;
-    if (!session) {
-      return;
-    }
+    if (!session) return;
 
     const baseUrl = resolveDriverApiBaseUrl(
       window.location.origin,
       process.env.NEXT_PUBLIC_API_BASE_URL,
       process.env.NODE_ENV,
     );
+    const stopsApi = createDriverStopsApi({ baseUrl, session });
     const controller = new DriverStopsController({
       baseUrl,
       session,
-      api: createDriverStopsApi({ baseUrl, session }),
+      api: stopsApi,
       cache: new IndexedDbDriverStopsCache(),
       realtimeFactory: defaultDriverStopsRealtimeFactory,
       telemetry: disabledDriverStopsTelemetry,
     });
+    const operationsController = new DriverOperationsController({
+      session,
+      api: createDriverSyncApi({
+        baseUrl,
+        session,
+        production: process.env.NODE_ENV === "production",
+      }),
+      refreshStops: async (signal) => {
+        try {
+          return await controller.refreshForSync(signal);
+        } catch (error) {
+          if (error instanceof DriverStopsApiError) {
+            const category =
+              error.category === "unauthorized" ||
+              error.category === "forbidden" ||
+              error.category === "cancelled"
+                ? error.category
+                : error.category === "recoverable"
+                  ? "recoverable"
+                  : "invalid-contract";
+            throw new DriverSyncApiError(category);
+          }
+          throw error;
+        }
+      },
+      onAccessRevoked: (category) => void controller.revokeAccess(category),
+    });
     controllerRef.current = controller;
+    operationsControllerRef.current = operationsController;
     const unsubscribe = controller.subscribe((next) => {
       if (active) setState(next);
     });
+    const unsubscribeOperations = operationsController.subscribe((next) => {
+      if (active) setOperationsState(next);
+    });
     void controller.start();
+    void operationsController.start();
 
     return () => {
       active = false;
       unsubscribe();
+      unsubscribeOperations();
       controllerRef.current = null;
+      operationsControllerRef.current = null;
+      void operationsController.dispose();
       void controller.dispose();
     };
   }, [identity, session]);
@@ -100,10 +166,16 @@ export function DriverStopsExperience() {
     }
   }, [route, state.phase]);
 
-  const stop = useMemo(
-    () => findDriverStopForRoute(route, state.stops),
-    [route, state.stops],
+  const projection = useMemo(
+    () => projectDriverOperations(state.stops, operationsState.operations),
+    [state.stops, operationsState.operations],
   );
+  const stop = useMemo(() => {
+    if (!route || route.kind !== "detail") return undefined;
+    return projection.stops.find(
+      (candidate) => candidate.order_id === route.orderId,
+    );
+  }, [projection.stops, route]);
 
   const retry = () => void controllerRef.current?.retry();
 
@@ -111,8 +183,8 @@ export function DriverStopsExperience() {
     return (
       <DriverShell>
         <StatusPanel title="Sesión no disponible">
-          Inicia una sesión válida y selecciona una organización para consultar tus
-          paradas.
+          Inicia una sesión válida y selecciona una organización para consultar
+          tus paradas.
         </StatusPanel>
       </DriverShell>
     );
@@ -130,42 +202,43 @@ export function DriverStopsExperience() {
     );
   }
 
-  if (state.phase === "unauthorized") {
+  if (
+    state.phase === "unauthorized" ||
+    state.phase === "forbidden"
+  ) {
     return (
       <DriverShell>
-        <StatusPanel title="Sesión no válida">
-          Tu sesión ya no permite consultar paradas. Vuelve a autenticarte.
+        <StatusPanel
+          title={
+            state.phase === "unauthorized"
+              ? "Sesión no válida"
+              : "Acceso no disponible"
+          }
+        >
+          {state.phase === "unauthorized"
+            ? "Tu sesión ya no permite consultar paradas. Vuelve a autenticarte."
+            : "No tienes acceso a las paradas de repartidor en esta organización."}
         </StatusPanel>
       </DriverShell>
     );
   }
 
-  if (state.phase === "forbidden") {
+  if (
+    state.phase === "invalid-contract" ||
+    state.phase === "recoverable-error"
+  ) {
     return (
       <DriverShell>
-        <StatusPanel title="Acceso no disponible">
-          No tienes acceso a las paradas de repartidor en esta organización.
-        </StatusPanel>
-      </DriverShell>
-    );
-  }
-
-  if (state.phase === "invalid-contract") {
-    return (
-      <DriverShell>
-        <StatusPanel title="Información no disponible">
-          La respuesta no pudo validarse de forma segura.
-          <RetryButton onClick={retry} />
-        </StatusPanel>
-      </DriverShell>
-    );
-  }
-
-  if (state.phase === "recoverable-error") {
-    return (
-      <DriverShell>
-        <StatusPanel title="No pudimos actualizar">
-          Intenta nuevamente en unos momentos.
+        <StatusPanel
+          title={
+            state.phase === "invalid-contract"
+              ? "Información no disponible"
+              : "No pudimos actualizar"
+          }
+        >
+          {state.phase === "invalid-contract"
+            ? "La respuesta no pudo validarse de forma segura."
+            : "Intenta nuevamente en unos momentos."}
           <RetryButton onClick={retry} />
         </StatusPanel>
       </DriverShell>
@@ -176,10 +249,16 @@ export function DriverStopsExperience() {
     state.phase === "offline" || state.phase === "offline-empty";
 
   return (
-    <DriverShell busy={state.refreshing}>
+    <DriverShell busy={state.refreshing || operationsState.mutating}>
       <ConnectionSummary
         state={state}
         offline={dataIsOffline || state.realtime === "offline"}
+      />
+      <QueueSummary
+        operations={projection.operations}
+        mutating={operationsState.mutating}
+        message={operationsState.message}
+        onSync={() => void operationsControllerRef.current?.syncNow()}
       />
       {route.kind === "detail" ? (
         <StopDetail
@@ -188,9 +267,46 @@ export function DriverStopsExperience() {
           headingRef={headingRef}
           synchronizedAt={state.synchronizedAt}
           offline={dataIsOffline}
+          operations={projection.operations.filter(
+            (operation) => operation.orderId === route.orderId,
+          )}
+          mutating={operationsState.mutating}
+          onEnqueue={(kind, blob) =>
+            stop
+              ? void operationsControllerRef.current?.enqueue(
+                  {
+                    orderId: stop.order_id,
+                    kind,
+                    projectedStatus: stop.projectedStatus,
+                    projectedVersion: stop.projectedVersion,
+                  },
+                  blob,
+                )
+              : undefined
+          }
+          onDiscard={(id, status, version) =>
+            void operationsControllerRef.current?.discard(id, status, version)
+          }
+          onNewSession={(id) =>
+            void operationsControllerRef.current?.createNewSession(id)
+          }
+          onRetrySame={(id, status, version) =>
+            void operationsControllerRef.current?.retrySame(id, status, version)
+          }
+          onRebuild={(id, status, version) =>
+            void operationsControllerRef.current?.rebuildForCurrentVersion(
+              id,
+              status,
+              version,
+            )
+          }
         />
       ) : route.kind === "list" ? (
-        <StopList state={state} retry={retry} />
+        <StopList
+          state={state}
+          projectedStops={projection.stops}
+          retry={retry}
+        />
       ) : (
         <StopDetail
           orderId={null}
@@ -198,6 +314,13 @@ export function DriverStopsExperience() {
           headingRef={headingRef}
           synchronizedAt={state.synchronizedAt}
           offline={dataIsOffline}
+          operations={[]}
+          mutating={operationsState.mutating}
+          onEnqueue={() => undefined}
+          onDiscard={() => undefined}
+          onNewSession={() => undefined}
+          onRetrySame={() => undefined}
+          onRebuild={() => undefined}
         />
       )}
     </DriverShell>
@@ -214,7 +337,7 @@ function DriverShell({
         <p className={styles.eyebrow}>Paquetenvia Repartidor</p>
         <h1>Mis paradas</h1>
         <p className={styles.intro}>
-          Consulta las recolecciones y entregas que tienes asignadas.
+          Consulta y registra las acciones de tus recolecciones y entregas.
         </p>
       </header>
       {children}
@@ -244,15 +367,55 @@ function ConnectionSummary({
   );
 }
 
+function QueueSummary({
+  operations,
+  mutating,
+  message,
+  onSync,
+}: Readonly<{
+  operations: readonly DriverOfflineOperation[];
+  mutating: boolean;
+  message: string | null;
+  onSync: () => void;
+}>) {
+  if (operations.length === 0 && !message) return null;
+  const attention = operations.filter(
+    (operation) => operation.status === "NEEDS_ATTENTION",
+  ).length;
+  return (
+    <section className={styles.queueSummary} aria-labelledby="queue-heading">
+      <h2 id="queue-heading">Sincronización pendiente</h2>
+      <p>
+        {operations.length} {operations.length === 1 ? "acción" : "acciones"}{" "}
+        en el dispositivo
+        {attention > 0 ? `; ${attention} requiere atención` : ""}.
+      </p>
+      {operations.length > 0 ? (
+        <button type="button" disabled={mutating} onClick={onSync}>
+          Sincronizar ahora
+        </button>
+      ) : null}
+      <p className={styles.liveMessage} aria-live="polite">
+        {message}
+      </p>
+    </section>
+  );
+}
+
 function StopList({
   state,
+  projectedStops,
   retry,
-}: Readonly<{ state: DriverStopsViewState; retry: () => void }>) {
+}: Readonly<{
+  state: DriverStopsViewState;
+  projectedStops: readonly ProjectedDriverStop[];
+  retry: () => void;
+}>) {
   if (state.phase === "offline-empty") {
     return (
       <StatusPanel title="Sin información guardada">
-        No hay información disponible sin conexión. Conéctate para actualizar tus
-        paradas.
+        No hay información disponible sin conexión. Conéctate para actualizar
+        tus paradas.
         <RetryButton onClick={retry} />
       </StatusPanel>
     );
@@ -271,7 +434,7 @@ function StopList({
         <OfflineBanner synchronizedAt={state.synchronizedAt} />
       ) : null}
       <ul className={styles.stopList} aria-label="Paradas asignadas">
-        {state.stops.map((stop) => (
+        {projectedStops.map((stop) => (
           <li className={styles.stopCard} key={stop.order_id}>
             <div className={styles.cardHeading}>
               <div>
@@ -279,7 +442,7 @@ function StopList({
                 <h2>{stop.order_public_id}</h2>
               </div>
               <span className={styles.badge}>
-                {driverStopStatusLabel(stop.status)}
+                {driverStopStatusLabel(stop.confirmedStatus)}
               </span>
             </div>
             <dl className={styles.stopFacts}>
@@ -293,7 +456,15 @@ function StopList({
               </div>
               <div>
                 <dt>Sincronización</dt>
-                <dd>{state.phase === "offline" ? "Información guardada" : "Actualizada"}</dd>
+                <dd>
+                  {stop.attentionCount > 0
+                    ? "Requiere atención"
+                    : stop.pendingCount > 0
+                      ? `${stop.pendingCount} pendiente${stop.pendingCount === 1 ? "" : "s"}`
+                      : state.phase === "offline"
+                        ? "Información guardada"
+                        : "Actualizada"}
+                </dd>
               </div>
             </dl>
             <a
@@ -315,12 +486,38 @@ function StopDetail({
   headingRef,
   synchronizedAt,
   offline,
+  operations,
+  mutating,
+  onEnqueue,
+  onDiscard,
+  onNewSession,
+  onRetrySame,
+  onRebuild,
 }: Readonly<{
   orderId: string | null;
-  stop: DriverStopsViewState["stops"][number] | undefined;
+  stop: ProjectedDriverStop | undefined;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   synchronizedAt: string | null;
   offline: boolean;
+  operations: readonly DriverOfflineOperation[];
+  mutating: boolean;
+  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => void;
+  onDiscard: (
+    operationId: string,
+    status: DriverOperationalStatus | null,
+    version: number,
+  ) => void;
+  onNewSession: (operationId: string) => void;
+  onRetrySame: (
+    operationId: string,
+    status: DriverOperationalStatus,
+    version: number,
+  ) => void;
+  onRebuild: (
+    operationId: string,
+    status: DriverOperationalStatus,
+    version: number,
+  ) => void;
 }>) {
   if (!stop || stop.order_id !== orderId) {
     return (
@@ -352,13 +549,23 @@ function StopDetail({
             <dd>{driverStopTypeLabel(stop.stop_type)}</dd>
           </div>
           <div>
-            <dt>Estado</dt>
+            <dt>Estado confirmado</dt>
             <dd>
               <span className={styles.badge}>
-                {driverStopStatusLabel(stop.status)}
+                {driverStopStatusLabel(stop.confirmedStatus)}
               </span>
             </dd>
           </div>
+          {stop.pendingCount > 0 ? (
+            <div>
+              <dt>Proyección pendiente</dt>
+              <dd>
+                <span className={styles.pendingBadge}>
+                  {driverStopStatusLabel(stop.projectedStatus)}
+                </span>
+              </dd>
+            </div>
+          ) : null}
           <div>
             <dt>Dirección</dt>
             <dd>{stop.address_summary}</dd>
@@ -372,11 +579,284 @@ function StopDetail({
             <dd>{offline ? "Sin conexión" : "En línea"}</dd>
           </div>
         </dl>
+        <StopAction
+          key={stop.projectedStatus}
+          stop={stop}
+          disabled={mutating}
+          onEnqueue={onEnqueue}
+        />
+        <ConflictResolution
+          stop={stop}
+          operations={operations}
+          disabled={mutating}
+          onDiscard={onDiscard}
+          onNewSession={onNewSession}
+          onRetrySame={onRetrySame}
+          onRebuild={onRebuild}
+        />
         <a className={styles.secondaryLink} href="/driver/stops">
           Volver a mis paradas
         </a>
       </article>
     </>
+  );
+}
+
+function StopAction({
+  stop,
+  disabled,
+  onEnqueue,
+}: Readonly<{
+  stop: ProjectedDriverStop;
+  disabled: boolean;
+  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => void;
+}>) {
+  const [proof, setProof] = useState<Blob | undefined>();
+  const [fileError, setFileError] = useState<string | null>(null);
+  const kind = nextDriverOperationKind(stop.projectedStatus);
+  if (!kind || stop.attentionCount > 0) return null;
+  const proofRequired = kind === "PICKUP_PROOF" || kind === "DELIVERY_PROOF";
+  return (
+    <fieldset className={styles.actions} disabled={disabled}>
+      <legend>Siguiente acción</legend>
+      {proofRequired ? (
+        <>
+          <label htmlFor={`proof-${stop.order_id}`}>
+            Foto de evidencia (JPEG o PNG, máximo 10 MiB)
+          </label>
+          <input
+            id={`proof-${stop.order_id}`}
+            type="file"
+            accept="image/jpeg,image/png"
+            capture="environment"
+            aria-describedby={
+              fileError ? `proof-error-${stop.order_id}` : undefined
+            }
+            aria-invalid={fileError ? true : undefined}
+            onChange={(event) => {
+              const files = event.currentTarget.files;
+              if (!files || files.length !== 1) {
+                setProof(undefined);
+                setFileError("Selecciona exactamente una foto.");
+                return;
+              }
+              setProof(files[0]);
+              setFileError(null);
+            }}
+          />
+          {fileError ? (
+            <p id={`proof-error-${stop.order_id}`} role="alert">
+              {fileError}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      <button
+        type="button"
+        disabled={disabled || (proofRequired && !proof)}
+        onClick={() => {
+          if (proofRequired && !proof) {
+            setFileError("Selecciona una foto antes de continuar.");
+            return;
+          }
+          onEnqueue(kind, proof);
+        }}
+      >
+        {operationLabel(kind)}
+      </button>
+    </fieldset>
+  );
+}
+
+function ConflictResolution({
+  stop,
+  operations,
+  disabled,
+  onDiscard,
+  onNewSession,
+  onRetrySame,
+  onRebuild,
+}: Readonly<{
+  stop: ProjectedDriverStop;
+  operations: readonly DriverOfflineOperation[];
+  disabled: boolean;
+  onDiscard: (
+    operationId: string,
+    status: DriverOperationalStatus | null,
+    version: number,
+  ) => void;
+  onNewSession: (operationId: string) => void;
+  onRetrySame: (
+    operationId: string,
+    status: DriverOperationalStatus,
+    version: number,
+  ) => void;
+  onRebuild: (
+    operationId: string,
+    status: DriverOperationalStatus,
+    version: number,
+  ) => void;
+}>) {
+  const [confirmation, setConfirmation] = useState<
+    "new-session" | "rebuild" | "discard" | null
+  >(null);
+  const confirmationButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmationDialogRef = useRef<HTMLDialogElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (confirmation) {
+      const dialog = confirmationDialogRef.current;
+      if (dialog && !dialog.open) dialog.showModal();
+      confirmationButtonRef.current?.focus();
+    }
+  }, [confirmation]);
+  const attention = operations.find(
+    (operation) => operation.status === "NEEDS_ATTENTION",
+  );
+  if (!attention) return null;
+  const blockedCount = operations.filter(
+    (operation) => operation.status === "BLOCKED",
+  ).length;
+  const confirmedOperationalStatus = toOperationalStatus(stop.confirmedStatus);
+  const closeConfirmation = () => {
+    confirmationDialogRef.current?.close();
+    setConfirmation(null);
+    queueMicrotask(() => triggerRef.current?.focus());
+  };
+  const requestConfirmation = (
+    value: "new-session" | "rebuild" | "discard",
+    trigger: HTMLButtonElement,
+  ) => {
+    triggerRef.current = trigger;
+    setConfirmation(value);
+  };
+  const confirmAction = () => {
+    if (confirmation === "new-session") {
+      onNewSession(attention.id);
+    } else if (
+      confirmation === "rebuild" &&
+      confirmedOperationalStatus
+    ) {
+      onRebuild(
+        attention.id,
+        confirmedOperationalStatus,
+        stop.confirmedVersion,
+      );
+    } else if (confirmation === "discard") {
+      onDiscard(
+        attention.id,
+        confirmedOperationalStatus,
+        stop.confirmedVersion,
+      );
+    }
+    closeConfirmation();
+  };
+  return (
+    <section className={styles.conflict} aria-labelledby="conflict-heading">
+      <h3 id="conflict-heading">Acción que requiere atención</h3>
+      <p>
+        Esta operación no pudo aplicarse porque la parada cambió. Revisa el
+        estado confirmado antes de continuar.
+      </p>
+      <dl>
+        <div>
+          <dt>Hora registrada en el dispositivo</dt>
+          <dd>{formatTimestamp(attention.clientOccurredAt)}</dd>
+        </div>
+        <div>
+          <dt>Estado confirmado</dt>
+          <dd>{driverStopStatusLabel(stop.confirmedStatus)}</dd>
+        </div>
+        <div>
+          <dt>Acción prevista</dt>
+          <dd>{driverStopStatusLabel(attention.targetStatus)}</dd>
+        </div>
+        <div>
+          <dt>Acciones bloqueadas después</dt>
+          <dd>{blockedCount}</dd>
+        </div>
+      </dl>
+      <div className={styles.conflictActions}>
+        {attention.safeError === "SESSION_EXPIRED" ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={(event) =>
+              requestConfirmation("new-session", event.currentTarget)
+            }
+          >
+            Crear nueva sesión
+          </button>
+        ) : null}
+        <button
+          type="button"
+          disabled={disabled || confirmedOperationalStatus === null}
+          onClick={() =>
+            confirmedOperationalStatus
+              ? onRetrySame(
+                  attention.id,
+                  confirmedOperationalStatus,
+                  stop.confirmedVersion,
+                )
+              : undefined
+          }
+        >
+          Reintentar la misma acción
+        </button>
+        <button
+          type="button"
+          disabled={disabled || confirmedOperationalStatus === null}
+          onClick={(event) =>
+            requestConfirmation("rebuild", event.currentTarget)
+          }
+        >
+          Crear acción para versión actual
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={(event) =>
+            requestConfirmation("discard", event.currentTarget)
+          }
+        >
+          Descartar
+        </button>
+      </div>
+      {confirmation ? (
+        <dialog
+          ref={confirmationDialogRef}
+          className={styles.confirmationDialog}
+          aria-labelledby="confirmation-title"
+          aria-describedby="confirmation-description"
+          onCancel={(event) => {
+            event.preventDefault();
+            closeConfirmation();
+          }}
+        >
+          <h4 id="confirmation-title">Confirma la acción</h4>
+          <p id="confirmation-description">
+            {confirmation === "new-session"
+              ? "Se creará una nueva sesión de carga conservando la evidencia local."
+              : confirmation === "rebuild"
+                ? "Se descartará la operación en conflicto y se creará otra con la versión confirmada actual."
+                : "Se eliminarán esta operación y su evidencia local del dispositivo."}
+          </p>
+          <div className={styles.dialogActions}>
+            <button
+              ref={confirmationButtonRef}
+              type="button"
+              disabled={disabled}
+              onClick={confirmAction}
+            >
+              Confirmar
+            </button>
+            <button type="button" onClick={closeConfirmation}>
+              Cancelar
+            </button>
+          </div>
+        </dialog>
+      ) : null}
+    </section>
   );
 }
 
@@ -412,6 +892,21 @@ function RetryButton({ onClick }: Readonly<{ onClick: () => void }>) {
   );
 }
 
+function operationLabel(kind: DriverOperationKind): string {
+  switch (kind) {
+    case "CHECK_IN":
+      return "Llegué a recolección";
+    case "PICKUP_PROOF":
+      return "Confirmar recolección";
+    case "START_TRANSIT":
+      return "Iniciar traslado";
+    case "START_DELIVERY":
+      return "Llegué al destino";
+    case "DELIVERY_PROOF":
+      return "Confirmar entrega";
+  }
+}
+
 function formatTimestamp(value: string | null): string {
   if (!value) return "No disponible";
   return new Intl.DateTimeFormat("es-MX", {
@@ -419,4 +914,18 @@ function formatTimestamp(value: string | null): string {
     timeStyle: "short",
     timeZone: "America/Mazatlan",
   }).format(new Date(value));
+}
+
+function toOperationalStatus(
+  value: ProjectedDriverStop["confirmedStatus"],
+): DriverOperationalStatus | null {
+  return [
+    "ASSIGNED",
+    "AT_PICKUP",
+    "PICKED_UP",
+    "IN_TRANSIT",
+    "DELIVERING",
+  ].includes(value)
+    ? (value as DriverOperationalStatus)
+    : null;
 }

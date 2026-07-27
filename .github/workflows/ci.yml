@@ -71,7 +71,7 @@ jobs:
           dotnet test
           --configuration Release
           --no-build
-          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa"
+          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa"
 
   runtime-contracts:
     name: Validate runtime contracts
@@ -329,7 +329,7 @@ jobs:
           fi
 
   driver-stops-pwa:
-    name: Validate driver stops PWA
+    name: Validate driver PWA
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -364,7 +364,7 @@ jobs:
           ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
           --locked-mode
 
-      - name: Build driver stops tests
+      - name: Build driver PWA tests
         run: >-
           dotnet build
           ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
@@ -382,7 +382,7 @@ jobs:
           --with-deps
           chromium
 
-      - name: Execute mobile, browser-offline and real DriverHub flows
+      - name: Execute stops, offline operations and real DriverHub flows
         env:
           MSBUILDDISABLENODEREUSE: "1"
         run: >-
@@ -390,7 +390,7 @@ jobs:
           ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
           --configuration Release
           --no-build
-          --filter "Category=DriverStopsPwa"
+          --filter "Category=DriverStopsPwa|Category=DriverOfflineOperationsPwa"
           --logger "trx;LogFileName=driver-stops-pwa.trx"
           --results-directory ./TestResults/driver-stops-pwa
 
