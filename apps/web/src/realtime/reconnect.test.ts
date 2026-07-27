@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { asUuid, type RealtimeEnvelope, type Uuid } from "./envelope";
 import { realtimeEventTypes } from "./event-types";
 
@@ -60,12 +60,21 @@ vi.mock("@microsoft/signalr", () => ({
 }));
 
 import { buildManagedConnection } from "./base-connection";
+import { createOperationsApi } from "../operations/api/operations-api";
+import type { OperationsDashboardResponse } from "../operations/contracts/operations-dashboard";
+import type { OperationsSession } from "../operations/session/operations-session";
+import { AuthoritativeRefreshCoordinator } from "../operations/state/authoritative-refresh-coordinator";
 
 interface TestPayload {
   readonly value: string;
 }
 
 const aggregateId = asUuid("11111111-1111-1111-1111-111111111111");
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function event(
   eventId: string,
@@ -132,4 +141,88 @@ describe("managed SignalR reconnect lifecycle", () => {
     expect(onError).toHaveBeenCalledOnce();
     expect(signalr.stop).toHaveBeenCalledOnce();
   });
+
+  it("stops reconnect when mandatory REST token acquisition times out", async () => {
+    vi.useFakeTimers();
+    signalr.stop.mockClear();
+    const token = deferred<string>();
+    const session: OperationsSession = {
+      organizationId: "11111111-1111-1111-1111-111111111111",
+      sessionNamespace: "reconnect-token-timeout",
+      getAccessToken: () => token.promise,
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createOperationsApi(
+      "https://api.synthetic.local",
+      session,
+      25,
+    );
+    const coordinator =
+      new AuthoritativeRefreshCoordinator<OperationsDashboardResponse>();
+    const apply = vi.fn();
+    const onResynchronized = vi.fn();
+    const onResynchronizationError = vi.fn();
+    let state = "Conectada";
+    buildManagedConnection("https://api.synthetic.local/hubs/operations", {
+      baseUrl: "https://api.synthetic.local",
+      tokenFactory: session.getAccessToken,
+      resynchronizeFromRest: async () => {
+        const response = await coordinator.request({
+          requirement: "mandatory-reconnect",
+          isCurrent: () => true,
+          execute: (signal) => api.list({}, signal),
+          apply,
+        });
+        return {
+          aggregate_versions: Object.fromEntries(
+            response.items.map((item) => [
+              item.order_id,
+              item.aggregate_version,
+            ]),
+          ),
+        };
+      },
+      onReconnecting: () => {
+        state = "Reconectando";
+      },
+      onResynchronized: () => {
+        state = "Conectada";
+        onResynchronized();
+      },
+      onResynchronizationError: (error) => {
+        state = "Sin conexión";
+        onResynchronizationError(error);
+      },
+    });
+
+    signalr.reconnecting(new Error("controlled transport interruption"));
+    const reconnect = signalr.reconnect();
+    expect(state).toBe("Reconectando");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(25);
+    await reconnect;
+
+    expect(onResynchronizationError).toHaveBeenCalledOnce();
+    expect(onResynchronized).not.toHaveBeenCalled();
+    expect(signalr.stop).toHaveBeenCalledOnce();
+    expect(apply).not.toHaveBeenCalled();
+    expect(state).toBe("Sin conexión");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    token.resolve("late-token");
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}

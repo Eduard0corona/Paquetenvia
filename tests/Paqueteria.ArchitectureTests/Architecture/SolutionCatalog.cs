@@ -138,8 +138,22 @@ internal static class SolutionCatalog
         ],
         allowedCrossModuleDependencies: ["Organizations"]);
 
+    internal static readonly ModuleDefinition Reporting = Module(
+        "Reporting",
+        typeof(Reporting.Domain.AssemblyReference).Assembly,
+        typeof(Reporting.Application.AssemblyReference).Assembly,
+        typeof(Reporting.Infrastructure.AssemblyReference).Assembly,
+        typeof(Reporting.Endpoints.AssemblyReference).Assembly,
+        usesSharedDomainContracts: true,
+        additionalEndpointReferences:
+        [
+            "Organizations.Application",
+            "Organizations.Endpoints",
+        ],
+        allowedCrossModuleDependencies: ["Organizations"]);
+
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
-        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody];
+        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody, Reporting];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -170,6 +184,8 @@ internal static class SolutionCatalog
             "Realtime.Infrastructure",
             "Custody.Endpoints",
             "Custody.Infrastructure",
+            "Reporting.Endpoints",
+            "Reporting.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -200,6 +216,7 @@ internal static class SolutionCatalog
         .. Dispatch.Components,
         .. Realtime.Components,
         .. Custody.Components,
+        .. Reporting.Components,
         Api,
         Worker,
     ];

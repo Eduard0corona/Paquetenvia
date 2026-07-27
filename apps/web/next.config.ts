@@ -40,6 +40,18 @@ const trackingCsp = [
   "font-src 'self'",
   `connect-src ${connectSources}`,
 ].join("; ");
+const operationsCsp = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  `connect-src ${connectSources}`,
+].join("; ");
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -72,6 +84,22 @@ const nextConfig: NextConfig = {
               "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
           },
           { key: "Content-Security-Policy", value: trackingCsp },
+        ],
+      },
+      {
+        source: "/ops/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store, private" },
+          { key: "Pragma", value: "no-cache" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          {
+            key: "Permissions-Policy",
+            value:
+              "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
+          },
+          { key: "Content-Security-Policy", value: operationsCsp },
         ],
       },
     ];

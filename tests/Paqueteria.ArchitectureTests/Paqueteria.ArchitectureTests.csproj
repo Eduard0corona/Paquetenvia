@@ -34,6 +34,10 @@
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Domain\Realtime.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Application\Reporting.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Domain\Reporting.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Domain\Orders.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Endpoints\Orders.Endpoints.csproj" />

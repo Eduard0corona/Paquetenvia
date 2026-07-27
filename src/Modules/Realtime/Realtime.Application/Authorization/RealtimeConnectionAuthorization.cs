@@ -15,12 +15,8 @@ public sealed record OperationsConnectionAuthorization(
 
 public static class RealtimeOperationsRolePolicy
 {
-    public static bool IsAllowed(OrganizationRole role, bool mfaSatisfied) => role switch
-    {
-        OrganizationRole.PlatformAdmin => mfaSatisfied,
-        OrganizationRole.Dispatcher => true,
-        _ => false,
-    };
+    public static bool IsAllowed(OrganizationRole role, bool mfaSatisfied) =>
+        OperationsRolePolicy.IsAllowed(role, mfaSatisfied);
 }
 
 public sealed record DriverConnectionAuthorization

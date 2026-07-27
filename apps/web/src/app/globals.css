@@ -265,3 +265,491 @@ p {
     display: none;
   }
 }
+
+.opsShell {
+  min-height: 100svh;
+  overflow-x: hidden;
+  background: #f4f7f6;
+  color: #112b2a;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(2rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+}
+
+.opsShell h1 {
+  margin: 0.2rem 0;
+  color: #102f2d;
+  font-size: clamp(2rem, 6vw, 3.75rem);
+}
+
+.opsShell h2 {
+  color: #183d39;
+}
+
+.opsHeader {
+  display: flex;
+  max-width: 92rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  margin: 0 auto;
+  border-bottom: 1px solid #b7cbc7;
+  padding: 1.5rem 0;
+}
+
+.opsEyebrow {
+  margin: 0;
+  color: #a53c22 !important;
+  font-size: 0.8rem !important;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.opsHeader p,
+.opsShell p {
+  font-size: 0.95rem;
+}
+
+.opsHeaderStatus {
+  display: flex;
+  min-width: 14rem;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  color: #38514f;
+}
+
+.opsTimezone {
+  max-width: 92rem;
+  margin: 1rem auto !important;
+  color: #4a615f !important;
+}
+
+.opsPrimary,
+.opsSecondary,
+.opsLoadMore,
+.opsToggle button,
+.opsFilters button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #0c6660;
+  border-radius: 0.7rem;
+  padding: 0.65rem 1rem;
+  font: inherit;
+  font-weight: 750;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.opsPrimary,
+.opsLoadMore {
+  background: #0c6660;
+  color: #fff;
+}
+
+.opsSecondary,
+.opsToggle button,
+.opsFilters button {
+  background: #fff;
+  color: #0c5a55;
+}
+
+.opsPrimary:focus-visible,
+.opsSecondary:focus-visible,
+.opsLoadMore:focus-visible,
+.opsToggle button:focus-visible,
+.opsFilters input:focus-visible,
+.opsFilters select:focus-visible,
+.opsOrganizationSelector select:focus-visible,
+.opsOrderCard a:focus-visible {
+  outline: 3px solid #f0a21a;
+  outline-offset: 3px;
+}
+
+.opsPrimary:disabled,
+.opsSecondary:disabled,
+.opsLoadMore:disabled,
+.opsDisabledActions button:disabled {
+  border-color: #81918f;
+  background: #dde5e3;
+  color: #5f706e;
+  cursor: not-allowed;
+}
+
+.opsSummary {
+  display: grid;
+  max-width: 92rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 1.25rem auto;
+}
+
+.opsSummary article {
+  display: flex;
+  min-height: 6.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid #b7cbc7;
+  border-radius: 0.8rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.opsSummary span {
+  color: #425c59;
+  font-weight: 650;
+}
+
+.opsSummary strong {
+  color: #102f2d;
+  font-size: 2rem;
+}
+
+.opsFilters {
+  display: grid;
+  max-width: 92rem;
+  grid-template-columns: repeat(4, minmax(11rem, 1fr));
+  gap: 0.85rem;
+  margin: 0 auto 1.25rem;
+  border: 1px solid #b7cbc7;
+  border-radius: 0.8rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.opsFilters legend,
+.opsToggle legend {
+  color: #183d39;
+  font-weight: 800;
+}
+
+.opsFilters label,
+.opsOrganizationSelector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: #304d49;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.opsFilters input,
+.opsFilters select,
+.opsOrganizationSelector select {
+  min-height: 44px;
+  width: 100%;
+  border: 1px solid #78928e;
+  border-radius: 0.55rem;
+  background: #fff;
+  color: #102f2d;
+  padding: 0.55rem;
+  font: inherit;
+}
+
+.opsCheckbox {
+  flex-direction: row !important;
+  align-items: center;
+}
+
+.opsCheckbox input {
+  width: 1.25rem;
+}
+
+.opsOrganizationSelector {
+  max-width: 28rem;
+  margin: 1rem auto;
+}
+
+.opsToggle {
+  display: flex;
+  max-width: 92rem;
+  gap: 0.5rem;
+  margin: 0 auto 1rem;
+  border: 0;
+  padding: 0;
+}
+
+.opsToggle button[aria-pressed="true"] {
+  background: #0c6660;
+  color: #fff;
+}
+
+.opsBoard {
+  display: flex;
+  max-width: 92rem;
+  gap: 1rem;
+  margin: 0 auto;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding-bottom: 1rem;
+}
+
+.opsBoardColumn {
+  min-width: min(20rem, 88vw);
+  flex: 1 0 20rem;
+  scroll-snap-align: start;
+  border-top: 4px solid #287d75;
+  border-radius: 0.4rem;
+  background: #e8efed;
+  padding: 0.75rem;
+}
+
+.opsBoardColumn > h2 {
+  display: flex;
+  min-height: 3rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.opsBoardColumn > h2 span {
+  min-width: 2rem;
+  border-radius: 999px;
+  background: #fff;
+  padding: 0.3rem;
+  text-align: center;
+}
+
+.opsCards {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.opsOrderCard {
+  overflow-wrap: anywhere;
+  border: 1px solid #b7cbc7;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 0.9rem;
+  box-shadow: 0 0.3rem 1rem rgb(16 47 45 / 6%);
+}
+
+.opsCardHeading {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.opsCardHeading h3 {
+  margin: 0;
+  color: #102f2d;
+  font-size: 1.05rem;
+}
+
+.opsStatus {
+  color: #0c5a55 !important;
+  font-weight: 800;
+}
+
+.opsOrderCard dl {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.8rem 0;
+}
+
+.opsOrderCard dl div {
+  display: grid;
+  grid-template-columns: minmax(6rem, 0.8fr) 1.4fr;
+  gap: 0.5rem;
+}
+
+.opsOrderCard dt {
+  color: #5a716e;
+  font-size: 0.82rem;
+}
+
+.opsOrderCard dd {
+  margin: 0;
+  color: #183d39;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.opsAlert,
+.opsWarning {
+  border-left: 4px solid #b33c1f;
+  background: #fff0eb;
+  color: #702611 !important;
+  padding: 0.65rem;
+  font-weight: 800;
+}
+
+.opsWarning {
+  border-color: #a06300;
+  background: #fff6db;
+  color: #674000 !important;
+}
+
+.opsOrderCard .opsPrimary {
+  width: 100%;
+}
+
+.opsLoadMore {
+  margin: 1rem auto;
+}
+
+.opsPositions {
+  max-width: 92rem;
+  margin: 0 auto;
+  border-radius: 0.9rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.opsPositionViewport {
+  position: relative;
+  min-height: 24rem;
+  overflow: hidden;
+  border: 1px solid #78928e;
+  border-radius: 0.8rem;
+  background:
+    linear-gradient(90deg, rgb(12 102 96 / 8%) 1px, transparent 1px),
+    linear-gradient(rgb(12 102 96 / 8%) 1px, transparent 1px),
+    #edf3f1;
+  background-size: 2.5rem 2.5rem;
+}
+
+.opsPositionPoint {
+  position: absolute;
+  max-width: 8rem;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #a53c22;
+  color: #fff;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  box-shadow: 0 0 0 2px #a53c22;
+}
+
+.opsPositionList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.opsPositionList li {
+  display: grid;
+  border: 1px solid #b7cbc7;
+  border-radius: 0.65rem;
+  padding: 0.8rem;
+  color: #304d49;
+}
+
+.opsDetail {
+  max-width: 70rem;
+  margin: 0 auto;
+}
+
+.opsDetailGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 1.25rem 0;
+}
+
+.opsDetailGrid article,
+.opsUnavailable,
+.opsMessage {
+  border: 1px solid #b7cbc7;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.opsDetailGrid h2,
+.opsUnavailable h2 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.opsDetailGrid p,
+.opsUnavailable p {
+  margin: 0.4rem 0 0;
+  color: #304d49;
+}
+
+.opsTimeline {
+  padding: 0;
+  list-style: none;
+}
+
+.opsTimeline li {
+  display: grid;
+  gap: 0.2rem;
+  border-left: 3px solid #287d75;
+  padding: 0.35rem 0 1.2rem 1rem;
+}
+
+.opsTimeline time {
+  color: #526966;
+}
+
+.opsDisabledActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.opsDisabledActions button {
+  min-height: 44px;
+  border: 1px solid #81918f;
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.8rem;
+}
+
+.opsLive {
+  min-height: 1.5rem;
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .opsHeader {
+    flex-direction: column;
+  }
+
+  .opsHeaderStatus {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .opsSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .opsFilters {
+    grid-template-columns: 1fr;
+  }
+
+  .opsBoard {
+    display: grid;
+    overflow-x: visible;
+  }
+
+  .opsBoardColumn {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .opsDetailGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .opsPositionViewport {
+    min-height: 18rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .opsSummary {
+    grid-template-columns: 1fr;
+  }
+}
