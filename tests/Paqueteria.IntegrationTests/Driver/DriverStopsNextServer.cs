@@ -26,6 +26,14 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
 
     internal Uri BaseAddress { get; }
 
+    internal bool OutputContains(string value)
+    {
+        lock (_output)
+        {
+            return _output.ToString().Contains(value, StringComparison.Ordinal);
+        }
+    }
+
     internal static int ReservePort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

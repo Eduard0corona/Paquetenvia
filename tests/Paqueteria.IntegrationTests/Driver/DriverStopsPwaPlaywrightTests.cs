@@ -339,7 +339,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.WaitForFunctionAsync(
             """
             async () => {
-              const cache = await caches.open("paquetenvia-driver-shell-v3");
+              const cache = await caches.open("paquetenvia-driver-shell-v4");
               const keys = await cache.keys();
               return keys.some(key => new URL(key.url).pathname.startsWith("/_next/static/"));
             }
@@ -380,7 +380,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         var state = await page.EvaluateAsync<bool[]>(
             """
             async orderId => {
-              const cache = await caches.open("paquetenvia-driver-shell-v3");
+              const cache = await caches.open("paquetenvia-driver-shell-v4");
               const shell = await cache.match("/driver/stops");
               const exact = await cache.match(`/driver/stops/${orderId}`);
               const shellText = shell ? await shell.clone().text() : "";

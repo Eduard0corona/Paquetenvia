@@ -292,6 +292,62 @@ public sealed class RealtimeReconnectKestrelTests(
         }
     }
 
+    [Fact]
+    public async Task Tracking_maximum_lifetime_bounds_revocation_of_an_active_connection()
+    {
+        var recorder = new RealtimeAuthorizationRecorder();
+        var reconnecting = Completion<Exception?>();
+        var reconnected = Completion<string?>();
+        var closed = Completion<Exception?>();
+
+        await using var host = new RealtimeKestrelWebApplicationFactory(
+            database.ApplicationConnectionString,
+            recorder,
+            configurationOverrides: new Dictionary<string, string?>
+            {
+                ["Realtime:TrackingMaximumConnectionLifetimeSeconds"] = "5",
+            });
+        var baseAddress = host.Start();
+        await using var connection = CreateTrackingConnection(
+            baseAddress,
+            () => Task.FromResult<string?>(
+                PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken));
+        connection.Reconnecting += error =>
+        {
+            reconnecting.TrySetResult(error);
+            return Task.CompletedTask;
+        };
+        connection.Reconnected += connectionId =>
+        {
+            reconnected.TrySetResult(connectionId);
+            return Task.CompletedTask;
+        };
+        connection.Closed += error =>
+        {
+            closed.TrySetResult(error);
+            return Task.CompletedTask;
+        };
+
+        try
+        {
+            await connection.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(await recorder.WaitForNextTrackingAcceptedAsync(
+                TimeSpan.FromSeconds(5)));
+            var authorizationCount = recorder.TrackingCount;
+            await database.RevokeValidTrackingTokenAsync();
+
+            await reconnecting.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await closed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.False(reconnected.Task.IsCompleted);
+            Assert.Equal(HubConnectionState.Disconnected, connection.State);
+            Assert.True(recorder.TrackingCount > authorizationCount);
+        }
+        finally
+        {
+            await database.RestoreValidTrackingTokenAsync();
+        }
+    }
+
     private static HubConnection CreateOperationsConnection(
         Uri baseAddress,
         Func<Task<string?>> tokenFactory) =>

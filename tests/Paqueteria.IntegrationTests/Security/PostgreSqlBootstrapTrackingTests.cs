@@ -237,7 +237,8 @@ public sealed class PostgreSqlBootstrapTrackingTests(
         var tracking = new PostgreSqlPublicTrackingProjectionReader(
             dataSource,
             Options.Create(new PublicTrackingOptions { Provider = PublicTrackingProviderKind.PostgreSql }),
-            NullLogger<PostgreSqlPublicTrackingProjectionReader>.Instance);
+            NullLogger<PostgreSqlPublicTrackingProjectionReader>.Instance,
+            NoOpPublicTrackingTelemetry.Instance);
 
         Assert.True((await resolver.ResolveAsync("mock-subject-active-viewer", default)).IsResolved);
         Assert.True((await tracking.FindAsync(PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken, default)).IsFound);
@@ -259,11 +260,21 @@ public sealed class PostgreSqlBootstrapTrackingTests(
         using var identityResponse = await client.SendAsync(identity);
         using var trackingResponse = await client.GetAsync(
             $"/__tests/tracking/{PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken}");
+        using var productTrackingResponse = await client.GetAsync(
+            $"/api/v1/tracking/{PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken}");
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, identityResponse.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, trackingResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, productTrackingResponse.StatusCode);
         Assert.Equal("Service Unavailable", (await identityResponse.Content.ReadFromJsonAsync<ProblemShape>())?.Title);
         Assert.Equal("Service Unavailable", (await trackingResponse.Content.ReadFromJsonAsync<ProblemShape>())?.Title);
+        var productProblem =
+            await productTrackingResponse.Content.ReadFromJsonAsync<ProblemShape>();
+        Assert.Equal("Service Unavailable", productProblem?.Title);
+        Assert.Null(productProblem?.TraceId);
+        Assert.Equal(
+            "no-store, private",
+            productTrackingResponse.Headers.CacheControl?.ToString());
     }
 
     private async Task<HttpResponseMessage> SendBearerAsync(string path, string credential)
