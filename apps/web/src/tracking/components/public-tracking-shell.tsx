@@ -5,6 +5,10 @@ import {
   publicStatusLabels,
   publicTimelineLabels,
 } from "../contracts/public-tracking-labels";
+import {
+  formatPublicTrackingEstimatedWindow,
+  formatPublicTrackingTimestamp,
+} from "../contracts/public-tracking-formatters";
 import { parsePublicTrackingPathname } from "../routing/public-tracking-route";
 import { usePublicTracking } from "../state/use-public-tracking";
 
@@ -74,6 +78,9 @@ export function PublicTrackingShell() {
 
   const temporarilyUnavailable =
     state.view === "unavailable" || state.view === "rate-limited";
+  const estimatedWindow = formatPublicTrackingEstimatedWindow(
+    state.projection.estimated_window,
+  );
   return (
     <main className="trackingShell">
       <article className="trackingCard">
@@ -90,17 +97,20 @@ export function PublicTrackingShell() {
 
         <section aria-labelledby="tracking-window-title">
           <h2 id="tracking-window-title">Ventana de entrega</h2>
-          <p>{formatEstimatedWindow(state.projection.estimated_window)}</p>
+          <p>{estimatedWindow ?? "Ventana de entrega por confirmar"}</p>
         </section>
 
         <section aria-labelledby="tracking-timeline-title">
           <h2 id="tracking-timeline-title">Historial</h2>
+          <p className="trackingTimeZoneNotice">
+            Horarios mostrados en hora de Mazatlán.
+          </p>
           <ol className="trackingTimeline">
             {state.projection.timeline.map((item, index) => (
               <li key={`${item.occurred_at}-${index}`}>
                 <span>{publicTimelineLabels[item.code]}</span>
                 <time dateTime={item.occurred_at}>
-                  {formatTimestamp(item.occurred_at)}
+                  {formatPublicTrackingTimestamp(item.occurred_at)}
                 </time>
               </li>
             ))}
@@ -124,7 +134,7 @@ export function PublicTrackingShell() {
             <p>
               Última actualización:{" "}
               <time dateTime={state.lastUpdated.toISOString()}>
-                {formatTimestamp(state.lastUpdated.toISOString())}
+                {formatPublicTrackingTimestamp(state.lastUpdated)}
               </time>
             </p>
           )}
@@ -169,29 +179,6 @@ function safeSupportUrl(value: string | undefined): string | null {
   } catch {
     return null;
   }
-}
-
-function formatEstimatedWindow(
-  window: Readonly<Record<string, string | null>> | null,
-): string {
-  const from = window?.from;
-  const to = window?.to;
-  if (
-    typeof from !== "string" ||
-    typeof to !== "string" ||
-    !Number.isFinite(Date.parse(from)) ||
-    !Number.isFinite(Date.parse(to))
-  ) {
-    return "Ventana de entrega por confirmar";
-  }
-  return `${formatTimestamp(from)} – ${formatTimestamp(to)}`;
-}
-
-function formatTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("es-MX", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
 }
 
 function connectionText(

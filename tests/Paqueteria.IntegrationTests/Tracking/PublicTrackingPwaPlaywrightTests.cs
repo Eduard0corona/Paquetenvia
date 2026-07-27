@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Playwright;
 using Paqueteria.IntegrationTests.Driver;
 using Paqueteria.IntegrationTests.Realtime;
@@ -10,6 +11,9 @@ namespace Paqueteria.IntegrationTests.Tracking;
 public sealed class PublicTrackingPwaPlaywrightTests(
     PostgreSqlSecurityWebApplicationFactory database)
 {
+    private const string PreviousDayTimestamp = "2026-01-01T06:30:00.000Z";
+    private const string WindowEndTimestamp = "2026-01-01T07:15:00.000Z";
+
     [Fact]
     [Trait("Category", "PublicTrackingPwa")]
     public async Task Real_api_signalr_next_and_chromium_render_without_persisting_or_logging_token()
@@ -34,15 +38,29 @@ public sealed class PublicTrackingPwaPlaywrightTests(
         await using var browser = await playwright.Chromium.LaunchAsync(
             new BrowserTypeLaunchOptions { Headless = true });
 
-        foreach (var viewport in new[]
+        foreach (var scenario in new (int Width, int Height, string? TimezoneId)[]
                  {
-                     new ViewportSize { Width = 320, Height = 568 },
-                     new ViewportSize { Width = 430, Height = 932 },
+                     (320, 568, null),
+                     (430, 932, null),
+                     (390, 844, "America/New_York"),
                  })
         {
             await using var context = await browser.NewContextAsync(
-                new BrowserNewContextOptions { ViewportSize = viewport });
+                new BrowserNewContextOptions
+                {
+                    ViewportSize = new ViewportSize
+                    {
+                        Width = scenario.Width,
+                        Height = scenario.Height,
+                    },
+                    TimezoneId = scenario.TimezoneId,
+                });
             var page = await context.NewPageAsync();
+            if (scenario.TimezoneId is not null)
+            {
+                await RouteTimeZoneProjectionAsync(page);
+            }
+
             var observedRequests = new ConcurrentQueue<IRequest>();
             var hubResponses = new ConcurrentQueue<string>();
             var browserDiagnostics = new ConcurrentQueue<string>();
@@ -105,6 +123,10 @@ public sealed class PublicTrackingPwaPlaywrightTests(
                 (await response.AllHeadersAsync())["x-robots-tag"]);
             Assert.False(await page.EvaluateAsync<bool>(
                 "() => document.documentElement.scrollWidth > document.documentElement.clientWidth"));
+            if (scenario.TimezoneId is not null)
+            {
+                await AssertMazatlanRenderingAsync(page);
+            }
 
             var apiRequest = observedRequests.Single(request =>
                 request.Url.Contains("/api/v1/tracking/", StringComparison.Ordinal));
@@ -163,6 +185,105 @@ public sealed class PublicTrackingPwaPlaywrightTests(
         Assert.False(web.OutputContains(
             PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken));
     }
+
+    private static Task RouteTimeZoneProjectionAsync(IPage page) =>
+        page.RouteAsync(
+            "**/api/v1/tracking/**",
+            route => route.FulfillAsync(new RouteFulfillOptions
+            {
+                Status = 200,
+                ContentType = "application/json; charset=utf-8",
+                Body = JsonSerializer.Serialize(new
+                {
+                    public_id = PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId,
+                    public_status = "OUT_FOR_DELIVERY",
+                    aggregate_version = 3,
+                    estimated_window = new
+                    {
+                        from = PreviousDayTimestamp,
+                        to = WindowEndTimestamp,
+                    },
+                    timeline = new[]
+                    {
+                        new
+                        {
+                            code = "OUT_FOR_DELIVERY",
+                            occurred_at = PreviousDayTimestamp,
+                        },
+                    },
+                }),
+            }));
+
+    private static async Task AssertMazatlanRenderingAsync(IPage page)
+    {
+        Assert.Equal(
+            "America/New_York",
+            await page.EvaluateAsync<string>(
+                "() => Intl.DateTimeFormat().resolvedOptions().timeZone"));
+        await page.GetByText(
+                "Horarios mostrados en hora de Mazatlán.",
+                new() { Exact = true })
+            .WaitForAsync();
+
+        var expectedTimeline = await FormatInMazatlanAsync(
+            page,
+            PreviousDayTimestamp);
+        var newYorkTimeline = await FormatInRecipientTimeZoneAsync(
+            page,
+            PreviousDayTimestamp);
+        Assert.NotEqual(expectedTimeline, newYorkTimeline);
+        Assert.Equal(
+            expectedTimeline,
+            (await page.Locator(".trackingTimeline time").First.TextContentAsync())?.Trim());
+
+        var expectedWindow =
+            $"{expectedTimeline} – {await FormatInMazatlanAsync(page, WindowEndTimestamp)}";
+        Assert.Equal(
+            expectedWindow,
+            (await page
+                .Locator("section[aria-labelledby='tracking-window-title'] p")
+                .TextContentAsync())?.Trim());
+
+        var lastUpdated = page.Locator(".trackingUpdate time");
+        await lastUpdated.WaitForAsync();
+        var lastUpdatedIso = await lastUpdated.GetAttributeAsync("datetime");
+        Assert.NotNull(lastUpdatedIso);
+        var expectedLastUpdated = await FormatInMazatlanAsync(page, lastUpdatedIso);
+        var newYorkLastUpdated = await FormatInRecipientTimeZoneAsync(
+            page,
+            lastUpdatedIso);
+        Assert.NotEqual(expectedLastUpdated, newYorkLastUpdated);
+        Assert.Equal(
+            expectedLastUpdated,
+            (await lastUpdated.TextContentAsync())?.Trim());
+    }
+
+    private static Task<string> FormatInMazatlanAsync(
+        IPage page,
+        string value) =>
+        page.EvaluateAsync<string>(
+            """
+            value => new Intl.DateTimeFormat("es-MX", {
+              dateStyle: "medium",
+              timeStyle: "short",
+              timeZone: "America/Mazatlan",
+              hourCycle: "h23",
+            }).format(new Date(value))
+            """,
+            value);
+
+    private static Task<string> FormatInRecipientTimeZoneAsync(
+        IPage page,
+        string value) =>
+        page.EvaluateAsync<string>(
+            """
+            value => new Intl.DateTimeFormat("es-MX", {
+              dateStyle: "medium",
+              timeStyle: "short",
+              hourCycle: "h23",
+            }).format(new Date(value))
+            """,
+            value);
 
     private sealed class PersistenceEvidence
     {

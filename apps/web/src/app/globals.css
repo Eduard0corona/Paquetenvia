@@ -167,6 +167,12 @@ p {
   list-style: none;
 }
 
+.trackingTimeZoneNotice {
+  margin-bottom: 0.85rem !important;
+  color: #475569;
+  font-size: 0.9rem !important;
+}
+
 .trackingTimeline li {
   position: relative;
   display: grid;

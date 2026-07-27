@@ -121,6 +121,13 @@ Sólo agrega `NEXT_PUBLIC_TRACKING_BRAND_NAME` y
 muestra “Comunícate por el mismo canal donde recibiste este enlace.” No existe
 branding o soporte tenant-specific.
 
+Los timestamps llegan en UTC y todas las superficies públicas se muestran
+mediante `Intl.DateTimeFormat` con `timeZone: "America/Mazatlan"`,
+independientemente de la zona configurada en el dispositivo del destinatario.
+Timeline, `estimated_window.from`, `estimated_window.to` y `lastUpdated`
+comparten el formatter puro centralizado. La página indica una vez, de forma
+visible, que los horarios se muestran en hora de Mazatlán.
+
 Loading, not-found, rate limited, indisponible, reconectando y offline son
 estados explícitos. Un 404 detiene TrackingHub y limpia la proyección. Un 503 o
 error de red conserva el snapshot sólo en memoria. El polling cancelable corre
@@ -182,10 +189,14 @@ order, tenant, timeline o estado por orden.
 agregaron valores reales, secretos, paquetes npm/NuGet o lockfiles.
 
 Vitest cubre ruta, parser, clasificación HTTP, etiquetas, CSP/headers y SW.
+También ejecuta directamente el formatter para cruces de día, fecha de verano,
+ventana, valores `Date`, independencia de zona e inputs inválidos.
 `PublicTrackingPostgreSql` usa PostgreSQL/PostGIS real para lifecycle, RLS,
 auditoría, colisiones, 25 rotaciones, 100 tokens aleatorios, HTTP/CORS y
 expiración. `PublicTrackingPwa` usa Kestrel, Next, Chromium y TrackingHub reales,
-viewports, storage/cache y log redaction. Otra prueba revoca durante una
+viewports, storage/cache y log redaction. Incluye un contexto configurado en
+`America/New_York` que demuestra que timeline, ventana y última actualización
+se siguen renderizando en `America/Mazatlan`. Otra prueba revoca durante una
 conexión, espera el corte y demuestra que la reconexión 404 no recupera grupo.
 Los contratos y OutboxSignalRDelivery permanecen verdes.
 
