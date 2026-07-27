@@ -1,20 +1,103 @@
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orders.Application.Tracking;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.RateLimiting;
 
 namespace Orders.Endpoints;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddOrdersEndpoints(this IServiceCollection services)
+    public static IServiceCollection AddOrdersEndpoints(
+        this IServiceCollection services,
+        IConfiguration configuration)
     {
         services.AddExceptionHandler<PublicTrackingTechnicalExceptionHandler>();
+        services.AddCors();
+        services.AddOptions<CorsOptions>()
+            .Configure<IOptions<PublicTrackingOptions>>((cors, tracking) =>
+                cors.AddPolicy(
+                    PublicTrackingEndpointDefaults.CorsPolicy,
+                    policy => ConfigureCors(policy, tracking.Value.AllowedOrigins)));
+        services.AddRateLimiter(rateLimiter =>
+        {
+            rateLimiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            rateLimiter.OnRejected = static async (context, cancellationToken) =>
+            {
+                if (!PublicTrackingEndpointDefaults.IsLookupPath(
+                        context.HttpContext.Request.Path))
+                {
+                    return;
+                }
+
+                context.HttpContext.RequestServices
+                    .GetRequiredService<IPublicTrackingTelemetry>()
+                    .RateLimitRejected();
+                context.HttpContext.Response.ContentType = "application/problem+json";
+                await context.HttpContext.Response.WriteAsJsonAsync(
+                    new PublicTrackingProblemResponse(
+                        "about:blank",
+                        "Too Many Requests",
+                        StatusCodes.Status429TooManyRequests),
+                    cancellationToken);
+            };
+            rateLimiter.AddPolicy(
+                PublicTrackingEndpointDefaults.RateLimitPolicy,
+                context =>
+                {
+                    var options = context.RequestServices
+                        .GetRequiredService<IOptions<PublicTrackingOptions>>()
+                        .Value;
+                    return RateLimitPartition.GetFixedWindowLimiter(
+                        GetNetworkPartition(context.Connection.RemoteIpAddress),
+                        _ => new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = options.LookupPermitLimit,
+                            Window = TimeSpan.FromSeconds(options.LookupWindowSeconds),
+                            QueueLimit = 0,
+                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                            AutoReplenishment = true,
+                        });
+                });
+        });
         return services;
+    }
+
+    private static void ConfigureCors(
+        CorsPolicyBuilder policy,
+        IReadOnlyCollection<string> origins)
+    {
+        if (origins.Count == 0)
+        {
+            policy.SetIsOriginAllowed(static _ => false);
+            return;
+        }
+
+        policy
+            .WithOrigins(origins.ToArray())
+            .WithMethods("GET")
+            .WithHeaders("Accept");
+    }
+
+    private static string GetNetworkPartition(IPAddress? address)
+    {
+        var normalized = address is null
+            ? "unknown"
+            : address.MapToIPv6().ToString();
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
     }
 }
 
-internal sealed class PublicTrackingTechnicalExceptionHandler : IExceptionHandler
+internal sealed class PublicTrackingTechnicalExceptionHandler(
+    IPublicTrackingTelemetry telemetry) : IExceptionHandler
 {
     public async ValueTask<bool> TryHandleAsync(
         HttpContext httpContext,
@@ -26,13 +109,14 @@ internal sealed class PublicTrackingTechnicalExceptionHandler : IExceptionHandle
             return false;
         }
 
-        await Results.Problem(
+        telemetry.LookupFailed("provider_unavailable");
+        await Results.Json(
+            new PublicTrackingProblemResponse(
+                "about:blank",
+                "Service Unavailable",
+                StatusCodes.Status503ServiceUnavailable),
             statusCode: StatusCodes.Status503ServiceUnavailable,
-            title: "Service Unavailable",
-            extensions: new Dictionary<string, object?>
-            {
-                ["traceId"] = httpContext.TraceIdentifier,
-            }).ExecuteAsync(httpContext);
+            contentType: "application/problem+json").ExecuteAsync(httpContext);
         return true;
     }
 }

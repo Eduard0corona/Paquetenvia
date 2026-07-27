@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Identity.Application.Bootstrap;
 using Identity.Application.Session;
@@ -82,7 +83,7 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
             }
 
             context.Items[TrackingHub.AuthorizationItemKey] = result.Authorization;
-            await next(context);
+            await ContinueWithinTrackingLifetimeAsync(context);
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
@@ -91,6 +92,43 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
         catch (RealtimeAuthorizationInfrastructureException)
         {
             await WriteProblemAsync(context, StatusCodes.Status503ServiceUnavailable, "Service unavailable.");
+        }
+    }
+
+    private async Task ContinueWithinTrackingLifetimeAsync(HttpContext context)
+    {
+        var options = context.RequestServices
+            .GetRequiredService<IOptions<RealtimeOptions>>()
+            .Value;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+            context.RequestAborted);
+        var expiration = AbortAtLifetimeAsync(
+            context,
+            TimeSpan.FromSeconds(options.TrackingMaximumConnectionLifetimeSeconds),
+            lifetime.Token);
+        try
+        {
+            await next(context);
+        }
+        finally
+        {
+            await lifetime.CancelAsync();
+            await expiration;
+        }
+    }
+
+    private static async Task AbortAtLifetimeAsync(
+        HttpContext context,
+        TimeSpan maximumLifetime,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(maximumLifetime, cancellationToken);
+            context.Abort();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 

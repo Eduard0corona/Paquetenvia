@@ -9,6 +9,7 @@ public sealed class DisabledPublicTrackingProjectionReader : IPublicTrackingProj
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(PublicTrackingLookupResult.NotFound);
+        return ValueTask.FromException<PublicTrackingLookupResult>(
+            new PublicTrackingInfrastructureException("Public tracking is unavailable."));
     }
 }

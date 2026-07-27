@@ -23,5 +23,6 @@ public sealed class RealtimeOptions
     public int AuthorizationCommandTimeoutSeconds { get; set; } = 5;
     public int AuthorizationRetryCount { get; set; } = 2;
     public int MaximumDriverAssignmentGroups { get; set; } = 100;
+    public int TrackingMaximumConnectionLifetimeSeconds { get; set; } = 60;
     public int[] ReconnectDelaysMilliseconds { get; set; } = [0, 2_000, 10_000, 30_000];
 }

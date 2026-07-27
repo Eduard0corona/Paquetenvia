@@ -93,7 +93,11 @@ public static class DependencyInjection
         policy
             .WithOrigins(origins.ToArray())
             .WithMethods("GET", "POST")
-            .WithHeaders("Authorization", "Content-Type", "X-Requested-With")
+            .WithHeaders(
+                "Authorization",
+                "Content-Type",
+                "X-Requested-With",
+                "X-SignalR-User-Agent")
             .AllowCredentials();
     }
 

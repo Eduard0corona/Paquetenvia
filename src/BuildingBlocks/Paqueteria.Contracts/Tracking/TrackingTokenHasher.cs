@@ -3,11 +3,11 @@ using System.Text;
 
 namespace Paqueteria.Contracts.Tracking;
 
-public sealed class TrackingTokenHasher
+public class TrackingTokenHasher
 {
     private const int EntropyBytes = 32;
 
-    public string CreateToken()
+    public virtual string CreateToken()
     {
         Span<byte> entropy = stackalloc byte[EntropyBytes];
         RandomNumberGenerator.Fill(entropy);
