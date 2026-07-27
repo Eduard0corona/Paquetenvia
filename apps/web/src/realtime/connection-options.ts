@@ -1,4 +1,4 @@
-import type { PublicOrderId, Uuid } from "./envelope";
+import type { Uuid } from "./envelope";
 
 export type RealtimeTokenFactory = () => string | Promise<string>;
 
@@ -16,6 +16,7 @@ export interface BaseRealtimeConnectionOptions {
   readonly onReconnecting?: (error?: Error) => void;
   readonly onReconnected?: (connectionId?: string) => void;
   readonly onResynchronizationError?: (error: unknown) => void;
+  readonly suppressLogging?: boolean;
 }
 
 export interface PrivateRealtimeConnectionOptions
@@ -25,7 +26,7 @@ export interface PrivateRealtimeConnectionOptions
 
 export interface TrackingRealtimeConnectionOptions
   extends BaseRealtimeConnectionOptions {
-  readonly expectedPublicOrderId?: PublicOrderId;
+  readonly expectedPublicOrderId?: string;
 }
 
 export const defaultReconnectDelaysMilliseconds = [0, 2_000, 10_000, 30_000] as const;

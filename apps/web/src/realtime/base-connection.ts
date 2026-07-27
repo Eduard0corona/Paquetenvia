@@ -46,7 +46,7 @@ export function buildManagedConnection(
   const connection = new HubConnectionBuilder()
     .withUrl(url, { accessTokenFactory: options.tokenFactory })
     .withAutomaticReconnect([...reconnectDelays])
-    .configureLogging(LogLevel.Warning)
+    .configureLogging(options.suppressLogging ? LogLevel.None : LogLevel.Warning)
     .build();
 
   connection.onreconnecting((error) => {

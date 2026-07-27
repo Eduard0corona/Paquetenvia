@@ -1,4 +1,4 @@
-const CACHE_NAME = "paquetenvia-driver-shell-v3";
+const CACHE_NAME = "paquetenvia-driver-shell-v4";
 const DRIVER_STOPS_SHELL_KEY = "/driver/stops";
 const OWNED_CACHE_PREFIXES = [
   "paquetenvia-driver-shell-",
@@ -58,6 +58,9 @@ function mustUseNetworkOnly(request) {
   return (
     url.origin !== self.location.origin ||
     request.headers.has("Authorization") ||
+    url.searchParams.has("access_token") ||
+    url.pathname === "/track" ||
+    url.pathname.startsWith("/track/") ||
     url.pathname.startsWith("/api/v1/") ||
     url.pathname.startsWith("/hubs/") ||
     url.pathname.includes("/proofs/") ||
