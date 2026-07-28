@@ -28,7 +28,9 @@ payload/
     ...
 ```
 
-`database.dump` usa `pg_dump --format=custom`. El inventario interno contiene keys, tamaños y hashes porque permanece dentro del payload cifrado. El manifest registra formato, backup ID no sensible, timestamps UTC, commit, versiones PostgreSQL/PostGIS, hashes y tamaños, histories de migrations, conteos, fingerprint antes/después y confirmación de quiescence.
+`database.dump` usa `pg_dump --format=custom`. El inventario interno contiene keys, tamaños y hashes porque permanece dentro del payload cifrado. El manifest registra formato, backup ID no sensible, timestamps UTC, `source_head_sha`, `tested_git_sha`, versiones PostgreSQL/PostGIS, hashes y tamaños, histories de migrations, conteos, fingerprint antes/después y confirmación de quiescence.
+
+`source_head_sha` identifica el HEAD exacto de la rama revisada y `tested_git_sha` identifica el checkout que ejecutó el drill. En CI de pull request el segundo es el merge-ref generado por GitHub: ambos SHA deben ser completos, el probado debe coincidir con `git rev-parse HEAD`, el HEAD revisado debe existir y debe ser ancestro del merge-ref. En una ejecución local sin variables CI, ambos campos usan el HEAD local.
 
 El bundle se comprime como tar/gzip y se cifra con `age` para un recipient X25519. El artifact final se llama `paquetenvia-backup-v1-<UTC>-<random>.tar.gz.age`. La identity nunca se copia al bundle, al reporte, al repositorio ni a `.env.example`.
 
@@ -50,7 +52,7 @@ En Unix, restrinja la identity:
 chmod 600 "$identity"
 ```
 
-`backup-environment.ps1` recibe solamente el recipient público. `restore-environment.ps1` recibe la ruta de la identity mediante `-IdentityFile`, rechaza identities dentro del repositorio y, en Unix, rechaza permisos de grupo u otros. No pase el contenido de la identity como argumento ni lo escriba en logs, artifacts o variables de salida.
+`backup-environment.ps1` recibe solamente el recipient público. `restore-environment.ps1` recibe la ruta de la identity mediante `-IdentityFile`, exige un archivo regular, rechaza symlinks, junctions, reparse points y cualquier ancestro enlazado, resuelve la ruta física y comprueba que quede fuera del repositorio. En Unix también rechaza permisos de grupo u otros. No pase el contenido de la identity como argumento ni lo escriba en logs, artifacts o variables de salida.
 
 ## Preflight y quiescence
 
@@ -64,7 +66,7 @@ Antes del backup:
 6. Verifique el artifact y su reporte redactado.
 7. Reanude servicios sólo después de completar la verificación.
 
-El script valida Docker/Compose, política estática, PostgreSQL y MinIO saludables, bucket privado, output nuevo fuera del repositorio, cero mensajes `PROCESSING` en ambos lanes y cero sesiones POD en `CREATED`, `UPLOADED`, `VALIDATING` o `READY`.
+El script valida Docker/Compose, política estática, PostgreSQL y MinIO saludables, bucket privado, output nuevo fuera del repositorio, cero mensajes `PROCESSING` en ambos lanes y cero sesiones POD en `CREATED`, `UPLOADED`, `VALIDATING` o `READY`. Para el output distingue ruta solicitada, ruta absoluta léxica, ancestro existente y ruta física. Rechaza cualquier componente enlazado, valida el ancestro antes de crear el directorio y vuelve a resolverlo después. Publicación y cleanup conservan el mismo objeto de ruta validado.
 
 La consistencia DB/S3 se protege con una ventana quiesced y un fingerprint agregado antes y después del dump/mirror. El fingerprint cubre órdenes, eventos, acceptances, assignments, proofs, sesiones POD, tracking, auditoría y ambos outbox sin exponer sus datos de entrada. Si cambia, el script responde `SOURCE_CHANGED_DURING_BACKUP`, elimina staging y no produce artifact.
 
@@ -144,7 +146,9 @@ Los logins externos y sus passwords no están en el backup. El operador debe pro
 
 `database-baseline.ps1 Assert` comprueba PostgreSQL 18, PostGIS 3.6, ubicación de extensiones, schemas, funciones, flags/memberships de roles, ownership, FORCE RLS, policies, triggers, revocaciones, grants, default privileges e histories.
 
-`tests/fixtures/ops-002/assert-restored.sql` comprueba conteos, estados, timestamps, aceptación, nueve eventos, assignment, POD, tracking hash, auditoría, outbox y tenant señuelo. Como `paqueteria_app`, valida lectura del tenant A, bloqueo del tenant B, falla cerrada sin contexto y reinicio del contexto transaccional. El harness también crea dos logins `NOBYPASSRLS` con passwords aleatorios sólo en memoria, los conecta por TCP, repite el aislamiento de ambos tenants y los elimina al terminar. También demuestra que UPDATE/DELETE siguen rechazados para eventos, acceptances, proofs y audit logs.
+`tests/fixtures/ops-002/assert-restored.sql` comprueba conteos, estados, timestamps, aceptación, nueve eventos, assignment, POD, tracking hash, auditoría, outbox y tenant señuelo. Como `paqueteria_app`, valida lectura del tenant A, bloqueo del tenant B, falla cerrada sin contexto y reinicio del contexto transaccional. El harness también crea dos logins `NOBYPASSRLS` con passwords aleatorios sólo en memoria, los conecta por TCP, repite el aislamiento de ambos tenants y los elimina al terminar.
+
+`tests/fixtures/ops-002/assert-append-only.sql` usa la conexión administrativa sintética, que tiene capacidad efectiva de `UPDATE` y `DELETE`, manteniendo `session_replication_role = origin`. Para cada una de las cuatro tablas comprueba nombre, estado, forma y función normativa del trigger; captura la fila conocida; exige SQLSTATE `42501` y el mensaje exacto `<schema>.<table> is append-only` para UPDATE y DELETE independientes; y vuelve a comparar la fila completa. No acepta `insufficient_privilege`. El restore parsea los conteos estructurados y exige 4 UPDATE guards, 4 DELETE guards, 8 fallos del trigger, 0 fallos de permisos y 8 verificaciones de filas intactas, inmediatamente después del restore y nuevamente después del restart.
 
 Los objetos restaurados se vuelven a espejar a staging, se recalculan tamaño/SHA-256/digest agregado y se cotejan uno a uno con `custody.proofs`. El bucket debe permanecer privado y no puede contener objetos faltantes ni adicionales.
 
@@ -156,7 +160,13 @@ pwsh ./tools/test-backup-restore.ps1 -CI
 
 El drill crea source y target aislados con puertos, proyectos, volúmenes y credenciales sintéticos; crea desde `template0` una base de datos fuente limpia; aplica baseline/migrations; inserta la fixture; sube tres objetos reales; ejecuta pruebas negativas; crea el backup; destruye source con `down --volumes --remove-orphans`; verifica ausencia de sus recursos; restaura target; reinicia; verifica y limpia.
 
-Las 35 pruebas negativas obligatorias y ocho guardas adicionales (43 comprobaciones en total) cubren preflight, recipient/identity, unhealthy/quiescence, cambios concurrentes, fallos de dump/mirror/cifrado, ausencia de sentinels visibles, integridad/tampering, limpieza/cancelación, timeout, target no limpio, exclusiones, restart, RLS, append-only, ownership/grants, traversal, rutas absolutas, enlaces, allowlist, cantidad y tamaño expandido.
+Las 35 pruebas negativas obligatorias y 35 guardas adicionales (70 comprobaciones en total) cubren preflight, recipient/identity, unhealthy/quiescence, cambios concurrentes, fallos de dump/mirror/cifrado, ausencia de sentinels visibles, integridad/tampering, limpieza/cancelación, timeout, target no limpio, exclusiones, restart, RLS, append-only privilegiado, ownership/grants, traversal, rutas absolutas, enlaces, allowlist, cantidad y tamaño expandido.
+
+Las guardas focales append-only eliminan y deshabilitan triggers, reemplazan temporalmente la función por un no-op, prueban un actor sin permisos, verifican las cuatro tablas por separado y demuestran que un UPDATE rechazado no compensa un DELETE no probado. Todas las mutaciones viven en transacciones efímeras que se revierten al fallar.
+
+En Linux CI también se prueban parent/output/identity symlinks, un staging root enlazado, reemplazo del output antes de cleanup, preservación del target ajeno y ausencia de artifacts/reportes dentro del repositorio. La detección productiva usa `FileAttributes.ReparsePoint`, `LinkType`, `LinkTarget` y resolución física del filesystem. En Windows se prueba la misma protección con junctions cuando el sistema permite crearlos y se mantiene una prueba directa del detector de reparse points.
+
+Las siete guardas de trazabilidad cubren variables ausentes, SHA malformado, checkout distinto, HEAD no ancestro, fallback local y la relación válida entre HEAD y merge-ref. El job `Validate backup and restore` conserva el checkout del merge-ref; no cambia a una ejecución exclusiva de la rama.
 
 ## RPO y RTO
 
@@ -204,7 +214,7 @@ docker compose `
 
 Confirme el nombre exacto antes de ejecutar. No use este comando contra un entorno real ni borre artifacts externos sin confirmación separada.
 
-Backup y restore crean staging aleatorio bajo el temporal del sistema, con permisos restrictivos y cleanup en `finally`. La eliminación lógica no garantiza secure erase físico en SSD, filesystems copy-on-write o runners administrados.
+Backup y restore crean staging aleatorio bajo la ruta temporal física del sistema, con permisos restrictivos y cleanup en `finally`. El cleanup vuelve a comprobar la identidad física almacenada, rechaza si la raíz fue reemplazada o si encuentra un enlace descendiente y nunca sigue un symlink/junction hacia un target ajeno. La eliminación lógica no garantiza secure erase físico en SSD, filesystems copy-on-write o runners administrados.
 
 ## Riesgos, limitaciones y rollback
 
