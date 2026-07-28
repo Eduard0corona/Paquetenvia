@@ -378,6 +378,7 @@ catch {
             $failurePhase = "pod_quiescence"
         }
     }
+    [Console]::Error.WriteLine("OPS002_FAILURE_PHASE=$failurePhase")
     Write-Error "OPS-002 backup failed during phase '$failurePhase': $($_.Exception.Message)"
     exit 1
 }

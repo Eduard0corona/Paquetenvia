@@ -403,6 +403,7 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
     })
 }
 catch {
+    [Console]::Error.WriteLine("OPS002_FAILURE_PHASE=$currentPhase")
     if ($_.Exception -is [System.OperationCanceledException]) {
         Write-Error "OPS-002 restore cancelled during phase '$currentPhase'."
     }

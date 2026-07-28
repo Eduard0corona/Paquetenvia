@@ -74,12 +74,19 @@ function Get-RedactedChildFailurePhase {
     param([AllowEmptyString()] [string] $StandardError)
 
     $failureText = if ($null -eq $StandardError) { "" } else { $StandardError }
-    $match = [regex]::Match(
+    $machineMatch = [regex]::Match(
+        $failureText,
+        'OPS002_FAILURE_PHASE=([a-z_]+)',
+        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if ($machineMatch.Success) {
+        return $machineMatch.Groups[1].Value
+    }
+    $messageMatch = [regex]::Match(
         $failureText,
         "phase '([a-z_]+)'",
         [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
-    if ($match.Success) {
-        return $match.Groups[1].Value
+    if ($messageMatch.Success) {
+        return $messageMatch.Groups[1].Value
     }
     return "unclassified"
 }
