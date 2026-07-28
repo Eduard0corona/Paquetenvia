@@ -365,7 +365,16 @@ pg_restore --list "$OPS002_DUMP_PATH"
     })
 }
 catch {
-    Write-Error "OPS-002 backup failed during phase '$currentPhase': $($_.Exception.Message)"
+    $failurePhase = $currentPhase
+    if ($currentPhase -ceq "quiescence") {
+        if ($_.Exception.Message -ceq "OUTBOX_PROCESSING_DURING_BACKUP") {
+            $failurePhase = "outbox_quiescence"
+        }
+        elseif ($_.Exception.Message -ceq "POD_SESSION_TRANSITIONAL_DURING_BACKUP") {
+            $failurePhase = "pod_quiescence"
+        }
+    }
+    Write-Error "OPS-002 backup failed during phase '$failurePhase': $($_.Exception.Message)"
     exit 1
 }
 finally {
