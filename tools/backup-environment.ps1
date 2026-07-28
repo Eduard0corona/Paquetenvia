@@ -210,6 +210,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
 
     $inventory = Get-Ops002ObjectInventory -Root $objectsRoot
     $proofReferences = @(Get-Ops002ProofReferences -Context $context)
+    $currentPhase = "object_integrity_validation"
     Assert-Ops002ProofObjectIntegrity `
         -ProofReferences $proofReferences `
         -Inventory $inventory

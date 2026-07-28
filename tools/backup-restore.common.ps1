@@ -336,7 +336,8 @@ SELECT
 '@
     $result = Invoke-Ops002PostgresQuery -Context $Context -Query $query
     $counts = $result.StandardOutput.Trim().Split("|")
-    if ($counts.Count -ne 3 -or $counts | Where-Object { $_ -notmatch '^\d+$' }) {
+    if ($counts.Count -ne 3 -or
+        @($counts | Where-Object { $_ -notmatch '^\d+$' }).Count -ne 0) {
         throw "Unable to verify quiescence."
     }
     if ([int64]$counts[0] -ne 0 -or [int64]$counts[1] -ne 0) {

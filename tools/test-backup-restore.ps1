@@ -84,6 +84,19 @@ function Get-RedactedChildFailurePhase {
     return "unclassified"
 }
 
+function Add-ExpectedBackupFailureResult {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] $Result,
+        [Parameter(Mandatory)] [string] $ExpectedPhase
+    )
+
+    $actualPhase = Get-RedactedChildFailurePhase `
+        -StandardError $Result.StandardError
+    Add-NegativeResult -Name $Name -Passed (
+        $Result.ExitCode -ne 0 -and $actualPhase -ceq $ExpectedPhase)
+}
+
 function Get-FreePort {
     $listener = [System.Net.Sockets.TcpListener]::new(
         [System.Net.IPAddress]::Loopback, 0)
@@ -767,7 +780,8 @@ try {
             $unhealthyOutput = Join-Path $temporaryRoot "ops002-unhealthy-$runSuffix"
             $result = Invoke-BackupProcess -Destination $unhealthyOutput `
                 -Recipient $recipient -AllowFailure
-            Add-NegativeResult -Name "services_unhealthy" -Passed ($result.ExitCode -ne 0)
+            Add-ExpectedBackupFailureResult -Name "services_unhealthy" `
+                -Result $result -ExpectedPhase "service_health"
         }
         finally {
             Invoke-DockerCompose -Context $script:sourceContext -Arguments @(
@@ -797,7 +811,8 @@ WHERE id='10000000-0000-4000-8000-000000000031';
             $processingOutput = Join-Path $temporaryRoot "ops002-processing-$runSuffix"
             $result = Invoke-BackupProcess -Destination $processingOutput `
                 -Recipient $recipient -AllowFailure
-            Add-NegativeResult -Name "outbox_processing" -Passed ($result.ExitCode -ne 0)
+            Add-ExpectedBackupFailureResult -Name "outbox_processing" `
+                -Result $result -ExpectedPhase "outbox_quiescence"
         }
         finally {
             Invoke-Ops002PostgresQuery -Context $script:sourceContext -Query @'
@@ -818,7 +833,8 @@ WHERE id='10000000-0000-4000-8000-000000000025';
             $podOutput = Join-Path $temporaryRoot "ops002-pod-$runSuffix"
             $result = Invoke-BackupProcess -Destination $podOutput `
                 -Recipient $recipient -AllowFailure
-            Add-NegativeResult -Name "pod_session_transitional" -Passed ($result.ExitCode -ne 0)
+            Add-ExpectedBackupFailureResult -Name "pod_session_transitional" `
+                -Result $result -ExpectedPhase "pod_quiescence"
         }
         finally {
             Invoke-Ops002PostgresQuery -Context $script:sourceContext -Query @'
@@ -835,7 +851,8 @@ WHERE id='10000000-0000-4000-8000-000000000025';
             -Recipient $recipient -Additional @(
                 "-TestFailureStage", "FINGERPRINT_CHANGE"
             ) -AllowFailure
-        Add-NegativeResult -Name "fingerprint_changed" -Passed ($result.ExitCode -ne 0)
+        Add-ExpectedBackupFailureResult -Name "fingerprint_changed" `
+            -Result $result -ExpectedPhase "consistency_validation"
         Assert-NoNewPlaintextStage -Before $stageSnapshot
 
         $script:currentPhase = "missing_object_guard"
@@ -844,7 +861,8 @@ WHERE id='10000000-0000-4000-8000-000000000025';
             $missingOutput = Join-Path $temporaryRoot "ops002-missing-$runSuffix"
             $result = Invoke-BackupProcess -Destination $missingOutput `
                 -Recipient $recipient -AllowFailure
-            Add-NegativeResult -Name "proof_without_object" -Passed ($result.ExitCode -ne 0)
+            Add-ExpectedBackupFailureResult -Name "proof_without_object" `
+                -Result $result -ExpectedPhase "object_integrity_validation"
         }
         finally {
             Set-ProofObjects -Context $script:sourceContext `
@@ -865,8 +883,9 @@ SET session_replication_role=origin;
             $hashOutput = Join-Path $temporaryRoot "ops002-hash-$runSuffix"
             $result = Invoke-BackupProcess -Destination $hashOutput `
                 -Recipient $recipient -AllowFailure
-            Add-NegativeResult -Name "database_object_hash_mismatch" `
-                -Passed ($result.ExitCode -ne 0)
+            Add-ExpectedBackupFailureResult `
+                -Name "database_object_hash_mismatch" `
+                -Result $result -ExpectedPhase "object_integrity_validation"
         }
         finally {
             $pickupSha = Get-Ops002Sha256 -Path $pickupPath
@@ -890,7 +909,13 @@ SET session_replication_role=origin;
                 -Recipient $recipient `
                 -Additional @("-TestFailureStage", $failure.Stage) `
                 -AllowFailure
-            Add-NegativeResult -Name $failure.Name -Passed ($result.ExitCode -ne 0)
+            $expectedPhase = switch ($failure.Stage) {
+                "PG_DUMP" { "database_dump" }
+                "MC_MIRROR" { "object_storage_mirror" }
+                "ENCRYPTION" { "encryption" }
+            }
+            Add-ExpectedBackupFailureResult -Name $failure.Name `
+                -Result $result -ExpectedPhase $expectedPhase
             Assert-NoNewPlaintextStage -Before $before
         }
         Add-NegativeResult -Name "cleanup_after_backup_failure" -Passed $true
