@@ -535,6 +535,19 @@ mc anonymous get "local/$MINIO_BUCKET"
     }
 }
 
+function Get-Ops002HostContainerUserArguments {
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        return @()
+    }
+
+    $uid = (Invoke-Ops002Process -FilePath "id" -Arguments @("-u")).StandardOutput.Trim()
+    $gid = (Invoke-Ops002Process -FilePath "id" -Arguments @("-g")).StandardOutput.Trim()
+    if ($uid -notmatch '^\d+$' -or $gid -notmatch '^\d+$') {
+        throw "Unable to resolve the host user for secure object staging."
+    }
+    return @("--user", "${uid}:${gid}")
+}
+
 function Invoke-Ops002McMirrorToHost {
     param(
         [Parameter(Mandatory)] $Context,
@@ -546,15 +559,19 @@ function Invoke-Ops002McMirrorToHost {
     $mount = "$resolved`:/backup"
     $shell = @'
 set -eu
+export MC_CONFIG_DIR=/tmp/.mc
 mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
 mc mirror --quiet --overwrite --remove "local/$MINIO_BUCKET" /backup
 '@
-    Invoke-Ops002Compose -Context $Context -Arguments @(
-        "run", "--rm", "--no-deps",
+    $arguments = @(
+        "run", "--rm", "--no-deps"
+    ) + @(Get-Ops002HostContainerUserArguments) + @(
         "--volume", $mount,
         "--entrypoint", "/bin/sh",
         "minio-init", "-c", $shell
-    ) -TimeoutSeconds $TimeoutSeconds | Out-Null
+    )
+    Invoke-Ops002Compose -Context $Context -Arguments $arguments `
+        -TimeoutSeconds $TimeoutSeconds | Out-Null
 }
 
 function Invoke-Ops002McMirrorFromHost {
