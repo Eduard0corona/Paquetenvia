@@ -93,8 +93,12 @@ function Add-ExpectedBackupFailureResult {
 
     $actualPhase = Get-RedactedChildFailurePhase `
         -StandardError $Result.StandardError
-    Add-NegativeResult -Name $Name -Passed (
-        $Result.ExitCode -ne 0 -and $actualPhase -ceq $ExpectedPhase)
+    if ($Result.ExitCode -eq 0 -or $actualPhase -cne $ExpectedPhase) {
+        throw (
+            "Required negative test failed: {0}; expected phase '{1}', observed '{2}', exit {3}." -f
+            $Name, $ExpectedPhase, $actualPhase, $Result.ExitCode)
+    }
+    Add-NegativeResult -Name $Name -Passed $true
 }
 
 function Get-FreePort {
