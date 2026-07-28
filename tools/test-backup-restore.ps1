@@ -91,8 +91,8 @@ function Add-ExpectedBackupFailureResult {
         [Parameter(Mandatory)] [string] $ExpectedPhase
     )
 
-    $actualPhase = Get-RedactedChildFailurePhase `
-        -StandardError $Result.StandardError
+    $capturedText = "{0}`n{1}" -f $Result.StandardError, $Result.StandardOutput
+    $actualPhase = Get-RedactedChildFailurePhase -StandardError $capturedText
     if ($Result.ExitCode -eq 0 -or $actualPhase -cne $ExpectedPhase) {
         throw (
             "Required negative test failed: {0}; expected phase '{1}', observed '{2}', exit {3}." -f
@@ -929,8 +929,10 @@ SET session_replication_role=origin;
         $backupResult = Invoke-BackupProcess -Destination $backupOutput `
             -Recipient $recipient -AllowFailure
         if ($backupResult.ExitCode -ne 0) {
+            $capturedText = "{0}`n{1}" -f
+                $backupResult.StandardError, $backupResult.StandardOutput
             $failurePhase = Get-RedactedChildFailurePhase `
-                -StandardError $backupResult.StandardError
+                -StandardError $capturedText
             throw "Canonical encrypted backup failed during phase '$failurePhase'."
         }
         $artifactPath = Get-ChildItem -LiteralPath $backupOutput `
@@ -1077,8 +1079,10 @@ mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >
         -Additional @("-ConfirmSourceDestroyed") `
         -AllowFailure
     if ($restoreResult.ExitCode -ne 0) {
+        $capturedText = "{0}`n{1}" -f
+            $restoreResult.StandardError, $restoreResult.StandardOutput
         $failurePhase = Get-RedactedChildFailurePhase `
-            -StandardError $restoreResult.StandardError
+            -StandardError $capturedText
         throw "Canonical restore failed during phase '$failurePhase'."
     }
     $script:targetRestored = $true
