@@ -82,10 +82,15 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($Database)) {
         $context.Environment["POSTGRES_DB"] = $Database
     }
+    $currentPhase = "docker_preflight"
     Assert-DockerAvailable
+    $currentPhase = "compose_policy"
     Assert-ComposeStaticPolicy -Context $context
+    $currentPhase = "service_health"
     Assert-Ops002ServicesHealthy -Context $context
+    $currentPhase = "bucket_privacy"
     Assert-Ops002BucketPrivate -Context $context
+    $currentPhase = "quiescence"
     Assert-Ops002Quiescence -Context $context
 
     $identity = $null
@@ -93,14 +98,18 @@ try {
         $identity = Assert-Ops002IdentityFile -IdentityFile $TestIdentityFile
     }
 
+    $currentPhase = "source_fingerprint"
     $fingerprintBefore = Get-Ops002Fingerprint -Context $context
+    $currentPhase = "database_versions"
     $versions = Get-Ops002DatabaseVersions -Context $context
+    $currentPhase = "migration_histories"
     $histories = Get-Ops002MigrationHistories -Context $context
     if (@($histories.psobject.Properties).Count -ne 8 -or
         @($histories.psobject.Properties.Value | Where-Object { [int]$_ -lt 1 }).Count -ne 0) {
         throw "Expected all eight module migration histories."
     }
 
+    $currentPhase = "fixture_validation"
     if ($RequireFixture) {
         $fixtureResult = Invoke-Ops002PostgresQuery -Context $context -Query @'
 SELECT
