@@ -1064,12 +1064,14 @@ SET session_replication_role=origin;
     ) | Out-Null
     Assert-ProjectResourcesAbsent -ProjectName $script:targetContext.ProjectName
 
+    $script:currentPhase = "dirty_bucket_guard"
     Start-ComposeEnvironment -Context $script:targetContext -TimeoutSeconds $TimeoutSeconds
     $dirtyObjectKey = [Guid]::NewGuid().ToString("N")
     $dirtyObjectScript = @'
 set -eu
 mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-'@ + "printf synthetic | mc pipe `"local/`$MINIO_BUCKET/$dirtyObjectKey`" >/dev/null`n"
+'@ + "printf synthetic > /tmp/ops002-dirty-object`n" +
+        "mc cp --quiet /tmp/ops002-dirty-object `"local/`$MINIO_BUCKET/$dirtyObjectKey`"`n"
     Invoke-McScript -Context $script:targetContext -ScriptText $dirtyObjectScript | Out-Null
     $dirtyBucketResult = Invoke-RestoreProcess -ArtifactPath $artifactPath `
         -IdentityPath $script:identityPath `
