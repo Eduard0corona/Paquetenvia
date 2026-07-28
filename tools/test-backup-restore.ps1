@@ -217,7 +217,11 @@ function New-Ops002SecurityTestArchive {
 }
 
 function Assert-NoNewPlaintextStage {
-    param([Parameter(Mandatory)] [string[]] $Before)
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $Before
+    )
     $after = @(Get-TemporaryStageSnapshot)
     $unexpected = @($after | Where-Object { $_ -notin $Before })
     if ($unexpected.Count -ne 0) {
