@@ -35,6 +35,7 @@ $artifactPath = $null
 $partialArtifact = $null
 $containerDump = $null
 $succeeded = $false
+$currentPhase = "preflight"
 $startedAt = [DateTimeOffset]::UtcNow
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -73,6 +74,7 @@ try {
     New-Item -ItemType Directory -Path $output -ErrorAction Stop | Out-Null
     $outputCreated = $true
 
+    $currentPhase = "source_validation"
     $context = Get-LocalEnvironmentContext `
         -ComposeFile $ComposeFile `
         -EnvironmentFile $EnvironmentFile `
@@ -126,6 +128,7 @@ SELECT
         }
     }
 
+    $currentPhase = "database_dump"
     $staging = New-Ops002StagingDirectory -Purpose "backup"
     $payloadRoot = Join-Path $staging "payload"
     $postgresRoot = Join-Path $payloadRoot "postgres"
@@ -187,6 +190,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     ) -AllowFailure | Out-Null
     $containerDump = $null
 
+    $currentPhase = "object_storage_mirror"
     if (Test-Ops002FailureStage -Requested $TestFailureStage -Stage "MC_MIRROR") {
         throw "Injected mc mirror failure."
     }
@@ -201,6 +205,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
         -ProofReferences $proofReferences `
         -Inventory $inventory
 
+    $currentPhase = "consistency_validation"
     $fingerprintAfter = Get-Ops002Fingerprint -Context $context
     if (Test-Ops002FailureStage -Requested $TestFailureStage -Stage "FINGERPRINT_CHANGE") {
         $fingerprintAfter = "0" * 64
@@ -224,6 +229,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     $backupId = "ops002-{0}-{1}" -f
         $startedAt.ToString("yyyyMMddTHHmmssZ"),
         ([Guid]::NewGuid().ToString("N").Substring(0, 12))
+    $currentPhase = "bundle_packaging"
     $manifest = [ordered]@{
         format_version = $script:Ops002FormatVersion
         backup_id = $backupId
@@ -254,6 +260,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     ) -TimeoutSeconds $TimeoutSeconds | Out-Null
     Assert-Ops002ArchiveEntries -Archive $archive | Out-Null
 
+    $currentPhase = "encryption"
     if (Test-Ops002FailureStage -Requested $TestFailureStage -Stage "ENCRYPTION") {
         throw "Injected encryption failure."
     }
@@ -292,6 +299,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     $artifactCompletedAt = [DateTimeOffset]::UtcNow
     $stopwatch.Stop()
 
+    $currentPhase = "reporting"
     $report = [ordered]@{
         format_version = $script:Ops002FormatVersion
         backup_id = $backupId
@@ -348,7 +356,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     })
 }
 catch {
-    Write-Error $_.Exception.Message
+    Write-Error "OPS-002 backup failed during phase '$currentPhase': $($_.Exception.Message)"
     exit 1
 }
 finally {

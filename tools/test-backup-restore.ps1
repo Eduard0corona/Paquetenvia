@@ -70,6 +70,20 @@ function Invoke-ExpectedScriptFailure {
     Add-NegativeResult -Name $Name -Passed ($result.ExitCode -ne 0)
 }
 
+function Get-RedactedChildFailurePhase {
+    param([AllowEmptyString()] [string] $StandardError)
+
+    $failureText = if ($null -eq $StandardError) { "" } else { $StandardError }
+    $match = [regex]::Match(
+        $failureText,
+        "phase '([a-z_]+)'",
+        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if ($match.Success) {
+        return $match.Groups[1].Value
+    }
+    return "unclassified"
+}
+
 function Get-FreePort {
     $listener = [System.Net.Sockets.TcpListener]::new(
         [System.Net.IPAddress]::Loopback, 0)
@@ -884,9 +898,11 @@ SET session_replication_role=origin;
         $script:currentPhase = "canonical_backup"
         $backupOutput = Join-Path $resultsRoot "encrypted-backup"
         $backupResult = Invoke-BackupProcess -Destination $backupOutput `
-            -Recipient $recipient
+            -Recipient $recipient -AllowFailure
         if ($backupResult.ExitCode -ne 0) {
-            throw "Canonical encrypted backup failed."
+            $failurePhase = Get-RedactedChildFailurePhase `
+                -StandardError $backupResult.StandardError
+            throw "Canonical encrypted backup failed during phase '$failurePhase'."
         }
         $artifactPath = Get-ChildItem -LiteralPath $backupOutput `
             -File -Filter "*.tar.gz.age" | Select-Object -ExpandProperty FullName -First 1
@@ -1029,9 +1045,12 @@ mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >
         -IdentityPath $script:identityPath `
         -Project $script:targetContext.ProjectName `
         -Database "ops002_restored" `
-        -Additional @("-ConfirmSourceDestroyed")
+        -Additional @("-ConfirmSourceDestroyed") `
+        -AllowFailure
     if ($restoreResult.ExitCode -ne 0) {
-        throw "Canonical restore failed."
+        $failurePhase = Get-RedactedChildFailurePhase `
+            -StandardError $restoreResult.StandardError
+        throw "Canonical restore failed during phase '$failurePhase'."
     }
     $script:targetRestored = $true
 

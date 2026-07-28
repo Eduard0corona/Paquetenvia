@@ -33,6 +33,7 @@ $succeeded = $false
 $containerDump = $null
 $rolesBootstrapDatabase = $null
 $rolesBootstrapCreated = $false
+$currentPhase = "preflight"
 $restoreStartedAt = [DateTimeOffset]::UtcNow
 $restoreStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $validationStopwatch = [System.Diagnostics.Stopwatch]::new()
@@ -75,6 +76,7 @@ try {
         throw "External artifact hash validation failed."
     }
 
+    $currentPhase = "artifact_validation"
     $staging = New-Ops002StagingDirectory -Purpose "restore"
     $archive = Join-Path $staging "payload.tar.gz"
     Invoke-Ops002Process -FilePath "age" -Arguments @(
@@ -98,6 +100,7 @@ try {
         ConvertFrom-Json
     $inventory = Assert-Ops002Manifest -Manifest $manifest -PayloadRoot $payloadRoot
 
+    $currentPhase = "target_preflight"
     $context = Get-LocalEnvironmentContext `
         -ComposeFile $ComposeFile `
         -EnvironmentFile $EnvironmentFile `
@@ -154,6 +157,7 @@ try {
     }
     $targetWasClean = $true
 
+    $currentPhase = "roles_bootstrap"
     $rolesBootstrapDatabase = "ops002_roles_$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
     Invoke-Ops002PostgresQuery -Context $context -Query (
         "CREATE DATABASE `"$rolesBootstrapDatabase`" TEMPLATE template0;") | Out-Null
@@ -179,6 +183,7 @@ try {
     $rolesBootstrapCreated = $false
     $rolesBootstrapDatabase = $null
 
+    $currentPhase = "database_restore"
     Invoke-Ops002PostgresQuery -Context $context -Query (
         "CREATE DATABASE `"$RestoredDatabase`" TEMPLATE template0;") | Out-Null
 
@@ -204,6 +209,7 @@ pg_restore --exit-on-error --single-transaction \
     ) -AllowFailure | Out-Null
     $containerDump = $null
 
+    $currentPhase = "object_storage_restore"
     Invoke-Ops002McMirrorFromHost -Context $context `
         -Source (Join-Path $payloadRoot "object-storage") `
         -TimeoutSeconds $TimeoutSeconds
@@ -212,6 +218,7 @@ pg_restore --exit-on-error --single-transaction \
     $restoreStopwatch.Stop()
     $validationStopwatch.Start()
 
+    $currentPhase = "restored_state_validation"
     $restoredConnection = "Host=127.0.0.1;Port=$($context.Environment['POSTGRES_HOST_PORT']);" +
         "Database=$RestoredDatabase;Username=$($context.Environment['POSTGRES_USER']);" +
         "Password=$($context.Environment['POSTGRES_PASSWORD']);Pooling=false;Timeout=15;Command Timeout=120"
@@ -256,6 +263,7 @@ pg_restore --exit-on-error --single-transaction \
         -ProofReferences $restoredProofs `
         -Inventory $restoredInventory
 
+    $currentPhase = "restart_validation"
     Invoke-Ops002Compose -Context $context -Arguments @(
         "restart", "postgres", "minio"
     ) -TimeoutSeconds $TimeoutSeconds | Out-Null
@@ -338,6 +346,7 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
     $validationStopwatch.Stop()
     $completedAt = [DateTimeOffset]::UtcNow
     $totalDuration = $completedAt - $restoreStartedAt
+    $currentPhase = "reporting"
     $restoreReport = [ordered]@{
         format_version = $script:Ops002FormatVersion
         backup_id = $manifest.backup_id
@@ -395,10 +404,10 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
 }
 catch {
     if ($_.Exception -is [System.OperationCanceledException]) {
-        Write-Error "Restore cancelled."
+        Write-Error "OPS-002 restore cancelled during phase '$currentPhase'."
     }
     else {
-        Write-Error $_.Exception.Message
+        Write-Error "OPS-002 restore failed during phase '$currentPhase': $($_.Exception.Message)"
     }
     exit 1
 }
