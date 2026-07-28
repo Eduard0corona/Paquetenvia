@@ -281,7 +281,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
         $completedAt.ToString("yyyyMMddTHHmmssZ"),
         ([Guid]::NewGuid().ToString("N").Substring(0, 12))
     $artifactPath = Join-Path $output $artifactName
-    $partialArtifact = Join-Path $output (".$artifactName.partial")
+    $partialArtifact = Join-Path $output ("$artifactName.partial")
     $currentPhase = "encryption_write"
     try {
         $ageResult = Invoke-Ops002Process -FilePath "age" -Arguments @(
@@ -333,7 +333,8 @@ pg_restore --list "$OPS002_DUMP_PATH"
     }
     $currentPhase = "encryption_output_validation"
     if (-not (Test-Path -LiteralPath $partialArtifact -PathType Leaf)) {
-        $currentPhase = if ($ageResult.StandardOutput.Length -gt 0) {
+        $currentPhase = if (-not [string]::IsNullOrEmpty(
+            [string]$ageResult.StandardOutput)) {
             "encryption_stdout"
         }
         else {
