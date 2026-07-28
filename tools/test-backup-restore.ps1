@@ -1070,9 +1070,12 @@ SET session_replication_role=origin;
     $dirtyObjectScript = @'
 set -eu
 mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-'@ + "printf synthetic > /tmp/ops002-dirty-object`n" +
-        "mc cp --quiet /tmp/ops002-dirty-object `"local/`$MINIO_BUCKET/$dirtyObjectKey`"`n"
-    Invoke-McScript -Context $script:targetContext -ScriptText $dirtyObjectScript | Out-Null
+'@ + "mc cp --quiet /fixtures/synthetic-decoy.png.b64 " +
+        "`"local/`$MINIO_BUCKET/$dirtyObjectKey`"`n"
+    $dirtyFixtureMount = "$([System.IO.Path]::GetFullPath(
+        (Join-Path $repositoryRoot 'tests/fixtures/ops-002/objects')))`:/fixtures:ro"
+    Invoke-McScript -Context $script:targetContext `
+        -ScriptText $dirtyObjectScript -Mount $dirtyFixtureMount | Out-Null
     $dirtyBucketResult = Invoke-RestoreProcess -ArtifactPath $artifactPath `
         -IdentityPath $script:identityPath `
         -Project $script:targetContext.ProjectName `
