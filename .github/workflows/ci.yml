@@ -800,6 +800,9 @@ jobs:
     timeout-minutes: 60
     env:
       CI: "true"
+      OPS002_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      OPS002_TESTED_GIT_SHA: ${{ github.sha }}
+      OPS002_PULL_REQUEST_EVENT: ${{ github.event_name == 'pull_request' }}
     steps:
       - name: Check out clean repository
         uses: actions/checkout@v5
@@ -958,6 +961,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           . ./tools/local-environment.common.ps1
+          . ./tools/backup-restore.common.ps1
           $cleanupFailures = [System.Collections.Generic.List[string]]::new()
           foreach ($environmentFile in @(
             $env:OPS002_SOURCE_ENV_FILE,
@@ -983,9 +987,16 @@ jobs:
             -Directory -Filter "paquetenvia-ops002-*" `
             -ErrorAction SilentlyContinue |
             ForEach-Object {
-              Remove-Item -LiteralPath $_.FullName -Recurse -Force
+              $pathInfo = New-Ops002ValidatedExternalDirectory `
+                -Path $_.FullName `
+                -Purpose "Plaintext staging"
+              Remove-Ops002StagingDirectory -PathInfo $pathInfo
             }
-          Remove-Item -LiteralPath $env:OPS002_IDENTITY_FILE -Force -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $env:OPS002_IDENTITY_FILE) {
+            $validatedIdentity = Assert-Ops002IdentityFile `
+              -IdentityFile $env:OPS002_IDENTITY_FILE
+            [System.IO.File]::Delete($validatedIdentity)
+          }
           Remove-Item -LiteralPath $env:OPS002_SOURCE_ENV_FILE -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $env:OPS002_TARGET_ENV_FILE -Force -ErrorAction SilentlyContinue
           if (Test-Path -LiteralPath $env:OPS002_IDENTITY_FILE) {
