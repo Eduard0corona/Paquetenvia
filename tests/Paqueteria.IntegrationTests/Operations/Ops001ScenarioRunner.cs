@@ -37,7 +37,8 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
     internal async Task<Ops001SimulationReport> RunAsync(
         Ops001ScenarioData data,
         bool publishReport,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Ops001RunTestCheckpoint? testCheckpoint = null)
     {
         var stopwatch = Stopwatch.StartNew();
         cancellationToken.ThrowIfCancellationRequested();
@@ -46,13 +47,12 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         IHost? proofWorker = null;
         RealtimeKestrelWebApplicationFactory? restoredHost = null;
         Ops001RealtimeObserver? restoredObserver = null;
-        var observedEventIds = new HashSet<Guid>();
-        var rawRealtimeDeliveries = 0;
+        var interruptedOutboxId = Guid.Empty;
+        var realtimeDeliveries = new List<Ops001RealtimeDelivery>();
         var logCollector = new Ops001LogCollector();
         try
         {
             ScenarioOrder[] orders;
-            Guid interruptedOutboxId;
             await using (var setupHost = fixture.CreateApiHost(data))
             {
                 var setupAddress = setupHost.Start();
@@ -120,11 +120,11 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                     cancellationToken);
                 Assert.Equal(1, interrupted.Attempts);
                 Assert.NotNull(interrupted.LeaseToken);
-                observedEventIds.UnionWith(initialObserver.EventIds);
-                rawRealtimeDeliveries += initialObserver.RawDeliveryCount;
+                realtimeDeliveries.AddRange(initialObserver.Deliveries);
             }
 
             var staleLeaseToken = Assert.IsType<Guid>(interrupted.LeaseToken);
+            testCheckpoint?.SetTargetOutbox(interruptedOutboxId);
 
             var pausingInjector = new Ops001PausingOutboxInjector(interruptedOutboxId);
             restoredHost = fixture.CreateApiHost(
@@ -137,6 +137,13 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                 restoredAddress,
                 data.OrganizationId);
             await restoredObserver.StartAsync(cancellationToken);
+            testCheckpoint?.OwnedHostStarted();
+            testCheckpoint?.OwnedObserverStarted();
+            if (testCheckpoint is not null)
+            {
+                await testCheckpoint.PauseAfterOwnedResourcesStartedAsync(cancellationToken);
+            }
+
             await ExpireLeaseAsync(interruptedOutboxId, cancellationToken);
 
             await pausingInjector.WaitUntilPausedAsync(
@@ -187,6 +194,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                 cancellationToken);
 
             proofWorker = fixture.CreateProofWorker();
+            testCheckpoint?.OwnedProofWorkerStarted();
 
             await RunBoundedAsync(
                 orders,
@@ -280,17 +288,39 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                 ExpectedRealtimeOutboxPerOrder * Ops001ScenarioData.OrderCount,
                 TimeSpan.FromMinutes(2),
                 cancellationToken);
-            await WaitForObservedEventsAsync(
-                observedEventIds,
-                restoredObserver,
+            var realtimeExpectations = await ReadRealtimeExpectationsAsync(
+                data.OrganizationId,
+                orders.Select(order => order.OrderId).ToArray(),
+                cancellationToken);
+            Assert.Equal(
                 ExpectedRealtimeStatusEventsPerOrder * Ops001ScenarioData.OrderCount,
+                realtimeExpectations.Count);
+            Assert.All(
+                orders,
+                order => Assert.Equal(
+                    Enumerable.Range(2, ExpectedRealtimeStatusEventsPerOrder),
+                    realtimeExpectations
+                        .Where(value => value.OrderId == order.OrderId)
+                        .Select(value => checked((int)value.AggregateVersion))
+                        .Order()));
+            await WaitForExpectedEventsAsync(
+                realtimeDeliveries,
+                restoredObserver,
+                realtimeExpectations,
                 TimeSpan.FromMinutes(1),
                 cancellationToken);
-            observedEventIds.UnionWith(restoredObserver.EventIds);
-            rawRealtimeDeliveries += restoredObserver.RawDeliveryCount;
+            realtimeDeliveries.AddRange(restoredObserver.Deliveries);
+            var realtimeCorrelation = Ops001RealtimeCorrelation.Correlate(
+                realtimeExpectations,
+                realtimeDeliveries);
             Assert.True(
-                rawRealtimeDeliveries > observedEventIds.Count,
-                "The interrupted event was not redelivered.");
+                realtimeCorrelation.RawDeliveriesFor(interruptedOutboxId) >= 2,
+                "The interrupted event did not have at least two raw deliveries.");
+            Assert.Single(
+                realtimeDeliveries
+                    .Where(value => value.EventId == interruptedOutboxId)
+                    .Select(value => value.EventId)
+                    .Distinct());
 
             await AssertPublicTrackingAsync(
                 restoredAddress,
@@ -311,8 +341,10 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                 cancellationToken);
 
             await restoredObserver.DisposeAsync();
+            testCheckpoint?.OwnedObserverDisposed();
             restoredObserver = null;
             await restoredHost.DisposeAsync();
+            testCheckpoint?.OwnedHostDisposed();
             restoredHost = null;
 
             await CompleteOrderCreatedOutboxAsync(
@@ -323,7 +355,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             var report = await BuildReportAsync(
                 data,
                 orders,
-                observedEventIds,
+                realtimeCorrelation,
                 poisonId,
                 newerOutboxId,
                 interruptedOutboxId,
@@ -338,7 +370,10 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                 cancellationToken);
             if (publishReport)
             {
-                await WriteReportAsync(report, cancellationToken);
+                await WriteReportAsync(
+                    report,
+                    testCheckpoint?.ReportPath,
+                    cancellationToken);
             }
 
             return report;
@@ -348,16 +383,31 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             if (restoredObserver is not null)
             {
                 await restoredObserver.DisposeAsync();
+                testCheckpoint?.OwnedObserverDisposed();
             }
 
             if (restoredHost is not null)
             {
                 await restoredHost.DisposeAsync();
+                testCheckpoint?.OwnedHostDisposed();
             }
 
             if (proofWorker is not null)
             {
                 proofWorker.Dispose();
+                testCheckpoint?.OwnedProofWorkerDisposed();
+            }
+
+            if (interruptedOutboxId != Guid.Empty)
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await ReleaseOwnedProcessingLeaseAsync(
+                    interruptedOutboxId,
+                    cleanup.Token);
+                var finalState = await ReadOutboxStateAsync(
+                    interruptedOutboxId,
+                    cleanup.Token);
+                testCheckpoint?.CleanupCompleted(finalState?.Status);
             }
         }
     }
@@ -816,7 +866,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
     private async Task<Ops001SimulationReport> BuildReportAsync(
         Ops001ScenarioData data,
         IReadOnlyCollection<ScenarioOrder> orders,
-        IReadOnlyCollection<Guid> observedEventIds,
+        Ops001RealtimeCorrelation realtimeCorrelation,
         Guid poisonId,
         Guid newerOutboxId,
         Guid interruptedOutboxId,
@@ -887,16 +937,45 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         var missingVersions = Ops001SimulationReport.CountMissingVersions(
             persistedVersions,
             expectedMaximumVersions);
-        var audits = await ReadRequiredAuditCountsAsync(
+        var auditExpectations = await ReadAuditExpectationsAsync(
             connection,
             data.OrganizationId,
             orderIds,
             cancellationToken);
-        Assert.Equal(orderIds.Length, audits.Count);
-        Assert.All(
-            audits,
-            value => Assert.Equal(ExpectedAuditsPerOrder, value.Value));
-        var auditsPersisted = audits.Values.Sum();
+        Assert.Equal(
+            ExpectedAuditsPerOrder * Ops001ScenarioData.OrderCount,
+            auditExpectations.Count);
+        var auditObservations = await ReadAuditObservationsAsync(
+            connection,
+            data.OrganizationId,
+            orderIds,
+            auditExpectations,
+            cancellationToken);
+        var auditCorrelation = Ops001AuditCorrelation.Correlate(
+            auditExpectations,
+            auditObservations);
+        if (auditCorrelation.Missing != 0 ||
+            auditCorrelation.Duplicated != 0 ||
+            auditCorrelation.Mismatched != 0)
+        {
+            var missingByAction = auditExpectations
+                .Where(expected => !auditObservations.Contains(expected))
+                .GroupBy(value => value.Action)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => $"{group.Key}:{group.Count()}");
+            var mismatchedByAction = auditObservations
+                .Where(observed => !auditExpectations.Contains(observed))
+                .GroupBy(value => value.Action)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => $"{group.Key}:{group.Count()}");
+            throw new Ops001AcceptanceException(
+                "Audit evidence did not correlate exactly. " +
+                $"missing={auditCorrelation.Missing}; " +
+                $"duplicated={auditCorrelation.Duplicated}; " +
+                $"mismatched={auditCorrelation.Mismatched}; " +
+                $"missing_by_action=[{string.Join(',', missingByAction)}]; " +
+                $"mismatched_by_action=[{string.Join(',', mismatchedByAction)}].");
+        }
         var outboxProcessed = await ScalarAsync<int>(
             connection,
             """
@@ -948,14 +1027,19 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             DomainEventsExpected:
                 ExpectedDomainEventsPerOrder * Ops001ScenarioData.OrderCount,
             DomainEventsPersisted: domainEventsPersisted,
-            RealtimeEventsExpected:
-                ExpectedRealtimeStatusEventsPerOrder * Ops001ScenarioData.OrderCount,
-            RealtimeEventsObserved: observedEventIds.Count,
-            RealtimeObservationPercent: Ops001SimulationReport.ObservationPercentage(
-                ExpectedRealtimeStatusEventsPerOrder * Ops001ScenarioData.OrderCount,
-                observedEventIds),
-            AuditsExpected: ExpectedAuditsPerOrder * Ops001ScenarioData.OrderCount,
-            AuditsPersisted: auditsPersisted,
+            RealtimeEventsExpected: realtimeCorrelation.Expected,
+            RealtimeEventsMatched: realtimeCorrelation.Matched,
+            RealtimeEventsMissing: realtimeCorrelation.Missing,
+            RealtimeEventsUnexpected: realtimeCorrelation.Unexpected,
+            RealtimeEventsMismatched: realtimeCorrelation.Mismatched,
+            RealtimeRawDeliveries: realtimeCorrelation.RawDeliveries,
+            RealtimeDuplicateDeliveries: realtimeCorrelation.DuplicateDeliveries,
+            RealtimeObservationPercent: realtimeCorrelation.ObservationPercent,
+            AuditsExpected: auditCorrelation.Expected,
+            AuditsExactlyMatched: auditCorrelation.ExactlyMatched,
+            AuditsMissing: auditCorrelation.Missing,
+            AuditsDuplicated: auditCorrelation.Duplicated,
+            AuditsMismatched: auditCorrelation.Mismatched,
             OutboxProcessed: outboxProcessed,
             OutboxDeadExpected: 1,
             OutboxDeadActual: outboxDead,
@@ -1080,6 +1164,23 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             """
             UPDATE platform.outbox_events
             SET lease_expires_at=clock_timestamp()-interval '1 second'
+            WHERE id=@id AND status='PROCESSING'
+            """,
+            cancellationToken,
+            P("id", outboxId));
+
+    private async Task ReleaseOwnedProcessingLeaseAsync(
+        Guid outboxId,
+        CancellationToken cancellationToken) =>
+        await ExecuteAdminAsync(
+            """
+            UPDATE platform.outbox_events
+            SET status='RETRY',
+                available_at=clock_timestamp(),
+                locked_at=NULL,
+                locked_by=NULL,
+                lease_token=NULL,
+                lease_expires_at=NULL
             WHERE id=@id AND status='PROCESSING'
             """,
             cancellationToken,
@@ -1320,27 +1421,74 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         throw new TimeoutException("Realtime outbox processing did not complete.");
     }
 
-    private static async Task WaitForObservedEventsAsync(
-        HashSet<Guid> initial,
+    private async Task<IReadOnlyList<Ops001RealtimeExpectation>>
+        ReadRealtimeExpectationsAsync(
+            Guid organizationId,
+            Guid[] orderIds,
+            CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(
+            fixture.Database.AdminConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT id,aggregate_id,aggregate_version
+            FROM platform.outbox_events
+            WHERE owner_org_id=@org
+              AND aggregate_id=ANY(@orders)
+              AND aggregate_version BETWEEN 2 AND 9
+              AND topic='orders.status-changed'
+            ORDER BY aggregate_id,aggregate_version
+            """,
+            connection);
+        command.Parameters.Add(P("org", organizationId));
+        command.Parameters.Add(PA("orders", orderIds));
+        var result = new List<Ops001RealtimeExpectation>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetInt32(2),
+                global::Realtime.Application.Events.RealtimeEventTypes.OrderStatusChanged));
+        }
+
+        return result;
+    }
+
+    private static async Task WaitForExpectedEventsAsync(
+        IReadOnlyCollection<Ops001RealtimeDelivery> initial,
         Ops001RealtimeObserver observer,
-        int expected,
+        IReadOnlyCollection<Ops001RealtimeExpectation> expected,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
-        while (!deadline.IsCancellationRequested)
+        try
         {
-            var observed = initial.Concat(observer.EventIds).Distinct().Count();
-            if (observed == expected)
+            while (!deadline.IsCancellationRequested)
             {
-                return;
-            }
+                var correlation = Ops001RealtimeCorrelation.Correlate(
+                    expected,
+                    initial.Concat(observer.Deliveries));
+                if (correlation.Matched == expected.Count)
+                {
+                    return;
+                }
 
-            await Task.Delay(50, deadline.Token);
+                await Task.Delay(50, deadline.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Realtime observations did not match every expected outbox event.");
         }
 
-        throw new TimeoutException("Realtime observations did not reach the expected count.");
+        throw new TimeoutException(
+            "Realtime observations did not match every expected outbox event.");
     }
 
     private async Task ProcessProofUntilReadyAsync(
@@ -1658,7 +1806,8 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         return result;
     }
 
-    private static async Task<IReadOnlyDictionary<Guid, int>> ReadRequiredAuditCountsAsync(
+    private static async Task<IReadOnlyList<Ops001AuditEvidence>>
+        ReadAuditExpectationsAsync(
         NpgsqlConnection connection,
         Guid organizationId,
         Guid[] orderIds,
@@ -1666,55 +1815,206 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
     {
         await using var command = new NpgsqlCommand(
             """
-            SELECT o.id,
-              (
-                SELECT count(*) FROM platform.audit_logs a
-                WHERE a.org_id=@org
-                  AND a.entity_id=o.id
-                  AND a.action IN (
-                    'ORDER_CREATED',
-                    'ORDER_STATUS_CHANGED',
-                    'TRACKING_TOKEN_ISSUED')
-              ) +
-              (
-                SELECT count(*) FROM platform.audit_logs a
-                JOIN dispatch.assignments d ON d.id=a.entity_id
-                WHERE d.order_id=o.id AND d.owner_org_id=@org
-                  AND a.org_id=@org AND a.action='ASSIGNMENT_CREATED'
-              ) +
-              (
-                SELECT count(*) FROM platform.audit_logs a
-                JOIN custody.proof_upload_sessions s ON s.id=a.entity_id
-                WHERE s.order_id=o.id AND s.owner_org_id=@org
-                  AND a.org_id=@org
-                  AND a.action IN (
-                    'custody.proof_upload_session.created',
-                    'custody.proof_upload_session.ready')
-              ) +
-              (
-                SELECT count(*) FROM platform.audit_logs a
-                JOIN custody.proofs p ON p.id=a.entity_id
-                WHERE p.order_id=o.id AND p.owner_org_id=@org
-                  AND a.org_id=@org
-                  AND a.action='custody.proof.finalized'
-              ) AS required_audits
-            FROM orders.orders o
-            WHERE o.owner_org_id=@org AND o.id=ANY(@orders)
+            SELECT e.id,e.owner_org_id,e.order_id,e.order_id,'Order',
+                   CASE WHEN e.aggregate_version=1
+                        THEN 'ORDER_CREATED'
+                        ELSE 'ORDER_STATUS_CHANGED' END,
+                   CASE WHEN e.aggregate_version=1
+                        THEN NULL
+                        ELSE e.aggregate_version END,
+                   e.occurred_at
+            FROM orders.order_events e
+            WHERE e.owner_org_id=@org AND e.order_id=ANY(@orders)
+              AND e.aggregate_version BETWEEN 1 AND 9
+            UNION ALL
+            SELECT t.order_id,t.owner_org_id,t.order_id,t.order_id,
+                   'PublicTrackingToken','TRACKING_TOKEN_ISSUED',
+                   NULL,t.created_at
+            FROM orders.public_tracking_tokens t
+            WHERE t.owner_org_id=@org AND t.order_id=ANY(@orders)
+            UNION ALL
+            SELECT a.id,a.owner_org_id,a.order_id,a.id,
+                   'Assignment','ASSIGNMENT_CREATED',
+                   NULL,a.created_at
+            FROM dispatch.assignments a
+            WHERE a.owner_org_id=@org AND a.order_id=ANY(@orders)
+            UNION ALL
+            SELECT s.id,s.owner_org_id,s.order_id,s.id,
+                   'proof_upload_session',
+                   'custody.proof_upload_session.created',
+                   NULL,s.created_at
+            FROM custody.proof_upload_sessions s
+            WHERE s.owner_org_id=@org AND s.order_id=ANY(@orders)
+            UNION ALL
+            SELECT s.id,s.owner_org_id,s.order_id,s.id,
+                   'proof_upload_session',
+                   'custody.proof_upload_session.ready',
+                   NULL,NULL::timestamptz
+            FROM custody.proof_upload_sessions s
+            WHERE s.owner_org_id=@org AND s.order_id=ANY(@orders)
+            UNION ALL
+            SELECT p.id,p.owner_org_id,p.order_id,p.id,
+                   'proof','custody.proof.finalized',
+                   NULL,p.created_at
+            FROM custody.proofs p
+            WHERE p.owner_org_id=@org AND p.order_id=ANY(@orders)
             """,
             connection);
         command.Parameters.Add(P("org", organizationId));
         command.Parameters.Add(PA("orders", orderIds));
-        var result = new Dictionary<Guid, int>();
+        var result = new List<Ops001AuditEvidence>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            result[reader.GetGuid(0)] = Convert.ToInt32(
-                reader.GetValue(1),
-                CultureInfo.InvariantCulture);
+            result.Add(new(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.GetGuid(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                reader.IsDBNull(7)
+                    ? null
+                    : reader.GetFieldValue<DateTimeOffset>(7)));
         }
 
         return result;
     }
+
+    private static async Task<IReadOnlyList<Ops001AuditEvidence>>
+        ReadAuditObservationsAsync(
+            NpgsqlConnection connection,
+            Guid organizationId,
+            Guid[] orderIds,
+            IReadOnlyCollection<Ops001AuditEvidence> expectations,
+            CancellationToken cancellationToken)
+    {
+        var entityIds = expectations
+            .Select(value => value.EntityId)
+            .Distinct()
+            .ToArray();
+        var orderTexts = orderIds.Select(value => value.ToString("D")).ToArray();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT id,org_id,action,entity_type,entity_id,
+                   payload_redacted::text,occurred_at
+            FROM platform.audit_logs
+            WHERE action IN (
+              'ORDER_CREATED',
+              'ORDER_STATUS_CHANGED',
+              'TRACKING_TOKEN_ISSUED',
+              'ASSIGNMENT_CREATED',
+              'custody.proof_upload_session.created',
+              'custody.proof_upload_session.ready',
+              'custody.proof.finalized')
+              AND (
+                entity_id=ANY(@entities)
+                OR payload_redacted->>'order_id'=ANY(@order_texts))
+            ORDER BY occurred_at,id
+            """,
+            connection);
+        command.Parameters.Add(PA("entities", entityIds));
+        command.Parameters.Add(new NpgsqlParameter<string[]>(
+            "order_texts",
+            NpgsqlDbType.Array | NpgsqlDbType.Text)
+        {
+            TypedValue = orderTexts,
+        });
+
+        var expectedByEntity = expectations
+            .GroupBy(value => value.EntityId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var result = new List<Ops001AuditEvidence>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var auditId = reader.GetGuid(0);
+            var auditOrganizationId = reader.GetGuid(1);
+            var action = reader.GetString(2);
+            var entityType = reader.GetString(3);
+            var entityId = reader.GetGuid(4);
+            using var payload = JsonDocument.Parse(reader.GetString(5));
+            var payloadRoot = payload.RootElement;
+            var orderId =
+                TryReadGuid(payloadRoot, "order_id") ??
+                expectedByEntity.GetValueOrDefault(entityId)?.FirstOrDefault()?.OrderId ??
+                Guid.Empty;
+            var aggregateVersion = action == "ORDER_STATUS_CHANGED"
+                ? TryReadInt32(payloadRoot, "new_version")
+                : null;
+            var operationId = ResolveAuditOperationId(
+                auditId,
+                action,
+                entityId,
+                orderId,
+                aggregateVersion,
+                payloadRoot,
+                expectations);
+            DateTimeOffset? occurredAt =
+                action == "custody.proof_upload_session.ready"
+                    ? null
+                    : reader.GetFieldValue<DateTimeOffset>(6);
+            result.Add(new(
+                operationId,
+                auditOrganizationId,
+                orderId,
+                entityId,
+                entityType,
+                action,
+                aggregateVersion,
+                occurredAt));
+        }
+
+        return result;
+    }
+
+    private static Guid ResolveAuditOperationId(
+        Guid auditId,
+        string action,
+        Guid entityId,
+        Guid orderId,
+        int? aggregateVersion,
+        JsonElement payload,
+        IReadOnlyCollection<Ops001AuditEvidence> expectations)
+    {
+        if (action is "custody.proof_upload_session.created"
+            or "custody.proof_upload_session.ready"
+            or "custody.proof.finalized")
+        {
+            return entityId;
+        }
+
+        if (action == "ASSIGNMENT_CREATED")
+        {
+            return TryReadGuid(payload, "assignment_id") ?? entityId;
+        }
+
+        if (action == "TRACKING_TOKEN_ISSUED")
+        {
+            return orderId == Guid.Empty ? auditId : orderId;
+        }
+
+        return expectations.FirstOrDefault(value =>
+                   value.OrderId == orderId &&
+                   value.Action == action &&
+                   value.AggregateVersion == aggregateVersion)
+               ?.OperationId ??
+            auditId;
+    }
+
+    private static Guid? TryReadGuid(JsonElement payload, string propertyName) =>
+        payload.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind == JsonValueKind.String &&
+        property.TryGetGuid(out var value)
+            ? value
+            : null;
+
+    private static int? TryReadInt32(JsonElement payload, string propertyName) =>
+        payload.TryGetProperty(propertyName, out var property) &&
+        property.TryGetInt32(out var value)
+            ? value
+            : null;
 
     private static async Task<int> CountSecondaryTenantRowsAsync(
         NpgsqlConnection connection,
@@ -1769,9 +2069,15 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
 
     private static async Task WriteReportAsync(
         Ops001SimulationReport report,
+        string? pathOverride,
         CancellationToken cancellationToken)
     {
-        var path = Environment.GetEnvironmentVariable("OPS001_REPORT_PATH");
+        var path = pathOverride;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            path = Environment.GetEnvironmentVariable("OPS001_REPORT_PATH");
+        }
+
         if (string.IsNullOrWhiteSpace(path))
         {
             path = Path.Combine(

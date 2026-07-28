@@ -15,10 +15,18 @@ internal sealed record Ops001SimulationReport(
     [property: JsonPropertyName("domain_events_expected")] int DomainEventsExpected,
     [property: JsonPropertyName("domain_events_persisted")] int DomainEventsPersisted,
     [property: JsonPropertyName("realtime_events_expected")] int RealtimeEventsExpected,
-    [property: JsonPropertyName("realtime_events_observed")] int RealtimeEventsObserved,
+    [property: JsonPropertyName("realtime_events_matched")] int RealtimeEventsMatched,
+    [property: JsonPropertyName("realtime_events_missing")] int RealtimeEventsMissing,
+    [property: JsonPropertyName("realtime_events_unexpected")] int RealtimeEventsUnexpected,
+    [property: JsonPropertyName("realtime_events_mismatched")] int RealtimeEventsMismatched,
+    [property: JsonPropertyName("realtime_raw_deliveries")] int RealtimeRawDeliveries,
+    [property: JsonPropertyName("realtime_duplicate_deliveries")] int RealtimeDuplicateDeliveries,
     [property: JsonPropertyName("realtime_observation_percent")] decimal RealtimeObservationPercent,
     [property: JsonPropertyName("audits_expected")] int AuditsExpected,
-    [property: JsonPropertyName("audits_persisted")] int AuditsPersisted,
+    [property: JsonPropertyName("audits_exactly_matched")] int AuditsExactlyMatched,
+    [property: JsonPropertyName("audits_missing")] int AuditsMissing,
+    [property: JsonPropertyName("audits_duplicated")] int AuditsDuplicated,
+    [property: JsonPropertyName("audits_mismatched")] int AuditsMismatched,
     [property: JsonPropertyName("outbox_processed")] int OutboxProcessed,
     [property: JsonPropertyName("outbox_dead_expected")] int OutboxDeadExpected,
     [property: JsonPropertyName("outbox_dead_actual")] int OutboxDeadActual,
@@ -47,10 +55,24 @@ internal sealed record Ops001SimulationReport(
         Require(DomainEventsExpected == 180, "domain_events_expected");
         Require(DomainEventsPersisted == DomainEventsExpected, "domain_events_persisted");
         Require(RealtimeEventsExpected == 160, "realtime_events_expected");
-        Require(RealtimeEventsObserved <= RealtimeEventsExpected, "realtime_events_observed");
+        Require(RealtimeEventsMissing == 0, "realtime_events_missing", RealtimeEventsMissing);
+        Require(
+            RealtimeEventsUnexpected == 0,
+            "realtime_events_unexpected",
+            RealtimeEventsUnexpected);
+        Require(
+            RealtimeEventsMismatched == 0,
+            "realtime_events_mismatched",
+            RealtimeEventsMismatched);
+        Require(RealtimeEventsMatched == RealtimeEventsExpected, "realtime_events_matched");
+        Require(RealtimeRawDeliveries >= RealtimeEventsMatched, "realtime_raw_deliveries");
+        Require(RealtimeDuplicateDeliveries >= 1, "realtime_duplicate_deliveries");
         Require(RealtimeObservationPercent >= 98m, "realtime_observation_percent");
         Require(AuditsExpected == 340, "audits_expected");
-        Require(AuditsPersisted == AuditsExpected, "audits_persisted");
+        Require(AuditsMissing == 0, "audits_missing", AuditsMissing);
+        Require(AuditsDuplicated == 0, "audits_duplicated", AuditsDuplicated);
+        Require(AuditsMismatched == 0, "audits_mismatched", AuditsMismatched);
+        Require(AuditsExactlyMatched == AuditsExpected, "audits_exactly_matched");
         Require(OutboxProcessed == 360, "outbox_processed");
         Require(OutboxDeadExpected == 1, "outbox_dead_expected");
         Require(OutboxDeadActual == OutboxDeadExpected, "outbox_dead_actual");
@@ -67,16 +89,20 @@ internal sealed record Ops001SimulationReport(
 
     internal static decimal ObservationPercentage(
         int expected,
-        IEnumerable<Guid> observedEventIds)
+        int matched)
     {
         if (expected <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(expected));
         }
 
-        var observed = observedEventIds.Distinct().Count();
+        if (matched < 0 || matched > expected)
+        {
+            throw new ArgumentOutOfRangeException(nameof(matched));
+        }
+
         return Math.Round(
-            Math.Min(observed, expected) * 100m / expected,
+            matched * 100m / expected,
             2,
             MidpointRounding.AwayFromZero);
     }
@@ -139,12 +165,13 @@ internal sealed record Ops001SimulationReport(
         }
     }
 
-    private static void Require(bool condition, string metric)
+    private static void Require(bool condition, string metric, object? actual = null)
     {
         if (!condition)
         {
             throw new Ops001AcceptanceException(
-                $"OPS-001 acceptance failed for metric '{metric}'.");
+                $"OPS-001 acceptance failed for metric '{metric}'" +
+                (actual is null ? "." : $" (actual={actual})."));
         }
     }
 }

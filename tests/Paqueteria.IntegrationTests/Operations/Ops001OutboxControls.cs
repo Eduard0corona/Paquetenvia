@@ -81,43 +81,75 @@ internal sealed class Ops001LogCollector : ILoggerProvider
     }
 }
 
-internal sealed class Ops001AsyncResourceScope : IAsyncDisposable
+internal sealed class Ops001RunTestCheckpoint
 {
-    private readonly Stack<IAsyncDisposable> _resources = new();
-    private int _disposed;
+    private readonly TaskCompletionSource _ownedResourcesStarted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _continue =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Guid _targetOutboxId;
+    private string? _finalOutboxStatus;
+    private int _activeHosts;
+    private int _activeObservers;
+    private int _activeProofWorkers;
+    private int _cleanupCompleted;
 
-    internal T Own<T>(T resource) where T : IAsyncDisposable
+    internal Ops001RunTestCheckpoint(string reportPath)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        _resources.Push(resource);
-        return resource;
+        if (string.IsNullOrWhiteSpace(reportPath))
+        {
+            throw new ArgumentException("A report path is required.", nameof(reportPath));
+        }
+
+        ReportPath = Path.GetFullPath(reportPath);
     }
 
-    internal int Count => _resources.Count;
+    internal string ReportPath { get; }
+    internal Guid TargetOutboxId => _targetOutboxId;
+    internal string? FinalOutboxStatus => _finalOutboxStatus;
+    internal int ActiveHosts => Volatile.Read(ref _activeHosts);
+    internal int ActiveObservers => Volatile.Read(ref _activeObservers);
+    internal int ActiveProofWorkers => Volatile.Read(ref _activeProofWorkers);
+    internal bool CleanupWasCompleted => Volatile.Read(ref _cleanupCompleted) != 0;
 
-    public async ValueTask DisposeAsync()
+    internal void SetTargetOutbox(Guid outboxId) => _targetOutboxId = outboxId;
+
+    internal void OwnedHostStarted() => Interlocked.Increment(ref _activeHosts);
+    internal void OwnedObserverStarted() => Interlocked.Increment(ref _activeObservers);
+    internal void OwnedProofWorkerStarted() =>
+        Interlocked.Increment(ref _activeProofWorkers);
+
+    internal void OwnedHostDisposed() => Decrement(ref _activeHosts, "host");
+    internal void OwnedObserverDisposed() => Decrement(ref _activeObservers, "observer");
+    internal void OwnedProofWorkerDisposed() =>
+        Decrement(ref _activeProofWorkers, "proof worker");
+
+    internal async Task PauseAfterOwnedResourcesStartedAsync(
+        CancellationToken cancellationToken)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
+        _ownedResourcesStarted.TrySetResult();
+        await _continue.Task.WaitAsync(cancellationToken);
+    }
 
-        List<Exception>? failures = null;
-        while (_resources.TryPop(out var resource))
-        {
-            try
-            {
-                await resource.DisposeAsync();
-            }
-            catch (Exception exception)
-            {
-                (failures ??= []).Add(exception);
-            }
-        }
+    internal Task WaitUntilOwnedResourcesStartedAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken) =>
+        _ownedResourcesStarted.Task.WaitAsync(timeout, cancellationToken);
 
-        if (failures is not null)
+    internal void Continue() => _continue.TrySetResult();
+
+    internal void CleanupCompleted(string? finalOutboxStatus)
+    {
+        _finalOutboxStatus = finalOutboxStatus;
+        Volatile.Write(ref _cleanupCompleted, 1);
+    }
+
+    private static void Decrement(ref int counter, string resource)
+    {
+        if (Interlocked.Decrement(ref counter) < 0)
         {
-            throw new AggregateException(failures);
+            throw new InvalidOperationException(
+                $"The owned {resource} resource counter became negative.");
         }
     }
 }

@@ -13,7 +13,7 @@ internal sealed class Ops001RealtimeObserver : IAsyncDisposable
 {
     private readonly HubConnection _connection;
     private readonly ConcurrentDictionary<Guid, int> _deliveries = new();
-    private readonly ConcurrentDictionary<Guid, int> _maximumVersions = new();
+    private readonly ConcurrentQueue<Ops001RealtimeDelivery> _rawDeliveries = new();
 
     internal Ops001RealtimeObserver(Uri baseAddress, Guid organizationId)
     {
@@ -39,18 +39,17 @@ internal sealed class Ops001RealtimeObserver : IAsyncDisposable
             "OrderStatusChanged",
             message =>
             {
-                _deliveries.AddOrUpdate(message.EventId, 1, (_, current) => current + 1);
-                _maximumVersions.AddOrUpdate(
+                _rawDeliveries.Enqueue(new(
+                    message.EventId,
                     message.AggregateId,
-                    checked((int)message.AggregateVersion),
-                    (_, current) => Math.Max(current, checked((int)message.AggregateVersion)));
+                    message.AggregateVersion,
+                    message.EventType));
+                _deliveries.AddOrUpdate(message.EventId, 1, (_, current) => current + 1);
             });
     }
 
-    internal IReadOnlyCollection<Guid> EventIds => _deliveries.Keys.ToArray();
-    internal int RawDeliveryCount => _deliveries.Values.Sum();
-    internal IReadOnlyDictionary<Guid, int> MaximumVersions =>
-        new Dictionary<Guid, int>(_maximumVersions);
+    internal IReadOnlyCollection<Ops001RealtimeDelivery> Deliveries =>
+        _rawDeliveries.ToArray();
 
     internal Task StartAsync(CancellationToken cancellationToken) =>
         _connection.StartAsync(cancellationToken);
@@ -74,19 +73,6 @@ internal sealed class Ops001RealtimeObserver : IAsyncDisposable
             throw new TimeoutException(
                 $"Realtime event {eventId:D} was not observed. " +
                 $"connection_state={_connection.State}; observed={string.Join(',', _deliveries.Keys)}");
-        }
-    }
-
-    internal async Task WaitForUniqueEventsAsync(
-        int expected,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
-    {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(timeout);
-        while (_deliveries.Count < expected)
-        {
-            await Task.Delay(50, deadline.Token);
         }
     }
 
