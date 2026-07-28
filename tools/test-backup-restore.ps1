@@ -1045,7 +1045,7 @@ try {
             ForEach-Object FullName
         )
         Add-NegativeResult -Name "linked_paths_published_nothing_in_repository" -Passed (
-            (Compare-Object `
+            @(Compare-Object `
                 -ReferenceObject $repositoryArtifactSnapshot `
                 -DifferenceObject $repositoryArtifactsAfterPathTests).Count -eq 0)
         Assert-ExpectedFailure -Name "process_timeout_enforced" -Action {
