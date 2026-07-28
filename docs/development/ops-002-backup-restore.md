@@ -87,6 +87,8 @@ pwsh ./tools/backup-environment.ps1 `
 
 El script ejecuta `pg_restore --list`, valida entradas críticas del dump, calcula SHA-256, verifica privacidad del bucket antes/después del mirror y coteja cada proof con sus bytes. Si se proporciona `-TestIdentityFile` en un entorno de prueba, también realiza una verificación controlada de descifrado antes de publicar el artifact.
 
+`-Database` es opcional y permite seleccionar explícitamente una base de datos del mismo clúster cuando `POSTGRES_DB` se reserva como bootstrap. El nombre debe ser un identificador PostgreSQL seguro; si se omite, se usa `POSTGRES_DB`.
+
 El reporte sidecar `<artifact>.report.json` es redactado: sólo contiene conteos, tamaños, timestamps, hashes, flags, versiones, commit y duraciones.
 
 Para verificar manualmente la autenticación sin extraer:
@@ -134,6 +136,8 @@ El orden operativo es:
 11. Confirmar Redis y Mailpit vacíos.
 12. Emitir un reporte redactado y eliminar plaintext.
 
+Para aplicar el baseline sin aceptar un estado parcial creado por scripts de inicialización de la imagen, el restore crea desde `template0` una base bootstrap temporal de nombre aleatorio y la elimina inmediatamente después. Nunca limpia ni reutiliza una base preexistente para este paso.
+
 Los logins externos y sus passwords no están en el backup. El operador debe proveer previamente los logins externos requeridos. El drill usa el mismo nombre de admin sintético en source/target, con passwords distintos, y recrea los roles normativos `NOLOGIN` mediante el baseline.
 
 ## Verificación posterior
@@ -150,7 +154,7 @@ Los objetos restaurados se vuelven a espejar a staging, se recalculan tamaño/SH
 pwsh ./tools/test-backup-restore.ps1 -CI
 ```
 
-El drill crea source y target aislados con puertos, proyectos, volúmenes y credenciales sintéticos; aplica baseline/migrations; inserta la fixture; sube tres objetos reales; ejecuta pruebas negativas; crea el backup; destruye source con `down --volumes --remove-orphans`; verifica ausencia de sus recursos; restaura target; reinicia; verifica y limpia.
+El drill crea source y target aislados con puertos, proyectos, volúmenes y credenciales sintéticos; crea desde `template0` una base de datos fuente limpia; aplica baseline/migrations; inserta la fixture; sube tres objetos reales; ejecuta pruebas negativas; crea el backup; destruye source con `down --volumes --remove-orphans`; verifica ausencia de sus recursos; restaura target; reinicia; verifica y limpia.
 
 Las 35 pruebas negativas obligatorias y ocho guardas adicionales (43 comprobaciones en total) cubren preflight, recipient/identity, unhealthy/quiescence, cambios concurrentes, fallos de dump/mirror/cifrado, ausencia de sentinels visibles, integridad/tampering, limpieza/cancelación, timeout, target no limpio, exclusiones, restart, RLS, append-only, ownership/grants, traversal, rutas absolutas, enlaces, allowlist, cantidad y tamaño expandido.
 

@@ -3,6 +3,7 @@ param(
     [string] $ComposeFile,
     [string] $EnvironmentFile,
     [string] $ProjectName,
+    [string] $Database,
     [string] $OutputDirectory,
     [string] $Recipient,
     [switch] $ConfirmQuiesced,
@@ -48,6 +49,10 @@ try {
     if ($TimeoutSeconds -lt 30 -or $TimeoutSeconds -gt 7200) {
         throw "TimeoutSeconds must be between 30 and 7200."
     }
+    if (-not [string]::IsNullOrWhiteSpace($Database) -and
+        $Database -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+        throw "Database must be a safe PostgreSQL identifier."
+    }
     if ($RequireFixture -and $env:OPS002_TEST_MODE -cne "true") {
         throw "Fixture validation is available only to the restore drill."
     }
@@ -72,6 +77,9 @@ try {
         -ComposeFile $ComposeFile `
         -EnvironmentFile $EnvironmentFile `
         -ProjectName $ProjectName
+    if (-not [string]::IsNullOrWhiteSpace($Database)) {
+        $context.Environment["POSTGRES_DB"] = $Database
+    }
     Assert-DockerAvailable
     Assert-ComposeStaticPolicy -Context $context
     Assert-Ops002ServicesHealthy -Context $context
@@ -133,13 +141,15 @@ SELECT
     $dumpShell = @'
 set -eu
 export PGPASSWORD="$POSTGRES_PASSWORD"
-pg_dump --format=custom --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+pg_dump --format=custom --username "$POSTGRES_USER" --dbname "$OPS002_DATABASE" \
   --file "$OPS002_DUMP_PATH"
 test -s "$OPS002_DUMP_PATH"
 pg_restore --list "$OPS002_DUMP_PATH"
 '@
     $dumpResult = Invoke-Ops002Compose -Context $context -Arguments @(
-        "exec", "-T", "--env", "OPS002_DUMP_PATH=$containerDump",
+        "exec", "-T",
+        "--env", "OPS002_DATABASE=$($context.Environment['POSTGRES_DB'])",
+        "--env", "OPS002_DUMP_PATH=$containerDump",
         "postgres", "/bin/sh", "-c", $dumpShell
     ) -TimeoutSeconds $TimeoutSeconds
     $toc = $dumpResult.StandardOutput

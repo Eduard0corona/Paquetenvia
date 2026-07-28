@@ -282,6 +282,7 @@ function Invoke-BackupProcess {
         "-ComposeFile", (Join-Path $repositoryRoot "deploy/docker-compose.yml"),
         "-EnvironmentFile", $script:sourceContext.EnvironmentFile,
         "-ProjectName", $script:sourceContext.ProjectName,
+        "-Database", $script:sourceContext.Environment["POSTGRES_DB"],
         "-OutputDirectory", $Destination,
         "-Recipient", $Recipient,
         "-ConfirmQuiesced",
@@ -580,6 +581,10 @@ try {
     Assert-ComposeStaticPolicy -Context $script:sourceContext
     Assert-ConfiguredPortsAvailable -Context $script:sourceContext
     Start-ComposeEnvironment -Context $script:sourceContext -TimeoutSeconds $TimeoutSeconds
+    $sourceDataDatabase = "ops002_source_data_$runSuffix"
+    Invoke-Ops002PostgresQuery -Context $script:sourceContext -Query (
+        "CREATE DATABASE `"$sourceDataDatabase`" TEMPLATE template0;") | Out-Null
+    $script:sourceContext.Environment["POSTGRES_DB"] = $sourceDataDatabase
     Invoke-DatabaseBaseline -Context $script:sourceContext -Operation Apply
     Invoke-DatabaseBaseline -Context $script:sourceContext -Operation Assert
 

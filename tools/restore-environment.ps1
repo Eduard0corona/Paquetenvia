@@ -31,6 +31,8 @@ $context = $null
 $targetStartedByRestore = $false
 $succeeded = $false
 $containerDump = $null
+$rolesBootstrapDatabase = $null
+$rolesBootstrapCreated = $false
 $restoreStartedAt = [DateTimeOffset]::UtcNow
 $restoreStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $validationStopwatch = [System.Diagnostics.Stopwatch]::new()
@@ -152,8 +154,12 @@ try {
     }
     $targetWasClean = $true
 
+    $rolesBootstrapDatabase = "ops002_roles_$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
+    Invoke-Ops002PostgresQuery -Context $context -Query (
+        "CREATE DATABASE `"$rolesBootstrapDatabase`" TEMPLATE template0;") | Out-Null
+    $rolesBootstrapCreated = $true
     $bootstrapConnection = "Host=127.0.0.1;Port=$($context.Environment['POSTGRES_HOST_PORT']);" +
-        "Database=$($context.Environment['POSTGRES_DB']);Username=$($context.Environment['POSTGRES_USER']);" +
+        "Database=$rolesBootstrapDatabase;Username=$($context.Environment['POSTGRES_USER']);" +
         "Password=$($context.Environment['POSTGRES_PASSWORD']);Pooling=false;Timeout=15;Command Timeout=120"
     [Environment]::SetEnvironmentVariable($connectionVariable, $bootstrapConnection, "Process")
     try {
@@ -168,6 +174,10 @@ try {
         [Environment]::SetEnvironmentVariable($connectionVariable, $null, "Process")
         $bootstrapConnection = $null
     }
+    Invoke-Ops002PostgresQuery -Context $context -Query (
+        "DROP DATABASE `"$rolesBootstrapDatabase`";") | Out-Null
+    $rolesBootstrapCreated = $false
+    $rolesBootstrapDatabase = $null
 
     Invoke-Ops002PostgresQuery -Context $context -Query (
         "CREATE DATABASE `"$RestoredDatabase`" TEMPLATE template0;") | Out-Null
@@ -394,6 +404,16 @@ catch {
 }
 finally {
     [Environment]::SetEnvironmentVariable($connectionVariable, $null, "Process")
+    if ($rolesBootstrapCreated -and $null -ne $context -and
+        -not [string]::IsNullOrWhiteSpace($rolesBootstrapDatabase)) {
+        try {
+            Invoke-Ops002PostgresQuery -Context $context -Query (
+                "DROP DATABASE `"$rolesBootstrapDatabase`";") -AllowFailure | Out-Null
+        }
+        catch {
+            # The temporary database is removed with project-scoped teardown below.
+        }
+    }
     if ($null -ne $containerDump -and $null -ne $context) {
         try {
             Invoke-Ops002Compose -Context $context -Arguments @(
