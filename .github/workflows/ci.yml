@@ -800,10 +800,6 @@ jobs:
     timeout-minutes: 60
     env:
       CI: "true"
-      OPS002_SOURCE_ENV_FILE: ${{ runner.temp }}/ops002-source.env
-      OPS002_TARGET_ENV_FILE: ${{ runner.temp }}/ops002-target.env
-      OPS002_IDENTITY_FILE: ${{ runner.temp }}/ops002-age-identity.txt
-      OPS002_RESULTS_DIRECTORY: ${{ runner.temp }}/ops002-results
     steps:
       - name: Check out clean repository
         uses: actions/checkout@v5
@@ -849,6 +845,20 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $env:OPS002_SOURCE_ENV_FILE = Join-Path $env:RUNNER_TEMP "ops002-source.env"
+          $env:OPS002_TARGET_ENV_FILE = Join-Path $env:RUNNER_TEMP "ops002-target.env"
+          $env:OPS002_IDENTITY_FILE = Join-Path $env:RUNNER_TEMP "ops002-age-identity.txt"
+          $env:OPS002_RESULTS_DIRECTORY = Join-Path $env:RUNNER_TEMP "ops002-results"
+          foreach ($name in @(
+            "OPS002_SOURCE_ENV_FILE",
+            "OPS002_TARGET_ENV_FILE",
+            "OPS002_IDENTITY_FILE",
+            "OPS002_RESULTS_DIRECTORY"
+          )) {
+            Add-Content -LiteralPath $env:GITHUB_ENV `
+              -Value "$name=$([Environment]::GetEnvironmentVariable($name))" `
+              -Encoding utf8
+          }
           $suffix = "${{ github.run_id }}-${{ github.run_attempt }}"
           $databaseUser = "ops002_$($suffix.Replace('-', '_'))"
           $sourceAccessKey = "ops002$([Guid]::NewGuid().ToString('N'))"
