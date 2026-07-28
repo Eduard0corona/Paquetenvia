@@ -1428,7 +1428,17 @@ SET session_replication_role=origin;
             $restoreResult.StandardError, $restoreResult.StandardOutput
         $failurePhase = Get-RedactedChildFailurePhase `
             -StandardError $capturedText
-        throw "Canonical restore failed during phase '$failurePhase'."
+        $appendOnlyReason = [regex]::Match(
+            $capturedText,
+            'OPS002_APPEND_ONLY_[A-Z_]+',
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+        $safeReason = if ($appendOnlyReason.Success) {
+            " ($($appendOnlyReason.Value))"
+        }
+        else {
+            ""
+        }
+        throw "Canonical restore failed during phase '$failurePhase'$safeReason."
     }
     $script:targetRestored = $true
 

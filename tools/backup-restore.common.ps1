@@ -665,7 +665,21 @@ function Invoke-Ops002AppendOnlyAssertions {
     ) -Raw -Encoding utf8
     $query = "\set ops002_append_only_table '$Table'`n$fixture"
     $result = Invoke-Ops002PostgresQuery -Context $Context -Database $Database `
-        -Query $query -TimeoutSeconds $TimeoutSeconds
+        -Query $query -TimeoutSeconds $TimeoutSeconds -AllowFailure
+    if ($result.ExitCode -ne 0) {
+        $captured = "{0}`n{1}" -f $result.StandardError, $result.StandardOutput
+        $reason = [regex]::Match(
+            $captured,
+            'OPS002_APPEND_ONLY_[A-Z_]+',
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+        $safeReason = if ($reason.Success) {
+            $reason.Value
+        }
+        else {
+            "OPS002_APPEND_ONLY_UNCLASSIFIED_FAILURE"
+        }
+        throw "Append-only restored-state validation failed: $safeReason"
+    }
     $expectedTables = if ($Table -ceq "all") { 4 } else { 1 }
     return ConvertFrom-Ops002AppendOnlyEvidence `
         -StandardOutput $result.StandardOutput `

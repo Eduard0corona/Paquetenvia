@@ -6,6 +6,7 @@
 \endif
 
 CREATE TEMP TABLE ops002_append_only_evidence (
+  table_filter text NOT NULL,
   tables_expected integer NOT NULL,
   permission_checks_verified integer NOT NULL DEFAULT 0,
   triggers_verified integer NOT NULL DEFAULT 0,
@@ -16,8 +17,10 @@ CREATE TEMP TABLE ops002_append_only_evidence (
   rows_intact_verified integer NOT NULL DEFAULT 0
 ) ON COMMIT PRESERVE ROWS;
 
-INSERT INTO ops002_append_only_evidence(tables_expected)
-SELECT CASE WHEN :'ops002_append_only_table' = 'all' THEN 4 ELSE 1 END;
+INSERT INTO ops002_append_only_evidence(table_filter, tables_expected)
+SELECT
+  :'ops002_append_only_table',
+  CASE WHEN :'ops002_append_only_table' = 'all' THEN 4 ELSE 1 END;
 
 DO $ops002$
 DECLARE
@@ -60,8 +63,8 @@ BEGIN
         'action=action'
       )
     ) AS expected(table_name, trigger_name, row_predicate, update_expression)
-    WHERE :'ops002_append_only_table' = 'all'
-       OR :'ops002_append_only_table' = expected.table_name
+    WHERE (SELECT table_filter FROM ops002_append_only_evidence) = 'all'
+       OR (SELECT table_filter FROM ops002_append_only_evidence) = expected.table_name
     ORDER BY expected.table_name
   LOOP
     selected_tables := selected_tables + 1;
