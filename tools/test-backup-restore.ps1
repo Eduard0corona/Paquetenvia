@@ -24,6 +24,7 @@ $script:sourceDestroyed = $false
 $script:targetRestored = $false
 $script:identityOwned = $false
 $script:wrongIdentity = $null
+$script:currentPhase = "preflight"
 $drillStartedAt = [DateTimeOffset]::UtcNow
 $drillStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $env:OPS002_TEST_MODE = "true"
@@ -580,7 +581,9 @@ try {
 
     Assert-ComposeStaticPolicy -Context $script:sourceContext
     Assert-ConfiguredPortsAvailable -Context $script:sourceContext
+    $script:currentPhase = "source_infrastructure"
     Start-ComposeEnvironment -Context $script:sourceContext -TimeoutSeconds $TimeoutSeconds
+    $script:currentPhase = "source_baseline"
     $sourceDataDatabase = "ops002_source_data_$runSuffix"
     Invoke-Ops002PostgresQuery -Context $script:sourceContext -Query (
         "CREATE DATABASE `"$sourceDataDatabase`" TEMPLATE template0;") | Out-Null
@@ -588,6 +591,7 @@ try {
     Invoke-DatabaseBaseline -Context $script:sourceContext -Operation Apply
     Invoke-DatabaseBaseline -Context $script:sourceContext -Operation Assert
 
+    $script:currentPhase = "source_fixture"
     $fixtureStage = New-Ops002StagingDirectory -Purpose "fixture"
     try {
         $fixtureObjects = Join-Path $fixtureStage "objects"
@@ -658,6 +662,7 @@ try {
             -DecoyKey $decoyKey
         Assert-Ops002BucketPrivate -Context $script:sourceContext
 
+        $script:currentPhase = "static_negative_guards"
         Assert-ExpectedFailure -Name "backup_without_recipient" -Action {
             Assert-Ops002Recipient -Recipient ""
         }
@@ -740,6 +745,7 @@ try {
             Remove-Item -LiteralPath $existingOutput -Force -Recurse
         }
 
+        $script:currentPhase = "unhealthy_service_guard"
         Invoke-DockerCompose -Context $script:sourceContext -Arguments @(
             "stop", "minio"
         ) | Out-Null
@@ -756,6 +762,7 @@ try {
             Wait-ComposeHealthy -Context $script:sourceContext -TimeoutSeconds $TimeoutSeconds
         }
 
+        $script:currentPhase = "confirmation_guard"
         Invoke-ExpectedScriptFailure -Name "source_not_confirmed_quiesced" `
             -Script (Join-Path $repositoryRoot "tools/backup-environment.ps1") `
             -Arguments @(
@@ -764,6 +771,7 @@ try {
                 "-Recipient", $recipient
             )
 
+        $script:currentPhase = "outbox_quiescence_guard"
         Invoke-Ops002PostgresQuery -Context $script:sourceContext -Query @'
 UPDATE platform.outbox_events
 SET status='PROCESSING',locked_at=clock_timestamp(),locked_by='ops002-negative',
@@ -786,6 +794,7 @@ WHERE id='10000000-0000-4000-8000-000000000031';
 '@ | Out-Null
         }
 
+        $script:currentPhase = "pod_quiescence_guard"
         Invoke-Ops002PostgresQuery -Context $script:sourceContext -Query @'
 UPDATE custody.proof_upload_sessions
 SET status='READY'
@@ -805,6 +814,7 @@ WHERE id='10000000-0000-4000-8000-000000000025';
 '@ | Out-Null
         }
 
+        $script:currentPhase = "fingerprint_guard"
         $stageSnapshot = @(Get-TemporaryStageSnapshot)
         $fingerprintOutput = Join-Path $temporaryRoot "ops002-fingerprint-$runSuffix"
         $result = Invoke-BackupProcess -Destination $fingerprintOutput `
@@ -814,6 +824,7 @@ WHERE id='10000000-0000-4000-8000-000000000025';
         Add-NegativeResult -Name "fingerprint_changed" -Passed ($result.ExitCode -ne 0)
         Assert-NoNewPlaintextStage -Before $stageSnapshot
 
+        $script:currentPhase = "missing_object_guard"
         Remove-ProofObject -Context $script:sourceContext -Key $pickupKey
         try {
             $missingOutput = Join-Path $temporaryRoot "ops002-missing-$runSuffix"
@@ -829,6 +840,7 @@ WHERE id='10000000-0000-4000-8000-000000000025';
                 -DecoyKey $decoyKey
         }
 
+        $script:currentPhase = "object_hash_guard"
         Invoke-Ops002PostgresQuery -Context $script:sourceContext -Query @'
 SET session_replication_role=replica;
 UPDATE custody.proofs SET sha256=decode(repeat('ff',32),'hex')
@@ -852,6 +864,7 @@ SET session_replication_role=origin;
 "@ | Out-Null
         }
 
+        $script:currentPhase = "backup_failure_guards"
         foreach ($failure in @(
             @{ Name = "pg_dump_failure"; Stage = "PG_DUMP" },
             @{ Name = "mc_mirror_failure"; Stage = "MC_MIRROR" },
@@ -868,6 +881,7 @@ SET session_replication_role=origin;
         }
         Add-NegativeResult -Name "cleanup_after_backup_failure" -Passed $true
 
+        $script:currentPhase = "canonical_backup"
         $backupOutput = Join-Path $resultsRoot "encrypted-backup"
         $backupResult = Invoke-BackupProcess -Destination $backupOutput `
             -Recipient $recipient
@@ -894,6 +908,7 @@ SET session_replication_role=origin;
         Remove-Ops002StagingDirectory -Path $fixtureStage
     }
 
+    $script:currentPhase = "restore_authentication_guards"
     $script:wrongIdentity = Join-Path $temporaryRoot "ops002-wrong-$runSuffix.txt"
     Invoke-Ops002Process -FilePath "age-keygen" -Arguments @(
         "--output", $script:wrongIdentity
@@ -968,6 +983,7 @@ SET session_replication_role=origin;
     Assert-NoNewPlaintextStage -Before $beforeCancel
     Add-NegativeResult -Name "cleanup_after_cancellation" -Passed $true
 
+    $script:currentPhase = "source_destruction"
     Invoke-DockerCompose -Context $script:sourceContext -Arguments @(
         "down", "--volumes", "--remove-orphans"
     ) | Out-Null
@@ -975,6 +991,7 @@ SET session_replication_role=origin;
     $script:sourceDestroyed = $true
     Add-NegativeResult -Name "source_destroyed_before_restore" -Passed $true
 
+    $script:currentPhase = "target_preflight_guards"
     Start-ComposeEnvironment -Context $script:targetContext -TimeoutSeconds $TimeoutSeconds
     Invoke-Ops002PostgresQuery -Context $script:targetContext -Query (
         'CREATE DATABASE "ops002_restored" TEMPLATE template0;') | Out-Null
@@ -1007,6 +1024,7 @@ mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >
     ) | Out-Null
     Assert-ProjectResourcesAbsent -ProjectName $script:targetContext.ProjectName
 
+    $script:currentPhase = "canonical_restore"
     $restoreResult = Invoke-RestoreProcess -ArtifactPath $artifactPath `
         -IdentityPath $script:identityPath `
         -Project $script:targetContext.ProjectName `
@@ -1017,6 +1035,7 @@ mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >
     }
     $script:targetRestored = $true
 
+    $script:currentPhase = "post_restore_validation"
     $restoreReportPath = "$artifactPath.restore-report.json"
     Assert-Ops002RedactedReport -Path $restoreReportPath
     $restoreReport = Get-Content -LiteralPath $restoreReportPath -Raw -Encoding utf8 |
@@ -1093,7 +1112,7 @@ mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >
     })
 }
 catch {
-    Write-Error $_.Exception.Message
+    Write-Error "OPS-002 drill failed during phase '$script:currentPhase': $($_.Exception.Message)"
     exit 1
 }
 finally {
