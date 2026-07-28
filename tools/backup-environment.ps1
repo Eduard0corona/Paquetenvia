@@ -283,10 +283,29 @@ pg_restore --list "$OPS002_DUMP_PATH"
     $artifactPath = Join-Path $output $artifactName
     $partialArtifact = Join-Path $output (".$artifactName.partial")
     $currentPhase = "encryption_write"
-    Invoke-Ops002Process -FilePath "age" -Arguments @(
+    $ageResult = Invoke-Ops002Process -FilePath "age" -Arguments @(
         "--encrypt", "--recipient", $Recipient,
         "--output", $partialArtifact, $archive
-    ) -TimeoutSeconds $TimeoutSeconds | Out-Null
+    ) -TimeoutSeconds $TimeoutSeconds -AllowFailure
+    if ($ageResult.ExitCode -ne 0) {
+        $ageError = $ageResult.StandardError
+        $currentPhase = if ($ageError -match '(?i)recipient') {
+            "encryption_recipient"
+        }
+        elseif ($ageError -match '(?i)input|read') {
+            "encryption_input"
+        }
+        elseif ($ageError -match '(?i)output|write|permission|exists') {
+            "encryption_output"
+        }
+        elseif ($ageError -match '(?i)usage|flag|option|argument') {
+            "encryption_cli"
+        }
+        else {
+            "encryption_process"
+        }
+        throw "age encryption command failed."
+    }
     if (-not (Test-Path -LiteralPath $partialArtifact -PathType Leaf) -or
         (Get-Item -LiteralPath $partialArtifact).Length -le 0) {
         throw "Encrypted artifact was not produced."
