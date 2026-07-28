@@ -332,8 +332,17 @@ pg_restore --list "$OPS002_DUMP_PATH"
         throw "age encryption command failed."
     }
     $currentPhase = "encryption_output_validation"
-    if (-not (Test-Path -LiteralPath $partialArtifact -PathType Leaf) -or
-        (Get-Item -LiteralPath $partialArtifact).Length -le 0) {
+    if (-not (Test-Path -LiteralPath $partialArtifact -PathType Leaf)) {
+        $currentPhase = if ($ageResult.StandardOutput.Length -gt 0) {
+            "encryption_stdout"
+        }
+        else {
+            "encryption_output_missing"
+        }
+        throw "Encrypted artifact was not produced."
+    }
+    if ((Get-Item -LiteralPath $partialArtifact).Length -le 0) {
+        $currentPhase = "encryption_output_empty"
         throw "Encrypted artifact was not produced."
     }
 
