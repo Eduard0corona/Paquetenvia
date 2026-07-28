@@ -1064,8 +1064,9 @@ SET session_replication_role=origin;
     ) | Out-Null
     Assert-ProjectResourcesAbsent -ProjectName $script:targetContext.ProjectName
 
-    $script:currentPhase = "dirty_bucket_guard"
+    $script:currentPhase = "dirty_bucket_start"
     Start-ComposeEnvironment -Context $script:targetContext -TimeoutSeconds $TimeoutSeconds
+    $script:currentPhase = "dirty_bucket_seed"
     $dirtyObjectKey = [Guid]::NewGuid().ToString("N")
     $dirtyObjectScript = @'
 set -eu
@@ -1076,12 +1077,14 @@ mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >
         (Join-Path $repositoryRoot 'tests/fixtures/ops-002/objects')))`:/fixtures:ro"
     Invoke-McScript -Context $script:targetContext `
         -ScriptText $dirtyObjectScript -Mount $dirtyFixtureMount | Out-Null
+    $script:currentPhase = "dirty_bucket_restore_guard"
     $dirtyBucketResult = Invoke-RestoreProcess -ArtifactPath $artifactPath `
         -IdentityPath $script:identityPath `
         -Project $script:targetContext.ProjectName `
         -Database "ops002_restored" -AllowFailure
     Add-NegativeResult -Name "target_bucket_not_empty" `
         -Passed ($dirtyBucketResult.ExitCode -ne 0)
+    $script:currentPhase = "dirty_bucket_cleanup"
     Invoke-DockerCompose -Context $script:targetContext -Arguments @(
         "down", "--volumes", "--remove-orphans"
     ) | Out-Null
