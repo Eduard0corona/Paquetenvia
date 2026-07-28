@@ -149,6 +149,7 @@ SELECT
         throw "Injected pg_dump failure."
     }
 
+    $currentPhase = "database_dump_creation"
     $containerDump = "/tmp/ops002-$([Guid]::NewGuid().ToString('N')).dump"
     $dumpShell = @'
 set -eu
@@ -165,15 +166,16 @@ pg_restore --list "$OPS002_DUMP_PATH"
         "postgres", "/bin/sh", "-c", $dumpShell
     ) -TimeoutSeconds $TimeoutSeconds
     $toc = $dumpResult.StandardOutput
+    $currentPhase = "database_dump_toc_validation"
     foreach ($requiredPattern in @(
-        '(?m) SCHEMA .* custody',
-        '(?m) TABLE .* orders orders',
-        '(?m) TABLE DATA .* orders orders',
-        '(?m) TABLE .* custody proofs',
-        '(?m) TABLE DATA .* custody proofs',
-        '(?m) FUNCTION .* security ',
-        '(?m) POLICY .* orders .*_tenant',
-        '(?m) TABLE .* platform __ef_migrations_history_'
+        '(?m) SCHEMA - custody ',
+        '(?m) TABLE orders orders ',
+        '(?m) TABLE DATA orders orders ',
+        '(?m) TABLE custody proofs ',
+        '(?m) TABLE DATA custody proofs ',
+        '(?m) FUNCTION security ',
+        '(?m) POLICY orders orders .*_tenant ',
+        '(?m) TABLE platform __ef_migrations_history_'
     )) {
         if ($toc -notmatch $requiredPattern) {
             throw "Database dump is missing required schema or data entries."
@@ -186,6 +188,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     }
 
     $dumpPath = Join-Path $postgresRoot "database.dump"
+    $currentPhase = "database_dump_copy"
     Invoke-Ops002Compose -Context $context -Arguments @(
         "cp", "postgres:$containerDump", $dumpPath
     ) -TimeoutSeconds $TimeoutSeconds | Out-Null
