@@ -282,6 +282,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
         ([Guid]::NewGuid().ToString("N").Substring(0, 12))
     $artifactPath = Join-Path $output $artifactName
     $partialArtifact = Join-Path $output (".$artifactName.partial")
+    $currentPhase = "encryption_write"
     Invoke-Ops002Process -FilePath "age" -Arguments @(
         "--encrypt", "--recipient", $Recipient,
         "--output", $partialArtifact, $archive
@@ -292,6 +293,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     }
 
     if ($null -ne $identity) {
+        $currentPhase = "controlled_decryption"
         $verificationArchive = Join-Path $staging "verification.tar.gz"
         Invoke-Ops002Process -FilePath "age" -Arguments @(
             "--decrypt", "--identity", $identity,
@@ -305,6 +307,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
         Remove-Item -LiteralPath $verificationArchive -Force
     }
 
+    $currentPhase = "artifact_publication"
     Move-Item -LiteralPath $partialArtifact -Destination $artifactPath
     $partialArtifact = $null
     $artifactSha = Get-Ops002Sha256 -Path $artifactPath
