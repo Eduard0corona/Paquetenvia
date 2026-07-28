@@ -1067,16 +1067,9 @@ SET session_replication_role=origin;
     $script:currentPhase = "dirty_bucket_start"
     Start-ComposeEnvironment -Context $script:targetContext -TimeoutSeconds $TimeoutSeconds
     $script:currentPhase = "dirty_bucket_seed"
-    $dirtyObjectKey = [Guid]::NewGuid().ToString("N")
-    $dirtyObjectScript = @'
-set -eu
-mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-'@ + "mc cp --quiet /fixtures/synthetic-decoy.png.b64 " +
-        "`"local/`$MINIO_BUCKET/$dirtyObjectKey`"`n"
-    $dirtyFixtureMount = "$([System.IO.Path]::GetFullPath(
-        (Join-Path $repositoryRoot 'tests/fixtures/ops-002/objects')))`:/fixtures:ro"
-    Invoke-McScript -Context $script:targetContext `
-        -ScriptText $dirtyObjectScript -Mount $dirtyFixtureMount | Out-Null
+    Invoke-Ops002McMirrorFromHost -Context $script:targetContext `
+        -Source (Join-Path $repositoryRoot "tests/fixtures/ops-002/objects") `
+        -TimeoutSeconds $TimeoutSeconds
     $script:currentPhase = "dirty_bucket_restore_guard"
     $dirtyBucketResult = Invoke-RestoreProcess -ArtifactPath $artifactPath `
         -IdentityPath $script:identityPath `
