@@ -1104,24 +1104,31 @@ SET session_replication_role=origin;
     Assert-Ops002RedactedReport -Path $restoreReportPath
     $restoreReport = Get-Content -LiteralPath $restoreReportPath -Raw -Encoding utf8 |
         ConvertFrom-Json
-    foreach ($condition in @(
-        $restoreReport.source_destroyed_before_restore -eq $true,
-        $restoreReport.target_was_clean -eq $true,
-        $restoreReport.baseline_assertions_passed -eq $true,
-        $restoreReport.module_migrations_asserted -eq $true,
-        $restoreReport.rls_assertions_passed -eq $true,
-        $restoreReport.append_only_assertions_passed -eq $true,
-        $restoreReport.object_integrity_passed -eq $true,
-        [int]$restoreReport.object_count -eq 3,
-        [int]$restoreReport.proof_objects_expected -eq 2,
-        [int]$restoreReport.proof_objects_restored -eq 2,
-        $restoreReport.redis_restored -eq $false,
-        $restoreReport.mailpit_restored -eq $false,
-        $restoreReport.plaintext_residue_detected -eq $false
-    )) {
-        if (-not $condition) {
-            throw "Canonical restore report failed a required assertion."
-        }
+    $reportAssertions = [ordered]@{
+        source_destroyed_before_restore =
+            ($restoreReport.source_destroyed_before_restore -eq $true)
+        target_was_clean = ($restoreReport.target_was_clean -eq $true)
+        baseline_assertions_passed = ($restoreReport.baseline_assertions_passed -eq $true)
+        module_migrations_asserted = ($restoreReport.module_migrations_asserted -eq $true)
+        rls_assertions_passed = ($restoreReport.rls_assertions_passed -eq $true)
+        append_only_assertions_passed = ($restoreReport.append_only_assertions_passed -eq $true)
+        object_integrity_passed = ($restoreReport.object_integrity_passed -eq $true)
+        object_count = ([int]$restoreReport.object_count -eq 3)
+        proof_objects_expected = ([int]$restoreReport.proof_objects_expected -eq 2)
+        proof_objects_restored = ([int]$restoreReport.proof_objects_restored -eq 2)
+        redis_restored = ($restoreReport.redis_restored -eq $false)
+        mailpit_restored = ($restoreReport.mailpit_restored -eq $false)
+        plaintext_residue_detected = ($restoreReport.plaintext_residue_detected -eq $false)
+    }
+    $failedReportAssertions = @(
+        $reportAssertions.GetEnumerator() |
+            Where-Object { -not [bool]$_.Value } |
+            ForEach-Object Key
+    )
+    if ($failedReportAssertions.Count -ne 0) {
+        throw (
+            "Canonical restore report failed required assertions: {0}." -f
+            ($failedReportAssertions -join ", "))
     }
     Add-NegativeResult -Name "redis_not_restored" -Passed $true
     Add-NegativeResult -Name "mailpit_not_restored" -Passed $true
