@@ -213,46 +213,4 @@ END
 $ops002$;
 COMMIT;
 
-BEGIN;
-SET LOCAL ROLE paqueteria_app;
-SELECT set_config('app.current_user','10000000-0000-4000-8000-000000000002',true);
-SELECT set_config('app.current_org_ids','{10000000-0000-4000-8000-000000000001}',true);
-DO $ops002$
-BEGIN
-  BEGIN
-    UPDATE orders.order_events SET event_type=event_type;
-    RAISE EXCEPTION 'OPS002_ORDER_EVENT_UPDATE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN
-    DELETE FROM orders.order_events;
-    RAISE EXCEPTION 'OPS002_ORDER_EVENT_DELETE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN
-    UPDATE orders.order_acceptances SET terms_version=terms_version;
-    RAISE EXCEPTION 'OPS002_ACCEPTANCE_UPDATE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN
-    DELETE FROM orders.order_acceptances;
-    RAISE EXCEPTION 'OPS002_ACCEPTANCE_DELETE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN
-    UPDATE custody.proofs SET proof_type=proof_type;
-    RAISE EXCEPTION 'OPS002_PROOF_UPDATE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN
-    DELETE FROM custody.proofs;
-    RAISE EXCEPTION 'OPS002_PROOF_DELETE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN
-    UPDATE platform.audit_logs SET action=action;
-    RAISE EXCEPTION 'OPS002_AUDIT_UPDATE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN
-    DELETE FROM platform.audit_logs;
-    RAISE EXCEPTION 'OPS002_AUDIT_DELETE_ACCEPTED';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-END
-$ops002$;
-ROLLBACK;
-
 SELECT 'OPS002_ASSERTIONS_OK';

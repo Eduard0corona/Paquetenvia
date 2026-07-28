@@ -28,8 +28,10 @@ if ([string]::IsNullOrWhiteSpace($EnvironmentFile)) {
 . (Join-Path $PSScriptRoot "backup-restore.common.ps1")
 
 $staging = $null
+$stagingPathInfo = $null
 $context = $null
 $output = $null
+$outputPathInfo = $null
 $outputCreated = $false
 $artifactPath = $null
 $partialArtifact = $null
@@ -57,9 +59,17 @@ try {
     if ($RequireFixture -and $env:OPS002_TEST_MODE -cne "true") {
         throw "Fixture validation is available only to the restore drill."
     }
+    $gitTrace = Get-Ops002GitTraceability -RepositoryRoot $repositoryRoot
 
-    $output = Assert-Ops002ExternalPath -Path $OutputDirectory -Purpose "Backup output"
-    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $outputPathInfo = New-Ops002ValidatedExternalDirectory `
+        -Path $OutputDirectory `
+        -Purpose "Backup output" `
+        -MustNotExist
+    $output = $outputPathInfo.PhysicalPath
+    $outputCreated = $true
+    $temporaryRoot = Assert-Ops002ExternalPath `
+        -Path ([System.IO.Path]::GetTempPath()) `
+        -Purpose "System temporary directory"
     if (Test-Ops002PathWithin -Path $output -Parent $temporaryRoot) {
         # Encrypted output may be in RUNNER_TEMP, but it must not be the plaintext
         # staging directory itself. A dedicated child is acceptable.
@@ -68,12 +78,6 @@ try {
             throw "Backup output cannot be a plaintext staging directory."
         }
     }
-    if (Test-Path -LiteralPath $output) {
-        throw "Backup output already exists."
-    }
-    New-Item -ItemType Directory -Path $output -ErrorAction Stop | Out-Null
-    $outputCreated = $true
-
     $currentPhase = "source_validation"
     $context = Get-LocalEnvironmentContext `
         -ComposeFile $ComposeFile `
@@ -138,7 +142,8 @@ SELECT
     }
 
     $currentPhase = "database_dump"
-    $staging = New-Ops002StagingDirectory -Purpose "backup"
+    $stagingPathInfo = New-Ops002StagingDirectory -Purpose "backup"
+    $staging = $stagingPathInfo.PhysicalPath
     $payloadRoot = Join-Path $staging "payload"
     $postgresRoot = Join-Path $payloadRoot "postgres"
     $objectsRoot = Join-Path $payloadRoot "object-storage"
@@ -233,12 +238,6 @@ pg_restore --list "$OPS002_DUMP_PATH"
         -Path (Join-Path $payloadRoot "object-inventory.json")
 
     $completedAt = [DateTimeOffset]::UtcNow
-    $sourceSha = (Invoke-Ops002Process -FilePath "git" -Arguments @(
-        "-C", $repositoryRoot, "rev-parse", "HEAD"
-    )).StandardOutput.Trim()
-    if ($sourceSha -notmatch '^[0-9a-f]{40}$') {
-        throw "Unable to resolve source Git SHA."
-    }
     $backupId = "ops002-{0}-{1}" -f
         $startedAt.ToString("yyyyMMddTHHmmssZ"),
         ([Guid]::NewGuid().ToString("N").Substring(0, 12))
@@ -248,7 +247,8 @@ pg_restore --list "$OPS002_DUMP_PATH"
         backup_id = $backupId
         created_at_utc = $startedAt.ToString("O")
         completed_at_utc = $completedAt.ToString("O")
-        source_git_sha = $sourceSha
+        source_head_sha = $gitTrace.SourceHeadSha
+        tested_git_sha = $gitTrace.TestedGitSha
         normative_version = "v0.6"
         postgresql_version = $versions.PostgreSql
         postgis_version = $versions.PostGis
@@ -283,6 +283,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     $artifactPath = Join-Path $output $artifactName
     $partialArtifact = Join-Path $output ("$artifactName.partial")
     $currentPhase = "encryption_write"
+    Assert-Ops002ValidatedDirectoryUnchanged -PathInfo $outputPathInfo | Out-Null
     try {
         $ageResult = Invoke-Ops002Process -FilePath "age" -Arguments @(
             "--encrypt", "--recipient", $Recipient,
@@ -363,6 +364,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     }
 
     $currentPhase = "artifact_publication"
+    Assert-Ops002ValidatedDirectoryUnchanged -PathInfo $outputPathInfo | Out-Null
     Move-Item -LiteralPath $partialArtifact -Destination $artifactPath
     $partialArtifact = $null
     $artifactSha = Get-Ops002Sha256 -Path $artifactPath
@@ -374,7 +376,9 @@ pg_restore --list "$OPS002_DUMP_PATH"
     $report = [ordered]@{
         format_version = $script:Ops002FormatVersion
         backup_id = $backupId
-        source_git_sha = $sourceSha
+        source_head_sha = $gitTrace.SourceHeadSha
+        tested_git_sha = $gitTrace.TestedGitSha
+        git_relationship = $gitTrace.Relationship
         backup_started_at_utc = $startedAt.ToString("O")
         backup_completed_at_utc = $artifactCompletedAt.ToString("O")
         backup_duration = $stopwatch.Elapsed.ToString("c")
@@ -414,6 +418,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
     }
     $reportPath = "$artifactPath.report.json"
     $partialReport = "$reportPath.partial"
+    Assert-Ops002ValidatedDirectoryUnchanged -PathInfo $outputPathInfo | Out-Null
     Write-Ops002Json -Value $report -Path $partialReport
     Assert-Ops002RedactedReport -Path $partialReport
     Move-Item -LiteralPath $partialReport -Destination $reportPath
@@ -454,24 +459,17 @@ finally {
             # The main failure remains authoritative; container cleanup is retried by project teardown.
         }
     }
-    if ($null -ne $staging) {
-        Remove-Ops002StagingDirectory -Path $staging
+    if ($null -ne $stagingPathInfo) {
+        Remove-Ops002StagingDirectory -PathInfo $stagingPathInfo
     }
-    if ($null -ne $partialArtifact -and (Test-Path -LiteralPath $partialArtifact)) {
-        Remove-Item -LiteralPath $partialArtifact -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $succeeded -and $null -ne $artifactPath -and
-        (Test-Path -LiteralPath $artifactPath)) {
-        Remove-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $succeeded -and $outputCreated -and $null -ne $output -and
-        (Test-Path -LiteralPath $output)) {
-        $validatedOutput = Assert-Ops002ExternalPath `
-            -Path $output `
+    if (-not $succeeded -and $outputCreated -and $null -ne $outputPathInfo) {
+        Remove-Ops002ValidatedDirectory `
+            -PathInfo $outputPathInfo `
             -Purpose "Backup output cleanup"
-        if ($validatedOutput -ceq [System.IO.Path]::GetFullPath($output)) {
-            Remove-Item -LiteralPath $validatedOutput -Recurse -Force `
-                -ErrorAction SilentlyContinue
-        }
+    }
+    elseif ($succeeded -and $null -ne $partialArtifact -and
+        (Test-Path -LiteralPath $partialArtifact)) {
+        Assert-Ops002ValidatedDirectoryUnchanged -PathInfo $outputPathInfo | Out-Null
+        Remove-Item -LiteralPath $partialArtifact -Force -ErrorAction Stop
     }
 }

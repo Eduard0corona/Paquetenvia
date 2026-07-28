@@ -27,6 +27,7 @@ if ([string]::IsNullOrWhiteSpace($EnvironmentFile)) {
 . (Join-Path $PSScriptRoot "backup-restore.common.ps1")
 
 $staging = $null
+$stagingPathInfo = $null
 $context = $null
 $targetStartedByRestore = $false
 $succeeded = $false
@@ -57,15 +58,17 @@ try {
         throw "TimeoutSeconds must be between 30 and 7200."
     }
 
-    $artifactPath = Get-Ops002FullPath -Path $Artifact
-    if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
-        throw "Encrypted artifact was not found."
-    }
+    $artifactPath = Assert-Ops002ExternalRegularFile `
+        -Path $Artifact `
+        -Purpose "Encrypted artifact"
+    $reportOutputPathInfo = New-Ops002ValidatedExternalDirectory `
+        -Path (Split-Path -Parent $artifactPath) `
+        -Purpose "Restore report output"
     $identity = Assert-Ops002IdentityFile -IdentityFile $IdentityFile
     $externalReportPath = "$artifactPath.report.json"
-    if (-not (Test-Path -LiteralPath $externalReportPath -PathType Leaf)) {
-        throw "External backup report was not found."
-    }
+    $externalReportPath = Assert-Ops002ExternalRegularFile `
+        -Path $externalReportPath `
+        -Purpose "External backup report"
     Assert-Ops002RedactedReport -Path $externalReportPath
     $backupReport = Get-Content -LiteralPath $externalReportPath -Raw -Encoding utf8 |
         ConvertFrom-Json
@@ -77,7 +80,8 @@ try {
     }
 
     $currentPhase = "artifact_validation"
-    $staging = New-Ops002StagingDirectory -Purpose "restore"
+    $stagingPathInfo = New-Ops002StagingDirectory -Purpose "restore"
+    $staging = $stagingPathInfo.PhysicalPath
     $archive = Join-Path $staging "payload.tar.gz"
     Invoke-Ops002Process -FilePath "age" -Arguments @(
         "--decrypt", "--identity", $identity,
@@ -243,6 +247,11 @@ pg_restore --exit-on-error --single-transaction \
     if ($assertionResult.StandardOutput.Trim() -notmatch 'OPS002_ASSERTIONS_OK') {
         throw "Restored database assertions failed."
     }
+    $currentPhase = "append_only_validation"
+    $appendOnlyBeforeRestart = Invoke-Ops002AppendOnlyAssertions `
+        -Context $context `
+        -Database $RestoredDatabase `
+        -TimeoutSeconds $TimeoutSeconds
 
     $verificationObjects = Join-Path $staging "verified-object-storage"
     New-Item -ItemType Directory -Path $verificationObjects | Out-Null
@@ -290,6 +299,11 @@ pg_restore --exit-on-error --single-transaction \
     if ($assertionResult.StandardOutput.Trim() -notmatch 'OPS002_ASSERTIONS_OK') {
         throw "Post-restart restored database assertions failed."
     }
+    $currentPhase = "post_restart_append_only_validation"
+    $appendOnlyAfterRestart = Invoke-Ops002AppendOnlyAssertions `
+        -Context $context `
+        -Database $RestoredDatabase `
+        -TimeoutSeconds $TimeoutSeconds
 
     $postRestartObjects = Join-Path $staging "post-restart-object-storage"
     New-Item -ItemType Directory -Path $postRestartObjects | Out-Null
@@ -350,7 +364,14 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
     $restoreReport = [ordered]@{
         format_version = $script:Ops002FormatVersion
         backup_id = $manifest.backup_id
-        source_git_sha = $manifest.source_git_sha
+        source_head_sha = $manifest.source_head_sha
+        tested_git_sha = $manifest.tested_git_sha
+        git_relationship = if ($manifest.source_head_sha -ceq $manifest.tested_git_sha) {
+            "same_commit"
+        }
+        else {
+            "source_head_is_ancestor_of_tested_commit"
+        }
         backup_started_at_utc = $backupReport.backup_started_at_utc
         backup_completed_at_utc = $backupReport.backup_completed_at_utc
         backup_duration = $backupReport.backup_duration
@@ -382,7 +403,49 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
         baseline_assertions_passed = $true
         module_migrations_asserted = $true
         rls_assertions_passed = $true
-        append_only_assertions_passed = $true
+        append_only_tables_expected = $appendOnlyAfterRestart.TablesExpected
+        append_only_permission_checks_verified =
+            $appendOnlyAfterRestart.PermissionChecksVerified
+        append_only_triggers_verified = $appendOnlyAfterRestart.TriggersVerified
+        append_only_update_guards_verified =
+            $appendOnlyAfterRestart.UpdateGuardsVerified
+        append_only_delete_guards_verified =
+            $appendOnlyAfterRestart.DeleteGuardsVerified
+        append_only_trigger_failures_verified =
+            $appendOnlyAfterRestart.TriggerFailuresVerified
+        append_only_permission_failures = $appendOnlyAfterRestart.PermissionFailures
+        append_only_rows_intact_verified = $appendOnlyAfterRestart.RowsIntactVerified
+        append_only_contract_sqlstate = $appendOnlyAfterRestart.SqlState
+        append_only_contract_message = $appendOnlyAfterRestart.MessageContract
+        append_only_before_restart = [ordered]@{
+            tables_expected = $appendOnlyBeforeRestart.TablesExpected
+            update_guards_verified = $appendOnlyBeforeRestart.UpdateGuardsVerified
+            delete_guards_verified = $appendOnlyBeforeRestart.DeleteGuardsVerified
+            trigger_failures_verified = $appendOnlyBeforeRestart.TriggerFailuresVerified
+            permission_failures = $appendOnlyBeforeRestart.PermissionFailures
+            rows_intact_verified = $appendOnlyBeforeRestart.RowsIntactVerified
+        }
+        append_only_after_restart = [ordered]@{
+            tables_expected = $appendOnlyAfterRestart.TablesExpected
+            update_guards_verified = $appendOnlyAfterRestart.UpdateGuardsVerified
+            delete_guards_verified = $appendOnlyAfterRestart.DeleteGuardsVerified
+            trigger_failures_verified = $appendOnlyAfterRestart.TriggerFailuresVerified
+            permission_failures = $appendOnlyAfterRestart.PermissionFailures
+            rows_intact_verified = $appendOnlyAfterRestart.RowsIntactVerified
+        }
+        append_only_assertions_passed = (
+            $appendOnlyBeforeRestart.TablesExpected -eq 4 -and
+            $appendOnlyBeforeRestart.UpdateGuardsVerified -eq 4 -and
+            $appendOnlyBeforeRestart.DeleteGuardsVerified -eq 4 -and
+            $appendOnlyBeforeRestart.TriggerFailuresVerified -eq 8 -and
+            $appendOnlyBeforeRestart.PermissionFailures -eq 0 -and
+            $appendOnlyBeforeRestart.RowsIntactVerified -eq 8 -and
+            $appendOnlyAfterRestart.TablesExpected -eq 4 -and
+            $appendOnlyAfterRestart.UpdateGuardsVerified -eq 4 -and
+            $appendOnlyAfterRestart.DeleteGuardsVerified -eq 4 -and
+            $appendOnlyAfterRestart.TriggerFailuresVerified -eq 8 -and
+            $appendOnlyAfterRestart.PermissionFailures -eq 0 -and
+            $appendOnlyAfterRestart.RowsIntactVerified -eq 8)
         object_integrity_passed = $true
         redis_restored = $false
         mailpit_restored = $false
@@ -391,6 +454,7 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
     }
     $restoreReportPath = "$artifactPath.restore-report.json"
     $partialReport = "$restoreReportPath.partial"
+    Assert-Ops002ValidatedDirectoryUnchanged -PathInfo $reportOutputPathInfo | Out-Null
     Write-Ops002Json -Value $restoreReport -Path $partialReport
     Assert-Ops002RedactedReport -Path $partialReport
     Move-Item -LiteralPath $partialReport -Destination $restoreReportPath -Force
@@ -446,7 +510,7 @@ finally {
             # The primary restore failure remains visible to the caller.
         }
     }
-    if ($null -ne $staging) {
-        Remove-Ops002StagingDirectory -Path $staging
+    if ($null -ne $stagingPathInfo) {
+        Remove-Ops002StagingDirectory -PathInfo $stagingPathInfo
     }
 }

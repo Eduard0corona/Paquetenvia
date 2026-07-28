@@ -22,6 +22,13 @@ function Get-Ops002FullPath {
     return [System.IO.Path]::GetFullPath((Join-Path $BasePath $Path))
 }
 
+function Get-Ops002PathComparison {
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        return [System.StringComparison]::OrdinalIgnoreCase
+    }
+    return [System.StringComparison]::Ordinal
+}
+
 function Test-Ops002PathWithin {
     param(
         [Parameter(Mandatory)] [string] $Path,
@@ -34,12 +41,7 @@ function Test-Ops002PathWithin {
     $root = [System.IO.Path]::GetFullPath($Parent).TrimEnd(
         [System.IO.Path]::DirectorySeparatorChar,
         [System.IO.Path]::AltDirectorySeparatorChar)
-    $comparison = if ($IsWindows -or $env:OS -eq "Windows_NT") {
-        [System.StringComparison]::OrdinalIgnoreCase
-    }
-    else {
-        [System.StringComparison]::Ordinal
-    }
+    $comparison = Get-Ops002PathComparison
 
     return $candidate.Equals($root, $comparison) -or
         $candidate.StartsWith(
@@ -50,31 +52,242 @@ function Test-Ops002PathWithin {
             $comparison)
 }
 
+function Test-Ops002FileSystemInfoLinked {
+    param([Parameter(Mandatory)] $Item)
+
+    if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        return $true
+    }
+    if ($Item.PSObject.Properties.Name -contains "LinkType" -and
+        -not [string]::IsNullOrWhiteSpace([string]$Item.LinkType)) {
+        return $true
+    }
+    if ($Item.PSObject.Properties.Name -contains "LinkTarget" -and
+        -not [string]::IsNullOrWhiteSpace([string]$Item.LinkTarget)) {
+        return $true
+    }
+    return $false
+}
+
+function Resolve-Ops002PhysicalExistingPath {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
+    return [System.IO.Path]::GetFullPath($resolved.ProviderPath)
+}
+
+function Get-Ops002PathResolution {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $lexicalPath = Get-Ops002FullPath -Path $Path
+    $root = [System.IO.Path]::GetPathRoot($lexicalPath)
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw "OPS002_PATH_ROOT_UNRESOLVED"
+    }
+
+    $existingItems = [System.Collections.Generic.List[object]]::new()
+    $linkedComponents = [System.Collections.Generic.List[string]]::new()
+    $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+    $existingItems.Add($rootItem)
+    if (Test-Ops002FileSystemInfoLinked -Item $rootItem) {
+        $linkedComponents.Add($rootItem.FullName)
+    }
+
+    $relative = $lexicalPath.Substring($root.Length)
+    $segments = @($relative.Split(
+        [char[]]@(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar),
+        [System.StringSplitOptions]::RemoveEmptyEntries))
+    $cursor = $root
+    foreach ($segment in $segments) {
+        $candidate = Join-Path $cursor $segment
+        $item = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) {
+            break
+        }
+        $existingItems.Add($item)
+        if (Test-Ops002FileSystemInfoLinked -Item $item) {
+            $linkedComponents.Add($item.FullName)
+        }
+        $cursor = $item.FullName
+    }
+
+    $nearestItem = $existingItems[$existingItems.Count - 1]
+    $nearestLexical = [System.IO.Path]::GetFullPath($nearestItem.FullName)
+    $nearestPhysical = Resolve-Ops002PhysicalExistingPath -Path $nearestLexical
+    $pathExists = Test-Path -LiteralPath $lexicalPath
+    $physicalPath = if ($pathExists) {
+        Resolve-Ops002PhysicalExistingPath -Path $lexicalPath
+    }
+    else {
+        $remaining = [System.IO.Path]::GetRelativePath($nearestLexical, $lexicalPath)
+        [System.IO.Path]::GetFullPath((Join-Path $nearestPhysical $remaining))
+    }
+
+    return [pscustomobject]@{
+        RequestedPath = $Path
+        LexicalPath = $lexicalPath
+        PhysicalPath = $physicalPath
+        Exists = $pathExists
+        ExistingAncestorLexicalPath = $nearestLexical
+        ExistingAncestorPhysicalPath = $nearestPhysical
+        ExistingAncestorIsDirectory = $nearestItem.PSIsContainer
+        LinkedComponents = @($linkedComponents)
+    }
+}
+
+function Get-Ops002PhysicalRepositoryRoot {
+    return Resolve-Ops002PhysicalExistingPath -Path (Get-Ops002RepositoryRoot)
+}
+
+function Assert-Ops002PhysicalExternalResolution {
+    param(
+        [Parameter(Mandatory)] $Resolution,
+        [Parameter(Mandatory)] [string] $Purpose
+    )
+
+    if (@($Resolution.LinkedComponents).Count -ne 0) {
+        throw "OPS002_PATH_LINK_COMPONENT_REJECTED: $Purpose"
+    }
+    if (Test-Ops002PathWithin `
+        -Path $Resolution.ExistingAncestorPhysicalPath `
+        -Parent (Get-Ops002PhysicalRepositoryRoot)) {
+        throw "OPS002_PATH_PHYSICAL_INSIDE_REPOSITORY: $Purpose"
+    }
+    if (Test-Ops002PathWithin `
+        -Path $Resolution.PhysicalPath `
+        -Parent (Get-Ops002PhysicalRepositoryRoot)) {
+        throw "OPS002_PATH_PHYSICAL_INSIDE_REPOSITORY: $Purpose"
+    }
+    return $Resolution
+}
+
 function Assert-Ops002ExternalPath {
     param(
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [string] $Purpose
     )
 
-    $resolved = Get-Ops002FullPath -Path $Path
-    $repositoryRoot = Get-Ops002RepositoryRoot
-    if (Test-Ops002PathWithin -Path $resolved -Parent $repositoryRoot) {
-        throw "$Purpose must be outside the repository."
+    $resolution = Get-Ops002PathResolution -Path $Path
+    Assert-Ops002PhysicalExternalResolution `
+        -Resolution $resolution `
+        -Purpose $Purpose | Out-Null
+    return $resolution.PhysicalPath
+}
+
+function New-Ops002ValidatedExternalDirectory {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Purpose,
+        [switch] $MustNotExist
+    )
+
+    $before = Get-Ops002PathResolution -Path $Path
+    Assert-Ops002PhysicalExternalResolution -Resolution $before -Purpose $Purpose | Out-Null
+    if (-not $before.ExistingAncestorIsDirectory) {
+        throw "OPS002_PATH_ANCESTOR_NOT_DIRECTORY: $Purpose"
+    }
+    if ($MustNotExist -and $before.Exists) {
+        throw "OPS002_PATH_ALREADY_EXISTS: $Purpose"
+    }
+    if (-not $before.Exists) {
+        [System.IO.Directory]::CreateDirectory($before.LexicalPath) | Out-Null
+    }
+    elseif (-not (Test-Path -LiteralPath $before.LexicalPath -PathType Container)) {
+        throw "OPS002_PATH_NOT_DIRECTORY: $Purpose"
     }
 
-    return $resolved
+    $after = Get-Ops002PathResolution -Path $before.LexicalPath
+    Assert-Ops002PhysicalExternalResolution -Resolution $after -Purpose $Purpose | Out-Null
+    if (-not $after.Exists -or
+        -not (Test-Path -LiteralPath $after.LexicalPath -PathType Container)) {
+        throw "OPS002_PATH_DIRECTORY_CREATION_FAILED: $Purpose"
+    }
+    return [pscustomobject]@{
+        RequestedPath = $before.RequestedPath
+        LexicalPath = $after.LexicalPath
+        PhysicalPath = $after.PhysicalPath
+        ExistingAncestorLexicalPath = $before.ExistingAncestorLexicalPath
+        ExistingAncestorPhysicalPath = $before.ExistingAncestorPhysicalPath
+        LinkedComponents = @($after.LinkedComponents)
+        Purpose = $Purpose
+    }
+}
+
+function Assert-Ops002ValidatedDirectoryUnchanged {
+    param(
+        [Parameter(Mandatory)] $PathInfo,
+        [string] $Purpose = $PathInfo.Purpose
+    )
+
+    $current = Get-Ops002PathResolution -Path $PathInfo.LexicalPath
+    Assert-Ops002PhysicalExternalResolution -Resolution $current -Purpose $Purpose | Out-Null
+    $comparison = Get-Ops002PathComparison
+    if (-not $current.Exists -or
+        -not (Test-Path -LiteralPath $current.LexicalPath -PathType Container) -or
+        -not $current.PhysicalPath.Equals($PathInfo.PhysicalPath, $comparison)) {
+        throw "OPS002_VALIDATED_PATH_CHANGED: $Purpose"
+    }
+    return $current
+}
+
+function Remove-Ops002ValidatedDirectory {
+    param(
+        [Parameter(Mandatory)] $PathInfo,
+        [string] $Purpose = $PathInfo.Purpose
+    )
+
+    if (-not (Test-Path -LiteralPath $PathInfo.LexicalPath)) {
+        return
+    }
+    Assert-Ops002ValidatedDirectoryUnchanged -PathInfo $PathInfo -Purpose $Purpose |
+        Out-Null
+    $linkedDescendant = Get-ChildItem -LiteralPath $PathInfo.PhysicalPath `
+        -Recurse -Force -ErrorAction Stop |
+        Where-Object { Test-Ops002FileSystemInfoLinked -Item $_ } |
+        Select-Object -First 1
+    if ($null -ne $linkedDescendant) {
+        throw "OPS002_CLEANUP_LINK_REJECTED: $Purpose"
+    }
+
+    Remove-Item -LiteralPath $PathInfo.PhysicalPath -Recurse -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $PathInfo.LexicalPath) {
+        throw "OPS002_VALIDATED_PATH_CLEANUP_FAILED: $Purpose"
+    }
+}
+
+function Assert-Ops002ExternalRegularFile {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Purpose
+    )
+
+    $resolution = Get-Ops002PathResolution -Path $Path
+    Assert-Ops002PhysicalExternalResolution `
+        -Resolution $resolution `
+        -Purpose $Purpose | Out-Null
+    if (-not $resolution.Exists -or
+        -not (Test-Path -LiteralPath $resolution.LexicalPath -PathType Leaf)) {
+        throw "OPS002_REGULAR_FILE_NOT_FOUND: $Purpose"
+    }
+    $item = Get-Item -LiteralPath $resolution.PhysicalPath -Force -ErrorAction Stop
+    if ($item.PSIsContainer -or (Test-Ops002FileSystemInfoLinked -Item $item)) {
+        throw "OPS002_PATH_NOT_REGULAR_FILE: $Purpose"
+    }
+    return $resolution.PhysicalPath
 }
 
 function Assert-Ops002IdentityFile {
     param([Parameter(Mandatory)] [string] $IdentityFile)
 
-    $resolved = Assert-Ops002ExternalPath -Path $IdentityFile -Purpose "Identity file"
-    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
-        throw "Identity file was not found."
-    }
+    $resolved = Assert-Ops002ExternalRegularFile `
+        -Path $IdentityFile `
+        -Purpose "Identity file"
+    $item = Get-Item -LiteralPath $resolved -Force -ErrorAction Stop
 
     if (-not ($IsWindows -or $env:OS -eq "Windows_NT")) {
-        $mode = (Get-Item -LiteralPath $resolved).UnixFileMode
+        $mode = $item.UnixFileMode
         $forbidden = [System.IO.UnixFileMode]::GroupRead -bor
             [System.IO.UnixFileMode]::GroupWrite -bor
             [System.IO.UnixFileMode]::GroupExecute -bor
@@ -103,42 +316,53 @@ function Assert-Ops002Recipient {
 function New-Ops002StagingDirectory {
     param([Parameter(Mandatory)] [ValidatePattern('^[a-z0-9-]+$')] [string] $Purpose)
 
-    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
-    $repositoryRoot = Get-Ops002RepositoryRoot
-    if (Test-Ops002PathWithin -Path $temporaryRoot -Parent $repositoryRoot) {
-        throw "System temporary directory must be outside the repository."
+    $temporaryRoot = if (
+        $env:OPS002_TEST_MODE -ceq "true" -and
+        -not [string]::IsNullOrWhiteSpace($env:OPS002_TEST_STAGING_ROOT)
+    ) {
+        $env:OPS002_TEST_STAGING_ROOT
+    }
+    else {
+        [System.IO.Path]::GetTempPath()
+    }
+    $rootResolution = Get-Ops002PathResolution -Path $temporaryRoot
+    Assert-Ops002PhysicalExternalResolution `
+        -Resolution $rootResolution `
+        -Purpose "Staging root" | Out-Null
+    if (-not $rootResolution.Exists -or
+        -not (Test-Path -LiteralPath $rootResolution.LexicalPath -PathType Container)) {
+        throw "OPS002_STAGING_ROOT_INVALID"
     }
 
-    $path = Join-Path $temporaryRoot (
+    $path = Join-Path $rootResolution.PhysicalPath (
         "paquetenvia-ops002-{0}-{1}" -f $Purpose, [Guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Path $path -ErrorAction Stop | Out-Null
+    $pathInfo = New-Ops002ValidatedExternalDirectory `
+        -Path $path `
+        -Purpose "Plaintext staging" `
+        -MustNotExist
 
     if (-not ($IsWindows -or $env:OS -eq "Windows_NT")) {
-        & chmod 700 -- $path
+        & chmod 700 -- $pathInfo.PhysicalPath
         if ($LASTEXITCODE -ne 0) {
-            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            Remove-Ops002ValidatedDirectory -PathInfo $pathInfo
             throw "Unable to restrict staging directory permissions."
         }
     }
 
-    return [System.IO.Path]::GetFullPath($path)
+    return $pathInfo
 }
 
 function Remove-Ops002StagingDirectory {
-    param([Parameter(Mandatory)] [string] $Path)
+    param([Parameter(Mandatory)] $PathInfo)
 
-    $resolved = [System.IO.Path]::GetFullPath($Path)
-    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
-    $leaf = Split-Path -Leaf $resolved
-    if (-not (Test-Ops002PathWithin -Path $resolved -Parent $temporaryRoot) -or
+    $leaf = Split-Path -Leaf $PathInfo.PhysicalPath
+    if ($PathInfo.Purpose -cne "Plaintext staging" -or
         $leaf -notmatch '^paquetenvia-ops002-[a-z0-9-]+-[0-9a-f]{32}$') {
         throw "Refusing to clean an unrecognized staging path."
     }
-
-    Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $resolved) {
-        throw "Plaintext staging cleanup failed."
-    }
+    Remove-Ops002ValidatedDirectory `
+        -PathInfo $PathInfo `
+        -Purpose "Plaintext staging"
 }
 
 function Get-Ops002Sha256 {
@@ -227,6 +451,75 @@ function Invoke-Ops002Process {
     }
 }
 
+function Get-Ops002GitTraceability {
+    param(
+        [string] $RepositoryRoot = (Get-Ops002RepositoryRoot)
+    )
+
+    $actualHead = (Invoke-Ops002Process -FilePath "git" -Arguments @(
+        "-C", $RepositoryRoot, "rev-parse", "HEAD"
+    )).StandardOutput.Trim().ToLowerInvariant()
+    if ($actualHead -notmatch '^[0-9a-f]{40}$') {
+        throw "OPS002_CHECKOUT_GIT_SHA_INVALID"
+    }
+
+    $sourceHead = [string]$env:OPS002_SOURCE_HEAD_SHA
+    $testedGit = [string]$env:OPS002_TESTED_GIT_SHA
+    $isCi = $env:CI -ceq "true"
+    $isPullRequest = $env:OPS002_PULL_REQUEST_EVENT -ceq "true"
+    if ([string]::IsNullOrWhiteSpace($sourceHead) -and
+        [string]::IsNullOrWhiteSpace($testedGit) -and
+        -not $isCi) {
+        $sourceHead = $actualHead
+        $testedGit = $actualHead
+    }
+    if ([string]::IsNullOrWhiteSpace($sourceHead)) {
+        throw "OPS002_SOURCE_HEAD_SHA_MISSING"
+    }
+    if ([string]::IsNullOrWhiteSpace($testedGit)) {
+        throw "OPS002_TESTED_GIT_SHA_MISSING"
+    }
+    $sourceHead = $sourceHead.Trim().ToLowerInvariant()
+    $testedGit = $testedGit.Trim().ToLowerInvariant()
+    if ($sourceHead -notmatch '^[0-9a-f]{40}$') {
+        throw "OPS002_SOURCE_HEAD_SHA_MALFORMED"
+    }
+    if ($testedGit -notmatch '^[0-9a-f]{40}$') {
+        throw "OPS002_TESTED_GIT_SHA_MALFORMED"
+    }
+    if ($testedGit -cne $actualHead) {
+        throw "OPS002_TESTED_GIT_SHA_CHECKOUT_MISMATCH"
+    }
+
+    $sourceExists = Invoke-Ops002Process -FilePath "git" -Arguments @(
+        "-C", $RepositoryRoot, "cat-file", "-e", "$sourceHead`^{commit}"
+    ) -AllowFailure
+    if ($sourceExists.ExitCode -ne 0) {
+        throw "OPS002_SOURCE_HEAD_SHA_NOT_IN_CHECKOUT"
+    }
+    if ($isPullRequest) {
+        $ancestor = Invoke-Ops002Process -FilePath "git" -Arguments @(
+            "-C", $RepositoryRoot,
+            "merge-base", "--is-ancestor", $sourceHead, $testedGit
+        ) -AllowFailure
+        if ($ancestor.ExitCode -ne 0) {
+            throw "OPS002_SOURCE_HEAD_NOT_ANCESTOR_OF_TESTED_SHA"
+        }
+    }
+
+    return [pscustomobject]@{
+        SourceHeadSha = $sourceHead
+        TestedGitSha = $testedGit
+        IsPullRequest = $isPullRequest
+        Relationship = if ($sourceHead -ceq $testedGit) {
+            "same_commit"
+        }
+        else {
+            "source_head_is_ancestor_of_tested_commit"
+        }
+    }
+}
+
 function Invoke-Ops002Compose {
     param(
         [Parameter(Mandatory)] $Context,
@@ -282,6 +575,101 @@ exec psql --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1 \
     )
     return Invoke-Ops002Compose -Context $Context -Arguments $arguments `
         -InputText $Query -TimeoutSeconds $TimeoutSeconds -AllowFailure:$AllowFailure
+}
+
+function ConvertFrom-Ops002AppendOnlyEvidence {
+    param(
+        [Parameter(Mandatory)] [string] $StandardOutput,
+        [Parameter(Mandatory)] [int] $ExpectedTables
+    )
+
+    $line = @($StandardOutput -split "`r?`n" |
+        Where-Object { $_ -like "OPS002_APPEND_ONLY_RESULT|*" })
+    if ($line.Count -ne 1) {
+        throw "Append-only validation did not return exactly one structured result."
+    }
+
+    $values = @{}
+    foreach ($part in $line[0].Split("|") | Select-Object -Skip 1) {
+        $pair = $part.Split("=", 2)
+        if ($pair.Count -ne 2 -or [string]::IsNullOrWhiteSpace($pair[0])) {
+            throw "Append-only validation returned malformed structured evidence."
+        }
+        $values[$pair[0]] = $pair[1]
+    }
+
+    $numericFields = @(
+        "tables_expected",
+        "permission_checks_verified",
+        "triggers_verified",
+        "update_guards_verified",
+        "delete_guards_verified",
+        "trigger_failures_verified",
+        "permission_failures",
+        "rows_intact_verified"
+    )
+    foreach ($name in $numericFields) {
+        if (-not $values.ContainsKey($name) -or $values[$name] -notmatch '^\d+$') {
+            throw "Append-only validation omitted required numeric evidence."
+        }
+    }
+    if (-not $values.ContainsKey("sqlstate") -or $values["sqlstate"] -cne "42501" -or
+        -not $values.ContainsKey("message_contract") -or
+        $values["message_contract"] -cne "qualified_table_is_append_only") {
+        throw "Append-only validation returned an unexpected trigger contract."
+    }
+
+    $evidence = [pscustomobject]@{
+        TablesExpected = [int]$values["tables_expected"]
+        PermissionChecksVerified = [int]$values["permission_checks_verified"]
+        TriggersVerified = [int]$values["triggers_verified"]
+        UpdateGuardsVerified = [int]$values["update_guards_verified"]
+        DeleteGuardsVerified = [int]$values["delete_guards_verified"]
+        TriggerFailuresVerified = [int]$values["trigger_failures_verified"]
+        PermissionFailures = [int]$values["permission_failures"]
+        RowsIntactVerified = [int]$values["rows_intact_verified"]
+        SqlState = $values["sqlstate"]
+        MessageContract = $values["message_contract"]
+    }
+    if ($evidence.TablesExpected -ne $ExpectedTables -or
+        $evidence.PermissionChecksVerified -ne $ExpectedTables -or
+        $evidence.TriggersVerified -ne $ExpectedTables -or
+        $evidence.UpdateGuardsVerified -ne $ExpectedTables -or
+        $evidence.DeleteGuardsVerified -ne $ExpectedTables -or
+        $evidence.TriggerFailuresVerified -ne ($ExpectedTables * 2) -or
+        $evidence.PermissionFailures -ne 0 -or
+        $evidence.RowsIntactVerified -ne ($ExpectedTables * 2)) {
+        throw "Append-only structured evidence did not satisfy every required guard."
+    }
+
+    return $evidence
+}
+
+function Invoke-Ops002AppendOnlyAssertions {
+    param(
+        [Parameter(Mandatory)] $Context,
+        [Parameter(Mandatory)] [string] $Database,
+        [ValidateSet(
+            "all",
+            "orders.order_events",
+            "orders.order_acceptances",
+            "custody.proofs",
+            "platform.audit_logs"
+        )]
+        [string] $Table = "all",
+        [int] $TimeoutSeconds = 120
+    )
+
+    $fixture = Get-Content -LiteralPath (
+        Join-Path (Get-Ops002RepositoryRoot) "tests/fixtures/ops-002/assert-append-only.sql"
+    ) -Raw -Encoding utf8
+    $query = "\set ops002_append_only_table '$Table'`n$fixture"
+    $result = Invoke-Ops002PostgresQuery -Context $Context -Database $Database `
+        -Query $query -TimeoutSeconds $TimeoutSeconds
+    $expectedTables = if ($Table -ceq "all") { 4 } else { 1 }
+    return ConvertFrom-Ops002AppendOnlyEvidence `
+        -StandardOutput $result.StandardOutput `
+        -ExpectedTables $expectedTables
 }
 
 function Assert-Ops002ServicesHealthy {
@@ -723,7 +1111,8 @@ function Assert-Ops002Manifest {
 
     $required = @(
         "format_version", "backup_id", "created_at_utc", "completed_at_utc",
-        "source_git_sha", "normative_version", "postgresql_version", "postgis_version",
+        "source_head_sha", "tested_git_sha", "normative_version",
+        "postgresql_version", "postgis_version",
         "database_dump_sha256", "database_dump_bytes", "object_count",
         "object_total_bytes", "object_inventory_sha256", "migration_histories",
         "consistency_fingerprint_before", "consistency_fingerprint_after", "quiesced",
@@ -736,7 +1125,8 @@ function Assert-Ops002Manifest {
     }
     if ($Manifest.format_version -cne $script:Ops002FormatVersion -or
         $Manifest.quiesced -ne $true -or
-        $Manifest.source_git_sha -notmatch '^[0-9a-f]{40}$' -or
+        $Manifest.source_head_sha -notmatch '^[0-9a-f]{40}$' -or
+        $Manifest.tested_git_sha -notmatch '^[0-9a-f]{40}$' -or
         $Manifest.database_dump_sha256 -notmatch '^[0-9a-f]{64}$' -or
         $Manifest.object_inventory_sha256 -notmatch '^[0-9a-f]{64}$' -or
         $Manifest.consistency_fingerprint_before -cne

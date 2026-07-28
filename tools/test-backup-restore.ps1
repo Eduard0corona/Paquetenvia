@@ -58,6 +58,54 @@ function Assert-ExpectedFailure {
     Add-NegativeResult -Name $Name -Passed $failed
 }
 
+function Assert-ExpectedFailureReason {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [string] $ExpectedReason,
+        [Parameter(Mandatory)] [scriptblock] $Action
+    )
+
+    $matched = $false
+    try {
+        & $Action
+    }
+    catch {
+        $matched = $_.Exception.Message.Contains(
+            $ExpectedReason,
+            [StringComparison]::Ordinal)
+    }
+    Add-NegativeResult -Name $Name -Passed $matched
+}
+
+function Invoke-GitTraceabilityCase {
+    param(
+        [AllowNull()] [string] $SourceHeadSha,
+        [AllowNull()] [string] $TestedGitSha,
+        [AllowNull()] [string] $CiValue,
+        [AllowNull()] [string] $PullRequestValue
+    )
+
+    $previous = [ordered]@{
+        SourceHeadSha = $env:OPS002_SOURCE_HEAD_SHA
+        TestedGitSha = $env:OPS002_TESTED_GIT_SHA
+        Ci = $env:CI
+        PullRequest = $env:OPS002_PULL_REQUEST_EVENT
+    }
+    try {
+        $env:OPS002_SOURCE_HEAD_SHA = $SourceHeadSha
+        $env:OPS002_TESTED_GIT_SHA = $TestedGitSha
+        $env:CI = $CiValue
+        $env:OPS002_PULL_REQUEST_EVENT = $PullRequestValue
+        return Get-Ops002GitTraceability -RepositoryRoot $repositoryRoot
+    }
+    finally {
+        $env:OPS002_SOURCE_HEAD_SHA = $previous.SourceHeadSha
+        $env:OPS002_TESTED_GIT_SHA = $previous.TestedGitSha
+        $env:CI = $previous.Ci
+        $env:OPS002_PULL_REQUEST_EVENT = $previous.PullRequest
+    }
+}
+
 function Invoke-ExpectedScriptFailure {
     param(
         [Parameter(Mandatory)] [string] $Name,
@@ -470,6 +518,51 @@ DROP ROLE $roleA,$roleB;
     }
 }
 
+function Invoke-AppendOnlyFixtureProcess {
+    param(
+        [Parameter(Mandatory)] $Context,
+        [Parameter(Mandatory)] [string] $Database,
+        [ValidateSet(
+            "all",
+            "orders.order_events",
+            "orders.order_acceptances",
+            "custody.proofs",
+            "platform.audit_logs"
+        )]
+        [string] $Table = "all",
+        [string] $PrefixSql = "",
+        [switch] $AllowFailure
+    )
+
+    $fixture = Get-Content -LiteralPath (
+        Join-Path $repositoryRoot "tests/fixtures/ops-002/assert-append-only.sql"
+    ) -Raw -Encoding utf8
+    $query = "{0}`n\set ops002_append_only_table '{1}'`n{2}" -f
+        $PrefixSql, $Table, $fixture
+    return Invoke-Ops002PostgresQuery -Context $Context -Database $Database `
+        -Query $query -TimeoutSeconds $TimeoutSeconds -AllowFailure:$AllowFailure
+}
+
+function Add-ExpectedAppendOnlyFailure {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [string] $PrefixSql,
+        [Parameter(Mandatory)] [string] $ExpectedReason,
+        [string] $Table = "all"
+    )
+
+    $result = Invoke-AppendOnlyFixtureProcess `
+        -Context $script:targetContext `
+        -Database "ops002_restored" `
+        -Table $Table `
+        -PrefixSql $PrefixSql `
+        -AllowFailure
+    $captured = "{0}`n{1}" -f $result.StandardError, $result.StandardOutput
+    Add-NegativeResult -Name $Name -Passed (
+        $result.ExitCode -ne 0 -and
+        $captured.Contains($ExpectedReason, [StringComparison]::Ordinal))
+}
+
 function Copy-BackupReportForArtifact {
     param(
         [Parameter(Mandatory)] [string] $SourceArtifact,
@@ -490,7 +583,8 @@ function New-InternalTamperedArtifact {
         [Parameter(Mandatory)] [string] $Recipient,
         [Parameter(Mandatory)] [string] $DestinationArtifact
     )
-    $tamperStage = New-Ops002StagingDirectory -Purpose "tamper"
+    $tamperStageInfo = New-Ops002StagingDirectory -Purpose "tamper"
+    $tamperStage = $tamperStageInfo.PhysicalPath
     try {
         $archive = Join-Path $tamperStage "payload.tar.gz"
         Invoke-Ops002Process -FilePath "age" -Arguments @(
@@ -532,7 +626,7 @@ function New-InternalTamperedArtifact {
             -DestinationArtifact $DestinationArtifact
     }
     finally {
-        Remove-Ops002StagingDirectory -Path $tamperStage
+        Remove-Ops002StagingDirectory -PathInfo $tamperStageInfo
     }
 }
 
@@ -542,6 +636,106 @@ try {
             throw "Required drill command '$command' is unavailable."
         }
     }
+    $script:gitTrace = Get-Ops002GitTraceability -RepositoryRoot $repositoryRoot
+    $actualGitHead = (Invoke-Ops002Process -FilePath "git" -Arguments @(
+        "-C", $repositoryRoot, "rev-parse", "HEAD"
+    )).StandardOutput.Trim().ToLowerInvariant()
+    $parentGitHead = (Invoke-Ops002Process -FilePath "git" -Arguments @(
+        "-C", $repositoryRoot, "rev-parse", "HEAD^"
+    )).StandardOutput.Trim().ToLowerInvariant()
+    $headTree = (Invoke-Ops002Process -FilePath "git" -Arguments @(
+        "-C", $repositoryRoot, "rev-parse", "HEAD^{tree}"
+    )).StandardOutput.Trim()
+    $previousAuthorName = $env:GIT_AUTHOR_NAME
+    $previousAuthorEmail = $env:GIT_AUTHOR_EMAIL
+    $previousCommitterName = $env:GIT_COMMITTER_NAME
+    $previousCommitterEmail = $env:GIT_COMMITTER_EMAIL
+    try {
+        $env:GIT_AUTHOR_NAME = "OPS002 synthetic guard"
+        $env:GIT_AUTHOR_EMAIL = "ops002.invalid"
+        $env:GIT_COMMITTER_NAME = "OPS002 synthetic guard"
+        $env:GIT_COMMITTER_EMAIL = "ops002.invalid"
+        $nonAncestorHead = (Invoke-Ops002Process -FilePath "git" -Arguments @(
+            "-C", $repositoryRoot,
+            "commit-tree", $headTree,
+            "-p", $actualGitHead,
+            "-m", "OPS002 synthetic non-ancestor guard"
+        )).StandardOutput.Trim().ToLowerInvariant()
+    }
+    finally {
+        $env:GIT_AUTHOR_NAME = $previousAuthorName
+        $env:GIT_AUTHOR_EMAIL = $previousAuthorEmail
+        $env:GIT_COMMITTER_NAME = $previousCommitterName
+        $env:GIT_COMMITTER_EMAIL = $previousCommitterEmail
+    }
+    Assert-ExpectedFailureReason `
+        -Name "git_source_head_sha_missing" `
+        -ExpectedReason "OPS002_SOURCE_HEAD_SHA_MISSING" `
+        -Action {
+            Invoke-GitTraceabilityCase `
+                -SourceHeadSha $null `
+                -TestedGitSha $actualGitHead `
+                -CiValue "true" `
+                -PullRequestValue "true" | Out-Null
+        }
+    Assert-ExpectedFailureReason `
+        -Name "git_tested_sha_missing" `
+        -ExpectedReason "OPS002_TESTED_GIT_SHA_MISSING" `
+        -Action {
+            Invoke-GitTraceabilityCase `
+                -SourceHeadSha $actualGitHead `
+                -TestedGitSha $null `
+                -CiValue "true" `
+                -PullRequestValue "true" | Out-Null
+        }
+    Assert-ExpectedFailureReason `
+        -Name "git_sha_malformed" `
+        -ExpectedReason "OPS002_SOURCE_HEAD_SHA_MALFORMED" `
+        -Action {
+            Invoke-GitTraceabilityCase `
+                -SourceHeadSha "not-a-full-sha" `
+                -TestedGitSha $actualGitHead `
+                -CiValue "true" `
+                -PullRequestValue "true" | Out-Null
+        }
+    Assert-ExpectedFailureReason `
+        -Name "git_tested_sha_checkout_mismatch" `
+        -ExpectedReason "OPS002_TESTED_GIT_SHA_CHECKOUT_MISMATCH" `
+        -Action {
+            Invoke-GitTraceabilityCase `
+                -SourceHeadSha $parentGitHead `
+                -TestedGitSha $parentGitHead `
+                -CiValue "true" `
+                -PullRequestValue "true" | Out-Null
+        }
+    Assert-ExpectedFailureReason `
+        -Name "git_source_head_not_ancestor" `
+        -ExpectedReason "OPS002_SOURCE_HEAD_NOT_ANCESTOR_OF_TESTED_SHA" `
+        -Action {
+            Invoke-GitTraceabilityCase `
+                -SourceHeadSha $nonAncestorHead `
+                -TestedGitSha $actualGitHead `
+                -CiValue "true" `
+                -PullRequestValue "true" | Out-Null
+        }
+    $localTrace = Invoke-GitTraceabilityCase `
+        -SourceHeadSha $null `
+        -TestedGitSha $null `
+        -CiValue $null `
+        -PullRequestValue $null
+    Add-NegativeResult -Name "git_local_trace_uses_same_commit" -Passed (
+        $localTrace.SourceHeadSha -ceq $actualGitHead -and
+        $localTrace.TestedGitSha -ceq $actualGitHead -and
+        $localTrace.Relationship -ceq "same_commit")
+    $prTrace = Invoke-GitTraceabilityCase `
+        -SourceHeadSha $parentGitHead `
+        -TestedGitSha $actualGitHead `
+        -CiValue "true" `
+        -PullRequestValue "true"
+    Add-NegativeResult -Name "git_pr_trace_accepts_valid_distinct_commits" -Passed (
+        $prTrace.SourceHeadSha -ceq $parentGitHead -and
+        $prTrace.TestedGitSha -ceq $actualGitHead -and
+        $prTrace.Relationship -ceq "source_head_is_ancestor_of_tested_commit")
     Assert-DockerAvailable
 
     $runSuffix = [Guid]::NewGuid().ToString("N").Substring(0, 12)
@@ -554,15 +748,14 @@ try {
             Join-Path $temporaryRoot "ops002-results-$runSuffix"
         }
     }
-    $resultsRoot = Assert-Ops002ExternalPath -Path $OutputDirectory -Purpose "Drill output"
+    $resultsRootPathInfo = New-Ops002ValidatedExternalDirectory `
+        -Path $OutputDirectory `
+        -Purpose "Drill output"
+    $resultsRoot = $resultsRootPathInfo.PhysicalPath
     if (Test-Path -LiteralPath $resultsRoot) {
         if (@(Get-ChildItem -LiteralPath $resultsRoot -Force).Count -ne 0) {
             throw "Drill output must be absent or empty."
         }
-    }
-    else {
-        New-Item -ItemType Directory -Path $resultsRoot | Out-Null
-        $script:ownedPaths.Add($resultsRoot)
     }
 
     if ([string]::IsNullOrWhiteSpace($SourceEnvironmentFile)) {
@@ -634,7 +827,8 @@ try {
     Invoke-DatabaseBaseline -Context $script:sourceContext -Operation Assert
 
     $script:currentPhase = "source_fixture"
-    $fixtureStage = New-Ops002StagingDirectory -Purpose "fixture"
+    $fixtureStageInfo = New-Ops002StagingDirectory -Purpose "fixture"
+    $fixtureStage = $fixtureStageInfo.PhysicalPath
     try {
         $fixtureObjects = Join-Path $fixtureStage "objects"
         New-Item -ItemType Directory -Path $fixtureObjects | Out-Null
@@ -716,13 +910,152 @@ try {
                 -Path (Join-Path $repositoryRoot "TestResults/ops002") `
                 -Purpose "Backup output"
         }
+        $mockReparsePoint = [pscustomobject]@{
+            Attributes = [System.IO.FileAttributes]::Directory -bor
+                [System.IO.FileAttributes]::ReparsePoint
+            LinkType = "Junction"
+            LinkTarget = "synthetic-target"
+        }
+        Add-NegativeResult -Name "reparse_point_detection" -Passed (
+            Test-Ops002FileSystemInfoLinked -Item $mockReparsePoint)
+
+        $repositoryArtifactSnapshot = @(
+            Get-ChildItem -LiteralPath $repositoryRoot -Recurse -Depth 4 -File -Force |
+            Where-Object {
+                $_.Name -match '\.tar\.gz\.age(?:\.report\.json)?$' -or
+                $_.Name -match 'ops002-(?:restore-drill-report|negative-tests)\.json$'
+            } |
+            ForEach-Object FullName
+        )
+        $pathGuardStageInfo = New-Ops002StagingDirectory -Purpose "path-guard"
+        $pathGuardStage = $pathGuardStageInfo.PhysicalPath
+        $createdLinks = [System.Collections.Generic.List[string]]::new()
+        try {
+            $repoParentLink = Join-Path $pathGuardStage "repo-parent-link"
+            New-Item -ItemType SymbolicLink -Path $repoParentLink `
+                -Target $repositoryRoot -ErrorAction Stop | Out-Null
+            $createdLinks.Add($repoParentLink)
+            Assert-ExpectedFailureReason `
+                -Name "output_parent_symlink_to_repository_rejected" `
+                -ExpectedReason "OPS002_PATH_LINK_COMPONENT_REJECTED" `
+                -Action {
+                    New-Ops002ValidatedExternalDirectory `
+                        -Path (Join-Path $repoParentLink "ops002-output") `
+                        -Purpose "Backup output" `
+                        -MustNotExist | Out-Null
+                }
+
+            $outputLink = Join-Path $pathGuardStage "output-link"
+            New-Item -ItemType SymbolicLink -Path $outputLink `
+                -Target $repositoryRoot -ErrorAction Stop | Out-Null
+            $createdLinks.Add($outputLink)
+            Assert-ExpectedFailureReason `
+                -Name "output_symlink_to_repository_rejected" `
+                -ExpectedReason "OPS002_PATH_LINK_COMPONENT_REJECTED" `
+                -Action {
+                    New-Ops002ValidatedExternalDirectory `
+                        -Path $outputLink `
+                        -Purpose "Backup output" `
+                        -MustNotExist | Out-Null
+                }
+
+            $repositoryIdentityTarget = Join-Path $repositoryRoot "README.md"
+            $identityRepoLink = Join-Path $pathGuardStage "identity-repo-link"
+            New-Item -ItemType SymbolicLink -Path $identityRepoLink `
+                -Target $repositoryIdentityTarget -ErrorAction Stop | Out-Null
+            $createdLinks.Add($identityRepoLink)
+            Assert-ExpectedFailureReason `
+                -Name "identity_symlink_to_repository_rejected" `
+                -ExpectedReason "OPS002_PATH_LINK_COMPONENT_REJECTED" `
+                -Action {
+                    Assert-Ops002IdentityFile -IdentityFile $identityRepoLink | Out-Null
+                }
+
+            $stagingRootLink = Join-Path $pathGuardStage "staging-root-link"
+            New-Item -ItemType SymbolicLink -Path $stagingRootLink `
+                -Target $repositoryRoot -ErrorAction Stop | Out-Null
+            $createdLinks.Add($stagingRootLink)
+            $previousStagingOverride = $env:OPS002_TEST_STAGING_ROOT
+            try {
+                $env:OPS002_TEST_STAGING_ROOT = $stagingRootLink
+                Assert-ExpectedFailureReason `
+                    -Name "linked_staging_root_rejected" `
+                    -ExpectedReason "OPS002_PATH_LINK_COMPONENT_REJECTED" `
+                    -Action {
+                        New-Ops002StagingDirectory -Purpose "linked-root" | Out-Null
+                    }
+            }
+            finally {
+                $env:OPS002_TEST_STAGING_ROOT = $previousStagingOverride
+            }
+
+            $unrelatedTarget = Join-Path $pathGuardStage "unrelated-target"
+            New-Item -ItemType Directory -Path $unrelatedTarget | Out-Null
+            $unrelatedSentinel = Join-Path $unrelatedTarget "must-survive.txt"
+            [System.IO.File]::WriteAllText($unrelatedSentinel, "survive")
+            $cleanupPath = Join-Path $pathGuardStage "validated-cleanup"
+            $cleanupPathInfo = New-Ops002ValidatedExternalDirectory `
+                -Path $cleanupPath `
+                -Purpose "Cleanup replacement test" `
+                -MustNotExist
+            [System.IO.Directory]::Delete($cleanupPathInfo.PhysicalPath)
+            New-Item -ItemType SymbolicLink -Path $cleanupPathInfo.LexicalPath `
+                -Target $unrelatedTarget -ErrorAction Stop | Out-Null
+            $createdLinks.Add($cleanupPathInfo.LexicalPath)
+            Assert-ExpectedFailureReason `
+                -Name "cleanup_replaced_output_symlink_rejected" `
+                -ExpectedReason "OPS002_PATH_LINK_COMPONENT_REJECTED" `
+                -Action {
+                    Remove-Ops002ValidatedDirectory -PathInfo $cleanupPathInfo
+                }
+            Add-NegativeResult -Name "cleanup_did_not_follow_replaced_symlink" -Passed (
+                Test-Path -LiteralPath $unrelatedSentinel -PathType Leaf)
+
+            $identityExternalLink = Join-Path $pathGuardStage "identity-external-link"
+            New-Item -ItemType SymbolicLink -Path $identityExternalLink `
+                -Target $script:identityPath -ErrorAction Stop | Out-Null
+            $createdLinks.Add($identityExternalLink)
+            Assert-ExpectedFailureReason `
+                -Name "identity_symlink_to_unrelated_resource_rejected" `
+                -ExpectedReason "OPS002_PATH_LINK_COMPONENT_REJECTED" `
+                -Action {
+                    Assert-Ops002IdentityFile -IdentityFile $identityExternalLink | Out-Null
+                }
+        }
+        finally {
+            foreach ($link in $createdLinks) {
+                $linkItem = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+                if ($null -ne $linkItem) {
+                    if ($linkItem.PSIsContainer) {
+                        [System.IO.Directory]::Delete($link)
+                    }
+                    else {
+                        [System.IO.File]::Delete($link)
+                    }
+                }
+            }
+            Remove-Ops002StagingDirectory -PathInfo $pathGuardStageInfo
+        }
+        $repositoryArtifactsAfterPathTests = @(
+            Get-ChildItem -LiteralPath $repositoryRoot -Recurse -Depth 4 -File -Force |
+            Where-Object {
+                $_.Name -match '\.tar\.gz\.age(?:\.report\.json)?$' -or
+                $_.Name -match 'ops002-(?:restore-drill-report|negative-tests)\.json$'
+            } |
+            ForEach-Object FullName
+        )
+        Add-NegativeResult -Name "linked_paths_published_nothing_in_repository" -Passed (
+            (Compare-Object `
+                -ReferenceObject $repositoryArtifactSnapshot `
+                -DifferenceObject $repositoryArtifactsAfterPathTests).Count -eq 0)
         Assert-ExpectedFailure -Name "process_timeout_enforced" -Action {
             Invoke-Ops002Process -FilePath "pwsh" -Arguments @(
                 "-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 5"
             ) -TimeoutSeconds 1 | Out-Null
         }
 
-        $archiveGuardStage = New-Ops002StagingDirectory -Purpose "archive-guard"
+        $archiveGuardStageInfo = New-Ops002StagingDirectory -Purpose "archive-guard"
+        $archiveGuardStage = $archiveGuardStageInfo.PhysicalPath
         try {
             $traversalArchive = Join-Path $archiveGuardStage "traversal.tar.gz"
             New-Ops002SecurityTestArchive -Path $traversalArchive -Entries @(
@@ -769,7 +1102,7 @@ try {
             }
         }
         finally {
-            Remove-Ops002StagingDirectory -Path $archiveGuardStage
+            Remove-Ops002StagingDirectory -PathInfo $archiveGuardStageInfo
         }
         $existingOutput = Join-Path $temporaryRoot "ops002-existing-$runSuffix"
         New-Item -ItemType Directory -Path $existingOutput | Out-Null
@@ -963,7 +1296,7 @@ SET session_replication_role=origin;
         $ciphertextText = $null
     }
     finally {
-        Remove-Ops002StagingDirectory -Path $fixtureStage
+        Remove-Ops002StagingDirectory -PathInfo $fixtureStageInfo
     }
 
     $script:currentPhase = "restore_authentication_guards"
@@ -1119,6 +1452,10 @@ SET session_replication_role=origin;
         redis_restored = ($restoreReport.redis_restored -eq $false)
         mailpit_restored = ($restoreReport.mailpit_restored -eq $false)
         plaintext_residue_detected = ($restoreReport.plaintext_residue_detected -eq $false)
+        source_head_sha =
+            ($restoreReport.source_head_sha -ceq $script:gitTrace.SourceHeadSha)
+        tested_git_sha =
+            ($restoreReport.tested_git_sha -ceq $script:gitTrace.TestedGitSha)
     }
     $failedReportAssertions = @(
         $reportAssertions.GetEnumerator() |
@@ -1135,8 +1472,95 @@ SET session_replication_role=origin;
     Add-NegativeResult -Name "restore_survives_target_restart" -Passed $true
     Assert-EphemeralLoginRls -Context $script:targetContext -Database "ops002_restored"
     Add-NegativeResult -Name "cross_tenant_isolation_after_restore" -Passed $true
-    Add-NegativeResult -Name "append_only_after_restore" -Passed $true
+    Add-NegativeResult -Name "append_only_after_restore" -Passed (
+        $restoreReport.append_only_assertions_passed -eq $true -and
+        [int]$restoreReport.append_only_update_guards_verified -eq 4 -and
+        [int]$restoreReport.append_only_delete_guards_verified -eq 4 -and
+        [int]$restoreReport.append_only_trigger_failures_verified -eq 8 -and
+        [int]$restoreReport.append_only_permission_failures -eq 0 -and
+        [int]$restoreReport.append_only_rows_intact_verified -eq 8)
     Add-NegativeResult -Name "role_ownership_and_grants_after_restore" -Passed $true
+
+    $script:currentPhase = "append_only_focal_guards"
+    Add-ExpectedAppendOnlyFailure `
+        -Name "append_only_missing_trigger_rejected" `
+        -PrefixSql @'
+BEGIN;
+DROP TRIGGER order_events_append_only ON orders.order_events;
+'@ `
+        -ExpectedReason "OPS002_APPEND_ONLY_TRIGGER_MISSING"
+    Add-ExpectedAppendOnlyFailure `
+        -Name "append_only_disabled_trigger_rejected" `
+        -PrefixSql @'
+BEGIN;
+ALTER TABLE orders.order_acceptances DISABLE TRIGGER order_acceptances_append_only;
+'@ `
+        -ExpectedReason "OPS002_APPEND_ONLY_TRIGGER_DISABLED"
+    Add-ExpectedAppendOnlyFailure `
+        -Name "append_only_noop_function_rejected" `
+        -PrefixSql @'
+BEGIN;
+CREATE OR REPLACE FUNCTION platform.reject_runtime_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $ops002_noop$
+BEGIN
+  RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END
+$ops002_noop$;
+'@ `
+        -ExpectedReason "OPS002_APPEND_ONLY_UPDATE_WAS_ACCEPTED"
+    Add-ExpectedAppendOnlyFailure `
+        -Name "append_only_unprivileged_actor_rejected" `
+        -PrefixSql @'
+BEGIN;
+SET LOCAL ROLE paqueteria_app;
+'@ `
+        -ExpectedReason "OPS002_APPEND_ONLY_TEST_ACTOR_PERMISSION_INVALID"
+    Add-ExpectedAppendOnlyFailure `
+        -Name "append_only_insufficient_privilege_classified_invalid" `
+        -PrefixSql @'
+BEGIN;
+SET LOCAL ROLE paqueteria_app;
+'@ `
+        -Table "orders.order_events" `
+        -ExpectedReason "OPS002_APPEND_ONLY_TEST_ACTOR_PERMISSION_INVALID"
+
+    foreach ($appendOnlyTable in @(
+        "orders.order_events",
+        "orders.order_acceptances",
+        "custody.proofs",
+        "platform.audit_logs"
+    )) {
+        $tableEvidence = Invoke-Ops002AppendOnlyAssertions `
+            -Context $script:targetContext `
+            -Database "ops002_restored" `
+            -Table $appendOnlyTable `
+            -TimeoutSeconds $TimeoutSeconds
+        Add-NegativeResult `
+            -Name ("append_only_table_independent_{0}" -f
+                $appendOnlyTable.Replace(".", "_")) `
+            -Passed (
+                $tableEvidence.UpdateGuardsVerified -eq 1 -and
+                $tableEvidence.DeleteGuardsVerified -eq 1 -and
+                $tableEvidence.TriggerFailuresVerified -eq 2 -and
+                $tableEvidence.RowsIntactVerified -eq 2)
+    }
+    Add-ExpectedAppendOnlyFailure `
+        -Name "append_only_update_does_not_compensate_missing_delete" `
+        -PrefixSql @'
+BEGIN;
+DROP TRIGGER proofs_append_only ON custody.proofs;
+CREATE TRIGGER proofs_append_only BEFORE UPDATE ON custody.proofs
+  FOR EACH ROW EXECUTE FUNCTION platform.reject_runtime_mutation();
+'@ `
+        -Table "custody.proofs" `
+        -ExpectedReason "OPS002_APPEND_ONLY_TRIGGER_CONTRACT_INVALID"
+    $postNegativeAppendOnlyEvidence = Invoke-Ops002AppendOnlyAssertions `
+        -Context $script:targetContext `
+        -Database "ops002_restored" `
+        -TimeoutSeconds $TimeoutSeconds
+    Add-NegativeResult -Name "append_only_rows_intact_after_focal_guards" -Passed (
+        $postNegativeAppendOnlyEvidence.RowsIntactVerified -eq 8 -and
+        $postNegativeAppendOnlyEvidence.PermissionFailures -eq 0)
 
     $plaintext = @(
         Get-ChildItem -LiteralPath $resultsRoot -File -Recurse |
@@ -1152,8 +1576,8 @@ SET session_replication_role=origin;
     }
     Add-NegativeResult -Name "reports_contain_no_secrets" -Passed $true
 
-    if ($script:negativeResults.Count -ne 43) {
-        throw "Expected 43 negative/security checks; observed $($script:negativeResults.Count)."
+    if ($script:negativeResults.Count -ne 70) {
+        throw "Expected 70 negative/security checks; observed $($script:negativeResults.Count)."
     }
 
     $drillStopwatch.Stop()
@@ -1168,8 +1592,10 @@ SET session_replication_role=origin;
     $testResultsPath = Join-Path $resultsRoot "ops002-negative-tests.json"
     Write-Ops002Json -Value ([ordered]@{
         format_version = $script:Ops002FormatVersion
-        required_checks = 43
-        passed_checks = 43
+        source_head_sha = $script:gitTrace.SourceHeadSha
+        tested_git_sha = $script:gitTrace.TestedGitSha
+        required_checks = 70
+        passed_checks = 70
         result = "OPS002_NEGATIVE_TESTS_PASSED"
         checks = $script:negativeResults
     }) -Path $testResultsPath
