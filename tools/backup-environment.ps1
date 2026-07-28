@@ -307,6 +307,11 @@ pg_restore --list "$OPS002_DUMP_PATH"
         }
         throw
     }
+    $currentPhase = "encryption_result_validation"
+    if ($null -eq $ageResult -or
+        $ageResult.PSObject.Properties.Name -notcontains "ExitCode") {
+        throw "age encryption returned no process result."
+    }
     if ($ageResult.ExitCode -ne 0) {
         $ageError = $ageResult.StandardError
         $currentPhase = if ($ageError -match '(?i)recipient') {
@@ -326,6 +331,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
         }
         throw "age encryption command failed."
     }
+    $currentPhase = "encryption_output_validation"
     if (-not (Test-Path -LiteralPath $partialArtifact -PathType Leaf) -or
         (Get-Item -LiteralPath $partialArtifact).Length -le 0) {
         throw "Encrypted artifact was not produced."
