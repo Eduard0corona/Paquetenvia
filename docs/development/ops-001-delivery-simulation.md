@@ -43,7 +43,8 @@ El escenario fuerza tres casos:
 1. Una publicación se interrumpe después de entregar a todas las audiencias y
    antes de `settle`. La fila queda `PROCESSING`, expira, se recupera con un
    lease nuevo y termina `PROCESSED` con dos intentos. SignalR observa la
-   redelivery y el conteo se deduplica por `event_id`.
+   redelivery: ambas entregas permanecen en el conteo crudo, pero la evidencia
+   funcional se deduplica por `event_id`.
 2. El lease anterior intenta completar la fila mientras el lease nuevo está
    vigente. `security.settle_outbox` devuelve `false`, no modifica el estado y
    el lease actual sí puede completar.
@@ -62,8 +63,17 @@ La aceptación exige, por corrida:
 - 20 órdenes `DELIVERED`, 20 assignments y distribución 5/5/5/5;
 - 20 pickup proofs y 20 delivery proofs finalizados;
 - 180 eventos de dominio, sin huecos de versiones 1 a 9;
-- 160 eventos realtime únicos y observación mínima de 98%;
-- 340 auditorías requeridas y correlacionadas;
+- 160 expectativas realtime leídas de las filas reales
+  `orders.status-changed` del outbox, versiones 2 a 9;
+- coincidencia exacta por `event_id`, orden, versión y tipo de evento;
+- cero eventos realtime faltantes, inesperados o inconsistentes; un evento
+  inesperado nunca compensa uno requerido ausente;
+- observación mínima normativa de 98%, calculada exclusivamente como IDs
+  esperados correctamente observados entre IDs esperados;
+- 340 auditorías esperadas derivadas de eventos, tokens, assignments, sesiones
+  y proofs reales, correlacionadas una por una;
+- cero auditorías faltantes, duplicadas o inconsistentes; duplicar una acción
+  no compensa la ausencia de otra;
 - 360 outbox procesados, un poison `DEAD` esperado y ningún outbox activo;
 - tracking público final sin driver, assignment ni payload interno;
 - dashboard con las 20 órdenes correctas y sin filas del tenant señuelo;
@@ -74,8 +84,19 @@ La aceptación exige, por corrida:
 
 La prueba principal ejecuta dos corridas consecutivas contra los mismos
 contenedores para detectar colisiones. La categoría también incluye pruebas
-focales de aceptación, deduplicación, huecos de versión, redacción y cleanup
-por cancelación.
+focales para sustitución de IDs, agregado o versión incorrectos, eventos
+inesperados, redelivery, multiplicidad de auditorías, tenant/entidad
+incorrectos y huecos de versión.
+
+La cancelación invoca el runner real con datos propios. Un checkpoint interno
+espera hasta que Kestrel, el dispatcher de outbox y el observer SignalR son
+propiedad de la corrida; la prueba cancela entonces el token y exige
+`OperationCanceledException`. El `finally` detiene host y observer, libera una
+lease `PROCESSING` como `RETRY`, no escribe un reporte exitoso y deja en cero
+los recursos activos. Una corrida completa posterior en la misma fixture
+demuestra que no quedaron puertos, conexiones, leases, locks ni tareas de host
+impidiendo continuar. PostgreSQL y Ceph pertenecen a la fixture y permanecen
+vivos hasta terminar la colección.
 
 ## Ejecución local
 
@@ -98,6 +119,11 @@ completo a 30 minutos.
 La segunda corrida escribe `ops001-delivery-simulation.json`. El documento
 contiene únicamente contadores, porcentajes, flags de recuperación y duración.
 No contiene IDs de órdenes, conductores u organizaciones.
+
+Realtime reporta expected, matched, missing, unexpected, mismatched, entregas
+crudas y duplicados. Auditoría reporta expected, exactly matched, missing,
+duplicated y mismatched. El JSON no incluye los conjuntos internos usados para
+correlacionar ni sus IDs, timestamps o payloads.
 
 El reporte es evidencia de integración, no telemetría de producción. CI lo
 publica junto con el TRX como artifact por 14 días. Los diagnósticos de fallo
