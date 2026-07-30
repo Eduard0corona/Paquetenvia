@@ -199,7 +199,7 @@ rechaza enlaces descendientes y no los sigue.
 
 ## Ejecución local
 
-Windows PowerShell 5.1 ejecuta únicamente las 48 pruebas Python:
+Windows PowerShell 5.1 ejecuta únicamente las 49 pruebas Python:
 
 ```powershell
 powershell -File ./tools/test-rel-000-internal-release.ps1 -PythonOnly

@@ -152,9 +152,9 @@ function Invoke-Rel000SelfTests {
     $cleanupLink = Test-Rel000CleanupLinkGuard
     Write-Output ([pscustomobject]@{
         format_version = "paquetenvia-rel000-self-test-v1"
-        focused_tests_expected = 50
-        focused_tests_passed = 50
-        python_focused_tests_expected = 48
+        focused_tests_expected = 51
+        focused_tests_passed = 51
+        python_focused_tests_expected = 49
         physical_path_tests_expected = 2
         physical_path_tests_ci = "PASSED"
         powershell_ci_major_version = $PSVersionTable.PSVersion.Major

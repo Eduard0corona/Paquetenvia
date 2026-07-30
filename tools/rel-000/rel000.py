@@ -1630,12 +1630,15 @@ def sanitize_audit(
                     if finding.get("version")
                 }
             )
-            dependency_paths = [
-                path
-                for finding in findings
-                for path in str(finding.get("paths") or "").split()
-                if path
-            ]
+            dependency_paths: list[str] = []
+            for finding in findings:
+                raw_paths = finding.get("paths") or []
+                if isinstance(raw_paths, str):
+                    dependency_paths.extend(path for path in raw_paths.split() if path)
+                elif isinstance(raw_paths, list):
+                    dependency_paths.extend(
+                        str(path) for path in raw_paths if isinstance(path, str) and path
+                    )
             package = str(advisory.get("module_name") or "")
             is_direct = any(path in {f".>{package}", package} for path in dependency_paths)
             patched_range = str(advisory.get("patched_versions") or "")

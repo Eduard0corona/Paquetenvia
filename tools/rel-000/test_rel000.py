@@ -819,6 +819,49 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
+    def test_49_sanitizer_preserves_dependency_path_classification(self):
+        raw_path = self.root / "audit-raw.json"
+        output_path = self.root / "audit-sanitized.json"
+        rel000.write_json(
+            raw_path,
+            {
+                "advisories": {
+                    "1": {
+                        "findings": [{"version": "16.2.10", "paths": [".>next"]}],
+                        "github_advisory_id": "GHSA-1111-2222-3333",
+                        "module_name": "next",
+                        "vulnerable_versions": "<16.2.11",
+                        "patched_versions": ">=16.2.11",
+                        "severity": "high",
+                    },
+                    "2": {
+                        "findings": [{"version": "0.34.5", "paths": [".>next>sharp"]}],
+                        "github_advisory_id": "GHSA-4444-5555-6666",
+                        "module_name": "sharp",
+                        "vulnerable_versions": "<0.35.0",
+                        "patched_versions": ">=0.35.0",
+                        "severity": "high",
+                    },
+                },
+                "metadata": {
+                    "vulnerabilities": {
+                        "critical": 0,
+                        "high": 2,
+                        "moderate": 0,
+                        "low": 0,
+                    }
+                },
+            },
+        )
+        rel000.sanitize_audit(raw_path, output_path, True, 1)
+        advisories = {
+            item["package"]: item
+            for item in rel000.load_json(output_path)["advisories"]
+        }
+        self.assertEqual("direct", advisories["next"]["direct_or_transitive"])
+        self.assertEqual("transitive", advisories["sharp"]["direct_or_transitive"])
+        self.assertEqual(1, advisories["next"]["dependency_path_count"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
