@@ -46,6 +46,9 @@ jobs:
   dotnet:
     name: Build and test .NET
     runs-on: ubuntu-latest
+    outputs:
+      execution-artifact-id: ${{ steps.upload-dotnet-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-dotnet-execution.outputs.artifact-digest }}
     env:
       CI: "true"
     steps:
@@ -73,11 +76,38 @@ jobs:
           --configuration Release
           --no-build
           --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation"
+          --logger "trx;LogFilePrefix=dotnet"
+          --results-directory ./TestResults/dotnet
+
+      - name: Correlate executed .NET tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job dotnet
+          --artifact-name rel000-execution-dotnet
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --trx "auto=./TestResults/dotnet/dotnet*.trx"
+          --output ./TestResults/dotnet/rel000-execution-results.json
+
+      - name: Publish structured .NET execution evidence
+        id: upload-dotnet-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-dotnet
+          path: ./TestResults/dotnet
+          if-no-files-found: error
+          retention-days: 7
 
   runtime-contracts:
     name: Validate runtime contracts
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      execution-artifact-id: ${{ steps.upload-runtime-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-runtime-execution.outputs.artifact-digest }}
     env:
       CI: "true"
     steps:
@@ -124,6 +154,29 @@ jobs:
           --filter "Category=SecureProofUpload"
           --logger "trx;LogFileName=secure-proof-runtime.trx"
           --results-directory ./TestResults/runtime-contracts
+
+      - name: Correlate executed runtime contract tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job runtime-contracts
+          --artifact-name rel000-execution-runtime-contracts
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --trx "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj|PostgreSqlContract=./TestResults/runtime-contracts/runtime-contracts.trx"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|SecureProofUpload=./TestResults/runtime-contracts/secure-proof-runtime.trx"
+          --output ./TestResults/runtime-contracts/rel000-execution-results.json
+
+      - name: Publish structured runtime execution evidence
+        id: upload-runtime-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-runtime-contracts
+          path: ./TestResults/runtime-contracts
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Capture Testcontainers diagnostics
         if: failure()
@@ -195,6 +248,9 @@ jobs:
   realtime-e2e:
     name: Validate real SignalR reconnect
     runs-on: ubuntu-latest
+    outputs:
+      execution-artifact-id: ${{ steps.upload-realtime-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-realtime-execution.outputs.artifact-digest }}
     env:
       PAQUETERIA_TEST_HOST_DLL: ${{ github.workspace }}/tests/Paqueteria.RealtimeTestHost/bin/Release/net10.0/Paqueteria.RealtimeTestHost.dll
     steps:
@@ -228,13 +284,45 @@ jobs:
       - name: Install web dependencies
         run: pnpm --dir apps/web install --frozen-lockfile
 
+      - name: Prepare realtime result directory
+        run: mkdir --parents ./TestResults/realtime-e2e
+
       - name: Execute real reconnect lifecycle
-        run: pnpm --dir apps/web test:realtime-e2e
+        run: >-
+          pnpm --dir apps/web exec vitest run
+          --config vitest.e2e.config.ts
+          --reporter=junit
+          --outputFile=../../TestResults/realtime-e2e/realtime-e2e.xml
+
+      - name: Correlate executed realtime tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job realtime-e2e
+          --artifact-name rel000-execution-realtime-e2e
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --junit "apps/web/src/realtime/real-reconnect.e2e.ts=./TestResults/realtime-e2e/realtime-e2e.xml"
+          --output ./TestResults/realtime-e2e/rel000-execution-results.json
+
+      - name: Publish structured realtime execution evidence
+        id: upload-realtime-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-realtime-e2e
+          path: ./TestResults/realtime-e2e
+          if-no-files-found: error
+          retention-days: 7
 
   outbox-signalr-delivery:
     name: Validate outbox SignalR delivery
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      execution-artifact-id: ${{ steps.upload-outbox-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-outbox-execution.outputs.artifact-digest }}
     env:
       CI: "true"
     steps:
@@ -297,6 +385,28 @@ jobs:
           --logger "trx;LogFileName=outbox-signalr-delivery.trx"
           --results-directory ./TestResults/outbox-signalr-delivery
 
+      - name: Correlate executed outbox delivery tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job outbox-signalr-delivery
+          --artifact-name rel000-execution-outbox-signalr-delivery
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OutboxSignalRDelivery=./TestResults/outbox-signalr-delivery/outbox-signalr-delivery.trx"
+          --output ./TestResults/outbox-signalr-delivery/rel000-execution-results.json
+
+      - name: Publish structured outbox execution evidence
+        id: upload-outbox-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-outbox-signalr-delivery
+          path: ./TestResults/outbox-signalr-delivery
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Capture delivery diagnostics
         if: failure()
         shell: bash
@@ -333,6 +443,9 @@ jobs:
     name: Validate driver PWA
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      execution-artifact-id: ${{ steps.upload-driver-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-driver-execution.outputs.artifact-digest }}
     env:
       CI: "true"
     steps:
@@ -383,7 +496,7 @@ jobs:
           --with-deps
           chromium
 
-      - name: Execute stops, offline operations and real DriverHub flows
+      - name: Execute stops and real DriverHub flows
         env:
           MSBUILDDISABLENODEREUSE: "1"
         run: >-
@@ -391,9 +504,44 @@ jobs:
           ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
           --configuration Release
           --no-build
-          --filter "Category=DriverStopsPwa|Category=DriverOfflineOperationsPwa"
+          --filter "Category=DriverStopsPwa"
           --logger "trx;LogFileName=driver-stops-pwa.trx"
           --results-directory ./TestResults/driver-stops-pwa
+
+      - name: Execute real offline operation flows
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
+        run: >-
+          dotnet test
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=DriverOfflineOperationsPwa"
+          --logger "trx;LogFileName=driver-offline-operations-pwa.trx"
+          --results-directory ./TestResults/driver-stops-pwa
+
+      - name: Correlate executed driver tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job driver-stops-pwa
+          --artifact-name rel000-execution-driver-stops-pwa
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverStopsPwa=./TestResults/driver-stops-pwa/driver-stops-pwa.trx"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverOfflineOperationsPwa=./TestResults/driver-stops-pwa/driver-offline-operations-pwa.trx"
+          --output ./TestResults/driver-stops-pwa/rel000-execution-results.json
+
+      - name: Publish structured driver execution evidence
+        id: upload-driver-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-driver-stops-pwa
+          path: ./TestResults/driver-stops-pwa
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Capture driver stops diagnostics
         if: failure()
@@ -431,6 +579,9 @@ jobs:
     name: Validate public tracking
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      execution-artifact-id: ${{ steps.upload-tracking-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-tracking-execution.outputs.artifact-digest }}
     env:
       CI: "true"
     steps:
@@ -529,6 +680,31 @@ jobs:
           --logger "trx;LogFileName=public-tracking-pwa.trx"
           --results-directory ./TestResults/public-tracking
 
+      - name: Correlate executed public tracking tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job public-tracking
+          --artifact-name rel000-execution-public-tracking
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|PublicTrackingPostgreSql=./TestResults/public-tracking/public-tracking-postgresql.trx"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|Uncategorized=./TestResults/public-tracking/public-tracking-lifetime.trx"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OutboxSignalRDelivery=./TestResults/public-tracking/public-tracking-outbox.trx"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|PublicTrackingPwa=./TestResults/public-tracking/public-tracking-pwa.trx"
+          --output ./TestResults/public-tracking/rel000-execution-results.json
+
+      - name: Publish structured public tracking execution evidence
+        id: upload-tracking-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-public-tracking
+          path: ./TestResults/public-tracking
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Capture public tracking diagnostics
         if: failure()
         shell: bash
@@ -565,6 +741,9 @@ jobs:
     name: Validate operations dashboard
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      execution-artifact-id: ${{ steps.upload-operations-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-operations-execution.outputs.artifact-digest }}
     env:
       CI: "true"
     steps:
@@ -638,6 +817,29 @@ jobs:
           --filter "Category=OperationsDashboardPwa"
           --logger "trx;LogFileName=operations-dashboard-pwa.trx"
           --results-directory ./TestResults/operations-dashboard
+
+      - name: Correlate executed operations dashboard tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job operations-dashboard
+          --artifact-name rel000-execution-operations-dashboard
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OperationsDashboardPostgreSql=./TestResults/operations-dashboard/operations-dashboard-postgresql.trx"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OperationsDashboardPwa=./TestResults/operations-dashboard/operations-dashboard-pwa.trx"
+          --output ./TestResults/operations-dashboard/rel000-execution-results.json
+
+      - name: Publish structured operations execution evidence
+        id: upload-operations-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-operations-dashboard
+          path: ./TestResults/operations-dashboard
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Capture redacted operations diagnostics
         if: failure()
@@ -720,6 +922,19 @@ jobs:
           --logger "trx;LogFileName=delivery-simulation.trx"
           --results-directory ./TestResults/delivery-simulation
 
+      - name: Correlate executed delivery simulation tests
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job delivery-simulation
+          --artifact-name delivery-simulation-results
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OpsDeliverySimulation=./TestResults/delivery-simulation/delivery-simulation.trx"
+          --output ./TestResults/delivery-simulation/rel000-execution-results.json
+
       - name: Capture redacted simulation diagnostics
         if: failure()
         shell: bash
@@ -767,6 +982,9 @@ jobs:
     name: Validate local infrastructure
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      execution-artifact-id: ${{ steps.upload-infrastructure-execution.outputs.artifact-id }}
+      execution-artifact-digest: ${{ steps.upload-infrastructure-execution.outputs.artifact-digest }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -796,11 +1014,35 @@ jobs:
 
       - name: Run infrastructure smoke and persistence tests
         shell: pwsh
+        env:
+          REL000_EXECUTION_RESULT_PATH: ${{ github.workspace }}/TestResults/infrastructure/infrastructure-smoke.json
         run: >-
           ./tools/test-local-environment.ps1
           -EnvironmentFile ./deploy/.env.ci
           -CI
           -TimeoutSeconds 300
+
+      - name: Correlate executed infrastructure smoke
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job infrastructure
+          --artifact-name rel000-execution-infrastructure
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --tested-git-sha "${{ github.sha }}"
+          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --structured "tools/test-local-environment.ps1=./TestResults/infrastructure/infrastructure-smoke.json"
+          --output ./TestResults/infrastructure/rel000-execution-results.json
+
+      - name: Publish structured infrastructure execution evidence
+        id: upload-infrastructure-execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-execution-infrastructure
+          path: ./TestResults/infrastructure
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Capture infrastructure diagnostics
         if: failure()
@@ -969,6 +1211,19 @@ jobs:
         shell: pwsh
         run: ./tools/test-backup-restore.ps1 -CI -TimeoutSeconds 1500
 
+      - name: Correlate executed backup and restore checks
+        run: >-
+          python ./tools/rel-000/rel000.py collect-results
+          --job backup-restore
+          --artifact-name ops002-backup-restore-results
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
+          --structured "tools/test-backup-restore.ps1=$OPS002_RESULTS_DIRECTORY/rel000-execution-input.json"
+          --output "$OPS002_RESULTS_DIRECTORY/rel000-execution-results.json"
+
       - name: Capture redacted backup diagnostics
         if: failure()
         shell: bash
@@ -1079,6 +1334,8 @@ jobs:
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
       REL000_JOB_RESULTS_JSON: >-
         {"normative":"${{ needs.normative.result }}","dotnet":"${{ needs.dotnet.result }}","runtime-contracts":"${{ needs.runtime-contracts.result }}","web":"${{ needs.web.result }}","realtime-e2e":"${{ needs.realtime-e2e.result }}","outbox-signalr-delivery":"${{ needs.outbox-signalr-delivery.result }}","driver-stops-pwa":"${{ needs.driver-stops-pwa.result }}","public-tracking":"${{ needs.public-tracking.result }}","operations-dashboard":"${{ needs.operations-dashboard.result }}","delivery-simulation":"${{ needs.delivery-simulation.result }}","infrastructure":"${{ needs.infrastructure.result }}","backup-restore":"${{ needs.backup-restore.result }}"}
+      REL000_EXECUTION_ARTIFACT_OUTPUTS_JSON: >-
+        [{"artifact_name":"rel000-execution-dotnet","artifact_id":"${{ needs.dotnet.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.dotnet.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-runtime-contracts","artifact_id":"${{ needs.runtime-contracts.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.runtime-contracts.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-realtime-e2e","artifact_id":"${{ needs.realtime-e2e.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.realtime-e2e.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-outbox-signalr-delivery","artifact_id":"${{ needs.outbox-signalr-delivery.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.outbox-signalr-delivery.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-driver-stops-pwa","artifact_id":"${{ needs.driver-stops-pwa.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.driver-stops-pwa.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-public-tracking","artifact_id":"${{ needs.public-tracking.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.public-tracking.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-operations-dashboard","artifact_id":"${{ needs.operations-dashboard.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.operations-dashboard.outputs.execution-artifact-digest }}"},{"artifact_name":"delivery-simulation-results","artifact_id":"${{ needs.delivery-simulation.outputs.artifact-id }}","artifact_digest":"${{ needs.delivery-simulation.outputs.artifact-digest }}"},{"artifact_name":"rel000-execution-infrastructure","artifact_id":"${{ needs.infrastructure.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.infrastructure.outputs.execution-artifact-digest }}"},{"artifact_name":"ops002-backup-restore-results","artifact_id":"${{ needs.backup-restore.outputs.artifact-id }}","artifact_digest":"${{ needs.backup-restore.outputs.artifact-digest }}"}]
       REL000_OPS001_ARTIFACT_NAME: delivery-simulation-results
       REL000_OPS001_ARTIFACT_ID: ${{ needs.delivery-simulation.outputs.artifact-id }}
       REL000_OPS001_ARTIFACT_DIGEST: ${{ needs.delivery-simulation.outputs.artifact-digest }}
@@ -1140,6 +1397,19 @@ jobs:
         with:
           name: ops002-backup-restore-results
           path: ${{ runner.temp }}/rel000-ops002
+
+      - name: Download current structured execution artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: rel000-execution-*
+          path: ${{ runner.temp }}/rel000-executions
+
+      - name: Correlate current-attempt execution artifact IDs and digests
+        run: >-
+          python ./tools/rel-000/rel000.py materialize-execution-artifacts
+          --artifacts-json "$REL000_EXECUTION_ARTIFACT_OUTPUTS_JSON"
+          --output "$RUNNER_TEMP/rel000-execution-artifacts.json"
+          --workflow-run-id "$GITHUB_RUN_ID"
 
       - name: Consult and sanitize open Issue 5
         env:
@@ -1223,6 +1493,8 @@ jobs:
           REL000_SECURITY_TRACKING_ISSUE_PATH: ${{ runner.temp }}/rel000-security-tracking.json
           REL000_BASE_AUDIT_PATH: ${{ runner.temp }}/rel000-base-audit.json
           REL000_BRANCH_AUDIT_PATH: ${{ runner.temp }}/rel000-branch-audit.json
+          REL000_EXECUTION_RESULTS_DIRECTORY: ${{ runner.temp }}
+          REL000_EXECUTION_ARTIFACTS_PATH: ${{ runner.temp }}/rel000-execution-artifacts.json
         run: ./tools/test-rel-000-internal-release.ps1 -CI
 
       - name: Publish only redacted REL-000 evidence
@@ -1243,6 +1515,7 @@ jobs:
           foreach ($path in @(
             (Join-Path $env:RUNNER_TEMP "rel000-ops001"),
             (Join-Path $env:RUNNER_TEMP "rel000-ops002"),
+            (Join-Path $env:RUNNER_TEMP "rel000-executions"),
             (Join-Path $env:RUNNER_TEMP "rel000-base-source"),
             (Join-Path $env:RUNNER_TEMP "rel000-output")
           )) {
@@ -1264,7 +1537,8 @@ jobs:
             "rel000-base-audit-raw.json",
             "rel000-base-audit.json",
             "rel000-branch-audit-raw.json",
-            "rel000-branch-audit.json"
+            "rel000-branch-audit.json",
+            "rel000-execution-artifacts.json"
           )) {
             $path = Join-Path $env:RUNNER_TEMP $name
             if (Test-Path -LiteralPath $path -PathType Leaf) {

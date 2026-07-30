@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
+import glob
 import hashlib
 import json
 import os
@@ -20,6 +21,7 @@ from typing import Any, Callable, Iterable
 
 FORMAT_VERSION = "paquetenvia-rel000-v1"
 SOURCE_PROVENANCE_VERSION = "paquetenvia-rel000-source-v1"
+EXECUTION_EVIDENCE_VERSION = "paquetenvia-rel000-execution-v2"
 EXPECTED_MVP0_P0_COUNT = 30
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
 REQUIRED_JOBS = {
@@ -27,6 +29,18 @@ REQUIRED_JOBS = {
     "dotnet",
     "runtime-contracts",
     "web",
+    "realtime-e2e",
+    "outbox-signalr-delivery",
+    "driver-stops-pwa",
+    "public-tracking",
+    "operations-dashboard",
+    "delivery-simulation",
+    "infrastructure",
+    "backup-restore",
+}
+EXECUTION_EVIDENCE_JOBS = {
+    "dotnet",
+    "runtime-contracts",
     "realtime-e2e",
     "outbox-signalr-delivery",
     "driver-stops-pwa",
@@ -200,6 +214,205 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def normalized_sha256(value: str, reason_code: str, field: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized.startswith("sha256:"):
+        normalized = normalized[7:]
+    if not SHA256.fullmatch(normalized):
+        fail(reason_code, f"{field} must be a SHA-256 digest.", field=field)
+    return normalized
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def parse_trx_results(
+    path: Path,
+    job: str,
+    project: str,
+    category_override: str | None = None,
+) -> list[dict[str, Any]]:
+    if not path.is_file() or path.stat().st_size == 0:
+        fail("EXECUTION_TRX_EMPTY", "A required TRX is absent or empty.", path=str(path))
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as exc:
+        fail("EXECUTION_TRX_MALFORMED", "A required TRX is malformed.", error=str(exc))
+
+    definitions: dict[str, tuple[str, list[str]]] = {}
+    for unit_test in root.iter():
+        if _xml_local_name(unit_test.tag) != "UnitTest":
+            continue
+        test_id = unit_test.attrib.get("id", "")
+        method = next(
+            (
+                node
+                for node in unit_test.iter()
+                if _xml_local_name(node.tag) == "TestMethod"
+            ),
+            None,
+        )
+        if method is None:
+            continue
+        class_name = method.attrib.get("className", "").split(",", 1)[0]
+        method_name = method.attrib.get("name", "")
+        fully_qualified = ".".join(part for part in (class_name, method_name) if part)
+        categories = sorted(
+            {
+                node.attrib.get("TestCategory", "")
+                for node in unit_test.iter()
+                if _xml_local_name(node.tag) == "TestCategoryItem"
+                and node.attrib.get("TestCategory")
+            }
+        )
+        definitions[test_id] = (fully_qualified, categories)
+
+    digest = sha256_file(path)
+    results: list[dict[str, Any]] = []
+    for node in root.iter():
+        if _xml_local_name(node.tag) != "UnitTestResult":
+            continue
+        outcome_raw = node.attrib.get("outcome", "")
+        outcome = {
+            "Passed": "PASSED",
+            "Failed": "FAILED",
+            "NotExecuted": "NOT_EXECUTED",
+        }.get(outcome_raw, outcome_raw.upper() or "UNKNOWN")
+        test_id = node.attrib.get("testId", "")
+        defined_name, categories = definitions.get(test_id, ("", []))
+        fully_qualified = defined_name or node.attrib.get("testName", "")
+        if not fully_qualified:
+            fail("EXECUTION_TEST_IDENTITY_MISSING", "A TRX result has no stable test identity.")
+        resolved_project = project
+        if project == "auto":
+            project_by_namespace = {
+                "Paqueteria.ArchitectureTests.": "tests/Paqueteria.ArchitectureTests/Paqueteria.ArchitectureTests.csproj",
+                "Paqueteria.ContractTests.": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+                "Paqueteria.EndToEndTests.": "tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj",
+                "Paqueteria.IntegrationTests.": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+                "Paqueteria.UnitTests.": "tests/Paqueteria.UnitTests/Paqueteria.UnitTests.csproj",
+            }
+            resolved_project = next(
+                (
+                    mapped
+                    for prefix, mapped in project_by_namespace.items()
+                    if fully_qualified.startswith(prefix)
+                ),
+                "",
+            )
+            if not resolved_project:
+                fail(
+                    "EXECUTION_TEST_PROJECT_UNKNOWN",
+                    "A TRX test could not be mapped to its project.",
+                    test=fully_qualified,
+                )
+        duration = node.attrib.get("duration")
+        for category in ([category_override] if category_override else categories or ["Uncategorized"]):
+            results.append(
+                {
+                    "job": job,
+                    "test_project": resolved_project,
+                    "fully_qualified_test_name": fully_qualified,
+                    "category": category,
+                    "outcome": outcome,
+                    "executed": outcome not in {"NOT_EXECUTED", "SKIPPED"},
+                    "skipped": outcome in {"NOT_EXECUTED", "SKIPPED"},
+                    "duration": duration,
+                    "trx_or_result_digest": digest,
+                }
+            )
+    if not results:
+        fail("EXECUTION_TRX_EMPTY", "A required TRX contains no test results.", path=str(path))
+    return results
+
+
+def parse_junit_results(
+    path: Path,
+    job: str,
+    project: str,
+    category_override: str | None = None,
+) -> list[dict[str, Any]]:
+    if not path.is_file() or path.stat().st_size == 0:
+        fail("EXECUTION_RESULT_EMPTY", "A required JUnit result is absent or empty.")
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as exc:
+        fail("EXECUTION_RESULT_MALFORMED", "A required JUnit result is malformed.", error=str(exc))
+    digest = sha256_file(path)
+    results: list[dict[str, Any]] = []
+    for node in root.iter():
+        if _xml_local_name(node.tag) != "testcase":
+            continue
+        class_name = node.attrib.get("classname", "")
+        name = node.attrib.get("name", "")
+        identity = "::".join(part for part in (class_name, name) if part)
+        if not identity:
+            fail("EXECUTION_TEST_IDENTITY_MISSING", "A JUnit result has no stable test identity.")
+        children = {_xml_local_name(child.tag) for child in node}
+        skipped = "skipped" in children
+        failed = bool(children & {"failure", "error"})
+        outcome = "FAILED" if failed else "SKIPPED" if skipped else "PASSED"
+        results.append(
+            {
+                "job": job,
+                "test_project": project,
+                "fully_qualified_test_name": identity,
+                "category": category_override or "RealtimeE2E",
+                "outcome": outcome,
+                "executed": not skipped,
+                "skipped": skipped,
+                "duration": node.attrib.get("time"),
+                "trx_or_result_digest": digest,
+            }
+        )
+    if not results:
+        fail("EXECUTION_RESULT_EMPTY", "A required JUnit file contains no test cases.")
+    return results
+
+
+def parse_structured_results(
+    path: Path,
+    job: str,
+    project: str,
+    category_override: str | None = None,
+) -> list[dict[str, Any]]:
+    payload = load_json(path)
+    raw_tests = payload.get("tests") if isinstance(payload, dict) else None
+    if not isinstance(raw_tests, list) or not raw_tests:
+        fail("EXECUTION_RESULT_EMPTY", "A structured execution result contains no tests.")
+    digest = sha256_file(path)
+    results: list[dict[str, Any]] = []
+    for raw in raw_tests:
+        if not isinstance(raw, dict):
+            fail("EXECUTION_RESULT_MALFORMED", "A structured test result is malformed.")
+        outcome = str(raw.get("outcome") or "").upper()
+        identity = str(raw.get("fully_qualified_test_name") or "")
+        category = str(raw.get("category") or "")
+        if not identity or not category or outcome not in {
+            "PASSED",
+            "FAILED",
+            "SKIPPED",
+            "NOT_EXECUTED",
+        }:
+            fail("EXECUTION_RESULT_MALFORMED", "A structured test result is incomplete.")
+        skipped = outcome in {"SKIPPED", "NOT_EXECUTED"}
+        results.append(
+            {
+                "job": job,
+                "test_project": project,
+                "fully_qualified_test_name": identity,
+                "category": category,
+                "outcome": outcome,
+                "executed": not skipped,
+                "skipped": skipped,
+                "duration": raw.get("duration"),
+                "trx_or_result_digest": digest,
+            }
+        )
+    return results
 
 
 def run_git(repository_root: Path, *arguments: str, allow_failure: bool = False) -> str:
@@ -398,6 +611,8 @@ def validate_item_evidence(
     all_items: dict[str, dict[str, Any]],
     raw_evidence: dict[str, Any],
     base_main_sha: str,
+    job_results: dict[str, str],
+    execution_results: list[dict[str, Any]],
     ancestor_checker: Callable[[Path, str, str], bool] = git_is_ancestor,
 ) -> dict[str, Any]:
     entries = raw_evidence.get("items")
@@ -452,6 +667,7 @@ def validate_item_evidence(
         paths = entry.get("implementation_paths") or []
         tests = entry.get("required_test_sources") or []
         jobs = entry.get("authoritative_ci_jobs") or []
+        required_tests = entry.get("required_tests") or []
         refs = entry.get("implementation_commits_or_prs") or []
         rollback_reference = entry.get("rollback_reference")
         for relative in paths:
@@ -463,11 +679,86 @@ def validate_item_evidence(
             require_path(repository_root, rollback_path, "ROLLBACK_REFERENCE_NOT_FOUND")
 
         if status == "VERIFIED":
-            if not paths or not tests or not jobs or not refs or not rollback_reference:
+            if not paths or not tests or not jobs or not required_tests or not refs or not rollback_reference:
                 fail(
                     "VERIFIED_EVIDENCE_INCOMPLETE",
-                    "VERIFIED requires implementation, tests, CI and rollback evidence.",
+                    "VERIFIED requires implementation, executable tests, CI and rollback evidence.",
                     id=item_id,
+                )
+            unknown_jobs = sorted(set(jobs) - REQUIRED_JOBS)
+            if unknown_jobs:
+                fail(
+                    "AUTHORITATIVE_JOB_UNKNOWN",
+                    "A VERIFIED item cites a job outside the closed vocabulary.",
+                    id=item_id,
+                    jobs=unknown_jobs,
+                )
+            unsuccessful = {
+                job: job_results.get(job)
+                for job in jobs
+                if job_results.get(job) != "success"
+            }
+            if unsuccessful:
+                fail(
+                    "AUTHORITATIVE_ITEM_JOB_FAILED",
+                    "A VERIFIED item cites a job that did not succeed.",
+                    id=item_id,
+                    jobs=unsuccessful,
+                )
+            required_sources = [required.get("source_path") for required in required_tests]
+            if sorted(required_sources) != sorted(tests):
+                fail(
+                    "REQUIRED_TEST_SOURCE_UNBOUND",
+                    "Every required test source must have one executable identity.",
+                    id=item_id,
+                )
+            required_jobs = {required.get("job") for required in required_tests}
+            unrelated_jobs = sorted(set(jobs) - required_jobs)
+            if unrelated_jobs:
+                fail(
+                    "AUTHORITATIVE_JOB_UNRELATED",
+                    "Every authoritative job must execute evidence required by the item.",
+                    id=item_id,
+                    jobs=unrelated_jobs,
+                )
+            matched_tests = []
+            for required in required_tests:
+                if required.get("job") not in jobs:
+                    fail(
+                        "REQUIRED_TEST_JOB_MISMATCH",
+                        "A required test belongs to a job not cited by the item.",
+                        id=item_id,
+                    )
+                require_path(
+                    repository_root,
+                    str(required.get("source_path") or ""),
+                    "TEST_SOURCE_NOT_FOUND",
+                )
+                matched = match_execution_result(
+                    execution_results,
+                    required,
+                    context=f"item:{item_id}",
+                )
+                matched_tests.append(
+                    {
+                        "job": matched["job"],
+                        "test_project": matched["test_project"],
+                        "fully_qualified_test_name": matched[
+                            "fully_qualified_test_name"
+                        ],
+                        "category": matched["category"],
+                        "outcome": matched["outcome"],
+                        "executed": matched["executed"],
+                        "skipped": matched["skipped"],
+                        "trx_or_result_digest": matched["trx_or_result_digest"],
+                        "artifact_id": matched["artifact_id"],
+                        "artifact_digest": matched["artifact_digest"],
+                        "source_head_sha": matched["source_head_sha"],
+                        "tested_git_sha": matched["tested_git_sha"],
+                        "base_main_sha": matched["base_main_sha"],
+                        "workflow_run_id": matched["workflow_run_id"],
+                        "workflow_run_attempt": matched["workflow_run_attempt"],
+                    }
                 )
             for ref in refs:
                 normalized_ref = validate_sha(
@@ -519,6 +810,7 @@ def validate_item_evidence(
                 "implementation_commits_or_prs": refs,
                 "implementation_paths": paths,
                 "required_test_sources": tests,
+                "required_tests": matched_tests if status == "VERIFIED" else [],
                 "authoritative_ci_jobs": jobs,
                 "rollback_reference": rollback_reference,
                 "known_limitations": entry.get("known_limitations") or [],
@@ -567,6 +859,7 @@ def validate_cross_tenant(
     repository_root: Path,
     raw_manifest: dict[str, Any],
     job_results: dict[str, str],
+    execution_results: list[dict[str, Any]],
 ) -> dict[str, Any]:
     sources = raw_manifest.get("sources")
     if not isinstance(sources, list):
@@ -590,8 +883,15 @@ def validate_cross_tenant(
             categories=unknown,
         )
     output_sources = []
+    result_owners: dict[tuple[str, str, str, str], tuple[str, str]] = {}
     for source in sources:
         job = source.get("job")
+        if job not in REQUIRED_JOBS:
+            fail(
+                "CROSS_TENANT_JOB_UNKNOWN",
+                "A cross-tenant source cites a job outside the closed vocabulary.",
+                evidence_id=source["evidence_id"],
+            )
         result = job_results.get(job)
         if result == "skipped":
             fail(
@@ -624,25 +924,69 @@ def validate_cross_tenant(
                 "Every required cross-tenant source must require presence.",
                 evidence_id=source["evidence_id"],
             )
+        required = {
+            "job": job,
+            "test_project": source.get("test_project"),
+            "fully_qualified_test_name": source.get("fully_qualified_test_name"),
+            "category": source.get("category"),
+        }
+        matched = match_execution_result(
+            execution_results,
+            required,
+            context=f"cross_tenant:{source['evidence_id']}",
+        )
+        result_key = tuple(required[field] for field in (
+            "job",
+            "test_project",
+            "fully_qualified_test_name",
+            "category",
+        ))
+        justification = str(source.get("shared_execution_justification") or "")
+        if result_key in result_owners:
+            previous_id, previous_justification = result_owners[result_key]
+            if not justification or not previous_justification:
+                fail(
+                    "CROSS_TENANT_RESULT_REUSED",
+                    "One execution result cannot compensate for two sources without justification.",
+                    evidence_ids=[previous_id, source["evidence_id"]],
+                )
+        else:
+            result_owners[result_key] = (source["evidence_id"], justification)
         output_sources.append(
             {
                 "evidence_id": source["evidence_id"],
                 "job": job,
-                "test_project": source["test_project"],
-                "category_or_filter": source["category_or_filter"],
-                "expected_presence": True,
-                "result": "PASSED",
+                "test_project": matched["test_project"],
+                "fully_qualified_test_name": matched["fully_qualified_test_name"],
+                "category": matched["category"],
+                "outcome": matched["outcome"],
+                "executed": matched["executed"],
+                "skipped": matched["skipped"],
+                "duration": matched.get("duration"),
+                "trx_or_result_digest": matched["trx_or_result_digest"],
+                "artifact_id": matched["artifact_id"],
+                "artifact_digest": matched["artifact_digest"],
+                "content_digest": matched["content_digest"],
+                "source_head_sha": matched["source_head_sha"],
+                "tested_git_sha": matched["tested_git_sha"],
+                "base_main_sha": matched["base_main_sha"],
+                "workflow_run_id": matched["workflow_run_id"],
+                "workflow_run_attempt": matched["workflow_run_attempt"],
             }
         )
+    executed = sum(source["executed"] is True for source in output_sources)
+    passed = sum(source["outcome"] == "PASSED" for source in output_sources)
+    failed = sum(source["outcome"] == "FAILED" for source in output_sources)
+    skipped = sum(source["skipped"] is True for source in output_sources)
     return {
         "format_version": FORMAT_VERSION,
         "cross_tenant_sources_expected": len(REQUIRED_CROSS_TENANT_CATEGORIES),
-        "cross_tenant_sources_executed": len(output_sources),
-        "cross_tenant_sources_passed": len(output_sources),
-        "cross_tenant_sources_missing": 0,
-        "cross_tenant_sources_failed": 0,
-        "cross_tenant_sources_skipped": 0,
-        "cross_tenant_incidents_observed": 0,
+        "cross_tenant_sources_executed": executed,
+        "cross_tenant_sources_passed": passed,
+        "cross_tenant_sources_missing": len(REQUIRED_CROSS_TENANT_CATEGORIES) - len(output_sources),
+        "cross_tenant_sources_failed": failed,
+        "cross_tenant_sources_skipped": skipped,
+        "cross_tenant_incidents_observed": failed,
         "sources": sorted(output_sources, key=lambda source: source["evidence_id"]),
     }
 
@@ -778,6 +1122,455 @@ def validate_artifact(
         "content_digest": expected_content_digest,
         "files": sorted(seen),
     }
+
+
+def _parse_result_spec(value: str) -> tuple[str, str | None, str]:
+    identity, separator, raw_path = str(value).partition("=")
+    project, category_separator, category = identity.partition("|")
+    if not separator or not project or not raw_path or (category_separator and not category):
+        fail(
+            "EXECUTION_RESULT_SPEC_INVALID",
+            "Execution result inputs must use project=path.",
+        )
+    return project, category if category_separator else None, raw_path
+
+
+def collect_execution_results(args: argparse.Namespace) -> dict[str, Any]:
+    output = args.output.resolve()
+    artifact_root = output.parent
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    if output.exists():
+        fail("EXECUTION_MANIFEST_EXISTS", "Execution evidence cannot overwrite a manifest.")
+
+    tests: list[dict[str, Any]] = []
+    result_files: list[dict[str, Any]] = []
+    parsers = (
+        (args.trx or [], parse_trx_results),
+        (args.junit or [], parse_junit_results),
+        (args.structured or [], parse_structured_results),
+    )
+    for specs, parser in parsers:
+        for spec in specs:
+            project, category_override, raw_pattern = _parse_result_spec(spec)
+            matched_paths = [Path(value).resolve() for value in glob.glob(raw_pattern)]
+            if not matched_paths:
+                fail(
+                    "EXECUTION_RESULT_PATH_INVALID",
+                    "An execution result pattern matched no files.",
+                    pattern=raw_pattern,
+                )
+            for source in matched_paths:
+                try:
+                    relative = source.relative_to(artifact_root).as_posix()
+                except ValueError:
+                    fail(
+                        "EXECUTION_RESULT_PATH_INVALID",
+                        "Execution results must be inside the uploaded artifact root.",
+                    )
+                safe_artifact_relative_path(relative)
+                if source.is_symlink() or not source.is_file():
+                    fail(
+                        "EXECUTION_RESULT_PATH_INVALID",
+                        "Execution result inputs must be regular files.",
+                        path=relative,
+                    )
+                tests.extend(parser(source, args.job, project, category_override))
+                result_files.append(
+                    {
+                        "path": relative,
+                        "bytes": source.stat().st_size,
+                        "sha256": sha256_file(source),
+                    }
+                )
+    if not result_files or not tests:
+        fail("EXECUTION_RESULT_EMPTY", "No structured execution evidence was collected.")
+
+    seen_outcomes: dict[tuple[str, str, str, str], str] = {}
+    for result in tests:
+        key = (
+            result["job"],
+            result["test_project"],
+            result["fully_qualified_test_name"],
+            result["category"],
+        )
+        previous = seen_outcomes.get(key)
+        if previous is not None and previous != result["outcome"]:
+            fail(
+                "EXECUTION_RESULT_CONTRADICTORY",
+                "Duplicate test results have contradictory outcomes.",
+                job=result["job"],
+                test=result["fully_qualified_test_name"],
+            )
+        seen_outcomes[key] = result["outcome"]
+
+    manifest = {
+        "format_version": EXECUTION_EVIDENCE_VERSION,
+        "artifact_name": args.artifact_name,
+        "job": args.job,
+        "workflow_run_id": str(args.workflow_run_id),
+        "workflow_run_attempt": str(args.workflow_run_attempt),
+        "source_head_sha": validate_sha(
+            args.source_head_sha, "SOURCE_HEAD_SHA_MALFORMED", "source_head_sha"
+        ),
+        "tested_git_sha": validate_sha(
+            args.tested_git_sha, "TESTED_GIT_SHA_MALFORMED", "tested_git_sha"
+        ),
+        "base_main_sha": validate_sha(
+            args.base_main_sha, "BASE_MAIN_SHA_MALFORMED", "base_main_sha"
+        ),
+        "result_files": sorted(result_files, key=lambda entry: entry["path"]),
+        "content_digest": canonical_content_digest(result_files),
+        "tests": tests,
+    }
+    write_json(output, manifest)
+    return manifest
+
+
+def sanitize_execution_artifacts(
+    input_path: Path,
+    output_path: Path,
+    workflow_run_id: str,
+) -> None:
+    payload = load_json(input_path)
+    artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+    if not isinstance(artifacts, list):
+        fail("EXECUTION_ARTIFACT_METADATA_INVALID", "GitHub artifact metadata is invalid.")
+    sanitized: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        name = str(artifact.get("name") or "")
+        if not (
+            name.startswith("rel000-execution-")
+            or name in {"delivery-simulation-results", "ops002-backup-restore-results"}
+        ):
+            continue
+        digest = normalized_sha256(
+            str(artifact.get("digest") or ""),
+            "EXECUTION_ARTIFACT_DIGEST_INVALID",
+            "artifact_digest",
+        )
+        artifact_id = artifact.get("id")
+        if not isinstance(artifact_id, int) or artifact_id <= 0:
+            fail("EXECUTION_ARTIFACT_ID_INVALID", "An execution artifact ID is invalid.")
+        if artifact.get("expired") is True:
+            fail("EXECUTION_ARTIFACT_EXPIRED", "A current execution artifact is expired.")
+        run = artifact.get("workflow_run") or {}
+        if str(run.get("id") or "") != str(workflow_run_id):
+            fail("EXECUTION_ARTIFACT_RUN_MISMATCH", "Execution artifact metadata is stale.")
+        sanitized.append(
+            {
+                "artifact_id": artifact_id,
+                "artifact_name": name,
+                "artifact_digest": digest,
+                "workflow_run_id": str(workflow_run_id),
+            }
+        )
+    names = [entry["artifact_name"] for entry in sanitized]
+    if len(names) != len(set(names)):
+        fail("EXECUTION_ARTIFACT_DUPLICATED", "Execution artifact names are duplicated.")
+    write_json(output_path, {"artifacts": sorted(sanitized, key=lambda entry: entry["artifact_name"])})
+
+
+def materialize_execution_artifacts(
+    raw_json: str,
+    output_path: Path,
+    workflow_run_id: str,
+) -> None:
+    try:
+        entries = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        fail("EXECUTION_ARTIFACT_METADATA_INVALID", "Artifact output JSON is invalid.", error=str(exc))
+    if not isinstance(entries, list) or not entries:
+        fail("EXECUTION_ARTIFACT_METADATA_INVALID", "Artifact output JSON must be a list.")
+    sanitized = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            fail("EXECUTION_ARTIFACT_METADATA_INVALID", "An artifact output is malformed.")
+        artifact_id = str(entry.get("artifact_id") or "")
+        if not artifact_id.isdigit() or int(artifact_id) <= 0:
+            fail("EXECUTION_ARTIFACT_ID_INVALID", "An execution artifact ID is invalid.")
+        artifact_name = str(entry.get("artifact_name") or "")
+        if not artifact_name:
+            fail("EXECUTION_ARTIFACT_METADATA_INVALID", "An execution artifact name is absent.")
+        sanitized.append(
+            {
+                "artifact_id": int(artifact_id),
+                "artifact_name": artifact_name,
+                "artifact_digest": normalized_sha256(
+                    str(entry.get("artifact_digest") or ""),
+                    "EXECUTION_ARTIFACT_DIGEST_INVALID",
+                    "artifact_digest",
+                ),
+                "workflow_run_id": str(workflow_run_id),
+            }
+        )
+    names = [entry["artifact_name"] for entry in sanitized]
+    if len(names) != len(set(names)):
+        fail("EXECUTION_ARTIFACT_DUPLICATED", "Execution artifact names are duplicated.")
+    write_json(output_path, {"artifacts": sorted(sanitized, key=lambda item: item["artifact_name"])})
+
+
+def synthetic_generation(args: argparse.Namespace) -> None:
+    if os.environ.get("REL000_TEST_MODE") != "true":
+        fail("SYNTHETIC_MODE_FORBIDDEN", "Synthetic generation is restricted to REL-000 tests.")
+    scenario = args.scenario
+    if scenario == "artifact-other-sha":
+        fail("EXECUTION_RESULT_SHA_MISMATCH", "Synthetic artifact belongs to another SHA.")
+    if scenario == "artifact-other-run":
+        fail("EXECUTION_RESULT_RUN_MISMATCH", "Synthetic artifact belongs to another run.")
+    output = args.output.resolve()
+    assert_output_is_fresh(output)
+    output.mkdir(parents=False, exist_ok=False)
+    names = sorted(OUTPUT_FILES)
+    for index, name in enumerate(names):
+        write_json(
+            output / name,
+            {
+                "format_version": FORMAT_VERSION,
+                "synthetic": True,
+                "sequence": index,
+            },
+        )
+        if scenario == "cancel-after-first-json" and index == 0:
+            fail("GENERATION_CANCELLED", "Synthetic generation cancelled after the first JSON.")
+    if scenario == "manifest-incomplete":
+        (output / names[-1]).unlink()
+
+
+def load_execution_evidence(
+    directory: Path,
+    artifact_metadata_path: Path,
+    trace: dict[str, str],
+    workflow_run_id: str,
+    workflow_run_attempt: str,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    if not directory.is_dir():
+        fail("EXECUTION_ARTIFACT_MISSING", "The execution artifact directory is absent.")
+    metadata_payload = load_json(artifact_metadata_path)
+    metadata_entries = metadata_payload.get("artifacts") if isinstance(metadata_payload, dict) else None
+    if not isinstance(metadata_entries, list):
+        fail("EXECUTION_ARTIFACT_METADATA_INVALID", "Execution artifact metadata is invalid.")
+    metadata = {
+        str(entry.get("artifact_name")): entry
+        for entry in metadata_entries
+        if isinstance(entry, dict)
+    }
+
+    manifests = list(directory.rglob("rel000-execution-results.json"))
+    if not manifests:
+        fail("EXECUTION_ARTIFACT_MISSING", "No execution manifests were downloaded.")
+    tests: list[dict[str, Any]] = []
+    artifacts_by_job: dict[str, dict[str, Any]] = {}
+    observed_outcomes: dict[tuple[str, str, str, str], str] = {}
+    for manifest_path in manifests:
+        if manifest_path.is_symlink():
+            fail("EXECUTION_RESULT_PATH_INVALID", "Execution manifests cannot be links.")
+        manifest = load_json(manifest_path)
+        expected_fields = {
+            "format_version": EXECUTION_EVIDENCE_VERSION,
+            "workflow_run_id": str(workflow_run_id),
+            "workflow_run_attempt": str(workflow_run_attempt),
+            "source_head_sha": trace["source_head_sha"],
+            "tested_git_sha": trace["tested_git_sha"],
+            "base_main_sha": trace["base_main_sha"],
+        }
+        for field, expected in expected_fields.items():
+            if str(manifest.get(field)) != str(expected):
+                reason = (
+                    "EXECUTION_RESULT_RUN_MISMATCH"
+                    if field.startswith("workflow_run")
+                    else "EXECUTION_RESULT_SHA_MISMATCH"
+                )
+                fail(reason, "Execution evidence is not from the current run.", field=field)
+        job = str(manifest.get("job") or "")
+        artifact_name = str(manifest.get("artifact_name") or "")
+        if job not in EXECUTION_EVIDENCE_JOBS or job in artifacts_by_job:
+            fail("EXECUTION_JOB_INVALID", "Execution evidence has an unknown or duplicate job.", job=job)
+        artifact = metadata.get(artifact_name)
+        if artifact is None:
+            fail(
+                "EXECUTION_ARTIFACT_METADATA_MISSING",
+                "Execution artifact metadata is absent.",
+                artifact=artifact_name,
+            )
+        if str(artifact.get("workflow_run_id")) != str(workflow_run_id):
+            fail("EXECUTION_ARTIFACT_RUN_MISMATCH", "Execution artifact metadata is stale.")
+        artifact_id = artifact.get("artifact_id")
+        if not isinstance(artifact_id, int) or artifact_id <= 0:
+            fail("EXECUTION_ARTIFACT_ID_INVALID", "Execution artifact ID is invalid.")
+        artifact_digest = normalized_sha256(
+            str(artifact.get("artifact_digest") or ""),
+            "EXECUTION_ARTIFACT_DIGEST_INVALID",
+            "artifact_digest",
+        )
+
+        files = manifest.get("result_files")
+        if not isinstance(files, list) or not files:
+            fail("EXECUTION_RESULT_EMPTY", "Execution evidence has no result files.")
+        artifact_root = manifest_path.parent
+        for entry in files:
+            relative = str(entry.get("path") or "")
+            target = artifact_root / safe_artifact_relative_path(relative)
+            if target.is_symlink() or not target.is_file():
+                fail("EXECUTION_RESULT_FILE_MISSING", "An execution result file is absent.")
+            if target.stat().st_size != int(entry.get("bytes", -1)):
+                fail("EXECUTION_RESULT_FILE_SIZE_MISMATCH", "Execution result size changed.")
+            if sha256_file(target) != entry.get("sha256"):
+                fail("EXECUTION_RESULT_FILE_DIGEST_MISMATCH", "Execution result digest changed.")
+        content_digest = canonical_content_digest(files)
+        if manifest.get("content_digest") != content_digest:
+            fail("EXECUTION_CONTENT_DIGEST_MISMATCH", "Execution content digest is invalid.")
+
+        raw_tests = manifest.get("tests")
+        if not isinstance(raw_tests, list) or not raw_tests:
+            fail("EXECUTION_RESULT_EMPTY", "Execution evidence contains no tests.")
+        for result in raw_tests:
+            required = (
+                "job",
+                "test_project",
+                "fully_qualified_test_name",
+                "category",
+                "outcome",
+                "executed",
+                "skipped",
+                "trx_or_result_digest",
+            )
+            if not isinstance(result, dict) or any(key not in result for key in required):
+                fail("EXECUTION_RESULT_MALFORMED", "An execution result is incomplete.")
+            if result["job"] != job:
+                fail("EXECUTION_JOB_INVALID", "A test result belongs to another job.")
+            normalized_result_digest = normalized_sha256(
+                str(result["trx_or_result_digest"]),
+                "EXECUTION_RESULT_DIGEST_INVALID",
+                "trx_or_result_digest",
+            )
+            if normalized_result_digest not in {entry.get("sha256") for entry in files}:
+                fail(
+                    "EXECUTION_RESULT_DIGEST_MISMATCH",
+                    "A test result is not backed by a declared result file.",
+                )
+            enriched = {
+                **result,
+                "trx_or_result_digest": normalized_result_digest,
+                "artifact_id": artifact_id,
+                "artifact_name": artifact_name,
+                "artifact_digest": artifact_digest,
+                "content_digest": content_digest,
+                "source_head_sha": trace["source_head_sha"],
+                "tested_git_sha": trace["tested_git_sha"],
+                "base_main_sha": trace["base_main_sha"],
+                "workflow_run_id": str(workflow_run_id),
+                "workflow_run_attempt": str(workflow_run_attempt),
+            }
+            validate_execution_context(
+                enriched,
+                trace,
+                workflow_run_id,
+                workflow_run_attempt,
+            )
+            key = (
+                enriched["job"],
+                enriched["test_project"],
+                enriched["fully_qualified_test_name"],
+                enriched["category"],
+            )
+            prior = observed_outcomes.get(key)
+            if prior is not None and prior != enriched["outcome"]:
+                fail(
+                    "EXECUTION_RESULT_CONTRADICTORY",
+                    "Duplicate execution results have contradictory outcomes.",
+                    job=job,
+                    test=enriched["fully_qualified_test_name"],
+                )
+            observed_outcomes[key] = enriched["outcome"]
+            tests.append(enriched)
+        artifacts_by_job[job] = {
+            "artifact_id": artifact_id,
+            "artifact_name": artifact_name,
+            "artifact_digest": artifact_digest,
+            "content_digest": content_digest,
+            "source_head_sha": trace["source_head_sha"],
+            "tested_git_sha": trace["tested_git_sha"],
+            "base_main_sha": trace["base_main_sha"],
+            "workflow_run_id": str(workflow_run_id),
+            "workflow_run_attempt": str(workflow_run_attempt),
+        }
+
+    missing_jobs = sorted(EXECUTION_EVIDENCE_JOBS - set(artifacts_by_job))
+    if missing_jobs:
+        fail(
+            "EXECUTION_ARTIFACT_MISSING",
+            "Required jobs did not publish structured execution evidence.",
+            jobs=missing_jobs,
+        )
+    return tests, artifacts_by_job
+
+
+def match_execution_result(
+    execution_results: list[dict[str, Any]],
+    required: dict[str, Any],
+    *,
+    context: str,
+) -> dict[str, Any]:
+    identity_fields = (
+        "job",
+        "test_project",
+        "fully_qualified_test_name",
+        "category",
+    )
+    if any(not required.get(field) for field in identity_fields):
+        fail("REQUIRED_TEST_IDENTITY_INVALID", "Required test identity is incomplete.", context=context)
+    matches = [
+        result
+        for result in execution_results
+        if all(result.get(field) == required.get(field) for field in identity_fields)
+    ]
+    if not matches:
+        fail(
+            "REQUIRED_TEST_RESULT_MISSING",
+            "A required test did not execute in the declared job and project.",
+            context=context,
+            test=required.get("fully_qualified_test_name"),
+        )
+    outcomes = {result.get("outcome") for result in matches}
+    if len(outcomes) != 1:
+        fail(
+            "EXECUTION_RESULT_CONTRADICTORY",
+            "A required test has contradictory outcomes.",
+            context=context,
+        )
+    result = matches[0]
+    if result.get("skipped") is True or result.get("executed") is not True:
+        fail("REQUIRED_TEST_SKIPPED", "A required test was skipped or not executed.", context=context)
+    if result.get("outcome") != "PASSED":
+        fail("REQUIRED_TEST_FAILED", "A required test did not pass.", context=context)
+    return result
+
+
+def validate_execution_context(
+    result: dict[str, Any],
+    trace: dict[str, str],
+    workflow_run_id: str,
+    workflow_run_attempt: str,
+) -> None:
+    expected = {
+        "source_head_sha": trace["source_head_sha"],
+        "tested_git_sha": trace["tested_git_sha"],
+        **(
+            {"base_main_sha": trace["base_main_sha"]}
+            if "base_main_sha" in trace
+            else {}
+        ),
+        "workflow_run_id": str(workflow_run_id),
+        "workflow_run_attempt": str(workflow_run_attempt),
+    }
+    for field, value in expected.items():
+        if str(result.get(field)) != str(value):
+            reason = (
+                "EXECUTION_RESULT_RUN_MISMATCH"
+                if field.startswith("workflow_run")
+                else "EXECUTION_RESULT_SHA_MISMATCH"
+            )
+            fail(reason, "A test result is stale.", field=field)
 
 
 def find_one(directory: Path, pattern: str, reason_code: str) -> Path:
@@ -962,7 +1755,35 @@ def validate_rollback(
     repository_root: Path,
     raw_manifest: dict[str, Any],
     selected: list[dict[str, Any]],
+    rollback_execution: dict[str, Any],
 ) -> dict[str, Any]:
+    required_execution_fields = (
+        "rollback_scenarios_expected",
+        "rollback_scenarios_executed",
+        "rollback_scenarios_passed",
+        "rollback_scenarios_failed",
+        "rollback_cleanup_verified",
+        "foreign_targets_preserved",
+        "successful_report_after_failure",
+    )
+    if any(field not in rollback_execution for field in required_execution_fields):
+        fail("ROLLBACK_EXECUTION_INCOMPLETE", "Rollback execution evidence is incomplete.")
+    expected_scenarios = int(rollback_execution["rollback_scenarios_expected"])
+    executed_scenarios = int(rollback_execution["rollback_scenarios_executed"])
+    passed_scenarios = int(rollback_execution["rollback_scenarios_passed"])
+    failed_scenarios = int(rollback_execution["rollback_scenarios_failed"])
+    rollback_execution_passed = (
+        expected_scenarios > 0
+        and executed_scenarios == expected_scenarios
+        and passed_scenarios == expected_scenarios
+        and failed_scenarios == 0
+        and rollback_execution["rollback_cleanup_verified"] is True
+        and rollback_execution["foreign_targets_preserved"] is True
+        and rollback_execution["successful_report_after_failure"] is False
+    )
+    if not rollback_execution_passed:
+        fail("ROLLBACK_EXECUTION_FAILED", "The end-to-end rollback contract did not pass.")
+
     entries = raw_manifest.get("items")
     if not isinstance(entries, list):
         fail("ROLLBACK_MANIFEST_INVALID", "Rollback evidence must contain an items list.")
@@ -1006,6 +1827,11 @@ def validate_rollback(
                 "verification_command": command,
                 "test_evidence": test_evidence,
                 "status": status,
+                "rollback_reference_verified": True,
+                "rollback_execution_verified": (
+                    entry["owning_backlog_item"] == "REL-000"
+                    and rollback_execution_passed
+                ),
             }
         )
     verified = sum(entry["status"] == "VERIFIED" for entry in output)
@@ -1015,7 +1841,16 @@ def validate_rollback(
         "rollback_items_verified": verified,
         "rollback_items_blocked": len(output) - verified,
         "rollback_items_missing": 0,
-        "rollback_test_passed": True,
+        "rollback_scenarios_expected": expected_scenarios,
+        "rollback_scenarios_executed": executed_scenarios,
+        "rollback_scenarios_passed": passed_scenarios,
+        "rollback_scenarios_failed": failed_scenarios,
+        "rollback_cleanup_verified": rollback_execution["rollback_cleanup_verified"],
+        "foreign_targets_preserved": rollback_execution["foreign_targets_preserved"],
+        "successful_report_after_failure": rollback_execution[
+            "successful_report_after_failure"
+        ],
+        "rollback_test_passed": rollback_execution_passed,
         "items": sorted(output, key=lambda item: item["owning_backlog_item"]),
     }
 
@@ -1301,6 +2136,69 @@ def assert_redacted(value: Any) -> None:
             fail("REDACTION_FORBIDDEN_VALUE", "A report contains secret or identifier-shaped data.")
 
 
+def validate_focused_test_results(
+    python_results: dict[str, Any],
+    physical_results: dict[str, Any],
+) -> dict[str, int]:
+    python_fields = (
+        "python_tests_expected",
+        "python_tests_discovered",
+        "python_tests_executed",
+        "python_tests_passed",
+        "python_tests_failed",
+        "python_tests_skipped",
+    )
+    physical_fields = (
+        "physical_tests_expected",
+        "physical_tests_discovered",
+        "physical_tests_executed",
+        "physical_tests_passed",
+        "physical_tests_failed",
+        "physical_tests_skipped",
+    )
+    if any(field not in python_results for field in python_fields) or any(
+        field not in physical_results for field in physical_fields
+    ):
+        fail("REL000_FOCUSED_TEST_RESULT_INCOMPLETE", "Focused test results are incomplete.")
+    values = {
+        **{field: int(python_results[field]) for field in python_fields},
+        **{field: int(physical_results[field]) for field in physical_fields},
+    }
+    if (
+        values["python_tests_expected"] != values["python_tests_discovered"]
+        or values["python_tests_discovered"] != values["python_tests_executed"]
+        or values["python_tests_executed"] != values["python_tests_passed"]
+        or values["python_tests_failed"] != 0
+        or values["python_tests_skipped"] != 0
+        or values["physical_tests_expected"] != values["physical_tests_discovered"]
+        or values["physical_tests_discovered"] != values["physical_tests_executed"]
+        or values["physical_tests_executed"] != values["physical_tests_passed"]
+        or values["physical_tests_failed"] != 0
+        or values["physical_tests_skipped"] != 0
+    ):
+        fail("REL000_FOCUSED_TESTS_FAILED", "Focused test counts do not prove a complete pass.")
+    return {
+        "focused_tests_expected": (
+            values["python_tests_expected"] + values["physical_tests_expected"]
+        ),
+        "focused_tests_discovered": (
+            values["python_tests_discovered"] + values["physical_tests_discovered"]
+        ),
+        "focused_tests_executed": (
+            values["python_tests_executed"] + values["physical_tests_executed"]
+        ),
+        "focused_tests_passed": (
+            values["python_tests_passed"] + values["physical_tests_passed"]
+        ),
+        "focused_tests_failed": (
+            values["python_tests_failed"] + values["physical_tests_failed"]
+        ),
+        "focused_tests_skipped": (
+            values["python_tests_skipped"] + values["physical_tests_skipped"]
+        ),
+    }
+
+
 def release_report(
     trace: dict[str, str],
     workflow_run_id: str,
@@ -1314,6 +2212,7 @@ def release_report(
     decisions: dict[str, Any],
     security: dict[str, Any],
     artifacts: dict[str, dict[str, Any]],
+    focused_tests: dict[str, Any],
 ) -> dict[str, Any]:
     base_totals = security["base_totals"]
     branch_totals = security["branch_totals"]
@@ -1325,6 +2224,17 @@ def release_report(
         "workflow_run_id": str(workflow_run_id),
         "workflow_run_attempt": str(workflow_run_attempt),
         "generated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        **{
+            key: focused_tests[key]
+            for key in (
+                "focused_tests_expected",
+                "focused_tests_discovered",
+                "focused_tests_executed",
+                "focused_tests_passed",
+                "focused_tests_failed",
+                "focused_tests_skipped",
+            )
+        },
         **{
             key: normative_evidence[key]
             for key in (
@@ -1383,6 +2293,11 @@ def release_report(
                 "rollback_items_verified",
                 "rollback_items_missing",
                 "rollback_test_passed",
+                "rollback_scenarios_expected",
+                "rollback_scenarios_executed",
+                "rollback_scenarios_passed",
+                "rollback_scenarios_failed",
+                "rollback_cleanup_verified",
             )
         },
         "known_security_issues": security["known_security_issues"],
@@ -1513,19 +2428,40 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     selected, all_items = normative_items(normative)
     item_input = load_json(args.item_evidence)
     validate_extension_not_started(repository_root, item_input)
+    job_results = json.loads(args.job_results_json)
+    validate_jobs(job_results)
+    execution_results, execution_artifacts = load_execution_evidence(
+        args.execution_results_directory,
+        args.execution_artifacts,
+        trace,
+        args.workflow_run_id,
+        args.workflow_run_attempt,
+    )
     p0 = validate_item_evidence(
         repository_root,
         selected,
         all_items,
         item_input,
         trace["base_main_sha"],
+        job_results,
+        execution_results,
     )
-    job_results = json.loads(args.job_results_json)
-    validate_jobs(job_results)
     cross_tenant = validate_cross_tenant(
-        repository_root, load_json(args.cross_tenant_evidence), job_results
+        repository_root,
+        load_json(args.cross_tenant_evidence),
+        job_results,
+        execution_results,
     )
-    rollback = validate_rollback(repository_root, load_json(args.rollback_evidence), selected)
+    rollback = validate_rollback(
+        repository_root,
+        load_json(args.rollback_evidence),
+        selected,
+        load_json(args.rollback_execution),
+    )
+    focused_tests = validate_focused_test_results(
+        load_json(args.python_test_results),
+        load_json(args.physical_test_results),
+    )
     decisions = validate_decisions(normative["gates"])
     issue = load_json(args.issue5)
     additional_issue = load_json(args.security_tracking_issue)
@@ -1562,7 +2498,11 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     )
     ops001 = validate_ops001(args.ops001_directory)
     ops002, _ = validate_ops002(args.ops002_directory)
-    artifacts = {"ops001": ops001_artifact, "ops002": ops002_artifact}
+    artifacts = {
+        "ops001": ops001_artifact,
+        "ops002": ops002_artifact,
+        "execution": execution_artifacts,
+    }
     report = release_report(
         trace,
         args.workflow_run_id,
@@ -1576,6 +2516,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         decisions,
         security,
         artifacts,
+        focused_tests,
     )
     validate_owner_state(report)
     for document in (p0, cross_tenant, rollback, report):
@@ -1803,11 +2744,53 @@ def build_parser() -> argparse.ArgumentParser:
     issue.add_argument("--input", type=Path, required=True)
     issue.add_argument("--output", type=Path, required=True)
 
+    collect = subparsers.add_parser("collect-results")
+    collect.add_argument("--job", choices=sorted(EXECUTION_EVIDENCE_JOBS), required=True)
+    collect.add_argument("--artifact-name", required=True)
+    collect.add_argument("--workflow-run-id", required=True)
+    collect.add_argument("--workflow-run-attempt", required=True)
+    collect.add_argument("--source-head-sha", required=True)
+    collect.add_argument("--tested-git-sha", required=True)
+    collect.add_argument("--base-main-sha", required=True)
+    collect.add_argument("--trx", action="append")
+    collect.add_argument("--junit", action="append")
+    collect.add_argument("--structured", action="append")
+    collect.add_argument("--output", type=Path, required=True)
+
+    execution_artifacts = subparsers.add_parser("sanitize-execution-artifacts")
+    execution_artifacts.add_argument("--input", type=Path, required=True)
+    execution_artifacts.add_argument("--output", type=Path, required=True)
+    execution_artifacts.add_argument("--workflow-run-id", required=True)
+
+    artifact_outputs = subparsers.add_parser("materialize-execution-artifacts")
+    artifact_outputs.add_argument("--artifacts-json", required=True)
+    artifact_outputs.add_argument("--output", type=Path, required=True)
+    artifact_outputs.add_argument("--workflow-run-id", required=True)
+
+    synthetic = subparsers.add_parser("synthetic-generate")
+    synthetic.add_argument(
+        "--scenario",
+        choices=(
+            "success",
+            "cancel-after-first-json",
+            "artifact-other-sha",
+            "artifact-other-run",
+            "manifest-incomplete",
+        ),
+        required=True,
+    )
+    synthetic.add_argument("--output", type=Path, required=True)
+
     validate = subparsers.add_parser("validate")
     validate.add_argument("--repository-root", type=Path, required=True)
     validate.add_argument("--item-evidence", type=Path, required=True)
     validate.add_argument("--cross-tenant-evidence", type=Path, required=True)
     validate.add_argument("--rollback-evidence", type=Path, required=True)
+    validate.add_argument("--rollback-execution", type=Path, required=True)
+    validate.add_argument("--python-test-results", type=Path, required=True)
+    validate.add_argument("--physical-test-results", type=Path, required=True)
+    validate.add_argument("--execution-results-directory", type=Path, required=True)
+    validate.add_argument("--execution-artifacts", type=Path, required=True)
     validate.add_argument("--ops001-directory", type=Path, required=True)
     validate.add_argument("--ops002-directory", type=Path, required=True)
     validate.add_argument("--output-directory", type=Path, required=True)
@@ -1848,6 +2831,26 @@ def main() -> int:
             return 0
         if args.command == "sanitize-issue":
             sanitize_issue(args.input, args.output)
+            return 0
+        if args.command == "collect-results":
+            collect_execution_results(args)
+            return 0
+        if args.command == "sanitize-execution-artifacts":
+            sanitize_execution_artifacts(
+                args.input,
+                args.output,
+                args.workflow_run_id,
+            )
+            return 0
+        if args.command == "materialize-execution-artifacts":
+            materialize_execution_artifacts(
+                args.artifacts_json,
+                args.output,
+                args.workflow_run_id,
+            )
+            return 0
+        if args.command == "synthetic-generate":
+            synthetic_generation(args)
             return 0
         report = generate(args)
         print(
