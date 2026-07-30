@@ -22,7 +22,11 @@ param(
     [string] $Ops001ArtifactDigest = $env:REL000_OPS001_ARTIFACT_DIGEST,
     [string] $Ops002ArtifactName = $env:REL000_OPS002_ARTIFACT_NAME,
     [string] $Ops002ArtifactId = $env:REL000_OPS002_ARTIFACT_ID,
-    [string] $Ops002ArtifactDigest = $env:REL000_OPS002_ARTIFACT_DIGEST
+    [string] $Ops002ArtifactDigest = $env:REL000_OPS002_ARTIFACT_DIGEST,
+    [string] $ExecutionResultsDirectory = $env:REL000_EXECUTION_RESULTS_DIRECTORY,
+    [string] $ExecutionArtifactsPath = $env:REL000_EXECUTION_ARTIFACTS_PATH,
+    [string] $SyntheticRollbackScenario,
+    [string] $SyntheticRoot
 )
 
 Set-StrictMode -Version Latest
@@ -33,22 +37,123 @@ if ($null -eq (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 
+if (-not [string]::IsNullOrWhiteSpace($SyntheticRollbackScenario)) {
+    if ($env:REL000_TEST_MODE -cne "true") {
+        throw "REL000_SYNTHETIC_MODE_FORBIDDEN"
+    }
+    $syntheticRootPath = [System.IO.Path]::GetFullPath($SyntheticRoot)
+    if ([System.IO.Path]::GetFileName($syntheticRootPath) -notlike "paquetenvia-rel000-rollback-*") {
+        throw "REL000_SYNTHETIC_ROOT_INVALID"
+    }
+    $stagingPath = Join-Path $syntheticRootPath "staging"
+    $outputPath = Join-Path $syntheticRootPath "output"
+    $outputOwned = $false
+    try {
+        if ($SyntheticRollbackScenario -eq "cancel-before-output") {
+            throw "REL000_SYNTHETIC_CANCEL_BEFORE_OUTPUT"
+        }
+        if ($SyntheticRollbackScenario -eq "preexisting-output") {
+            [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $outputPath "preexisting.txt"), "preserve")
+        }
+        if (Test-Path -LiteralPath $outputPath) {
+            if ($SyntheticRollbackScenario -eq "preexisting-output") {
+                throw "REL000_STALE_REPORT_REUSED"
+            }
+            throw "REL000_SYNTHETIC_OUTPUT_UNEXPECTED"
+        }
+        [System.IO.Directory]::CreateDirectory($stagingPath) | Out-Null
+        if ($SyntheticRollbackScenario -eq "cancel-after-staging") {
+            throw "REL000_SYNTHETIC_CANCEL_AFTER_STAGING"
+        }
+        if ($SyntheticRollbackScenario -eq "staging-link-rejected") {
+            $foreignPath = Join-Path $syntheticRootPath "foreign"
+            $linkPath = Join-Path $stagingPath "linked-foreign"
+            $linkType = if ($IsWindows -or $env:OS -eq "Windows_NT") {
+                "Junction"
+            }
+            else {
+                "SymbolicLink"
+            }
+            New-Item -ItemType $linkType -Path $linkPath -Target $foreignPath | Out-Null
+            throw "REL000_STAGING_LINK_REJECTED"
+        }
+        $generatorScenario = switch ($SyntheticRollbackScenario) {
+            "artifact-other-sha" { "artifact-other-sha" }
+            "artifact-other-run" { "artifact-other-run" }
+            "manifest-incomplete" { "manifest-incomplete" }
+            "error-after-final-output" { "success" }
+            "no-success-after-failure" { "success" }
+            "output-partial-removed" { "success" }
+            default { "cancel-after-first-json" }
+        }
+        $generatedPath = Join-Path $stagingPath "generated"
+        & python (Join-Path $repositoryRoot "tools/rel-000/rel000.py") `
+            synthetic-generate `
+            --scenario $generatorScenario `
+            --output $generatedPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "REL000_SYNTHETIC_GENERATION_FAILED"
+        }
+        if ($SyntheticRollbackScenario -eq "manifest-incomplete") {
+            $generated = @(Get-ChildItem -LiteralPath $generatedPath -File)
+            if ($generated.Count -ne 4) {
+                throw "REL000_GENERATED_OUTPUT_INCOMPLETE"
+            }
+        }
+        [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
+        $outputOwned = $true
+        $first = Get-ChildItem -LiteralPath $generatedPath -File | Select-Object -First 1
+        [System.IO.File]::Copy($first.FullName, (Join-Path $outputPath $first.Name), $false)
+        throw "REL000_SYNTHETIC_ERROR_AFTER_FINAL_OUTPUT"
+    }
+    finally {
+        $link = Join-Path $stagingPath "linked-foreign"
+        if (Test-Path -LiteralPath $link) {
+            [System.IO.Directory]::Delete($link)
+        }
+        if ($outputOwned -and (Test-Path -LiteralPath $outputPath)) {
+            [System.IO.Directory]::Delete($outputPath, $true)
+        }
+        if (Test-Path -LiteralPath $stagingPath) {
+            [System.IO.Directory]::Delete($stagingPath, $true)
+        }
+    }
+}
+
 function Invoke-Rel000PythonTests {
-    & python (Join-Path $repositoryRoot "tools/rel-000/test_rel000.py")
+    param([Parameter(Mandatory)] [string] $OutputPath)
+    & python (Join-Path $repositoryRoot "tools/rel-000/run_focused_tests.py") `
+        --expected 63 `
+        --output $OutputPath
     if ($LASTEXITCODE -ne 0) {
         throw "REL000_PYTHON_FOCAL_TESTS_FAILED"
     }
 }
 
+$selfTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+    "paquetenvia-rel000-self-test-" + [Guid]::NewGuid().ToString("N"))
+[System.IO.Directory]::CreateDirectory($selfTestRoot) | Out-Null
+$pythonTestResultsPath = Join-Path $selfTestRoot "python-tests.json"
+$physicalTestResultsPath = Join-Path $selfTestRoot "physical-tests.json"
+$rollbackExecutionPath = Join-Path $selfTestRoot "rollback-execution.json"
+
 if ($PythonOnly) {
-    Invoke-Rel000PythonTests
+    Invoke-Rel000PythonTests -OutputPath $pythonTestResultsPath
+    $pythonResult = Get-Content -LiteralPath $pythonTestResultsPath -Raw | ConvertFrom-Json
     Write-Output ([pscustomobject]@{
         format_version = "paquetenvia-rel000-local-self-test-v1"
-        python_focused_tests = "PASSED"
+        python_tests_expected = $pythonResult.python_tests_expected
+        python_tests_discovered = $pythonResult.python_tests_discovered
+        python_tests_executed = $pythonResult.python_tests_executed
+        python_tests_passed = $pythonResult.python_tests_passed
+        python_tests_failed = $pythonResult.python_tests_failed
+        python_tests_skipped = $pythonResult.python_tests_skipped
         physical_path_tests_local = "NOT_EXECUTED"
         physical_path_tests_local_reason = "POWERSHELL_7_UNAVAILABLE"
         result = "REL000_LOCAL_PYTHON_TESTS_PASSED"
     } | ConvertTo-Json -Depth 4)
+    [System.IO.Directory]::Delete($selfTestRoot, $true)
     return
 }
 
@@ -147,24 +252,68 @@ function Invoke-Rel000SelfTests {
     if ($CI -and $PSVersionTable.PSVersion.Major -ne 7) {
         throw "REL000_POWERSHELL_7_REQUIRED_IN_CI"
     }
-    Invoke-Rel000PythonTests
-    $physicalOutput = Test-Rel000PhysicalOutputGuard
-    $cleanupLink = Test-Rel000CleanupLinkGuard
+    Invoke-Rel000PythonTests -OutputPath $pythonTestResultsPath
+    $physicalGuards = @(
+        Test-Rel000PhysicalOutputGuard
+        Test-Rel000CleanupLinkGuard
+    )
+    $physicalTestsExpected = 2
+    if ($physicalGuards.Count -ne $physicalTestsExpected) {
+        throw "REL000_FOCUSED_TEST_COUNT_MISMATCH"
+    }
+    $physicalPassed = @($physicalGuards | Where-Object passed).Count
+    $physicalPayload = [pscustomobject]@{
+        format_version = "paquetenvia-rel000-physical-tests-v2"
+        physical_tests_expected = $physicalTestsExpected
+        physical_tests_discovered = $physicalGuards.Count
+        physical_tests_executed = $physicalGuards.Count
+        physical_tests_passed = $physicalPassed
+        physical_tests_failed = $physicalGuards.Count - $physicalPassed
+        physical_tests_skipped = 0
+        tests = $physicalGuards
+    } | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText(
+        $physicalTestResultsPath,
+        $physicalPayload + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false))
+    & python (Join-Path $repositoryRoot "tools/rel-000/run_rollback_e2e.py") `
+        --wrapper $PSCommandPath `
+        --output $rollbackExecutionPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "REL000_ROLLBACK_E2E_TESTS_FAILED"
+    }
+    $pythonResult = Get-Content -LiteralPath $pythonTestResultsPath -Raw | ConvertFrom-Json
+    $physicalResult = Get-Content -LiteralPath $physicalTestResultsPath -Raw | ConvertFrom-Json
+    $rollbackResult = Get-Content -LiteralPath $rollbackExecutionPath -Raw | ConvertFrom-Json
     Write-Output ([pscustomobject]@{
-        format_version = "paquetenvia-rel000-self-test-v1"
-        focused_tests_expected = 51
-        focused_tests_passed = 51
-        python_focused_tests_expected = 49
-        physical_path_tests_expected = 2
+        format_version = "paquetenvia-rel000-self-test-v2"
+        focused_tests_expected = (
+            $pythonResult.python_tests_expected + $physicalResult.physical_tests_expected)
+        focused_tests_discovered = (
+            $pythonResult.python_tests_discovered + $physicalResult.physical_tests_discovered)
+        focused_tests_executed = (
+            $pythonResult.python_tests_executed + $physicalResult.physical_tests_executed)
+        focused_tests_passed = (
+            $pythonResult.python_tests_passed + $physicalResult.physical_tests_passed)
+        focused_tests_failed = (
+            $pythonResult.python_tests_failed + $physicalResult.physical_tests_failed)
+        focused_tests_skipped = (
+            $pythonResult.python_tests_skipped + $physicalResult.physical_tests_skipped)
         physical_path_tests_ci = "PASSED"
         powershell_ci_major_version = $PSVersionTable.PSVersion.Major
-        physical_guards = @($physicalOutput, $cleanupLink)
+        physical_guards = $physicalGuards
+        rollback_scenarios_expected = $rollbackResult.rollback_scenarios_expected
+        rollback_scenarios_executed = $rollbackResult.rollback_scenarios_executed
+        rollback_scenarios_passed = $rollbackResult.rollback_scenarios_passed
+        rollback_scenarios_failed = $rollbackResult.rollback_scenarios_failed
+        rollback_cleanup_verified = $rollbackResult.rollback_cleanup_verified
         result = "REL000_FOCUSED_TESTS_PASSED"
     } | ConvertTo-Json -Depth 6)
 }
 
 Invoke-Rel000SelfTests
 if ($SelfTest) {
+    [System.IO.Directory]::Delete($selfTestRoot, $true)
     return
 }
 if (-not $CI) {
@@ -192,6 +341,8 @@ $required = [ordered]@{
     Ops002ArtifactName = $Ops002ArtifactName
     Ops002ArtifactId = $Ops002ArtifactId
     Ops002ArtifactDigest = $Ops002ArtifactDigest
+    ExecutionResultsDirectory = $ExecutionResultsDirectory
+    ExecutionArtifactsPath = $ExecutionArtifactsPath
 }
 $missing = @(
     $required.GetEnumerator() |
@@ -208,6 +359,12 @@ $validatedOps001 = Assert-Ops002ExternalPath `
 $validatedOps002 = Assert-Ops002ExternalPath `
     -Path $Ops002ArtifactDirectory `
     -Purpose "REL-000 OPS-002 artifact"
+$validatedExecutionResults = Assert-Ops002ExternalPath `
+    -Path $ExecutionResultsDirectory `
+    -Purpose "REL-000 execution artifacts"
+$validatedExecutionArtifacts = Assert-Ops002ExternalRegularFile `
+    -Path $ExecutionArtifactsPath `
+    -Purpose "REL-000 execution artifact metadata"
 $validatedIssue = Assert-Ops002ExternalRegularFile `
     -Path $Issue5Path `
     -Purpose "REL-000 Issue #5 state"
@@ -233,6 +390,11 @@ try {
         "--item-evidence", (Join-Path $repositoryRoot "tests/fixtures/rel-000/item-evidence.json"),
         "--cross-tenant-evidence", (Join-Path $repositoryRoot "tests/fixtures/rel-000/cross-tenant-evidence.json"),
         "--rollback-evidence", (Join-Path $repositoryRoot "tests/fixtures/rel-000/rollback-evidence.json"),
+        "--rollback-execution", $rollbackExecutionPath,
+        "--python-test-results", $pythonTestResultsPath,
+        "--physical-test-results", $physicalTestResultsPath,
+        "--execution-results-directory", $validatedExecutionResults,
+        "--execution-artifacts", $validatedExecutionArtifacts,
         "--ops001-directory", $validatedOps001,
         "--ops002-directory", $validatedOps002,
         "--output-directory", $generatedPath,
@@ -307,5 +469,8 @@ finally {
     }
     if (Test-Path -LiteralPath $stagingInfo.LexicalPath) {
         Remove-Ops002StagingDirectory -PathInfo $stagingInfo
+    }
+    if (Test-Path -LiteralPath $selfTestRoot) {
+        [System.IO.Directory]::Delete($selfTestRoot, $true)
     }
 }
