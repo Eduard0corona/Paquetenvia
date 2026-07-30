@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
 
 jobs:
   normative:
@@ -671,11 +672,20 @@ jobs:
     name: Validate 20-delivery simulation
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      artifact-id: ${{ steps.upload-delivery-simulation.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload-delivery-simulation.outputs.artifact-digest }}
     env:
       CI: "true"
+      REL000_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      REL000_TESTED_GIT_SHA: ${{ github.sha }}
+      REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+      REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -717,7 +727,21 @@ jobs:
           docker version
           docker ps --all --format '{{.ID}} {{.Image}} {{.Status}}'
 
+      - name: Write same-run simulation provenance
+        if: always()
+        run: >-
+          python ./tools/rel-000/rel000.py provenance
+          --artifact-directory ./TestResults/delivery-simulation
+          --artifact-name delivery-simulation-results
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
+          --git-relationship "$REL000_GIT_RELATIONSHIP"
+
       - name: Publish simulation results and redacted report
+        id: upload-delivery-simulation
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -798,11 +822,18 @@ jobs:
     name: Validate backup and restore
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      artifact-id: ${{ steps.upload-backup-restore.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload-backup-restore.outputs.artifact-digest }}
     env:
       CI: "true"
       OPS002_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       OPS002_TESTED_GIT_SHA: ${{ github.sha }}
       OPS002_PULL_REQUEST_EVENT: ${{ github.event_name == 'pull_request' }}
+      REL000_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      REL000_TESTED_GIT_SHA: ${{ github.sha }}
+      REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+      REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
     steps:
       - name: Check out clean repository
         uses: actions/checkout@v5
@@ -944,7 +975,21 @@ jobs:
         run: |
           docker ps --all --format '{{.ID}} {{.Image}} {{.Status}}'
 
+      - name: Write same-run backup provenance
+        if: always()
+        run: >-
+          python ./tools/rel-000/rel000.py provenance
+          --artifact-directory "$OPS002_RESULTS_DIRECTORY"
+          --artifact-name ops002-backup-restore-results
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
+          --git-relationship "$REL000_GIT_RELATIONSHIP"
+
       - name: Publish only encrypted artifact and redacted results
+        id: upload-backup-restore
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -1004,4 +1049,225 @@ jobs:
           }
           if ($cleanupFailures.Count -ne 0) {
             throw ($cleanupFailures -join " ")
+          }
+
+  rel000:
+    name: Validate MVP-0 internal release evidence
+    if: always()
+    needs:
+      - normative
+      - dotnet
+      - runtime-contracts
+      - web
+      - realtime-e2e
+      - outbox-signalr-delivery
+      - driver-stops-pwa
+      - public-tracking
+      - operations-dashboard
+      - delivery-simulation
+      - infrastructure
+      - backup-restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      REL000_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      REL000_TESTED_GIT_SHA: ${{ github.sha }}
+      REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+      REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
+      REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
+      REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+      REL000_JOB_RESULTS_JSON: >-
+        {"normative":"${{ needs.normative.result }}","dotnet":"${{ needs.dotnet.result }}","runtime-contracts":"${{ needs.runtime-contracts.result }}","web":"${{ needs.web.result }}","realtime-e2e":"${{ needs.realtime-e2e.result }}","outbox-signalr-delivery":"${{ needs.outbox-signalr-delivery.result }}","driver-stops-pwa":"${{ needs.driver-stops-pwa.result }}","public-tracking":"${{ needs.public-tracking.result }}","operations-dashboard":"${{ needs.operations-dashboard.result }}","delivery-simulation":"${{ needs.delivery-simulation.result }}","infrastructure":"${{ needs.infrastructure.result }}","backup-restore":"${{ needs.backup-restore.result }}"}
+      REL000_OPS001_ARTIFACT_NAME: delivery-simulation-results
+      REL000_OPS001_ARTIFACT_ID: ${{ needs.delivery-simulation.outputs.artifact-id }}
+      REL000_OPS001_ARTIFACT_DIGEST: ${{ needs.delivery-simulation.outputs.artifact-digest }}
+      REL000_OPS002_ARTIFACT_NAME: ops002-backup-restore-results
+      REL000_OPS002_ARTIFACT_ID: ${{ needs.backup-restore.outputs.artifact-id }}
+      REL000_OPS002_ARTIFACT_DIGEST: ${{ needs.backup-restore.outputs.artifact-digest }}
+    steps:
+      - name: Check out tested merge ref
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify every authoritative upstream job succeeded
+        shell: pwsh
+        run: |
+          $results = $env:REL000_JOB_RESULTS_JSON | ConvertFrom-Json
+          $failed = @(
+            $results.psobject.Properties |
+              Where-Object { $_.Value -cne "success" } |
+              ForEach-Object { "$($_.Name)=$($_.Value)" }
+          )
+          if ($failed.Count -ne 0) {
+            throw "REL000_AUTHORITATIVE_UPSTREAM_FAILED: $($failed -join ', ')"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:REL000_OPS001_ARTIFACT_ID) -or
+              [string]::IsNullOrWhiteSpace($env:REL000_OPS001_ARTIFACT_DIGEST) -or
+              [string]::IsNullOrWhiteSpace($env:REL000_OPS002_ARTIFACT_ID) -or
+              [string]::IsNullOrWhiteSpace($env:REL000_OPS002_ARTIFACT_DIGEST)) {
+            throw "REL000_ARTIFACT_METADATA_MISSING"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install existing normative parser dependency
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Download current OPS-001 artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: delivery-simulation-results
+          path: ${{ runner.temp }}/rel000-ops001
+
+      - name: Download current OPS-002 artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ops002-backup-restore-results
+          path: ${{ runner.temp }}/rel000-ops002
+
+      - name: Consult and sanitize open Issue 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/5" \
+            > "$RUNNER_TEMP/rel000-issue5-raw.json"
+          python ./tools/rel-000/rel000.py sanitize-issue \
+            --input "$RUNNER_TEMP/rel000-issue5-raw.json" \
+            --output "$RUNNER_TEMP/rel000-issue5.json"
+
+      - name: Consult and sanitize additional security tracking
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          issue_number="$(
+            python -c 'import json; print(json.load(open("tests/fixtures/rel-000/security-tracking.json", encoding="utf-8"))["issue_number"])'
+          )"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" \
+            > "$RUNNER_TEMP/rel000-security-tracking-raw.json"
+          python ./tools/rel-000/rel000.py sanitize-issue \
+            --input "$RUNNER_TEMP/rel000-security-tracking-raw.json" \
+            --output "$RUNNER_TEMP/rel000-security-tracking.json"
+
+      - name: Prove dependency files are unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code "$REL000_BASE_MAIN_SHA" -- \
+            apps/web/package.json \
+            apps/web/pnpm-lock.yaml \
+            apps/web/pnpm-workspace.yaml
+
+      - name: Capture and sanitize real base and branch audits
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_source="$RUNNER_TEMP/rel000-base-source"
+          mkdir "$base_source"
+          git archive "$REL000_BASE_MAIN_SHA" \
+            apps/web/package.json \
+            apps/web/pnpm-lock.yaml \
+            apps/web/pnpm-workspace.yaml |
+            tar -x -C "$base_source"
+
+          set +e
+          pnpm --dir "$base_source/apps/web" audit --json \
+            > "$RUNNER_TEMP/rel000-base-audit-raw.json"
+          base_audit_exit=$?
+          pnpm --dir apps/web audit --json \
+            > "$RUNNER_TEMP/rel000-branch-audit-raw.json"
+          branch_audit_exit=$?
+          set -e
+          for audit_exit in "$base_audit_exit" "$branch_audit_exit"; do
+            if [ "$audit_exit" -ne 0 ] && [ "$audit_exit" -ne 1 ]; then
+              exit "$audit_exit"
+            fi
+          done
+          python ./tools/rel-000/rel000.py sanitize-audit \
+            --input "$RUNNER_TEMP/rel000-base-audit-raw.json" \
+            --output "$RUNNER_TEMP/rel000-base-audit.json" \
+            --command-executed \
+            --command-exit-code "$base_audit_exit"
+          python ./tools/rel-000/rel000.py sanitize-audit \
+            --input "$RUNNER_TEMP/rel000-branch-audit-raw.json" \
+            --output "$RUNNER_TEMP/rel000-branch-audit.json" \
+            --command-executed \
+            --command-exit-code "$branch_audit_exit"
+
+      - name: Validate and generate redacted REL-000 evidence
+        shell: pwsh
+        env:
+          REL000_OPS001_ARTIFACT_DIRECTORY: ${{ runner.temp }}/rel000-ops001
+          REL000_OPS002_ARTIFACT_DIRECTORY: ${{ runner.temp }}/rel000-ops002
+          REL000_OUTPUT_DIRECTORY: ${{ runner.temp }}/rel000-output
+          REL000_ISSUE5_PATH: ${{ runner.temp }}/rel000-issue5.json
+          REL000_SECURITY_TRACKING_ISSUE_PATH: ${{ runner.temp }}/rel000-security-tracking.json
+          REL000_BASE_AUDIT_PATH: ${{ runner.temp }}/rel000-base-audit.json
+          REL000_BRANCH_AUDIT_PATH: ${{ runner.temp }}/rel000-branch-audit.json
+        run: ./tools/test-rel-000-internal-release.ps1 -CI
+
+      - name: Publish only redacted REL-000 evidence
+        id: upload-rel000
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel000-mvp0-internal-release-evidence
+          path: ${{ runner.temp }}/rel000-output
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Clean REL-000 inputs and generated evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . ./tools/backup-restore.common.ps1
+          foreach ($path in @(
+            (Join-Path $env:RUNNER_TEMP "rel000-ops001"),
+            (Join-Path $env:RUNNER_TEMP "rel000-ops002"),
+            (Join-Path $env:RUNNER_TEMP "rel000-base-source"),
+            (Join-Path $env:RUNNER_TEMP "rel000-output")
+          )) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              continue
+            }
+            $pathInfo = New-Ops002ValidatedExternalDirectory `
+              -Path $path `
+              -Purpose "REL-000 cleanup"
+            Remove-Ops002ValidatedDirectory `
+              -PathInfo $pathInfo `
+              -Purpose "REL-000 cleanup"
+          }
+          foreach ($name in @(
+            "rel000-issue5-raw.json",
+            "rel000-issue5.json",
+            "rel000-security-tracking-raw.json",
+            "rel000-security-tracking.json",
+            "rel000-base-audit-raw.json",
+            "rel000-base-audit.json",
+            "rel000-branch-audit-raw.json",
+            "rel000-branch-audit.json"
+          )) {
+            $path = Join-Path $env:RUNNER_TEMP $name
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+              [System.IO.File]::Delete($path)
+            }
           }
