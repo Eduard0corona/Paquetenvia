@@ -1,0 +1,205 @@
+\set ON_ERROR_STOP on
+BEGIN;
+
+INSERT INTO organizations.organizations(
+  id,legal_name,display_name,organization_type,status,created_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000001','OPS-002 Synthetic Owner','OPS-002 Synthetic Owner','BUSINESS','ACTIVE','2026-01-01T00:00:00Z'),
+  ('20000000-0000-4000-8000-000000000001','OPS-002 Synthetic Decoy','OPS-002 Synthetic Decoy','BUSINESS','ACTIVE','2026-01-01T00:00:00Z');
+
+INSERT INTO identity.users(id,identity_subject,status,created_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000002','ops002-owner-user.invalid','ACTIVE','2026-01-01T00:00:00Z'),
+  ('20000000-0000-4000-8000-000000000002','ops002-decoy-user.invalid','ACTIVE','2026-01-01T00:00:00Z');
+
+INSERT INTO organizations.organization_memberships(
+  id,user_id,organization_id,role,status,is_default,granted_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000003','10000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000001','DISPATCHER','ACTIVE',true,'2026-01-01T00:00:00Z'),
+  ('20000000-0000-4000-8000-000000000003','20000000-0000-4000-8000-000000000002','20000000-0000-4000-8000-000000000001','VIEWER','ACTIVE',true,'2026-01-01T00:00:00Z');
+
+INSERT INTO locations.cities(id,country_code,state_code,name,timezone,status)
+VALUES ('30000000-0000-4000-8000-000000000001','MX','ZZ','OPS-002 Synthetic City','Etc/UTC','ACTIVE');
+
+INSERT INTO locations.service_areas(
+  id,owner_org_id,city_id,name,polygon,status,created_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000004',
+  '10000000-0000-4000-8000-000000000001',
+  '30000000-0000-4000-8000-000000000001',
+  'OPS-002 Synthetic Service Area',
+  ST_GeomFromText('MULTIPOLYGON(((-1 -1,1 -1,1 1,-1 1,-1 -1)))',4326),
+  'ACTIVE','2026-01-01T00:00:00Z');
+
+INSERT INTO locations.operating_zones(
+  id,owner_org_id,service_area_id,name,zone_type,polygon,status,created_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000005',
+  '10000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000004',
+  'OPS-002 Synthetic Core','CORE',
+  ST_GeomFromText('MULTIPOLYGON(((-0.5 -0.5,0.5 -0.5,0.5 0.5,-0.5 0.5,-0.5 -0.5)))',4326),
+  'ACTIVE','2026-01-01T00:00:00Z');
+
+INSERT INTO locations.locations(
+  id,owner_org_id,city_id,service_area_id,operating_zone_id,point,
+  address_ciphertext,address_summary,pii_key_version,created_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000006','10000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000004','10000000-0000-4000-8000-000000000005',ST_SetSRID(ST_MakePoint(0,0),4326),decode('01','hex'),'[SYNTHETIC ORIGIN]','synthetic-v1','2026-01-01T00:00:00Z'),
+  ('10000000-0000-4000-8000-000000000007','10000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000004','10000000-0000-4000-8000-000000000005',ST_SetSRID(ST_MakePoint(0.1,0.1),4326),decode('02','hex'),'[SYNTHETIC DESTINATION]','synthetic-v1','2026-01-01T00:00:00Z'),
+  ('20000000-0000-4000-8000-000000000006','20000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001',NULL,NULL,ST_SetSRID(ST_MakePoint(0.2,0.2),4326),decode('03','hex'),'[SYNTHETIC DECOY ORIGIN]','synthetic-v1','2026-01-01T00:00:00Z'),
+  ('20000000-0000-4000-8000-000000000007','20000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001',NULL,NULL,ST_SetSRID(ST_MakePoint(0.3,0.3),4326),decode('04','hex'),'[SYNTHETIC DECOY DESTINATION]','synthetic-v1','2026-01-01T00:00:00Z');
+
+INSERT INTO pricing.tariff_rules(
+  id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,
+  service_type,amount_cents,tax_mode,active_from,status)
+VALUES (
+  '10000000-0000-4000-8000-000000000008',
+  '10000000-0000-4000-8000-000000000001',
+  '30000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000004',
+  '10000000-0000-4000-8000-000000000005',
+  'OCCASIONAL','SAME_DAY',12000,'EXEMPT','2025-12-31T00:00:00Z','ACTIVE');
+
+INSERT INTO pricing.quotes(
+  id,owner_org_id,city_id,service_area_id,origin_location_id,destination_location_id,
+  service_type,pricing_tier,subtotal_cents,discount_cents,tax_cents,total_cents,
+  minimum_total_cents_snapshot,currency,pricing_policy_version,rule_ids,
+  request_snapshot_redacted,package_snapshot,breakdown,input_hash,status,expires_at,consumed_at,created_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000009','10000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000004','10000000-0000-4000-8000-000000000006','10000000-0000-4000-8000-000000000007','SAME_DAY','OCCASIONAL',12000,0,0,12000,12000,'MXN','ops002-synthetic-v1',ARRAY['10000000-0000-4000-8000-000000000008'::uuid],'{}','[{"description":"[REDACTED]","weight_grams":1000}]','[]',decode(repeat('10',32),'hex'),'USED','2026-01-02T00:00:00Z','2026-01-01T00:01:00Z','2026-01-01T00:00:00Z'),
+  ('20000000-0000-4000-8000-000000000009','20000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001',NULL,'20000000-0000-4000-8000-000000000006','20000000-0000-4000-8000-000000000007','SAME_DAY','OCCASIONAL',12000,0,0,12000,12000,'MXN','ops002-synthetic-v1','{}','{}','[{"description":"[REDACTED]","weight_grams":1000}]','[]',decode(repeat('20',32),'hex'),'USED','2026-01-02T00:00:00Z','2026-01-01T00:01:00Z','2026-01-01T00:00:00Z');
+
+INSERT INTO orders.orders(
+  id,public_id,quote_id,owner_org_id,city_id,service_area_id,origin_location_id,
+  destination_location_id,service_type,pricing_tier,payer_type,status,
+  subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot,
+  currency,pricing_policy_version,package_snapshot,version,created_at,updated_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000010','OPS002-SYNTHETIC-MAIN','10000000-0000-4000-8000-000000000009','10000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000004','10000000-0000-4000-8000-000000000006','10000000-0000-4000-8000-000000000007','SAME_DAY','OCCASIONAL','SENDER','DELIVERED',12000,0,0,12000,12000,'MXN','ops002-synthetic-v1','[{"description":"[REDACTED]","weight_grams":1000}]',9,'2026-01-01T00:01:00Z','2026-01-01T00:09:00Z'),
+  ('20000000-0000-4000-8000-000000000010','OPS002-SYNTHETIC-DECOY','20000000-0000-4000-8000-000000000009','20000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001',NULL,'20000000-0000-4000-8000-000000000006','20000000-0000-4000-8000-000000000007','SAME_DAY','OCCASIONAL','SENDER','DELIVERED',12000,0,0,12000,12000,'MXN','ops002-synthetic-v1','[{"description":"[REDACTED]","weight_grams":1000}]',1,'2026-01-01T00:01:00Z','2026-01-01T00:01:00Z');
+
+INSERT INTO orders.order_acceptances(
+  id,order_id,quote_id,owner_org_id,actor_id,terms_version,privacy_version,
+  accepted_at_client,recorded_at_server,acceptance_channel,evidence_schema_version,evidence_hash)
+VALUES (
+  '10000000-0000-4000-8000-000000000011',
+  '10000000-0000-4000-8000-000000000010',
+  '10000000-0000-4000-8000-000000000009',
+  '10000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000002',
+  'synthetic-v1','synthetic-v1','2026-01-01T00:00:59Z','2026-01-01T00:01:00Z',
+  'API','order-acceptance-v1',decode(repeat('30',32),'hex'));
+
+INSERT INTO orders.order_events(
+  id,order_id,owner_org_id,aggregate_version,event_type,public_event_code,payload,actor_id,occurred_at)
+SELECT
+  ('10000000-0000-4000-8000-' || lpad(version::text,12,'0'))::uuid,
+  '10000000-0000-4000-8000-000000000010',
+  '10000000-0000-4000-8000-000000000001',
+  version,event_type,public_code,'{}',
+  '10000000-0000-4000-8000-000000000002',
+  '2026-01-01T00:00:00Z'::timestamptz + make_interval(mins => version)
+FROM (VALUES
+  (1,'ORDER_CREATED','ORDER_CREATED'),
+  (2,'ORDER_CONFIRMED','PICKUP_SCHEDULED'),
+  (3,'ORDER_ASSIGNED',NULL),
+  (4,'ARRIVED_AT_PICKUP',NULL),
+  (5,'ORDER_PICKED_UP','PICKED_UP'),
+  (6,'ORDER_IN_TRANSIT','IN_TRANSIT'),
+  (7,'ORDER_DELIVERING','OUT_FOR_DELIVERY'),
+  (8,'DELIVERY_CONFIRMED','DELIVERED'),
+  (9,'ORDER_DELIVERED',NULL)
+) AS events(version,event_type,public_code);
+
+INSERT INTO orders.public_tracking_tokens(
+  id,order_id,owner_org_id,token_hash,expires_at,created_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000021',
+  '10000000-0000-4000-8000-000000000010',
+  '10000000-0000-4000-8000-000000000001',
+  decode(repeat('40',32),'hex'),'2026-02-01T00:00:00Z','2026-01-01T00:01:00Z');
+
+INSERT INTO drivers.driver_profiles(
+  id,user_id,org_id,home_city_id,driver_type,vehicle_type,status,created_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000022',
+  '10000000-0000-4000-8000-000000000002',
+  '10000000-0000-4000-8000-000000000001',
+  '30000000-0000-4000-8000-000000000001',
+  'OWN','MOTORCYCLE','ACTIVE','2026-01-01T00:00:00Z');
+
+INSERT INTO drivers.driver_service_areas(driver_id,service_area_id,org_id,status)
+VALUES (
+  '10000000-0000-4000-8000-000000000022',
+  '10000000-0000-4000-8000-000000000004',
+  '10000000-0000-4000-8000-000000000001','ACTIVE');
+
+INSERT INTO drivers.driver_documents(
+  id,driver_id,org_id,document_type,object_key,sha256,status,created_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000023',
+  '10000000-0000-4000-8000-000000000022',
+  '10000000-0000-4000-8000-000000000001',
+  'IDENTITY','__DRIVER_DOCUMENT_KEY__',decode(repeat('50',32),'hex'),'VALID',
+  '2026-01-01T00:00:00Z');
+
+INSERT INTO dispatch.assignments(
+  id,order_id,owner_org_id,driver_id,assignment_type,status,cost_cents,accepted_at,created_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000024',
+  '10000000-0000-4000-8000-000000000010',
+  '10000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000022',
+  'OWN','COMPLETED',5000,'2026-01-01T00:02:00Z','2026-01-01T00:02:00Z');
+
+INSERT INTO custody.proof_upload_sessions(
+  id,order_id,owner_org_id,requested_by,object_key_quarantine,expected_content_type,
+  maximum_bytes,status,expires_at,created_at,updated_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000025','10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002','__PICKUP_QUARANTINE_KEY__','image/png',1048576,'CONSUMED','2026-01-02T00:00:00Z','2026-01-01T00:04:00Z','2026-01-01T00:05:00Z'),
+  ('10000000-0000-4000-8000-000000000026','10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002','__DELIVERY_QUARANTINE_KEY__','image/png',1048576,'CONSUMED','2026-01-02T00:00:00Z','2026-01-01T00:07:00Z','2026-01-01T00:08:00Z');
+
+INSERT INTO custody.proofs(
+  id,order_id,owner_org_id,upload_session_id,proof_type,object_key,sha256,
+  content_type,size_bytes,captured_at,created_by,created_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000027','10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000025','PICKUP_PHOTO','__PICKUP_KEY__',decode('__PICKUP_SHA__','hex'),'image/png',__PICKUP_BYTES__,'2026-01-01T00:05:00Z','10000000-0000-4000-8000-000000000002','2026-01-01T00:05:00Z'),
+  ('10000000-0000-4000-8000-000000000028','10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000026','DELIVERY_PHOTO','__DELIVERY_KEY__',decode('__DELIVERY_SHA__','hex'),'image/png',__DELIVERY_BYTES__,'2026-01-01T00:08:00Z','10000000-0000-4000-8000-000000000002','2026-01-01T00:08:00Z');
+
+INSERT INTO platform.audit_logs(
+  id,org_id,actor_id,action,entity_type,entity_id,payload_redacted,occurred_at)
+VALUES
+  ('10000000-0000-4000-8000-000000000029','10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002','PICKUP_PROOF_FINALIZED','Proof','10000000-0000-4000-8000-000000000027','{}','2026-01-01T00:05:00Z'),
+  ('10000000-0000-4000-8000-000000000030','10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002','DELIVERY_PROOF_FINALIZED','Proof','10000000-0000-4000-8000-000000000028','{}','2026-01-01T00:08:00Z');
+
+INSERT INTO platform.outbox_events(
+  id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,
+  payload,priority,status,attempts,available_at,created_at,processed_at,last_error)
+VALUES
+  ('10000000-0000-4000-8000-000000000031','10000000-0000-4000-8000-000000000001','{}','orders.status-changed','Order','10000000-0000-4000-8000-000000000010',9,'{}',50,'PROCESSED',1,'2026-01-01T00:09:00Z','2026-01-01T00:09:00Z','2026-01-01T00:09:01Z',NULL),
+  ('10000000-0000-4000-8000-000000000032','10000000-0000-4000-8000-000000000001','{}','ops002.synthetic-dead','Order','10000000-0000-4000-8000-000000000010',9,'{}',0,'DEAD',5,'2026-01-01T00:09:00Z','2026-01-01T00:09:00Z',NULL,'OPS002_SYNTHETIC_ALLOWLISTED');
+
+INSERT INTO drivers.driver_positions(
+  id,driver_id,org_id,city_id,client_event_id,point,accuracy_m,captured_at,received_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000033',
+  '10000000-0000-4000-8000-000000000022',
+  '10000000-0000-4000-8000-000000000001',
+  '30000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000034',
+  ST_SetSRID(ST_MakePoint(0.05,0.05),4326),5,
+  '2026-01-01T00:06:00Z','2026-01-01T00:06:01Z');
+
+INSERT INTO platform.location_outbox_events(
+  id,owner_org_id,driver_position_id,topic,payload,status,attempts,
+  available_at,created_at,processed_at)
+VALUES (
+  '10000000-0000-4000-8000-000000000035',
+  '10000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000033',
+  'drivers.location-updated','{}','PROCESSED',1,
+  '2026-01-01T00:06:01Z','2026-01-01T00:06:01Z','2026-01-01T00:06:02Z');
+
+COMMIT;
+SELECT 'OPS002_SEED_OK';

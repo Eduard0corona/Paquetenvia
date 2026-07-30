@@ -793,3 +793,215 @@ jobs:
             docker compose --env-file ./deploy/.env.ci --file ./deploy/docker-compose.yml down --volumes --remove-orphans
             Remove-Item ./deploy/.env.ci -Force
           }
+
+  backup-restore:
+    name: Validate backup and restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI: "true"
+      OPS002_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      OPS002_TESTED_GIT_SHA: ${{ github.sha }}
+      OPS002_PULL_REQUEST_EVENT: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Check out clean repository
+        uses: actions/checkout@v5
+        with:
+          clean: true
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Verify PowerShell 7
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 7) {
+            throw "OPS-002 requires PowerShell 7."
+          }
+
+      - name: Install checksum-pinned age 1.3.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/age-v1.3.1-linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/age-v1.3.1"
+          curl --fail --silent --show-error --location \
+            --output "$archive" \
+            https://github.com/FiloSottile/age/releases/download/v1.3.1/age-v1.3.1-linux-amd64.tar.gz
+          echo "bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377  $archive" \
+            | sha256sum --check --strict
+          mkdir --parents "$install_dir"
+          tar --extract --gzip --file "$archive" --directory "$install_dir" --strip-components=1
+          test -x "$install_dir/age"
+          test -x "$install_dir/age-keygen"
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Restore locked dependencies
+        run: dotnet restore Paqueteria.sln --locked-mode
+
+      - name: Generate isolated synthetic environments and identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:OPS002_SOURCE_ENV_FILE = Join-Path $env:RUNNER_TEMP "ops002-source.env"
+          $env:OPS002_TARGET_ENV_FILE = Join-Path $env:RUNNER_TEMP "ops002-target.env"
+          $env:OPS002_IDENTITY_FILE = Join-Path $env:RUNNER_TEMP "ops002-age-identity.txt"
+          $env:OPS002_RESULTS_DIRECTORY = Join-Path $env:RUNNER_TEMP "ops002-results"
+          foreach ($name in @(
+            "OPS002_SOURCE_ENV_FILE",
+            "OPS002_TARGET_ENV_FILE",
+            "OPS002_IDENTITY_FILE",
+            "OPS002_RESULTS_DIRECTORY"
+          )) {
+            Add-Content -LiteralPath $env:GITHUB_ENV `
+              -Value "$name=$([Environment]::GetEnvironmentVariable($name))" `
+              -Encoding utf8
+          }
+          $suffix = "${{ github.run_id }}-${{ github.run_attempt }}"
+          $databaseUser = "ops002_$($suffix.Replace('-', '_'))"
+          $sourceAccessKey = "ops002$([Guid]::NewGuid().ToString('N'))"
+          $targetAccessKey = "ops002$([Guid]::NewGuid().ToString('N'))"
+          $sourcePassword = "synthetic-source-$([Guid]::NewGuid().ToString('N'))"
+          $targetPassword = "synthetic-target-$([Guid]::NewGuid().ToString('N'))"
+          @"
+          COMPOSE_PROJECT_NAME=ops002-source-$suffix
+          POSTGRES_HOST_PORT=15432
+          POSTGRES_DB=ops002_source
+          POSTGRES_USER=$databaseUser
+          POSTGRES_PASSWORD=$sourcePassword
+          REDIS_HOST_PORT=16379
+          REDIS_PASSWORD=$sourcePassword
+          MINIO_API_HOST_PORT=19000
+          MINIO_CONSOLE_HOST_PORT=19001
+          MINIO_ROOT_USER=$sourceAccessKey
+          MINIO_ROOT_PASSWORD=$sourcePassword
+          MINIO_BUCKET=ops002-source-$suffix
+          AWS_ACCESS_KEY_ID=$sourceAccessKey
+          AWS_SECRET_ACCESS_KEY=$sourcePassword
+          ProofStorage__Provider=S3Compatible
+          ProofStorage__ThreatScanner=Synthetic
+          ProofStorage__ServiceUrl=http://127.0.0.1:19000
+          ProofStorage__PublicPresignUrl=http://127.0.0.1:19000
+          ProofStorage__Region=us-east-1
+          ProofStorage__Bucket=ops002-source-$suffix
+          ProofStorage__ProcessingIntervalSeconds=5
+          ProofStorage__StaleValidationSeconds=300
+          ProofStorage__MaximumConcurrency=4
+          MAIL_SMTP_HOST_PORT=11025
+          MAIL_UI_HOST_PORT=18025
+          "@ | Set-Content -LiteralPath $env:OPS002_SOURCE_ENV_FILE -Encoding utf8NoBOM
+          @"
+          COMPOSE_PROJECT_NAME=ops002-target-$suffix
+          POSTGRES_HOST_PORT=25432
+          POSTGRES_DB=ops002_bootstrap
+          POSTGRES_USER=$databaseUser
+          POSTGRES_PASSWORD=$targetPassword
+          REDIS_HOST_PORT=26379
+          REDIS_PASSWORD=$targetPassword
+          MINIO_API_HOST_PORT=29000
+          MINIO_CONSOLE_HOST_PORT=29001
+          MINIO_ROOT_USER=$targetAccessKey
+          MINIO_ROOT_PASSWORD=$targetPassword
+          MINIO_BUCKET=ops002-target-$suffix
+          AWS_ACCESS_KEY_ID=$targetAccessKey
+          AWS_SECRET_ACCESS_KEY=$targetPassword
+          ProofStorage__Provider=S3Compatible
+          ProofStorage__ThreatScanner=Synthetic
+          ProofStorage__ServiceUrl=http://127.0.0.1:29000
+          ProofStorage__PublicPresignUrl=http://127.0.0.1:29000
+          ProofStorage__Region=us-east-1
+          ProofStorage__Bucket=ops002-target-$suffix
+          ProofStorage__ProcessingIntervalSeconds=5
+          ProofStorage__StaleValidationSeconds=300
+          ProofStorage__MaximumConcurrency=4
+          MAIL_SMTP_HOST_PORT=21025
+          MAIL_UI_HOST_PORT=28025
+          "@ | Set-Content -LiteralPath $env:OPS002_TARGET_ENV_FILE -Encoding utf8NoBOM
+          & age-keygen --output $env:OPS002_IDENTITY_FILE 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to generate the ephemeral age identity."
+          }
+          & chmod 600 -- `
+            $env:OPS002_SOURCE_ENV_FILE `
+            $env:OPS002_TARGET_ENV_FILE `
+            $env:OPS002_IDENTITY_FILE
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to restrict ephemeral credential file permissions."
+          }
+
+      - name: Execute encrypted backup and clean restore drill
+        shell: pwsh
+        run: ./tools/test-backup-restore.ps1 -CI -TimeoutSeconds 1500
+
+      - name: Capture redacted backup diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          docker ps --all --format '{{.ID}} {{.Image}} {{.Status}}'
+
+      - name: Publish only encrypted artifact and redacted results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops002-backup-restore-results
+          path: |
+            ${{ runner.temp }}/ops002-results/**/*.json
+            ${{ runner.temp }}/ops002-results/encrypted-backup/*.tar.gz.age
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Clean backup and restore resources
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . ./tools/local-environment.common.ps1
+          . ./tools/backup-restore.common.ps1
+          $cleanupFailures = [System.Collections.Generic.List[string]]::new()
+          foreach ($environmentFile in @(
+            $env:OPS002_SOURCE_ENV_FILE,
+            $env:OPS002_TARGET_ENV_FILE
+          )) {
+            if (-not (Test-Path -LiteralPath $environmentFile)) {
+              continue
+            }
+            try {
+              $context = Get-LocalEnvironmentContext `
+                -ComposeFile ./deploy/docker-compose.yml `
+                -EnvironmentFile $environmentFile
+              Invoke-DockerCompose -Context $context -Arguments @(
+                "down", "--volumes", "--remove-orphans"
+              ) -AllowFailure | Out-Null
+              Assert-ProjectResourcesAbsent -ProjectName $context.ProjectName
+            }
+            catch {
+              $cleanupFailures.Add("A project-scoped Compose cleanup failed.")
+            }
+          }
+          Get-ChildItem -LiteralPath $env:RUNNER_TEMP `
+            -Directory -Filter "paquetenvia-ops002-*" `
+            -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              $pathInfo = New-Ops002ValidatedExternalDirectory `
+                -Path $_.FullName `
+                -Purpose "Plaintext staging"
+              Remove-Ops002StagingDirectory -PathInfo $pathInfo
+            }
+          if (Test-Path -LiteralPath $env:OPS002_IDENTITY_FILE) {
+            $validatedIdentity = Assert-Ops002IdentityFile `
+              -IdentityFile $env:OPS002_IDENTITY_FILE
+            [System.IO.File]::Delete($validatedIdentity)
+          }
+          Remove-Item -LiteralPath $env:OPS002_SOURCE_ENV_FILE -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $env:OPS002_TARGET_ENV_FILE -Force -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $env:OPS002_IDENTITY_FILE) {
+            throw "Ephemeral identity cleanup failed."
+          }
+          if ($cleanupFailures.Count -ne 0) {
+            throw ($cleanupFailures -join " ")
+          }
