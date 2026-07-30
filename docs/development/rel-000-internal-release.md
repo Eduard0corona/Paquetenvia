@@ -59,7 +59,9 @@ AI-08. Un elemento `VERIFIED` exige:
 
 - implementación fusionada cuyo SHA sea ancestro de la base `main`;
 - paths de implementación y tests existentes;
-- jobs autoritativos;
+- jobs autoritativos dentro de un vocabulario cerrado y con resultado `success`;
+- una identidad ejecutable exacta por cada fuente requerida, correlacionada con
+  job, proyecto, categoría, source HEAD, tested SHA, run y attempt actuales;
 - referencia de rollback;
 - criterios verificables y limitaciones visibles.
 
@@ -94,8 +96,8 @@ COD como unit economics, no inicia EXT-001 ni RTE-001 y no altera AI-08.
 ## Fuentes cross-tenant
 
 `tests/fixtures/rel-000/cross-tenant-evidence.json` es un manifest cerrado de
-25 categorías. Cada entrada declara ID, job, proyecto, filtro, fuente y marcador
-de presencia. El gate comprueba explícitamente:
+25 categorías. Cada entrada declara ID, job, proyecto, nombre de test completo,
+categoría, fuente y marcador de presencia. El gate comprueba explícitamente:
 
 - identidad y organización activa;
 - RLS transaccional, pooling/retry y provisioning;
@@ -107,10 +109,14 @@ de presencia. El gate comprueba explícitamente:
 - sesiones POD, proofs y auditoría;
 - backup/restore y tenant señuelo de OPS-001.
 
-El job autoritativo debe estar en `success`, la fuente y su marcador deben
-existir y ninguna categoría requerida puede aparecer como skipped. La salida
-distingue expected, executed, passed, missing, failed, skipped e incidents. No
-publica IDs de usuarios, organizaciones, órdenes, drivers, tokens ni objetos.
+El job autoritativo debe estar en `success` y el resultado estructurado de la
+misma corrida debe demostrar `executed=true`, `outcome=PASSED` y
+`skipped=false` para esa identidad exacta. La presencia de fuente/marker se
+conserva sólo como guardia estructural adicional y nunca produce `PASSED`.
+TRX vacío, malformado, stale, de otro proyecto/categoría, ausente, skipped,
+fallido o contradictorio falla cerrado. La salida distingue expected,
+executed, passed, missing, failed, skipped e incidents. No publica IDs de
+usuarios, organizaciones, órdenes, drivers, tokens ni objetos.
 
 ## Evidencia OPS-001
 
@@ -159,9 +165,12 @@ attempt o SHA y archivo no declarado en provenance.
 
 El job `Validate MVP-0 internal release evidence` usa `if: always()` y depende
 de los doce jobs autoritativos. Primero comprueba que todos terminaron en
-`success`; luego descarga los artifacts actuales, consulta Issue #5 e Issue
-#30, captura audits reproducibles de la base fija y de la rama sin publicar su
-JSON crudo, ejecuta las pruebas focales y genera cuatro JSON redactados.
+`success`; luego descarga los artifacts actuales y los artifacts internos de
+ejecución. Estos últimos contienen TRX/JUnit/JSON estructurado, y se validan
+contra artifact ID, upload digest, content digest, run, attempt, source HEAD,
+tested SHA y base SHA. Después consulta Issue #5 e Issue #30, captura audits
+reproducibles de la base fija y de la rama sin publicar su JSON crudo, ejecuta
+las pruebas focales y genera cuatro JSON redactados.
 
 ## Artifact publicado
 
@@ -181,8 +190,8 @@ rel000-rollback-evidence.json
 ```
 
 No se publican env files, identities, dumps, SQL, backups duplicados, logs de
-contenedores, tokens, URLs firmadas, object keys, connection strings, payloads
-ni IDs sintéticos de entidades.
+contenedores, TRX/JUnit, resultados raw, tokens, URLs firmadas, object keys,
+connection strings, payloads ni IDs sintéticos de entidades.
 
 ## Seguridad física, fallo y cleanup
 
@@ -199,7 +208,7 @@ rechaza enlaces descendientes y no los sigue.
 
 ## Ejecución local
 
-Windows PowerShell 5.1 ejecuta únicamente las 49 pruebas Python:
+Windows PowerShell 5.1 ejecuta únicamente las 63 pruebas Python:
 
 ```powershell
 powershell -File ./tools/test-rel-000-internal-release.ps1 -PythonOnly
@@ -210,9 +219,11 @@ Issue #5, Issue #30 y ambos audits sanitizados, metadata de artifact, resultados
 de los jobs y SHAs completos. CI configura esas entradas. El host local
 registra exactamente `physical_path_tests_local=NOT_EXECUTED` y
 `physical_path_tests_local_reason=POWERSHELL_7_UNAVAILABLE`. Las dos pruebas
-físicas son obligatorias en CI con PowerShell 7 y deben producir
-`physical_path_tests_ci=PASSED`. Las suites Testcontainers no deben ejecutarse
-en paralelo.
+físicas y los 14 escenarios end-to-end de rollback son obligatorios en CI con
+PowerShell 7. Los conteos `focused_tests_*` se derivan de los resultados Python
+y físicos realmente descubiertos/ejecutados; un caso no descubierto produce
+`REL000_FOCUSED_TEST_COUNT_MISMATCH`. Las suites Testcontainers no deben
+ejecutarse en paralelo.
 
 Validación complementaria:
 
@@ -271,4 +282,10 @@ El rollback de este bloque es no destructivo:
    normativa v0.6.
 
 La matriz completa se conserva en el reporte de liberación y en
-`rel000-rollback-evidence.json`.
+`rel000-rollback-evidence.json`. Cada fila distingue
+`rollback_reference_verified` de `rollback_execution_verified`: la presencia de
+un comando no afirma que ese rollback individual haya sido ejecutado. Para el
+gate REL-000, 14 escenarios lanzan el wrapper/generador real en subprocess,
+verifican cancelación/fallo en distintas fases, rechazos por SHA/run/manifest,
+guardas contra links, limpieza de staging/output y preservación de inputs y
+destinos ajenos.

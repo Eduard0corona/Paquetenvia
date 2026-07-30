@@ -17,9 +17,9 @@ release_candidate_status = BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION
 ```
 
 El estado técnico final de cada corrida sólo es autoritativo en
-`rel000-internal-release-report.json`, generado con artifacts OPS-001 y OPS-002
-de esa misma corrida. La documentación no reemplaza la correlación dinámica de
-SHAs, run, attempt, artifact ID y digests.
+`rel000-internal-release-report.json`, generado con artifacts OPS-001, OPS-002
+y resultados estructurados por test de esa misma corrida. La documentación no
+reemplaza la correlación dinámica de SHAs, run, attempt, artifact ID y digests.
 
 ## Inventario MVP-0/P0
 
@@ -64,9 +64,11 @@ acceptances, transiciones, drivers, assignments, stops, ubicación, ambos
 outbox, OperationsHub, DriverHub, tracking, dashboard, POD, proofs, auditoría,
 restore y tenant señuelo.
 
-Los conteos executed/passed sólo se emiten cuando todos los jobs autoritativos
-de la corrida están en `success`, la fuente declarada existe y el marcador de
-test continúa presente. Missing, failed, skipped e incidents deben ser cero.
+Los conteos executed/passed sólo se derivan de resultados estructurados que
+coinciden exactamente en job, proyecto, nombre completo, categoría, SHA, run y
+attempt, con `executed=true`, `outcome=PASSED` y `skipped=false`. La fuente y su
+marker son una guardia adicional, no evidencia de ejecución. Missing, failed,
+skipped e incidents deben ser cero.
 
 ## OPS-001 y OPS-002
 
@@ -83,6 +85,11 @@ completo antes/después, objetos íntegros y cero plaintext residual.
 Los producers registran provenance por archivo. El agregador valida nombres,
 IDs, digest de upload, digest de contenido, run, attempt, source HEAD, tested
 SHA, base main y relación Git.
+
+Los jobs que sustentan el manifest publican artifacts internos de ejecución
+derivados de TRX, JUnit o JSON del runner real. Esos inputs no forman parte del
+artifact público REL-000: la allowlist final conserva exactamente cuatro JSON y
+excluye TRX, JUnit y resultados raw.
 
 ## Gates y riesgos abiertos
 
@@ -139,7 +146,8 @@ Cada item cuenta con una fila estructurada en
 `tests/fixtures/rel-000/rollback-evidence.json`; la salida validada es
 `rel000-rollback-evidence.json`. Las 29 filas implementadas tienen referencia,
 comando y prueba; FIN-001 se conserva como `BLOCKED` porque no existe una
-implementación completa que retirar.
+implementación completa que retirar. La matriz distingue referencia declarada
+de ejecución demostrada; no afirma que cada comando individual fue ejecutado.
 
 | Componentes | Items | Tipo | Preserva datos | Estado |
 |---|---|---|---:|---|
@@ -167,9 +175,13 @@ Para retirar exclusivamente REL-000:
 - no borrar backups ni keys;
 - no modificar `docs/normative/v0.6/`.
 
-Las pruebas focales demuestran que una generación fallida/cancelada no publica
-un reporte exitoso, que se eliminan parciales, que un output previo o evidencia
-de otro SHA/run se rechaza y que cleanup no sigue enlaces.
+Las pruebas focales ejecutan 63 casos Python, dos guardas físicas y 14 escenarios
+end-to-end del wrapper/generador. Demuestran que una generación
+fallida/cancelada no publica un reporte exitoso, que se eliminan staging/output
+parciales, que un output previo o evidencia de otro SHA/run/manifest se rechaza,
+que cleanup no sigue enlaces y que inputs y destinos ajenos se preservan. Los
+conteos del JSON final se calculan a partir de lo realmente
+descubierto/ejecutado/pasado.
 
 ## Restricciones de liberación
 
