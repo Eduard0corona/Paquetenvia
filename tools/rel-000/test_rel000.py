@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import io
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +22,12 @@ assert SPEC and SPEC.loader
 rel000 = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = rel000
 SPEC.loader.exec_module(rel000)
+
+RUNNER_PATH = Path(__file__).with_name("run_focused_tests.py")
+RUNNER_SPEC = importlib.util.spec_from_file_location("run_focused_tests", RUNNER_PATH)
+assert RUNNER_SPEC and RUNNER_SPEC.loader
+focused_runner = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(focused_runner)
 
 
 EXPECTED_IDS = [
@@ -91,6 +98,7 @@ class Rel000FocusedTests(unittest.TestCase):
             ]
         }
         self.job_results = {job: "success" for job in rel000.REQUIRED_JOBS}
+        self.execution_results = []
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -112,8 +120,43 @@ class Rel000FocusedTests(unittest.TestCase):
             by_id or self.by_id,
             evidence or self.item_evidence,
             "a" * 40,
+            self.job_results,
+            self.execution_results,
             ancestor_checker=lambda *_: True,
         )
+
+    @staticmethod
+    def execution_result(
+        *,
+        job="dotnet",
+        project="tests/example.csproj",
+        name="Example.Tests.required",
+        category="Example",
+        outcome="PASSED",
+        executed=True,
+        skipped=False,
+        run_id="100",
+    ):
+        return {
+            "job": job,
+            "test_project": project,
+            "fully_qualified_test_name": name,
+            "category": category,
+            "outcome": outcome,
+            "executed": executed,
+            "skipped": skipped,
+            "duration": "00:00:00.100",
+            "trx_or_result_digest": "1" * 64,
+            "artifact_id": 1,
+            "artifact_name": f"rel000-execution-{job}",
+            "artifact_digest": "2" * 64,
+            "content_digest": "3" * 64,
+            "source_head_sha": "b" * 40,
+            "tested_git_sha": "b" * 40,
+            "base_main_sha": "a" * 40,
+            "workflow_run_id": run_id,
+            "workflow_run_attempt": "1",
+        }
 
     def make_audit(self):
         high = {
@@ -196,13 +239,14 @@ class Rel000FocusedTests(unittest.TestCase):
             "\n".join(sorted(rel000.REQUIRED_CROSS_TENANT_CATEGORIES)),
             encoding="utf-8",
         )
-        return {
+        manifest = {
             "sources": [
                 {
                     "evidence_id": evidence_id,
                     "job": "dotnet",
                     "test_project": "tests/example.csproj",
-                    "category_or_filter": evidence_id,
+                    "fully_qualified_test_name": f"Example.Tests.{evidence_id}",
+                    "category": evidence_id,
                     "expected_presence": True,
                     "source_path": source.name,
                     "source_match": evidence_id,
@@ -210,6 +254,41 @@ class Rel000FocusedTests(unittest.TestCase):
                 for evidence_id in sorted(rel000.REQUIRED_CROSS_TENANT_CATEGORIES)
             ]
         }
+        self.execution_results = [
+            self.execution_result(
+                name=source["fully_qualified_test_name"],
+                category=source["category"],
+            )
+            for source in manifest["sources"]
+        ]
+        return manifest
+
+    def make_verified_item(self):
+        for name in ("implementation.txt", "required-test.txt", "rollback.md"):
+            (self.root / name).write_text(name, encoding="utf-8")
+        evidence = copy.deepcopy(self.item_evidence)
+        item = next(entry for entry in evidence["items"] if entry["id"] == "FND-001")
+        item.update(
+            {
+                "implementation_status": "VERIFIED",
+                "implementation_commits_or_prs": ["a" * 40],
+                "implementation_paths": ["implementation.txt"],
+                "required_test_sources": ["required-test.txt"],
+                "authoritative_ci_jobs": ["dotnet"],
+                "required_tests": [
+                    {
+                        "source_path": "required-test.txt",
+                        "job": "dotnet",
+                        "test_project": "tests/example.csproj",
+                        "fully_qualified_test_name": "Example.Tests.required",
+                        "category": "Example",
+                    }
+                ],
+                "rollback_reference": "rollback.md#fnd-001",
+            }
+        )
+        self.execution_results = [self.execution_result()]
+        return evidence, item
 
     def make_ops001(self) -> Path:
         directory = self.root / "ops001"
@@ -255,6 +334,18 @@ class Rel000FocusedTests(unittest.TestCase):
             encoding="utf-8",
         )
         return directory
+
+    @staticmethod
+    def passing_rollback_execution():
+        return {
+            "rollback_scenarios_expected": 14,
+            "rollback_scenarios_executed": 14,
+            "rollback_scenarios_passed": 14,
+            "rollback_scenarios_failed": 0,
+            "rollback_cleanup_verified": True,
+            "foreign_targets_preserved": True,
+            "successful_report_after_failure": False,
+        }
 
     @staticmethod
     def append_only(prefix=""):
@@ -368,7 +459,12 @@ class Rel000FocusedTests(unittest.TestCase):
     def test_09_rollback_missing(self):
         self.assert_reason(
             "ROLLBACK_MISSING",
-            lambda: rel000.validate_rollback(self.root, {"items": []}, self.selected),
+            lambda: rel000.validate_rollback(
+                self.root,
+                {"items": []},
+                self.selected,
+                self.passing_rollback_execution(),
+            ),
         )
 
     def test_10_cross_tenant_category_missing(self):
@@ -376,7 +472,9 @@ class Rel000FocusedTests(unittest.TestCase):
         manifest["sources"].pop()
         self.assert_reason(
             "CROSS_TENANT_CATEGORY_MISSING",
-            lambda: rel000.validate_cross_tenant(self.root, manifest, self.job_results),
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, self.job_results, self.execution_results
+            ),
         )
 
     def test_11_cross_tenant_category_failed(self):
@@ -385,7 +483,9 @@ class Rel000FocusedTests(unittest.TestCase):
         jobs["dotnet"] = "failure"
         self.assert_reason(
             "CROSS_TENANT_SOURCE_FAILED",
-            lambda: rel000.validate_cross_tenant(self.root, manifest, jobs),
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, jobs, self.execution_results
+            ),
         )
 
     def test_12_cross_tenant_required_skipped(self):
@@ -394,7 +494,136 @@ class Rel000FocusedTests(unittest.TestCase):
         jobs["dotnet"] = "skipped"
         self.assert_reason(
             "CROSS_TENANT_REQUIRED_SKIPPED",
-            lambda: rel000.validate_cross_tenant(self.root, manifest, jobs),
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, jobs, self.execution_results
+            ),
+        )
+
+    def test_50_cross_tenant_job_success_required_test_missing(self):
+        manifest = self.make_cross_tenant()
+        self.execution_results.pop()
+        self.assert_reason(
+            "REQUIRED_TEST_RESULT_MISSING",
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, self.job_results, self.execution_results
+            ),
+        )
+
+    def test_51_cross_tenant_job_success_required_test_skipped(self):
+        manifest = self.make_cross_tenant()
+        self.execution_results[0].update(
+            outcome="NOT_EXECUTED", executed=False, skipped=True
+        )
+        self.assert_reason(
+            "REQUIRED_TEST_SKIPPED",
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, self.job_results, self.execution_results
+            ),
+        )
+
+    def test_52_cross_tenant_job_success_wrong_category(self):
+        manifest = self.make_cross_tenant()
+        manifest["sources"][0]["category"] = "WrongCategory"
+        self.assert_reason(
+            "REQUIRED_TEST_RESULT_MISSING",
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, self.job_results, self.execution_results
+            ),
+        )
+
+    def test_53_cross_tenant_job_success_wrong_project(self):
+        manifest = self.make_cross_tenant()
+        manifest["sources"][0]["test_project"] = "tests/wrong.csproj"
+        self.assert_reason(
+            "REQUIRED_TEST_RESULT_MISSING",
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, self.job_results, self.execution_results
+            ),
+        )
+
+    def test_54_cross_tenant_duplicate_contradictory_result(self):
+        manifest = self.make_cross_tenant()
+        contradictory = copy.deepcopy(self.execution_results[0])
+        contradictory["outcome"] = "FAILED"
+        self.execution_results.append(contradictory)
+        self.assert_reason(
+            "EXECUTION_RESULT_CONTRADICTORY",
+            lambda: rel000.validate_cross_tenant(
+                self.root, manifest, self.job_results, self.execution_results
+            ),
+        )
+
+    def test_54b_cross_tenant_stale_trx_context(self):
+        result = self.execution_result(run_id="99")
+        self.assert_reason(
+            "EXECUTION_RESULT_RUN_MISMATCH",
+            lambda: rel000.validate_execution_context(
+                result,
+                {"source_head_sha": "b" * 40, "tested_git_sha": "b" * 40},
+                "100",
+                "1",
+            ),
+        )
+
+    def test_55_verified_item_unknown_authoritative_job(self):
+        evidence, item = self.make_verified_item()
+        item["authoritative_ci_jobs"] = ["imaginary-job"]
+        self.assert_reason("AUTHORITATIVE_JOB_UNKNOWN", lambda: self.validate_items(evidence))
+
+    def test_56_verified_item_successful_unrelated_job(self):
+        evidence, item = self.make_verified_item()
+        item["authoritative_ci_jobs"].append("web")
+        self.assert_reason(
+            "AUTHORITATIVE_JOB_UNRELATED", lambda: self.validate_items(evidence)
+        )
+
+    def test_57_verified_item_required_test_absent(self):
+        evidence, _ = self.make_verified_item()
+        self.execution_results.clear()
+        self.assert_reason(
+            "REQUIRED_TEST_RESULT_MISSING", lambda: self.validate_items(evidence)
+        )
+
+    def test_58_verified_item_required_test_skipped(self):
+        evidence, _ = self.make_verified_item()
+        self.execution_results[0].update(
+            outcome="NOT_EXECUTED", executed=False, skipped=True
+        )
+        self.assert_reason("REQUIRED_TEST_SKIPPED", lambda: self.validate_items(evidence))
+
+    def test_59_verified_item_required_test_wrong_project(self):
+        evidence, item = self.make_verified_item()
+        item["required_tests"][0]["test_project"] = "tests/wrong.csproj"
+        self.assert_reason(
+            "REQUIRED_TEST_RESULT_MISSING", lambda: self.validate_items(evidence)
+        )
+
+    def test_60_verified_item_source_exists_but_test_not_executed(self):
+        evidence, _ = self.make_verified_item()
+        self.execution_results.clear()
+        self.assert_reason(
+            "REQUIRED_TEST_RESULT_MISSING", lambda: self.validate_items(evidence)
+        )
+
+    def test_60b_verified_item_required_test_from_another_run(self):
+        result = self.execution_result(run_id="99")
+        self.assert_reason(
+            "EXECUTION_RESULT_RUN_MISMATCH",
+            lambda: rel000.validate_execution_context(
+                result,
+                {"source_head_sha": "b" * 40, "tested_git_sha": "b" * 40},
+                "100",
+                "1",
+            ),
+        )
+
+    def test_61_focused_runner_rejects_missing_discovered_case(self):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)])
+        with self.assertRaises(focused_runner.FocusedTestCountMismatch) as raised:
+            focused_runner.execute_suite(suite, 2, stream=io.StringIO())
+        self.assertEqual(
+            "REL000_FOCUSED_TEST_COUNT_MISMATCH",
+            raised.exception.reason_code,
         )
 
     # 13-18: OPS-001 provenance and exact correlation.
