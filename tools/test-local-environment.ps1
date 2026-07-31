@@ -343,6 +343,24 @@ ORDER BY extname;
     $mailMessageId = $null
 
     $succeeded = $true
+    if (-not [string]::IsNullOrWhiteSpace($env:REL000_EXECUTION_RESULT_PATH)) {
+        $executionResultPath = [System.IO.Path]::GetFullPath($env:REL000_EXECUTION_RESULT_PATH)
+        [System.IO.Directory]::CreateDirectory(
+            [System.IO.Path]::GetDirectoryName($executionResultPath)) | Out-Null
+        [System.IO.File]::WriteAllText(
+            $executionResultPath,
+            ([pscustomobject]@{
+                format_version = "paquetenvia-rel000-structured-test-v1"
+                tests = @(
+                    [pscustomobject]@{
+                        fully_qualified_test_name = "tools.test-local-environment.FND002_smoke"
+                        category = "InfrastructureSmoke"
+                        outcome = "PASSED"
+                    }
+                )
+            } | ConvertTo-Json -Depth 6) + [Environment]::NewLine,
+            [System.Text.UTF8Encoding]::new($false))
+    }
     Write-Host "FND-002 smoke test passed: health, private object storage, APIs, restart persistence, down persistence, diagnostics, and cleanup behavior."
 }
 catch {

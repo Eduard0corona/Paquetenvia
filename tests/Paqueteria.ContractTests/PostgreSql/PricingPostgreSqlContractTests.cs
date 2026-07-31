@@ -24,6 +24,7 @@ using Pricing.Infrastructure.Quotes;
 namespace Paqueteria.ContractTests.PostgreSql;
 
 [Collection(PostgreSqlContractCollection.Name)]
+[Trait("Category", "PostgreSqlContract")]
 public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
     [PostgreSqlContractFact]

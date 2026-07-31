@@ -419,19 +419,29 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
         append_only_contract_message = $appendOnlyAfterRestart.MessageContract
         append_only_before_restart = [ordered]@{
             tables_expected = $appendOnlyBeforeRestart.TablesExpected
+            permission_checks_verified =
+                $appendOnlyBeforeRestart.PermissionChecksVerified
+            triggers_verified = $appendOnlyBeforeRestart.TriggersVerified
             update_guards_verified = $appendOnlyBeforeRestart.UpdateGuardsVerified
             delete_guards_verified = $appendOnlyBeforeRestart.DeleteGuardsVerified
             trigger_failures_verified = $appendOnlyBeforeRestart.TriggerFailuresVerified
             permission_failures = $appendOnlyBeforeRestart.PermissionFailures
             rows_intact_verified = $appendOnlyBeforeRestart.RowsIntactVerified
+            contract_sqlstate = $appendOnlyBeforeRestart.SqlState
+            contract_message = $appendOnlyBeforeRestart.MessageContract
         }
         append_only_after_restart = [ordered]@{
             tables_expected = $appendOnlyAfterRestart.TablesExpected
+            permission_checks_verified =
+                $appendOnlyAfterRestart.PermissionChecksVerified
+            triggers_verified = $appendOnlyAfterRestart.TriggersVerified
             update_guards_verified = $appendOnlyAfterRestart.UpdateGuardsVerified
             delete_guards_verified = $appendOnlyAfterRestart.DeleteGuardsVerified
             trigger_failures_verified = $appendOnlyAfterRestart.TriggerFailuresVerified
             permission_failures = $appendOnlyAfterRestart.PermissionFailures
             rows_intact_verified = $appendOnlyAfterRestart.RowsIntactVerified
+            contract_sqlstate = $appendOnlyAfterRestart.SqlState
+            contract_message = $appendOnlyAfterRestart.MessageContract
         }
         append_only_assertions_passed = (
             $appendOnlyBeforeRestart.TablesExpected -eq 4 -and

@@ -1,0 +1,255 @@
+{
+  "format_version": "paquetenvia-rel000-cross-tenant-v1",
+  "sources": [
+    {
+      "evidence_id": "identity_resolution",
+      "job": "dotnet",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Security.AuthenticationPipelineTests.Organization_authorization_keeps_multi_org_roles_separate",
+      "category": "Uncategorized",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Security/AuthenticationPipelineTests.cs",
+      "source_match": "Organization_authorization_keeps_multi_org_roles_separate"
+    },
+    {
+      "evidence_id": "active_organization",
+      "job": "dotnet",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Security.TenantSelectionPipelineTests.Foreign_organization_is_forbidden_without_disclosure",
+      "category": "Uncategorized",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Security/TenantSelectionPipelineTests.cs",
+      "source_match": "Foreign_organization_is_forbidden_without_disclosure"
+    },
+    {
+      "evidence_id": "transaction_local_rls",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.TransactionalRlsPoolingContractTests.Tenant_queries_commands_and_save_changes_fail_before_useful_sql_outside_transaction",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/TransactionalRlsPoolingContractTests.cs",
+      "source_match": "Tenant_queries_commands_and_save_changes_fail_before_useful_sql_outside_transaction"
+    },
+    {
+      "evidence_id": "pooling_retry",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.TransactionalRlsPoolingContractTests.Retry_strategy_creates_new_transactions_and_reapplies_the_complete_context_before_business_sql",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/TransactionalRlsPoolingContractTests.cs",
+      "source_match": "Retry_strategy_creates_new_transactions_and_reapplies_the_complete_context_before_business_sql"
+    },
+    {
+      "evidence_id": "provisioning",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.RlsAndProvisioningContractTests.First_user_and_organization_provisioning_are_preauthorized_and_atomic",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/RlsAndProvisioningContractTests.cs",
+      "source_match": "First_user_and_organization_provisioning_are_preauthorized_and_atomic"
+    },
+    {
+      "evidence_id": "organizations_memberships",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.ActiveTenantRuntimeContractTests.Product_context_reader_uses_all_active_memberships_without_an_active_header",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/ActiveTenantRuntimeContractTests.cs",
+      "source_match": "Product_context_reader_uses_all_active_memberships_without_an_active_header"
+    },
+    {
+      "evidence_id": "quotes",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.PricingPostgreSqlContractTests.Different_tenants_can_reuse_same_key_without_pooling_leak",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/PricingPostgreSqlContractTests.cs",
+      "source_match": "Different_tenants_can_reuse_same_key_without_pooling_leak"
+    },
+    {
+      "evidence_id": "orders",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.OrdersPostgreSqlContractTests.Create_replay_queries_and_all_transactional_artifacts_match_the_quote",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/OrdersPostgreSqlContractTests.cs",
+      "source_match": "Create_replay_queries_and_all_transactional_artifacts_match_the_quote"
+    },
+    {
+      "evidence_id": "order_acceptances",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.Acceptance.QuoteOrderAcceptanceContractTests.Acceptance_and_all_evidence_tables_are_rls_protected_and_append_only_for_runtime",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/Acceptance/QuoteOrderAcceptanceContractTests.cs",
+      "source_match": "Acceptance_and_all_evidence_tables_are_rls_protected_and_append_only_for_runtime"
+    },
+    {
+      "evidence_id": "state_transitions",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.RLS_hides_cross_tenant_order_and_foreign_guard_rows_and_cancellation_is_partial_row_free",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/OrdersTransitionPostgreSqlContractTests.cs",
+      "source_match": "RLS_hides_cross_tenant_order_and_foreign_guard_rows_and_cancellation_is_partial_row_free"
+    },
+    {
+      "evidence_id": "driver_profiles_documents",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DriversEligibilityPostgreSqlContractTests.Driver_RLS_is_forced_fail_closed_and_blocks_cross_tenant_mutations",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/DriversEligibilityPostgreSqlContractTests.cs",
+      "source_match": "Driver_RLS_is_forced_fail_closed_and_blocks_cross_tenant_mutations"
+    },
+    {
+      "evidence_id": "assignments",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DispatchPostgreSqlContractTests.Missing_and_cross_tenant_resources_execute_the_same_visibility_plan_and_roll_back",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/DispatchPostgreSqlContractTests.cs",
+      "source_match": "Missing_and_cross_tenant_resources_execute_the_same_visibility_plan_and_roll_back"
+    },
+    {
+      "evidence_id": "driver_stops",
+      "job": "driver-stops-pwa",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Driver.DriverStopsPwaPlaywrightTests.Offline_partition_never_renders_another_organization_or_session",
+      "category": "DriverStopsPwa",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Driver/DriverStopsPwaPlaywrightTests.cs",
+      "source_match": "Offline_partition_never_renders_another_organization_or_session"
+    },
+    {
+      "evidence_id": "driver_location",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DriverLocationIngestionPostgreSqlContractTests.Same_event_id_is_scoped_by_driver_and_tenant_context_does_not_leak_through_pooling",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/DriverLocationIngestionPostgreSqlContractTests.cs",
+      "source_match": "Same_event_id_is_scoped_by_driver_and_tenant_context_does_not_leak"
+    },
+    {
+      "evidence_id": "business_outbox",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Runtime_outbox_access_is_insert_only_without_returning_for_both_lanes",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/OutboxLifecycleContractTests.cs",
+      "source_match": "Runtime_outbox_access_is_insert_only_without_returning_for_both_lanes"
+    },
+    {
+      "evidence_id": "location_outbox",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DriverLocationIngestionPostgreSqlContractTests.Batch_persists_every_valid_point_deduplicates_and_emits_minimal_throttled_outbox",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/DriverLocationIngestionPostgreSqlContractTests.cs",
+      "source_match": "Batch_persists_every_valid_point_deduplicates_and_emits_minimal_throttled_outbox"
+    },
+    {
+      "evidence_id": "signalr_operations_hub",
+      "job": "outbox-signalr-delivery",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Realtime.RealtimeOutboxAudienceAndIsolationTests.Real_location_lane_publishes_exact_payload_only_to_same_tenant_operations",
+      "category": "OutboxSignalRDelivery",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Realtime/RealtimeOutboxAudienceAndIsolationTests.cs",
+      "source_match": "Real_location_lane_publishes_exact_payload_only_to_same_tenant_operations"
+    },
+    {
+      "evidence_id": "signalr_driver_hub",
+      "job": "driver-stops-pwa",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Driver.DriverStopsRealtimePlaywrightTests.Real_DriverHub_signal_debounces_and_resynchronizes_from_REST",
+      "category": "DriverStopsPwa",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Driver/DriverStopsRealtimePlaywrightTests.cs",
+      "source_match": "Real_DriverHub_signal_debounces_and_resynchronizes_from_REST"
+    },
+    {
+      "evidence_id": "public_tracking",
+      "job": "public-tracking",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Tracking.PublicTrackingPostgreSqlTests.Lifecycle_is_tenant_safe_audited_and_plaintext_is_returned_once",
+      "category": "PublicTrackingPostgreSql",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Tracking/PublicTrackingPostgreSqlTests.cs",
+      "source_match": "Lifecycle_is_tenant_safe_audited_and_plaintext_is_returned_once"
+    },
+    {
+      "evidence_id": "operations_dashboard",
+      "job": "operations-dashboard",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Operations.OperationsDashboardPostgreSqlTests.Authorization_precedence_and_tenant_isolation_are_enforced",
+      "category": "OperationsDashboardPostgreSql",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Operations/OperationsDashboardPostgreSqlTests.cs",
+      "source_match": "Authorization_precedence_and_tenant_isolation_are_enforced"
+    },
+    {
+      "evidence_id": "pod_upload_sessions",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Custody.SecureProofReplayAuthorizationTests.Http_replay_authorizes_current_actor_before_exposing_the_stored_grant",
+      "category": "SecureProofUpload",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Custody/SecureProofReplayAuthorizationTests.cs",
+      "source_match": "Http_replay_authorizes_current_actor_before_exposing_the_stored_grant"
+    },
+    {
+      "evidence_id": "proofs",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Custody.SecureProofUploadPipelineTests.Api_storage_worker_and_finalization_complete_once_without_order_transition",
+      "category": "SecureProofUpload",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Custody/SecureProofUploadPipelineTests.cs",
+      "source_match": "Api_storage_worker_and_finalization_complete_once_without_order_transition"
+    },
+    {
+      "evidence_id": "audit",
+      "job": "runtime-contracts",
+      "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.AppendOnlyAuditContractTests.Concurrent_tenant_audits_do_not_cross_contaminate",
+      "category": "PostgreSqlContract",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.ContractTests/PostgreSql/AppendOnlyAuditContractTests.cs",
+      "source_match": "Concurrent_tenant_audits_do_not_cross_contaminate"
+    },
+    {
+      "evidence_id": "backup_restore",
+      "job": "backup-restore",
+      "test_project": "tools/test-backup-restore.ps1",
+      "fully_qualified_test_name": "tools.test-backup-restore.cross_tenant_isolation_after_restore",
+      "category": "BackupRestore",
+      "expected_presence": true,
+      "source_path": "tools/test-backup-restore.ps1",
+      "source_match": "cross_tenant_isolation_after_restore"
+    },
+    {
+      "evidence_id": "ops001_decoy_tenant",
+      "job": "delivery-simulation",
+      "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+      "fully_qualified_test_name": "Paqueteria.IntegrationTests.Operations.Ops001DeliverySimulationTests.Two_consecutive_runs_deliver_twenty_orders_with_worker_recovery",
+      "category": "OpsDeliverySimulation",
+      "expected_presence": true,
+      "source_path": "tests/Paqueteria.IntegrationTests/Operations/Ops001DeliverySimulationTests.cs",
+      "source_match": "Two_consecutive_runs_deliver_twenty_orders_with_worker_recovery"
+    }
+  ]
+}

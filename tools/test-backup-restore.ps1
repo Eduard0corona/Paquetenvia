@@ -1611,6 +1611,28 @@ CREATE TRIGGER proofs_append_only BEFORE UPDATE ON custody.proofs
     }) -Path $testResultsPath
     Assert-Ops002RedactedReport -Path $testResultsPath
 
+    $rel000ExecutionInputPath = Join-Path $resultsRoot "rel000-execution-input.json"
+    $rel000Tests = @(
+        $script:negativeResults |
+            ForEach-Object {
+                [ordered]@{
+                    fully_qualified_test_name = "tools.test-backup-restore.$($_.name)"
+                    category = "BackupRestore"
+                    outcome = if ($_.passed) { "PASSED" } else { "FAILED" }
+                }
+            }
+    )
+    $rel000Tests += [ordered]@{
+        fully_qualified_test_name = "tools.test-backup-restore.Backup_restore_drill"
+        category = "BackupRestore"
+        outcome = "PASSED"
+    }
+    Write-Ops002Json -Value ([ordered]@{
+        format_version = "paquetenvia-rel000-structured-test-v1"
+        tests = $rel000Tests
+    }) -Path $rel000ExecutionInputPath
+    Assert-Ops002RedactedReport -Path $rel000ExecutionInputPath
+
     Write-Host "OPS-002 encrypted backup and clean restore drill passed."
     Write-Output ([pscustomobject]@{
         Report = $finalReportPath
