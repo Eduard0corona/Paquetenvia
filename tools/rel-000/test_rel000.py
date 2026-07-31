@@ -30,55 +30,19 @@ focused_runner = importlib.util.module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(focused_runner)
 
 
-EXPECTED_IDS = [
-    "FND-001",
-    "ARC-001",
-    "ARC-002",
-    "FND-002",
-    "SEC-001",
-    "TEN-001",
-    "AUD-001",
-    "GEO-001",
-    "PRC-001",
-    "PRC-002",
-    "ORD-001",
-    "ORD-002",
-    "DSP-001",
-    "DSP-002",
-    "RTM-001",
-    "DRV-003",
-    "RTM-002",
-    "POD-001",
-    "DRV-001",
-    "DRV-002",
-    "TRK-001",
-    "OBS-001",
-    "OPS-001",
-    "OPS-002",
-    "REL-000",
-    "FIN-001",
-    "SEC-002",
-    "TEN-002",
-    "DBA-001",
-    "TEN-003",
-]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Rel000FocusedTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-tests-")
         self.root = Path(self.temp.name)
-        self.selected = [
-            {
-                "id": item_id,
-                "title": f"Title {item_id}",
-                "release": "MVP-0",
-                "priority": "P0",
-                "depends_on": [],
-            }
-            for item_id in EXPECTED_IDS
-        ]
-        self.by_id = {item["id"]: item for item in self.selected}
+        normative = rel000.load_normative(REPOSITORY_ROOT)
+        selected, by_id = rel000.normative_items(normative)
+        self.selected = copy.deepcopy(selected)
+        self.by_id = copy.deepcopy(by_id)
+        self.all_items = list(self.by_id.values())
+        self.gates = copy.deepcopy(normative["gates"])
         self.item_evidence = {
             "items": [
                 {
@@ -90,11 +54,9 @@ class Rel000FocusedTests(unittest.TestCase):
                     "authoritative_ci_jobs": [],
                     "rollback_reference": None,
                     "known_limitations": [],
-                    "open_gates": (
-                        ["REL-000-DEF-001"] if item_id in {"REL-000", "FIN-001"} else []
-                    ),
+                    "open_gates": ["Issue #5"] if item_id == "REL-000" else [],
                 }
-                for item_id in EXPECTED_IDS
+                for item_id in [item["id"] for item in self.selected]
             ]
         }
         self.job_results = {job: "success" for job in rel000.REQUIRED_JOBS}
@@ -124,6 +86,12 @@ class Rel000FocusedTests(unittest.TestCase):
             self.execution_results,
             ancestor_checker=lambda *_: True,
         )
+
+    def normative_with_fin001(self, **changes):
+        items = copy.deepcopy(self.all_items)
+        fin001 = next(item for item in items if item["id"] == "FIN-001")
+        fin001.update(changes)
+        return {"backlog": {"items": items}}
 
     @staticmethod
     def execution_result(
@@ -412,10 +380,10 @@ class Rel000FocusedTests(unittest.TestCase):
         )
         return directory, trace
 
-    # 1-8: exact P0 inventory and evidence.
-    def test_01_missing_p0_item(self):
+    # 1-8: exact P0 inventory, FIN-001 classification and evidence.
+    def test_01_rel000_omitted(self):
         evidence = copy.deepcopy(self.item_evidence)
-        evidence["items"] = [item for item in evidence["items"] if item["id"] != "FND-001"]
+        evidence["items"] = [item for item in evidence["items"] if item["id"] != "REL-000"]
         self.assert_reason("P0_ITEM_MISSING", lambda: self.validate_items(evidence))
 
     def test_02_duplicate_p0_item(self):
@@ -428,20 +396,100 @@ class Rel000FocusedTests(unittest.TestCase):
         evidence["items"][0]["id"] = "UNKNOWN-001"
         self.assert_reason("P0_ITEM_UNKNOWN", lambda: self.validate_items(evidence))
 
-    def test_04_fin001_omitted(self):
-        evidence = copy.deepcopy(self.item_evidence)
-        evidence["items"] = [item for item in evidence["items"] if item["id"] != "FIN-001"]
-        self.assert_reason("FIN001_OMITTED", lambda: self.validate_items(evidence))
+    def test_04_fin001_in_mvp0_fails(self):
+        self.assert_reason(
+            "FIN001_RELEASE_CLASSIFICATION_INVALID",
+            lambda: rel000.normative_items(self.normative_with_fin001(release="MVP-0")),
+        )
 
-    def test_05_fin001_falsely_verified(self):
+    def test_04b_fin001_in_other_release_fails(self):
+        self.assert_reason(
+            "FIN001_RELEASE_CLASSIFICATION_INVALID",
+            lambda: rel000.normative_items(self.normative_with_fin001(release="MVP-2")),
+        )
+
+    def test_04c_fin001_without_p0_priority_fails(self):
+        self.assert_reason(
+            "FIN001_PRIORITY_INVALID",
+            lambda: rel000.normative_items(self.normative_with_fin001(priority="P1")),
+        )
+
+    def test_04d_fin001_without_ext001_fails(self):
+        self.assert_reason(
+            "FIN001_DEPENDENCY_SET_INVALID",
+            lambda: rel000.normative_items(
+                self.normative_with_fin001(depends_on=["DSP-002", "RTE-001"])
+            ),
+        )
+
+    def test_04e_fin001_without_rte001_fails(self):
+        self.assert_reason(
+            "FIN001_DEPENDENCY_SET_INVALID",
+            lambda: rel000.normative_items(
+                self.normative_with_fin001(depends_on=["DSP-002", "EXT-001"])
+            ),
+        )
+
+    def test_04f_fin001_without_dsp002_fails(self):
+        self.assert_reason(
+            "FIN001_DEPENDENCY_SET_INVALID",
+            lambda: rel000.normative_items(
+                self.normative_with_fin001(depends_on=["EXT-001", "RTE-001"])
+            ),
+        )
+
+    def test_04g_fin001_with_unexpected_dependency_fails(self):
+        self.assert_reason(
+            "FIN001_DEPENDENCY_SET_INVALID",
+            lambda: rel000.normative_items(
+                self.normative_with_fin001(
+                    depends_on=["DSP-002", "EXT-001", "RTE-001", "REL-000"]
+                )
+            ),
+        )
+
+    def test_05_fin001_in_mvp0_manifest_is_unknown(self):
         evidence = copy.deepcopy(self.item_evidence)
-        next(item for item in evidence["items"] if item["id"] == "FIN-001")[
+        evidence["items"].append(
+            {
+                "id": "FIN-001",
+                "implementation_status": "BLOCKED",
+                "implementation_commits_or_prs": [],
+                "implementation_paths": [],
+                "required_test_sources": [],
+                "authoritative_ci_jobs": [],
+                "rollback_reference": None,
+                "known_limitations": [],
+                "open_gates": [],
+            }
+        )
+        self.assert_reason("P0_ITEM_UNKNOWN", lambda: self.validate_items(evidence))
+
+    def test_05b_inventory_with_30_rows_fails(self):
+        evidence = copy.deepcopy(self.item_evidence)
+        evidence["items"].append(copy.deepcopy(evidence["items"][0]))
+        self.assert_reason("P0_ITEM_DUPLICATED", lambda: self.validate_items(evidence))
+
+    def test_05c_inventory_with_28_rows_fails(self):
+        evidence = copy.deepcopy(self.item_evidence)
+        evidence["items"].pop()
+        self.assert_reason("P0_ITEM_MISSING", lambda: self.validate_items(evidence))
+
+    def test_05d_exact_29_item_inventory_passes(self):
+        result = self.validate_items(copy.deepcopy(self.item_evidence))
+        self.assertEqual(29, result["mvp0_p0_items_expected"])
+        self.assertEqual(29, result["mvp0_p0_items_evaluated"])
+        self.assertNotIn("FIN-001", [item["id"] for item in result["items"]])
+
+    def test_05e_rel000_falsely_verified_fails(self):
+        evidence = copy.deepcopy(self.item_evidence)
+        next(item for item in evidence["items"] if item["id"] == "REL-000")[
             "implementation_status"
         ] = "VERIFIED"
-        self.assert_reason("FIN001_FALSELY_VERIFIED", lambda: self.validate_items(evidence))
+        self.assert_reason("OWNER_APPROVAL_FALSELY_ASSERTED", lambda: self.validate_items(evidence))
 
     def test_06_dependency_missing(self):
-        normative = {"backlog": {"items": copy.deepcopy(self.selected)}}
+        normative = {"backlog": {"items": copy.deepcopy(self.all_items)}}
         normative["backlog"]["items"][0]["depends_on"] = ["MISSING-001"]
         self.assert_reason("DEPENDENCY_NOT_FOUND", lambda: rel000.normative_items(normative))
 
@@ -462,6 +510,17 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_rollback(
                 self.root,
                 {"items": []},
+                self.selected,
+                self.passing_rollback_execution(),
+            ),
+        )
+
+    def test_09b_fin001_rollback_row_is_unknown(self):
+        self.assert_reason(
+            "ROLLBACK_ITEM_UNKNOWN",
+            lambda: rel000.validate_rollback(
+                self.root,
+                {"items": [{"owning_backlog_item": "FIN-001"}]},
                 self.selected,
                 self.passing_rollback_execution(),
             ),
@@ -834,11 +893,14 @@ class Rel000FocusedTests(unittest.TestCase):
         self.assert_reason("STALE_REPORT_REUSED", lambda: rel000.assert_output_is_fresh(output))
 
     # 30-35: owner state, gates, issue, cancellation.
-    def test_30_owner_approval_falsely_marked_approved(self):
+    def test_30_resolved_scope_does_not_imply_owner_approval(self):
         report = {
             "owner_approval_status": "APPROVED",
             "release_candidate_status": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
             "dependency_security_status": "BLOCKED",
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
             "audit_tracking_gap_detected": True,
             "audit_tracking_gap_count": 10,
             "technical_evidence_status": "PASSED",
@@ -854,6 +916,9 @@ class Rel000FocusedTests(unittest.TestCase):
             "owner_approval_status": "PENDING",
             "release_candidate_status": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
             "dependency_security_status": "BLOCKED",
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
             "audit_tracking_gap_detected": True,
             "audit_tracking_gap_count": 10,
             "technical_evidence_status": "FAILED",
@@ -879,6 +944,24 @@ class Rel000FocusedTests(unittest.TestCase):
             "resolved_decisions": [{"id": "GATE-002"}],
         }
         self.assert_reason("OPEN_GATE_OMITTED", lambda: rel000.validate_decisions(gates))
+
+    def test_33b_rel000_def001_resolution_is_structurally_valid(self):
+        result = rel000.validate_decisions(copy.deepcopy(self.gates))
+        self.assertIn(
+            "REL-000-DEF-001",
+            [decision["id"] for decision in result["resolved_decisions"]],
+        )
+
+    def test_33c_rel000_def001_resolution_drift_fails(self):
+        gates = copy.deepcopy(self.gates)
+        decision = next(
+            item for item in gates["resolved_decisions"] if item["id"] == "REL-000-DEF-001"
+        )
+        decision["ext001_authorized"] = True
+        self.assert_reason(
+            "REL000_DEF001_DECISION_INVALID",
+            lambda: rel000.validate_decisions(gates),
+        )
 
     def test_34_issue5_omitted(self):
         issue = {"number": 5, "state": "CLOSED"}
@@ -995,11 +1078,14 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
-    def test_45_security_falsely_passed(self):
+    def test_45_resolved_scope_does_not_unblock_dependency_security(self):
         report = {
             "owner_approval_status": "PENDING",
             "dependency_security_status": "PASSED",
             "release_candidate_status": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
             "audit_tracking_gap_detected": True,
             "audit_tracking_gap_count": 10,
             "technical_evidence_status": "PASSED",
@@ -1015,6 +1101,9 @@ class Rel000FocusedTests(unittest.TestCase):
             "owner_approval_status": "PENDING",
             "dependency_security_status": "BLOCKED",
             "release_candidate_status": "READY_FOR_RELEASE",
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
             "audit_tracking_gap_detected": True,
             "audit_tracking_gap_count": 10,
             "technical_evidence_status": "PASSED",
@@ -1030,6 +1119,9 @@ class Rel000FocusedTests(unittest.TestCase):
             "owner_approval_status": "PENDING",
             "dependency_security_status": "BLOCKED",
             "release_candidate_status": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
             "audit_tracking_gap_detected": False,
             "audit_tracking_gap_count": 0,
             "technical_evidence_status": "PASSED",
