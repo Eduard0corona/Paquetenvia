@@ -134,6 +134,24 @@ resolved_decisions:
   - confirm deployment topology sustains the committed 99.5%
   reference: docs/gates/GATE-002_RESOLUTION_IDENTITY_PROVIDER.md
   gate_007_input: data residency defined (Mexico, no international transfer)
+- id: REL-000-DEF-001
+  topic: fin001_release_classification
+  resolved_on: 2026-07-31
+  resolved_by: project_owner
+  decision: Move FIN-001 completely from MVP-0 to MVP-1.
+  fin001_priority: P0
+  fin001_depends_on:
+  - DSP-002
+  - EXT-001
+  - RTE-001
+  fin001_mvp0_variant: none
+  mvp0_p0_inventory_before: 30
+  mvp0_p0_inventory_after: 29
+  rel000_depends_on_fin001: false
+  ext001_depends_on_rel000: true
+  ext001_authorized: false
+  rel000_approved: false
+  mvp0_internal_approved: false
 release_gates:
   MVP-0_INTERNAL:
   - mock identity/maps allowed

@@ -122,8 +122,8 @@ Evidencia local:
 
 ## Capability antes de estado persistido DSP-002
 
-La sincronización
-`v0.6-full-canonical-sync-6-dsp002-capability-before-state` valida
+La sincronización histórica
+`v0.6-full-canonical-sync-6-dsp002-capability-before-state` validó
 `DSP-002-CAPABILITY-BEFORE-PERSISTED-STATE`:
 
 - JSON/request/Idempotency-Key inválidos producen `409 INVALID_REQUEST` sin

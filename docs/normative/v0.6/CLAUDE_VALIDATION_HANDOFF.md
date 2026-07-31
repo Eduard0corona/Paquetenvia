@@ -1,6 +1,6 @@
 # Entrega para validación independiente
 
-Valida únicamente este bundle: `v0.6-full-canonical-sync-6-dsp002-capability-before-state`.
+Valida únicamente este bundle: `v0.6-full-canonical-sync-7-fin001-mvp1`.
 
 ## Comprobaciones mínimas
 
@@ -28,6 +28,9 @@ Valida únicamente este bundle: `v0.6-full-canonical-sync-6-dsp002-capability-be
 15. Confirmar que la forma inválida puede devolver `INVALID_REQUEST` sin
     transacción productiva y que todo request válido autoriza antes de lock,
     lectura idempotente o evidencia de replay.
+16. Confirmar que REL-000-DEF-001 está resuelto, FIN-001 es MVP-1/P0 con las
+    dependencias DSP-002, EXT-001 y RTE-001, y el inventario MVP-0/P0 contiene
+    29 elementos sin autorizar REL-000, MVP-0_INTERNAL o EXT-001.
 
 ## Ejecución real completada por ARC-002
 

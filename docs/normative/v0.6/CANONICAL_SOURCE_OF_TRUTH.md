@@ -1,8 +1,14 @@
 # Fuente única de verdad — paquete canónico v0.6
 
-**Identificador de bundle:** `v0.6-full-canonical-sync-6-dsp002-capability-before-state`
-**Fecha de reconstrucción:** 2026-07-24
-**Estado:** normativa consolidada y validada; ARC-002, contrato DSP-002, visibilidad no enumerable y capability-before-persisted-state `DONE`.
+**Identificador de bundle:** `v0.6-full-canonical-sync-7-fin001-mvp1`
+**Fecha de reconstrucción:** 2026-07-31
+**Estado:** normativa consolidada y validada; REL-000-DEF-001 `RESOLVED` mediante la opción A aprobada por el project owner.
+
+FIN-001 pertenece completo a MVP-1 con prioridad P0 y sus dependencias
+preservadas. El inventario MVP-0/P0 contiene 29 elementos y no incluye una
+variante reducida de FIN-001. Esta sincronización no modifica contratos
+funcionales, OpenAPI, SQL, roles ni SignalR; no aprueba REL-000 o
+MVP-0_INTERNAL y no autoriza EXT-001.
 
 ## Regla de autoridad
 
