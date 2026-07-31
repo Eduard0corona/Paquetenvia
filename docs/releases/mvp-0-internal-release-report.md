@@ -8,9 +8,11 @@ una aprobación del propietario.
 ```text
 format_version = paquetenvia-rel000-v1
 release = MVP-0_INTERNAL
-base_main_sha = 9418504bec0b2eab96ff6c2f3cebb54048482a1f
+base_main_sha = b091b6126cda1536c55b55be88dfb76bc618bdec
 normative_version = 0.6
-normative_scope_status = BLOCKED_BY_OWNER_DECISION
+rel000_def_001_status = RESOLVED
+normative_scope_status = RESOLVED
+normative_scope_decision = FIN001_MOVED_TO_MVP1
 dependency_security_status = BLOCKED
 owner_approval_status = PENDING
 release_candidate_status = BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION
@@ -23,8 +25,16 @@ reemplaza la correlación dinámica de SHAs, run, attempt, artifact ID y digests
 
 ## Inventario MVP-0/P0
 
-AI-08 contiene 30 items con `release=MVP-0` y `priority=P0`, incluido REL-000.
+AI-08 contiene 29 items con `release=MVP-0` y `priority=P0`, incluido REL-000.
 La evaluación de la base fusionada es:
+
+```text
+P0 expected = 29
+P0 evaluated = 29
+P0 verified = 28
+P0 blocked = 1
+blocked_ids = ["REL-000"]
+```
 
 - `VERIFIED` (28): ARC-001, ARC-002, AUD-001, DBA-001, DRV-001, DRV-002,
   DRV-003, DSP-001, DSP-002, FND-001, FND-002, GEO-001, OBS-001, OPS-001,
@@ -32,29 +42,29 @@ La evaluación de la base fusionada es:
   SEC-001, SEC-002, TEN-001, TEN-002, TEN-003 y TRK-001.
 - `PARTIAL` (0): ninguno.
 - `NOT_STARTED` (0): ninguno dentro de la evidencia atribuible evaluada.
-- `BLOCKED` (2): FIN-001 y REL-000.
+- `BLOCKED` (1): REL-000.
 
 REL-000 permanece bloqueado por la deuda de seguridad heredada y por la
-decisión del propietario; no se cuenta como aprobado. FIN-001 permanece
-bloqueado y no se infiere completo a partir de los guards COD existentes.
+aprobación final pendiente del propietario; no se cuenta como aprobado.
+FIN-001 pertenece a MVP-1 y por ello no aparece en este inventario, sin que se
+infiera implementado o verificado a partir de los guards COD existentes.
 
 ## REL-000-DEF-001
 
-Título: **Clasificación inconsistente de FIN-001 dentro de MVP-0**.
+Estado: **RESOLVED**.
 
-FIN-001 es MVP-0/P0 y depende de EXT-001 y RTE-001. EXT-001 depende de REL-000,
-mientras REL-000 exige todos los P0 completos. La contradicción requiere una
-decisión normativa humana. Este reporte presenta, sin seleccionar:
+El project owner aprobó la opción A el 2026-07-31. FIN-001 pasa completo a
+MVP-1, conserva prioridad P0 y las dependencias DSP-002, EXT-001 y RTE-001. No
+existe una variante mínima de FIN-001 dentro de MVP-0. REL-000 deja de depender
+normativamente de FIN-001; EXT-001 continúa dependiendo de REL-000 y no queda
+autorizado ni iniciado. La decisión no constituye aprobación de REL-000 o
+MVP-0_INTERNAL.
 
-A. Reclasificar FIN-001 como MVP-1.
-
-B. Dividir FIN-001 en un mínimo financiero MVP-0 y unit economics MVP-1.
-
-C. Redefinir explícitamente “todos P0 completos” como el cierre transitivo de
-REL-000.
-
-D. Cambiar la secuencia REL-000 / EXT-001 / FIN-001 mediante una decisión
-normativa nueva.
+```text
+resolution = FIN001_MOVED_TO_MVP1
+resolved_by = project_owner
+resolved_on = 2026-07-31
+```
 
 ## Cobertura cross-tenant
 
@@ -116,8 +126,9 @@ GATE-017
 RTM-001-CUSTOMER-SUPPORT-ROLE
 Issue #5
 Issue #30
-REL-000-DEF-001
 ```
+
+REL-000-DEF-001 figura en `resolved_decisions`; no es un gate abierto.
 
 Issue #5 sigue abierto. El baseline aceptado es un finding high heredado de
 `sharp 0.34.5` (GHSA-f88m-g3jw-g9cj); no cubre los once findings actuales.
@@ -142,12 +153,13 @@ overrides.
 
 ## Rollback matrix
 
-Cada item cuenta con una fila estructurada en
+Cada item MVP-0/P0 cuenta con una fila estructurada en
 `tests/fixtures/rel-000/rollback-evidence.json`; la salida validada es
-`rel000-rollback-evidence.json`. Las 29 filas implementadas tienen referencia,
-comando y prueba; FIN-001 se conserva como `BLOCKED` porque no existe una
-implementación completa que retirar. La matriz distingue referencia declarada
-de ejecución demostrada; no afirma que cada comando individual fue ejecutado.
+`rel000-rollback-evidence.json`. Las 29 filas tienen referencia, comando y
+prueba. FIN-001 no aparece porque pertenece a MVP-1; no se afirma que sus
+rollbacks funcionales fueron ejecutados. La matriz distingue referencia
+declarada de ejecución demostrada y no afirma que cada comando individual fue
+ejecutado.
 
 | Componentes | Items | Tipo | Preserva datos | Estado |
 |---|---|---|---:|---|
@@ -158,7 +170,6 @@ de ejecución demostrada; no afirma que cada comando individual fue ejecutado.
 | Realtime, tracking y dashboard | RTM-001, RTM-002, TRK-001, OBS-001 | revert aplicativa/worker/UI | sí | VERIFIED |
 | POD y operaciones | POD-001, OPS-001, OPS-002 | revert aplicativa/test tooling | sí | VERIFIED |
 | Gate REL-000 | REL-000 | revert no destructivo del gate | sí | VERIFIED |
-| Finanzas | FIN-001 | sin implementación; decisión humana | sí | BLOCKED |
 
 La matriz no autoriza rollback de datos, DDL inverso ni eliminación de backups,
 keys o artifacts externos.
@@ -175,7 +186,7 @@ Para retirar exclusivamente REL-000:
 - no borrar backups ni keys;
 - no modificar `docs/normative/v0.6/`.
 
-Las pruebas focales ejecutan 63 casos Python, dos guardas físicas y 14 escenarios
+Las pruebas focales ejecutan 76 casos Python, dos guardas físicas y 14 escenarios
 end-to-end del wrapper/generador. Demuestran que una generación
 fallida/cancelada no publica un reporte exitoso, que se eliminan staging/output
 parciales, que un output previo o evidencia de otro SHA/run/manifest se rechaza,
