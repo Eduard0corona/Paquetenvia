@@ -22,7 +22,8 @@ from typing import Any, Callable, Iterable
 FORMAT_VERSION = "paquetenvia-rel000-v1"
 SOURCE_PROVENANCE_VERSION = "paquetenvia-rel000-source-v1"
 EXECUTION_EVIDENCE_VERSION = "paquetenvia-rel000-execution-v2"
-EXPECTED_MVP0_P0_COUNT = 30
+EXPECTED_MVP0_P0_COUNT = 29
+FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
 REQUIRED_JOBS = {
     "normative",
@@ -578,6 +579,30 @@ def normative_items(normative: dict[str, Any]) -> tuple[list[dict[str, Any]], di
                     item=item["id"],
                     dependency=dependency,
                 )
+    fin001 = by_id.get("FIN-001")
+    if not fin001 or fin001.get("release") != "MVP-1":
+        fail(
+            "FIN001_RELEASE_CLASSIFICATION_INVALID",
+            "FIN-001 must exist globally and belong completely to MVP-1.",
+            actual=None if not fin001 else fin001.get("release"),
+        )
+    if fin001.get("priority") != "P0":
+        fail(
+            "FIN001_PRIORITY_INVALID",
+            "FIN-001 must retain priority P0.",
+            actual=fin001.get("priority"),
+        )
+    fin001_dependencies = fin001.get("depends_on") or []
+    if (
+        len(fin001_dependencies) != len(FIN001_EXPECTED_DEPENDENCIES)
+        or set(fin001_dependencies) != FIN001_EXPECTED_DEPENDENCIES
+    ):
+        fail(
+            "FIN001_DEPENDENCY_SET_INVALID",
+            "FIN-001 must retain exactly DSP-002, EXT-001 and RTE-001.",
+            expected=sorted(FIN001_EXPECTED_DEPENDENCIES),
+            actual=sorted(fin001_dependencies),
+        )
     selected = [
         item
         for item in all_items
@@ -591,8 +616,8 @@ def normative_items(normative: dict[str, Any]) -> tuple[list[dict[str, Any]], di
             actual=len(selected),
         )
     selected_ids = {item["id"] for item in selected}
-    if "REL-000" not in selected_ids or "FIN-001" not in selected_ids:
-        fail("REQUIRED_P0_ITEM_MISSING", "REL-000 or FIN-001 is absent from MVP-0/P0.")
+    if "REL-000" not in selected_ids:
+        fail("REQUIRED_P0_ITEM_MISSING", "REL-000 is absent from MVP-0/P0.")
     return selected, by_id
 
 
@@ -629,8 +654,7 @@ def validate_item_evidence(
         fail("P0_ITEM_UNKNOWN", "The evidence contains unknown MVP-0/P0 items.", ids=unknown)
     missing = sorted(expected_ids - actual_ids)
     if missing:
-        reason = "FIN001_OMITTED" if "FIN-001" in missing else "P0_ITEM_MISSING"
-        fail(reason, "One or more canonical MVP-0/P0 items have no evidence.", ids=missing)
+        fail("P0_ITEM_MISSING", "One or more canonical MVP-0/P0 items have no evidence.", ids=missing)
     if len(entries) != EXPECTED_MVP0_P0_COUNT:
         fail(
             "P0_COUNT_UNEXPECTED",
@@ -652,11 +676,6 @@ def validate_item_evidence(
                 "NOT_APPLICABLE_UNJUSTIFIED",
                 "NOT_APPLICABLE requires an explicit normative justification.",
                 id=item_id,
-            )
-        if item_id == "FIN-001" and status == "VERIFIED":
-            fail(
-                "FIN001_FALSELY_VERIFIED",
-                "FIN-001 cannot be VERIFIED without complete merged implementation evidence.",
             )
         if item_id == "REL-000" and status == "VERIFIED":
             fail(
@@ -773,10 +792,10 @@ def validate_item_evidence(
                     )
 
         open_gates = entry.get("open_gates") or []
-        if item_id in {"FIN-001", "REL-000"} and "REL-000-DEF-001" not in open_gates:
+        if "REL-000-DEF-001" in open_gates:
             fail(
-                "NORMATIVE_BLOCKER_OMITTED",
-                "FIN-001 and REL-000 must expose REL-000-DEF-001.",
+                "RESOLVED_NORMATIVE_DECISION_REOPENED",
+                "REL-000-DEF-001 is resolved and cannot remain an open item gate.",
                 id=item_id,
             )
 
@@ -1791,6 +1810,13 @@ def validate_rollback(
     ids = [entry.get("owning_backlog_item") for entry in entries]
     if len(ids) != len(set(ids)):
         fail("ROLLBACK_ITEM_DUPLICATED", "Rollback evidence duplicates a backlog item.")
+    unknown = sorted(set(ids) - expected_ids)
+    if unknown:
+        fail(
+            "ROLLBACK_ITEM_UNKNOWN",
+            "Rollback evidence contains an item outside MVP-0/P0.",
+            ids=unknown,
+        )
     missing = sorted(expected_ids - set(ids))
     if missing:
         fail("ROLLBACK_MISSING", "A required MVP-0 rollback entry is absent.", ids=missing)
@@ -1841,6 +1867,8 @@ def validate_rollback(
         "rollback_items_verified": verified,
         "rollback_items_blocked": len(output) - verified,
         "rollback_items_missing": 0,
+        "rollback_items_unknown": 0,
+        "rollback_items_duplicated": 0,
         "rollback_scenarios_expected": expected_scenarios,
         "rollback_scenarios_executed": executed_scenarios,
         "rollback_scenarios_passed": passed_scenarios,
@@ -1867,6 +1895,45 @@ def validate_decisions(gates: dict[str, Any]) -> dict[str, Any]:
     resolved_ids = {decision.get("id") for decision in resolved_decisions}
     if "GATE-002" not in resolved_ids:
         fail("GATE002_NOT_RESOLVED", "GATE-002 must be present in resolved decisions.")
+    if "REL-000-DEF-001" in open_ids:
+        fail(
+            "REL000_DEF001_NOT_RESOLVED",
+            "REL-000-DEF-001 cannot remain in open decisions.",
+        )
+    rel000_decision = next(
+        (decision for decision in resolved_decisions if decision.get("id") == "REL-000-DEF-001"),
+        None,
+    )
+    expected_decision = {
+        "topic": "fin001_release_classification",
+        "resolved_on": "2026-07-31",
+        "resolved_by": "project_owner",
+        "decision": "Move FIN-001 completely from MVP-0 to MVP-1.",
+        "fin001_priority": "P0",
+        "fin001_depends_on": ["DSP-002", "EXT-001", "RTE-001"],
+        "fin001_mvp0_variant": "none",
+        "mvp0_p0_inventory_before": 30,
+        "mvp0_p0_inventory_after": 29,
+        "rel000_depends_on_fin001": False,
+        "ext001_depends_on_rel000": True,
+        "ext001_authorized": False,
+        "rel000_approved": False,
+        "mvp0_internal_approved": False,
+    }
+    if not rel000_decision or any(
+        (
+            sorted(rel000_decision.get(key) or []) != sorted(value)
+            if key == "fin001_depends_on"
+            else str(rel000_decision.get(key)) != value
+            if key == "resolved_on"
+            else rel000_decision.get(key) != value
+        )
+        for key, value in expected_decision.items()
+    ):
+        fail(
+            "REL000_DEF001_DECISION_INVALID",
+            "The resolved FIN-001 release-scope decision is missing or inconsistent.",
+        )
     return {
         "resolved_decisions": resolved_decisions,
         "open_decisions": open_decisions,
@@ -2292,6 +2359,8 @@ def release_report(
                 "rollback_items_expected",
                 "rollback_items_verified",
                 "rollback_items_missing",
+                "rollback_items_unknown",
+                "rollback_items_duplicated",
                 "rollback_test_passed",
                 "rollback_scenarios_expected",
                 "rollback_scenarios_executed",
@@ -2334,21 +2403,12 @@ def release_report(
         + ["Issue #5", f"Issue #{security['additional_issue']['number']}"],
         "blocking_scope": decisions["blocking_scope"],
         "work_allowed": decisions["work_allowed"],
-        "normative_blockers": [
-            {
-                "id": "REL-000-DEF-001",
-                "title": "Clasificación inconsistente de FIN-001 dentro de MVP-0",
-                "alternatives_for_owner": [
-                    "A. Reclasificar FIN-001 como MVP-1.",
-                    "B. Dividir FIN-001 en un mínimo financiero MVP-0 y unit economics MVP-1.",
-                    "C. Redefinir explícitamente todos P0 completos como el cierre transitivo de REL-000.",
-                    "D. Cambiar la secuencia REL-000 / EXT-001 / FIN-001 mediante una decisión normativa nueva.",
-                ],
-            }
-        ],
+        "normative_blockers": [],
         "artifact_sources": artifacts,
         "owner_approval_status": "PENDING",
-        "normative_scope_status": "BLOCKED_BY_OWNER_DECISION",
+        "rel000_def_001_status": "RESOLVED",
+        "normative_scope_status": "RESOLVED",
+        "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
         "technical_evidence_status": "PASSED",
         "release_candidate_status": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
         "technical_gate_outcome": "EVIDENCE_COMPLETE_RELEASE_BLOCKED",
@@ -2366,6 +2426,15 @@ def validate_owner_state(report: dict[str, Any]) -> None:
         "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION"
     ):
         fail("RELEASE_CANDIDATE_NOT_BLOCKED", "The release candidate must remain blocked.")
+    if (
+        report.get("rel000_def_001_status") != "RESOLVED"
+        or report.get("normative_scope_status") != "RESOLVED"
+        or report.get("normative_scope_decision") != "FIN001_MOVED_TO_MVP1"
+    ):
+        fail(
+            "REL000_DEF001_RESOLUTION_INVALID",
+            "The approved FIN-001 normative resolution must remain explicit.",
+        )
     if report.get("audit_tracking_gap_detected") is not True or report.get(
         "audit_tracking_gap_count"
     ) != 10:
