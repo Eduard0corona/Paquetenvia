@@ -9,8 +9,9 @@ no sustituye la decisión humana. El máximo resultado técnico del gate es
 
 La normativa canónica es `docs/normative/v0.6/`. El gate la lee y verifica sus
 checksums, pero nunca la modifica. El inventario MVP-0/P0 se deriva de
-`AI-08_BACKLOG.yaml`; las decisiones abiertas, la decisión resuelta GATE-002 y
-el alcance permitido se derivan de `AI-10_DECISIONS_AND_GATES.yaml`.
+`AI-08_BACKLOG.yaml`; las decisiones abiertas, GATE-002 y REL-000-DEF-001
+resueltas, y el alcance permitido se derivan de
+`AI-10_DECISIONS_AND_GATES.yaml`.
 
 ## Límites de autorización
 
@@ -42,16 +43,22 @@ La rama REL-000 sólo puede partir de `main` después de comprobar:
 - worktree limpio;
 - `git pull --ff-only` en `main`.
 
-La base registrada para este bloque es
-`9418504bec0b2eab96ff6c2f3cebb54048482a1f`.
+La base registrada para la sincronización normativa de REL-000-DEF-001 es
+`b091b6126cda1536c55b55be88dfb76bc618bdec`.
 
 ## Inventario P0 y correlación exacta
 
 `tools/rel-000/rel000.py` selecciona directamente todos los elementos de
-AI-08 con `release=MVP-0` y `priority=P0`. La línea base v0.6 exige exactamente
-30, incluido REL-000, y 29 anteriores al gate. El input no puede sustituir IDs:
+AI-08 con `release=MVP-0` y `priority=P0`. La línea base v0.6 sync 7 exige
+exactamente 29, incluido REL-000, y 28 anteriores al gate. El input no puede sustituir IDs:
 faltantes, duplicados, desconocidos o dependencias inexistentes fallan con una
 razón estructurada.
+
+FIN-001 permanece en el backlog global como `release=MVP-1`, `priority=P0` y
+con el conjunto exacto de dependencias DSP-002, EXT-001 y RTE-001. El gate
+rechaza cualquier drift con `FIN001_RELEASE_CLASSIFICATION_INVALID`,
+`FIN001_PRIORITY_INVALID` o `FIN001_DEPENDENCY_SET_INVALID`; FIN-001 dentro del
+manifest MVP-0 se rechaza como `P0_ITEM_UNKNOWN`.
 
 `tests/fixtures/rel-000/item-evidence.json` sólo aporta atribución de evidencia.
 El validador vuelve a cargar título, release, prioridad y dependencias desde
@@ -71,27 +78,34 @@ marca un item como `VERIFIED`.
 
 ## REL-000-DEF-001
 
-AI-08 clasifica FIN-001 como MVP-0/P0 y lo hace depender de EXT-001 y RTE-001.
-EXT-001 depende a su vez de REL-000, mientras REL-000 exige todos los P0
-completos. La interpretación literal forma un ciclo de secuencia que el código
-no puede resolver sin cambiar la normativa.
+El project owner resolvió la clasificación el 2026-07-31 mediante la opción A:
+FIN-001 se mueve completo a MVP-1, sin dividir alcance ni crear una variante
+financiera mínima en MVP-0. Conserva prioridad P0 y las dependencias DSP-002,
+EXT-001 y RTE-001. EXT-001 continúa dependiendo de REL-000 y no queda
+autorizado.
 
-El bloqueo se registra como:
+La resolución se registra como:
 
 ```text
 REL-000-DEF-001
-Clasificación inconsistente de FIN-001 dentro de MVP-0
+resolution = FIN001_MOVED_TO_MVP1
+resolved_by = project_owner
+resolved_on = 2026-07-31
 ```
 
-Hasta una decisión explícita:
+La resolución normativa no constituye aprobación final:
 
 ```text
-normative_scope_status = BLOCKED_BY_OWNER_DECISION
+rel000_def_001_status = RESOLVED
+normative_scope_status = RESOLVED
+normative_scope_decision = FIN001_MOVED_TO_MVP1
 owner_approval_status = PENDING
+dependency_security_status = BLOCKED
 ```
 
-La herramienta no marca FIN-001 como completo, no toma los guards parciales de
-COD como unit economics, no inicia EXT-001 ni RTE-001 y no altera AI-08.
+La herramienta no incluye FIN-001 en el artifact MVP-0/P0, no lo marca como
+implementado o verificado, no toma guards parciales de COD como unit economics
+y no inicia EXT-001 ni RTE-001.
 
 ## Fuentes cross-tenant
 
@@ -208,7 +222,7 @@ rechaza enlaces descendientes y no los sigue.
 
 ## Ejecución local
 
-Windows PowerShell 5.1 ejecuta únicamente las 63 pruebas Python:
+Windows PowerShell 5.1 ejecuta únicamente las 76 pruebas Python:
 
 ```powershell
 powershell -File ./tools/test-rel-000-internal-release.ps1 -PythonOnly

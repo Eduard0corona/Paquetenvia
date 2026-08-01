@@ -2,8 +2,8 @@
 
 **Proyecto:** [NOMBRE COMERCIAL PENDIENTE] — plataforma de paquetería local en Culiacán  
 **Versión:** 0.6  
-**Fecha:** 2026-07-24
-**Estado:** línea base normativa de seguridad/runtime, contrato incremental DSP-002, visibilidad no enumerable y capability-before-persisted-state validados en PostgreSQL 18/PostGIS 3.6. Sustituye completamente a v0.5.
+**Fecha:** 2026-07-31
+**Estado:** línea base normativa de seguridad/runtime validada; REL-000-DEF-001 resuelto por el project owner mediante el traslado completo de FIN-001 a MVP-1. Sustituye completamente a v0.5.
 
 ## Propósito
 
@@ -66,7 +66,13 @@ Pueden iniciar con estos contratos: `FND-001`, `ARC-001` y `FND-002`.
 Un entorno reproducible debe completar 20 entregas sintéticas sin pérdida de eventos, fuga tenant ni POD incompleto; recuperar leases abandonados; negar settles obsoletos; producir tracking público minimizado y validar bootstrap/hash/mapeos contra PostgreSQL real.
 ## Identidad de esta entrega consolidada
 
-Este directorio pertenece al bundle `v0.6-full-canonical-sync-6-dsp002-capability-before-state`. Para evitar mezclar copias intermedias, validar primero `CANONICAL_SOURCE_OF_TRUTH.md`, `CLAUDE_VALIDATION_HANDOFF.md`, `MANIFEST.json` y `CHECKSUMS_SHA256.txt`.
+Este directorio pertenece al bundle `v0.6-full-canonical-sync-7-fin001-mvp1`. Para evitar mezclar copias intermedias, validar primero `CANONICAL_SOURCE_OF_TRUTH.md`, `CLAUDE_VALIDATION_HANDOFF.md`, `MANIFEST.json` y `CHECKSUMS_SHA256.txt`.
+
+REL-000-DEF-001 está `RESOLVED`: FIN-001 pertenece completo a MVP-1, conserva
+prioridad P0 y sus dependencias, y no existe una variante reducida en MVP-0.
+El inventario MVP-0/P0 contiene 29 elementos. Esta sincronización no modifica
+contratos funcionales, OpenAPI, SQL, roles ni SignalR; tampoco autoriza
+REL-000, MVP-0_INTERNAL o EXT-001.
 
 ARC-002 está `DONE` después de pasar los cinco jobs de CI: AI-06 y AI-18 se
 ejecutaron en PostgreSQL 18/PostGIS 3.6 efímero, incluida purga real y

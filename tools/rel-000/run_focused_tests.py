@@ -53,7 +53,14 @@ def execute_suite(
         "python_tests_passed": passed,
         "python_tests_failed": failed,
         "python_tests_skipped": skipped,
-        "successful": result.wasSuccessful() and skipped == 0 and executed == discovered,
+        "successful": (
+            expected == discovered
+            and executed == discovered
+            and passed == executed
+            and failed == 0
+            and skipped == 0
+            and result.wasSuccessful()
+        ),
     }
     if not output["successful"]:
         raise RuntimeError(

@@ -597,7 +597,7 @@ items:
   expected_outputs:
   - release report
   acceptance_criteria:
-  - todos P0 completos
+  - todos los elementos MVP-0/P0 completos
   - cero cross-tenant
   - 20 pruebas completas
   - rollback probado
@@ -701,7 +701,7 @@ items:
   approval_gate: null
 - id: FIN-001
   epic: Finance
-  release: MVP-0
+  release: MVP-1
   title: Registro mínimo de COD y costo/ingreso por orden
   priority: P0
   depends_on:

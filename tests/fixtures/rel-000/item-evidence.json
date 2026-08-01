@@ -299,18 +299,7 @@
       "authoritative_ci_jobs": ["rel000"],
       "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-rel-000",
       "known_limitations": ["Technical evidence does not constitute owner approval."],
-      "open_gates": ["REL-000-DEF-001", "Issue #5"]
-    },
-    {
-      "id": "FIN-001",
-      "implementation_status": "BLOCKED",
-      "implementation_commits_or_prs": [],
-      "implementation_paths": [],
-      "required_test_sources": [],
-      "authoritative_ci_jobs": [],
-      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rel-000-def-001",
-      "known_limitations": ["No complete unit economics implementation attributable to FIN-001 is merged."],
-      "open_gates": ["REL-000-DEF-001"]
+      "open_gates": ["Issue #5"]
     },
     {
       "id": "SEC-002",

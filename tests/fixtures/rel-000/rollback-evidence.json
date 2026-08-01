@@ -277,17 +277,6 @@
       "status": "VERIFIED"
     },
     {
-      "component": "COD and unit economics",
-      "owning_backlog_item": "FIN-001",
-      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rel-000-def-001",
-      "rollback_type": "no_implementation_owner_blocked",
-      "destructive_actions_required": false,
-      "data_preservation": true,
-      "verification_command": "Confirm FIN-001 remains BLOCKED and no implementation is removed.",
-      "test_evidence": "tools/rel-000/test_rel000.py",
-      "status": "BLOCKED"
-    },
-    {
       "component": "Secure identity bootstrap and tracking",
       "owning_backlog_item": "SEC-002",
       "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",

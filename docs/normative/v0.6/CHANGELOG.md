@@ -1,5 +1,18 @@
 # Changelog
 
+## Resolución de alcance REL-000-DEF-001 — 2026-07-31
+
+- El project owner aprobó la opción A: FIN-001 pasa completo de MVP-0 a MVP-1.
+- FIN-001 conserva prioridad P0, alcance funcional y dependencias DSP-002,
+  EXT-001 y RTE-001; no se crea una variante financiera reducida en MVP-0.
+- El inventario MVP-0/P0 pasa de 30 a 29 elementos y REL-000 deja de depender
+  normativamente de FIN-001.
+- EXT-001 continúa dependiendo de REL-000 y no queda autorizado ni iniciado.
+- La decisión resuelve REL-000-DEF-001, pero no aprueba REL-000,
+  MVP-0_INTERNAL ni la liberación.
+- Bundle emitido como `v0.6-full-canonical-sync-7-fin001-mvp1`; no cambian
+  contratos funcionales, OpenAPI, SQL, roles ni SignalR.
+
 ## Capability antes de estado persistido DSP-002 — 2026-07-24
 
 - `DSP-002-CAPABILITY-BEFORE-PERSISTED-STATE` separa validación de forma de

@@ -124,7 +124,7 @@ if (-not [string]::IsNullOrWhiteSpace($SyntheticRollbackScenario)) {
 function Invoke-Rel000PythonTests {
     param([Parameter(Mandatory)] [string] $OutputPath)
     & python (Join-Path $repositoryRoot "tools/rel-000/run_focused_tests.py") `
-        --expected 63 `
+        --expected 76 `
         --output $OutputPath
     if ($LASTEXITCODE -ne 0) {
         throw "REL000_PYTHON_FOCAL_TESTS_FAILED"
