@@ -201,6 +201,121 @@ class Rel000FocusedTests(unittest.TestCase):
         }
         return issue5, additional, self.make_audit(), self.make_audit(), clean
 
+    def make_remediation_inputs(
+        self,
+        remaining_ids=None,
+        *,
+        issue5_state="OPEN",
+        issue30_state="OPEN",
+    ):
+        issue5, issue30, base, _, _ = self.make_security_inputs()
+        issue5["state"] = issue5_state
+        issue30["state"] = issue30_state
+        remaining = {
+            value.lower()
+            for value in (
+                remaining_ids
+                if remaining_ids is not None
+                else {rel000.ISSUE5_ADVISORY}
+            )
+        }
+        branch_advisories = [
+            copy.deepcopy(item)
+            for item in base["advisories"]
+            if item["advisory_id"].lower() in remaining
+        ]
+        totals = {
+            severity: sum(item["severity"] == severity for item in branch_advisories)
+            for severity in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(branch_advisories)
+        branch = {
+            "command_executed": True,
+            "command_exit_code": 1 if branch_advisories else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "advisories": branch_advisories,
+        }
+        dependency_diff = {
+            "dependency_manifest_changed": True,
+            "dependency_lockfile_changed": True,
+            "dependency_workspace_changed": True,
+            "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+            "changed_dependency_files": sorted(rel000.SECURITY_REMEDIATION_DEPENDENCY_FILES),
+            "lockfile_consistency_verified": True,
+            "vulnerable_lock_versions": (
+                ["sharp@0.34.5"]
+                if rel000.ISSUE5_ADVISORY.lower() in remaining
+                else []
+            ),
+        }
+        return issue5, issue30, base, branch, dependency_diff
+
+    def make_dependency_repo(self):
+        root = self.root / "dependency-repo"
+        web = root / "apps/web"
+        web.mkdir(parents=True)
+        package = {
+            "name": "@paquetenvia/web",
+            "private": True,
+            "dependencies": {
+                "next": "16.2.10",
+                "react": "19.2.7",
+                "react-dom": "19.2.7",
+            },
+            "devDependencies": {
+                "eslint": "9.39.5",
+                "eslint-config-next": "16.2.10",
+            },
+        }
+        (web / "package.json").write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+        (web / "pnpm-workspace.yaml").write_text(
+            "overrides:\n  postcss: 8.5.21\n", encoding="utf-8"
+        )
+        (web / "pnpm-lock.yaml").write_text(
+            "lockfileVersion: '9.0'\n"
+            "importers:\n  .:\n    dependencies:\n      next:\n"
+            "        specifier: 16.2.10\n        version: 16.2.10\n"
+            "    devDependencies:\n      eslint-config-next:\n"
+            "        specifier: 16.2.10\n        version: 16.2.10\n"
+            "packages:\n  next@16.2.10:\n    resolution: {}\n"
+            "  eslint-config-next@16.2.10:\n    resolution: {}\n"
+            "  brace-expansion@1.1.16:\n    resolution: {}\n"
+            "  brace-expansion@5.0.7:\n    resolution: {}\n"
+            "  sharp@0.34.5:\n    resolution: {}\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        package["dependencies"]["next"] = "16.2.11"
+        package["devDependencies"]["eslint-config-next"] = "16.2.11"
+        (web / "package.json").write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+        (web / "pnpm-workspace.yaml").write_text(
+            "overrides:\n"
+            "  postcss: 8.5.21\n"
+            "  \"brace-expansion@<1.1.17\": 1.1.17\n"
+            "  \"brace-expansion@>=4.0.0 <5.0.8\": 5.0.8\n",
+            encoding="utf-8",
+        )
+        (web / "pnpm-lock.yaml").write_text(
+            "lockfileVersion: '9.0'\n"
+            "importers:\n  .:\n    dependencies:\n      next:\n"
+            "        specifier: 16.2.11\n        version: 16.2.11\n"
+            "    devDependencies:\n      eslint-config-next:\n"
+            "        specifier: 16.2.11\n        version: 16.2.11\n"
+            "packages:\n  next@16.2.11:\n    resolution: {}\n"
+            "  eslint-config-next@16.2.11:\n    resolution: {}\n"
+            "  brace-expansion@1.1.17:\n    resolution: {}\n"
+            "  brace-expansion@5.0.8:\n    resolution: {}\n"
+            "  sharp@0.34.5:\n    resolution: {}\n",
+            encoding="utf-8",
+        )
+        return root, base
+
     def make_cross_tenant(self):
         source = self.root / "cross-tenant-tests.txt"
         source.write_text(
@@ -901,8 +1016,8 @@ class Rel000FocusedTests(unittest.TestCase):
             "rel000_def_001_status": "RESOLVED",
             "normative_scope_status": "RESOLVED",
             "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
-            "audit_tracking_gap_detected": True,
-            "audit_tracking_gap_count": 10,
+            "audit_tracking_gap_detected": False,
+            "audit_tracking_gap_count": 0,
             "technical_evidence_status": "PASSED",
             "result": "REL000_EVIDENCE_GENERATED",
         }
@@ -919,8 +1034,8 @@ class Rel000FocusedTests(unittest.TestCase):
             "rel000_def_001_status": "RESOLVED",
             "normative_scope_status": "RESOLVED",
             "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
-            "audit_tracking_gap_detected": True,
-            "audit_tracking_gap_count": 10,
+            "audit_tracking_gap_detected": False,
+            "audit_tracking_gap_count": 0,
             "technical_evidence_status": "FAILED",
             "result": "REL000_EVIDENCE_GENERATED",
         }
@@ -963,11 +1078,11 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_decisions(gates),
         )
 
-    def test_34_issue5_omitted(self):
-        issue = {"number": 5, "state": "CLOSED"}
-        _, additional, base, branch, clean = self.make_security_inputs()
+    def test_34_issue5_closed_while_present(self):
+        issue, additional, base, branch, clean = self.make_security_inputs()
+        issue["state"] = "CLOSED"
         self.assert_reason(
-            "ISSUE5_OMITTED_OR_CLOSED",
+            "SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT",
             lambda: rel000.validate_issue_and_audit(
                 issue, additional, base, branch, clean
             ),
@@ -1008,7 +1123,7 @@ class Rel000FocusedTests(unittest.TestCase):
         branch["totals"]["high"] += 1
         branch["totals"]["total"] += 1
         self.assert_reason(
-            "BRANCH_AUDIT_WORSENED",
+            "NEW_DEPENDENCY_ADVISORY",
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
@@ -1019,7 +1134,7 @@ class Rel000FocusedTests(unittest.TestCase):
         branch["totals"]["high"] += 1
         branch["totals"]["moderate"] -= 1
         self.assert_reason(
-            "BRANCH_AUDIT_WORSENED",
+            "DEPENDENCY_ADVISORY_SEVERITY_INCREASED",
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
@@ -1030,7 +1145,7 @@ class Rel000FocusedTests(unittest.TestCase):
         branch["totals"]["high"] -= 1
         branch["totals"]["moderate"] += 1
         self.assert_reason(
-            "BRANCH_AUDIT_WORSENED",
+            "BRANCH_ADVISORY_SET_CHANGED",
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
@@ -1049,7 +1164,7 @@ class Rel000FocusedTests(unittest.TestCase):
         issue5, additional, base, branch, clean = self.make_security_inputs()
         branch["advisories"][0]["package"] = "unexpected-package"
         self.assert_reason(
-            "BRANCH_ADVISORY_SET_CHANGED",
+            "NEW_AFFECTED_DEPENDENCY_PACKAGE",
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
@@ -1078,23 +1193,20 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
-    def test_45_resolved_scope_does_not_unblock_dependency_security(self):
+    def test_45_passed_security_still_blocks_on_owner_decision(self):
         report = {
             "owner_approval_status": "PENDING",
             "dependency_security_status": "PASSED",
-            "release_candidate_status": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
+            "release_candidate_status": "BLOCKED_BY_OWNER_DECISION",
             "rel000_def_001_status": "RESOLVED",
             "normative_scope_status": "RESOLVED",
             "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
-            "audit_tracking_gap_detected": True,
-            "audit_tracking_gap_count": 10,
+            "audit_tracking_gap_detected": False,
+            "audit_tracking_gap_count": 0,
             "technical_evidence_status": "PASSED",
             "result": "REL000_EVIDENCE_GENERATED",
         }
-        self.assert_reason(
-            "DEPENDENCY_SECURITY_FALSELY_PASSED",
-            lambda: rel000.validate_owner_state(report),
-        )
+        rel000.validate_owner_state(report)
 
     def test_46_release_candidate_unblocked(self):
         report = {
@@ -1104,8 +1216,8 @@ class Rel000FocusedTests(unittest.TestCase):
             "rel000_def_001_status": "RESOLVED",
             "normative_scope_status": "RESOLVED",
             "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
-            "audit_tracking_gap_detected": True,
-            "audit_tracking_gap_count": 10,
+            "audit_tracking_gap_detected": False,
+            "audit_tracking_gap_count": 0,
             "technical_evidence_status": "PASSED",
             "result": "REL000_EVIDENCE_GENERATED",
         }
@@ -1114,7 +1226,7 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_owner_state(report),
         )
 
-    def test_47_tracking_gap_hidden(self):
+    def test_47_tracking_gap_falsely_reported(self):
         report = {
             "owner_approval_status": "PENDING",
             "dependency_security_status": "BLOCKED",
@@ -1122,13 +1234,13 @@ class Rel000FocusedTests(unittest.TestCase):
             "rel000_def_001_status": "RESOLVED",
             "normative_scope_status": "RESOLVED",
             "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
-            "audit_tracking_gap_detected": False,
-            "audit_tracking_gap_count": 0,
+            "audit_tracking_gap_detected": True,
+            "audit_tracking_gap_count": 10,
             "technical_evidence_status": "PASSED",
             "result": "REL000_EVIDENCE_GENERATED",
         }
         self.assert_reason(
-            "AUDIT_TRACKING_GAP_HIDDEN",
+            "AUDIT_TRACKING_GAP_INVALID",
             lambda: rel000.validate_owner_state(report),
         )
 
@@ -1182,6 +1294,300 @@ class Rel000FocusedTests(unittest.TestCase):
         self.assertEqual("direct", advisories["next"]["direct_or_transitive"])
         self.assertEqual("transitive", advisories["sharp"]["direct_or_transitive"])
         self.assertEqual(1, advisories["next"]["dependency_path_count"])
+
+    # 62-85: controlled dependency-remediation states and fail-closed graph checks.
+    def test_62_security_base_audit_not_executed(self):
+        inputs = list(self.make_remediation_inputs())
+        inputs[2]["command_executed"] = False
+        self.assert_reason(
+            "AUDIT_COMMAND_NOT_EXECUTED",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_63_security_branch_audit_not_executed(self):
+        inputs = list(self.make_remediation_inputs())
+        inputs[3]["command_executed"] = False
+        self.assert_reason(
+            "AUDIT_COMMAND_NOT_EXECUTED",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_64_security_audit_not_parseable(self):
+        inputs = list(self.make_remediation_inputs())
+        inputs[3]["parse_succeeded"] = False
+        self.assert_reason(
+            "AUDIT_PARSE_FAILED",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_65_security_critical_advisory_rejected(self):
+        inputs = list(self.make_remediation_inputs())
+        inputs[3]["advisories"][0]["severity"] = "critical"
+        inputs[3]["totals"].update(high=0, critical=1)
+        self.assert_reason(
+            "AUDIT_CRITICAL_PRESENT",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_66_security_new_advisory_rejected(self):
+        inputs = list(self.make_remediation_inputs())
+        added = copy.deepcopy(inputs[3]["advisories"][0])
+        added["advisory_id"] = "GHSA-1111-2222-3333"
+        inputs[3]["advisories"].append(added)
+        inputs[3]["totals"]["high"] += 1
+        inputs[3]["totals"]["total"] += 1
+        self.assert_reason(
+            "NEW_DEPENDENCY_ADVISORY",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_67_security_severity_increase_rejected(self):
+        moderate_id = next(
+            item["advisory_id"]
+            for item in self.make_audit()["advisories"]
+            if item["severity"] == "moderate"
+        )
+        inputs = list(self.make_remediation_inputs({moderate_id}))
+        inputs[3]["advisories"][0]["severity"] = "high"
+        inputs[3]["totals"].update(high=1, moderate=0)
+        self.assert_reason(
+            "DEPENDENCY_ADVISORY_SEVERITY_INCREASED",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_68_security_new_affected_package_rejected(self):
+        inputs = list(self.make_remediation_inputs())
+        inputs[3]["advisories"][0]["package"] = "other-image-library"
+        self.assert_reason(
+            "NEW_AFFECTED_DEPENDENCY_PACKAGE",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_69_unauthorized_dependency_file_rejected(self):
+        root, base = self.make_dependency_repo()
+        extra = root / "tools/package.json"
+        extra.parent.mkdir()
+        extra.write_text("{}\n", encoding="utf-8")
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_70_inconsistent_lockfile_rejected(self):
+        root, base = self.make_dependency_repo()
+        lock = root / "apps/web/pnpm-lock.yaml"
+        lock.write_text(
+            lock.read_text(encoding="utf-8").replace("  next@16.2.11:\n", ""),
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "LOCKFILE_INCONSISTENT",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_71_closed_issue_with_present_advisory_rejected(self):
+        inputs = self.make_remediation_inputs(issue5_state="CLOSED")
+        self.assert_reason(
+            "SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_72_removed_advisory_open_issue_is_pending_merge(self):
+        removed = "GHSA-4633-3j49-mh5q"
+        remaining = rel000.EXPECTED_BASE_ADVISORIES - {removed}
+        result = rel000.validate_issue_and_audit(
+            *self.make_remediation_inputs(remaining),
+            rel000.SECURITY_REMEDIATION,
+        )
+        record = next(
+            item for item in result["remediated_advisories"]
+            if item["advisory_id"] == removed
+        )
+        self.assertEqual("REMEDIATED_PENDING_MERGE", record["remediation_status"])
+
+    def test_73_issue30_fully_remediated_pending_merge(self):
+        result = rel000.validate_issue_and_audit(
+            *self.make_remediation_inputs({rel000.ISSUE5_ADVISORY}),
+            rel000.SECURITY_REMEDIATION,
+        )
+        self.assertEqual(
+            "REMEDIATED_PENDING_MERGE", result["issue_30_remediation_status"]
+        )
+
+    def test_74_issue30_partial_when_only_brace_remains(self):
+        result = rel000.validate_issue_and_audit(
+            *self.make_remediation_inputs(
+                {rel000.ISSUE5_ADVISORY, "GHSA-mh99-v99m-4gvg"}
+            ),
+            rel000.SECURITY_REMEDIATION,
+        )
+        self.assertEqual("PARTIALLY_REMEDIATED", result["issue_30_remediation_status"])
+
+    def test_75_sharp_present_keeps_issue5_blocked(self):
+        result = rel000.validate_issue_and_audit(
+            *self.make_remediation_inputs(), rel000.SECURITY_REMEDIATION
+        )
+        self.assertEqual("UNRESOLVED", result["issue_5_remediation_status"])
+        self.assertEqual(
+            "BLOCKED_BY_UPSTREAM_COMPATIBILITY", result["sharp_remediation_status"]
+        )
+
+    def test_76_sharp_absent_open_issue_is_pending_merge(self):
+        result = rel000.validate_issue_and_audit(
+            *self.make_remediation_inputs(set()), rel000.SECURITY_REMEDIATION
+        )
+        self.assertEqual(
+            "REMEDIATED_PENDING_MERGE", result["issue_5_remediation_status"]
+        )
+
+    def test_77_zero_advisories_open_issues_is_not_passed(self):
+        result = rel000.validate_issue_and_audit(
+            *self.make_remediation_inputs(set()), rel000.SECURITY_REMEDIATION
+        )
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+
+    def test_78_zero_advisories_closed_issues_is_passed(self):
+        result = rel000.validate_issue_and_audit(
+            *self.make_remediation_inputs(
+                set(), issue5_state="CLOSED", issue30_state="CLOSED"
+            ),
+            rel000.SECURITY_REMEDIATION,
+        )
+        self.assertEqual("PASSED", result["dependency_security_status"])
+        self.assertEqual("BLOCKED_BY_OWNER_DECISION", result["release_candidate_status"])
+
+    def test_79_passed_security_does_not_imply_owner_approval(self):
+        report = {
+            "owner_approval_status": "APPROVED",
+            "dependency_security_status": "PASSED",
+            "release_candidate_status": "BLOCKED_BY_OWNER_DECISION",
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
+            "audit_tracking_gap_detected": False,
+            "audit_tracking_gap_count": 0,
+        }
+        self.assert_reason(
+            "OWNER_APPROVAL_FALSELY_ASSERTED",
+            lambda: rel000.validate_owner_state(report),
+        )
+
+    def test_80_passed_security_does_not_verify_rel000(self):
+        report = {
+            "owner_approval_status": "PENDING",
+            "dependency_security_status": "PASSED",
+            "release_candidate_status": "BLOCKED_BY_OWNER_DECISION",
+            "mvp0_p0_items_verified": 29,
+            "mvp0_p0_items_blocked": 0,
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
+            "audit_tracking_gap_detected": False,
+            "audit_tracking_gap_count": 0,
+        }
+        self.assert_reason(
+            "REL000_FALSELY_VERIFIED", lambda: rel000.validate_owner_state(report)
+        )
+
+    def test_81_normal_mode_still_rejects_dependency_drift(self):
+        dirty = {
+            "dependency_manifest_changed": True,
+            "dependency_lockfile_changed": True,
+            "dependency_diff_against_base": "DIRTY",
+        }
+        issue5, issue30, base, branch, _ = self.make_security_inputs()
+        self.assert_reason(
+            "DEPENDENCY_FILES_CHANGED",
+            lambda: rel000.validate_issue_and_audit(
+                issue5,
+                issue30,
+                base,
+                branch,
+                dirty,
+                rel000.NORMAL_RELEASE_EVIDENCE,
+            ),
+        )
+
+    def test_82_incompatible_override_rejected(self):
+        root, base = self.make_dependency_repo()
+        workspace = root / "apps/web/pnpm-workspace.yaml"
+        workspace.write_text(
+            workspace.read_text(encoding="utf-8").replace(
+                '"brace-expansion@>=4.0.0 <5.0.8": 5.0.8',
+                '"brace-expansion@>=4.0.0 <5.0.8": 1.1.17',
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "INCOMPATIBLE_DEPENDENCY_OVERRIDE",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_83_duplicate_vulnerable_lock_version_rejected(self):
+        root, base = self.make_dependency_repo()
+        lock = root / "apps/web/pnpm-lock.yaml"
+        lock.write_text(
+            lock.read_text(encoding="utf-8")
+            + "  brace-expansion@5.0.7:\n    resolution: {}\n",
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "VULNERABLE_VERSION_RETAINED",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_84_prerelease_dependency_rejected(self):
+        root, base = self.make_dependency_repo()
+        lock = root / "apps/web/pnpm-lock.yaml"
+        lock.write_text(
+            lock.read_text(encoding="utf-8")
+            + "  brace-expansion@5.0.8-rc.0:\n    resolution: {}\n",
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_85_dynamic_focused_count_is_self_consistent(self):
+        class PassingCase(unittest.TestCase):
+            def runTest(self):
+                self.assertTrue(True)
+
+        suite = unittest.TestSuite([PassingCase()])
+        discovered = focused_runner.count_cases(suite)
+        result = focused_runner.execute_suite(suite, discovered, stream=io.StringIO())
+        self.assertEqual(result["python_tests_expected"], result["python_tests_discovered"])
+        self.assertEqual(result["python_tests_executed"], result["python_tests_discovered"])
+        self.assertEqual(result["python_tests_passed"], result["python_tests_executed"])
+        self.assertEqual(0, result["python_tests_failed"])
+        self.assertEqual(0, result["python_tests_skipped"])
 
 
 if __name__ == "__main__":

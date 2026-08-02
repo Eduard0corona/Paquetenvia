@@ -1330,6 +1330,8 @@ jobs:
       REL000_TESTED_GIT_SHA: ${{ github.sha }}
       REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
+      REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+      REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
       REL000_JOB_RESULTS_JSON: >-
@@ -1438,14 +1440,17 @@ jobs:
             --input "$RUNNER_TEMP/rel000-security-tracking-raw.json" \
             --output "$RUNNER_TEMP/rel000-security-tracking.json"
 
-      - name: Prove dependency files are unchanged
+      - name: Resolve explicit REL-000 mode and verify the branch lockfile
         shell: bash
         run: |
           set -euo pipefail
-          git diff --exit-code "$REL000_BASE_MAIN_SHA" -- \
-            apps/web/package.json \
-            apps/web/pnpm-lock.yaml \
-            apps/web/pnpm-workspace.yaml
+          mode="$(
+            python ./tools/rel-000/rel000.py resolve-mode \
+              --policy "$REL000_REMEDIATION_POLICY_PATH" \
+              --source-branch "$REL000_SOURCE_BRANCH"
+          )"
+          echo "REL000_MODE=$mode" >> "$GITHUB_ENV"
+          pnpm --dir apps/web install --frozen-lockfile
 
       - name: Capture and sanitize real base and branch audits
         shell: bash
@@ -1458,6 +1463,8 @@ jobs:
             apps/web/pnpm-lock.yaml \
             apps/web/pnpm-workspace.yaml |
             tar -x -C "$base_source"
+
+          pnpm --dir "$base_source/apps/web" install --frozen-lockfile --lockfile-only
 
           set +e
           pnpm --dir "$base_source/apps/web" audit --json \

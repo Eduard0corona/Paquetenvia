@@ -22,6 +22,11 @@ from typing import Any, Callable, Iterable
 FORMAT_VERSION = "paquetenvia-rel000-v1"
 SOURCE_PROVENANCE_VERSION = "paquetenvia-rel000-source-v1"
 EXECUTION_EVIDENCE_VERSION = "paquetenvia-rel000-execution-v2"
+NORMAL_RELEASE_EVIDENCE = "NORMAL_RELEASE_EVIDENCE"
+SECURITY_REMEDIATION = "SECURITY_REMEDIATION"
+REL000_MODES = {NORMAL_RELEASE_EVIDENCE, SECURITY_REMEDIATION}
+SECURITY_REMEDIATION_BASE_SHA = "1ac8054026b3e4cb06612001f2be053d351fd2cf"
+SECURITY_REMEDIATION_BRANCH = "fix/security-next-sharp-brace-expansion"
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -108,6 +113,18 @@ DEPENDENCY_FILES = (
     "apps/web/pnpm-lock.yaml",
     "apps/web/pnpm-workspace.yaml",
 )
+SECURITY_REMEDIATION_DEPENDENCY_FILES = {
+    "apps/web/package.json",
+    "apps/web/pnpm-lock.yaml",
+    "apps/web/pnpm-workspace.yaml",
+}
+DEPENDENCY_FILE_NAMES = {
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+}
 ISSUE5_ADVISORY = "GHSA-f88m-g3jw-g9cj"
 ADDITIONAL_SECURITY_ISSUE_TITLE = (
     "Security: remediate inherited Next.js and brace-expansion advisories "
@@ -133,6 +150,8 @@ EXPECTED_BASE_ADVISORIES = {
     "GHSA-p9j2-gv94-2wf4",
     "GHSA-q8wf-6r8g-63ch",
 }
+ISSUE30_ADVISORIES = EXPECTED_BASE_ADVISORIES - {ISSUE5_ADVISORY}
+SEVERITY_RANK = {"low": 0, "moderate": 1, "high": 2, "critical": 3}
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_RESULT_WORDS = {
@@ -200,6 +219,58 @@ def load_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         fail("JSON_INPUT_INVALID", f"Unable to load JSON input {path.name}.", error=str(exc))
+
+
+def load_remediation_policy(path: Path) -> dict[str, Any]:
+    policy = load_json(path)
+    if not isinstance(policy, dict):
+        fail("REMEDIATION_POLICY_INVALID", "The remediation policy must be a JSON object.")
+    if policy.get("default_mode") != NORMAL_RELEASE_EVIDENCE:
+        fail("REMEDIATION_POLICY_INVALID", "The remediation policy must fail closed to normal mode.")
+    remediation = policy.get("security_remediation")
+    if not isinstance(remediation, dict):
+        fail("REMEDIATION_POLICY_INVALID", "The security remediation authorization is missing.")
+    if (
+        remediation.get("mode") != SECURITY_REMEDIATION
+        or remediation.get("authorized_base_sha") != SECURITY_REMEDIATION_BASE_SHA
+        or remediation.get("authorized_source_branch") != SECURITY_REMEDIATION_BRANCH
+        or set(remediation.get("allowed_dependency_files") or [])
+        != SECURITY_REMEDIATION_DEPENDENCY_FILES
+    ):
+        fail("REMEDIATION_POLICY_INVALID", "The security remediation authorization drifted.")
+    return policy
+
+
+def resolve_rel000_mode(policy: dict[str, Any], source_branch: str) -> str:
+    remediation = policy["security_remediation"]
+    if source_branch == remediation["authorized_source_branch"]:
+        return SECURITY_REMEDIATION
+    return NORMAL_RELEASE_EVIDENCE
+
+
+def validate_mode_authorization(
+    mode: str,
+    policy: dict[str, Any],
+    source_branch: str,
+    base_main_sha: str,
+) -> None:
+    if mode not in REL000_MODES:
+        fail("REL000_MODE_INVALID", "The REL-000 execution mode is invalid.", mode=mode)
+    resolved = resolve_rel000_mode(policy, source_branch)
+    if mode != resolved:
+        fail(
+            "REL000_MODE_NOT_AUTHORIZED",
+            "The requested REL-000 mode is not authorized for this source branch.",
+            requested=mode,
+            authorized=resolved,
+        )
+    if mode == SECURITY_REMEDIATION and base_main_sha != SECURITY_REMEDIATION_BASE_SHA:
+        fail(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            "Security remediation requires the exact authorized base SHA.",
+            expected=SECURITY_REMEDIATION_BASE_SHA,
+            actual=base_main_sha,
+        )
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -1948,26 +2019,188 @@ def validate_decisions(gates: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_dependency_diff(repository_root: Path, base_main_sha: str) -> dict[str, Any]:
-    changed = run_git(
-        repository_root,
-        "diff",
-        "--name-only",
-        base_main_sha,
-        "--",
-        *DEPENDENCY_FILES,
-    ).splitlines()
-    changed = sorted(path.replace("\\", "/") for path in changed if path.strip())
-    if changed:
+def _semver_tuple(value: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def _lock_versions(lock_text: str, package: str) -> set[str]:
+    pattern = re.compile(rf"^  {re.escape(package)}@([0-9][^:() ]*):", re.MULTILINE)
+    return {match.group(1) for match in pattern.finditer(lock_text)}
+
+
+def validate_dependency_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    mode: str = NORMAL_RELEASE_EVIDENCE,
+) -> dict[str, Any]:
+    all_changed = sorted(
+        {
+            path.replace("\\", "/")
+            for output in (
+                run_git(repository_root, "diff", "--name-only", base_main_sha),
+                run_git(repository_root, "ls-files", "--others", "--exclude-standard"),
+            )
+            for path in output.splitlines()
+            if path.strip()
+        }
+    )
+    changed = sorted(path for path in all_changed if path in SECURITY_REMEDIATION_DEPENDENCY_FILES)
+    unexpected_dependency_files = sorted(
+        path
+        for path in all_changed
+        if Path(path).name in DEPENDENCY_FILE_NAMES
+        and path not in SECURITY_REMEDIATION_DEPENDENCY_FILES
+    )
+    if unexpected_dependency_files:
         fail(
-            "DEPENDENCY_FILES_CHANGED",
-            "Dependency manifests or lockfiles changed relative to the fixed base.",
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            "A dependency file outside the REL-000 allowlist changed.",
+            files=unexpected_dependency_files,
+        )
+    if mode == NORMAL_RELEASE_EVIDENCE:
+        if changed:
+            fail(
+                "DEPENDENCY_FILES_CHANGED",
+                "Dependency manifests or lockfiles changed in normal release-evidence mode.",
+                files=changed,
+            )
+        return {
+            "dependency_manifest_changed": False,
+            "dependency_lockfile_changed": False,
+            "dependency_workspace_changed": False,
+            "dependency_diff_against_base": "CLEAN",
+            "changed_dependency_files": [],
+            "lockfile_consistency_verified": True,
+            "vulnerable_lock_versions": [],
+        }
+    if mode != SECURITY_REMEDIATION:
+        fail("REL000_MODE_INVALID", "The dependency validator received an invalid mode.")
+    required = {"apps/web/package.json", "apps/web/pnpm-lock.yaml"}
+    if not required.issubset(changed) or not set(changed).issubset(
+        SECURITY_REMEDIATION_DEPENDENCY_FILES
+    ):
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "Security remediation changed an unexpected dependency scope.",
             files=changed,
         )
+
+    package_path = repository_root / "apps/web/package.json"
+    current_package = load_json(package_path)
+    try:
+        base_package = json.loads(
+            run_git(repository_root, "show", f"{base_main_sha}:apps/web/package.json")
+        )
+    except json.JSONDecodeError as exc:
+        fail("BASE_DEPENDENCY_MANIFEST_INVALID", "The base package manifest is invalid.", error=str(exc))
+    expected_package = copy.deepcopy(base_package)
+    expected_package["dependencies"]["next"] = current_package["dependencies"].get("next")
+    expected_package["devDependencies"]["eslint-config-next"] = current_package[
+        "devDependencies"
+    ].get("eslint-config-next")
+    if current_package != expected_package:
+        fail(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            "Only Next.js and eslint-config-next may change in the web manifest.",
+        )
+    next_version = current_package["dependencies"].get("next")
+    eslint_next_version = current_package["devDependencies"].get("eslint-config-next")
+    if next_version != "16.2.11" or eslint_next_version != next_version:
+        fail(
+            "SECURITY_REMEDIATION_VERSION_INVALID",
+            "Next.js dependencies must use the aligned minimum patched stable version.",
+            next=next_version,
+            eslint_config_next=eslint_next_version,
+        )
+    if _semver_tuple(str(next_version)) is None:
+        fail("PRERELEASE_DEPENDENCY_REJECTED", "Prerelease dependency versions are forbidden.")
+
+    lock_text = (repository_root / "apps/web/pnpm-lock.yaml").read_text(encoding="utf-8")
+    if (
+        f"specifier: {next_version}" not in lock_text
+        or not re.search(rf"^  next@{re.escape(next_version)}:", lock_text, re.MULTILINE)
+        or not re.search(
+            rf"^  eslint-config-next@{re.escape(eslint_next_version)}:",
+            lock_text,
+            re.MULTILINE,
+        )
+    ):
+        fail("LOCKFILE_INCONSISTENT", "The lockfile does not match the dependency manifest.")
+    brace_versions = _lock_versions(lock_text, "brace-expansion")
+    sharp_versions = _lock_versions(lock_text, "sharp")
+    prerelease = sorted(
+        version
+        for version in brace_versions | sharp_versions
+        if _semver_tuple(version) is None
+    )
+    if prerelease:
+        fail(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            "Prerelease dependency versions are forbidden in the remediation graph.",
+            versions=prerelease,
+        )
+    vulnerable: list[str] = []
+    for version in brace_versions:
+        parsed = _semver_tuple(version)
+        if parsed is not None and (parsed < (1, 1, 17) or (4, 0, 0) <= parsed < (5, 0, 8)):
+            vulnerable.append(f"brace-expansion@{version}")
+    for version in sharp_versions:
+        parsed = _semver_tuple(version)
+        if parsed is not None and parsed < (0, 35, 0):
+            vulnerable.append(f"sharp@{version}")
+
+    workspace_text = (repository_root / "apps/web/pnpm-workspace.yaml").read_text(
+        encoding="utf-8"
+    )
+    brace_overrides = {
+        (match.group(1), match.group(2))
+        for match in re.finditer(
+            r'^\s*["\']?(brace-expansion@[^"\']+)["\']?:\s*([^\s#]+)',
+            workspace_text,
+            re.MULTILINE,
+        )
+    }
+    expected_overrides = {
+        ("brace-expansion@<1.1.17", "1.1.17"),
+        ("brace-expansion@>=4.0.0 <5.0.8", "5.0.8"),
+    }
+    if brace_overrides != expected_overrides:
+        fail(
+            "INCOMPATIBLE_DEPENDENCY_OVERRIDE",
+            "Brace-expansion overrides must stay same-major and satisfy every consumer range.",
+            overrides=sorted(brace_overrides),
+        )
+    if brace_versions != {"1.1.17", "5.0.8"}:
+        fail(
+            "VULNERABLE_VERSION_RETAINED",
+            "The lockfile must contain only the patched brace-expansion branches.",
+            versions=sorted(brace_versions),
+        )
+    for path in all_changed:
+        if path in SECURITY_REMEDIATION_DEPENDENCY_FILES or not path.startswith("apps/web/"):
+            continue
+        added = [
+            line[1:]
+            for line in run_git(repository_root, "diff", "--unified=0", base_main_sha, "--", path).splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+        if any(re.search(r"(?:from\s+|require\()['\"]sharp['\"]", line) for line in added):
+            fail("DIRECT_SHARP_USAGE_ADDED", "The remediation added direct Sharp usage.", file=path)
+        if any("next/image" in line for line in added):
+            fail("NEXT_IMAGE_USAGE_ADDED", "The remediation added next/image usage.", file=path)
     return {
-        "dependency_manifest_changed": False,
-        "dependency_lockfile_changed": False,
-        "dependency_diff_against_base": "CLEAN",
+        "dependency_manifest_changed": True,
+        "dependency_lockfile_changed": True,
+        "dependency_workspace_changed": "apps/web/pnpm-workspace.yaml" in changed,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": changed,
+        "lockfile_consistency_verified": True,
+        "vulnerable_lock_versions": sorted(vulnerable),
+        "brace_expansion_versions": sorted(brace_versions),
+        "sharp_versions": sorted(sharp_versions),
     }
 
 
@@ -2056,12 +2289,32 @@ def validate_issue_and_audit(
     base_audit: dict[str, Any],
     branch_audit: dict[str, Any],
     dependency_diff: dict[str, Any],
+    mode: str = NORMAL_RELEASE_EVIDENCE,
 ) -> dict[str, Any]:
-    if int(issue.get("number", 0)) != 5 or str(issue.get("state", "")).upper() != "OPEN":
-        fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 must be consulted and remain open.")
+    if int(issue.get("number", 0)) != 5:
+        fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 must be consulted.")
     issue5_ids = {str(value).lower() for value in issue.get("tracked_advisory_ids") or []}
     if issue5_ids != {ISSUE5_ADVISORY.lower()}:
         fail("ISSUE5_SCOPE_MISREPRESENTED", "Issue #5 must track only its sharp advisory.")
+    issue5_state = str(issue.get("state", "")).upper()
+    issue30_state = str(additional_issue.get("state", "")).upper()
+    expected_issue30_ids = {value.lower() for value in ISSUE30_ADVISORIES}
+    if (
+        int(additional_issue.get("number", 0)) != 30
+        or issue30_state not in {"OPEN", "CLOSED"}
+        or additional_issue.get("title") != ADDITIONAL_SECURITY_ISSUE_TITLE
+        or {
+            str(value).lower()
+            for value in additional_issue.get("tracked_advisory_ids") or []
+        }
+        != expected_issue30_ids
+    ):
+        fail(
+            "ADDITIONAL_SECURITY_TRACKING_INVALID",
+            "Issue #30 must track exactly its ten registered advisories.",
+        )
+    if issue5_state not in {"OPEN", "CLOSED"}:
+        fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 has an invalid state.")
 
     base = validate_audit_snapshot(base_audit, "base")
     branch = validate_audit_snapshot(branch_audit, "branch")
@@ -2069,65 +2322,148 @@ def validate_issue_and_audit(
     branch_totals = branch["totals"]
     if branch_totals["critical"] > 0:
         fail("AUDIT_CRITICAL_PRESENT", "The branch audit contains a critical advisory.")
-    for key, expected in EXPECTED_BASE_AUDIT_TOTALS.items():
-        if base_totals[key] != expected:
-            fail(
-                "BASE_AUDIT_UNEXPECTED",
-                "The real base audit no longer matches the fixed inherited baseline.",
-                severity=key,
-                expected=expected,
-                actual=base_totals[key],
-            )
-    for key in ("total", "critical", "high", "moderate", "low"):
-        if branch_totals[key] > base_totals[key]:
-            fail(
-                "BRANCH_AUDIT_WORSENED",
-                "The branch audit worsened relative to the real base audit.",
-                severity=key,
-                base=base_totals[key],
-                branch=branch_totals[key],
-            )
-
-    def identities(snapshot: dict[str, Any]) -> set[tuple[str, str, str, tuple[str, ...]]]:
-        return {
-            (
-                item["advisory_id"].lower(),
-                item["package"],
-                item["severity"],
-                tuple(item["installed_versions"]),
-            )
-            for item in snapshot["advisories"]
-        }
-
     base_ids = {item["advisory_id"].lower() for item in base["advisories"]}
     branch_ids = {item["advisory_id"].lower() for item in branch["advisories"]}
     expected_ids = {value.lower() for value in EXPECTED_BASE_ADVISORIES}
-    if base_ids != expected_ids:
-        fail("BASE_ADVISORY_SET_UNEXPECTED", "The base advisory set is incomplete or changed.")
-    if identities(base) != identities(branch):
-        fail(
-            "BRANCH_ADVISORY_SET_CHANGED",
-            "The branch advisory or affected package set changed without dependency changes.",
-        )
-    if any(dependency_diff.get(key) is not False for key in (
-        "dependency_manifest_changed",
-        "dependency_lockfile_changed",
-    )) or dependency_diff.get("dependency_diff_against_base") != "CLEAN":
-        fail("DEPENDENCY_FILES_CHANGED", "Dependency files changed relative to the fixed base.")
+    if mode == SECURITY_REMEDIATION:
+        for key, expected in EXPECTED_BASE_AUDIT_TOTALS.items():
+            if base_totals[key] != expected:
+                fail(
+                    "BASE_AUDIT_UNEXPECTED",
+                    "The real base audit no longer matches the authorized inherited baseline.",
+                    severity=key,
+                    expected=expected,
+                    actual=base_totals[key],
+                )
+        if base_ids != expected_ids:
+            fail("BASE_ADVISORY_SET_UNEXPECTED", "The base advisory set is incomplete or changed.")
+        if dependency_diff.get("dependency_diff_against_base") != (
+            "AUTHORIZED_SECURITY_REMEDIATION"
+        ):
+            fail("DEPENDENCY_FILES_CHANGED", "Security remediation dependency evidence is missing.")
+    elif mode == NORMAL_RELEASE_EVIDENCE:
+        if dependency_diff.get("dependency_diff_against_base") != "CLEAN":
+            fail("DEPENDENCY_FILES_CHANGED", "Normal release evidence requires a clean dependency diff.")
+    else:
+        fail("REL000_MODE_INVALID", "The audit validator received an invalid mode.")
 
-    additional_ids = base_ids - {ISSUE5_ADVISORY.lower()}
-    if (
-        str(additional_issue.get("state", "")).upper() != "OPEN"
-        or additional_issue.get("title") != ADDITIONAL_SECURITY_ISSUE_TITLE
-        or {
-            str(value).lower()
-            for value in additional_issue.get("tracked_advisory_ids") or []
-        } != additional_ids
-    ):
+    untracked_base = base_ids - expected_ids
+    if untracked_base:
         fail(
-            "ADDITIONAL_SECURITY_TRACKING_INVALID",
-            "The additional security issue must remain open and track the ten-advisory gap.",
+            "UNTRACKED_DEPENDENCY_ADVISORY",
+            "The base audit contains an advisory not tracked by Issue #5 or Issue #30.",
+            advisories=sorted(untracked_base),
         )
+    base_by_id = {item["advisory_id"].lower(): item for item in base["advisories"]}
+    branch_by_id = {item["advisory_id"].lower(): item for item in branch["advisories"]}
+    new_ids = branch_ids - base_ids
+    if new_ids:
+        fail(
+            "NEW_DEPENDENCY_ADVISORY",
+            "The branch audit introduced a new advisory or changed an advisory identifier.",
+            advisories=sorted(new_ids),
+        )
+    base_packages = {item["package"] for item in base["advisories"]}
+    new_packages = {item["package"] for item in branch["advisories"]} - base_packages
+    if new_packages:
+        fail(
+            "NEW_AFFECTED_DEPENDENCY_PACKAGE",
+            "The branch audit introduced a newly affected package.",
+            packages=sorted(new_packages),
+        )
+    for advisory_id in branch_ids:
+        previous = base_by_id[advisory_id]
+        current = branch_by_id[advisory_id]
+        if current["package"] != previous["package"]:
+            fail(
+                "NEW_AFFECTED_DEPENDENCY_PACKAGE",
+                "An advisory moved to a different affected package.",
+                advisory=advisory_id,
+            )
+        if SEVERITY_RANK[current["severity"]] > SEVERITY_RANK[previous["severity"]]:
+            fail(
+                "DEPENDENCY_ADVISORY_SEVERITY_INCREASED",
+                "An advisory severity increased on the branch.",
+                advisory=advisory_id,
+                base=previous["severity"],
+                branch=current["severity"],
+            )
+    if mode == NORMAL_RELEASE_EVIDENCE:
+        def identities(snapshot: dict[str, Any]) -> set[tuple[str, str, str, tuple[str, ...]]]:
+            return {
+                (
+                    item["advisory_id"].lower(),
+                    item["package"],
+                    item["severity"],
+                    tuple(item["installed_versions"]),
+                )
+                for item in snapshot["advisories"]
+            }
+
+        if identities(base) != identities(branch):
+            fail(
+                "BRANCH_ADVISORY_SET_CHANGED",
+                "The branch advisory set changed in normal release-evidence mode.",
+            )
+
+    for vulnerable in dependency_diff.get("vulnerable_lock_versions") or []:
+        if vulnerable.startswith("sharp@") and ISSUE5_ADVISORY.lower() not in branch_ids:
+            fail(
+                "VULNERABLE_VERSION_RETAINED",
+                "The lockfile retained vulnerable Sharp while the audit claimed remediation.",
+            )
+        if vulnerable.startswith("brace-expansion@") and (
+            "GHSA-mh99-v99m-4gvg".lower() not in branch_ids
+        ):
+            fail(
+                "VULNERABLE_VERSION_RETAINED",
+                "The lockfile retained vulnerable brace-expansion while the audit claimed remediation.",
+            )
+
+    issue5_present = bool(branch_ids & issue5_ids)
+    issue30_present = branch_ids & expected_issue30_ids
+    if issue5_present and issue5_state == "CLOSED":
+        fail(
+            "SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT",
+            "Issue #5 is closed while its advisory remains present.",
+            issue=5,
+        )
+    if issue30_present and issue30_state == "CLOSED":
+        fail(
+            "SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT",
+            "Issue #30 is closed while one or more advisories remain present.",
+            issue=30,
+        )
+    issue5_status = (
+        "UNRESOLVED"
+        if issue5_present
+        else "REMEDIATED_PENDING_MERGE"
+        if issue5_state == "OPEN"
+        else "REMEDIATED"
+    )
+    if issue30_present:
+        issue30_status = (
+            "PARTIALLY_REMEDIATED"
+            if issue30_present != expected_issue30_ids
+            else "UNRESOLVED"
+        )
+    else:
+        issue30_status = (
+            "REMEDIATED_PENDING_MERGE" if issue30_state == "OPEN" else "REMEDIATED"
+        )
+    removed_ids = base_ids - branch_ids
+    if branch_ids:
+        dependency_security_status = "BLOCKED"
+        release_candidate_status = "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION"
+    elif issue5_state == "OPEN" or issue30_state == "OPEN":
+        dependency_security_status = "REMEDIATED_PENDING_MERGE"
+        release_candidate_status = (
+            "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION"
+        )
+    else:
+        dependency_security_status = "PASSED"
+        release_candidate_status = "BLOCKED_BY_OWNER_DECISION"
+
     tracking_by_id = {
         advisory_id: (
             "Issue #5"
@@ -2144,6 +2480,8 @@ def validate_issue_and_audit(
             "affected_range": item["affected_range"],
             "patched_range": item["patched_range"],
             "direct_or_transitive": item["direct_or_transitive"],
+            "installed_versions": item["installed_versions"],
+            "dependency_path_count": item["dependency_path_count"],
             "fix_available": item["fix_available"],
             "fix_compatibility": item["fix_compatibility"],
             "tracking_issue": tracking_by_id[item["advisory_id"].lower()],
@@ -2151,23 +2489,48 @@ def validate_issue_and_audit(
         for item in branch["advisories"]
     ]
     return {
+        "mode": mode,
         "known_security_issues": [
             {
                 "id": "Issue #5",
-                "state": "OPEN",
+                "state": issue5_state,
                 "title": issue.get("title"),
                 "url": issue.get("url"),
                 "tracked_advisories": 1,
+                "remediation_status": issue5_status,
             },
             {
                 "id": f"Issue #{additional_issue['number']}",
-                "state": "OPEN",
+                "state": issue30_state,
                 "title": additional_issue.get("title"),
                 "url": additional_issue.get("url"),
                 "tracked_advisories": 10,
+                "remediation_status": issue30_status,
             },
         ],
         "dependency_advisories": redacted_advisories,
+        "remediated_advisories": [
+            {
+                "advisory_id": base_by_id[advisory_id]["advisory_id"],
+                "package": base_by_id[advisory_id]["package"],
+                "severity": base_by_id[advisory_id]["severity"],
+                "tracking_issue": tracking_by_id[advisory_id],
+                "remediation_status": "REMEDIATED_PENDING_MERGE"
+                if (
+                    tracking_by_id[advisory_id] == "Issue #5" and issue5_state == "OPEN"
+                )
+                or (
+                    tracking_by_id[advisory_id] == f"Issue #{additional_issue['number']}"
+                    and issue30_state == "OPEN"
+                )
+                else "REMEDIATED",
+            }
+            for advisory_id in sorted(removed_ids)
+        ],
+        "removed_advisory_ids": sorted(base_by_id[value]["advisory_id"] for value in removed_ids),
+        "remaining_advisory_ids": sorted(
+            branch_by_id[value]["advisory_id"] for value in branch_ids
+        ),
         "base_totals": base_totals,
         "branch_totals": branch_totals,
         "deltas": {
@@ -2178,6 +2541,19 @@ def validate_issue_and_audit(
             "number": additional_issue["number"],
             "url": additional_issue["url"],
         },
+        "issue_5_remediation_status": issue5_status,
+        "issue_30_remediation_status": issue30_status,
+        "sharp_remediation_status": (
+            "BLOCKED_BY_UPSTREAM_COMPATIBILITY" if issue5_present else issue5_status
+        ),
+        "brace_expansion_remediation_status": (
+            "BLOCKED_BY_UPSTREAM_DEPENDENCY_GRAPH"
+            if "GHSA-mh99-v99m-4gvg".lower() in branch_ids
+            else "REMEDIATED"
+        ),
+        "dependency_security_status": dependency_security_status,
+        "release_candidate_status": release_candidate_status,
+        "dependency_diff": dependency_diff,
     }
 
 
@@ -2370,6 +2746,7 @@ def release_report(
             )
         },
         "known_security_issues": security["known_security_issues"],
+        "rel000_mode": security["mode"],
         "dependency_audit_command_executed": True,
         "dependency_audit_parse_succeeded": True,
         "tracked_issue_5_advisories": 1,
@@ -2385,14 +2762,40 @@ def release_report(
         **{f"dependency_audit_delta_{key}": deltas[key] for key in (
             "total", "critical", "high", "moderate", "low"
         )},
-        "dependency_manifest_changed": False,
-        "dependency_lockfile_changed": False,
-        "dependency_diff_against_base": "CLEAN",
-        "audit_tracking_gap_detected": True,
-        "audit_tracking_gap_count": 10,
+        "dependency_manifest_changed": security["dependency_diff"][
+            "dependency_manifest_changed"
+        ],
+        "dependency_lockfile_changed": security["dependency_diff"][
+            "dependency_lockfile_changed"
+        ],
+        "dependency_workspace_changed": security["dependency_diff"][
+            "dependency_workspace_changed"
+        ],
+        "dependency_diff_against_base": security["dependency_diff"][
+            "dependency_diff_against_base"
+        ],
+        "changed_dependency_files": security["dependency_diff"][
+            "changed_dependency_files"
+        ],
+        "lockfile_consistency_verified": security["dependency_diff"][
+            "lockfile_consistency_verified"
+        ],
+        "audit_tracking_gap_detected": False,
+        "audit_tracking_gap_count": 0,
         "dependency_advisories": security["dependency_advisories"],
-        "dependency_security_status": "BLOCKED",
-        "additional_security_tracking_status": "OPEN",
+        "remediated_advisories": security["remediated_advisories"],
+        "removed_advisory_ids": security["removed_advisory_ids"],
+        "remaining_advisory_ids": security["remaining_advisory_ids"],
+        "dependency_security_status": security["dependency_security_status"],
+        "issue_5_remediation_status": security["issue_5_remediation_status"],
+        "issue_30_remediation_status": security["issue_30_remediation_status"],
+        "sharp_remediation_status": security["sharp_remediation_status"],
+        "brace_expansion_remediation_status": security[
+            "brace_expansion_remediation_status"
+        ],
+        "additional_security_tracking_status": security["known_security_issues"][1][
+            "state"
+        ],
         "additional_security_tracking_issue": security["additional_issue"],
         "physical_path_tests_local": "NOT_EXECUTED",
         "physical_path_tests_local_reason": "POWERSHELL_7_UNAVAILABLE",
@@ -2400,7 +2803,11 @@ def release_report(
         "powershell_ci_major_version": 7,
         "resolved_decisions": [decision["id"] for decision in decisions["resolved_decisions"]],
         "open_decisions": [decision["id"] for decision in decisions["open_decisions"]]
-        + ["Issue #5", f"Issue #{security['additional_issue']['number']}"],
+        + [
+            issue["id"]
+            for issue in security["known_security_issues"]
+            if issue["state"] == "OPEN"
+        ],
         "blocking_scope": decisions["blocking_scope"],
         "work_allowed": decisions["work_allowed"],
         "normative_blockers": [],
@@ -2410,7 +2817,7 @@ def release_report(
         "normative_scope_status": "RESOLVED",
         "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
         "technical_evidence_status": "PASSED",
-        "release_candidate_status": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
+        "release_candidate_status": security["release_candidate_status"],
         "technical_gate_outcome": "EVIDENCE_COMPLETE_RELEASE_BLOCKED",
         "result": "REL000_EVIDENCE_GENERATED",
     }
@@ -2420,12 +2827,25 @@ def release_report(
 def validate_owner_state(report: dict[str, Any]) -> None:
     if report.get("owner_approval_status") != "PENDING":
         fail("OWNER_APPROVAL_FALSELY_ASSERTED", "Owner approval must remain PENDING.")
-    if report.get("dependency_security_status") != "BLOCKED":
-        fail("DEPENDENCY_SECURITY_FALSELY_PASSED", "Dependency security must remain BLOCKED.")
-    if report.get("release_candidate_status") != (
-        "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION"
-    ):
+    expected_release_status = {
+        "BLOCKED": "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION",
+        "REMEDIATED_PENDING_MERGE": (
+            "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION"
+        ),
+        "PASSED": "BLOCKED_BY_OWNER_DECISION",
+    }.get(report.get("dependency_security_status"))
+    if expected_release_status is None:
+        fail("DEPENDENCY_SECURITY_STATUS_INVALID", "Dependency security has an invalid state.")
+    if report.get("release_candidate_status") != expected_release_status:
         fail("RELEASE_CANDIDATE_NOT_BLOCKED", "The release candidate must remain blocked.")
+    if (
+        "mvp0_p0_items_verified" in report
+        or "mvp0_p0_items_blocked" in report
+    ) and (
+        report.get("mvp0_p0_items_verified") != 28
+        or report.get("mvp0_p0_items_blocked") != 1
+    ):
+        fail("REL000_FALSELY_VERIFIED", "REL-000 must remain the single blocked MVP-0 item.")
     if (
         report.get("rel000_def_001_status") != "RESOLVED"
         or report.get("normative_scope_status") != "RESOLVED"
@@ -2435,10 +2855,10 @@ def validate_owner_state(report: dict[str, Any]) -> None:
             "REL000_DEF001_RESOLUTION_INVALID",
             "The approved FIN-001 normative resolution must remain explicit.",
         )
-    if report.get("audit_tracking_gap_detected") is not True or report.get(
+    if report.get("audit_tracking_gap_detected") is not False or report.get(
         "audit_tracking_gap_count"
-    ) != 10:
-        fail("AUDIT_TRACKING_GAP_HIDDEN", "The ten-advisory Issue #5 tracking gap must be visible.")
+    ) != 0:
+        fail("AUDIT_TRACKING_GAP_INVALID", "Every advisory must be mapped to its owning issue.")
     if report.get("result") == "REL000_EVIDENCE_GENERATED" and report.get(
         "technical_evidence_status"
     ) != "PASSED":
@@ -2492,6 +2912,13 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         args.base_main_sha,
         args.git_relationship,
     )
+    policy = load_remediation_policy(args.remediation_policy)
+    validate_mode_authorization(
+        args.mode,
+        policy,
+        args.source_branch,
+        trace["base_main_sha"],
+    )
     normative = load_normative(repository_root)
     normative_evidence = validate_normative_checksums(normative["root"])
     selected, all_items = normative_items(normative)
@@ -2536,13 +2963,18 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     additional_issue = load_json(args.security_tracking_issue)
     base_audit = load_json(args.base_audit)
     branch_audit = load_json(args.branch_audit)
-    dependency_diff = validate_dependency_diff(repository_root, trace["base_main_sha"])
+    dependency_diff = validate_dependency_diff(
+        repository_root,
+        trace["base_main_sha"],
+        args.mode,
+    )
     security = validate_issue_and_audit(
         issue,
         additional_issue,
         base_audit,
         branch_audit,
         dependency_diff,
+        args.mode,
     )
 
     ops001_artifact = validate_artifact(
@@ -2713,19 +3145,45 @@ def sanitize_audit(
                         ),
                     }
                 )
-    unique = {
-        (
-            advisory.get("advisory_id"),
-            advisory.get("package"),
-            tuple(advisory.get("installed_versions") or []),
-            advisory.get("severity"),
-        ): advisory
-        for advisory in advisories
-    }
-    metadata = raw.get("metadata") or {}
-    vulnerability_counts = metadata.get("vulnerabilities") or {}
+    unique: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for advisory in advisories:
+        key = (
+            str(advisory.get("advisory_id")),
+            str(advisory.get("package")),
+            str(advisory.get("severity")),
+        )
+        existing = unique.get(key)
+        if existing is None:
+            unique[key] = copy.deepcopy(advisory)
+            continue
+        existing["installed_versions"] = sorted(
+            set(existing["installed_versions"]) | set(advisory["installed_versions"])
+        )
+        existing["affected_range"] = " || ".join(
+            sorted(set(existing["affected_range"].split(" || ")) | {advisory["affected_range"]})
+        )
+        existing["patched_range"] = " || ".join(
+            sorted(set(existing["patched_range"].split(" || ")) | {advisory["patched_range"]})
+        )
+        existing["direct_or_transitive"] = (
+            "direct"
+            if "direct" in {
+                existing["direct_or_transitive"],
+                advisory["direct_or_transitive"],
+            }
+            else "transitive"
+        )
+        existing["dependency_path_count"] += advisory["dependency_path_count"]
+        existing["fix_available"] = bool(
+            existing["fix_available"] and advisory["fix_available"]
+        )
+        if "requires_compatibility_assessment" in {
+            existing["fix_compatibility"],
+            advisory["fix_compatibility"],
+        }:
+            existing["fix_compatibility"] = "requires_compatibility_assessment"
     totals = {
-        severity: int(vulnerability_counts.get(severity, 0))
+        severity: sum(item["severity"] == severity for item in unique.values())
         for severity in ("critical", "high", "moderate", "low")
     }
     totals["total"] = sum(totals.values())
@@ -2813,6 +3271,10 @@ def build_parser() -> argparse.ArgumentParser:
     issue.add_argument("--input", type=Path, required=True)
     issue.add_argument("--output", type=Path, required=True)
 
+    resolve_mode = subparsers.add_parser("resolve-mode")
+    resolve_mode.add_argument("--policy", type=Path, required=True)
+    resolve_mode.add_argument("--source-branch", required=True)
+
     collect = subparsers.add_parser("collect-results")
     collect.add_argument("--job", choices=sorted(EXECUTION_EVIDENCE_JOBS), required=True)
     collect.add_argument("--artifact-name", required=True)
@@ -2867,6 +3329,9 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--security-tracking-issue", type=Path, required=True)
     validate.add_argument("--base-audit", type=Path, required=True)
     validate.add_argument("--branch-audit", type=Path, required=True)
+    validate.add_argument("--mode", choices=sorted(REL000_MODES), required=True)
+    validate.add_argument("--source-branch", required=True)
+    validate.add_argument("--remediation-policy", type=Path, required=True)
     validate.add_argument("--source-head-sha", required=True)
     validate.add_argument("--tested-git-sha", required=True)
     validate.add_argument("--base-main-sha", required=True)
@@ -2900,6 +3365,9 @@ def main() -> int:
             return 0
         if args.command == "sanitize-issue":
             sanitize_issue(args.input, args.output)
+            return 0
+        if args.command == "resolve-mode":
+            print(resolve_rel000_mode(load_remediation_policy(args.policy), args.source_branch))
             return 0
         if args.command == "collect-results":
             collect_execution_results(args)
