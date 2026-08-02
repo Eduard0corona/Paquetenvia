@@ -292,14 +292,15 @@
     },
     {
       "id": "REL-000",
-      "implementation_status": "BLOCKED",
-      "implementation_commits_or_prs": [],
-      "implementation_paths": ["tools/rel-000/rel000.py"],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": ["3b23a26d97e31424ba023aa4ecf204142ece0445"],
+      "implementation_paths": ["tools/rel-000/rel000.py", "docs/releases/mvp-0-owner-decision.json"],
       "required_test_sources": ["tools/rel-000/test_rel000.py"],
+      "required_tests": [{"source_path": "tools/rel-000/test_rel000.py", "job": "rel000", "test_project": "tools/rel-000/test_rel000.py", "fully_qualified_test_name": "OwnerApprovalDecisionTests", "category": "REL000_OWNER_APPROVAL"}],
       "authoritative_ci_jobs": ["rel000"],
       "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-rel-000",
-      "known_limitations": ["Technical evidence does not constitute owner approval."],
-      "open_gates": ["Issue #5"]
+      "known_limitations": ["Approval is limited to MVP-0_INTERNAL with synthetic data and does not authorize pilot or production."],
+      "open_gates": []
     },
     {
       "id": "SEC-002",
