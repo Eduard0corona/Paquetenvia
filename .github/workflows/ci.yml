@@ -1464,7 +1464,7 @@ jobs:
             apps/web/pnpm-workspace.yaml |
             tar -x -C "$base_source"
 
-          pnpm --dir "$base_source/apps/web" install --frozen-lockfile
+          pnpm --dir "$base_source/apps/web" install --frozen-lockfile --lockfile-only
 
           set +e
           pnpm --dir "$base_source/apps/web" audit --json \
