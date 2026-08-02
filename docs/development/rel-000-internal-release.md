@@ -412,6 +412,35 @@ La fase técnica y la fase humana son independientes:
    `decision_record_sha` registra el HEAD que versiona la decisión. Nunca se
    sustituyen entre sí.
 
+### Snapshot durable de la evidencia aprobada
+
+El artifact `8834236041` fue la fuente externa original y expira el
+`2026-08-16T13:38:41Z`. Durante una captura administrativa única, mientras
+seguía disponible, se validaron su metadata, digest ZIP
+`66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172`,
+contenido técnico y escaneo de secretos/PII. Los cuatro JSON se copiaron
+byte-for-byte a `docs/releases/evidence/rel-000-owner-001/`; no se versionaron
+el ZIP, URLs de descarga, headers ni metadata cruda.
+
+`capture-approved-evidence` es el único comando que consulta la expiración y
+exige el ZIP vivo. Rechaza anclas, tamaños, hashes, JSON o contenido distintos,
+outputs preexistentes, links/reparse points y limpia cualquier output parcial.
+No forma parte del flujo normal de Foundation CI.
+
+La validación normal usa exclusivamente:
+
+```text
+REL000_APPROVED_EVIDENCE_MANIFEST_PATH = docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json
+REL000_APPROVED_EVIDENCE_DIRECTORY = docs/releases/evidence/rel-000-owner-001
+REL000_DECISION_RECORD_PATH = docs/releases/mvp-0-owner-decision.json
+```
+
+El validador comprueba paths canónicos, cinco Git blobs versionados, allowlist,
+ausencia de links o traversal, manifest exacto, cuatro tamaños y hashes, JSON,
+provenance, estados técnicos históricos y escaneo de secretos/PII. No usa la
+fecha actual: la expiración original es provenance histórica, no una futura
+dependencia operacional de CI.
+
 El artifact histórico no contiene `ext001_started` y esa ausencia no se toma
 como `false`. La fuente separada es
 `tests/fixtures/rel-000/item-evidence.json` en el SHA aprobado, blob
@@ -425,15 +454,18 @@ ext001_state_source_sha = 3b23a26d97e31424ba023aa4ecf204142ece0445
 ext001_started = false
 ```
 
-El runner acepta `-DecisionRecordPath`, pero rechaza cualquier ruta distinta
-del registro canónico. Una variable de entorno aislada nunca concede
-aprobación. El orden es: validar evidencia técnica histórica y actual, validar
-el decision record versionado, comprobar la fuente EXT-001, ejecutar la suite,
-aplicar la transición y publicar exclusivamente los cuatro JSON permitidos.
+El runner acepta `-DecisionRecordPath`, `-ApprovedEvidenceManifestPath` y
+`-ApprovedEvidenceDirectory`, pero rechaza cualquier ruta distinta de las
+ubicaciones canónicas. Una variable de entorno aislada nunca concede
+aprobación. El orden es: validar el snapshot técnico histórico y la evidencia
+actual, validar el decision record versionado, comprobar la fuente EXT-001,
+ejecutar la suite, aplicar la transición y publicar exclusivamente los cuatro
+JSON permitidos.
 
 La validación falla ante registro ausente, JSON/schema/ID/statement/razón/fecha
-o actor incorrectos, anclas diferentes, artifact inaccesible o expirado,
-digest/contenido/provenance distintos, issues de seguridad abiertos,
+o actor incorrectos, anclas diferentes, snapshot ausente o no versionado,
+manifest/tamaños/hashes/contenido/provenance distintos, links o archivos extra,
+issues de seguridad abiertos,
 seguridad/evidencia técnica no `PASSED`, decisión duplicada, fuente EXT-001
 ausente o modificada, o cualquier flag de alcance habilitado.
 
