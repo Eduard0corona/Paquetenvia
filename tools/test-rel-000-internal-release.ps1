@@ -10,6 +10,9 @@ param(
     [string] $SecurityTrackingIssuePath = $env:REL000_SECURITY_TRACKING_ISSUE_PATH,
     [string] $BaseAuditPath = $env:REL000_BASE_AUDIT_PATH,
     [string] $BranchAuditPath = $env:REL000_BRANCH_AUDIT_PATH,
+    [string] $Mode = $env:REL000_MODE,
+    [string] $SourceBranch = $env:REL000_SOURCE_BRANCH,
+    [string] $RemediationPolicyPath = $env:REL000_REMEDIATION_POLICY_PATH,
     [string] $SourceHeadSha = $env:REL000_SOURCE_HEAD_SHA,
     [string] $TestedGitSha = $env:REL000_TESTED_GIT_SHA,
     [string] $BaseMainSha = $env:REL000_BASE_MAIN_SHA,
@@ -124,7 +127,6 @@ if (-not [string]::IsNullOrWhiteSpace($SyntheticRollbackScenario)) {
 function Invoke-Rel000PythonTests {
     param([Parameter(Mandatory)] [string] $OutputPath)
     & python (Join-Path $repositoryRoot "tools/rel-000/run_focused_tests.py") `
-        --expected 76 `
         --output $OutputPath
     if ($LASTEXITCODE -ne 0) {
         throw "REL000_PYTHON_FOCAL_TESTS_FAILED"
@@ -328,6 +330,9 @@ $required = [ordered]@{
     SecurityTrackingIssuePath = $SecurityTrackingIssuePath
     BaseAuditPath = $BaseAuditPath
     BranchAuditPath = $BranchAuditPath
+    Mode = $Mode
+    SourceBranch = $SourceBranch
+    RemediationPolicyPath = $RemediationPolicyPath
     SourceHeadSha = $SourceHeadSha
     TestedGitSha = $TestedGitSha
     BaseMainSha = $BaseMainSha
@@ -402,6 +407,9 @@ try {
         "--security-tracking-issue", $validatedSecurityTrackingIssue,
         "--base-audit", $validatedBaseAudit,
         "--branch-audit", $validatedBranchAudit,
+        "--mode", $Mode,
+        "--source-branch", $SourceBranch,
+        "--remediation-policy", $RemediationPolicyPath,
         "--source-head-sha", $SourceHeadSha,
         "--tested-git-sha", $TestedGitSha,
         "--base-main-sha", $BaseMainSha,

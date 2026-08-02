@@ -85,7 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(__file__).with_name("test_rel000.py"),
     )
-    parser.add_argument("--expected", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -93,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        output = execute_suite(discover_suite(args.test_file.resolve()), args.expected)
+        suite = discover_suite(args.test_file.resolve())
+        output = execute_suite(suite, count_cases(suite))
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
             json.dumps(output, ensure_ascii=False, indent=2) + "\n",

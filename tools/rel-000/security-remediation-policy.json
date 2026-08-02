@@ -1,0 +1,15 @@
+{
+  "format_version": "paquetenvia-rel000-security-remediation-policy-v1",
+  "default_mode": "NORMAL_RELEASE_EVIDENCE",
+  "security_remediation": {
+    "id": "ISSUES-5-30-WEB-DEPENDENCIES",
+    "mode": "SECURITY_REMEDIATION",
+    "authorized_base_sha": "1ac8054026b3e4cb06612001f2be053d351fd2cf",
+    "authorized_source_branch": "fix/security-next-sharp-brace-expansion",
+    "allowed_dependency_files": [
+      "apps/web/package.json",
+      "apps/web/pnpm-lock.yaml",
+      "apps/web/pnpm-workspace.yaml"
+    ]
+  }
+}
