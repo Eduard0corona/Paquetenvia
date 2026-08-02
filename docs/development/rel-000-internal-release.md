@@ -181,10 +181,45 @@ El job `Validate MVP-0 internal release evidence` usa `if: always()` y depende
 de los doce jobs autoritativos. Primero comprueba que todos terminaron en
 `success`; luego descarga los artifacts actuales y los artifacts internos de
 ejecución. Estos últimos contienen TRX/JUnit/JSON estructurado, y se validan
-contra artifact ID, upload digest, content digest, run, attempt, source HEAD,
-tested SHA y base SHA. Después consulta Issue #5 e Issue #30, captura audits
+contra artifact ID, upload digest, content digest, run, producer attempt,
+source HEAD, tested SHA y base SHA. Después consulta Issue #5 e Issue #30, captura audits
 reproducibles de la base fija y de la rama sin publicar su JSON crudo, ejecuta
 las pruebas focales y genera cuatro JSON redactados.
+
+### Provenance en reruns parciales
+
+`GITHUB_RUN_ATTEMPT` identifica el intento del agregador. Cada artifact conserva
+por separado el `workflow_run_attempt` del job que lo produjo. En un rerun
+parcial ambos valores pueden ser distintos: un job no reejecutado conserva su
+artifact del intento anterior, mientras que un job reejecutado debe aportar el
+artifact de su ejecución más reciente.
+
+El workflow consulta de forma autenticada la metadata del run, cada endpoint de
+attempt/jobs y los artifacts del run con `per_page=100`. La tabla fija de trece
+jobs relaciona cada key interno con un único nombre de Foundation CI. Para cada
+intento, `run_started_at` distingue ejecuciones nuevas de resultados retenidos:
+un resultado anterior al inicio del intento debe coincidir de forma inequívoca
+con una ejecución real ya observada. La lógica pura de `rel000.py` no accede a
+la red.
+
+Las respuestas GitHub crudas viven únicamente bajo `RUNNER_TEMP`. Se reducen al
+manifiesto versionado `paquetenvia-rel000-workflow-provenance-v1`, que conserva
+run, source SHA, aggregator attempt, jobs ejecutados y la asociación exacta de
+job key, job name, job ID, producer attempt, artifact name, artifact ID y
+digest. El cleanup elimina tanto las respuestas crudas como el manifiesto
+sanitizado. El job sólo dispone de `actions: read`, `contents: read` e
+`issues: read`.
+
+Para cada productor se acepta exclusivamente el mayor intento realmente
+ejecutado. Su estado debe ser `completed/success`, y la evidencia interna debe
+declarar ese mismo producer attempt. Faltantes, duplicados, intentos futuros,
+evidencia anterior a una reejecución, IDs/digests contradictorios, jobs
+desconocidos o metadata incompleta son errores fail-closed, nunca warnings.
+
+El reporte público añade `execution_provenance` con el aggregator attempt, el
+indicador `mixed_attempt_evidence` y la lista sanitizada de producer attempts e
+IDs/digests. No incluye respuestas GitHub crudas ni URLs de descarga. El
+artifact público conserva exactamente los mismos cuatro JSON.
 
 ## Artifact publicado
 
@@ -207,6 +242,12 @@ No se publican env files, identities, dumps, SQL, backups duplicados, logs de
 contenedores, TRX/JUnit, resultados raw, tokens, URLs firmadas, object keys,
 connection strings, payloads ni IDs sintéticos de entidades.
 
+Si Vitest falla en `Validate real SignalR reconnect`, una ruta condicionada por
+`failure()` conserva `TestResults/realtime-e2e` durante siete días como
+`realtime-e2e-failure-results-attempt-<N>`. Es evidencia diagnóstica: nunca
+satisface REL-000, nunca sustituye `rel000-execution-realtime-e2e` y no cambia
+el resultado fallido del job.
+
 ## Seguridad física, fallo y cleanup
 
 El wrapper reutiliza las guardas físicas de OPS-002. Staging y output deben
@@ -222,7 +263,7 @@ rechaza enlaces descendientes y no los sigue.
 
 ## Ejecución local
 
-Windows PowerShell 5.1 ejecuta únicamente las 76 pruebas Python:
+Windows PowerShell 5.1 ejecuta únicamente las pruebas Python focales descubiertas dinámicamente:
 
 ```powershell
 powershell -File ./tools/test-rel-000-internal-release.ps1 -PythonOnly
