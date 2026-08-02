@@ -1,0 +1,35 @@
+{
+  "format_version": "paquetenvia-rel000-workflow-provenance-v1",
+  "workflow_run_id": "30739725353",
+  "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d",
+  "current_attempt": 2,
+  "jobs": [
+    {"job_key": "normative", "job_name": "Validate normative baseline", "job_id": 91474837036, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "dotnet", "job_name": "Build and test .NET", "job_id": 91474837059, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "runtime-contracts", "job_name": "Validate runtime contracts", "job_id": 91474837067, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "web", "job_name": "Validate web workspace", "job_id": 91474837068, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "realtime-e2e", "job_name": "Validate real SignalR reconnect", "job_id": 91474837038, "run_attempt": 1, "status": "completed", "conclusion": "failure"},
+    {"job_key": "outbox-signalr-delivery", "job_name": "Validate outbox SignalR delivery", "job_id": 91474837037, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "driver-stops-pwa", "job_name": "Validate driver PWA", "job_id": 91474837042, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "public-tracking", "job_name": "Validate public tracking", "job_id": 91474837078, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "operations-dashboard", "job_name": "Validate operations dashboard", "job_id": 91474837072, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "delivery-simulation", "job_name": "Validate 20-delivery simulation", "job_id": 91474837062, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "infrastructure", "job_name": "Validate local infrastructure", "job_id": 91474837055, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "backup-restore", "job_name": "Validate backup and restore", "job_id": 91474837073, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+    {"job_key": "rel000", "job_name": "Validate MVP-0 internal release evidence", "job_id": 91475186598, "run_attempt": 1, "status": "completed", "conclusion": "failure"},
+    {"job_key": "realtime-e2e", "job_name": "Validate real SignalR reconnect", "job_id": 91477923673, "run_attempt": 2, "status": "completed", "conclusion": "success"},
+    {"job_key": "rel000", "job_name": "Validate MVP-0 internal release evidence", "job_id": 91478014545, "run_attempt": 2, "status": "completed", "conclusion": "failure"}
+  ],
+  "artifacts": [
+    {"job_key": "dotnet", "artifact_name": "rel000-execution-dotnet", "artifact_id": 8830877916, "artifact_digest": "sha256:9d162199d41f78c28007a2daf10099b0c22d4cac0b7492c0c273ca864715acda", "producer_attempt": 1, "producer_job_id": 91474837059, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "runtime-contracts", "artifact_name": "rel000-execution-runtime-contracts", "artifact_id": 8830880291, "artifact_digest": "sha256:58c4941e2fd7288794bba29e1a118f8c9a604b0ed09563fb264253a4a28e7c19", "producer_attempt": 1, "producer_job_id": 91474837067, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "realtime-e2e", "artifact_name": "rel000-execution-realtime-e2e", "artifact_id": 8831239342, "artifact_digest": "sha256:2e6757fa5a1f81c7850b1bc99ebbb248e63fc6a4167f49a7d072921aa9ed4378", "producer_attempt": 2, "producer_job_id": 91477923673, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "outbox-signalr-delivery", "artifact_name": "rel000-execution-outbox-signalr-delivery", "artifact_id": 8830883199, "artifact_digest": "sha256:c72e772621afdb97972dfca045f487c01e418b176e78560e3079c2a8afb2b016", "producer_attempt": 1, "producer_job_id": 91474837037, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "driver-stops-pwa", "artifact_name": "rel000-execution-driver-stops-pwa", "artifact_id": 8830889828, "artifact_digest": "sha256:a18c51933a2a08de2afe5dcabe7d291ca96d60945aa948ddf08204c687a05ac2", "producer_attempt": 1, "producer_job_id": 91474837042, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "public-tracking", "artifact_name": "rel000-execution-public-tracking", "artifact_id": 8830889795, "artifact_digest": "sha256:8750c245caafa1ea10a56e093cdc9b5a6d10476b8fd124dd7585fcdd8bca5197", "producer_attempt": 1, "producer_job_id": 91474837078, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "operations-dashboard", "artifact_name": "rel000-execution-operations-dashboard", "artifact_id": 8830878229, "artifact_digest": "sha256:c287034753dfe72c587fe2079a28b725dd8d9723ab51d9c0f92344cf74fea53f", "producer_attempt": 1, "producer_job_id": 91474837072, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "delivery-simulation", "artifact_name": "delivery-simulation-results", "artifact_id": 8830879953, "artifact_digest": "sha256:a2ba49469aec35e9b90479b63783bc60370db28a9fefced0cb596942480fea64", "producer_attempt": 1, "producer_job_id": 91474837062, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "infrastructure", "artifact_name": "rel000-execution-infrastructure", "artifact_id": 8830868833, "artifact_digest": "sha256:dd1af2bcc3178b805fcad5f3027a3eb3b30298c80751bed33fd2af909e832d18", "producer_attempt": 1, "producer_job_id": 91474837055, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"},
+    {"job_key": "backup-restore", "artifact_name": "ops002-backup-restore-results", "artifact_id": 8830894929, "artifact_digest": "sha256:abd3ef6c9897ef0cc11e6b2f1cdcdd5fa1abae42b01241f1581aefa63b9a8eac", "producer_attempt": 1, "producer_job_id": 91474837073, "workflow_run_id": "30739725353", "head_sha": "c09a074fae9c854f01b9f399c4c8132a882b914d"}
+  ]
+}

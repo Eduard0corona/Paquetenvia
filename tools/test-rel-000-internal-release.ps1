@@ -29,7 +29,7 @@ param(
     [string] $Ops002ArtifactId = $env:REL000_OPS002_ARTIFACT_ID,
     [string] $Ops002ArtifactDigest = $env:REL000_OPS002_ARTIFACT_DIGEST,
     [string] $ExecutionResultsDirectory = $env:REL000_EXECUTION_RESULTS_DIRECTORY,
-    [string] $ExecutionArtifactsPath = $env:REL000_EXECUTION_ARTIFACTS_PATH,
+    [string] $WorkflowProvenancePath = $env:REL000_WORKFLOW_PROVENANCE_PATH,
     [string] $SyntheticRollbackScenario,
     [string] $SyntheticRoot
 )
@@ -349,7 +349,7 @@ $required = [ordered]@{
     Ops002ArtifactId = $Ops002ArtifactId
     Ops002ArtifactDigest = $Ops002ArtifactDigest
     ExecutionResultsDirectory = $ExecutionResultsDirectory
-    ExecutionArtifactsPath = $ExecutionArtifactsPath
+    WorkflowProvenancePath = $WorkflowProvenancePath
 }
 if ($Mode -eq "SECURITY_REMEDIATION") {
     $required.SharpRuntimeSmokePath = $SharpRuntimeSmokePath
@@ -372,9 +372,9 @@ $validatedOps002 = Assert-Ops002ExternalPath `
 $validatedExecutionResults = Assert-Ops002ExternalPath `
     -Path $ExecutionResultsDirectory `
     -Purpose "REL-000 execution artifacts"
-$validatedExecutionArtifacts = Assert-Ops002ExternalRegularFile `
-    -Path $ExecutionArtifactsPath `
-    -Purpose "REL-000 execution artifact metadata"
+$validatedWorkflowProvenance = Assert-Ops002ExternalRegularFile `
+    -Path $WorkflowProvenancePath `
+    -Purpose "REL-000 workflow provenance manifest"
 $validatedIssue = Assert-Ops002ExternalRegularFile `
     -Path $Issue5Path `
     -Purpose "REL-000 Issue #5 state"
@@ -410,7 +410,7 @@ try {
         "--python-test-results", $pythonTestResultsPath,
         "--physical-test-results", $physicalTestResultsPath,
         "--execution-results-directory", $validatedExecutionResults,
-        "--execution-artifacts", $validatedExecutionArtifacts,
+        "--workflow-provenance", $validatedWorkflowProvenance,
         "--ops001-directory", $validatedOps001,
         "--ops002-directory", $validatedOps002,
         "--output-directory", $generatedPath,

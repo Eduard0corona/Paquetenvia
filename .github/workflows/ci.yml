@@ -100,6 +100,7 @@ jobs:
           path: ./TestResults/dotnet
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   runtime-contracts:
     name: Validate runtime contracts
@@ -177,6 +178,7 @@ jobs:
           path: ./TestResults/runtime-contracts
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture Testcontainers diagnostics
         if: failure()
@@ -297,6 +299,15 @@ jobs:
           --reporter=junit
           --outputFile=../../TestResults/realtime-e2e/realtime-e2e.xml
 
+      - name: Publish failed realtime JUnit evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtime-e2e-failure-results-attempt-${{ github.run_attempt }}
+          path: ./TestResults/realtime-e2e
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Correlate executed realtime tests
         run: >-
           python ./tools/rel-000/rel000.py collect-results
@@ -318,6 +329,7 @@ jobs:
           path: ./TestResults/realtime-e2e
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   outbox-signalr-delivery:
     name: Validate outbox SignalR delivery
@@ -409,6 +421,7 @@ jobs:
           path: ./TestResults/outbox-signalr-delivery
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture delivery diagnostics
         if: failure()
@@ -545,6 +558,7 @@ jobs:
           path: ./TestResults/driver-stops-pwa
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture driver stops diagnostics
         if: failure()
@@ -707,6 +721,7 @@ jobs:
           path: ./TestResults/public-tracking
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture public tracking diagnostics
         if: failure()
@@ -843,6 +858,7 @@ jobs:
           path: ./TestResults/operations-dashboard
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture redacted operations diagnostics
         if: failure()
@@ -967,6 +983,7 @@ jobs:
           path: ./TestResults/delivery-simulation
           if-no-files-found: ignore
           retention-days: 14
+          overwrite: true
 
       - name: Clean delivery simulation resources
         if: always()
@@ -1046,6 +1063,7 @@ jobs:
           path: ./TestResults/infrastructure
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture infrastructure diagnostics
         if: failure()
@@ -1257,6 +1275,7 @@ jobs:
             ${{ runner.temp }}/ops002-results/encrypted-backup/*.tar.gz.age
           if-no-files-found: ignore
           retention-days: 14
+          overwrite: true
 
       - name: Clean backup and restore resources
         if: always()
@@ -1327,6 +1346,10 @@ jobs:
       - backup-restore
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      issues: read
     env:
       CI: "true"
       REL000_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -1392,6 +1415,34 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      - name: Capture and sanitize workflow provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw_directory="$RUNNER_TEMP/rel000-workflow-provenance-raw"
+          mkdir "$raw_directory"
+          for attempt in $(seq 1 "$GITHUB_RUN_ATTEMPT"); do
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt}" \
+              > "$raw_directory/attempt-${attempt}-run.json"
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt}/jobs?per_page=100" \
+              > "$raw_directory/attempt-${attempt}-jobs.json"
+          done
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            > "$raw_directory/artifacts.json"
+          python ./tools/rel-000/rel000.py sanitize-workflow-provenance \
+            --attempts-directory "$raw_directory" \
+            --artifacts "$raw_directory/artifacts.json" \
+            --artifact-outputs-json "$REL000_EXECUTION_ARTIFACT_OUTPUTS_JSON" \
+            --output "$RUNNER_TEMP/rel000-workflow-provenance.json" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --current-attempt "$GITHUB_RUN_ATTEMPT" \
+            --head-sha "$REL000_SOURCE_HEAD_SHA"
+
       - name: Download current OPS-001 artifact
         uses: actions/download-artifact@v5
         with:
@@ -1409,13 +1460,6 @@ jobs:
         with:
           pattern: rel000-execution-*
           path: ${{ runner.temp }}/rel000-executions
-
-      - name: Correlate current-attempt execution artifact IDs and digests
-        run: >-
-          python ./tools/rel-000/rel000.py materialize-execution-artifacts
-          --artifacts-json "$REL000_EXECUTION_ARTIFACT_OUTPUTS_JSON"
-          --output "$RUNNER_TEMP/rel000-execution-artifacts.json"
-          --workflow-run-id "$GITHUB_RUN_ID"
 
       - name: Consult and sanitize open Issue 5
         env:
@@ -1511,7 +1555,7 @@ jobs:
           REL000_BRANCH_AUDIT_PATH: ${{ runner.temp }}/rel000-branch-audit.json
           REL000_SHARP_RUNTIME_SMOKE_PATH: ${{ runner.temp }}/rel000-sharp-runtime-smoke.json
           REL000_EXECUTION_RESULTS_DIRECTORY: ${{ runner.temp }}
-          REL000_EXECUTION_ARTIFACTS_PATH: ${{ runner.temp }}/rel000-execution-artifacts.json
+          REL000_WORKFLOW_PROVENANCE_PATH: ${{ runner.temp }}/rel000-workflow-provenance.json
         run: ./tools/test-rel-000-internal-release.ps1 -CI
 
       - name: Publish only redacted REL-000 evidence
@@ -1534,6 +1578,7 @@ jobs:
             (Join-Path $env:RUNNER_TEMP "rel000-ops002"),
             (Join-Path $env:RUNNER_TEMP "rel000-executions"),
             (Join-Path $env:RUNNER_TEMP "rel000-base-source"),
+            (Join-Path $env:RUNNER_TEMP "rel000-workflow-provenance-raw"),
             (Join-Path $env:RUNNER_TEMP "rel000-output")
           )) {
             if (-not (Test-Path -LiteralPath $path)) {
@@ -1556,7 +1601,7 @@ jobs:
             "rel000-branch-audit-raw.json",
             "rel000-branch-audit.json",
             "rel000-sharp-runtime-smoke.json",
-            "rel000-execution-artifacts.json"
+            "rel000-workflow-provenance.json"
           )) {
             $path = Join-Path $env:RUNNER_TEMP $name
             if (Test-Path -LiteralPath $path -PathType Leaf) {
