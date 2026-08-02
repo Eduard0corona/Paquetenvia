@@ -1659,9 +1659,11 @@ class WorkflowProvenanceTests(unittest.TestCase):
         jobs = {
             job["job_key"]: job for job in payload["jobs"] if job["run_attempt"] == 2
         }
-        for artifact in payload["artifacts"]:
+        for index, artifact in enumerate(payload["artifacts"], start=1):
             artifact["producer_attempt"] = 2
             artifact["producer_job_id"] = jobs[artifact["job_key"]]["job_id"]
+            artifact["artifact_id"] += 100000000
+            artifact["artifact_digest"] = f"{index:x}" * 64
         return payload
 
     def write_partial_raw_metadata(self):
@@ -1768,9 +1770,26 @@ class WorkflowProvenanceTests(unittest.TestCase):
         self.assertFalse(result["report"]["mixed_attempt_evidence"])
 
     def test_132_full_rerun_provenance_passes(self):
-        result = self.validate(self.full_rerun())
+        attempt_one = self.attempt_one()
+        rerun = self.full_rerun()
+        result = self.validate(rerun)
         self.assertFalse(result["report"]["mixed_attempt_evidence"])
         self.assertTrue(all(item["producer_attempt"] == 2 for item in result["report"]["jobs"]))
+        old_artifacts = {item["job_key"]: item for item in attempt_one["artifacts"]}
+        new_artifacts = {item["job_key"]: item for item in rerun["artifacts"]}
+        self.assertTrue(
+            all(new_artifacts[key]["artifact_id"] != old_artifacts[key]["artifact_id"] for key in new_artifacts)
+        )
+        self.assertTrue(
+            all(
+                new_artifacts[key]["artifact_digest"] != old_artifacts[key]["artifact_digest"]
+                for key in new_artifacts
+            )
+        )
+        reported = {item["job"]: item for item in result["report"]["jobs"]}
+        for key, artifact in new_artifacts.items():
+            self.assertEqual(artifact["artifact_id"], reported[key]["artifact_id"])
+            self.assertEqual(f"sha256:{artifact['artifact_digest']}", reported[key]["artifact_digest"])
 
     def test_133_partial_rerun_provenance_passes(self):
         result = self.validate()
@@ -1778,6 +1797,10 @@ class WorkflowProvenanceTests(unittest.TestCase):
         attempts = {item["job"]: item["producer_attempt"] for item in result["report"]["jobs"]}
         self.assertEqual(2, attempts["realtime-e2e"])
         self.assertEqual(1, attempts["dotnet"])
+        retained = next(item for item in result["report"]["jobs"] if item["job"] == "dotnet")
+        expected = next(item for item in self.fixture["artifacts"] if item["job_key"] == "dotnet")
+        self.assertEqual(expected["artifact_id"], retained["artifact_id"])
+        self.assertEqual(expected["artifact_digest"], retained["artifact_digest"])
 
     def test_134_attempt_n_uses_each_latest_executed_job(self):
         payload = self.attempt_one()
@@ -1817,8 +1840,8 @@ class WorkflowProvenanceTests(unittest.TestCase):
     def test_136_full_rerun_rejects_attempt_one_artifact(self):
         payload = self.full_rerun()
         artifact = next(item for item in payload["artifacts"] if item["job_key"] == "dotnet")
-        artifact["producer_attempt"] = 1
-        artifact["producer_job_id"] = next(job["job_id"] for job in payload["jobs"] if job["job_key"] == "dotnet" and job["run_attempt"] == 1)
+        old_artifact = next(item for item in self.attempt_one()["artifacts"] if item["job_key"] == "dotnet")
+        artifact.update(old_artifact)
         self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_STALE_AFTER_RERUN", lambda: self.validate(payload))
 
     def test_137_latest_producer_failure_fails(self):
@@ -2082,6 +2105,7 @@ class WorkflowPhysicalGuardsTests(unittest.TestCase):
         self.assertEqual(7, diagnostic["with"]["retention-days"])
         self.assertEqual("ignore", diagnostic["with"]["if-no-files-found"])
         self.assertFalse(diagnostic["with"]["name"].startswith("rel000-execution-"))
+        self.assertNotIn("overwrite", diagnostic["with"])
 
     def test_171_successful_signalr_artifact_remains_authoritative(self):
         steps = self.workflow["jobs"]["realtime-e2e"]["steps"]
@@ -2093,6 +2117,90 @@ class WorkflowPhysicalGuardsTests(unittest.TestCase):
         execute = next(step for step in job["steps"] if step.get("name") == "Execute real reconnect lifecycle")
         self.assertNotIn("timeout-minutes", job)
         self.assertNotRegex(execute["run"].lower(), r"retry|sleep|timeout")
+
+    def test_173_exact_authoritative_artifacts_replace_and_keep_outputs(self):
+        expected_upload_steps = {
+            "dotnet": "upload-dotnet-execution",
+            "runtime-contracts": "upload-runtime-execution",
+            "realtime-e2e": "upload-realtime-execution",
+            "outbox-signalr-delivery": "upload-outbox-execution",
+            "driver-stops-pwa": "upload-driver-execution",
+            "public-tracking": "upload-tracking-execution",
+            "operations-dashboard": "upload-operations-execution",
+            "delivery-simulation": "upload-delivery-simulation",
+            "infrastructure": "upload-infrastructure-execution",
+            "backup-restore": "upload-backup-restore",
+        }
+        expected_names = rel000.EXECUTION_ARTIFACT_NAMES
+        authoritative = []
+        for job_key, job in self.workflow["jobs"].items():
+            for step in job.get("steps", []):
+                if (
+                    step.get("uses") == "actions/upload-artifact@v4"
+                    and step.get("with", {}).get("name") in expected_names.values()
+                ):
+                    authoritative.append((job_key, step))
+
+        self.assertEqual(10, len(authoritative))
+        self.assertEqual(set(expected_names), {job_key for job_key, _ in authoritative})
+        self.assertEqual(
+            set(expected_names.values()),
+            {step["with"]["name"] for _, step in authoritative},
+        )
+        self.assertEqual(10, len({job_key for job_key, _ in authoritative}))
+
+        for job_key, step in authoritative:
+            self.assertEqual(expected_names[job_key], step["with"]["name"])
+            self.assertEqual(expected_upload_steps[job_key], step["id"])
+            self.assertEqual("actions/upload-artifact@v4", step["uses"])
+            self.assertIs(True, step["with"].get("overwrite"))
+            output_prefix = "artifact" if job_key in {"delivery-simulation", "backup-restore"} else "execution-artifact"
+            outputs = self.workflow["jobs"][job_key]["outputs"]
+            self.assertEqual(
+                f"${{{{ steps.{step['id']}.outputs.artifact-id }}}}",
+                outputs[f"{output_prefix}-id"],
+            )
+            self.assertEqual(
+                f"${{{{ steps.{step['id']}.outputs.artifact-digest }}}}",
+                outputs[f"{output_prefix}-digest"],
+            )
+
+        configured = json.loads(
+            self.workflow["jobs"]["rel000"]["env"]["REL000_EXECUTION_ARTIFACT_OUTPUTS_JSON"]
+        )
+        self.assertEqual(set(expected_names.values()), {item["artifact_name"] for item in configured})
+        self.assertTrue(all(item["artifact_id"] and item["artifact_digest"] for item in configured))
+
+    def test_174_retry_timeout_and_assertion_policy_is_unchanged(self):
+        expected_timeouts = {
+            "normative": None,
+            "dotnet": None,
+            "runtime-contracts": 20,
+            "web": None,
+            "realtime-e2e": None,
+            "outbox-signalr-delivery": 25,
+            "driver-stops-pwa": 25,
+            "public-tracking": 25,
+            "operations-dashboard": 25,
+            "delivery-simulation": 30,
+            "infrastructure": 20,
+            "backup-restore": 60,
+            "rel000": 15,
+        }
+        self.assertEqual(
+            expected_timeouts,
+            {job_key: job.get("timeout-minutes") for job_key, job in self.workflow["jobs"].items()},
+        )
+        self.assertNotRegex(self.text.lower(), r"\bretry\b|\bsleep\b")
+        self.assertEqual(1, self.text.count("Assert-ProjectResourcesAbsent"))
+        self.assertEqual(1, self.text.count("Assert-Ops002IdentityFile"))
+        upstream_guard = next(
+            step
+            for step in self.workflow["jobs"]["rel000"]["steps"]
+            if step.get("name") == "Verify every authoritative upstream job succeeded"
+        )
+        self.assertIn('Where-Object { $_.Value -cne "success" }', upstream_guard["run"])
+        self.assertIn('throw "REL000_AUTHORITATIVE_UPSTREAM_FAILED:', upstream_guard["run"])
 
 
 class SharpRemediationPolicyTests(unittest.TestCase):

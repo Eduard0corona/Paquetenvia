@@ -194,6 +194,25 @@ parcial ambos valores pueden ser distintos: un job no reejecutado conserva su
 artifact del intento anterior, mientras que un job reejecutado debe aportar el
 artifact de su ejecución más reciente.
 
+Los diez artifacts autoritativos usan nombres estables y `overwrite: true` al
+publicarse. GitHub Actions trata cada upload como inmutable: si un productor se
+reejecuta, el upload elimina el artifact anterior con ese nombre y crea uno
+nuevo, con un artifact ID y un upload digest nuevos. De este modo la consulta
+del run y los outputs del productor sólo pueden asociar REL-000 con la evidencia
+del intento vigente. El ID anterior queda obsoleto después del rerun y se
+rechaza como `WORKFLOW_PROVENANCE_ARTIFACT_STALE_AFTER_RERUN`; un productor no
+reejecutado conserva legítimamente su ID, digest y producer attempt previos.
+El reemplazo no vuelve válida la evidencia de una ejecución fallida: el último
+producer elegible debe seguir en `completed/success`, por lo que cualquier
+producer fallido bloquea REL-000. Al conservar un único nombre estable y aceptar
+sólo los outputs ID/digest del último producer elegible, nunca quedan dos
+artifacts autoritativos elegibles para el mismo producer.
+
+El artifact diagnóstico
+`realtime-e2e-failure-results-attempt-<N>` mantiene un nombre por intento y no
+usa reemplazo. Nunca forma parte del mapeo autoritativo ni puede satisfacer la
+provenance de `rel000-execution-realtime-e2e`.
+
 El workflow consulta de forma autenticada la metadata del run, cada endpoint de
 attempt/jobs y los artifacts del run con `per_page=100`. La tabla fija de trece
 jobs relaciona cada key interno con un único nombre de Foundation CI. Para cada

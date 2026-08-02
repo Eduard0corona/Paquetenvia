@@ -100,6 +100,7 @@ jobs:
           path: ./TestResults/dotnet
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   runtime-contracts:
     name: Validate runtime contracts
@@ -177,6 +178,7 @@ jobs:
           path: ./TestResults/runtime-contracts
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture Testcontainers diagnostics
         if: failure()
@@ -327,6 +329,7 @@ jobs:
           path: ./TestResults/realtime-e2e
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   outbox-signalr-delivery:
     name: Validate outbox SignalR delivery
@@ -418,6 +421,7 @@ jobs:
           path: ./TestResults/outbox-signalr-delivery
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture delivery diagnostics
         if: failure()
@@ -554,6 +558,7 @@ jobs:
           path: ./TestResults/driver-stops-pwa
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture driver stops diagnostics
         if: failure()
@@ -716,6 +721,7 @@ jobs:
           path: ./TestResults/public-tracking
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture public tracking diagnostics
         if: failure()
@@ -852,6 +858,7 @@ jobs:
           path: ./TestResults/operations-dashboard
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture redacted operations diagnostics
         if: failure()
@@ -976,6 +983,7 @@ jobs:
           path: ./TestResults/delivery-simulation
           if-no-files-found: ignore
           retention-days: 14
+          overwrite: true
 
       - name: Clean delivery simulation resources
         if: always()
@@ -1055,6 +1063,7 @@ jobs:
           path: ./TestResults/infrastructure
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
       - name: Capture infrastructure diagnostics
         if: failure()
@@ -1266,6 +1275,7 @@ jobs:
             ${{ runner.temp }}/ops002-results/encrypted-backup/*.tar.gz.age
           if-no-files-found: ignore
           retention-days: 14
+          overwrite: true
 
       - name: Clean backup and restore resources
         if: always()
