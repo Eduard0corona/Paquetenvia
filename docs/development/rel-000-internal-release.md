@@ -4,8 +4,8 @@
 
 REL-000 reúne evidencia técnica trazable para que el propietario de producto y
 tecnología decida sobre `MVP-0_INTERNAL`. No agrega funcionalidad de producto y
-no sustituye la decisión humana. El máximo resultado técnico del gate es
-`READY_FOR_OWNER_DECISION`; el estado del propietario permanece `PENDING`.
+no sustituye la decisión humana. El resultado técnico continúa bloqueando la
+liberación; el estado del propietario permanece `PENDING`.
 
 La normativa canónica es `docs/normative/v0.6/`. El gate la lee y verifica sus
 checksums, pero nunca la modifica. El inventario MVP-0/P0 se deriva de
@@ -258,31 +258,44 @@ Docker habilita además infraestructura, PostgreSQL/Testcontainers, SignalR,
 PWA, dashboard, OPS-001 y OPS-002. Si el host no puede ejecutarlos, el reporte
 debe decirlo y usar la CI limpia como autoridad.
 
-## Gates, Issue #5 y audit
+## Gates, Issues #5/#30 y audit
 
 GATE-002 se carga como resuelto. GATE-001, GATE-003 a GATE-017 y
-RTM-001-CUSTOMER-SUPPORT-ROLE permanecen abiertos según AI-10. Issue #5 se
-consulta en GitHub y debe permanecer abierto. El baseline aceptado es un
-finding high de `sharp 0.34.5`, GHSA-f88m-g3jw-g9cj, y sólo ese finding.
+RTM-001-CUSTOMER-SUPPORT-ROLE permanecen abiertos según AI-10. Los advisories
+de dependencias se relacionan de forma exhaustiva con Issue #5 o Issue #30;
+`audit_tracking_gap_detected=false` y `audit_tracking_gap_count=0`.
 
-El audit real de la base fija contiene 11 advisories: 6 high y 5 moderate;
-nueve pertenecen a Next.js, uno a sharp y uno a brace-expansion. Issue #30
-mantiene abiertos los diez no cubiertos por Issue #5. La rama debe ejecutar su
-propio audit y mantener delta cero, conjunto idéntico y diff limpio para
-`apps/web/package.json`, `apps/web/pnpm-lock.yaml` y
-`apps/web/pnpm-workspace.yaml`.
+La política versionada `tools/rel-000/security-remediation-policy.json` separa
+dos modos explícitos. `NORMAL_RELEASE_EVIDENCE` rechaza cualquier cambio en los
+archivos de dependencias y exige que el audit de la rama sea idéntico al de su
+base real. `SECURITY_REMEDIATION` sólo está autorizado para la rama
+`fix/security-next-sharp-brace-expansion` sobre la base exacta
+`1ac8054026b3e4cb06612001f2be053d351fd2cf` y permite únicamente los tres
+archivos web declarados por la política.
 
-Ese baseline exacto permite generar evidencia técnica, pero siempre emite:
+La base autorizada contiene 11 advisories únicos: 6 high y 5 moderate. La rama
+actualiza `next` y `eslint-config-next` de 16.2.10 a 16.2.11, eliminando los
+nueve advisories de Next.js. Los overrides segmentados mantienen
+`brace-expansion` dentro de los rangos de todos sus consumidores: 1.1.17 para
+la rama 1.x y 5.0.8 para la rama 5.x. No existe override cross-major.
+
+Next.js 16.2.11 declara `sharp ^0.34.5`; ese rango excluye 0.35.x. El audit de
+la rama conserva por ello sólo GHSA-f88m-g3jw-g9cj en `sharp 0.34.5`:
 
 ```text
+sharp_remediation_status = BLOCKED_BY_UPSTREAM_COMPATIBILITY
+issue_30_remediation_status = REMEDIATED_PENDING_MERGE
 dependency_security_status = BLOCKED
 release_candidate_status = BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION
+owner_approval_status = PENDING
 ```
 
-El gate falla si la rama empeora respecto de la base real, aparece un critical,
-falta un advisory, el audit se omite/no se parsea, cambia un archivo de
-dependencias, se oculta el gap de diez o se presenta Issue #5 como cobertura de
-los once. REL-000 no actualiza paquetes ni agrega overrides.
+El modo de remediación falla ante base distinta, audit omitido o no parseable,
+critical, advisory o paquete nuevo, aumento de severidad, issue cerrado con su
+advisory presente, archivo no autorizado, lockfile inconsistente, prerelease,
+override incompatible o versión vulnerable duplicada. La suite focal deriva su
+conteo de los tests descubiertos; la corrida actual exige y pasa 100/100, sin
+fallos ni skips.
 
 ## Rollback REL-000
 
