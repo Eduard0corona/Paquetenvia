@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1588,6 +1589,510 @@ class Rel000FocusedTests(unittest.TestCase):
         self.assertEqual(result["python_tests_passed"], result["python_tests_executed"])
         self.assertEqual(0, result["python_tests_failed"])
         self.assertEqual(0, result["python_tests_skipped"])
+
+
+class WorkflowProvenanceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-provenance-tests-")
+        self.root = Path(self.temp.name)
+        self.fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/partial-rerun-provenance.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.sha = self.fixture["head_sha"]
+        self.trace = {
+            "source_head_sha": self.sha,
+            "tested_git_sha": self.sha,
+            "base_main_sha": self.sha,
+        }
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def write_manifest(self, payload=None, name="provenance.json") -> Path:
+        path = self.root / name
+        path.write_text(json.dumps(payload if payload is not None else self.fixture), encoding="utf-8")
+        return path
+
+    def validate(self, payload=None, *, current_attempt=None):
+        value = payload if payload is not None else self.fixture
+        attempt = current_attempt if current_attempt is not None else value.get("current_attempt")
+        return rel000.validate_workflow_provenance(
+            self.write_manifest(value),
+            self.trace,
+            self.fixture["workflow_run_id"],
+            attempt,
+        )
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def attempt_one(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["current_attempt"] = 1
+        payload["jobs"] = [job for job in payload["jobs"] if job["run_attempt"] == 1]
+        for job in payload["jobs"]:
+            job["status"] = "completed"
+            job["conclusion"] = "success"
+        jobs = {job["job_key"]: job for job in payload["jobs"]}
+        for artifact in payload["artifacts"]:
+            artifact["producer_attempt"] = 1
+            artifact["producer_job_id"] = jobs[artifact["job_key"]]["job_id"]
+        return payload
+
+    def full_rerun(self):
+        payload = self.attempt_one()
+        payload["current_attempt"] = 2
+        first_attempt = copy.deepcopy(payload["jobs"])
+        for job in first_attempt:
+            rerun = copy.deepcopy(job)
+            rerun["job_id"] += 100000000
+            rerun["run_attempt"] = 2
+            if rerun["job_key"] == "rel000":
+                rerun["status"] = "in_progress"
+                rerun["conclusion"] = ""
+            payload["jobs"].append(rerun)
+        jobs = {
+            job["job_key"]: job for job in payload["jobs"] if job["run_attempt"] == 2
+        }
+        for artifact in payload["artifacts"]:
+            artifact["producer_attempt"] = 2
+            artifact["producer_job_id"] = jobs[artifact["job_key"]]["job_id"]
+        return payload
+
+    def write_partial_raw_metadata(self):
+        raw = self.root / "raw"
+        raw.mkdir()
+        attempt_one_jobs = []
+        for index, job in enumerate(item for item in self.fixture["jobs"] if item["run_attempt"] == 1):
+            attempt_one_jobs.append(
+                {
+                    "id": job["job_id"],
+                    "name": job["job_name"],
+                    "run_attempt": 1,
+                    "status": job["status"],
+                    "conclusion": job["conclusion"],
+                    "started_at": f"2026-08-02T08:25:{index:02d}Z",
+                    "completed_at": f"2026-08-02T08:30:{index:02d}Z",
+                }
+            )
+        (raw / "attempt-1-run.json").write_text(
+            json.dumps(
+                {
+                    "id": int(self.fixture["workflow_run_id"]),
+                    "run_attempt": 1,
+                    "head_sha": self.sha,
+                    "run_started_at": "2026-08-02T08:24:51Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (raw / "attempt-1-jobs.json").write_text(
+            json.dumps({"total_count": 13, "jobs": attempt_one_jobs}), encoding="utf-8"
+        )
+        actual_attempt_two = {
+            job["job_key"]: job for job in self.fixture["jobs"] if job["run_attempt"] == 2
+        }
+        attempt_two_jobs = []
+        for index, prior in enumerate(attempt_one_jobs):
+            key = next(
+                key for key, name in rel000.AUTHORITATIVE_JOB_NAMES.items() if name == prior["name"]
+            )
+            if key in actual_attempt_two:
+                actual = actual_attempt_two[key]
+                attempt_two_jobs.append(
+                    {
+                        "id": actual["job_id"],
+                        "name": actual["job_name"],
+                        "run_attempt": 2,
+                        "status": actual["status"],
+                        "conclusion": actual["conclusion"],
+                        "started_at": f"2026-08-02T09:00:{index:02d}Z",
+                        "completed_at": f"2026-08-02T09:02:{index:02d}Z",
+                    }
+                )
+            else:
+                retained = copy.deepcopy(prior)
+                retained["id"] += 100000000
+                retained["run_attempt"] = 2
+                attempt_two_jobs.append(retained)
+        (raw / "attempt-2-run.json").write_text(
+            json.dumps(
+                {
+                    "id": int(self.fixture["workflow_run_id"]),
+                    "run_attempt": 2,
+                    "head_sha": self.sha,
+                    "run_started_at": "2026-08-02T08:59:34Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (raw / "attempt-2-jobs.json").write_text(
+            json.dumps({"total_count": 13, "jobs": attempt_two_jobs}), encoding="utf-8"
+        )
+        raw_artifacts = {
+            "artifacts": [
+                {
+                    "id": artifact["artifact_id"],
+                    "name": artifact["artifact_name"],
+                    "digest": artifact["artifact_digest"],
+                    "expired": False,
+                    "workflow_run": {
+                        "id": int(self.fixture["workflow_run_id"]),
+                        "head_sha": self.sha,
+                    },
+                }
+                for artifact in self.fixture["artifacts"]
+            ]
+        }
+        artifacts_path = raw / "artifacts.json"
+        artifacts_path.write_text(json.dumps(raw_artifacts), encoding="utf-8")
+        outputs = json.dumps(
+            [
+                {
+                    "artifact_name": artifact["artifact_name"],
+                    "artifact_id": str(artifact["artifact_id"]),
+                    "artifact_digest": artifact["artifact_digest"],
+                }
+                for artifact in self.fixture["artifacts"]
+            ]
+        )
+        return raw, artifacts_path, outputs
+
+    def test_131_attempt_one_provenance_passes(self):
+        result = self.validate(self.attempt_one())
+        self.assertFalse(result["report"]["mixed_attempt_evidence"])
+
+    def test_132_full_rerun_provenance_passes(self):
+        result = self.validate(self.full_rerun())
+        self.assertFalse(result["report"]["mixed_attempt_evidence"])
+        self.assertTrue(all(item["producer_attempt"] == 2 for item in result["report"]["jobs"]))
+
+    def test_133_partial_rerun_provenance_passes(self):
+        result = self.validate()
+        self.assertTrue(result["report"]["mixed_attempt_evidence"])
+        attempts = {item["job"]: item["producer_attempt"] for item in result["report"]["jobs"]}
+        self.assertEqual(2, attempts["realtime-e2e"])
+        self.assertEqual(1, attempts["dotnet"])
+
+    def test_134_attempt_n_uses_each_latest_executed_job(self):
+        payload = self.attempt_one()
+        payload["current_attempt"] = 4
+        next_id = 99000000000
+        for attempt, keys in ((2, ("dotnet", "rel000")), (3, ("realtime-e2e", "rel000")), (4, ("outbox-signalr-delivery", "rel000"))):
+            for key in keys:
+                source = next(job for job in payload["jobs"] if job["job_key"] == key)
+                job = copy.deepcopy(source)
+                job["job_id"] = next_id
+                next_id += 1
+                job["run_attempt"] = attempt
+                job["status"] = "in_progress" if key == "rel000" and attempt == 4 else "completed"
+                job["conclusion"] = "" if key == "rel000" and attempt == 4 else "success"
+                payload["jobs"].append(job)
+        latest = {}
+        for job in payload["jobs"]:
+            if job["job_key"] not in latest or job["run_attempt"] > latest[job["job_key"]]["run_attempt"]:
+                latest[job["job_key"]] = job
+        for artifact in payload["artifacts"]:
+            job = latest[artifact["job_key"]]
+            artifact["producer_attempt"] = job["run_attempt"]
+            artifact["producer_job_id"] = job["job_id"]
+        result = self.validate(payload)
+        attempts = {item["job"]: item["producer_attempt"] for item in result["report"]["jobs"]}
+        self.assertEqual(2, attempts["dotnet"])
+        self.assertEqual(3, attempts["realtime-e2e"])
+        self.assertEqual(4, attempts["outbox-signalr-delivery"])
+
+    def test_135_stale_signalr_artifact_after_rerun_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        artifact = next(item for item in payload["artifacts"] if item["job_key"] == "realtime-e2e")
+        artifact["producer_attempt"] = 1
+        artifact["producer_job_id"] = 91474837038
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_STALE_AFTER_RERUN", lambda: self.validate(payload))
+
+    def test_136_full_rerun_rejects_attempt_one_artifact(self):
+        payload = self.full_rerun()
+        artifact = next(item for item in payload["artifacts"] if item["job_key"] == "dotnet")
+        artifact["producer_attempt"] = 1
+        artifact["producer_job_id"] = next(job["job_id"] for job in payload["jobs"] if job["job_key"] == "dotnet" and job["run_attempt"] == 1)
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_STALE_AFTER_RERUN", lambda: self.validate(payload))
+
+    def test_137_latest_producer_failure_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        latest = next(job for job in payload["jobs"] if job["job_key"] == "realtime-e2e" and job["run_attempt"] == 2)
+        latest["conclusion"] = "failure"
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda: self.validate(payload))
+
+    def test_138_latest_producer_cancelled_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        latest = next(job for job in payload["jobs"] if job["job_key"] == "realtime-e2e" and job["run_attempt"] == 2)
+        latest["conclusion"] = "cancelled"
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda: self.validate(payload))
+
+    def test_139_latest_producer_skipped_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        latest = next(job for job in payload["jobs"] if job["job_key"] == "realtime-e2e" and job["run_attempt"] == 2)
+        latest["conclusion"] = "skipped"
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda: self.validate(payload))
+
+    def test_140_producer_attempt_future_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["producer_attempt"] = 3
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_FUTURE", lambda: self.validate(payload))
+
+    def test_141_producer_attempt_zero_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["producer_attempt"] = 0
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_INVALID", lambda: self.validate(payload))
+
+    def test_142_producer_attempt_missing_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        del payload["artifacts"][0]["producer_attempt"]
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_MISSING", lambda: self.validate(payload))
+
+    def test_143_producer_attempt_absent_from_jobs_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["producer_attempt"] = 2
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_UNKNOWN", lambda: self.validate(payload))
+
+    def test_144_wrong_run_id_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["workflow_run_id"] = "999"
+        self.assert_reason("WORKFLOW_PROVENANCE_RUN_MISMATCH", lambda: self.validate(payload))
+
+    def test_145_wrong_head_sha_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["head_sha"] = "d" * 40
+        self.assert_reason("WORKFLOW_PROVENANCE_HEAD_SHA_MISMATCH", lambda: self.validate(payload))
+
+    def test_146_current_attempt_zero_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["current_attempt"] = 0
+        self.assert_reason("WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_INVALID", lambda: self.validate(payload, current_attempt=0))
+
+    def test_147_unknown_job_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["jobs"][0]["job_key"] = "unknown"
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.validate(payload))
+
+    def test_148_duplicate_job_attempt_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        duplicate = copy.deepcopy(payload["jobs"][0])
+        duplicate["job_id"] += 999999
+        payload["jobs"].append(duplicate)
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_AMBIGUOUS", lambda: self.validate(payload))
+
+    def test_149_expected_job_missing_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["jobs"] = [job for job in payload["jobs"] if job["job_key"] != "dotnet"]
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_MISSING", lambda: self.validate(payload))
+
+    def test_150_artifact_missing_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"] = payload["artifacts"][1:]
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_MISSING", lambda: self.validate(payload))
+
+    def test_151_artifact_id_invalid_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["artifact_id"] = 0
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_ID_INVALID", lambda: self.validate(payload))
+
+    def test_152_artifact_digest_invalid_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["artifact_digest"] = "not-a-digest"
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_DIGEST_INVALID", lambda: self.validate(payload))
+
+    def test_153_artifact_name_mismatch_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["artifact_name"] = "wrong"
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_NAME_MISMATCH", lambda: self.validate(payload))
+
+    def test_154_artifact_producer_job_id_mismatch_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["producer_job_id"] += 1
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_JOB_MISMATCH", lambda: self.validate(payload))
+
+    def test_155_artifact_other_run_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["workflow_run_id"] = "999"
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_RUN_MISMATCH", lambda: self.validate(payload))
+
+    def test_156_artifact_other_sha_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][0]["head_sha"] = "d" * 40
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_SHA_MISMATCH", lambda: self.validate(payload))
+
+    def test_157_artifact_reused_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        payload["artifacts"][1]["artifact_id"] = payload["artifacts"][0]["artifact_id"]
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_REUSED", lambda: self.validate(payload))
+
+    def test_158_multiple_artifacts_for_one_job_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        duplicate = copy.deepcopy(payload["artifacts"][0])
+        duplicate["artifact_id"] += 999999
+        payload["artifacts"].append(duplicate)
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_AMBIGUOUS", lambda: self.validate(payload))
+
+    def test_159_diagnostic_signalr_artifact_cannot_be_authoritative(self):
+        payload = copy.deepcopy(self.fixture)
+        artifact = next(item for item in payload["artifacts"] if item["job_key"] == "realtime-e2e")
+        artifact["artifact_name"] = "realtime-e2e-failure-results-attempt-2"
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_NAME_MISMATCH", lambda: self.validate(payload))
+
+    def test_160_manifest_missing_fails(self):
+        self.assert_reason(
+            "WORKFLOW_PROVENANCE_MANIFEST_MISSING",
+            lambda: rel000.validate_workflow_provenance(
+                self.root / "missing.json", self.trace, self.fixture["workflow_run_id"], 2
+            ),
+        )
+
+    def test_161_manifest_nonparseable_fails(self):
+        path = self.root / "broken.json"
+        path.write_text("{", encoding="utf-8")
+        self.assert_reason(
+            "WORKFLOW_PROVENANCE_MANIFEST_INVALID",
+            lambda: rel000.validate_workflow_provenance(path, self.trace, self.fixture["workflow_run_id"], 2),
+        )
+
+    def test_162_manifest_incomplete_fails(self):
+        payload = copy.deepcopy(self.fixture)
+        del payload["jobs"]
+        self.assert_reason("WORKFLOW_PROVENANCE_MANIFEST_INCOMPLETE", lambda: self.validate(payload))
+
+    def test_163_source_sha_mismatch_is_rejected(self):
+        result = Rel000FocusedTests.execution_result()
+        result["source_head_sha"] = "c" * 40
+        self.assert_reason(
+            "EXECUTION_RESULT_SHA_MISMATCH",
+            lambda: rel000.validate_execution_context(result, self.trace, "100", "1"),
+        )
+
+    def test_164_tested_sha_mismatch_is_rejected(self):
+        result = Rel000FocusedTests.execution_result()
+        result["tested_git_sha"] = "c" * 40
+        self.assert_reason(
+            "EXECUTION_RESULT_SHA_MISMATCH",
+            lambda: rel000.validate_execution_context(result, self.trace, "100", "1"),
+        )
+
+    def test_165_base_sha_mismatch_is_rejected(self):
+        result = Rel000FocusedTests.execution_result()
+        result["base_main_sha"] = "c" * 40
+        self.assert_reason(
+            "EXECUTION_RESULT_SHA_MISMATCH",
+            lambda: rel000.validate_execution_context(result, self.trace, "100", "1"),
+        )
+
+    def test_165a_raw_partial_rerun_metadata_sanitizes_fail_closed(self):
+        raw, artifacts, outputs = self.write_partial_raw_metadata()
+        output = self.root / "sanitized.json"
+        manifest = rel000.sanitize_workflow_provenance(
+            raw,
+            artifacts,
+            outputs,
+            output,
+            self.fixture["workflow_run_id"],
+            2,
+            self.sha,
+        )
+        result = rel000.validate_workflow_provenance(
+            output, self.trace, self.fixture["workflow_run_id"], 2
+        )
+        self.assertEqual(15, len(manifest["jobs"]))
+        self.assertTrue(result["report"]["mixed_attempt_evidence"])
+
+    def test_165b_unparseable_github_metadata_fails(self):
+        raw, artifacts, outputs = self.write_partial_raw_metadata()
+        (raw / "attempt-1-run.json").write_text("{", encoding="utf-8")
+        self.assert_reason(
+            "WORKFLOW_PROVENANCE_METADATA_INVALID",
+            lambda: rel000.sanitize_workflow_provenance(
+                raw,
+                artifacts,
+                outputs,
+                self.root / "sanitized.json",
+                self.fixture["workflow_run_id"],
+                2,
+                self.sha,
+            ),
+        )
+
+    def test_165c_artifact_output_contradicting_github_metadata_fails(self):
+        raw, artifacts, outputs = self.write_partial_raw_metadata()
+        payload = json.loads(artifacts.read_text(encoding="utf-8"))
+        payload["artifacts"][0]["digest"] = "sha256:" + "f" * 64
+        artifacts.write_text(json.dumps(payload), encoding="utf-8")
+        self.assert_reason(
+            "WORKFLOW_PROVENANCE_ARTIFACT_DIGEST_MISMATCH",
+            lambda: rel000.sanitize_workflow_provenance(
+                raw,
+                artifacts,
+                outputs,
+                self.root / "sanitized.json",
+                self.fixture["workflow_run_id"],
+                2,
+                self.sha,
+            ),
+        )
+
+
+class WorkflowPhysicalGuardsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.path = REPOSITORY_ROOT / ".github/workflows/ci.yml"
+        cls.text = cls.path.read_text(encoding="utf-8")
+        import yaml
+
+        cls.workflow = yaml.safe_load(cls.text)
+
+    def test_166_foundation_ci_keeps_exactly_thirteen_jobs(self):
+        self.assertEqual(13, len(self.workflow["jobs"]))
+
+    def test_167_rel000_permissions_are_read_only(self):
+        self.assertEqual(
+            {"actions": "read", "contents": "read", "issues": "read"},
+            self.workflow["jobs"]["rel000"]["permissions"],
+        )
+
+    def test_168_workflow_queries_every_attempt_and_artifact_metadata(self):
+        self.assertIn("/attempts/${attempt}/jobs?per_page=100", self.text)
+        self.assertIn("/attempts/${attempt}", self.text)
+        self.assertIn("/artifacts?per_page=100", self.text)
+
+    def test_169_raw_metadata_is_cleaned_and_not_published(self):
+        self.assertGreaterEqual(self.text.count("rel000-workflow-provenance-raw"), 2)
+        publication = next(
+            step
+            for step in self.workflow["jobs"]["rel000"]["steps"]
+            if step.get("name") == "Publish only redacted REL-000 evidence"
+        )
+        self.assertEqual("${{ runner.temp }}/rel000-output", publication["with"]["path"])
+
+    def test_170_failed_signalr_junit_uses_non_authoritative_name(self):
+        steps = self.workflow["jobs"]["realtime-e2e"]["steps"]
+        diagnostic = next(step for step in steps if step.get("name") == "Publish failed realtime JUnit evidence")
+        self.assertEqual("failure()", diagnostic["if"])
+        self.assertEqual("actions/upload-artifact@v4", diagnostic["uses"])
+        self.assertEqual(7, diagnostic["with"]["retention-days"])
+        self.assertEqual("ignore", diagnostic["with"]["if-no-files-found"])
+        self.assertFalse(diagnostic["with"]["name"].startswith("rel000-execution-"))
+
+    def test_171_successful_signalr_artifact_remains_authoritative(self):
+        steps = self.workflow["jobs"]["realtime-e2e"]["steps"]
+        authoritative = next(step for step in steps if step.get("name") == "Publish structured realtime execution evidence")
+        self.assertEqual("rel000-execution-realtime-e2e", authoritative["with"]["name"])
+
+    def test_172_signalr_execution_has_no_retry_or_timeout_change(self):
+        job = self.workflow["jobs"]["realtime-e2e"]
+        execute = next(step for step in job["steps"] if step.get("name") == "Execute real reconnect lifecycle")
+        self.assertNotIn("timeout-minutes", job)
+        self.assertNotRegex(execute["run"].lower(), r"retry|sleep|timeout")
 
 
 class SharpRemediationPolicyTests(unittest.TestCase):
