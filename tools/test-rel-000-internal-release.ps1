@@ -31,8 +31,8 @@ param(
     [string] $ExecutionResultsDirectory = $env:REL000_EXECUTION_RESULTS_DIRECTORY,
     [string] $WorkflowProvenancePath = $env:REL000_WORKFLOW_PROVENANCE_PATH,
     [string] $DecisionRecordPath = $env:REL000_DECISION_RECORD_PATH,
-    [string] $ApprovedArtifactMetadataPath = $env:REL000_APPROVED_ARTIFACT_METADATA_PATH,
-    [string] $ApprovedArtifactZipPath = $env:REL000_APPROVED_ARTIFACT_ZIP_PATH,
+    [string] $ApprovedEvidenceManifestPath = $env:REL000_APPROVED_EVIDENCE_MANIFEST_PATH,
+    [string] $ApprovedEvidenceDirectory = $env:REL000_APPROVED_EVIDENCE_DIRECTORY,
     [string] $SyntheticRollbackScenario,
     [string] $SyntheticRoot
 )
@@ -354,8 +354,8 @@ $required = [ordered]@{
     ExecutionResultsDirectory = $ExecutionResultsDirectory
     WorkflowProvenancePath = $WorkflowProvenancePath
     DecisionRecordPath = $DecisionRecordPath
-    ApprovedArtifactMetadataPath = $ApprovedArtifactMetadataPath
-    ApprovedArtifactZipPath = $ApprovedArtifactZipPath
+    ApprovedEvidenceManifestPath = $ApprovedEvidenceManifestPath
+    ApprovedEvidenceDirectory = $ApprovedEvidenceDirectory
 }
 if ($Mode -eq "SECURITY_REMEDIATION") {
     $required.SharpRuntimeSmokePath = $SharpRuntimeSmokePath
@@ -388,12 +388,26 @@ if ($resolvedDecisionRecordPath -cne $expectedDecisionRecordPath -or
     -not (Test-Path -LiteralPath $resolvedDecisionRecordPath -PathType Leaf)) {
     throw "REL000_OWNER_DECISION_RECORD_PATH_INVALID"
 }
-$validatedApprovedArtifactMetadata = Assert-Ops002ExternalRegularFile `
-    -Path $ApprovedArtifactMetadataPath `
-    -Purpose "REL-000 approved artifact metadata"
-$validatedApprovedArtifactZip = Assert-Ops002ExternalRegularFile `
-    -Path $ApprovedArtifactZipPath `
-    -Purpose "REL-000 approved artifact ZIP"
+$expectedApprovedEvidenceDirectory = [System.IO.Path]::GetFullPath(
+    (Join-Path $repositoryRoot "docs/releases/evidence/rel-000-owner-001"))
+$resolvedApprovedEvidenceDirectory = [System.IO.Path]::GetFullPath($ApprovedEvidenceDirectory)
+$expectedApprovedEvidenceManifest = [System.IO.Path]::GetFullPath(
+    (Join-Path $expectedApprovedEvidenceDirectory "approved-evidence-manifest.json"))
+$resolvedApprovedEvidenceManifest = [System.IO.Path]::GetFullPath($ApprovedEvidenceManifestPath)
+if ($resolvedApprovedEvidenceDirectory -cne $expectedApprovedEvidenceDirectory -or
+    -not (Test-Path -LiteralPath $resolvedApprovedEvidenceDirectory -PathType Container)) {
+    throw "REL000_APPROVED_EVIDENCE_DIRECTORY_PATH_INVALID"
+}
+if ($resolvedApprovedEvidenceManifest -cne $expectedApprovedEvidenceManifest -or
+    -not (Test-Path -LiteralPath $resolvedApprovedEvidenceManifest -PathType Leaf)) {
+    throw "REL000_APPROVED_EVIDENCE_MANIFEST_PATH_INVALID"
+}
+foreach ($path in @($resolvedApprovedEvidenceDirectory, $resolvedApprovedEvidenceManifest)) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "REL000_APPROVED_EVIDENCE_LINK_REJECTED"
+    }
+}
 $validatedIssue = Assert-Ops002ExternalRegularFile `
     -Path $Issue5Path `
     -Purpose "REL-000 Issue #5 state"
@@ -423,8 +437,8 @@ try {
         "validate",
         "--repository-root", $repositoryRoot,
         "--decision-record", $resolvedDecisionRecordPath,
-        "--approved-artifact-metadata", $validatedApprovedArtifactMetadata,
-        "--approved-artifact-zip", $validatedApprovedArtifactZip,
+        "--approved-evidence-manifest", $resolvedApprovedEvidenceManifest,
+        "--approved-evidence-directory", $resolvedApprovedEvidenceDirectory,
         "--item-evidence", (Join-Path $repositoryRoot "tests/fixtures/rel-000/item-evidence.json"),
         "--cross-tenant-evidence", (Join-Path $repositoryRoot "tests/fixtures/rel-000/cross-tenant-evidence.json"),
         "--rollback-evidence", (Join-Path $repositoryRoot "tests/fixtures/rel-000/rollback-evidence.json"),

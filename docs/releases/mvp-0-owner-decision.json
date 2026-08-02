@@ -15,6 +15,12 @@
     "artifact_name": "rel000-mvp0-internal-release-evidence",
     "artifact_digest": "sha256:66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172"
   },
+  "evidence_preservation": {
+    "mode": "VERSIONED_REDACTED_SNAPSHOT",
+    "manifest_path": "docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json",
+    "snapshot_directory": "docs/releases/evidence/rel-000-owner-001",
+    "historical_artifact_live_access_required": false
+  },
   "scope": {
     "synthetic_internal_mvp0_only": true,
     "pilot_authorized": false,

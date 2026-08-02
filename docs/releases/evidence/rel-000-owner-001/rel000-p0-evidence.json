@@ -1,0 +1,1406 @@
+{
+  "format_version": "paquetenvia-rel000-v1",
+  "inventory_source": "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml",
+  "mvp0_p0_items_expected": 29,
+  "mvp0_p0_items_evaluated": 29,
+  "mvp0_p0_items_verified": 28,
+  "mvp0_p0_items_partial": 0,
+  "mvp0_p0_items_not_started": 0,
+  "mvp0_p0_items_blocked": 1,
+  "mvp0_p0_items_missing": 0,
+  "mvp0_p0_items_duplicated": 0,
+  "mvp0_p0_items_unknown": 0,
+  "ids_by_status": {
+    "VERIFIED": [
+      "ARC-001",
+      "ARC-002",
+      "AUD-001",
+      "DBA-001",
+      "DRV-001",
+      "DRV-002",
+      "DRV-003",
+      "DSP-001",
+      "DSP-002",
+      "FND-001",
+      "FND-002",
+      "GEO-001",
+      "OBS-001",
+      "OPS-001",
+      "OPS-002",
+      "ORD-001",
+      "ORD-002",
+      "POD-001",
+      "PRC-001",
+      "PRC-002",
+      "RTM-001",
+      "RTM-002",
+      "SEC-001",
+      "SEC-002",
+      "TEN-001",
+      "TEN-002",
+      "TEN-003",
+      "TRK-001"
+    ],
+    "BLOCKED": [
+      "REL-000"
+    ],
+    "NOT_STARTED": [],
+    "PARTIAL": [],
+    "NOT_APPLICABLE": []
+  },
+  "items": [
+    {
+      "id": "ARC-001",
+      "title": "Plantilla modular y pruebas de límites",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "FND-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "15692b5007f120efb8a2dbe4682bfcc6ae8eba5b"
+      ],
+      "implementation_paths": [
+        "templates/Paqueteria.Module/ModuleName.Domain/ModuleName.Domain.csproj"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ArchitectureTests/ModuleTemplateTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "dotnet",
+          "test_project": "tests/Paqueteria.ArchitectureTests/Paqueteria.ArchitectureTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ArchitectureTests.ModuleTemplateTests.Template_generates_and_builds_a_Sandbox_module_outside_the_repository",
+          "category": "Uncategorized",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "14927b4821ab3d3727168bb3541b6f05fb398ca3cd42172f83e1fa19f3b5f093",
+          "artifact_id": 8834204886,
+          "artifact_digest": "abbdf32250423826f8c5660fa1255d67338ab84ca631a1525588c743ee16fdd8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "dotnet"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "ARC-002",
+      "title": "Cerrar remediaciones contractuales v0.6",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "fe0db3e9ffda887e4ec920afd9c3cdf4c82f2ef7"
+      ],
+      "implementation_paths": [
+        "docs/normative/v0.6/tools/validate_contracts.py"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/Normative/NormativeBaselineTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "dotnet",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.Normative.NormativeBaselineTests.Every_normative_yaml_document_parses",
+          "category": "Uncategorized",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "676c7ef1ca68a5214c2027788f368699cf8b34eff01f31576a30a982bf584ba7",
+          "artifact_id": 8834204886,
+          "artifact_digest": "abbdf32250423826f8c5660fa1255d67338ab84ca631a1525588c743ee16fdd8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "dotnet"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "AUD-001",
+      "title": "Auditoría append-only",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "TEN-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "44473eb1d1354b76e4d27800fefd6dcb6c01bfca"
+      ],
+      "implementation_paths": [
+        "src/BuildingBlocks/Paqueteria.Application/Auditing/AuditPayloadRedactor.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/AppendOnlyAuditContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.AppendOnlyAuditContractTests.Concurrent_tenant_audits_do_not_cross_contaminate",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": [
+        "GATE-007"
+      ]
+    },
+    {
+      "id": "DBA-001",
+      "title": "Esquemas físicos, privilegios y append-only",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "FND-002",
+        "ARC-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "4237b2d7570a10312302853d37065e90a725e292"
+      ],
+      "implementation_paths": [
+        "tools/database-baseline.ps1"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/DatabaseBaselineDeploymentContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DatabaseBaselineDeploymentContractTests.Clean_database_applies_once_and_then_reports_already_applied",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "DRV-001",
+      "title": "Lista y detalle de paradas",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "DSP-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "20d3daba7cda83e431cc8536ee8b8912942905e6"
+      ],
+      "implementation_paths": [
+        "src/Modules/Dispatch/Dispatch.Infrastructure/Stops/PostgreSqlDriverStopsQuery.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Driver/DriverStopsPwaPlaywrightTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "driver-stops-pwa",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Driver.DriverStopsPwaPlaywrightTests.Offline_partition_never_renders_another_organization_or_session",
+          "category": "DriverStopsPwa",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "bf77ce9c420073395008aecf796b581f5c4a21c9535c4b4ad93ccaa2489f0c4b",
+          "artifact_id": 8834221421,
+          "artifact_digest": "dc09b28287bd0e217255b34c225dc49e7f061486f64b70cd13d17a34dea73241",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "driver-stops-pwa"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "DRV-002",
+      "title": "Cola offline de eventos y POD",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "DRV-001",
+        "POD-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "7d433cd631f1095d4dfaf259360c032ce1e51f49"
+      ],
+      "implementation_paths": [
+        "apps/web/src/driver/offline/driver-offline-queue.ts"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Driver/DriverOfflineOperationsRealPipelineTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "driver-stops-pwa",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Driver.DriverOfflineOperationsRealPipelineTests.Real_postgres_s3_api_worker_and_browser_complete_the_offline_chain",
+          "category": "DriverOfflineOperationsPwa",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "93d66ac754d84400042186aa0cd3451c60344f3a6241b7978f33920faa0e7344",
+          "artifact_id": 8834221421,
+          "artifact_digest": "dc09b28287bd0e217255b34c225dc49e7f061486f64b70cd13d17a34dea73241",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "driver-stops-pwa"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Offline credentials and proof responses are not persisted."
+      ],
+      "open_gates": []
+    },
+    {
+      "id": "DRV-003",
+      "title": "Ingesta y persistencia de ubicación del repartidor",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "DSP-001",
+        "TEN-001",
+        "AUD-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "43d615dc92b2b12cb34e2d824136de234a15a96f"
+      ],
+      "implementation_paths": [
+        "src/Modules/Drivers/Drivers.Infrastructure/Locations/PostgreSqlDriverLocationIngestionService.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/DriverLocationIngestionPostgreSqlContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DriverLocationIngestionPostgreSqlContractTests.Same_event_id_is_scoped_by_driver_and_tenant_context_does_not_leak_through_pooling",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Production telemetry retention is unresolved."
+      ],
+      "open_gates": [
+        "GATE-007"
+      ]
+    },
+    {
+      "id": "DSP-001",
+      "title": "Perfiles y elegibilidad de repartidor propio",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "TEN-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "6e65573eaa7bbc72964f06bd104384445f8b9f79"
+      ],
+      "implementation_paths": [
+        "src/Modules/Drivers/Drivers.Infrastructure/Eligibility/PostgreSqlDriverEligibilityService.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/DriversEligibilityPostgreSqlContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DriversEligibilityPostgreSqlContractTests.Driver_RLS_is_forced_fail_closed_and_blocks_cross_tenant_mutations",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Only own drivers are enabled."
+      ],
+      "open_gates": [
+        "GATE-008"
+      ]
+    },
+    {
+      "id": "DSP-002",
+      "title": "Asignación manual a repartidor propio",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "ORD-002",
+        "DSP-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "533fa9c27b7c5352e047d7e4a595cc5c4c8aed8d"
+      ],
+      "implementation_paths": [
+        "src/Modules/Dispatch/Dispatch.Infrastructure/Assignments/PostgreSqlAssignmentToOrderCoordinator.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/DispatchPostgreSqlContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.DispatchPostgreSqlContractTests.Missing_and_cross_tenant_resources_execute_the_same_visibility_plan_and_roll_back",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "EXTERNAL and ALLY_CAPACITY remain disabled."
+      ],
+      "open_gates": []
+    },
+    {
+      "id": "FND-001",
+      "title": "Inicializar solución .NET y workspace web",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "ARC-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "2153db54d977ee125fba1012fa1890a6d485db6b"
+      ],
+      "implementation_paths": [
+        "Paqueteria.sln"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ArchitectureTests/DependencyRulesTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "dotnet",
+          "test_project": "tests/Paqueteria.ArchitectureTests/Paqueteria.ArchitectureTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ArchitectureTests.DependencyRulesTests.Every_module_has_the_canonical_four_layers",
+          "category": "Uncategorized",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "14927b4821ab3d3727168bb3541b6f05fb398ca3cd42172f83e1fa19f3b5f093",
+          "artifact_id": 8834204886,
+          "artifact_digest": "abbdf32250423826f8c5660fa1255d67338ab84ca631a1525588c743ee16fdd8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "dotnet"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "FND-002",
+      "title": "Docker Compose local",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "FND-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "813a5010515fb5704fdc29e308f06dc81ff515e7"
+      ],
+      "implementation_paths": [
+        "deploy/docker-compose.yml"
+      ],
+      "required_test_sources": [
+        "tools/test-local-environment.ps1"
+      ],
+      "required_tests": [
+        {
+          "job": "infrastructure",
+          "test_project": "tools/test-local-environment.ps1",
+          "fully_qualified_test_name": "tools.test-local-environment.FND002_smoke",
+          "category": "InfrastructureSmoke",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b0612af794cb45cbbd1e60ecf648682c12cc2de57ef9948b685990128031c299",
+          "artifact_id": 8834192697,
+          "artifact_digest": "d7c43408b4eb8c189e019a5bbb4f0ce81d758c64a26d3a4ec788dcc77f026777",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "infrastructure"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "GEO-001",
+      "title": "Ubicaciones, zonas y adaptador geográfico",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "TEN-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "cbcb58a44c3940f81619f45a24f4f80c888e7cf5"
+      ],
+      "implementation_paths": [
+        "src/Modules/Locations/Locations.Infrastructure/Locations/PostgreSqlLocationService.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/LocationsPostGisContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.LocationsPostGisContractTests.Location_catalog_is_tenant_isolated_and_cross_tenant_rows_are_uniformly_absent",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Maps remain synthetic/manual for MVP-0."
+      ],
+      "open_gates": [
+        "GATE-003",
+        "GATE-010"
+      ]
+    },
+    {
+      "id": "OBS-001",
+      "title": "Dashboard de despacho básico",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "ORD-001",
+        "DSP-002",
+        "RTM-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "9e4578a76809f154536a0e713e2a3b09112ac495"
+      ],
+      "implementation_paths": [
+        "src/Modules/Reporting/Reporting.Infrastructure/Operations/PostgreSqlOperationsDashboardReader.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Operations/OperationsDashboardPostgreSqlTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "operations-dashboard",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Operations.OperationsDashboardPostgreSqlTests.Authorization_precedence_and_tenant_isolation_are_enforced",
+          "category": "OperationsDashboardPostgreSql",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "49dc8145a7e097840582e9f6ca8f077e91610b6e491f4cae6ef997117cf692ad",
+          "artifact_id": 8834205497,
+          "artifact_digest": "14e3132f02df7f020525b9928f8a54957056d51ce66fba02f518599c3eb90ff0",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "operations-dashboard"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": [
+        "RTM-001-CUSTOMER-SUPPORT-ROLE"
+      ]
+    },
+    {
+      "id": "OPS-001",
+      "title": "Seed y simulador de 20 entregas",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "DRV-002",
+        "TRK-001",
+        "OBS-001",
+        "RTM-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "b126e636ac0ae60e96f76841dca09ffc4e842060"
+      ],
+      "implementation_paths": [
+        "tests/Paqueteria.IntegrationTests/Operations/Ops001ScenarioRunner.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Operations/Ops001DeliverySimulationTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "delivery-simulation",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Operations.Ops001DeliverySimulationTests.Two_consecutive_runs_deliver_twenty_orders_with_worker_recovery",
+          "category": "OpsDeliverySimulation",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "f24ff91c8a71007dab21a774043de53c83a4d5dfae0c0badb3e23df57b10828b",
+          "artifact_id": 8834204946,
+          "artifact_digest": "d430e625043a069a7eb42c0d8d66c49d575b22b81a19e4d6ba8246e44b5b7a94",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "delivery-simulation"
+      ],
+      "rollback_reference": "docs/development/ops-001-delivery-simulation.md#rollback",
+      "known_limitations": [
+        "Synthetic workload is not a production capacity test."
+      ],
+      "open_gates": [
+        "Issue #5"
+      ]
+    },
+    {
+      "id": "OPS-002",
+      "title": "Backups y restauración",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "FND-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "9418504bec0b2eab96ff6c2f3cebb54048482a1f"
+      ],
+      "implementation_paths": [
+        "tools/test-backup-restore.ps1"
+      ],
+      "required_test_sources": [
+        "tests/fixtures/ops-002/assert-restored.sql"
+      ],
+      "required_tests": [
+        {
+          "job": "backup-restore",
+          "test_project": "tools/test-backup-restore.ps1",
+          "fully_qualified_test_name": "tools.test-backup-restore.cross_tenant_isolation_after_restore",
+          "category": "BackupRestore",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "bdbf1dd80ebcb006ee102095be34f1d9bef58780e29261554bc5feb0641e7e36",
+          "artifact_id": 8834223900,
+          "artifact_digest": "1211a3c647afa26a83dd884c09ea2e338e08f8694e927ff96fb7bc38fbf70d91",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "backup-restore"
+      ],
+      "rollback_reference": "docs/development/ops-002-backup-restore.md#riesgos-limitaciones-y-rollback",
+      "known_limitations": [
+        "RPO is not established and PITR is not implemented."
+      ],
+      "open_gates": [
+        "GATE-007",
+        "GATE-012"
+      ]
+    },
+    {
+      "id": "ORD-001",
+      "title": "Crear y consultar órdenes",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "PRC-001",
+        "TEN-001",
+        "ARC-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "570fe050dc20eaa1b49486b6960f2fceacf31603"
+      ],
+      "implementation_paths": [
+        "src/Modules/Orders/Orders.Infrastructure/Orders/QuoteSnapshotToOrderCoordinator.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/OrdersPostgreSqlContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.OrdersPostgreSqlContractTests.Create_replay_queries_and_all_transactional_artifacts_match_the_quote",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "ORD-002",
+      "title": "Máquina de estados",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "ORD-001",
+        "AUD-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "126caf6ae7335b4e55a933e68359c992dcc3f96c"
+      ],
+      "implementation_paths": [
+        "src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionService.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/OrdersTransitionPostgreSqlContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.RLS_hides_cross_tenant_order_and_foreign_guard_rows_and_cancellation_is_partial_row_free",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "POD-001",
+      "title": "Carga segura de evidencia",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "FND-002",
+        "ORD-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "239a7ee458047c86cdce7861a963d75c52a1c8ff"
+      ],
+      "implementation_paths": [
+        "src/Modules/Custody/Custody.Infrastructure/Proofs/PostgreSqlProofUploadSessionService.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Custody/SecureProofUploadPipelineTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Custody.SecureProofUploadPipelineTests.Api_storage_worker_and_finalization_complete_once_without_order_transition",
+          "category": "SecureProofUpload",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "e9e1e6633614326b79868cabdd4a7c997a9c9597a7b07fd503ceaf30d2561178",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Synthetic POD only."
+      ],
+      "open_gates": [
+        "GATE-007",
+        "GATE-012"
+      ]
+    },
+    {
+      "id": "PRC-001",
+      "title": "Motor de cotización básico",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "GEO-001",
+        "ARC-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "587a2f9638c5150c72a774d79655ac804fff7632"
+      ],
+      "implementation_paths": [
+        "src/Modules/Pricing/Pricing.Domain/TariffRuleEvaluator.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.UnitTests/Pricing/PricingDomainTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "dotnet",
+          "test_project": "tests/Paqueteria.UnitTests/Paqueteria.UnitTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.UnitTests.Pricing.PricingDomainTests.Active_client_account_selects_exact_private_tariff_tier",
+          "category": "Uncategorized",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "7ef31642971cfbe784978bfbdc44168f0219e9210e768f287c206b5300f6a8b1",
+          "artifact_id": 8834204886,
+          "artifact_digest": "abbdf32250423826f8c5660fa1255d67338ab84ca631a1525588c743ee16fdd8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "dotnet"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "No real or public pricing is authorized."
+      ],
+      "open_gates": [
+        "GATE-003",
+        "GATE-010",
+        "GATE-011"
+      ]
+    },
+    {
+      "id": "PRC-002",
+      "title": "Guardia para tarifas de volumen",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "PRC-001",
+        "AUD-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "587a2f9638c5150c72a774d79655ac804fff7632"
+      ],
+      "implementation_paths": [
+        "src/Modules/Pricing/Pricing.Domain/PricingPolicies.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/PricingPostgreSqlContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.PricingPostgreSqlContractTests.Pricing_and_idempotency_RLS_are_forced_fail_closed_and_cross_tenant_safe",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Tax display remains owner-blocked."
+      ],
+      "open_gates": [
+        "GATE-011"
+      ]
+    },
+    {
+      "id": "REL-000",
+      "title": "Puerta de liberación interna",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "OPS-001",
+        "OPS-002"
+      ],
+      "implementation_status": "BLOCKED",
+      "implementation_commits_or_prs": [],
+      "implementation_paths": [
+        "tools/rel-000/rel000.py"
+      ],
+      "required_test_sources": [
+        "tools/rel-000/test_rel000.py"
+      ],
+      "required_tests": [],
+      "authoritative_ci_jobs": [
+        "rel000"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-rel-000",
+      "known_limitations": [
+        "Technical evidence does not constitute owner approval."
+      ],
+      "open_gates": [
+        "Issue #5"
+      ]
+    },
+    {
+      "id": "RTM-001",
+      "title": "Infraestructura SignalR segura y tenant-aware",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "SEC-001",
+        "TEN-001",
+        "AUD-001",
+        "ARC-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "f7d05acf756b77570adef206fd7fa42f6bd3ccc9"
+      ],
+      "implementation_paths": [
+        "src/Modules/Realtime/Realtime.Endpoints/Hubs/OperationsHub.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Realtime/RealtimeHubIntegrationTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "dotnet",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Realtime.RealtimeHubIntegrationTests.Operations_groups_isolate_two_organizations",
+          "category": "Uncategorized",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "f8a3afecd5d30eda4b8fdbd3855fbe3a4d3882f4c90097ba9fff91d757767244",
+          "artifact_id": 8834204886,
+          "artifact_digest": "abbdf32250423826f8c5660fa1255d67338ab84ca631a1525588c743ee16fdd8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "dotnet"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Single-instance SignalR only for MVP-0."
+      ],
+      "open_gates": [
+        "GATE-013",
+        "RTM-001-CUSTOMER-SUPPORT-ROLE"
+      ]
+    },
+    {
+      "id": "RTM-002",
+      "title": "Publicación confiable de eventos operativos",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "RTM-001",
+        "ORD-002",
+        "DSP-002",
+        "DRV-003"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "5dc7339b392659d6ad30762a16d22fcb759c9413"
+      ],
+      "implementation_paths": [
+        "src/Modules/Realtime/Realtime.Infrastructure/Dispatching/RealtimeOutboxProcessor.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Realtime/RealtimeOutboxAudienceAndIsolationTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "outbox-signalr-delivery",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Realtime.RealtimeOutboxAudienceAndIsolationTests.Real_location_lane_publishes_exact_payload_only_to_same_tenant_operations",
+          "category": "OutboxSignalRDelivery",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "162c8f4b8ba51fde730d577abd18c5ab82083bc64fffd2b65328a70087562ee1",
+          "artifact_id": 8834210014,
+          "artifact_digest": "b523d22b84d0c365c2b91a0ff207b96b3f48a6c295daafed6d04760a32d92845",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "outbox-signalr-delivery"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": [
+        "GATE-013"
+      ]
+    },
+    {
+      "id": "SEC-001",
+      "title": "Abstracción OIDC y sesión",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "FND-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "e7bf83c7984aa693f4b03e611145e7d6fb2d34bb"
+      ],
+      "implementation_paths": [
+        "src/Modules/Identity/Identity.Infrastructure/Mock/MockIdentityProvider.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Security/AuthenticationPipelineTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "dotnet",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Security.AuthenticationPipelineTests.Organization_authorization_keeps_multi_org_roles_separate",
+          "category": "Uncategorized",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "f8a3afecd5d30eda4b8fdbd3855fbe3a4d3882f4c90097ba9fff91d757767244",
+          "artifact_id": 8834204886,
+          "artifact_digest": "abbdf32250423826f8c5660fa1255d67338ab84ca631a1525588c743ee16fdd8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "dotnet"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "MVP-0 permits synthetic mock identity only."
+      ],
+      "open_gates": []
+    },
+    {
+      "id": "SEC-002",
+      "title": "Bootstrap seguro de identidad y tracking",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "FND-002",
+        "DBA-001",
+        "SEC-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "c4099ebe60b6e84e99cc773216b178839e935aab"
+      ],
+      "implementation_paths": [
+        "src/Modules/Identity/Identity.Infrastructure/Bootstrap/PostgreSqlIdentityContextResolver.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Security/PostgreSqlBootstrapTrackingTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "dotnet",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Security.PostgreSqlBootstrapTrackingTests.Organization_contexts_are_read_through_productive_transactional_RLS",
+          "category": "Uncategorized",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "f8a3afecd5d30eda4b8fdbd3855fbe3a4d3882f4c90097ba9fff91d757767244",
+          "artifact_id": 8834204886,
+          "artifact_digest": "abbdf32250423826f8c5660fa1255d67338ab84ca631a1525588c743ee16fdd8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "dotnet"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "TEN-001",
+      "title": "Organizaciones, usuarios y contexto tenant",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "SEC-001",
+        "SEC-002",
+        "DBA-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "4ce264f92bb77e778c181603266f208b88d6ae73"
+      ],
+      "implementation_paths": [
+        "src/Modules/Organizations/Organizations.Endpoints/Tenancy/TenantContextMiddleware.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/ActiveTenantRuntimeContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.ActiveTenantRuntimeContractTests.Product_context_reader_uses_all_active_memberships_without_an_active_header",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": [
+        "RTM-001-CUSTOMER-SUPPORT-ROLE"
+      ]
+    },
+    {
+      "id": "TEN-002",
+      "title": "Contexto RLS transaccional y pooling seguro",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "TEN-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "14e43111aaaba3cf18cf4b3c7be2184608b6fe6e"
+      ],
+      "implementation_paths": [
+        "src/BuildingBlocks/Paqueteria.Infrastructure/Tenancy/TenantTransactionContext.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/TransactionalRlsPoolingContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.TransactionalRlsPoolingContractTests.Concurrent_pooled_transactions_do_not_cross_contaminate_tenants",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Real PgBouncer validation remains a later scale gate."
+      ],
+      "open_gates": [
+        "GATE-014"
+      ]
+    },
+    {
+      "id": "TEN-003",
+      "title": "Provisioning transaccional de usuario y organización",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "SEC-001",
+        "TEN-002",
+        "DBA-001"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "4ce264f92bb77e778c181603266f208b88d6ae73"
+      ],
+      "implementation_paths": [
+        "src/Modules/Organizations/Organizations.Infrastructure/Provisioning/PostgreSqlInitialOrganizationProvisioner.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.ContractTests/PostgreSql/RlsAndProvisioningContractTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "runtime-contracts",
+          "test_project": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.ContractTests.PostgreSql.RlsAndProvisioningContractTests.First_user_and_organization_provisioning_are_preauthorized_and_atomic",
+          "category": "PostgreSqlContract",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5161a06e7f7175615ce06d2816fda602c1e83387cb220bfc2a57a95d4e92ff1",
+          "artifact_id": 8834208670,
+          "artifact_digest": "67a336b7772e831bcda11b237cb60d17c0d8c5f2f2be98313c1c9438c888f6c8",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "runtime-contracts"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [],
+      "open_gates": []
+    },
+    {
+      "id": "TRK-001",
+      "title": "Tracking público mínimo",
+      "release": "MVP-0",
+      "priority": "P0",
+      "dependencies": [
+        "ORD-002",
+        "RTM-002"
+      ],
+      "implementation_status": "VERIFIED",
+      "implementation_commits_or_prs": [
+        "2541984489c8459f2cc2b728ffed78c4c14882c3"
+      ],
+      "implementation_paths": [
+        "src/Modules/Orders/Orders.Infrastructure/Tracking/PostgreSqlPublicTrackingProjectionReader.cs"
+      ],
+      "required_test_sources": [
+        "tests/Paqueteria.IntegrationTests/Tracking/PublicTrackingPostgreSqlTests.cs"
+      ],
+      "required_tests": [
+        {
+          "job": "public-tracking",
+          "test_project": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj",
+          "fully_qualified_test_name": "Paqueteria.IntegrationTests.Tracking.PublicTrackingPostgreSqlTests.Lifecycle_is_tenant_safe_audited_and_plaintext_is_returned_once",
+          "category": "PublicTrackingPostgreSql",
+          "outcome": "PASSED",
+          "executed": true,
+          "skipped": false,
+          "trx_or_result_digest": "b5c7203f7f1b0b0ded3b5b383e0e5dd774dd3938eda843b4388cb892e74ce385",
+          "artifact_id": 8834217098,
+          "artifact_digest": "3cac6d03284e813d0f577a245052ca295c266dbc90b0e69387323c31c182815f",
+          "source_head_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "tested_git_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "base_main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+          "workflow_run_id": "30750187893",
+          "workflow_run_attempt": "1"
+        }
+      ],
+      "authoritative_ci_jobs": [
+        "public-tracking"
+      ],
+      "rollback_reference": "docs/releases/mvp-0-internal-release-report.md#rollback-matrix",
+      "known_limitations": [
+        "Synthetic tracking only; no customer messaging."
+      ],
+      "open_gates": [
+        "GATE-004",
+        "GATE-007"
+      ]
+    }
+  ]
+}

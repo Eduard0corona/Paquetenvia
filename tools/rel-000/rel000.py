@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -41,6 +43,32 @@ APPROVED_ARTIFACT_NAME = "rel000-mvp0-internal-release-evidence"
 APPROVED_ARTIFACT_DIGEST = (
     "sha256:66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172"
 )
+APPROVED_ARTIFACT_ZIP_SIZE = 17147
+APPROVED_ARTIFACT_CREATED_AT = "2026-08-02T13:38:42Z"
+APPROVED_ARTIFACT_EXPIRES_AT = "2026-08-16T13:38:41Z"
+APPROVED_SNAPSHOT_FORMAT = "paquetenvia-rel000-approved-evidence-snapshot-v1"
+APPROVED_SNAPSHOT_DIRECTORY = "docs/releases/evidence/rel-000-owner-001"
+APPROVED_SNAPSHOT_MANIFEST_PATH = (
+    f"{APPROVED_SNAPSHOT_DIRECTORY}/approved-evidence-manifest.json"
+)
+APPROVED_SNAPSHOT_FILES = {
+    "rel000-cross-tenant-evidence.json": {
+        "size_bytes": 27804,
+        "sha256": "d3a9dc7343ddb2c9f00e3484e89789c639ee555c3fd17e2aff81c047515e5bcd",
+    },
+    "rel000-internal-release-report.json": {
+        "size_bytes": 17749,
+        "sha256": "ed30fbbad93369aece753be930e1b6b9d51e12a219e5e9e7560e74082ce68a92",
+    },
+    "rel000-p0-evidence.json": {
+        "size_bytes": 54623,
+        "sha256": "5db1e0a0e8c4759198e55c1a8be6f4d9090a9ca6edb1e3cb807f8812ecad7525",
+    },
+    "rel000-rollback-evidence.json": {
+        "size_bytes": 18565,
+        "sha256": "267e01eb480349eefb50060d9ee8fe2c7c5dc78ca812a543a2e547f93af37eeb",
+    },
+}
 APPROVED_EXT001_SOURCE_PATH = "tests/fixtures/rel-000/item-evidence.json"
 APPROVED_EXT001_SOURCE_BLOB_SHA = "5bdf2c7845aceb84806f3cc0f0fdf3bcc6bbe9ae"
 OWNER_APPROVAL_SCOPE = {
@@ -751,6 +779,19 @@ def validate_owner_decision_record(record: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, bool) or value is not expected:
             reason_code = "EXT001_ALREADY_STARTED" if key == "ext001_started" and value is True else "OWNER_DECISION_SCOPE_INVALID"
             fail(reason_code, "The owner approval scope contains an unauthorized value.", field=key)
+
+    preservation = record.get("evidence_preservation")
+    expected_preservation = {
+        "mode": "VERSIONED_REDACTED_SNAPSHOT",
+        "manifest_path": APPROVED_SNAPSHOT_MANIFEST_PATH,
+        "snapshot_directory": APPROVED_SNAPSHOT_DIRECTORY,
+        "historical_artifact_live_access_required": False,
+    }
+    if preservation != expected_preservation:
+        fail(
+            "OWNER_DECISION_EVIDENCE_PRESERVATION_INVALID",
+            "The owner decision must reference the canonical durable evidence snapshot.",
+        )
     return copy.deepcopy(record)
 
 
@@ -830,54 +871,44 @@ def validate_ext001_state_source(repository_root: Path, approved_main_sha: str) 
     return validate_ext001_state_document(approved_main_sha, blob_sha, content)
 
 
-def validate_approved_artifact(
-    metadata: dict[str, Any],
-    zip_path: Path,
-    *,
-    now: dt.datetime | None = None,
-) -> dict[str, Any]:
-    if not isinstance(metadata, dict):
-        fail("APPROVED_ARTIFACT_METADATA_INVALID", "Approved artifact metadata is invalid.")
-    if metadata.get("id") != APPROVED_ARTIFACT_ID:
-        fail("APPROVED_ARTIFACT_ID_MISMATCH", "The approved artifact ID changed.")
-    if metadata.get("name") != APPROVED_ARTIFACT_NAME:
-        fail("APPROVED_ARTIFACT_NAME_MISMATCH", "The approved artifact name changed.")
-    if metadata.get("digest") != APPROVED_ARTIFACT_DIGEST:
-        fail("APPROVED_ARTIFACT_DIGEST_MISMATCH", "The published artifact digest changed.")
-    if metadata.get("expired") is not False:
-        fail("APPROVED_ARTIFACT_EXPIRED", "The approved artifact is expired.")
-    expires_at = metadata.get("expires_at")
+def _has_reparse_point(path: Path) -> bool:
     try:
-        expires = dt.datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-    except ValueError:
-        fail("APPROVED_ARTIFACT_METADATA_INVALID", "The approved artifact expiration is invalid.")
-    current = now or dt.datetime.now(dt.timezone.utc)
-    if expires <= current:
-        fail("APPROVED_ARTIFACT_EXPIRED", "The approved artifact has passed its expiration time.")
-    workflow_run = metadata.get("workflow_run")
-    if not isinstance(workflow_run, dict) or str(workflow_run.get("id")) != APPROVED_WORKFLOW_RUN_ID:
-        fail("APPROVED_ARTIFACT_RUN_MISMATCH", "The approved artifact belongs to another run.")
-    if workflow_run.get("head_sha") != APPROVED_EVIDENCE_MAIN_SHA:
-        fail("APPROVED_ARTIFACT_SOURCE_SHA_MISMATCH", "The approved artifact belongs to another SHA.")
-    if not zip_path.is_file():
-        fail("APPROVED_ARTIFACT_INACCESSIBLE", "The approved artifact ZIP is unavailable.")
-    actual_digest = f"sha256:{sha256_file(zip_path)}"
-    if actual_digest != APPROVED_ARTIFACT_DIGEST:
-        fail("APPROVED_ARTIFACT_ZIP_DIGEST_MISMATCH", "The downloaded artifact digest does not match GitHub.")
-    try:
-        with zipfile.ZipFile(zip_path) as archive:
-            names = sorted(item.filename for item in archive.infolist() if not item.is_dir())
-            if names != sorted(OUTPUT_FILES):
-                fail("APPROVED_ARTIFACT_CONTENT_INVALID", "The approved artifact does not contain exactly four public JSON files.")
-            documents = {
-                name: json.loads(archive.read(name).decode("utf-8"))
-                for name in names
-            }
-    except (OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        fail("APPROVED_ARTIFACT_CONTENT_INVALID", "The approved artifact content is invalid.", error=str(exc))
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _assert_snapshot_redacted(documents: dict[str, Any]) -> None:
+    allowed_public_issue_urls = {
+        "https://github.com/Eduard0corona/Paquetenvia/issues/5",
+        "https://github.com/Eduard0corona/Paquetenvia/issues/30",
+    }
+
+    def sanitize_known_public_urls(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: sanitize_known_public_urls(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [sanitize_known_public_urls(child) for child in value]
+        if isinstance(value, str) and value in allowed_public_issue_urls:
+            return "PUBLIC_GITHUB_ISSUE_REFERENCE"
+        return value
+
+    assert_redacted(sanitize_known_public_urls(documents))
+
+
+def _validate_historical_approved_documents(documents: dict[str, Any]) -> dict[str, Any]:
+    if set(documents) != OUTPUT_FILES:
+        fail(
+            "APPROVED_ARTIFACT_CONTENT_INVALID",
+            "The approved evidence does not contain exactly four public JSON files.",
+        )
+    if any(not isinstance(document, dict) for document in documents.values()):
+        fail("APPROVED_ARTIFACT_CONTENT_INVALID", "Every approved evidence file must be a JSON object.")
     report = documents["rel000-internal-release-report.json"]
     p0 = documents["rel000-p0-evidence.json"]
     expected_report = {
+        "format_version": FORMAT_VERSION,
         "source_head_sha": APPROVED_EVIDENCE_MAIN_SHA,
         "tested_git_sha": APPROVED_EVIDENCE_MAIN_SHA,
         "base_main_sha": APPROVED_EVIDENCE_MAIN_SHA,
@@ -895,6 +926,8 @@ def validate_approved_artifact(
     if (
         not isinstance(jobs, list)
         or len(jobs) != 10
+        or {job.get("job") for job in jobs} != EXECUTION_EVIDENCE_JOBS
+        or str(provenance.get("workflow_run_id")) != APPROVED_WORKFLOW_RUN_ID
         or provenance.get("aggregator_attempt") != 1
         or provenance.get("mixed_attempt_evidence") is not False
         or any(job.get("producer_attempt") != 1 for job in jobs)
@@ -909,14 +942,252 @@ def validate_approved_artifact(
         or blocked_ids != ["REL-000"]
     ):
         fail("APPROVED_TECHNICAL_EVIDENCE_INVALID", "The approved historical inventory is invalid.")
+    if "ext001_started" in report:
+        fail(
+            "APPROVED_ARTIFACT_SCHEMA_DRIFT",
+            "The historical approved report must preserve the original absence of ext001_started.",
+        )
+    _assert_snapshot_redacted(documents)
     return {
         "artifact_id": APPROVED_ARTIFACT_ID,
         "artifact_name": APPROVED_ARTIFACT_NAME,
         "artifact_digest": APPROVED_ARTIFACT_DIGEST,
-        "technical_artifact_contains_ext001_started": "ext001_started" in report,
+        "technical_artifact_contains_ext001_started": False,
         "dependency_security_status": "PASSED",
         "technical_evidence_status": "PASSED",
     }
+
+
+def validate_approved_artifact(
+    metadata: dict[str, Any],
+    zip_path: Path,
+    *,
+    now: dt.datetime | None = None,
+) -> dict[str, Any]:
+    """Validate the live historical artifact only during one-time capture."""
+    if not isinstance(metadata, dict):
+        fail("APPROVED_ARTIFACT_METADATA_INVALID", "Approved artifact metadata is invalid.")
+    expected_metadata = {
+        "id": APPROVED_ARTIFACT_ID,
+        "name": APPROVED_ARTIFACT_NAME,
+        "size_in_bytes": APPROVED_ARTIFACT_ZIP_SIZE,
+        "digest": APPROVED_ARTIFACT_DIGEST,
+        "created_at": APPROVED_ARTIFACT_CREATED_AT,
+        "expires_at": APPROVED_ARTIFACT_EXPIRES_AT,
+        "expired": False,
+    }
+    reason_codes = {
+        "id": "APPROVED_ARTIFACT_ID_MISMATCH",
+        "name": "APPROVED_ARTIFACT_NAME_MISMATCH",
+        "size_in_bytes": "APPROVED_ARTIFACT_ZIP_SIZE_MISMATCH",
+        "digest": "APPROVED_ARTIFACT_DIGEST_MISMATCH",
+        "created_at": "APPROVED_ARTIFACT_METADATA_INVALID",
+        "expires_at": "APPROVED_ARTIFACT_METADATA_INVALID",
+        "expired": "APPROVED_ARTIFACT_EXPIRED",
+    }
+    for key, expected in expected_metadata.items():
+        if metadata.get(key) != expected:
+            fail(reason_codes[key], "The approved artifact metadata changed.", field=key)
+    try:
+        expires = dt.datetime.fromisoformat(APPROVED_ARTIFACT_EXPIRES_AT.replace("Z", "+00:00"))
+    except ValueError:
+        fail("APPROVED_ARTIFACT_METADATA_INVALID", "The approved artifact expiration is invalid.")
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if expires <= current:
+        fail("APPROVED_ARTIFACT_EXPIRED", "The approved artifact has passed its expiration time.")
+    workflow_run = metadata.get("workflow_run")
+    if not isinstance(workflow_run, dict) or str(workflow_run.get("id")) != APPROVED_WORKFLOW_RUN_ID:
+        fail("APPROVED_ARTIFACT_RUN_MISMATCH", "The approved artifact belongs to another run.")
+    if workflow_run.get("head_sha") != APPROVED_EVIDENCE_MAIN_SHA:
+        fail("APPROVED_ARTIFACT_SOURCE_SHA_MISMATCH", "The approved artifact belongs to another SHA.")
+    if not zip_path.is_file() or zip_path.is_symlink() or _has_reparse_point(zip_path):
+        fail("APPROVED_ARTIFACT_INACCESSIBLE", "The approved artifact ZIP is unavailable or linked.")
+    if zip_path.stat().st_size != APPROVED_ARTIFACT_ZIP_SIZE:
+        fail("APPROVED_ARTIFACT_ZIP_SIZE_MISMATCH", "The downloaded artifact ZIP size changed.")
+    actual_digest = f"sha256:{sha256_file(zip_path)}"
+    if actual_digest != APPROVED_ARTIFACT_DIGEST:
+        fail("APPROVED_ARTIFACT_ZIP_DIGEST_MISMATCH", "The downloaded artifact digest does not match GitHub.")
+    file_bytes: dict[str, bytes] = {}
+    documents: dict[str, Any] = {}
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            entries = archive.infolist()
+            if (
+                len(entries) != len(APPROVED_SNAPSHOT_FILES)
+                or sorted(item.filename for item in entries) != sorted(APPROVED_SNAPSHOT_FILES)
+                or any(item.is_dir() for item in entries)
+                or any(((item.external_attr >> 16) & 0o170000) == 0o120000 for item in entries)
+            ):
+                fail("APPROVED_ARTIFACT_CONTENT_INVALID", "The approved artifact does not contain exactly four regular JSON files.")
+            for item in entries:
+                raw = archive.read(item)
+                expected = APPROVED_SNAPSHOT_FILES[item.filename]
+                if len(raw) != expected["size_bytes"]:
+                    fail("APPROVED_ARTIFACT_FILE_SIZE_MISMATCH", "An approved artifact file size changed.", file=item.filename)
+                if hashlib.sha256(raw).hexdigest() != expected["sha256"]:
+                    fail("APPROVED_ARTIFACT_FILE_HASH_MISMATCH", "An approved artifact file hash changed.", file=item.filename)
+                file_bytes[item.filename] = raw
+                documents[item.filename] = json.loads(raw.decode("utf-8"))
+    except ValidationFailure:
+        raise
+    except (OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail("APPROVED_ARTIFACT_CONTENT_INVALID", "The approved artifact content is invalid.", error=str(exc))
+    result = _validate_historical_approved_documents(documents)
+    result["file_bytes"] = file_bytes
+    return result
+
+
+def approved_snapshot_manifest() -> dict[str, Any]:
+    return {
+        "format_version": APPROVED_SNAPSHOT_FORMAT,
+        "decision_id": OWNER_DECISION_ID,
+        "release": "MVP-0_INTERNAL",
+        "capture": {
+            "source": "GITHUB_ACTIONS_ARTIFACT",
+            "artifact_id": APPROVED_ARTIFACT_ID,
+            "artifact_name": APPROVED_ARTIFACT_NAME,
+            "artifact_zip_size_bytes": APPROVED_ARTIFACT_ZIP_SIZE,
+            "artifact_zip_sha256": APPROVED_ARTIFACT_DIGEST.removeprefix("sha256:"),
+            "workflow_run_id": APPROVED_WORKFLOW_RUN_ID,
+            "workflow_run_attempt": APPROVED_WORKFLOW_RUN_ATTEMPT,
+            "source_sha": APPROVED_EVIDENCE_MAIN_SHA,
+            "created_at": APPROVED_ARTIFACT_CREATED_AT,
+            "original_expires_at": APPROVED_ARTIFACT_EXPIRES_AT,
+            "captured_while_live": True,
+        },
+        "files": [
+            {"name": name, **APPROVED_SNAPSHOT_FILES[name]}
+            for name in sorted(APPROVED_SNAPSHOT_FILES)
+        ],
+    }
+
+
+def capture_approved_evidence(
+    metadata_path: Path,
+    zip_path: Path,
+    output_directory: Path,
+    *,
+    now: dt.datetime | None = None,
+) -> dict[str, Any]:
+    if output_directory.exists() or output_directory.is_symlink() or _has_reparse_point(output_directory):
+        fail("APPROVED_SNAPSHOT_OUTPUT_EXISTS", "The capture output must not preexist.")
+    parent = output_directory.parent
+    if not parent.is_dir() or parent.is_symlink() or _has_reparse_point(parent):
+        fail("APPROVED_SNAPSHOT_OUTPUT_PATH_INVALID", "The capture output parent must be a regular directory.")
+    metadata = load_json(metadata_path)
+    validated = validate_approved_artifact(metadata, zip_path, now=now)
+    created = False
+    try:
+        output_directory.mkdir(parents=False, exist_ok=False)
+        created = True
+        for name in sorted(APPROVED_SNAPSHOT_FILES):
+            (output_directory / name).write_bytes(validated["file_bytes"][name])
+        manifest = approved_snapshot_manifest()
+        write_json(output_directory / "approved-evidence-manifest.json", manifest)
+        return manifest
+    except BaseException:
+        if created and output_directory.is_dir() and not output_directory.is_symlink() and not _has_reparse_point(output_directory):
+            shutil.rmtree(output_directory)
+        raise
+
+
+def _git_bytes_at_commit(
+    repository_root: Path,
+    commit_sha: str,
+    relative_path: str,
+) -> bytes:
+    result = subprocess.run(
+        ["git", "-C", str(repository_root), "show", f"{commit_sha}:{relative_path}"],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode:
+        fail("APPROVED_SNAPSHOT_NOT_VERSIONED", "The approved snapshot is missing from the source HEAD.", path=relative_path)
+    return result.stdout
+
+
+def validate_approved_evidence_snapshot(
+    repository_root: Path,
+    manifest_path: Path,
+    snapshot_directory: Path,
+    source_head_sha: str,
+    *,
+    versioned_bytes_loader: Callable[[str], bytes] | None = None,
+) -> dict[str, Any]:
+    expected_directory = (repository_root / APPROVED_SNAPSHOT_DIRECTORY).resolve()
+    expected_manifest = (repository_root / APPROVED_SNAPSHOT_MANIFEST_PATH).resolve()
+    try:
+        actual_directory = snapshot_directory.resolve(strict=True)
+        actual_manifest = manifest_path.resolve(strict=True)
+    except OSError:
+        fail("APPROVED_SNAPSHOT_MISSING", "The approved evidence snapshot or manifest is missing.")
+    if actual_directory != expected_directory or actual_manifest != expected_manifest:
+        fail("APPROVED_SNAPSHOT_PATH_INVALID", "The approved snapshot must use its canonical versioned paths.")
+    if (
+        not actual_directory.is_dir()
+        or actual_directory.is_symlink()
+        or _has_reparse_point(actual_directory)
+        or not actual_manifest.is_file()
+        or actual_manifest.is_symlink()
+        or _has_reparse_point(actual_manifest)
+    ):
+        fail("APPROVED_SNAPSHOT_LINK_REJECTED", "The approved snapshot cannot contain links or reparse points.")
+    expected_names = {"approved-evidence-manifest.json", *APPROVED_SNAPSHOT_FILES}
+    entries = list(actual_directory.iterdir())
+    if {entry.name for entry in entries} != expected_names or len(entries) != len(expected_names):
+        fail("APPROVED_SNAPSHOT_FILE_LIST_INVALID", "The approved snapshot file allowlist changed.")
+    if any(not entry.is_file() or entry.is_symlink() or _has_reparse_point(entry) for entry in entries):
+        fail("APPROVED_SNAPSHOT_LINK_REJECTED", "Every approved snapshot entry must be a regular file.")
+    try:
+        manifest = json.loads(actual_manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail("APPROVED_SNAPSHOT_MANIFEST_INVALID", "The approved snapshot manifest is invalid JSON.", error=str(exc))
+    if manifest != approved_snapshot_manifest():
+        fail("APPROVED_SNAPSHOT_MANIFEST_INVALID", "The approved snapshot manifest does not match its immutable anchor.")
+    documents: dict[str, Any] = {}
+    snapshot_bytes: dict[str, bytes] = {}
+    for name, expected in APPROVED_SNAPSHOT_FILES.items():
+        path = actual_directory / name
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            fail("APPROVED_SNAPSHOT_FILE_MISSING", "An approved snapshot file is missing.", file=name, error=str(exc))
+        if len(raw) != expected["size_bytes"]:
+            fail("APPROVED_SNAPSHOT_FILE_SIZE_MISMATCH", "An approved snapshot file size changed.", file=name)
+        if hashlib.sha256(raw).hexdigest() != expected["sha256"]:
+            fail("APPROVED_SNAPSHOT_FILE_HASH_MISMATCH", "An approved snapshot file hash changed.", file=name)
+        try:
+            documents[name] = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            fail("APPROVED_SNAPSHOT_JSON_INVALID", "An approved snapshot file is invalid JSON.", file=name, error=str(exc))
+        snapshot_bytes[f"{APPROVED_SNAPSHOT_DIRECTORY}/{name}"] = raw
+    snapshot_bytes[APPROVED_SNAPSHOT_MANIFEST_PATH] = actual_manifest.read_bytes()
+    loader = versioned_bytes_loader or (
+        lambda relative: _git_bytes_at_commit(repository_root, source_head_sha, relative)
+    )
+    for relative, raw in snapshot_bytes.items():
+        if loader(relative) != raw:
+            fail("APPROVED_SNAPSHOT_NOT_VERSIONED", "The approved snapshot differs from the source HEAD.", path=relative)
+    result = _validate_historical_approved_documents(documents)
+    result.update(
+        {
+            "storage": "VERSIONED_REDACTED_SNAPSHOT",
+            "manifest_path": APPROVED_SNAPSHOT_MANIFEST_PATH,
+            "snapshot_file_count": 4,
+            "live_artifact_required": False,
+            "original_expires_at": APPROVED_ARTIFACT_EXPIRES_AT,
+        }
+    )
+    return result
+
+
+def capture_approved_evidence_command(args: argparse.Namespace) -> None:
+    manifest = capture_approved_evidence(
+        args.metadata,
+        args.artifact_zip,
+        args.output_directory,
+    )
+    print(json.dumps({"result": "REL000_APPROVED_EVIDENCE_CAPTURED", "manifest": manifest}, sort_keys=True))
 
 
 def validate_owner_approval_issues(issue5: dict[str, Any], issue30: dict[str, Any]) -> None:
@@ -929,8 +1200,8 @@ def validate_owner_approval_issues(issue5: dict[str, Any], issue30: dict[str, An
 def validate_owner_approval(
     repository_root: Path,
     decision_record_path: Path,
-    approved_artifact_metadata_path: Path,
-    approved_artifact_zip_path: Path,
+    approved_evidence_manifest_path: Path,
+    approved_evidence_directory: Path,
     issue5: dict[str, Any],
     issue30: dict[str, Any],
     source_head_sha: str,
@@ -966,8 +1237,12 @@ def validate_owner_approval(
     if duplicates != [expected_path]:
         fail("OWNER_DECISION_DUPLICATED", "The owner decision ID must exist in exactly one decision record.")
     validate_owner_approval_issues(issue5, issue30)
-    metadata = load_json(approved_artifact_metadata_path)
-    artifact = validate_approved_artifact(metadata, approved_artifact_zip_path)
+    artifact = validate_approved_evidence_snapshot(
+        repository_root,
+        approved_evidence_manifest_path,
+        approved_evidence_directory,
+        source_head_sha,
+    )
     ext001 = validate_ext001_state_source(repository_root, record["approved_evidence"]["main_sha"])
     if artifact["technical_artifact_contains_ext001_started"] is not False:
         fail("APPROVED_ARTIFACT_SCHEMA_DRIFT", "The historical artifact unexpectedly claims the EXT-001 state.")
@@ -4089,6 +4364,13 @@ def apply_owner_approval(report: dict[str, Any], approval: dict[str, Any]) -> di
             "approved_artifact_id": APPROVED_ARTIFACT_ID,
             "approved_artifact_name": APPROVED_ARTIFACT_NAME,
             "approved_artifact_digest": APPROVED_ARTIFACT_DIGEST,
+            "approved_evidence_storage": artifact["storage"],
+            "approved_evidence_snapshot_manifest_path": artifact["manifest_path"],
+            "approved_evidence_snapshot_file_count": artifact["snapshot_file_count"],
+            "approved_evidence_live_artifact_required": artifact["live_artifact_required"],
+            "approved_artifact_original_id": APPROVED_ARTIFACT_ID,
+            "approved_artifact_original_digest": APPROVED_ARTIFACT_DIGEST,
+            "approved_artifact_original_expires_at": artifact["original_expires_at"],
             "approved_evidence_ext001_source_path": ext001["path"],
             "approved_evidence_ext001_source_blob_sha": ext001["blob_sha"],
             "approved_evidence_ext001_started": False,
@@ -4136,6 +4418,13 @@ def validate_approved_owner_state(report: dict[str, Any]) -> None:
         "result": "REL000_OWNER_APPROVED",
         "dependency_security_status": "PASSED",
         "technical_evidence_status": "PASSED",
+        "approved_evidence_storage": "VERSIONED_REDACTED_SNAPSHOT",
+        "approved_evidence_snapshot_manifest_path": APPROVED_SNAPSHOT_MANIFEST_PATH,
+        "approved_evidence_snapshot_file_count": 4,
+        "approved_evidence_live_artifact_required": False,
+        "approved_artifact_original_id": APPROVED_ARTIFACT_ID,
+        "approved_artifact_original_digest": APPROVED_ARTIFACT_DIGEST,
+        "approved_artifact_original_expires_at": APPROVED_ARTIFACT_EXPIRES_AT,
         "release_scope": "MVP-0_INTERNAL",
         "synthetic_data_only": True,
         "pilot_authorized": False,
@@ -4288,8 +4577,8 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     owner_approval = validate_owner_approval(
         repository_root,
         args.decision_record,
-        args.approved_artifact_metadata,
-        args.approved_artifact_zip,
+        args.approved_evidence_manifest,
+        args.approved_evidence_directory,
         issue,
         additional_issue,
         trace["source_head_sha"],
@@ -4731,11 +5020,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     synthetic.add_argument("--output", type=Path, required=True)
 
+    capture = subparsers.add_parser("capture-approved-evidence")
+    capture.add_argument("--metadata", type=Path, required=True)
+    capture.add_argument("--artifact-zip", type=Path, required=True)
+    capture.add_argument("--output-directory", type=Path, required=True)
+
     validate = subparsers.add_parser("validate")
     validate.add_argument("--repository-root", type=Path, required=True)
     validate.add_argument("--decision-record", type=Path, required=True)
-    validate.add_argument("--approved-artifact-metadata", type=Path, required=True)
-    validate.add_argument("--approved-artifact-zip", type=Path, required=True)
+    validate.add_argument("--approved-evidence-manifest", type=Path, required=True)
+    validate.add_argument("--approved-evidence-directory", type=Path, required=True)
     validate.add_argument("--item-evidence", type=Path, required=True)
     validate.add_argument("--cross-tenant-evidence", type=Path, required=True)
     validate.add_argument("--rollback-evidence", type=Path, required=True)
@@ -4843,6 +5137,9 @@ def main() -> int:
             return 0
         if args.command == "synthetic-generate":
             synthetic_generation(args)
+            return 0
+        if args.command == "capture-approved-evidence":
+            capture_approved_evidence_command(args)
             return 0
         report = generate(args)
         print(
