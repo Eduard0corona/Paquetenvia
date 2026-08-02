@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -23,6 +24,39 @@ FORMAT_VERSION = "paquetenvia-rel000-v1"
 SOURCE_PROVENANCE_VERSION = "paquetenvia-rel000-source-v1"
 EXECUTION_EVIDENCE_VERSION = "paquetenvia-rel000-execution-v2"
 WORKFLOW_PROVENANCE_VERSION = "paquetenvia-rel000-workflow-provenance-v1"
+OWNER_DECISION_FORMAT = "paquetenvia-mvp0-owner-decision-v1"
+OWNER_DECISION_ID = "REL-000-OWNER-001"
+OWNER_DECISION_PATH = "docs/releases/mvp-0-owner-decision.json"
+OWNER_DECISION_STATEMENT = "Apruebo REL-000"
+OWNER_DECISION_REASON = (
+    "Aprobación explícita del project owner posterior al cierre técnico y a la "
+    "validación completa de la evidencia REL-000."
+)
+OWNER_DECISION_DATE = "2026-08-02"
+APPROVED_EVIDENCE_MAIN_SHA = "3b23a26d97e31424ba023aa4ecf204142ece0445"
+APPROVED_WORKFLOW_RUN_ID = "30750187893"
+APPROVED_WORKFLOW_RUN_ATTEMPT = 1
+APPROVED_ARTIFACT_ID = 8834236041
+APPROVED_ARTIFACT_NAME = "rel000-mvp0-internal-release-evidence"
+APPROVED_ARTIFACT_DIGEST = (
+    "sha256:66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172"
+)
+APPROVED_EXT001_SOURCE_PATH = "tests/fixtures/rel-000/item-evidence.json"
+APPROVED_EXT001_SOURCE_BLOB_SHA = "5bdf2c7845aceb84806f3cc0f0fdf3bcc6bbe9ae"
+OWNER_APPROVAL_SCOPE = {
+    "synthetic_internal_mvp0_only": True,
+    "pilot_authorized": False,
+    "production_authorized": False,
+    "deployment_authorized": False,
+    "go_live_authorized": False,
+    "real_customers_authorized": False,
+    "real_pii_authorized": False,
+    "real_pricing_authorized": False,
+    "payments_authorized": False,
+    "invoicing_authorized": False,
+    "external_drivers_authorized": False,
+    "ext001_started": False,
+}
 NORMAL_RELEASE_EVIDENCE = "NORMAL_RELEASE_EVIDENCE"
 SECURITY_REMEDIATION = "SECURITY_REMEDIATION"
 REL000_MODES = {NORMAL_RELEASE_EVIDENCE, SECURITY_REMEDIATION}
@@ -208,6 +242,8 @@ FORBIDDEN_REDACTED_KEYS = {
 FORBIDDEN_TEXT_PATTERNS = (
     re.compile(r"AGE-SECRET-KEY-", re.IGNORECASE),
     re.compile(r"postgres(?:ql)?://", re.IGNORECASE),
+    re.compile(r"https?://", re.IGNORECASE),
+    re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(
@@ -643,6 +679,307 @@ def validate_sha(value: str, reason_code: str, field: str) -> str:
     return normalized
 
 
+def load_owner_decision(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        fail("OWNER_DECISION_RECORD_MISSING", "The versioned owner decision record is missing.")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail("OWNER_DECISION_JSON_INVALID", "The owner decision record is not valid JSON.", error=str(exc))
+    if not isinstance(value, dict):
+        fail("OWNER_DECISION_JSON_INVALID", "The owner decision record must be a JSON object.")
+    return value
+
+
+def validate_owner_decision_record(record: dict[str, Any]) -> dict[str, Any]:
+    if record.get("format_version") != OWNER_DECISION_FORMAT:
+        fail("OWNER_DECISION_FORMAT_INVALID", "The owner decision format version is invalid.")
+    if record.get("decision_id") != OWNER_DECISION_ID:
+        fail("OWNER_DECISION_ID_INVALID", "The owner decision ID is invalid.")
+    if record.get("release") != "MVP-0_INTERNAL":
+        fail("OWNER_DECISION_RELEASE_INVALID", "The owner decision exceeds the internal MVP-0 release.")
+    if record.get("decision") != "APPROVE":
+        fail("OWNER_DECISION_VALUE_INVALID", "The owner decision must be APPROVE.")
+    statement = record.get("decision_statement")
+    if not isinstance(statement, str) or not statement:
+        fail("OWNER_DECISION_STATEMENT_EMPTY", "The owner decision statement is empty.")
+    if statement != OWNER_DECISION_STATEMENT:
+        fail("OWNER_DECISION_STATEMENT_INVALID", "The owner decision statement is not exact.")
+    reason = record.get("decision_reason")
+    if not isinstance(reason, str) or not reason.strip():
+        fail("OWNER_DECISION_REASON_EMPTY", "The owner decision reason is empty.")
+    if reason != OWNER_DECISION_REASON:
+        fail("OWNER_DECISION_REASON_INVALID", "The owner decision reason is not exact.")
+    decided_on = record.get("decided_on")
+    try:
+        parsed_date = dt.date.fromisoformat(decided_on) if isinstance(decided_on, str) else None
+    except ValueError:
+        parsed_date = None
+    if parsed_date is None or decided_on != OWNER_DECISION_DATE:
+        fail("OWNER_DECISION_DATE_INVALID", "The owner decision date is invalid or unexpected.")
+    if record.get("decided_by") != "project_owner":
+        fail("OWNER_DECISION_ACTOR_INVALID", "The decision actor must be project_owner.")
+
+    evidence = record.get("approved_evidence")
+    if not isinstance(evidence, dict):
+        fail("OWNER_DECISION_EVIDENCE_INVALID", "The approved evidence anchor is missing.")
+    expected_evidence = {
+        "main_sha": APPROVED_EVIDENCE_MAIN_SHA,
+        "workflow_run_id": APPROVED_WORKFLOW_RUN_ID,
+        "workflow_run_attempt": APPROVED_WORKFLOW_RUN_ATTEMPT,
+        "artifact_id": APPROVED_ARTIFACT_ID,
+        "artifact_name": APPROVED_ARTIFACT_NAME,
+        "artifact_digest": APPROVED_ARTIFACT_DIGEST,
+    }
+    reason_codes = {
+        "main_sha": "EXT001_STATE_SOURCE_MAIN_MISMATCH",
+        "workflow_run_id": "OWNER_DECISION_RUN_ID_MISMATCH",
+        "workflow_run_attempt": "OWNER_DECISION_RUN_ATTEMPT_MISMATCH",
+        "artifact_id": "OWNER_DECISION_ARTIFACT_ID_MISMATCH",
+        "artifact_name": "OWNER_DECISION_ARTIFACT_NAME_MISMATCH",
+        "artifact_digest": "OWNER_DECISION_ARTIFACT_DIGEST_MISMATCH",
+    }
+    for key, expected in expected_evidence.items():
+        if evidence.get(key) != expected:
+            fail(reason_codes[key], "The owner decision evidence anchor does not match.", field=key)
+
+    scope = record.get("scope")
+    if not isinstance(scope, dict) or set(scope) != set(OWNER_APPROVAL_SCOPE):
+        fail("OWNER_DECISION_SCOPE_INVALID", "The owner approval scope is incomplete or expanded.")
+    for key, expected in OWNER_APPROVAL_SCOPE.items():
+        value = scope.get(key)
+        if not isinstance(value, bool) or value is not expected:
+            reason_code = "EXT001_ALREADY_STARTED" if key == "ext001_started" and value is True else "OWNER_DECISION_SCOPE_INVALID"
+            fail(reason_code, "The owner approval scope contains an unauthorized value.", field=key)
+    return copy.deepcopy(record)
+
+
+def _git_file_at_commit(
+    repository_root: Path,
+    commit_sha: str,
+    relative_path: str,
+    missing_reason: str,
+) -> tuple[str, str]:
+    spec = f"{commit_sha}:{relative_path}"
+    blob = subprocess.run(
+        ["git", "-C", str(repository_root), "rev-parse", spec],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if blob.returncode != 0 or not SHA40.fullmatch(blob.stdout.strip().lower()):
+        fail(missing_reason, "The required versioned source does not exist at the approved SHA.")
+    content = subprocess.run(
+        ["git", "-C", str(repository_root), "show", spec],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if content.returncode != 0:
+        fail(missing_reason, "The required versioned source cannot be read at the approved SHA.")
+    return blob.stdout.strip().lower(), content.stdout
+
+
+def validate_ext001_state_document(
+    approved_main_sha: str,
+    blob_sha: str,
+    content: str,
+) -> dict[str, Any]:
+    if approved_main_sha != APPROVED_EVIDENCE_MAIN_SHA:
+        fail("EXT001_STATE_SOURCE_MAIN_MISMATCH", "The EXT-001 state source is anchored to another main SHA.")
+    if blob_sha != APPROVED_EXT001_SOURCE_BLOB_SHA:
+        fail("EXT001_STATE_SOURCE_BLOB_MISMATCH", "The EXT-001 state source blob does not match.")
+    try:
+        source = json.loads(content)
+    except json.JSONDecodeError as exc:
+        fail("EXT001_STATE_SOURCE_FORMAT_INVALID", "The EXT-001 state source is invalid JSON.", error=str(exc))
+    if not isinstance(source, dict) or source.get("format_version") != "paquetenvia-rel000-item-evidence-v1":
+        fail("EXT001_STATE_SOURCE_FORMAT_INVALID", "The EXT-001 state source format is invalid.")
+    if "ext001_started" not in source:
+        fail("EXT001_STARTED_FIELD_MISSING", "The EXT-001 state source omits ext001_started.")
+    if not isinstance(source["ext001_started"], bool):
+        fail("EXT001_STARTED_FIELD_TYPE_INVALID", "ext001_started must be a JSON boolean.")
+    if source["ext001_started"]:
+        fail("EXT001_ALREADY_STARTED", "EXT-001 already started in the approved state source.")
+    blocked = [
+        item.get("id")
+        for item in source.get("items", [])
+        if item.get("implementation_status") == "BLOCKED"
+    ]
+    if blocked != ["REL-000"]:
+        fail("EXT001_STATE_SOURCE_FORMAT_INVALID", "The approved inventory no longer has only REL-000 blocked.")
+    return {
+        "path": APPROVED_EXT001_SOURCE_PATH,
+        "blob_sha": blob_sha,
+        "source_sha": approved_main_sha,
+        "ext001_started": False,
+    }
+
+
+def validate_ext001_state_source(repository_root: Path, approved_main_sha: str) -> dict[str, Any]:
+    if approved_main_sha != APPROVED_EVIDENCE_MAIN_SHA:
+        fail("EXT001_STATE_SOURCE_MAIN_MISMATCH", "The EXT-001 state source is anchored to another main SHA.")
+    blob_sha, content = _git_file_at_commit(
+        repository_root,
+        approved_main_sha,
+        APPROVED_EXT001_SOURCE_PATH,
+        "EXT001_STATE_SOURCE_MISSING",
+    )
+    return validate_ext001_state_document(approved_main_sha, blob_sha, content)
+
+
+def validate_approved_artifact(
+    metadata: dict[str, Any],
+    zip_path: Path,
+    *,
+    now: dt.datetime | None = None,
+) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        fail("APPROVED_ARTIFACT_METADATA_INVALID", "Approved artifact metadata is invalid.")
+    if metadata.get("id") != APPROVED_ARTIFACT_ID:
+        fail("APPROVED_ARTIFACT_ID_MISMATCH", "The approved artifact ID changed.")
+    if metadata.get("name") != APPROVED_ARTIFACT_NAME:
+        fail("APPROVED_ARTIFACT_NAME_MISMATCH", "The approved artifact name changed.")
+    if metadata.get("digest") != APPROVED_ARTIFACT_DIGEST:
+        fail("APPROVED_ARTIFACT_DIGEST_MISMATCH", "The published artifact digest changed.")
+    if metadata.get("expired") is not False:
+        fail("APPROVED_ARTIFACT_EXPIRED", "The approved artifact is expired.")
+    expires_at = metadata.get("expires_at")
+    try:
+        expires = dt.datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    except ValueError:
+        fail("APPROVED_ARTIFACT_METADATA_INVALID", "The approved artifact expiration is invalid.")
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if expires <= current:
+        fail("APPROVED_ARTIFACT_EXPIRED", "The approved artifact has passed its expiration time.")
+    workflow_run = metadata.get("workflow_run")
+    if not isinstance(workflow_run, dict) or str(workflow_run.get("id")) != APPROVED_WORKFLOW_RUN_ID:
+        fail("APPROVED_ARTIFACT_RUN_MISMATCH", "The approved artifact belongs to another run.")
+    if workflow_run.get("head_sha") != APPROVED_EVIDENCE_MAIN_SHA:
+        fail("APPROVED_ARTIFACT_SOURCE_SHA_MISMATCH", "The approved artifact belongs to another SHA.")
+    if not zip_path.is_file():
+        fail("APPROVED_ARTIFACT_INACCESSIBLE", "The approved artifact ZIP is unavailable.")
+    actual_digest = f"sha256:{sha256_file(zip_path)}"
+    if actual_digest != APPROVED_ARTIFACT_DIGEST:
+        fail("APPROVED_ARTIFACT_ZIP_DIGEST_MISMATCH", "The downloaded artifact digest does not match GitHub.")
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            names = sorted(item.filename for item in archive.infolist() if not item.is_dir())
+            if names != sorted(OUTPUT_FILES):
+                fail("APPROVED_ARTIFACT_CONTENT_INVALID", "The approved artifact does not contain exactly four public JSON files.")
+            documents = {
+                name: json.loads(archive.read(name).decode("utf-8"))
+                for name in names
+            }
+    except (OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail("APPROVED_ARTIFACT_CONTENT_INVALID", "The approved artifact content is invalid.", error=str(exc))
+    report = documents["rel000-internal-release-report.json"]
+    p0 = documents["rel000-p0-evidence.json"]
+    expected_report = {
+        "source_head_sha": APPROVED_EVIDENCE_MAIN_SHA,
+        "tested_git_sha": APPROVED_EVIDENCE_MAIN_SHA,
+        "base_main_sha": APPROVED_EVIDENCE_MAIN_SHA,
+        "workflow_run_id": APPROVED_WORKFLOW_RUN_ID,
+        "workflow_run_attempt": str(APPROVED_WORKFLOW_RUN_ATTEMPT),
+        "dependency_security_status": "PASSED",
+        "technical_evidence_status": "PASSED",
+        "owner_approval_status": "PENDING",
+        "release_candidate_status": "BLOCKED_BY_OWNER_DECISION",
+    }
+    if any(report.get(key) != value for key, value in expected_report.items()):
+        fail("APPROVED_TECHNICAL_EVIDENCE_INVALID", "The approved technical report does not match its immutable state.")
+    provenance = report.get("execution_provenance")
+    jobs = provenance.get("jobs") if isinstance(provenance, dict) else None
+    if (
+        not isinstance(jobs, list)
+        or len(jobs) != 10
+        or provenance.get("aggregator_attempt") != 1
+        or provenance.get("mixed_attempt_evidence") is not False
+        or any(job.get("producer_attempt") != 1 for job in jobs)
+    ):
+        fail("APPROVED_ARTIFACT_PROVENANCE_INVALID", "The approved artifact provenance is invalid.")
+    blocked_ids = (p0.get("ids_by_status") or {}).get("BLOCKED")
+    if (
+        report.get("mvp0_p0_items_expected") != 29
+        or report.get("mvp0_p0_items_evaluated") != 29
+        or report.get("mvp0_p0_items_verified") != 28
+        or report.get("mvp0_p0_items_blocked") != 1
+        or blocked_ids != ["REL-000"]
+    ):
+        fail("APPROVED_TECHNICAL_EVIDENCE_INVALID", "The approved historical inventory is invalid.")
+    return {
+        "artifact_id": APPROVED_ARTIFACT_ID,
+        "artifact_name": APPROVED_ARTIFACT_NAME,
+        "artifact_digest": APPROVED_ARTIFACT_DIGEST,
+        "technical_artifact_contains_ext001_started": "ext001_started" in report,
+        "dependency_security_status": "PASSED",
+        "technical_evidence_status": "PASSED",
+    }
+
+
+def validate_owner_approval_issues(issue5: dict[str, Any], issue30: dict[str, Any]) -> None:
+    if issue5.get("state") != "CLOSED":
+        fail("OWNER_APPROVAL_ISSUE_5_OPEN", "Issue #5 must be closed before approval.")
+    if issue30.get("state") != "CLOSED":
+        fail("OWNER_APPROVAL_ISSUE_30_OPEN", "Issue #30 must be closed before approval.")
+
+
+def validate_owner_approval(
+    repository_root: Path,
+    decision_record_path: Path,
+    approved_artifact_metadata_path: Path,
+    approved_artifact_zip_path: Path,
+    issue5: dict[str, Any],
+    issue30: dict[str, Any],
+    source_head_sha: str,
+) -> dict[str, Any]:
+    expected_path = (repository_root / OWNER_DECISION_PATH).resolve()
+    try:
+        actual_path = decision_record_path.resolve(strict=True)
+    except OSError:
+        fail("OWNER_DECISION_RECORD_MISSING", "The versioned owner decision record is missing.")
+    if actual_path != expected_path:
+        fail("OWNER_DECISION_PATH_INVALID", "Approval must come from the canonical versioned decision record.")
+    record = validate_owner_decision_record(load_owner_decision(actual_path))
+    record_blob, record_content = _git_file_at_commit(
+        repository_root,
+        source_head_sha,
+        OWNER_DECISION_PATH,
+        "OWNER_DECISION_RECORD_NOT_VERSIONED",
+    )
+    try:
+        committed_record = json.loads(record_content)
+    except json.JSONDecodeError:
+        fail("OWNER_DECISION_RECORD_NOT_VERSIONED", "The committed owner decision record is invalid.")
+    if committed_record != record:
+        fail("OWNER_DECISION_RECORD_NOT_VERSIONED", "The owner decision record differs from the source HEAD.")
+    duplicates = []
+    for candidate in (repository_root / "docs/releases").glob("*.json"):
+        try:
+            value = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict) and value.get("decision_id") == OWNER_DECISION_ID:
+            duplicates.append(candidate.resolve())
+    if duplicates != [expected_path]:
+        fail("OWNER_DECISION_DUPLICATED", "The owner decision ID must exist in exactly one decision record.")
+    validate_owner_approval_issues(issue5, issue30)
+    metadata = load_json(approved_artifact_metadata_path)
+    artifact = validate_approved_artifact(metadata, approved_artifact_zip_path)
+    ext001 = validate_ext001_state_source(repository_root, record["approved_evidence"]["main_sha"])
+    if artifact["technical_artifact_contains_ext001_started"] is not False:
+        fail("APPROVED_ARTIFACT_SCHEMA_DRIFT", "The historical artifact unexpectedly claims the EXT-001 state.")
+    return {
+        "record": record,
+        "decision_record_sha": source_head_sha,
+        "decision_record_blob_sha": record_blob,
+        "artifact": artifact,
+        "ext001": ext001,
+    }
+
+
 def validate_traceability(
     repository_root: Path,
     source_head_sha: str,
@@ -829,6 +1166,8 @@ def validate_item_evidence(
     base_main_sha: str,
     job_results: dict[str, str],
     execution_results: list[dict[str, Any]],
+    owner_approval: dict[str, Any] | None = None,
+    focused_tests: dict[str, Any] | None = None,
     ancestor_checker: Callable[[Path, str, str], bool] = git_is_ancestor,
 ) -> dict[str, Any]:
     entries = raw_evidence.get("items")
@@ -868,10 +1207,10 @@ def validate_item_evidence(
                 "NOT_APPLICABLE requires an explicit normative justification.",
                 id=item_id,
             )
-        if item_id == "REL-000" and status == "VERIFIED":
+        if item_id == "REL-000" and status == "VERIFIED" and owner_approval is None:
             fail(
                 "OWNER_APPROVAL_FALSELY_ASSERTED",
-                "REL-000 cannot be VERIFIED before the owner decision.",
+                "REL-000 cannot be VERIFIED without a valid versioned owner decision.",
             )
 
         paths = entry.get("implementation_paths") or []
@@ -895,7 +1234,8 @@ def validate_item_evidence(
                     "VERIFIED requires implementation, executable tests, CI and rollback evidence.",
                     id=item_id,
                 )
-            unknown_jobs = sorted(set(jobs) - REQUIRED_JOBS)
+            allowed_jobs = REQUIRED_JOBS | ({"rel000"} if item_id == "REL-000" else set())
+            unknown_jobs = sorted(set(jobs) - allowed_jobs)
             if unknown_jobs:
                 fail(
                     "AUTHORITATIVE_JOB_UNKNOWN",
@@ -906,7 +1246,7 @@ def validate_item_evidence(
             unsuccessful = {
                 job: job_results.get(job)
                 for job in jobs
-                if job_results.get(job) != "success"
+                if job != "rel000" and job_results.get(job) != "success"
             }
             if unsuccessful:
                 fail(
@@ -944,32 +1284,60 @@ def validate_item_evidence(
                     str(required.get("source_path") or ""),
                     "TEST_SOURCE_NOT_FOUND",
                 )
-                matched = match_execution_result(
-                    execution_results,
-                    required,
-                    context=f"item:{item_id}",
-                )
-                matched_tests.append(
-                    {
-                        "job": matched["job"],
-                        "test_project": matched["test_project"],
-                        "fully_qualified_test_name": matched[
-                            "fully_qualified_test_name"
-                        ],
-                        "category": matched["category"],
-                        "outcome": matched["outcome"],
-                        "executed": matched["executed"],
-                        "skipped": matched["skipped"],
-                        "trx_or_result_digest": matched["trx_or_result_digest"],
-                        "artifact_id": matched["artifact_id"],
-                        "artifact_digest": matched["artifact_digest"],
-                        "source_head_sha": matched["source_head_sha"],
-                        "tested_git_sha": matched["tested_git_sha"],
-                        "base_main_sha": matched["base_main_sha"],
-                        "workflow_run_id": matched["workflow_run_id"],
-                        "workflow_run_attempt": matched["workflow_run_attempt"],
-                    }
-                )
+                if item_id == "REL-000":
+                    if required != {
+                        "job": "rel000",
+                        "source_path": "tools/rel-000/test_rel000.py",
+                        "test_project": "tools/rel-000/test_rel000.py",
+                        "fully_qualified_test_name": "OwnerApprovalDecisionTests",
+                        "category": "REL000_OWNER_APPROVAL",
+                    }:
+                        fail("OWNER_APPROVAL_TEST_BINDING_INVALID", "REL-000 approval tests are not bound exactly.")
+                    if not isinstance(focused_tests, dict) or any(
+                        focused_tests.get(key) != focused_tests.get("focused_tests_expected")
+                        for key in (
+                            "focused_tests_discovered",
+                            "focused_tests_executed",
+                            "focused_tests_passed",
+                        )
+                    ) or focused_tests.get("focused_tests_failed") != 0 or focused_tests.get("focused_tests_skipped") != 0:
+                        fail("OWNER_APPROVAL_TESTS_NOT_PASSED", "The focused owner-approval suite did not pass exactly.")
+                    matched_tests.append(
+                        {
+                            **required,
+                            "outcome": "PASSED",
+                            "executed": True,
+                            "skipped": False,
+                            "evidence_source": "REL000_FOCUSED_TEST_SUITE",
+                        }
+                    )
+                else:
+                    matched = match_execution_result(
+                        execution_results,
+                        required,
+                        context=f"item:{item_id}",
+                    )
+                    matched_tests.append(
+                        {
+                            "job": matched["job"],
+                            "test_project": matched["test_project"],
+                            "fully_qualified_test_name": matched[
+                                "fully_qualified_test_name"
+                            ],
+                            "category": matched["category"],
+                            "outcome": matched["outcome"],
+                            "executed": matched["executed"],
+                            "skipped": matched["skipped"],
+                            "trx_or_result_digest": matched["trx_or_result_digest"],
+                            "artifact_id": matched["artifact_id"],
+                            "artifact_digest": matched["artifact_digest"],
+                            "source_head_sha": matched["source_head_sha"],
+                            "tested_git_sha": matched["tested_git_sha"],
+                            "base_main_sha": matched["base_main_sha"],
+                            "workflow_run_id": matched["workflow_run_id"],
+                            "workflow_run_attempt": matched["workflow_run_attempt"],
+                        }
+                    )
             for ref in refs:
                 normalized_ref = validate_sha(
                     ref, "IMPLEMENTATION_REF_MALFORMED", "implementation_commits_or_prs"
@@ -3678,6 +4046,7 @@ def release_report(
         "normative_blockers": [],
         "artifact_sources": artifacts,
         "execution_provenance": execution_provenance,
+        "blocked_ids": p0["ids_by_status"]["BLOCKED"],
         "owner_approval_status": "PENDING",
         "rel000_def_001_status": "RESOLVED",
         "normative_scope_status": "RESOLVED",
@@ -3688,6 +4057,112 @@ def release_report(
         "result": "REL000_EVIDENCE_GENERATED",
     }
     return result
+
+
+def apply_owner_approval(report: dict[str, Any], approval: dict[str, Any]) -> dict[str, Any]:
+    if report.get("dependency_security_status") != "PASSED":
+        fail("OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED", "Dependency security must pass before owner approval.")
+    if report.get("technical_evidence_status") != "PASSED":
+        fail("OWNER_APPROVAL_TECHNICAL_EVIDENCE_NOT_PASSED", "Technical evidence must pass before owner approval.")
+    if (
+        report.get("mvp0_p0_items_expected") != 29
+        or report.get("mvp0_p0_items_evaluated") != 29
+        or report.get("mvp0_p0_items_verified") != 29
+        or report.get("mvp0_p0_items_blocked") != 0
+        or report.get("blocked_ids") != []
+    ):
+        fail("OWNER_APPROVAL_INVENTORY_INVALID", "Owner approval requires the exact 29/29/0 inventory.")
+    record = approval["record"]
+    artifact = approval["artifact"]
+    ext001 = approval["ext001"]
+    approved = copy.deepcopy(report)
+    for issue in approved.get("known_security_issues") or []:
+        issue.pop("url", None)
+    additional_issue = approved.get("additional_security_tracking_issue")
+    if isinstance(additional_issue, dict):
+        additional_issue.pop("url", None)
+    approved.update(
+        {
+            "approved_evidence_sha": APPROVED_EVIDENCE_MAIN_SHA,
+            "approved_workflow_run_id": APPROVED_WORKFLOW_RUN_ID,
+            "approved_workflow_run_attempt": APPROVED_WORKFLOW_RUN_ATTEMPT,
+            "approved_artifact_id": APPROVED_ARTIFACT_ID,
+            "approved_artifact_name": APPROVED_ARTIFACT_NAME,
+            "approved_artifact_digest": APPROVED_ARTIFACT_DIGEST,
+            "approved_evidence_ext001_source_path": ext001["path"],
+            "approved_evidence_ext001_source_blob_sha": ext001["blob_sha"],
+            "approved_evidence_ext001_started": False,
+            "technical_artifact_contains_ext001_started": artifact[
+                "technical_artifact_contains_ext001_started"
+            ],
+            "ext001_state_source": "VERSIONED_ITEM_EVIDENCE",
+            "ext001_state_source_sha": ext001["source_sha"],
+            "ext001_started": False,
+            "decision_record_sha": approval["decision_record_sha"],
+            "decision_record_blob_sha": approval["decision_record_blob_sha"],
+            "decision_id": record["decision_id"],
+            "decision_statement": record["decision_statement"],
+            "decision_reason": record["decision_reason"],
+            "decided_by": record["decided_by"],
+            "decided_on": record["decided_on"],
+            "release_scope": "MVP-0_INTERNAL",
+            "synthetic_data_only": True,
+            "pilot_authorized": False,
+            "production_authorized": False,
+            "deployment_authorized": False,
+            "go_live_authorized": False,
+            "real_customers_authorized": False,
+            "real_pii_authorized": False,
+            "real_pricing_authorized": False,
+            "payments_authorized": False,
+            "invoicing_authorized": False,
+            "external_drivers_authorized": False,
+            "owner_approval_status": "APPROVED",
+            "release_candidate_status": "APPROVED_FOR_MVP0_INTERNAL",
+            "technical_gate_outcome": "OWNER_APPROVED_INTERNAL_RELEASE",
+            "rel000_status": "VERIFIED",
+            "mvp0_approved": True,
+            "result": "REL000_OWNER_APPROVED",
+        }
+    )
+    return approved
+
+
+def validate_approved_owner_state(report: dict[str, Any]) -> None:
+    expected = {
+        "owner_approval_status": "APPROVED",
+        "release_candidate_status": "APPROVED_FOR_MVP0_INTERNAL",
+        "technical_gate_outcome": "OWNER_APPROVED_INTERNAL_RELEASE",
+        "result": "REL000_OWNER_APPROVED",
+        "dependency_security_status": "PASSED",
+        "technical_evidence_status": "PASSED",
+        "release_scope": "MVP-0_INTERNAL",
+        "synthetic_data_only": True,
+        "pilot_authorized": False,
+        "production_authorized": False,
+        "ext001_started": False,
+        "rel000_status": "VERIFIED",
+        "mvp0_approved": True,
+        "mvp0_p0_items_expected": 29,
+        "mvp0_p0_items_evaluated": 29,
+        "mvp0_p0_items_verified": 29,
+        "mvp0_p0_items_blocked": 0,
+        "blocked_ids": [],
+    }
+    if any(report.get(key) != value for key, value in expected.items()):
+        fail("OWNER_APPROVAL_STATE_INVALID", "The approved internal release state is inconsistent.")
+    for key in (
+        "deployment_authorized",
+        "go_live_authorized",
+        "real_customers_authorized",
+        "real_pii_authorized",
+        "real_pricing_authorized",
+        "payments_authorized",
+        "invoicing_authorized",
+        "external_drivers_authorized",
+    ):
+        if report.get(key) is not False:
+            fail("OWNER_APPROVAL_SCOPE_INVALID", "The approved report expands internal MVP-0 scope.", field=key)
 
 
 def validate_owner_state(report: dict[str, Any]) -> None:
@@ -3739,8 +4214,12 @@ def validate_owner_state(report: dict[str, Any]) -> None:
 
 
 def validate_extension_not_started(repository_root: Path, raw_item_evidence: dict[str, Any]) -> None:
-    if raw_item_evidence.get("ext001_started") is True:
-        fail("EXT001_STARTED", "EXT-001 must not start before owner approval.")
+    if "ext001_started" not in raw_item_evidence:
+        fail("EXT001_STARTED_FIELD_MISSING", "The current item evidence omits ext001_started.")
+    if not isinstance(raw_item_evidence["ext001_started"], bool):
+        fail("EXT001_STARTED_FIELD_TYPE_INVALID", "ext001_started must be a JSON boolean.")
+    if raw_item_evidence["ext001_started"]:
+        fail("EXT001_ALREADY_STARTED", "EXT-001 must remain not started after internal approval.")
     tracked = run_git(repository_root, "ls-files").splitlines()
     forbidden = [
         path
@@ -3749,7 +4228,7 @@ def validate_extension_not_started(repository_root: Path, raw_item_evidence: dic
         and path != "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml"
     ]
     if forbidden:
-        fail("EXT001_STARTED", "Tracked implementation evidence indicates EXT-001 started.", files=forbidden)
+        fail("EXT001_ALREADY_STARTED", "Tracked implementation evidence indicates EXT-001 started.", files=forbidden)
 
 
 def assert_output_is_fresh(output_directory: Path) -> None:
@@ -3791,6 +4270,8 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     selected, all_items = normative_items(normative)
     item_input = load_json(args.item_evidence)
     validate_extension_not_started(repository_root, item_input)
+    issue = load_json(args.issue5)
+    additional_issue = load_json(args.security_tracking_issue)
     job_results = json.loads(args.job_results_json)
     validate_jobs(job_results)
     execution_results, execution_artifacts, execution_provenance = load_execution_evidence(
@@ -3800,6 +4281,19 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         args.workflow_run_id,
         args.workflow_run_attempt,
     )
+    focused_tests = validate_focused_test_results(
+        load_json(args.python_test_results),
+        load_json(args.physical_test_results),
+    )
+    owner_approval = validate_owner_approval(
+        repository_root,
+        args.decision_record,
+        args.approved_artifact_metadata,
+        args.approved_artifact_zip,
+        issue,
+        additional_issue,
+        trace["source_head_sha"],
+    )
     p0 = validate_item_evidence(
         repository_root,
         selected,
@@ -3808,6 +4302,8 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         trace["base_main_sha"],
         job_results,
         execution_results,
+        owner_approval,
+        focused_tests,
     )
     cross_tenant = validate_cross_tenant(
         repository_root,
@@ -3821,13 +4317,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         selected,
         load_json(args.rollback_execution),
     )
-    focused_tests = validate_focused_test_results(
-        load_json(args.python_test_results),
-        load_json(args.physical_test_results),
-    )
     decisions = validate_decisions(normative["gates"])
-    issue = load_json(args.issue5)
-    additional_issue = load_json(args.security_tracking_issue)
     base_audit = load_json(args.base_audit)
     branch_audit = load_json(args.branch_audit)
     dependency_diff = validate_dependency_diff(
@@ -3895,7 +4385,8 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         execution_provenance,
         focused_tests,
     )
-    validate_owner_state(report)
+    report = apply_owner_approval(report, owner_approval)
+    validate_approved_owner_state(report)
     for document in (p0, cross_tenant, rollback, report):
         assert_redacted(document)
 
@@ -4242,6 +4733,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = subparsers.add_parser("validate")
     validate.add_argument("--repository-root", type=Path, required=True)
+    validate.add_argument("--decision-record", type=Path, required=True)
+    validate.add_argument("--approved-artifact-metadata", type=Path, required=True)
+    validate.add_argument("--approved-artifact-zip", type=Path, required=True)
     validate.add_argument("--item-evidence", type=Path, required=True)
     validate.add_argument("--cross-tenant-evidence", type=Path, required=True)
     validate.add_argument("--rollback-evidence", type=Path, required=True)

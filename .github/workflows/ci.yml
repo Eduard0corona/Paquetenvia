@@ -1434,6 +1434,14 @@ jobs:
           gh api \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
             > "$raw_directory/artifacts.json"
+          approved_directory="$RUNNER_TEMP/rel000-approved-evidence"
+          mkdir "$approved_directory"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/8834236041" \
+            > "$approved_directory/metadata.json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/8834236041/zip" \
+            > "$approved_directory/artifact.zip"
           python ./tools/rel-000/rel000.py sanitize-workflow-provenance \
             --attempts-directory "$raw_directory" \
             --artifacts "$raw_directory/artifacts.json" \
@@ -1556,6 +1564,9 @@ jobs:
           REL000_SHARP_RUNTIME_SMOKE_PATH: ${{ runner.temp }}/rel000-sharp-runtime-smoke.json
           REL000_EXECUTION_RESULTS_DIRECTORY: ${{ runner.temp }}
           REL000_WORKFLOW_PROVENANCE_PATH: ${{ runner.temp }}/rel000-workflow-provenance.json
+          REL000_DECISION_RECORD_PATH: docs/releases/mvp-0-owner-decision.json
+          REL000_APPROVED_ARTIFACT_METADATA_PATH: ${{ runner.temp }}/rel000-approved-evidence/metadata.json
+          REL000_APPROVED_ARTIFACT_ZIP_PATH: ${{ runner.temp }}/rel000-approved-evidence/artifact.zip
         run: ./tools/test-rel-000-internal-release.ps1 -CI
 
       - name: Publish only redacted REL-000 evidence
@@ -1579,6 +1590,7 @@ jobs:
             (Join-Path $env:RUNNER_TEMP "rel000-executions"),
             (Join-Path $env:RUNNER_TEMP "rel000-base-source"),
             (Join-Path $env:RUNNER_TEMP "rel000-workflow-provenance-raw"),
+            (Join-Path $env:RUNNER_TEMP "rel000-approved-evidence"),
             (Join-Path $env:RUNNER_TEMP "rel000-output")
           )) {
             if (-not (Test-Path -LiteralPath $path)) {
