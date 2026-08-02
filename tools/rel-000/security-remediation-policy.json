@@ -1,15 +1,80 @@
 {
-  "format_version": "paquetenvia-rel000-security-remediation-policy-v1",
+  "format_version": "paquetenvia-rel000-security-remediation-policy-v2",
   "default_mode": "NORMAL_RELEASE_EVIDENCE",
-  "security_remediation": {
-    "id": "ISSUES-5-30-WEB-DEPENDENCIES",
-    "mode": "SECURITY_REMEDIATION",
-    "authorized_base_sha": "1ac8054026b3e4cb06612001f2be053d351fd2cf",
-    "authorized_source_branch": "fix/security-next-sharp-brace-expansion",
-    "allowed_dependency_files": [
-      "apps/web/package.json",
-      "apps/web/pnpm-lock.yaml",
-      "apps/web/pnpm-workspace.yaml"
-    ]
-  }
+  "historical_remediations": [
+    {
+      "id": "ISSUES-5-30-WEB-DEPENDENCIES",
+      "mode": "SECURITY_REMEDIATION",
+      "status": "MERGED",
+      "authorized_base_sha": "1ac8054026b3e4cb06612001f2be053d351fd2cf",
+      "authorized_source_branch": "fix/security-next-sharp-brace-expansion",
+      "tracked_issues": [5, 30],
+      "expected_base_advisories": [
+        "GHSA-4633-3j49-mh5q",
+        "GHSA-4c39-4ccg-62r3",
+        "GHSA-68g3-v927-f742",
+        "GHSA-6gpp-xcg3-4w24",
+        "GHSA-89xv-2m56-2m9x",
+        "GHSA-955p-x3mx-jcvp",
+        "GHSA-f88m-g3jw-g9cj",
+        "GHSA-m99w-x7hq-7vfj",
+        "GHSA-mh99-v99m-4gvg",
+        "GHSA-p9j2-gv94-2wf4",
+        "GHSA-q8wf-6r8g-63ch"
+      ],
+      "allowed_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ]
+    }
+  ],
+  "active_remediations": [
+    {
+      "id": "ISSUE-5-SHARP-035-REMEDIATION",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "78117e6551b3f758dd82190d3fae325a95dc14c6",
+      "authorized_source_branch": "fix/security-sharp-035-override",
+      "tracked_issue": 5,
+      "expected_base_advisories": ["GHSA-f88m-g3jw-g9cj"],
+      "expected_base_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [],
+      "allowed_dependency_files": [
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "required_dependency_files": [
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        "docs/development/rel-000-internal-release.md",
+        "docs/releases/mvp-0-internal-release-report.md",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/run_focused_tests.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py",
+        "tools/security/sharp-runtime-smoke.mjs",
+        "tools/test-rel-000-internal-release.ps1"
+      ],
+      "expected_direct_versions": {
+        "next": "16.2.11",
+        "eslint-config-next": "16.2.11",
+        "react": "19.2.7",
+        "react-dom": "19.2.7"
+      },
+      "allowed_overrides": {
+        "next@16.2.11>sharp": "0.35.3"
+      },
+      "target_sharp_version": "0.35.3",
+      "require_sharp_runtime_smoke": true
+    }
+  ]
 }

@@ -25,8 +25,8 @@ EXECUTION_EVIDENCE_VERSION = "paquetenvia-rel000-execution-v2"
 NORMAL_RELEASE_EVIDENCE = "NORMAL_RELEASE_EVIDENCE"
 SECURITY_REMEDIATION = "SECURITY_REMEDIATION"
 REL000_MODES = {NORMAL_RELEASE_EVIDENCE, SECURITY_REMEDIATION}
-SECURITY_REMEDIATION_BASE_SHA = "1ac8054026b3e4cb06612001f2be053d351fd2cf"
-SECURITY_REMEDIATION_BRANCH = "fix/security-next-sharp-brace-expansion"
+REMEDIATION_POLICY_FORMAT = "paquetenvia-rel000-security-remediation-policy-v2"
+SHARP_REMEDIATION_ID = "ISSUE-5-SHARP-035-REMEDIATION"
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -225,27 +225,112 @@ def load_remediation_policy(path: Path) -> dict[str, Any]:
     policy = load_json(path)
     if not isinstance(policy, dict):
         fail("REMEDIATION_POLICY_INVALID", "The remediation policy must be a JSON object.")
+    if policy.get("format_version") != REMEDIATION_POLICY_FORMAT:
+        fail("REMEDIATION_POLICY_FORMAT_INVALID", "The remediation policy format is unknown.")
     if policy.get("default_mode") != NORMAL_RELEASE_EVIDENCE:
         fail("REMEDIATION_POLICY_INVALID", "The remediation policy must fail closed to normal mode.")
-    remediation = policy.get("security_remediation")
-    if not isinstance(remediation, dict):
-        fail("REMEDIATION_POLICY_INVALID", "The security remediation authorization is missing.")
-    if (
-        remediation.get("mode") != SECURITY_REMEDIATION
-        or remediation.get("authorized_base_sha") != SECURITY_REMEDIATION_BASE_SHA
-        or remediation.get("authorized_source_branch") != SECURITY_REMEDIATION_BRANCH
-        or set(remediation.get("allowed_dependency_files") or [])
-        != SECURITY_REMEDIATION_DEPENDENCY_FILES
-    ):
-        fail("REMEDIATION_POLICY_INVALID", "The security remediation authorization drifted.")
+    historical = policy.get("historical_remediations")
+    active = policy.get("active_remediations")
+    if not isinstance(historical, list) or not isinstance(active, list):
+        fail("REMEDIATION_POLICY_INVALID", "The remediation registries must be arrays.")
+    identifiers: set[str] = set()
+    branches: set[str] = set()
+    required = {
+        "id",
+        "mode",
+        "authorized_base_sha",
+        "authorized_source_branch",
+        "expected_base_advisories",
+        "allowed_dependency_files",
+    }
+    for authorization in [*historical, *active]:
+        if not isinstance(authorization, dict) or not required.issubset(authorization):
+            fail("REMEDIATION_POLICY_INVALID", "A remediation authorization is incomplete.")
+        identifier = authorization.get("id")
+        branch = authorization.get("authorized_source_branch")
+        base = authorization.get("authorized_base_sha")
+        advisories = authorization.get("expected_base_advisories")
+        files = authorization.get("allowed_dependency_files")
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or identifier in identifiers
+            or not isinstance(branch, str)
+            or not branch
+            or branch in branches
+            or not isinstance(base, str)
+            or re.fullmatch(r"[0-9a-f]{40}", base) is None
+            or authorization.get("mode") != SECURITY_REMEDIATION
+            or not isinstance(advisories, list)
+            or not advisories
+            or any(not isinstance(value, str) or not value.startswith("GHSA-") for value in advisories)
+            or not isinstance(files, list)
+            or not files
+            or any(
+                not isinstance(value, str) or Path(value).name not in DEPENDENCY_FILE_NAMES
+                for value in files
+            )
+        ):
+            fail("REMEDIATION_POLICY_INVALID", "A remediation authorization is invalid.")
+        identifiers.add(identifier)
+        branches.add(branch)
+    for authorization in active:
+        totals = authorization.get("expected_base_totals")
+        required_files = authorization.get("required_dependency_files")
+        allowed_direct = authorization.get("allowed_direct_packages")
+        allowed_non_dependency = authorization.get("allowed_non_dependency_files")
+        if (
+            not isinstance(totals, dict)
+            or set(totals) != {"total", "critical", "high", "moderate", "low"}
+            or any(not isinstance(value, int) or value < 0 for value in totals.values())
+            or totals["total"] != sum(totals[key] for key in ("critical", "high", "moderate", "low"))
+            or not isinstance(required_files, list)
+            or not set(required_files).issubset(set(authorization["allowed_dependency_files"]))
+            or not isinstance(allowed_direct, list)
+            or not isinstance(allowed_non_dependency, list)
+            or any(not isinstance(value, str) or not value for value in allowed_non_dependency)
+            or not isinstance(authorization.get("tracked_issue"), int)
+        ):
+            fail("REMEDIATION_POLICY_INVALID", "An active remediation authorization is invalid.")
     return policy
 
 
-def resolve_rel000_mode(policy: dict[str, Any], source_branch: str) -> str:
-    remediation = policy["security_remediation"]
-    if source_branch == remediation["authorized_source_branch"]:
+def resolve_rel000_mode(
+    policy: dict[str, Any], source_branch: str, remediation_id: str = ""
+) -> str:
+    active = policy["active_remediations"]
+    matching_branch = next(
+        (item for item in active if item["authorized_source_branch"] == source_branch),
+        None,
+    )
+    if not remediation_id:
+        if matching_branch is not None:
+            fail(
+                "REMEDIATION_ID_REQUIRED",
+                "An active remediation branch must request its exact remediation ID.",
+            )
+        return NORMAL_RELEASE_EVIDENCE
+    authorization = next((item for item in active if item["id"] == remediation_id), None)
+    if authorization is None:
+        historical = {item["id"] for item in policy["historical_remediations"]}
+        fail(
+            "REMEDIATION_ID_NOT_ACTIVE" if remediation_id in historical else "REMEDIATION_ID_UNKNOWN",
+            "The requested remediation ID is not an active authorization.",
+            remediation_id=remediation_id,
+        )
+    if source_branch == authorization["authorized_source_branch"]:
         return SECURITY_REMEDIATION
     return NORMAL_RELEASE_EVIDENCE
+
+
+def active_remediation(policy: dict[str, Any], remediation_id: str) -> dict[str, Any]:
+    authorization = next(
+        (item for item in policy["active_remediations"] if item["id"] == remediation_id),
+        None,
+    )
+    if authorization is None:
+        fail("REMEDIATION_ID_UNKNOWN", "The requested remediation authorization was not found.")
+    return authorization
 
 
 def validate_mode_authorization(
@@ -253,10 +338,11 @@ def validate_mode_authorization(
     policy: dict[str, Any],
     source_branch: str,
     base_main_sha: str,
-) -> None:
+    remediation_id: str = "",
+) -> dict[str, Any] | None:
     if mode not in REL000_MODES:
         fail("REL000_MODE_INVALID", "The REL-000 execution mode is invalid.", mode=mode)
-    resolved = resolve_rel000_mode(policy, source_branch)
+    resolved = resolve_rel000_mode(policy, source_branch, remediation_id)
     if mode != resolved:
         fail(
             "REL000_MODE_NOT_AUTHORIZED",
@@ -264,13 +350,19 @@ def validate_mode_authorization(
             requested=mode,
             authorized=resolved,
         )
-    if mode == SECURITY_REMEDIATION and base_main_sha != SECURITY_REMEDIATION_BASE_SHA:
+    if mode == NORMAL_RELEASE_EVIDENCE:
+        return None
+    authorization = active_remediation(policy, remediation_id)
+    if source_branch != authorization["authorized_source_branch"]:
+        fail("REL000_MODE_NOT_AUTHORIZED", "The remediation branch does not match its authorization.")
+    if base_main_sha != authorization["authorized_base_sha"]:
         fail(
             "SECURITY_REMEDIATION_BASE_MISMATCH",
             "Security remediation requires the exact authorized base SHA.",
-            expected=SECURITY_REMEDIATION_BASE_SHA,
+            expected=authorization["authorized_base_sha"],
             actual=base_main_sha,
         )
+    return authorization
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -2031,10 +2123,178 @@ def _lock_versions(lock_text: str, package: str) -> set[str]:
     return {match.group(1) for match in pattern.finditer(lock_text)}
 
 
+def _workspace_overrides(value: str) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    in_overrides = False
+    for line in value.splitlines():
+        if line == "overrides:":
+            in_overrides = True
+            continue
+        if not in_overrides:
+            continue
+        if line and not line.startswith("  "):
+            break
+        match = re.fullmatch(r'  ["\']?(.+?)["\']?:\s*([^\s#]+)\s*', line)
+        if match:
+            overrides[match.group(1)] = match.group(2)
+    return overrides
+
+
+def _manifest_direct_versions(package: dict[str, Any]) -> dict[str, str]:
+    dependencies = package.get("dependencies") or {}
+    development = package.get("devDependencies") or {}
+    return {
+        "next": dependencies.get("next"),
+        "eslint-config-next": development.get("eslint-config-next"),
+        "react": dependencies.get("react"),
+        "react-dom": dependencies.get("react-dom"),
+    }
+
+
+def validate_sharp_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_all = set(authorization["allowed_dependency_files"]) | set(
+        authorization["allowed_non_dependency_files"]
+    )
+    unexpected = sorted(set(all_changed) - allowed_all)
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The remediation changed a file outside its exact authorization.",
+            files=unexpected,
+        )
+    required = set(authorization["required_dependency_files"])
+    if set(changed_dependency_files) != required:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The remediation dependency files do not match the exact authorization.",
+            expected=sorted(required),
+            actual=changed_dependency_files,
+        )
+
+    package_path = repository_root / "apps/web/package.json"
+    current_package = load_json(package_path)
+    try:
+        base_package = json.loads(
+            run_git(repository_root, "show", f"{base_main_sha}:apps/web/package.json")
+        )
+    except json.JSONDecodeError as exc:
+        fail("BASE_DEPENDENCY_MANIFEST_INVALID", "The base package manifest is invalid.", error=str(exc))
+    direct_versions = _manifest_direct_versions(current_package)
+    if any(
+        "sharp" in (current_package.get(section) or {})
+        for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+    ):
+        fail("DIRECT_SHARP_DEPENDENCY_REJECTED", "Sharp must remain transitive and optional.")
+    next_version = direct_versions["next"]
+    eslint_next_version = direct_versions["eslint-config-next"]
+    if _semver_tuple(str(next_version)) is None or _semver_tuple(str(eslint_next_version)) is None:
+        fail("PRERELEASE_DEPENDENCY_REJECTED", "Prerelease Next.js dependencies are forbidden.")
+    if next_version != eslint_next_version:
+        fail(
+            "NEXT_DEPENDENCY_ALIGNMENT_INVALID",
+            "Next.js and eslint-config-next must remain aligned stable versions.",
+        )
+    if current_package != base_package:
+        fail(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            "The Sharp remediation does not authorize direct package changes.",
+        )
+    if direct_versions != authorization["expected_direct_versions"]:
+        fail(
+            "DIRECT_DEPENDENCY_VERSION_INVALID",
+            "The direct web dependency versions drifted from the authorization.",
+            expected=authorization["expected_direct_versions"],
+            actual=direct_versions,
+        )
+
+    workspace_path = repository_root / "apps/web/pnpm-workspace.yaml"
+    current_workspace = workspace_path.read_text(encoding="utf-8")
+    base_workspace = run_git(
+        repository_root, "show", f"{base_main_sha}:apps/web/pnpm-workspace.yaml"
+    )
+    base_overrides = _workspace_overrides(base_workspace)
+    current_overrides = _workspace_overrides(current_workspace)
+    allowed_overrides = authorization.get("allowed_overrides") or {}
+    if not isinstance(allowed_overrides, dict) or current_overrides != {
+        **base_overrides,
+        **allowed_overrides,
+    }:
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "Only the exact authorized Sharp dependency-edge override may be added.",
+            expected={**base_overrides, **allowed_overrides},
+            actual=current_overrides,
+        )
+    target_sharp = authorization.get("target_sharp_version")
+    if _semver_tuple(str(target_sharp)) is None or _semver_tuple(str(target_sharp)) < (0, 35, 0):
+        fail("SHARP_TARGET_VERSION_INVALID", "The authorized Sharp target must be stable and patched.")
+    if allowed_overrides != {f"next@{next_version}>sharp": target_sharp}:
+        fail(
+            "SHARP_OVERRIDE_SELECTOR_INVALID",
+            "The Sharp override must target only the selected Next.js dependency edge.",
+        )
+
+    lock_text = (repository_root / "apps/web/pnpm-lock.yaml").read_text(encoding="utf-8")
+    sharp_versions = _lock_versions(lock_text, "sharp")
+    if sharp_versions != {target_sharp}:
+        fail(
+            "SHARP_LOCK_VERSION_INVALID",
+            "The lockfile must contain exactly one authorized patched Sharp version.",
+            versions=sorted(sharp_versions),
+        )
+    if f"{next_version}>sharp: {target_sharp}" not in lock_text or not re.search(
+        rf"^\s+sharp:\s+{re.escape(target_sharp)}(?:\(|$)", lock_text, re.MULTILINE
+    ):
+        fail("LOCKFILE_INCONSISTENT", "The lockfile does not apply the authorized Sharp edge.")
+    if re.search(r"^\s{6}sharp:\s*$", lock_text, re.MULTILINE):
+        fail("DIRECT_SHARP_DEPENDENCY_REJECTED", "Sharp appeared in the direct importer.")
+    prerelease = sorted(version for version in sharp_versions if _semver_tuple(version) is None)
+    if prerelease:
+        fail("PRERELEASE_DEPENDENCY_REJECTED", "Prerelease Sharp versions are forbidden.")
+
+    for path in all_changed:
+        if not path.startswith("apps/web/") or path in authorization["allowed_dependency_files"]:
+            continue
+        added = [
+            line[1:]
+            for line in run_git(
+                repository_root, "diff", "--unified=0", base_main_sha, "--", path
+            ).splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+        if any(re.search(r"(?:from\s+|require\()['\"]sharp['\"]", line) for line in added):
+            fail("DIRECT_SHARP_USAGE_ADDED", "The remediation added direct Sharp usage.", file=path)
+        if any("next/image" in line for line in added):
+            fail("NEXT_IMAGE_USAGE_ADDED", "The remediation added next/image usage.", file=path)
+        if any(re.search(r"['\"]use server['\"]", line) for line in added):
+            fail("NEXT_SERVER_ACTION_ADDED", "The remediation added a Next.js Server Action.", file=path)
+
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": False,
+        "dependency_lockfile_changed": True,
+        "dependency_workspace_changed": True,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": changed_dependency_files,
+        "lockfile_consistency_verified": True,
+        "vulnerable_lock_versions": [],
+        "sharp_versions": sorted(sharp_versions),
+        "sharp_override_selector": next(iter(allowed_overrides)),
+        "sharp_override_version": target_sharp,
+    }
+
+
 def validate_dependency_diff(
     repository_root: Path,
     base_main_sha: str,
     mode: str = NORMAL_RELEASE_EVIDENCE,
+    authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     all_changed = sorted(
         {
@@ -2047,12 +2307,17 @@ def validate_dependency_diff(
             if path.strip()
         }
     )
-    changed = sorted(path for path in all_changed if path in SECURITY_REMEDIATION_DEPENDENCY_FILES)
+    allowed_dependency_files = (
+        set(authorization["allowed_dependency_files"])
+        if authorization is not None
+        else SECURITY_REMEDIATION_DEPENDENCY_FILES
+    )
+    changed = sorted(path for path in all_changed if path in allowed_dependency_files)
     unexpected_dependency_files = sorted(
         path
         for path in all_changed
         if Path(path).name in DEPENDENCY_FILE_NAMES
-        and path not in SECURITY_REMEDIATION_DEPENDENCY_FILES
+        and path not in allowed_dependency_files
     )
     if unexpected_dependency_files:
         fail(
@@ -2078,6 +2343,14 @@ def validate_dependency_diff(
         }
     if mode != SECURITY_REMEDIATION:
         fail("REL000_MODE_INVALID", "The dependency validator received an invalid mode.")
+    if authorization is not None and authorization.get("id") == SHARP_REMEDIATION_ID:
+        return validate_sharp_remediation_diff(
+            repository_root,
+            base_main_sha,
+            all_changed,
+            changed,
+            authorization,
+        )
     required = {"apps/web/package.json", "apps/web/pnpm-lock.yaml"}
     if not required.issubset(changed) or not set(changed).issubset(
         SECURITY_REMEDIATION_DEPENDENCY_FILES
@@ -2283,6 +2556,52 @@ def validate_audit_snapshot(audit: dict[str, Any], label: str) -> dict[str, Any]
     return {"totals": normalized_totals, "advisories": normalized}
 
 
+def validate_sharp_runtime_smoke(
+    smoke: dict[str, Any] | None,
+    mode: str,
+    authorization: dict[str, Any] | None,
+) -> dict[str, Any]:
+    required = (
+        mode == SECURITY_REMEDIATION
+        and authorization is not None
+        and authorization.get("require_sharp_runtime_smoke") is True
+    )
+    if not required:
+        return {"executed": False, "status": "NOT_REQUIRED"}
+    if not isinstance(smoke, dict):
+        fail("SHARP_RUNTIME_SMOKE_NOT_EXECUTED", "The Sharp runtime smoke evidence is missing.")
+    if smoke.get("result") != "SHARP_RUNTIME_SMOKE_PASSED":
+        fail("SHARP_RUNTIME_SMOKE_FAILED", "The Sharp runtime smoke did not pass.")
+    expected_version = authorization.get("target_sharp_version")
+    if smoke.get("sharp_version") != expected_version:
+        fail(
+            "SHARP_RUNTIME_SMOKE_VERSION_INVALID",
+            "The Sharp runtime smoke executed a different dependency version.",
+            expected=expected_version,
+            actual=smoke.get("sharp_version"),
+        )
+    if (
+        smoke.get("dependency_parent") != "next"
+        or smoke.get("node_version") != "24.13.0"
+        or smoke.get("platform") not in {"linux", "win32"}
+        or smoke.get("output_format") != "png"
+        or not isinstance(smoke.get("output_bytes"), int)
+        or smoke["output_bytes"] <= 8
+    ):
+        fail("SHARP_RUNTIME_SMOKE_INVALID", "The Sharp runtime smoke evidence is invalid.")
+    return {
+        "executed": True,
+        "status": "PASSED",
+        "sharp_version": smoke["sharp_version"],
+        "dependency_parent": "next",
+        "node_version": smoke["node_version"],
+        "platform": smoke["platform"],
+        "architecture": smoke.get("architecture"),
+        "output_format": "png",
+        "output_nonempty": True,
+    }
+
+
 def validate_issue_and_audit(
     issue: dict[str, Any],
     additional_issue: dict[str, Any],
@@ -2290,6 +2609,7 @@ def validate_issue_and_audit(
     branch_audit: dict[str, Any],
     dependency_diff: dict[str, Any],
     mode: str = NORMAL_RELEASE_EVIDENCE,
+    authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if int(issue.get("number", 0)) != 5:
         fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 must be consulted.")
@@ -2315,6 +2635,13 @@ def validate_issue_and_audit(
         )
     if issue5_state not in {"OPEN", "CLOSED"}:
         fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 has an invalid state.")
+    if authorization is not None and authorization.get("tracked_issue") != int(
+        issue.get("number", 0)
+    ):
+        fail(
+            "REMEDIATION_TRACKED_ISSUE_INVALID",
+            "The remediation authorization targets a different issue.",
+        )
 
     base = validate_audit_snapshot(base_audit, "base")
     branch = validate_audit_snapshot(branch_audit, "branch")
@@ -2324,9 +2651,19 @@ def validate_issue_and_audit(
         fail("AUDIT_CRITICAL_PRESENT", "The branch audit contains a critical advisory.")
     base_ids = {item["advisory_id"].lower() for item in base["advisories"]}
     branch_ids = {item["advisory_id"].lower() for item in branch["advisories"]}
-    expected_ids = {value.lower() for value in EXPECTED_BASE_ADVISORIES}
+    expected_base_advisories = (
+        set(authorization["expected_base_advisories"])
+        if authorization is not None
+        else EXPECTED_BASE_ADVISORIES
+    )
+    expected_base_totals = (
+        authorization["expected_base_totals"]
+        if authorization is not None
+        else EXPECTED_BASE_AUDIT_TOTALS
+    )
+    expected_ids = {value.lower() for value in expected_base_advisories}
     if mode == SECURITY_REMEDIATION:
-        for key, expected in EXPECTED_BASE_AUDIT_TOTALS.items():
+        for key, expected in expected_base_totals.items():
             if base_totals[key] != expected:
                 fail(
                     "BASE_AUDIT_UNEXPECTED",
@@ -2341,6 +2678,15 @@ def validate_issue_and_audit(
             "AUTHORIZED_SECURITY_REMEDIATION"
         ):
             fail("DEPENDENCY_FILES_CHANGED", "Security remediation dependency evidence is missing.")
+        if (
+            authorization is not None
+            and authorization.get("tracked_issue") == 5
+            and issue30_state != "CLOSED"
+        ):
+            fail(
+                "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+                "Issue #30 must remain closed during the Issue #5 remediation.",
+            )
     elif mode == NORMAL_RELEASE_EVIDENCE:
         if dependency_diff.get("dependency_diff_against_base") != "CLEAN":
             fail("DEPENDENCY_FILES_CHANGED", "Normal release evidence requires a clean dependency diff.")
@@ -2747,6 +3093,7 @@ def release_report(
         },
         "known_security_issues": security["known_security_issues"],
         "rel000_mode": security["mode"],
+        "security_remediation_id": security["remediation_id"],
         "dependency_audit_command_executed": True,
         "dependency_audit_parse_succeeded": True,
         "tracked_issue_5_advisories": 1,
@@ -2790,6 +3137,13 @@ def release_report(
         "issue_5_remediation_status": security["issue_5_remediation_status"],
         "issue_30_remediation_status": security["issue_30_remediation_status"],
         "sharp_remediation_status": security["sharp_remediation_status"],
+        "sharp_runtime_smoke": security["sharp_runtime_smoke"],
+        "sharp_override_selector": security["dependency_diff"].get(
+            "sharp_override_selector"
+        ),
+        "sharp_override_version": security["dependency_diff"].get(
+            "sharp_override_version"
+        ),
         "brace_expansion_remediation_status": security[
             "brace_expansion_remediation_status"
         ],
@@ -2913,11 +3267,12 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         args.git_relationship,
     )
     policy = load_remediation_policy(args.remediation_policy)
-    validate_mode_authorization(
+    authorization = validate_mode_authorization(
         args.mode,
         policy,
         args.source_branch,
         trace["base_main_sha"],
+        args.remediation_id,
     )
     normative = load_normative(repository_root)
     normative_evidence = validate_normative_checksums(normative["root"])
@@ -2967,6 +3322,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         repository_root,
         trace["base_main_sha"],
         args.mode,
+        authorization,
     )
     security = validate_issue_and_audit(
         issue,
@@ -2975,7 +3331,14 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         branch_audit,
         dependency_diff,
         args.mode,
+        authorization,
     )
+    security["sharp_runtime_smoke"] = validate_sharp_runtime_smoke(
+        load_json(args.sharp_runtime_smoke) if args.sharp_runtime_smoke else None,
+        args.mode,
+        authorization,
+    )
+    security["remediation_id"] = authorization["id"] if authorization else None
 
     ops001_artifact = validate_artifact(
         args.ops001_directory,
@@ -3274,6 +3637,7 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_mode = subparsers.add_parser("resolve-mode")
     resolve_mode.add_argument("--policy", type=Path, required=True)
     resolve_mode.add_argument("--source-branch", required=True)
+    resolve_mode.add_argument("--remediation-id", default="")
 
     collect = subparsers.add_parser("collect-results")
     collect.add_argument("--job", choices=sorted(EXECUTION_EVIDENCE_JOBS), required=True)
@@ -3329,8 +3693,10 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--security-tracking-issue", type=Path, required=True)
     validate.add_argument("--base-audit", type=Path, required=True)
     validate.add_argument("--branch-audit", type=Path, required=True)
+    validate.add_argument("--sharp-runtime-smoke", type=Path)
     validate.add_argument("--mode", choices=sorted(REL000_MODES), required=True)
     validate.add_argument("--source-branch", required=True)
+    validate.add_argument("--remediation-id", default="")
     validate.add_argument("--remediation-policy", type=Path, required=True)
     validate.add_argument("--source-head-sha", required=True)
     validate.add_argument("--tested-git-sha", required=True)
@@ -3367,7 +3733,13 @@ def main() -> int:
             sanitize_issue(args.input, args.output)
             return 0
         if args.command == "resolve-mode":
-            print(resolve_rel000_mode(load_remediation_policy(args.policy), args.source_branch))
+            print(
+                resolve_rel000_mode(
+                    load_remediation_policy(args.policy),
+                    args.source_branch,
+                    args.remediation_id,
+                )
+            )
             return 0
         if args.command == "collect-results":
             collect_execution_results(args)

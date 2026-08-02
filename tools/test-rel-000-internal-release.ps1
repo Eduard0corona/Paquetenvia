@@ -12,7 +12,9 @@ param(
     [string] $BranchAuditPath = $env:REL000_BRANCH_AUDIT_PATH,
     [string] $Mode = $env:REL000_MODE,
     [string] $SourceBranch = $env:REL000_SOURCE_BRANCH,
+    [string] $RemediationId = $env:REL000_REMEDIATION_ID,
     [string] $RemediationPolicyPath = $env:REL000_REMEDIATION_POLICY_PATH,
+    [string] $SharpRuntimeSmokePath = $env:REL000_SHARP_RUNTIME_SMOKE_PATH,
     [string] $SourceHeadSha = $env:REL000_SOURCE_HEAD_SHA,
     [string] $TestedGitSha = $env:REL000_TESTED_GIT_SHA,
     [string] $BaseMainSha = $env:REL000_BASE_MAIN_SHA,
@@ -349,6 +351,9 @@ $required = [ordered]@{
     ExecutionResultsDirectory = $ExecutionResultsDirectory
     ExecutionArtifactsPath = $ExecutionArtifactsPath
 }
+if ($Mode -eq "SECURITY_REMEDIATION") {
+    $required.SharpRuntimeSmokePath = $SharpRuntimeSmokePath
+}
 $missing = @(
     $required.GetEnumerator() |
         Where-Object { [string]::IsNullOrWhiteSpace([string]$_.Value) } |
@@ -382,6 +387,12 @@ $validatedBaseAudit = Assert-Ops002ExternalRegularFile `
 $validatedBranchAudit = Assert-Ops002ExternalRegularFile `
     -Path $BranchAuditPath `
     -Purpose "REL-000 branch audit state"
+$validatedSharpRuntimeSmoke = $null
+if (-not [string]::IsNullOrWhiteSpace($SharpRuntimeSmokePath)) {
+    $validatedSharpRuntimeSmoke = Assert-Ops002ExternalRegularFile `
+        -Path $SharpRuntimeSmokePath `
+        -Purpose "REL-000 Sharp runtime smoke"
+}
 
 $stagingInfo = New-Ops002StagingDirectory -Purpose "rel000"
 $finalOutputInfo = $null
@@ -409,6 +420,7 @@ try {
         "--branch-audit", $validatedBranchAudit,
         "--mode", $Mode,
         "--source-branch", $SourceBranch,
+        "--remediation-id", $RemediationId,
         "--remediation-policy", $RemediationPolicyPath,
         "--source-head-sha", $SourceHeadSha,
         "--tested-git-sha", $TestedGitSha,
@@ -424,6 +436,9 @@ try {
         "--ops002-artifact-id", $Ops002ArtifactId,
         "--ops002-artifact-digest", $Ops002ArtifactDigest
     )
+    if ($null -ne $validatedSharpRuntimeSmoke) {
+        $arguments += @("--sharp-runtime-smoke", $validatedSharpRuntimeSmoke)
+    }
     & python @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "REL000_TECHNICAL_VALIDATION_FAILED"

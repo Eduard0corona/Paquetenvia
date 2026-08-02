@@ -265,37 +265,56 @@ RTM-001-CUSTOMER-SUPPORT-ROLE permanecen abiertos según AI-10. Los advisories
 de dependencias se relacionan de forma exhaustiva con Issue #5 o Issue #30;
 `audit_tracking_gap_detected=false` y `audit_tracking_gap_count=0`.
 
-La política versionada `tools/rel-000/security-remediation-policy.json` separa
-dos modos explícitos. `NORMAL_RELEASE_EVIDENCE` rechaza cualquier cambio en los
-archivos de dependencias y exige que el audit de la rama sea idéntico al de su
-base real. `SECURITY_REMEDIATION` sólo está autorizado para la rama
-`fix/security-next-sharp-brace-expansion` sobre la base exacta
-`1ac8054026b3e4cb06612001f2be053d351fd2cf` y permite únicamente los tres
-archivos web declarados por la política.
+La política v2 `tools/rel-000/security-remediation-policy.json` separa el
+registro histórico ya fusionado de PR #33 y las autorizaciones activas.
+`NORMAL_RELEASE_EVIDENCE` rechaza cualquier dependency drift. La autorización
+`ISSUE-5-SHARP-035-REMEDIATION` exige simultáneamente la rama
+`fix/security-sharp-035-override`, la base exacta
+`78117e6551b3f758dd82190d3fae325a95dc14c6`, Issue #5, el único advisory base y
+la allowlist exacta. Una rama parecida, otro ID o una base distinta no activa
+el modo de remediación.
 
-La base autorizada contiene 11 advisories únicos: 6 high y 5 moderate. La rama
-actualiza `next` y `eslint-config-next` de 16.2.10 a 16.2.11, eliminando los
-nueve advisories de Next.js. Los overrides segmentados mantienen
-`brace-expansion` dentro de los rangos de todos sus consumidores: 1.1.17 para
-la rama 1.x y 5.0.8 para la rama 5.x. No existe override cross-major.
+El descubrimiento upstream del 2026-08-02 confirmó que Next.js 16.2.12 es
+estable, pero todavía declara la optional dependency `sharp ^0.34.5`; por ello
+no existe una ruta estable normal hacia Sharp 0.35.x. Sharp 0.35.3 es estable y
+parchea `GHSA-f88m-g3jw-g9cj`. La ruta seleccionada es el resultado B: el
+selector pnpm exacto `next@16.2.11>sharp` fija Sharp 0.35.3 únicamente para ese
+edge. Conserva sin cambios Next.js/eslint-config-next 16.2.11, React/React DOM
+19.2.7 y los overrides previos de PostCSS y brace-expansion.
 
-Next.js 16.2.11 declara `sharp ^0.34.5`; ese rango excluye 0.35.x. El audit de
-la rama conserva por ello sólo GHSA-f88m-g3jw-g9cj en `sharp 0.34.5`:
+Fuentes primarias consultadas:
+
+- [release de Next.js 16.2.12](https://github.com/vercel/next.js/releases/tag/v16.2.12);
+- [`packages/next/package.json` de 16.2.12](https://github.com/vercel/next.js/blob/v16.2.12/packages/next/package.json);
+- [advisory GHSA-f88m-g3jw-g9cj](https://github.com/advisories/GHSA-f88m-g3jw-g9cj);
+- [issue vercel/next.js#96064](https://github.com/vercel/next.js/issues/96064) y la
+  [recomendación del mantenedor](https://github.com/vercel/next.js/issues/96064#issuecomment-5052143831);
+- [issue lovell/sharp#4567](https://github.com/lovell/sharp/issues/4567).
+
+La base autorizada contiene exactamente un advisory high en `sharp 0.34.5`; el
+audit de la rama queda en cero y el lockfile contiene sólo `sharp 0.35.3`:
 
 ```text
-sharp_remediation_status = BLOCKED_BY_UPSTREAM_COMPATIBILITY
-issue_30_remediation_status = REMEDIATED_PENDING_MERGE
-dependency_security_status = BLOCKED
-release_candidate_status = BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION
+issue_5_remediation_status = REMEDIATED_PENDING_MERGE
+issue_30_remediation_status = REMEDIATED
+sharp_remediation_status = REMEDIATED_PENDING_MERGE
+dependency_security_status = REMEDIATED_PENDING_MERGE
+release_candidate_status = BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION
 owner_approval_status = PENDING
 ```
+
+El smoke test resuelve Sharp desde el paquete Next.js, carga el módulo nativo y
+genera una imagen PNG sintética sólo en memoria. Se ejecuta localmente y en
+Linux dentro de los jobs `web` y REL-000. No valida el runtime específico de
+Vercel. Paquetenvia no importa Sharp, no usa `next/image` ni procesa imágenes en
+una Server Action; cualquier uso futuro debe reevaluar `lovell/sharp#4567`.
 
 El modo de remediación falla ante base distinta, audit omitido o no parseable,
 critical, advisory o paquete nuevo, aumento de severidad, issue cerrado con su
 advisory presente, archivo no autorizado, lockfile inconsistente, prerelease,
-override incompatible o versión vulnerable duplicada. La suite focal deriva su
-conteo de los tests descubiertos; la corrida actual exige y pasa 100/100, sin
-fallos ni skips.
+override incompatible, versión vulnerable duplicada o smoke test ausente o
+fallido. La suite focal deriva su conteo de los tests descubiertos; la corrida
+actual exige y pasa 145/145, sin fallos ni skips.
 
 ## Rollback REL-000
 

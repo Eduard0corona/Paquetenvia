@@ -1590,5 +1590,343 @@ class Rel000FocusedTests(unittest.TestCase):
         self.assertEqual(0, result["python_tests_skipped"])
 
 
+class SharpRemediationPolicyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-sharp-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_value = json.loads(
+            (REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def write_policy(self, value=None) -> Path:
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value or self.policy_value), encoding="utf-8")
+        return path
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.write_policy())
+
+    def authorization(self):
+        return copy.deepcopy(self.policy_value["active_remediations"][0])
+
+    @staticmethod
+    def sharp_advisory(advisory_id=rel000.ISSUE5_ADVISORY, package="sharp", severity="high"):
+        return {
+            "advisory_id": advisory_id,
+            "package": package,
+            "installed_versions": ["0.34.5"],
+            "severity": severity,
+            "affected_range": "<0.35.0",
+            "patched_range": ">=0.35.0",
+            "direct_or_transitive": "transitive",
+            "dependency_path_count": 1,
+            "fix_available": True,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def audit(self, advisories, *, executed=True, parsed=True):
+        totals = {
+            key: sum(item["severity"] == key for item in advisories)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(advisories)
+        return {
+            "command_executed": executed,
+            "command_exit_code": 1 if advisories else 0,
+            "parse_succeeded": parsed,
+            "totals": totals,
+            "advisories": copy.deepcopy(advisories),
+        }
+
+    def security_inputs(self, *, branch=None, issue5="OPEN", issue30="CLOSED"):
+        base = self.audit([self.sharp_advisory()])
+        return (
+            {
+                "number": 5,
+                "state": issue5,
+                "title": "sharp",
+                "url": "https://github.com/example/issues/5",
+                "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+            },
+            {
+                "number": 30,
+                "state": issue30,
+                "title": rel000.ADDITIONAL_SECURITY_ISSUE_TITLE,
+                "url": "https://github.com/example/issues/30",
+                "tracked_advisory_ids": sorted(rel000.ISSUE30_ADVISORIES),
+            },
+            base,
+            branch if branch is not None else self.audit([]),
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+        )
+
+    def validate_security(self, **kwargs):
+        return rel000.validate_issue_and_audit(
+            *self.security_inputs(**kwargs),
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+        )
+
+    @staticmethod
+    def passing_smoke(version="0.35.3"):
+        return {
+            "result": "SHARP_RUNTIME_SMOKE_PASSED",
+            "sharp_version": version,
+            "dependency_parent": "next",
+            "node_version": "24.13.0",
+            "platform": "linux",
+            "architecture": "x64",
+            "output_format": "png",
+            "output_bytes": 95,
+        }
+
+    def dependency_repo(self):
+        root = self.root / "repo"
+        web = root / "apps/web"
+        web.mkdir(parents=True)
+        package = {
+            "name": "@paquetenvia/web",
+            "private": True,
+            "dependencies": {
+                "next": "16.2.11",
+                "react": "19.2.7",
+                "react-dom": "19.2.7",
+            },
+            "devDependencies": {"eslint-config-next": "16.2.11"},
+        }
+        workspace = (
+            "overrides:\n"
+            "  postcss: 8.5.21\n"
+            "  \"brace-expansion@<1.1.17\": 1.1.17\n"
+            "  \"brace-expansion@>=4.0.0 <5.0.8\": 5.0.8\n"
+        )
+        base_lock = (
+            "lockfileVersion: '9.0'\n"
+            "overrides:\n"
+            "  postcss: 8.5.21\n"
+            "importers:\n  .:\n    dependencies:\n      next:\n"
+            "        specifier: 16.2.11\n        version: 16.2.11\n"
+            "    devDependencies:\n      eslint-config-next:\n"
+            "        specifier: 16.2.11\n        version: 16.2.11\n"
+            "packages:\n  next@16.2.11:\n    resolution: {}\n"
+            "  eslint-config-next@16.2.11:\n    resolution: {}\n"
+            "  sharp@0.34.5:\n    resolution: {}\n"
+            "snapshots:\n  next@16.2.11:\n    optionalDependencies:\n      sharp: 0.34.5\n"
+        )
+        (web / "package.json").write_text(json.dumps(package), encoding="utf-8")
+        (web / "pnpm-workspace.yaml").write_text(workspace, encoding="utf-8")
+        (web / "pnpm-lock.yaml").write_text(base_lock, encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        (web / "pnpm-workspace.yaml").write_text(
+            workspace + '  "next@16.2.11>sharp": 0.35.3\n', encoding="utf-8"
+        )
+        (web / "pnpm-lock.yaml").write_text(
+            base_lock.replace("  postcss: 8.5.21\n", "  postcss: 8.5.21\n  next@16.2.11>sharp: 0.35.3\n")
+            .replace("sharp@0.34.5", "sharp@0.35.3")
+            .replace("sharp: 0.34.5", "sharp: 0.35.3"),
+            encoding="utf-8",
+        )
+        return root, base, self.authorization()
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    def test_86_policy_v1_rejected(self):
+        value = copy.deepcopy(self.policy_value); value["format_version"] = "paquetenvia-rel000-security-remediation-policy-v1"
+        self.assert_reason("REMEDIATION_POLICY_FORMAT_INVALID", lambda: rel000.load_remediation_policy(self.write_policy(value)))
+
+    def test_87_policy_missing_rejected(self):
+        self.assert_reason("JSON_INPUT_INVALID", lambda: rel000.load_remediation_policy(self.root / "missing.json"))
+
+    def test_88_unknown_policy_format_rejected(self):
+        value = copy.deepcopy(self.policy_value); value["format_version"] = "unknown"
+        self.assert_reason("REMEDIATION_POLICY_FORMAT_INVALID", lambda: rel000.load_remediation_policy(self.write_policy(value)))
+
+    def test_89_unknown_remediation_id_rejected(self):
+        self.assert_reason("REMEDIATION_ID_UNKNOWN", lambda: rel000.resolve_rel000_mode(self.policy(), "fix/security-sharp-035-override", "UNKNOWN"))
+
+    def test_90_wrong_branch_resolves_normal(self):
+        self.assertEqual(rel000.NORMAL_RELEASE_EVIDENCE, rel000.resolve_rel000_mode(self.policy(), "fix/other", rel000.SHARP_REMEDIATION_ID))
+
+    def test_91_wrong_base_rejected(self):
+        self.assert_reason("SECURITY_REMEDIATION_BASE_MISMATCH", lambda: rel000.validate_mode_authorization(rel000.SECURITY_REMEDIATION, self.policy(), "fix/security-sharp-035-override", "a" * 40, rel000.SHARP_REMEDIATION_ID))
+
+    def test_92_wrong_issue_rejected(self):
+        auth = self.authorization(); auth["tracked_issue"] = 6
+        self.assert_reason("REMEDIATION_TRACKED_ISSUE_INVALID", lambda: rel000.validate_issue_and_audit(*self.security_inputs(), rel000.SECURITY_REMEDIATION, auth))
+
+    def test_93_wrong_base_advisory_rejected(self):
+        auth = self.authorization(); auth["expected_base_advisories"] = ["GHSA-1111-2222-3333"]
+        self.assert_reason("BASE_ADVISORY_SET_UNEXPECTED", lambda: rel000.validate_issue_and_audit(*self.security_inputs(), rel000.SECURITY_REMEDIATION, auth))
+
+    def test_94_zero_base_advisories_rejected(self):
+        inputs = list(self.security_inputs()); inputs[2] = self.audit([])
+        self.assert_reason("BASE_AUDIT_UNEXPECTED", lambda: rel000.validate_issue_and_audit(*inputs, rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_95_multiple_base_advisories_rejected(self):
+        inputs = list(self.security_inputs()); inputs[2] = self.audit([self.sharp_advisory(), self.sharp_advisory("GHSA-1111-2222-3333")])
+        self.assert_reason("BASE_AUDIT_UNEXPECTED", lambda: rel000.validate_issue_and_audit(*inputs, rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_96_base_audit_not_executed(self):
+        inputs = list(self.security_inputs()); inputs[2]["command_executed"] = False
+        self.assert_reason("AUDIT_COMMAND_NOT_EXECUTED", lambda: rel000.validate_issue_and_audit(*inputs, rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_97_branch_audit_not_executed(self):
+        inputs = list(self.security_inputs()); inputs[3]["command_executed"] = False
+        self.assert_reason("AUDIT_COMMAND_NOT_EXECUTED", lambda: rel000.validate_issue_and_audit(*inputs, rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_98_unparseable_audit_rejected(self):
+        inputs = list(self.security_inputs()); inputs[3]["parse_succeeded"] = False
+        self.assert_reason("AUDIT_PARSE_FAILED", lambda: rel000.validate_issue_and_audit(*inputs, rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_99_new_advisory_rejected(self):
+        branch = self.audit([self.sharp_advisory("GHSA-1111-2222-3333")])
+        self.assert_reason("NEW_DEPENDENCY_ADVISORY", lambda: self.validate_security(branch=branch))
+
+    def test_100_new_affected_package_rejected(self):
+        branch = self.audit([self.sharp_advisory(package="other")])
+        self.assert_reason("NEW_AFFECTED_DEPENDENCY_PACKAGE", lambda: self.validate_security(branch=branch))
+
+    def test_101_severity_increase_rejected(self):
+        inputs = list(self.security_inputs(branch=self.audit([self.sharp_advisory(severity="high")]))); inputs[2]["advisories"][0]["severity"] = "moderate"; inputs[2]["totals"].update(high=0, moderate=1)
+        auth = self.authorization(); auth["expected_base_totals"].update(high=0, moderate=1)
+        self.assert_reason("DEPENDENCY_ADVISORY_SEVERITY_INCREASED", lambda: rel000.validate_issue_and_audit(*inputs, rel000.SECURITY_REMEDIATION, auth))
+
+    def test_102_critical_advisory_rejected(self):
+        self.assert_reason("AUDIT_CRITICAL_PRESENT", lambda: self.validate_security(branch=self.audit([self.sharp_advisory(severity="critical")])))
+
+    def test_103_vulnerable_sharp_retained_rejected(self):
+        root, base, auth = self.dependency_repo(); lock = root / "apps/web/pnpm-lock.yaml"; lock.write_text(lock.read_text().replace("sharp@0.35.3", "sharp@0.34.5"), encoding="utf-8")
+        self.assert_reason("SHARP_LOCK_VERSION_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_104_duplicate_sharp_versions_rejected(self):
+        root, base, auth = self.dependency_repo(); lock = root / "apps/web/pnpm-lock.yaml"; lock.write_text(lock.read_text() + "  sharp@0.34.5:\n    resolution: {}\n", encoding="utf-8")
+        self.assert_reason("SHARP_LOCK_VERSION_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_105_direct_sharp_dependency_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/package.json"; value = json.loads(path.read_text()); value["dependencies"]["sharp"] = "0.35.3"; path.write_text(json.dumps(value), encoding="utf-8")
+        auth["allowed_dependency_files"].append("apps/web/package.json"); auth["required_dependency_files"].append("apps/web/package.json")
+        self.assert_reason("DIRECT_SHARP_DEPENDENCY_REJECTED", lambda: self.validate_dependency(root, base, auth))
+
+    def test_106_required_override_missing(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/pnpm-workspace.yaml"; path.write_text(path.read_text().replace('  "next@16.2.11>sharp": 0.35.3\n', '# required Sharp override intentionally absent\n'), encoding="utf-8")
+        self.assert_reason("SECURITY_REMEDIATION_OVERRIDE_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_107_broad_override_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/pnpm-workspace.yaml"; path.write_text(path.read_text().replace("next@16.2.11>sharp", "sharp"), encoding="utf-8")
+        self.assert_reason("SECURITY_REMEDIATION_OVERRIDE_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_108_wrong_parent_override_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/pnpm-workspace.yaml"; path.write_text(path.read_text().replace("next@16.2.11>sharp", "other@1.0.0>sharp"), encoding="utf-8")
+        self.assert_reason("SECURITY_REMEDIATION_OVERRIDE_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_109_wrong_override_version_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/pnpm-workspace.yaml"; path.write_text(path.read_text().replace("0.35.3", "0.35.2"), encoding="utf-8")
+        self.assert_reason("SECURITY_REMEDIATION_OVERRIDE_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_110_prerelease_sharp_rejected(self):
+        root, base, auth = self.dependency_repo(); auth["target_sharp_version"] = "0.35.4-rc.1"; auth["allowed_overrides"]["next@16.2.11>sharp"] = "0.35.4-rc.1"
+        for relative in ("apps/web/pnpm-workspace.yaml", "apps/web/pnpm-lock.yaml"):
+            path = root / relative; path.write_text(path.read_text().replace("0.35.3", "0.35.4-rc.1"), encoding="utf-8")
+        self.assert_reason("SHARP_TARGET_VERSION_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_111_prerelease_next_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/package.json"; value = json.loads(path.read_text()); value["dependencies"]["next"] = "16.3.0-rc.1"; value["devDependencies"]["eslint-config-next"] = "16.3.0-rc.1"; path.write_text(json.dumps(value), encoding="utf-8"); auth["allowed_dependency_files"].append("apps/web/package.json"); auth["required_dependency_files"].append("apps/web/package.json")
+        self.assert_reason("PRERELEASE_DEPENDENCY_REJECTED", lambda: self.validate_dependency(root, base, auth))
+
+    def test_112_next_alignment_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/package.json"; value = json.loads(path.read_text()); value["devDependencies"]["eslint-config-next"] = "16.2.12"; path.write_text(json.dumps(value), encoding="utf-8"); auth["allowed_dependency_files"].append("apps/web/package.json"); auth["required_dependency_files"].append("apps/web/package.json")
+        self.assert_reason("NEXT_DEPENDENCY_ALIGNMENT_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_113_unauthorized_dependency_file_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "tools/package.json"; path.parent.mkdir(); path.write_text("{}", encoding="utf-8")
+        self.assert_reason("UNAUTHORIZED_DEPENDENCY_FILE_CHANGED", lambda: self.validate_dependency(root, base, auth))
+
+    def test_114_existing_override_change_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/pnpm-workspace.yaml"; path.write_text(path.read_text().replace("postcss: 8.5.21", "postcss: 8.5.20"), encoding="utf-8")
+        self.assert_reason("SECURITY_REMEDIATION_OVERRIDE_INVALID", lambda: self.validate_dependency(root, base, auth))
+
+    def test_115_inconsistent_lockfile_rejected(self):
+        root, base, auth = self.dependency_repo(); path = root / "apps/web/pnpm-lock.yaml"; path.write_text(path.read_text().replace("      sharp: 0.35.3\n", ""), encoding="utf-8")
+        self.assert_reason("LOCKFILE_INCONSISTENT", lambda: self.validate_dependency(root, base, auth))
+
+    def test_116_smoke_not_executed_rejected(self):
+        self.assert_reason("SHARP_RUNTIME_SMOKE_NOT_EXECUTED", lambda: rel000.validate_sharp_runtime_smoke(None, rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_117_failed_smoke_rejected(self):
+        smoke = self.passing_smoke(); smoke["result"] = "FAILED"
+        self.assert_reason("SHARP_RUNTIME_SMOKE_FAILED", lambda: rel000.validate_sharp_runtime_smoke(smoke, rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_118_vulnerable_smoke_version_rejected(self):
+        self.assert_reason("SHARP_RUNTIME_SMOKE_VERSION_INVALID", lambda: rel000.validate_sharp_runtime_smoke(self.passing_smoke("0.34.5"), rel000.SECURITY_REMEDIATION, self.authorization()))
+
+    def test_119_closed_issue5_with_advisory_rejected(self):
+        branch = self.audit([self.sharp_advisory()])
+        self.assert_reason("SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT", lambda: self.validate_security(branch=branch, issue5="CLOSED"))
+
+    def test_120_open_issue30_rejected(self):
+        self.assert_reason("ADDITIONAL_SECURITY_ISSUE_STATE_INVALID", lambda: self.validate_security(issue30="OPEN"))
+
+    def test_121_zero_audit_open_issue5_pending_merge(self):
+        self.assertEqual("REMEDIATED_PENDING_MERGE", self.validate_security()["dependency_security_status"])
+
+    def test_122_zero_audit_closed_issues_passed(self):
+        self.assertEqual("PASSED", self.validate_security(issue5="CLOSED")["dependency_security_status"])
+
+    def test_123_passed_security_keeps_owner_pending(self):
+        report = {"owner_approval_status": "PENDING", "dependency_security_status": "PASSED", "release_candidate_status": "BLOCKED_BY_OWNER_DECISION", "rel000_def_001_status": "RESOLVED", "normative_scope_status": "RESOLVED", "normative_scope_decision": "FIN001_MOVED_TO_MVP1", "audit_tracking_gap_detected": False, "audit_tracking_gap_count": 0}
+        rel000.validate_owner_state(report)
+
+    def test_124_passed_security_does_not_verify_rel000(self):
+        report = {"owner_approval_status": "PENDING", "dependency_security_status": "PASSED", "release_candidate_status": "BLOCKED_BY_OWNER_DECISION", "mvp0_p0_items_verified": 29, "mvp0_p0_items_blocked": 0, "rel000_def_001_status": "RESOLVED", "normative_scope_status": "RESOLVED", "normative_scope_decision": "FIN001_MOVED_TO_MVP1", "audit_tracking_gap_detected": False, "audit_tracking_gap_count": 0}
+        self.assert_reason("REL000_FALSELY_VERIFIED", lambda: rel000.validate_owner_state(report))
+
+    def test_125_normal_mode_rejects_dependency_drift(self):
+        root, base, _ = self.dependency_repo()
+        self.assert_reason("DEPENDENCY_FILES_CHANGED", lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE))
+
+    def test_126_historical_authorization_not_active(self):
+        historical = self.policy_value["historical_remediations"][0]
+        self.assert_reason("REMEDIATION_ID_NOT_ACTIVE", lambda: rel000.resolve_rel000_mode(self.policy(), historical["authorized_source_branch"], historical["id"]))
+
+    def test_127_new_authorization_does_not_match_historical_branch(self):
+        historical_branch = self.policy_value["historical_remediations"][0]["authorized_source_branch"]
+        self.assertEqual(rel000.NORMAL_RELEASE_EVIDENCE, rel000.resolve_rel000_mode(self.policy(), historical_branch, rel000.SHARP_REMEDIATION_ID))
+
+    def test_128_dynamic_counts_equal(self):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)]); count = focused_runner.count_cases(suite); result = focused_runner.execute_suite(suite, count, stream=io.StringIO())
+        self.assertEqual(result["python_tests_expected"], result["python_tests_discovered"]); self.assertEqual(result["python_tests_executed"], result["python_tests_discovered"]); self.assertEqual(result["python_tests_passed"], result["python_tests_executed"])
+
+    def test_129_dynamic_failed_zero(self):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)]); result = focused_runner.execute_suite(suite, 1, stream=io.StringIO()); self.assertEqual(0, result["python_tests_failed"])
+
+    def test_130_dynamic_skipped_zero(self):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)]); result = focused_runner.execute_suite(suite, 1, stream=io.StringIO()); self.assertEqual(0, result["python_tests_skipped"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
