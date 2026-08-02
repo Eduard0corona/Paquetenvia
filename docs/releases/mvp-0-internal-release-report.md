@@ -8,14 +8,14 @@ una aprobación del propietario.
 ```text
 format_version = paquetenvia-rel000-v1
 release = MVP-0_INTERNAL
-base_main_sha = 1ac8054026b3e4cb06612001f2be053d351fd2cf
+base_main_sha = 78117e6551b3f758dd82190d3fae325a95dc14c6
 normative_version = 0.6
 rel000_def_001_status = RESOLVED
 normative_scope_status = RESOLVED
 normative_scope_decision = FIN001_MOVED_TO_MVP1
-dependency_security_status = BLOCKED
+dependency_security_status = REMEDIATED_PENDING_MERGE
 owner_approval_status = PENDING
-release_candidate_status = BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION
+release_candidate_status = BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION
 ```
 
 El estado técnico final de cada corrida sólo es autoritativo en
@@ -44,8 +44,9 @@ blocked_ids = ["REL-000"]
 - `NOT_STARTED` (0): ninguno dentro de la evidencia atribuible evaluada.
 - `BLOCKED` (1): REL-000.
 
-REL-000 permanece bloqueado por la deuda de seguridad heredada y por la
-aprobación final pendiente del propietario; no se cuenta como aprobado.
+REL-000 permanece bloqueado hasta que la remediación de seguridad se fusione y
+el propietario tome una decisión explícita posterior; no se cuenta como
+aprobado.
 FIN-001 pertenece a MVP-1 y por ello no aparece en este inventario, sin que se
 infiera implementado o verificado a partir de los guards COD existentes.
 
@@ -125,34 +126,37 @@ GATE-016
 GATE-017
 RTM-001-CUSTOMER-SUPPORT-ROLE
 Issue #5
-Issue #30
 ```
 
 REL-000-DEF-001 figura en `resolved_decisions`; no es un gate abierto.
 
-Issues #5 y #30 siguen abiertos mientras la remediación permanece en Draft.
-Issue #5 rastrea el finding high heredado de `sharp 0.34.5`
-(GHSA-f88m-g3jw-g9cj). Issue #30 registra los nueve advisories de Next.js y el
-advisory de brace-expansion.
+Issue #5 sigue abierto mientras esta remediación permanece en Draft y rastrea
+el finding high heredado de `sharp 0.34.5` (GHSA-f88m-g3jw-g9cj). Issue #30,
+propietario histórico de los nueve advisories de Next.js y el advisory de
+brace-expansion, permanece cerrado como `completed` después de PR #33.
 
 | Fuente | Total | High | Moderate | Alcance |
 |---|---:|---:|---:|---|
 | Issue #5 | 1 | 1 | 0 | sharp |
-| Base main real | 11 | 6 | 5 | next, sharp, brace-expansion |
-| Rama de remediación | 1 | 1 | 0 | sharp |
-| Delta de la rama | -10 | -5 | -5 | sin advisories ni paquetes nuevos |
+| Base main real | 1 | 1 | 0 | sharp 0.34.5 |
+| Rama de remediación | 0 | 0 | 0 | ninguno |
+| Delta de la rama | -1 | -1 | 0 | sin advisories ni paquetes nuevos |
 
-Resultado B: remediación parcial compatible. `next` y `eslint-config-next`
-pasan de 16.2.10 a 16.2.11; desaparecen los nueve advisories de Next.js.
-`brace-expansion` queda en 1.1.17 y 5.0.8 mediante overrides same-major que
-satisfacen `^1.1.7` y `^5.0.5`; desaparece su advisory. Issue #30 queda
-`REMEDIATED_PENDING_MERGE` y es elegible para cierre al fusionar.
+Resultado B: remediación mediante override oficial, exacto y controlado.
+Next.js y eslint-config-next permanecen en 16.2.11 porque incluso la versión
+estable 16.2.12 declara `sharp ^0.34.5`, rango que excluye Sharp 0.35.x. El
+selector pnpm `next@16.2.11>sharp` fija únicamente ese edge en Sharp 0.35.3,
+versión estable parcheada. El lockfile contiene una sola versión de Sharp, no
+existe dependencia directa, no hay prereleases y los overrides existentes no
+cambian.
 
-Sharp permanece en 0.34.5 porque Next.js 16.2.11 declara `sharp ^0.34.5`, rango
-que no admite 0.35.x. No se fuerza una versión incompatible: Issue #5 permanece
-`UNRESOLVED` y `sharp_remediation_status = BLOCKED_BY_UPSTREAM_COMPATIBILITY`.
-El mapeo advisory→issue es completo (`audit_tracking_gap_detected=false`), pero
-la seguridad y REL-000 permanecen bloqueados; owner approval continúa pendiente.
+El smoke test carga Sharp desde el dependency graph de Next.js y produce un PNG
+sintético en memoria. La validación local no representa el runtime de Vercel;
+la CI Linux prueba instalación nativa, smoke, lint, typecheck, Vitest y build.
+Paquetenvia no importa Sharp, no usa `next/image` ni ejecuta procesamiento de
+imágenes en una Server Action. Issue #5 queda `REMEDIATED_PENDING_MERGE`, la
+seguridad no se reporta `PASSED` dentro del Draft y owner approval continúa
+pendiente.
 
 ## Rollback matrix
 
@@ -189,7 +193,7 @@ Para retirar exclusivamente REL-000:
 - no borrar backups ni keys;
 - no modificar `docs/normative/v0.6/`.
 
-Las pruebas focales ejecutan 76 casos Python, dos guardas físicas y 14 escenarios
+Las pruebas focales ejecutan 145 casos Python, dos guardas físicas y 14 escenarios
 end-to-end del wrapper/generador. Demuestran que una generación
 fallida/cancelada no publica un reporte exitoso, que se eliminan staging/output
 parciales, que un output previo o evidencia de otro SHA/run/manifest se rechaza,
