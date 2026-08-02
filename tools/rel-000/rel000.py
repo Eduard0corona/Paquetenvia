@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterable
 FORMAT_VERSION = "paquetenvia-rel000-v1"
 SOURCE_PROVENANCE_VERSION = "paquetenvia-rel000-source-v1"
 EXECUTION_EVIDENCE_VERSION = "paquetenvia-rel000-execution-v2"
+WORKFLOW_PROVENANCE_VERSION = "paquetenvia-rel000-workflow-provenance-v1"
 NORMAL_RELEASE_EVIDENCE = "NORMAL_RELEASE_EVIDENCE"
 SECURITY_REMEDIATION = "SECURITY_REMEDIATION"
 REL000_MODES = {NORMAL_RELEASE_EVIDENCE, SECURITY_REMEDIATION}
@@ -55,6 +56,33 @@ EXECUTION_EVIDENCE_JOBS = {
     "delivery-simulation",
     "infrastructure",
     "backup-restore",
+}
+AUTHORITATIVE_JOB_NAMES = {
+    "normative": "Validate normative baseline",
+    "dotnet": "Build and test .NET",
+    "runtime-contracts": "Validate runtime contracts",
+    "web": "Validate web workspace",
+    "realtime-e2e": "Validate real SignalR reconnect",
+    "outbox-signalr-delivery": "Validate outbox SignalR delivery",
+    "driver-stops-pwa": "Validate driver PWA",
+    "public-tracking": "Validate public tracking",
+    "operations-dashboard": "Validate operations dashboard",
+    "delivery-simulation": "Validate 20-delivery simulation",
+    "infrastructure": "Validate local infrastructure",
+    "backup-restore": "Validate backup and restore",
+    "rel000": "Validate MVP-0 internal release evidence",
+}
+EXECUTION_ARTIFACT_NAMES = {
+    "dotnet": "rel000-execution-dotnet",
+    "runtime-contracts": "rel000-execution-runtime-contracts",
+    "realtime-e2e": "rel000-execution-realtime-e2e",
+    "outbox-signalr-delivery": "rel000-execution-outbox-signalr-delivery",
+    "driver-stops-pwa": "rel000-execution-driver-stops-pwa",
+    "public-tracking": "rel000-execution-public-tracking",
+    "operations-dashboard": "rel000-execution-operations-dashboard",
+    "delivery-simulation": "delivery-simulation-results",
+    "infrastructure": "rel000-execution-infrastructure",
+    "backup-restore": "ops002-backup-restore-results",
 }
 REQUIRED_CROSS_TENANT_CATEGORIES = {
     "identity_resolution",
@@ -1491,6 +1519,460 @@ def materialize_execution_artifacts(
     write_json(output_path, {"artifacts": sorted(sanitized, key=lambda item: item["artifact_name"])})
 
 
+def parse_positive_attempt(
+    value: Any,
+    *,
+    missing_reason: str,
+    invalid_reason: str,
+    field: str,
+) -> int:
+    if value is None or value == "":
+        fail(missing_reason, f"{field} is required.", field=field)
+    if isinstance(value, bool):
+        fail(invalid_reason, f"{field} must be a positive integer.", field=field)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        fail(invalid_reason, f"{field} must be a positive integer.", field=field)
+    if parsed <= 0 or str(parsed) != str(value).strip():
+        fail(invalid_reason, f"{field} must be a positive integer.", field=field)
+    return parsed
+
+
+def parse_github_timestamp(value: Any, field: str) -> dt.datetime:
+    if not isinstance(value, str) or not value:
+        fail("WORKFLOW_PROVENANCE_METADATA_INCOMPLETE", "GitHub job metadata is incomplete.", field=field)
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        fail(
+            "WORKFLOW_PROVENANCE_METADATA_INVALID",
+            "GitHub job metadata contains an invalid timestamp.",
+            field=field,
+            error=str(exc),
+        )
+    if parsed.tzinfo is None:
+        fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "GitHub timestamps must include a timezone.", field=field)
+    return parsed
+
+
+def load_workflow_json(path: Path, missing_reason: str, invalid_reason: str) -> Any:
+    if not path.is_file() or path.is_symlink():
+        fail(missing_reason, "Required GitHub workflow metadata is absent.", path=path.name)
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fail(invalid_reason, "GitHub workflow metadata is not parseable.", path=path.name, error=str(exc))
+
+
+def sanitize_workflow_provenance(
+    attempts_directory: Path,
+    artifacts_path: Path,
+    artifact_outputs_json: str,
+    output_path: Path,
+    workflow_run_id: str,
+    current_attempt_value: Any,
+    head_sha_value: str,
+) -> dict[str, Any]:
+    current_attempt = parse_positive_attempt(
+        current_attempt_value,
+        missing_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_MISSING",
+        invalid_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_INVALID",
+        field="current_attempt",
+    )
+    head_sha = validate_sha(head_sha_value, "WORKFLOW_PROVENANCE_HEAD_SHA_INVALID", "head_sha")
+    if not str(workflow_run_id).isdigit() or int(workflow_run_id) <= 0:
+        fail("WORKFLOW_PROVENANCE_RUN_ID_INVALID", "The workflow run ID is invalid.")
+    if not attempts_directory.is_dir() or attempts_directory.is_symlink():
+        fail("WORKFLOW_PROVENANCE_MANIFEST_MISSING", "Workflow attempt metadata is absent.")
+
+    names_to_keys = {name: key for key, name in AUTHORITATIVE_JOB_NAMES.items()}
+    actual_jobs: list[dict[str, Any]] = []
+    actual_by_key: dict[str, list[dict[str, Any]]] = {
+        key: [] for key in AUTHORITATIVE_JOB_NAMES
+    }
+    observed_job_ids: set[int] = set()
+    for attempt in range(1, current_attempt + 1):
+        run_payload = load_workflow_json(
+            attempts_directory / f"attempt-{attempt}-run.json",
+            "WORKFLOW_PROVENANCE_ATTEMPT_METADATA_MISSING",
+            "WORKFLOW_PROVENANCE_METADATA_INVALID",
+        )
+        if not isinstance(run_payload, dict):
+            fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "Workflow attempt metadata must be an object.")
+        if str(run_payload.get("id") or "") != str(workflow_run_id):
+            fail("WORKFLOW_PROVENANCE_RUN_MISMATCH", "Workflow attempt metadata belongs to another run.")
+        raw_attempt = parse_positive_attempt(
+            run_payload.get("run_attempt"),
+            missing_reason="WORKFLOW_PROVENANCE_ATTEMPT_METADATA_INCOMPLETE",
+            invalid_reason="WORKFLOW_PROVENANCE_ATTEMPT_METADATA_INVALID",
+            field="run_attempt",
+        )
+        if raw_attempt != attempt:
+            fail("WORKFLOW_PROVENANCE_ATTEMPT_METADATA_INVALID", "Workflow attempt metadata is out of sequence.")
+        if str(run_payload.get("head_sha") or "") != head_sha:
+            fail("WORKFLOW_PROVENANCE_HEAD_SHA_MISMATCH", "Workflow attempt metadata belongs to another SHA.")
+        attempt_started_at = parse_github_timestamp(
+            run_payload.get("run_started_at"), "run_started_at"
+        )
+
+        jobs_payload = load_workflow_json(
+            attempts_directory / f"attempt-{attempt}-jobs.json",
+            "WORKFLOW_PROVENANCE_JOBS_MISSING",
+            "WORKFLOW_PROVENANCE_METADATA_INVALID",
+        )
+        jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else None
+        if not isinstance(jobs, list):
+            fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "Workflow jobs metadata must contain a jobs array.")
+        if len(jobs) != len(AUTHORITATIVE_JOB_NAMES):
+            fail(
+                "WORKFLOW_PROVENANCE_JOB_SET_INVALID",
+                "Foundation CI must contain exactly the authoritative job set.",
+                expected=len(AUTHORITATIVE_JOB_NAMES),
+                observed=len(jobs),
+                attempt=attempt,
+            )
+        seen_names: set[str] = set()
+        for raw_job in jobs:
+            if not isinstance(raw_job, dict):
+                fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "A GitHub job record is malformed.")
+            job_name = str(raw_job.get("name") or "")
+            if job_name not in names_to_keys:
+                fail("WORKFLOW_PROVENANCE_JOB_UNKNOWN", "GitHub metadata contains an unknown job.", job_name=job_name)
+            if job_name in seen_names:
+                fail("WORKFLOW_PROVENANCE_JOB_AMBIGUOUS", "A job name appears more than once in one attempt.", job_name=job_name)
+            seen_names.add(job_name)
+            raw_job_attempt = parse_positive_attempt(
+                raw_job.get("run_attempt"),
+                missing_reason="WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_MISSING",
+                invalid_reason="WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_INVALID",
+                field="run_attempt",
+            )
+            if raw_job_attempt != attempt:
+                fail("WORKFLOW_PROVENANCE_ATTEMPT_METADATA_INVALID", "A job record belongs to another attempt.")
+            job_id = raw_job.get("id")
+            if not isinstance(job_id, int) or job_id <= 0:
+                fail("WORKFLOW_PROVENANCE_JOB_ID_INVALID", "A GitHub job ID is invalid.", job_name=job_name)
+            if job_id in observed_job_ids:
+                fail("WORKFLOW_PROVENANCE_JOB_ID_REUSED", "A GitHub job ID is reused.", job_id=job_id)
+            observed_job_ids.add(job_id)
+            started_at_text = str(raw_job.get("started_at") or "")
+            completed_at_text = str(raw_job.get("completed_at") or "")
+            started_at = parse_github_timestamp(started_at_text, "started_at")
+            key = names_to_keys[job_name]
+            record = {
+                "job_key": key,
+                "job_name": job_name,
+                "job_id": job_id,
+                "run_attempt": attempt,
+                "status": str(raw_job.get("status") or ""),
+                "conclusion": str(raw_job.get("conclusion") or ""),
+                "_started_at": started_at_text,
+                "_completed_at": completed_at_text,
+            }
+            if started_at >= attempt_started_at:
+                actual_jobs.append(record)
+                actual_by_key[key].append(record)
+                continue
+            retained_matches = [
+                prior
+                for prior in actual_by_key[key]
+                if prior["_started_at"] == started_at_text
+                and prior["_completed_at"] == completed_at_text
+                and prior["status"] == record["status"]
+                and prior["conclusion"] == record["conclusion"]
+            ]
+            if len(retained_matches) != 1:
+                fail(
+                    "WORKFLOW_PROVENANCE_RETAINED_JOB_AMBIGUOUS",
+                    "A retained job cannot be tied to one earlier execution.",
+                    job=key,
+                    attempt=attempt,
+                )
+        if seen_names != set(AUTHORITATIVE_JOB_NAMES.values()):
+            fail("WORKFLOW_PROVENANCE_JOB_SET_INVALID", "The authoritative job set is incomplete.")
+
+    latest_jobs: dict[str, dict[str, Any]] = {}
+    for key, records in actual_by_key.items():
+        if not records:
+            fail("WORKFLOW_PROVENANCE_JOB_MISSING", "An authoritative job has no executed attempt.", job=key)
+        latest_jobs[key] = max(records, key=lambda item: item["run_attempt"])
+    if latest_jobs["rel000"]["run_attempt"] != current_attempt:
+        fail("WORKFLOW_PROVENANCE_AGGREGATOR_ATTEMPT_MISMATCH", "The aggregator did not execute in the current attempt.")
+    for key in REQUIRED_JOBS:
+        latest = latest_jobs[key]
+        if latest["status"] != "completed" or latest["conclusion"] != "success":
+            fail(
+                "WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL",
+                "The latest executed authoritative producer job did not succeed.",
+                job=key,
+                producer_attempt=latest["run_attempt"],
+                status=latest["status"],
+                conclusion=latest["conclusion"],
+            )
+
+    artifacts_payload = load_workflow_json(
+        artifacts_path,
+        "WORKFLOW_PROVENANCE_ARTIFACT_METADATA_MISSING",
+        "WORKFLOW_PROVENANCE_ARTIFACT_METADATA_INVALID",
+    )
+    raw_artifacts = artifacts_payload.get("artifacts") if isinstance(artifacts_payload, dict) else None
+    if not isinstance(raw_artifacts, list):
+        fail("WORKFLOW_PROVENANCE_ARTIFACT_METADATA_INVALID", "GitHub artifact metadata is invalid.")
+    try:
+        outputs = json.loads(artifact_outputs_json)
+    except json.JSONDecodeError as exc:
+        fail("WORKFLOW_PROVENANCE_ARTIFACT_OUTPUTS_INVALID", "Artifact outputs are not parseable.", error=str(exc))
+    if not isinstance(outputs, list):
+        fail("WORKFLOW_PROVENANCE_ARTIFACT_OUTPUTS_INVALID", "Artifact outputs must be an array.")
+    output_by_name: dict[str, dict[str, Any]] = {}
+    for output in outputs:
+        if not isinstance(output, dict):
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_OUTPUTS_INVALID", "An artifact output is malformed.")
+        name = str(output.get("artifact_name") or "")
+        if name in output_by_name:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_AMBIGUOUS", "Artifact outputs contain duplicate names.", artifact=name)
+        output_by_name[name] = output
+    if set(output_by_name) != set(EXECUTION_ARTIFACT_NAMES.values()):
+        fail("WORKFLOW_PROVENANCE_ARTIFACT_SET_INVALID", "Artifact outputs do not match the authoritative set.")
+
+    sanitized_artifacts: list[dict[str, Any]] = []
+    selected_ids: set[int] = set()
+    for job_key, expected_name in EXECUTION_ARTIFACT_NAMES.items():
+        output = output_by_name[expected_name]
+        output_id = str(output.get("artifact_id") or "")
+        if not output_id.isdigit() or int(output_id) <= 0:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_ID_INVALID", "An artifact output ID is invalid.", job=job_key)
+        artifact_id = int(output_id)
+        if artifact_id in selected_ids:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_REUSED", "One artifact ID cannot satisfy two jobs.", artifact_id=artifact_id)
+        selected_ids.add(artifact_id)
+        output_digest = normalized_sha256(
+            str(output.get("artifact_digest") or ""),
+            "WORKFLOW_PROVENANCE_ARTIFACT_DIGEST_INVALID",
+            "artifact_digest",
+        )
+        candidates = [item for item in raw_artifacts if isinstance(item, dict) and item.get("id") == artifact_id]
+        if len(candidates) != 1:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_AMBIGUOUS", "Artifact metadata does not identify one candidate.", artifact_id=artifact_id)
+        artifact = candidates[0]
+        if str(artifact.get("name") or "") != expected_name:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_NAME_MISMATCH", "Artifact metadata has an unexpected name.", job=job_key)
+        if artifact.get("expired") is True:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_EXPIRED", "An authoritative artifact is expired.", job=job_key)
+        metadata_digest = normalized_sha256(
+            str(artifact.get("digest") or ""),
+            "WORKFLOW_PROVENANCE_ARTIFACT_DIGEST_INVALID",
+            "artifact_digest",
+        )
+        if metadata_digest != output_digest:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_DIGEST_MISMATCH", "Artifact output and GitHub metadata digests differ.", job=job_key)
+        artifact_run = artifact.get("workflow_run")
+        if not isinstance(artifact_run, dict):
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_METADATA_INCOMPLETE", "Artifact workflow metadata is absent.", job=job_key)
+        if str(artifact_run.get("id") or "") != str(workflow_run_id):
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_RUN_MISMATCH", "An artifact belongs to another workflow run.", job=job_key)
+        if str(artifact_run.get("head_sha") or "") != head_sha:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_SHA_MISMATCH", "An artifact belongs to another source SHA.", job=job_key)
+        producer = latest_jobs[job_key]
+        sanitized_artifacts.append(
+            {
+                "job_key": job_key,
+                "artifact_name": expected_name,
+                "artifact_id": artifact_id,
+                "artifact_digest": f"sha256:{metadata_digest}",
+                "producer_attempt": producer["run_attempt"],
+                "producer_job_id": producer["job_id"],
+                "workflow_run_id": str(workflow_run_id),
+                "head_sha": head_sha,
+            }
+        )
+
+    sanitized_jobs = [
+        {key: value for key, value in record.items() if not key.startswith("_")}
+        for record in sorted(actual_jobs, key=lambda item: (item["run_attempt"], item["job_key"]))
+    ]
+    manifest = {
+        "format_version": WORKFLOW_PROVENANCE_VERSION,
+        "workflow_run_id": str(workflow_run_id),
+        "head_sha": head_sha,
+        "current_attempt": current_attempt,
+        "jobs": sanitized_jobs,
+        "artifacts": sorted(sanitized_artifacts, key=lambda item: item["job_key"]),
+    }
+    write_json(output_path, manifest)
+    return manifest
+
+
+def validate_workflow_provenance(
+    manifest_path: Path,
+    trace: dict[str, str],
+    workflow_run_id: str,
+    current_attempt_value: Any,
+) -> dict[str, Any]:
+    payload = load_workflow_json(
+        manifest_path,
+        "WORKFLOW_PROVENANCE_MANIFEST_MISSING",
+        "WORKFLOW_PROVENANCE_MANIFEST_INVALID",
+    )
+    if not isinstance(payload, dict) or payload.get("format_version") != WORKFLOW_PROVENANCE_VERSION:
+        fail("WORKFLOW_PROVENANCE_MANIFEST_INVALID", "The workflow provenance format is invalid.")
+    current_attempt = parse_positive_attempt(
+        current_attempt_value,
+        missing_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_MISSING",
+        invalid_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_INVALID",
+        field="current_attempt",
+    )
+    manifest_attempt = parse_positive_attempt(
+        payload.get("current_attempt"),
+        missing_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_MISSING",
+        invalid_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_INVALID",
+        field="current_attempt",
+    )
+    if manifest_attempt != current_attempt:
+        fail("WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_MISMATCH", "The provenance manifest targets another aggregator attempt.")
+    if str(payload.get("workflow_run_id") or "") != str(workflow_run_id):
+        fail("WORKFLOW_PROVENANCE_RUN_MISMATCH", "The provenance manifest belongs to another run.")
+    if str(payload.get("head_sha") or "") != trace["source_head_sha"]:
+        fail("WORKFLOW_PROVENANCE_HEAD_SHA_MISMATCH", "The provenance manifest belongs to another source SHA.")
+
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list):
+        fail("WORKFLOW_PROVENANCE_MANIFEST_INCOMPLETE", "The provenance manifest has no jobs array.")
+    by_key: dict[str, list[dict[str, Any]]] = {key: [] for key in AUTHORITATIVE_JOB_NAMES}
+    seen_job_attempts: set[tuple[str, int]] = set()
+    seen_job_ids: set[int] = set()
+    for job in jobs:
+        if not isinstance(job, dict):
+            fail("WORKFLOW_PROVENANCE_JOB_INVALID", "A provenance job is malformed.")
+        key = str(job.get("job_key") or "")
+        if key not in AUTHORITATIVE_JOB_NAMES:
+            fail("WORKFLOW_PROVENANCE_JOB_UNKNOWN", "The provenance manifest contains an unknown job.", job=key)
+        if str(job.get("job_name") or "") != AUTHORITATIVE_JOB_NAMES[key]:
+            fail("WORKFLOW_PROVENANCE_JOB_NAME_MISMATCH", "A job key is associated with the wrong name.", job=key)
+        attempt = parse_positive_attempt(
+            job.get("run_attempt"),
+            missing_reason="WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_MISSING",
+            invalid_reason="WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_INVALID",
+            field="run_attempt",
+        )
+        if attempt > current_attempt:
+            fail("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_FUTURE", "A producer attempt is in the future.", job=key)
+        identity = (key, attempt)
+        if identity in seen_job_attempts:
+            fail("WORKFLOW_PROVENANCE_JOB_AMBIGUOUS", "A job has multiple executions in one attempt.", job=key, attempt=attempt)
+        seen_job_attempts.add(identity)
+        job_id = job.get("job_id")
+        if not isinstance(job_id, int) or job_id <= 0:
+            fail("WORKFLOW_PROVENANCE_JOB_ID_INVALID", "A provenance job ID is invalid.", job=key)
+        if job_id in seen_job_ids:
+            fail("WORKFLOW_PROVENANCE_JOB_ID_REUSED", "A provenance job ID is reused.", job_id=job_id)
+        seen_job_ids.add(job_id)
+        normalized = {**job, "run_attempt": attempt}
+        by_key[key].append(normalized)
+    latest_jobs: dict[str, dict[str, Any]] = {}
+    for key, records in by_key.items():
+        if not records:
+            fail("WORKFLOW_PROVENANCE_JOB_MISSING", "An authoritative job is absent.", job=key)
+        latest_jobs[key] = max(records, key=lambda item: item["run_attempt"])
+    if latest_jobs["rel000"]["run_attempt"] != current_attempt:
+        fail("WORKFLOW_PROVENANCE_AGGREGATOR_ATTEMPT_MISMATCH", "The current aggregator execution is absent.")
+    for key in REQUIRED_JOBS:
+        latest = latest_jobs[key]
+        if latest.get("status") != "completed" or latest.get("conclusion") != "success":
+            fail(
+                "WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL",
+                "The latest producer execution is not successful.",
+                job=key,
+                producer_attempt=latest["run_attempt"],
+            )
+
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        fail("WORKFLOW_PROVENANCE_MANIFEST_INCOMPLETE", "The provenance manifest has no artifacts array.")
+    artifacts_by_job: dict[str, dict[str, Any]] = {}
+    seen_artifact_ids: set[int] = set()
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_INVALID", "A provenance artifact is malformed.")
+        job_key = str(artifact.get("job_key") or "")
+        if job_key not in EXECUTION_ARTIFACT_NAMES:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_JOB_UNKNOWN", "An artifact references an unknown producer.", job=job_key)
+        if job_key in artifacts_by_job:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_AMBIGUOUS", "A producer has multiple eligible artifacts.", job=job_key)
+        expected_name = EXECUTION_ARTIFACT_NAMES[job_key]
+        if str(artifact.get("artifact_name") or "") != expected_name:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_NAME_MISMATCH", "An artifact name does not match its producer.", job=job_key)
+        artifact_id = artifact.get("artifact_id")
+        if not isinstance(artifact_id, int) or artifact_id <= 0:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_ID_INVALID", "An artifact ID is invalid.", job=job_key)
+        if artifact_id in seen_artifact_ids:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_REUSED", "One artifact cannot satisfy two producers.", artifact_id=artifact_id)
+        seen_artifact_ids.add(artifact_id)
+        digest = normalized_sha256(
+            str(artifact.get("artifact_digest") or ""),
+            "WORKFLOW_PROVENANCE_ARTIFACT_DIGEST_INVALID",
+            "artifact_digest",
+        )
+        producer_attempt = parse_positive_attempt(
+            artifact.get("producer_attempt"),
+            missing_reason="WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_MISSING",
+            invalid_reason="WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_INVALID",
+            field="producer_attempt",
+        )
+        if producer_attempt > current_attempt:
+            fail("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_FUTURE", "An artifact producer attempt is in the future.", job=job_key)
+        producer_matches = [job for job in by_key[job_key] if job["run_attempt"] == producer_attempt]
+        if len(producer_matches) != 1:
+            fail("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_UNKNOWN", "An artifact producer attempt is absent from job metadata.", job=job_key)
+        latest = latest_jobs[job_key]
+        if producer_attempt < latest["run_attempt"]:
+            fail(
+                "WORKFLOW_PROVENANCE_ARTIFACT_STALE_AFTER_RERUN",
+                "An artifact predates the latest executed producer job.",
+                job=job_key,
+                producer_attempt=producer_attempt,
+                latest_attempt=latest["run_attempt"],
+            )
+        if producer_attempt != latest["run_attempt"]:
+            fail("WORKFLOW_PROVENANCE_PRODUCER_ATTEMPT_MISMATCH", "An artifact does not match the latest producer attempt.", job=job_key)
+        if artifact.get("producer_job_id") != latest["job_id"]:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_JOB_MISMATCH", "An artifact is associated with the wrong producer job ID.", job=job_key)
+        if str(artifact.get("workflow_run_id") or "") != str(workflow_run_id):
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_RUN_MISMATCH", "An artifact belongs to another workflow run.", job=job_key)
+        if str(artifact.get("head_sha") or "") != trace["source_head_sha"]:
+            fail("WORKFLOW_PROVENANCE_ARTIFACT_SHA_MISMATCH", "An artifact belongs to another source SHA.", job=job_key)
+        artifacts_by_job[job_key] = {
+            **artifact,
+            "artifact_digest": digest,
+            "producer_attempt": producer_attempt,
+        }
+    missing_artifacts = sorted(set(EXECUTION_ARTIFACT_NAMES) - set(artifacts_by_job))
+    if missing_artifacts:
+        fail("WORKFLOW_PROVENANCE_ARTIFACT_MISSING", "Authoritative artifacts are missing.", jobs=missing_artifacts)
+
+    attempts = {artifact["producer_attempt"] for artifact in artifacts_by_job.values()}
+    report = {
+        "workflow_run_id": str(workflow_run_id),
+        "aggregator_attempt": current_attempt,
+        "mixed_attempt_evidence": len(attempts) > 1,
+        "jobs": [
+            {
+                "job": key,
+                "producer_attempt": artifact["producer_attempt"],
+                "artifact_id": artifact["artifact_id"],
+                "artifact_digest": f"sha256:{artifact['artifact_digest']}",
+            }
+            for key, artifact in sorted(artifacts_by_job.items())
+        ],
+    }
+    return {
+        "latest_jobs": latest_jobs,
+        "artifacts_by_job": artifacts_by_job,
+        "report": report,
+    }
+
+
 def synthetic_generation(args: argparse.Namespace) -> None:
     if os.environ.get("REL000_TEST_MODE") != "true":
         fail("SYNTHETIC_MODE_FORBIDDEN", "Synthetic generation is restricted to REL-000 tests.")
@@ -1520,22 +2002,20 @@ def synthetic_generation(args: argparse.Namespace) -> None:
 
 def load_execution_evidence(
     directory: Path,
-    artifact_metadata_path: Path,
+    workflow_provenance_path: Path,
     trace: dict[str, str],
     workflow_run_id: str,
     workflow_run_attempt: str,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     if not directory.is_dir():
         fail("EXECUTION_ARTIFACT_MISSING", "The execution artifact directory is absent.")
-    metadata_payload = load_json(artifact_metadata_path)
-    metadata_entries = metadata_payload.get("artifacts") if isinstance(metadata_payload, dict) else None
-    if not isinstance(metadata_entries, list):
-        fail("EXECUTION_ARTIFACT_METADATA_INVALID", "Execution artifact metadata is invalid.")
-    metadata = {
-        str(entry.get("artifact_name")): entry
-        for entry in metadata_entries
-        if isinstance(entry, dict)
-    }
+    provenance = validate_workflow_provenance(
+        workflow_provenance_path,
+        trace,
+        workflow_run_id,
+        workflow_run_attempt,
+    )
+    metadata_by_job = provenance["artifacts_by_job"]
 
     manifests = list(directory.rglob("rel000-execution-results.json"))
     if not manifests:
@@ -1547,10 +2027,49 @@ def load_execution_evidence(
         if manifest_path.is_symlink():
             fail("EXECUTION_RESULT_PATH_INVALID", "Execution manifests cannot be links.")
         manifest = load_json(manifest_path)
+        job = str(manifest.get("job") or "")
+        artifact_name = str(manifest.get("artifact_name") or "")
+        if job not in EXECUTION_EVIDENCE_JOBS or job in artifacts_by_job:
+            fail("EXECUTION_JOB_INVALID", "Execution evidence has an unknown or duplicate job.", job=job)
+        artifact = metadata_by_job.get(job)
+        if artifact is None:
+            fail(
+                "EXECUTION_ARTIFACT_METADATA_MISSING",
+                "Execution artifact metadata is absent.",
+                job=job,
+            )
+        if artifact_name != EXECUTION_ARTIFACT_NAMES[job] or artifact_name != artifact["artifact_name"]:
+            fail(
+                "EXECUTION_ARTIFACT_NAME_MISMATCH",
+                "Execution evidence declares an artifact that does not belong to its producer.",
+                job=job,
+            )
+        manifest_attempt = parse_positive_attempt(
+            manifest.get("workflow_run_attempt"),
+            missing_reason="EXECUTION_PRODUCER_ATTEMPT_MISSING",
+            invalid_reason="EXECUTION_PRODUCER_ATTEMPT_INVALID",
+            field="workflow_run_attempt",
+        )
+        producer_attempt = artifact["producer_attempt"]
+        if manifest_attempt < producer_attempt:
+            fail(
+                "EXECUTION_ARTIFACT_STALE_AFTER_RERUN",
+                "Execution evidence predates the latest producer execution.",
+                job=job,
+                producer_attempt=manifest_attempt,
+                latest_attempt=producer_attempt,
+            )
+        if manifest_attempt != producer_attempt:
+            fail(
+                "EXECUTION_PRODUCER_ATTEMPT_MISMATCH",
+                "Execution evidence does not match its eligible producer attempt.",
+                job=job,
+                expected=producer_attempt,
+                observed=manifest_attempt,
+            )
         expected_fields = {
             "format_version": EXECUTION_EVIDENCE_VERSION,
             "workflow_run_id": str(workflow_run_id),
-            "workflow_run_attempt": str(workflow_run_attempt),
             "source_head_sha": trace["source_head_sha"],
             "tested_git_sha": trace["tested_git_sha"],
             "base_main_sha": trace["base_main_sha"],
@@ -1563,17 +2082,6 @@ def load_execution_evidence(
                     else "EXECUTION_RESULT_SHA_MISMATCH"
                 )
                 fail(reason, "Execution evidence is not from the current run.", field=field)
-        job = str(manifest.get("job") or "")
-        artifact_name = str(manifest.get("artifact_name") or "")
-        if job not in EXECUTION_EVIDENCE_JOBS or job in artifacts_by_job:
-            fail("EXECUTION_JOB_INVALID", "Execution evidence has an unknown or duplicate job.", job=job)
-        artifact = metadata.get(artifact_name)
-        if artifact is None:
-            fail(
-                "EXECUTION_ARTIFACT_METADATA_MISSING",
-                "Execution artifact metadata is absent.",
-                artifact=artifact_name,
-            )
         if str(artifact.get("workflow_run_id")) != str(workflow_run_id):
             fail("EXECUTION_ARTIFACT_RUN_MISMATCH", "Execution artifact metadata is stale.")
         artifact_id = artifact.get("artifact_id")
@@ -1641,13 +2149,13 @@ def load_execution_evidence(
                 "tested_git_sha": trace["tested_git_sha"],
                 "base_main_sha": trace["base_main_sha"],
                 "workflow_run_id": str(workflow_run_id),
-                "workflow_run_attempt": str(workflow_run_attempt),
+                "workflow_run_attempt": str(producer_attempt),
             }
             validate_execution_context(
                 enriched,
                 trace,
                 workflow_run_id,
-                workflow_run_attempt,
+                str(producer_attempt),
             )
             key = (
                 enriched["job"],
@@ -1674,7 +2182,9 @@ def load_execution_evidence(
             "tested_git_sha": trace["tested_git_sha"],
             "base_main_sha": trace["base_main_sha"],
             "workflow_run_id": str(workflow_run_id),
-            "workflow_run_attempt": str(workflow_run_attempt),
+            "workflow_run_attempt": str(producer_attempt),
+            "producer_attempt": producer_attempt,
+            "producer_job_id": artifact["producer_job_id"],
         }
 
     missing_jobs = sorted(EXECUTION_EVIDENCE_JOBS - set(artifacts_by_job))
@@ -1684,7 +2194,7 @@ def load_execution_evidence(
             "Required jobs did not publish structured execution evidence.",
             jobs=missing_jobs,
         )
-    return tests, artifacts_by_job
+    return tests, artifacts_by_job, provenance["report"]
 
 
 def match_execution_result(
@@ -3001,6 +3511,7 @@ def release_report(
     decisions: dict[str, Any],
     security: dict[str, Any],
     artifacts: dict[str, dict[str, Any]],
+    execution_provenance: dict[str, Any],
     focused_tests: dict[str, Any],
 ) -> dict[str, Any]:
     base_totals = security["base_totals"]
@@ -3166,6 +3677,7 @@ def release_report(
         "work_allowed": decisions["work_allowed"],
         "normative_blockers": [],
         "artifact_sources": artifacts,
+        "execution_provenance": execution_provenance,
         "owner_approval_status": "PENDING",
         "rel000_def_001_status": "RESOLVED",
         "normative_scope_status": "RESOLVED",
@@ -3281,9 +3793,9 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     validate_extension_not_started(repository_root, item_input)
     job_results = json.loads(args.job_results_json)
     validate_jobs(job_results)
-    execution_results, execution_artifacts = load_execution_evidence(
+    execution_results, execution_artifacts, execution_provenance = load_execution_evidence(
         args.execution_results_directory,
-        args.execution_artifacts,
+        args.workflow_provenance,
         trace,
         args.workflow_run_id,
         args.workflow_run_attempt,
@@ -3347,7 +3859,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         args.ops001_artifact_digest,
         trace,
         args.workflow_run_id,
-        args.workflow_run_attempt,
+        str(execution_artifacts["delivery-simulation"]["producer_attempt"]),
         lambda path: path.endswith(".json") or path.endswith(".trx"),
     )
     ops002_artifact = validate_artifact(
@@ -3357,7 +3869,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         args.ops002_artifact_digest,
         trace,
         args.workflow_run_id,
-        args.workflow_run_attempt,
+        str(execution_artifacts["backup-restore"]["producer_attempt"]),
         lambda path: path.endswith(".json") or path.endswith(".tar.gz.age"),
     )
     ops001 = validate_ops001(args.ops001_directory)
@@ -3380,6 +3892,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         decisions,
         security,
         artifacts,
+        execution_provenance,
         focused_tests,
     )
     validate_owner_state(report)
@@ -3412,6 +3925,37 @@ def provenance_command(args: argparse.Namespace) -> None:
         validate_sha(args.base_main_sha, "BASE_MAIN_SHA_MALFORMED", "base_main_sha"),
         args.git_relationship,
     )
+
+
+def replay_execution_provenance(args: argparse.Namespace) -> dict[str, Any]:
+    trace = {
+        "source_head_sha": validate_sha(
+            args.source_head_sha, "SOURCE_HEAD_SHA_MALFORMED", "source_head_sha"
+        ),
+        "tested_git_sha": validate_sha(
+            args.tested_git_sha, "TESTED_GIT_SHA_MALFORMED", "tested_git_sha"
+        ),
+        "base_main_sha": validate_sha(
+            args.base_main_sha, "BASE_MAIN_SHA_MALFORMED", "base_main_sha"
+        ),
+    }
+    tests, artifacts, provenance = load_execution_evidence(
+        args.execution_results_directory,
+        args.workflow_provenance,
+        trace,
+        args.workflow_run_id,
+        args.workflow_run_attempt,
+    )
+    result = {
+        "result": "HISTORICAL_PARTIAL_RERUN_PROVENANCE_REPLAY_PASSED",
+        "workflow_run_id": str(args.workflow_run_id),
+        "aggregator_attempt": provenance["aggregator_attempt"],
+        "mixed_attempt_evidence": provenance["mixed_attempt_evidence"],
+        "artifacts_validated": len(artifacts),
+        "tests_validated": len(tests),
+    }
+    print(json.dumps(result, sort_keys=True))
+    return result
 
 
 def sanitize_audit(
@@ -3662,6 +4206,26 @@ def build_parser() -> argparse.ArgumentParser:
     artifact_outputs.add_argument("--output", type=Path, required=True)
     artifact_outputs.add_argument("--workflow-run-id", required=True)
 
+    workflow_provenance = subparsers.add_parser("sanitize-workflow-provenance")
+    workflow_provenance.add_argument("--attempts-directory", type=Path, required=True)
+    workflow_provenance.add_argument("--artifacts", type=Path, required=True)
+    artifact_outputs_source = workflow_provenance.add_mutually_exclusive_group(required=True)
+    artifact_outputs_source.add_argument("--artifact-outputs-json")
+    artifact_outputs_source.add_argument("--artifact-outputs", type=Path)
+    workflow_provenance.add_argument("--output", type=Path, required=True)
+    workflow_provenance.add_argument("--workflow-run-id", required=True)
+    workflow_provenance.add_argument("--current-attempt", required=True)
+    workflow_provenance.add_argument("--head-sha", required=True)
+
+    replay = subparsers.add_parser("replay-execution-provenance")
+    replay.add_argument("--execution-results-directory", type=Path, required=True)
+    replay.add_argument("--workflow-provenance", type=Path, required=True)
+    replay.add_argument("--workflow-run-id", required=True)
+    replay.add_argument("--workflow-run-attempt", required=True)
+    replay.add_argument("--source-head-sha", required=True)
+    replay.add_argument("--tested-git-sha", required=True)
+    replay.add_argument("--base-main-sha", required=True)
+
     synthetic = subparsers.add_parser("synthetic-generate")
     synthetic.add_argument(
         "--scenario",
@@ -3685,7 +4249,13 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--python-test-results", type=Path, required=True)
     validate.add_argument("--physical-test-results", type=Path, required=True)
     validate.add_argument("--execution-results-directory", type=Path, required=True)
-    validate.add_argument("--execution-artifacts", type=Path, required=True)
+    validate.add_argument(
+        "--workflow-provenance",
+        "--execution-artifacts",
+        dest="workflow_provenance",
+        type=Path,
+        required=True,
+    )
     validate.add_argument("--ops001-directory", type=Path, required=True)
     validate.add_argument("--ops002-directory", type=Path, required=True)
     validate.add_argument("--output-directory", type=Path, required=True)
@@ -3757,6 +4327,25 @@ def main() -> int:
                 args.output,
                 args.workflow_run_id,
             )
+            return 0
+        if args.command == "sanitize-workflow-provenance":
+            artifact_outputs_json = (
+                args.artifact_outputs.read_text(encoding="utf-8-sig")
+                if args.artifact_outputs is not None
+                else args.artifact_outputs_json
+            )
+            sanitize_workflow_provenance(
+                args.attempts_directory,
+                args.artifacts,
+                artifact_outputs_json,
+                args.output,
+                args.workflow_run_id,
+                args.current_attempt,
+                args.head_sha,
+            )
+            return 0
+        if args.command == "replay-execution-provenance":
+            replay_execution_provenance(args)
             return 0
         if args.command == "synthetic-generate":
             synthetic_generation(args)
