@@ -233,6 +233,9 @@ jobs:
       - name: Install dependencies
         run: pnpm --dir apps/web install --frozen-lockfile
 
+      - name: Verify Sharp native runtime through Next.js
+        run: node ./tools/security/sharp-runtime-smoke.mjs
+
       - name: Lint
         run: pnpm --dir apps/web lint
 
@@ -1331,6 +1334,7 @@ jobs:
       REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
       REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-sharp-035-override' && 'ISSUE-5-SHARP-035-REMEDIATION' || '' }}
       REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -1447,10 +1451,15 @@ jobs:
           mode="$(
             python ./tools/rel-000/rel000.py resolve-mode \
               --policy "$REL000_REMEDIATION_POLICY_PATH" \
-              --source-branch "$REL000_SOURCE_BRANCH"
+              --source-branch "$REL000_SOURCE_BRANCH" \
+              --remediation-id "$REL000_REMEDIATION_ID"
           )"
           echo "REL000_MODE=$mode" >> "$GITHUB_ENV"
           pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Execute Sharp runtime smoke for REL-000
+        shell: bash
+        run: node ./tools/security/sharp-runtime-smoke.mjs > "$RUNNER_TEMP/rel000-sharp-runtime-smoke.json"
 
       - name: Capture and sanitize real base and branch audits
         shell: bash
@@ -1500,6 +1509,7 @@ jobs:
           REL000_SECURITY_TRACKING_ISSUE_PATH: ${{ runner.temp }}/rel000-security-tracking.json
           REL000_BASE_AUDIT_PATH: ${{ runner.temp }}/rel000-base-audit.json
           REL000_BRANCH_AUDIT_PATH: ${{ runner.temp }}/rel000-branch-audit.json
+          REL000_SHARP_RUNTIME_SMOKE_PATH: ${{ runner.temp }}/rel000-sharp-runtime-smoke.json
           REL000_EXECUTION_RESULTS_DIRECTORY: ${{ runner.temp }}
           REL000_EXECUTION_ARTIFACTS_PATH: ${{ runner.temp }}/rel000-execution-artifacts.json
         run: ./tools/test-rel-000-internal-release.ps1 -CI
@@ -1545,6 +1555,7 @@ jobs:
             "rel000-base-audit.json",
             "rel000-branch-audit-raw.json",
             "rel000-branch-audit.json",
+            "rel000-sharp-runtime-smoke.json",
             "rel000-execution-artifacts.json"
           )) {
             $path = Join-Path $env:RUNNER_TEMP $name
