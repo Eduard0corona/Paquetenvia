@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7459,
-      "sha256": "fc66876ae727091665ee2087c1620b29ddf35ebc10cc6f8e5caf7b5ef2ba2643"
+      "sha256": "d4e2f09df67802c9298cb9ec8e5db4f62ade012bb02658019f0ec841050c07d6"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -69,8 +69,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 8636,
-      "sha256": "28c2f3f09783f8d3ec4531626a32032192dcdfd6bfd0ab45e6990d141ed081a2"
+      "bytes": 8917,
+      "sha256": "ec57f0d8bfe1f7a02a9280e9b105acfee16b81edbec48e3da45e4f72a4ea8351"
     },
     {
       "path": "docs/adr/ADR-001_MODULAR_MONOLITH.md",

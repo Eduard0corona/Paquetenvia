@@ -1556,6 +1556,9 @@ jobs:
           REL000_SHARP_RUNTIME_SMOKE_PATH: ${{ runner.temp }}/rel000-sharp-runtime-smoke.json
           REL000_EXECUTION_RESULTS_DIRECTORY: ${{ runner.temp }}
           REL000_WORKFLOW_PROVENANCE_PATH: ${{ runner.temp }}/rel000-workflow-provenance.json
+          REL000_DECISION_RECORD_PATH: docs/releases/mvp-0-owner-decision.json
+          REL000_APPROVED_EVIDENCE_MANIFEST_PATH: docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json
+          REL000_APPROVED_EVIDENCE_DIRECTORY: docs/releases/evidence/rel-000-owner-001
         run: ./tools/test-rel-000-internal-release.ps1 -CI
 
       - name: Publish only redacted REL-000 evidence

@@ -8,12 +8,15 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 import io
+import zipfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 
@@ -604,6 +607,56 @@ class Rel000FocusedTests(unittest.TestCase):
         ] = "VERIFIED"
         self.assert_reason("OWNER_APPROVAL_FALSELY_ASSERTED", lambda: self.validate_items(evidence))
 
+    def test_05f_rel000_verified_requires_valid_owner_and_focused_evidence(self):
+        evidence = copy.deepcopy(self.item_evidence)
+        implementation = self.root / "tools/rel-000/rel000.py"
+        tests = self.root / "tools/rel-000/test_rel000.py"
+        rollback = self.root / "docs/releases/mvp-0-internal-release-report.md"
+        for path in (implementation, tests, rollback):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("evidence\n", encoding="utf-8")
+        item = next(item for item in evidence["items"] if item["id"] == "REL-000")
+        item.update(
+            implementation_status="VERIFIED",
+            implementation_commits_or_prs=["a" * 40],
+            implementation_paths=["tools/rel-000/rel000.py"],
+            required_test_sources=["tools/rel-000/test_rel000.py"],
+            required_tests=[
+                {
+                    "source_path": "tools/rel-000/test_rel000.py",
+                    "job": "rel000",
+                    "test_project": "tools/rel-000/test_rel000.py",
+                    "fully_qualified_test_name": "OwnerApprovalDecisionTests",
+                    "category": "REL000_OWNER_APPROVAL",
+                }
+            ],
+            authoritative_ci_jobs=["rel000"],
+            rollback_reference="docs/releases/mvp-0-internal-release-report.md#rollback-rel-000",
+            open_gates=[],
+        )
+        result = rel000.validate_item_evidence(
+            self.root,
+            self.selected,
+            self.by_id,
+            evidence,
+            "a" * 40,
+            self.job_results,
+            self.execution_results,
+            owner_approval={"record": {}},
+            focused_tests={
+                "focused_tests_expected": 1,
+                "focused_tests_discovered": 1,
+                "focused_tests_executed": 1,
+                "focused_tests_passed": 1,
+                "focused_tests_failed": 0,
+                "focused_tests_skipped": 0,
+            },
+            ancestor_checker=lambda *_: True,
+        )
+        rel_item = next(item for item in result["items"] if item["id"] == "REL-000")
+        self.assertEqual("VERIFIED", rel_item["implementation_status"])
+        self.assertEqual("PASSED", rel_item["required_tests"][0]["outcome"])
+
     def test_06_dependency_missing(self):
         normative = {"backlog": {"items": copy.deepcopy(self.all_items)}}
         normative["backlog"]["items"][0]["depends_on"] = ["MISSING-001"]
@@ -1047,7 +1100,7 @@ class Rel000FocusedTests(unittest.TestCase):
 
     def test_32_ext001_started(self):
         self.assert_reason(
-            "EXT001_STARTED",
+            "EXT001_ALREADY_STARTED",
             lambda: rel000.validate_extension_not_started(
                 self.root, {"ext001_started": True}
             ),
@@ -1589,6 +1642,696 @@ class Rel000FocusedTests(unittest.TestCase):
         self.assertEqual(result["python_tests_passed"], result["python_tests_executed"])
         self.assertEqual(0, result["python_tests_failed"])
         self.assertEqual(0, result["python_tests_skipped"])
+
+
+class OwnerApprovalDecisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-owner-tests-")
+        self.root = Path(self.temp.name)
+        self.record = json.loads(
+            (REPOSITORY_ROOT / rel000.OWNER_DECISION_PATH).read_text(encoding="utf-8")
+        )
+        self.historical_source = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(REPOSITORY_ROOT),
+                "show",
+                f"{rel000.APPROVED_EVIDENCE_MAIN_SHA}:{rel000.APPROVED_EXT001_SOURCE_PATH}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def valid_metadata(self) -> dict:
+        return {
+            "id": rel000.APPROVED_ARTIFACT_ID,
+            "name": rel000.APPROVED_ARTIFACT_NAME,
+            "size_in_bytes": rel000.APPROVED_ARTIFACT_ZIP_SIZE,
+            "digest": rel000.APPROVED_ARTIFACT_DIGEST,
+            "expired": False,
+            "created_at": rel000.APPROVED_ARTIFACT_CREATED_AT,
+            "expires_at": "2026-08-16T13:38:41Z",
+            "workflow_run": {
+                "id": int(rel000.APPROVED_WORKFLOW_RUN_ID),
+                "head_sha": rel000.APPROVED_EVIDENCE_MAIN_SHA,
+            },
+        }
+
+    def valid_zip(self) -> Path:
+        path = self.root / "approved.zip"
+        source = REPOSITORY_ROOT / rel000.APPROVED_SNAPSHOT_DIRECTORY
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name in sorted(rel000.APPROVED_SNAPSHOT_FILES):
+                archive.writestr(name, (source / name).read_bytes())
+        return path
+
+    def validate_artifact(self, metadata=None, zip_path=None):
+        path = zip_path or self.valid_zip()
+        value = metadata or self.valid_metadata()
+        value["size_in_bytes"] = path.stat().st_size
+        with patch.object(
+            rel000,
+            "sha256_file",
+            return_value=rel000.APPROVED_ARTIFACT_DIGEST.removeprefix("sha256:"),
+        ), patch.object(rel000, "APPROVED_ARTIFACT_ZIP_SIZE", path.stat().st_size):
+            return rel000.validate_approved_artifact(
+                value,
+                path,
+                now=rel000.dt.datetime(2026, 8, 2, tzinfo=rel000.dt.timezone.utc),
+            )
+
+    def approved_report(self) -> dict:
+        return {
+            "dependency_security_status": "PASSED",
+            "technical_evidence_status": "PASSED",
+            "mvp0_p0_items_expected": 29,
+            "mvp0_p0_items_evaluated": 29,
+            "mvp0_p0_items_verified": 29,
+            "mvp0_p0_items_blocked": 0,
+            "blocked_ids": [],
+            "known_security_issues": [{"id": "Issue #5", "url": "https://example.invalid"}],
+            "additional_security_tracking_issue": {"number": 30, "url": "https://example.invalid"},
+        }
+
+    def approval(self) -> dict:
+        return {
+            "record": self.record,
+            "decision_record_sha": "d" * 40,
+            "decision_record_blob_sha": "e" * 40,
+            "artifact": {
+                "technical_artifact_contains_ext001_started": False,
+                "storage": "VERSIONED_REDACTED_SNAPSHOT",
+                "manifest_path": rel000.APPROVED_SNAPSHOT_MANIFEST_PATH,
+                "snapshot_file_count": 4,
+                "live_artifact_required": False,
+                "original_expires_at": rel000.APPROVED_ARTIFACT_EXPIRES_AT,
+            },
+            "ext001": {
+                "path": rel000.APPROVED_EXT001_SOURCE_PATH,
+                "blob_sha": rel000.APPROVED_EXT001_SOURCE_BLOB_SHA,
+                "source_sha": rel000.APPROVED_EVIDENCE_MAIN_SHA,
+                "ext001_started": False,
+            },
+        }
+
+    def test_175_exact_owner_decision_is_valid(self):
+        self.assertEqual("APPROVE", rel000.validate_owner_decision_record(self.record)["decision"])
+
+    def test_176_missing_decision_record_fails(self):
+        self.assert_reason("OWNER_DECISION_RECORD_MISSING", lambda: rel000.load_owner_decision(self.root / "missing.json"))
+
+    def test_177_invalid_decision_json_fails(self):
+        path = self.root / "invalid.json"
+        path.write_text("{", encoding="utf-8")
+        self.assert_reason("OWNER_DECISION_JSON_INVALID", lambda: rel000.load_owner_decision(path))
+
+    def test_178_decision_scalar_fields_fail_closed(self):
+        cases = {
+            "format_version": ("wrong", "OWNER_DECISION_FORMAT_INVALID"),
+            "decision_id": ("wrong", "OWNER_DECISION_ID_INVALID"),
+            "decision": ("REJECT", "OWNER_DECISION_VALUE_INVALID"),
+            "decision_statement": ("", "OWNER_DECISION_STATEMENT_EMPTY"),
+            "decision_reason": ("", "OWNER_DECISION_REASON_EMPTY"),
+            "decided_on": ("not-a-date", "OWNER_DECISION_DATE_INVALID"),
+            "decided_by": ("automation", "OWNER_DECISION_ACTOR_INVALID"),
+        }
+        for field, (value, reason) in cases.items():
+            with self.subTest(field=field):
+                record = copy.deepcopy(self.record)
+                record[field] = value
+                self.assert_reason(reason, lambda record=record: rel000.validate_owner_decision_record(record))
+
+    def test_179_modified_statement_fails(self):
+        record = copy.deepcopy(self.record)
+        record["decision_statement"] = "Apruebo MVP-0"
+        self.assert_reason("OWNER_DECISION_STATEMENT_INVALID", lambda: rel000.validate_owner_decision_record(record))
+
+    def test_180_evidence_anchor_fields_fail_closed(self):
+        cases = {
+            "main_sha": ("a" * 40, "EXT001_STATE_SOURCE_MAIN_MISMATCH"),
+            "workflow_run_id": ("1", "OWNER_DECISION_RUN_ID_MISMATCH"),
+            "workflow_run_attempt": (2, "OWNER_DECISION_RUN_ATTEMPT_MISMATCH"),
+            "artifact_id": (1, "OWNER_DECISION_ARTIFACT_ID_MISMATCH"),
+            "artifact_name": ("wrong", "OWNER_DECISION_ARTIFACT_NAME_MISMATCH"),
+            "artifact_digest": ("sha256:" + "0" * 64, "OWNER_DECISION_ARTIFACT_DIGEST_MISMATCH"),
+        }
+        for field, (value, reason) in cases.items():
+            with self.subTest(field=field):
+                record = copy.deepcopy(self.record)
+                record["approved_evidence"][field] = value
+                self.assert_reason(reason, lambda record=record: rel000.validate_owner_decision_record(record))
+
+    def test_181_unauthorized_scope_flags_fail(self):
+        for field in rel000.OWNER_APPROVAL_SCOPE:
+            with self.subTest(field=field):
+                record = copy.deepcopy(self.record)
+                record["scope"][field] = not rel000.OWNER_APPROVAL_SCOPE[field]
+                expected = "EXT001_ALREADY_STARTED" if field == "ext001_started" else "OWNER_DECISION_SCOPE_INVALID"
+                self.assert_reason(expected, lambda record=record: rel000.validate_owner_decision_record(record))
+
+    def test_181b_evidence_preservation_anchor_is_exact(self):
+        for field, value in {
+            "mode": "LIVE_ARTIFACT",
+            "manifest_path": "elsewhere.json",
+            "snapshot_directory": "elsewhere",
+            "historical_artifact_live_access_required": True,
+        }.items():
+            with self.subTest(field=field):
+                record = copy.deepcopy(self.record)
+                record["evidence_preservation"][field] = value
+                self.assert_reason(
+                    "OWNER_DECISION_EVIDENCE_PRESERVATION_INVALID",
+                    lambda record=record: rel000.validate_owner_decision_record(record),
+                )
+
+    def test_182_historical_artifact_without_ext_and_versioned_false_passes(self):
+        artifact = self.validate_artifact()
+        ext001 = rel000.validate_ext001_state_document(
+            rel000.APPROVED_EVIDENCE_MAIN_SHA,
+            rel000.APPROVED_EXT001_SOURCE_BLOB_SHA,
+            self.historical_source,
+        )
+        self.assertFalse(artifact["technical_artifact_contains_ext001_started"])
+        self.assertFalse(ext001["ext001_started"])
+
+    def test_183_versioned_ext_field_missing_fails(self):
+        source = json.loads(self.historical_source)
+        del source["ext001_started"]
+        self.assert_reason(
+            "EXT001_STARTED_FIELD_MISSING",
+            lambda: rel000.validate_ext001_state_document(rel000.APPROVED_EVIDENCE_MAIN_SHA, rel000.APPROVED_EXT001_SOURCE_BLOB_SHA, json.dumps(source)),
+        )
+
+    def test_184_versioned_ext_true_fails(self):
+        source = json.loads(self.historical_source)
+        source["ext001_started"] = True
+        self.assert_reason(
+            "EXT001_ALREADY_STARTED",
+            lambda: rel000.validate_ext001_state_document(rel000.APPROVED_EVIDENCE_MAIN_SHA, rel000.APPROVED_EXT001_SOURCE_BLOB_SHA, json.dumps(source)),
+        )
+
+    def test_185_versioned_ext_string_fails(self):
+        source = json.loads(self.historical_source)
+        source["ext001_started"] = "false"
+        self.assert_reason(
+            "EXT001_STARTED_FIELD_TYPE_INVALID",
+            lambda: rel000.validate_ext001_state_document(rel000.APPROVED_EVIDENCE_MAIN_SHA, rel000.APPROVED_EXT001_SOURCE_BLOB_SHA, json.dumps(source)),
+        )
+
+    def test_186_ext_blob_mismatch_fails(self):
+        self.assert_reason(
+            "EXT001_STATE_SOURCE_BLOB_MISMATCH",
+            lambda: rel000.validate_ext001_state_document(rel000.APPROVED_EVIDENCE_MAIN_SHA, "0" * 40, self.historical_source),
+        )
+
+    def test_187_ext_main_mismatch_fails(self):
+        self.assert_reason(
+            "EXT001_STATE_SOURCE_MAIN_MISMATCH",
+            lambda: rel000.validate_ext001_state_document("0" * 40, rel000.APPROVED_EXT001_SOURCE_BLOB_SHA, self.historical_source),
+        )
+
+    def test_188_technical_artifact_missing_fails(self):
+        self.assert_reason(
+            "APPROVED_ARTIFACT_INACCESSIBLE",
+            lambda: rel000.validate_approved_artifact(
+                self.valid_metadata(), self.root / "missing.zip", now=rel000.dt.datetime(2026, 8, 2, tzinfo=rel000.dt.timezone.utc)
+            ),
+        )
+
+    def test_189_artifact_expired_fails(self):
+        metadata = self.valid_metadata()
+        metadata["expired"] = True
+        self.assert_reason("APPROVED_ARTIFACT_EXPIRED", lambda: self.validate_artifact(metadata=metadata))
+
+    def test_190_artifact_content_allowlist_fails(self):
+        path = self.valid_zip()
+        with zipfile.ZipFile(path, "a") as archive:
+            archive.writestr("fifth.json", "{}")
+        self.assert_reason("APPROVED_ARTIFACT_CONTENT_INVALID", lambda: self.validate_artifact(zip_path=path))
+
+    def test_191_artifact_digest_recalculation_fails(self):
+        path = self.valid_zip()
+        metadata = self.valid_metadata()
+        metadata["size_in_bytes"] = path.stat().st_size
+        self.assert_reason(
+            "APPROVED_ARTIFACT_ZIP_DIGEST_MISMATCH",
+            lambda: self._validate_digest_failure(metadata, path),
+        )
+
+    def _validate_digest_failure(self, metadata, path):
+        with patch.object(rel000, "APPROVED_ARTIFACT_ZIP_SIZE", path.stat().st_size):
+            return rel000.validate_approved_artifact(
+                metadata,
+                path,
+                now=rel000.dt.datetime(2026, 8, 2, tzinfo=rel000.dt.timezone.utc),
+            )
+
+    def test_192_invalid_technical_evidence_fails(self):
+        path = self.valid_zip()
+        rewritten = self.root / "invalid-technical.zip"
+        with zipfile.ZipFile(path) as source, zipfile.ZipFile(rewritten, "w") as target:
+            for name in source.namelist():
+                value = json.loads(source.read(name))
+                if name == "rel000-internal-release-report.json":
+                    value["technical_evidence_status"] = "FAILED"
+                target.writestr(name, json.dumps(value))
+        self.assert_reason("APPROVED_ARTIFACT_FILE_SIZE_MISMATCH", lambda: self.validate_artifact(zip_path=rewritten))
+
+    def test_193_green_ci_merge_artifact_or_pr_metadata_do_not_infer_approval(self):
+        base = {
+            "owner_approval_status": "PENDING",
+            "release_candidate_status": "BLOCKED_BY_OWNER_DECISION",
+            "dependency_security_status": "PASSED",
+            "rel000_def_001_status": "RESOLVED",
+            "normative_scope_status": "RESOLVED",
+            "normative_scope_decision": "FIN001_MOVED_TO_MVP1",
+            "audit_tracking_gap_detected": False,
+            "audit_tracking_gap_count": 0,
+        }
+        for irrelevant in ({"ci": "success"}, {"merged": True}, {"artifact_valid": True}, {"pr_body": "approved"}):
+            with self.subTest(irrelevant=irrelevant):
+                report = {**base, **irrelevant}
+                rel000.validate_owner_state(report)
+                self.assertEqual("PENDING", report["owner_approval_status"])
+
+    def test_194_valid_approval_emits_internal_state_and_explicit_ext_false(self):
+        report = rel000.apply_owner_approval(self.approved_report(), self.approval())
+        rel000.validate_approved_owner_state(report)
+        self.assertEqual("APPROVED", report["owner_approval_status"])
+        self.assertEqual("APPROVED_FOR_MVP0_INTERNAL", report["release_candidate_status"])
+        self.assertFalse(report["ext001_started"])
+        self.assertFalse(report["technical_artifact_contains_ext001_started"])
+        self.assertEqual("VERSIONED_REDACTED_SNAPSHOT", report["approved_evidence_storage"])
+        self.assertFalse(report["approved_evidence_live_artifact_required"])
+        self.assertEqual(4, report["approved_evidence_snapshot_file_count"])
+        self.assertNotIn("https://", json.dumps(report))
+
+    def test_195_inventory_changes_only_rel000(self):
+        historical = json.loads(self.historical_source)
+        current = json.loads((REPOSITORY_ROOT / rel000.APPROVED_EXT001_SOURCE_PATH).read_text(encoding="utf-8"))
+        old = {item["id"]: item for item in historical["items"]}
+        new = {item["id"]: item for item in current["items"]}
+        changed = [item_id for item_id in old if old[item_id] != new[item_id]]
+        self.assertEqual(["REL-000"], changed)
+        self.assertEqual(29, len(new))
+        self.assertEqual(29, sum(item["implementation_status"] == "VERIFIED" for item in new.values()))
+        self.assertEqual([], [item["id"] for item in new.values() if item["implementation_status"] == "BLOCKED"])
+
+    def test_196_public_allowlist_stays_four_json(self):
+        self.assertEqual(
+            {
+                "rel000-internal-release-report.json",
+                "rel000-p0-evidence.json",
+                "rel000-cross-tenant-evidence.json",
+                "rel000-rollback-evidence.json",
+            },
+            rel000.OUTPUT_FILES,
+        )
+        self.assertNotIn("mvp-0-owner-decision.json", rel000.OUTPUT_FILES)
+
+    def test_197_missing_versioned_ext_source_fails(self):
+        self.assert_reason(
+            "EXT001_STATE_SOURCE_MISSING",
+            lambda: rel000.validate_ext001_state_source(self.root, rel000.APPROVED_EVIDENCE_MAIN_SHA),
+        )
+
+    def test_198_current_ext_source_missing_or_wrong_type_fails(self):
+        self.assert_reason(
+            "EXT001_STARTED_FIELD_MISSING",
+            lambda: rel000.validate_extension_not_started(self.root, {}),
+        )
+        self.assert_reason(
+            "EXT001_STARTED_FIELD_TYPE_INVALID",
+            lambda: rel000.validate_extension_not_started(self.root, {"ext001_started": "false"}),
+        )
+
+    def test_199_open_security_issues_fail(self):
+        self.assert_reason(
+            "OWNER_APPROVAL_ISSUE_5_OPEN",
+            lambda: rel000.validate_owner_approval_issues({"state": "OPEN"}, {"state": "CLOSED"}),
+        )
+        self.assert_reason(
+            "OWNER_APPROVAL_ISSUE_30_OPEN",
+            lambda: rel000.validate_owner_approval_issues({"state": "CLOSED"}, {"state": "OPEN"}),
+        )
+
+    def test_200_security_or_technical_failure_blocks_transition(self):
+        security = self.approved_report()
+        security["dependency_security_status"] = "FAILED"
+        self.assert_reason(
+            "OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED",
+            lambda: rel000.apply_owner_approval(security, self.approval()),
+        )
+        technical = self.approved_report()
+        technical["technical_evidence_status"] = "FAILED"
+        self.assert_reason(
+            "OWNER_APPROVAL_TECHNICAL_EVIDENCE_NOT_PASSED",
+            lambda: rel000.apply_owner_approval(technical, self.approval()),
+        )
+
+    def test_201_live_artifact_metadata_fields_fail_closed(self):
+        cases = {
+            "id": (1, "APPROVED_ARTIFACT_ID_MISMATCH"),
+            "name": ("wrong", "APPROVED_ARTIFACT_NAME_MISMATCH"),
+            "digest": ("sha256:" + "0" * 64, "APPROVED_ARTIFACT_DIGEST_MISMATCH"),
+        }
+        for field, (value, reason) in cases.items():
+            with self.subTest(field=field):
+                metadata = self.valid_metadata()
+                metadata[field] = value
+                self.assert_reason(reason, lambda metadata=metadata: self.validate_artifact(metadata=metadata))
+
+    def test_202_live_artifact_run_and_source_fail_closed(self):
+        run = self.valid_metadata()
+        run["workflow_run"]["id"] = 1
+        self.assert_reason("APPROVED_ARTIFACT_RUN_MISMATCH", lambda: self.validate_artifact(metadata=run))
+        source = self.valid_metadata()
+        source["workflow_run"]["head_sha"] = "0" * 40
+        self.assert_reason("APPROVED_ARTIFACT_SOURCE_SHA_MISMATCH", lambda: self.validate_artifact(metadata=source))
+
+
+class DurableApprovedEvidenceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-durable-tests-")
+        self.root = Path(self.temp.name) / "repository"
+        self.snapshot = self.root / rel000.APPROVED_SNAPSHOT_DIRECTORY
+        self.snapshot.parent.mkdir(parents=True)
+        shutil.copytree(REPOSITORY_ROOT / rel000.APPROVED_SNAPSHOT_DIRECTORY, self.snapshot)
+        self.manifest = self.root / rel000.APPROVED_SNAPSHOT_MANIFEST_PATH
+        self.versioned = {
+            relative: (self.root / relative).read_bytes()
+            for relative in (
+                rel000.APPROVED_SNAPSHOT_MANIFEST_PATH,
+                *(f"{rel000.APPROVED_SNAPSHOT_DIRECTORY}/{name}" for name in rel000.APPROVED_SNAPSHOT_FILES),
+            )
+        }
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def validate_snapshot(self, *, loader=None):
+        return rel000.validate_approved_evidence_snapshot(
+            self.root,
+            self.manifest,
+            self.snapshot,
+            "f" * 40,
+            versioned_bytes_loader=loader or (lambda relative: self.versioned[relative]),
+        )
+
+    def metadata(self, zip_path: Path) -> dict:
+        return {
+            "id": rel000.APPROVED_ARTIFACT_ID,
+            "name": rel000.APPROVED_ARTIFACT_NAME,
+            "size_in_bytes": zip_path.stat().st_size,
+            "digest": rel000.APPROVED_ARTIFACT_DIGEST,
+            "expired": False,
+            "created_at": rel000.APPROVED_ARTIFACT_CREATED_AT,
+            "expires_at": rel000.APPROVED_ARTIFACT_EXPIRES_AT,
+            "workflow_run": {
+                "id": int(rel000.APPROVED_WORKFLOW_RUN_ID),
+                "head_sha": rel000.APPROVED_EVIDENCE_MAIN_SHA,
+            },
+        }
+
+    def zip_from_snapshot(self, *, omit=None, extra=None, overrides=None) -> Path:
+        path = Path(self.temp.name) / f"capture-{len(list(Path(self.temp.name).glob('*.zip')))}.zip"
+        overrides = overrides or {}
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name in sorted(rel000.APPROVED_SNAPSHOT_FILES):
+                if name == omit:
+                    continue
+                archive.writestr(name, overrides.get(name, (self.snapshot / name).read_bytes()))
+            if extra:
+                archive.writestr(extra, b"{}")
+        return path
+
+    def capture(self, zip_path: Path, output: Path, metadata=None):
+        value = metadata or self.metadata(zip_path)
+        metadata_path = Path(self.temp.name) / f"metadata-{len(list(Path(self.temp.name).glob('metadata-*.json')))}.json"
+        metadata_path.write_text(json.dumps(value), encoding="utf-8")
+        with patch.object(rel000, "APPROVED_ARTIFACT_ZIP_SIZE", zip_path.stat().st_size), patch.object(
+            rel000,
+            "sha256_file",
+            return_value=rel000.APPROVED_ARTIFACT_DIGEST.removeprefix("sha256:"),
+        ):
+            return rel000.capture_approved_evidence(
+                metadata_path,
+                zip_path,
+                output,
+                now=rel000.dt.datetime(2026, 8, 2, tzinfo=rel000.dt.timezone.utc),
+            )
+
+    def rewrite_snapshot_json(self, name: str, mutate) -> dict[str, dict[str, Any]]:
+        value = json.loads((self.snapshot / name).read_text(encoding="utf-8"))
+        mutate(value)
+        raw = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        (self.snapshot / name).write_bytes(raw)
+        expected = copy.deepcopy(rel000.APPROVED_SNAPSHOT_FILES)
+        expected[name] = {"size_bytes": len(raw), "sha256": rel000.hashlib.sha256(raw).hexdigest()}
+        return expected
+
+    def validate_semantic_mutation(self, name: str, mutate):
+        expected = self.rewrite_snapshot_json(name, mutate)
+        with patch.object(rel000, "APPROVED_SNAPSHOT_FILES", expected):
+            rel000.write_json(self.manifest, rel000.approved_snapshot_manifest())
+            return self.validate_snapshot(loader=lambda relative: (self.root / relative).read_bytes())
+
+    def test_205_valid_snapshot_passes_without_live_artifact(self):
+        with patch.object(rel000, "validate_approved_artifact", side_effect=AssertionError("network path used")):
+            result = self.validate_snapshot()
+        self.assertEqual("VERSIONED_REDACTED_SNAPSHOT", result["storage"])
+        self.assertFalse(result["live_artifact_required"])
+
+    def test_206_snapshot_validation_does_not_use_current_date(self):
+        class ExplodingDateTime:
+            @classmethod
+            def now(cls, *_args, **_kwargs):
+                raise AssertionError("current date must not be consulted")
+
+        with patch.object(rel000.dt, "datetime", ExplodingDateTime):
+            self.validate_snapshot()
+
+    def test_207_capture_valid_metadata_and_zip_is_byte_exact(self):
+        zip_path = self.zip_from_snapshot()
+        output = Path(self.temp.name) / "captured"
+        manifest = self.capture(zip_path, output)
+        self.assertEqual(manifest, json.loads((output / "approved-evidence-manifest.json").read_text(encoding="utf-8")))
+        self.assertEqual(zip_path.stat().st_size, manifest["capture"]["artifact_zip_size_bytes"])
+        for name in rel000.APPROVED_SNAPSHOT_FILES:
+            self.assertEqual((self.snapshot / name).read_bytes(), (output / name).read_bytes())
+
+    def test_208_capture_metadata_digest_and_expiry_fail_closed(self):
+        zip_path = self.zip_from_snapshot()
+        for field, value, reason in (
+            ("id", 1, "APPROVED_ARTIFACT_ID_MISMATCH"),
+            ("digest", "sha256:" + "0" * 64, "APPROVED_ARTIFACT_DIGEST_MISMATCH"),
+            ("expired", True, "APPROVED_ARTIFACT_EXPIRED"),
+        ):
+            with self.subTest(field=field):
+                metadata = self.metadata(zip_path)
+                metadata[field] = value
+                self.assert_reason(reason, lambda metadata=metadata: self.capture(zip_path, Path(self.temp.name) / f"out-{field}", metadata))
+
+    def test_209_capture_rejects_missing_and_additional_files(self):
+        for zip_path in (
+            self.zip_from_snapshot(omit="rel000-rollback-evidence.json"),
+            self.zip_from_snapshot(extra="extra.json"),
+        ):
+            with self.subTest(zip=zip_path.name):
+                self.assert_reason(
+                    "APPROVED_ARTIFACT_CONTENT_INVALID",
+                    lambda zip_path=zip_path: self.capture(zip_path, Path(self.temp.name) / f"out-{zip_path.stem}"),
+                )
+
+    def test_210_capture_rejects_file_hash_or_size_change(self):
+        name = "rel000-cross-tenant-evidence.json"
+        original = (self.snapshot / name).read_bytes()
+        for changed, reason in ((original + b"\n", "APPROVED_ARTIFACT_FILE_SIZE_MISMATCH"), (b"!" + original[1:], "APPROVED_ARTIFACT_FILE_HASH_MISMATCH")):
+            zip_path = self.zip_from_snapshot(overrides={name: changed})
+            with self.subTest(reason=reason):
+                self.assert_reason(reason, lambda zip_path=zip_path: self.capture(zip_path, Path(self.temp.name) / f"out-{reason}"))
+
+    def test_211_capture_rejects_invalid_json_and_secret(self):
+        name = "rel000-cross-tenant-evidence.json"
+        invalid = b"!" + (self.snapshot / name).read_bytes()[1:]
+        zip_path = self.zip_from_snapshot(overrides={name: invalid})
+        expected = copy.deepcopy(rel000.APPROVED_SNAPSHOT_FILES)
+        expected[name] = {"size_bytes": len(invalid), "sha256": rel000.hashlib.sha256(invalid).hexdigest()}
+        with patch.object(rel000, "APPROVED_SNAPSHOT_FILES", expected):
+            self.assert_reason(
+                "APPROVED_ARTIFACT_CONTENT_INVALID",
+                lambda: self.capture(zip_path, Path(self.temp.name) / "invalid-json"),
+            )
+        self.assert_reason(
+            "REDACTION_FORBIDDEN_VALUE",
+            lambda: rel000._assert_snapshot_redacted({"x.json": {"contact": "owner@example.com"}}),
+        )
+
+    def test_212_capture_rejects_existing_output_and_cleans_partial_failure(self):
+        zip_path = self.zip_from_snapshot()
+        existing = Path(self.temp.name) / "existing"
+        existing.mkdir()
+        (existing / "keep.txt").write_text("keep", encoding="utf-8")
+        self.assert_reason("APPROVED_SNAPSHOT_OUTPUT_EXISTS", lambda: self.capture(zip_path, existing))
+        output = Path(self.temp.name) / "partial"
+        with patch.object(Path, "write_bytes", side_effect=OSError("synthetic write failure")):
+            with self.assertRaises(OSError):
+                self.capture(zip_path, output)
+        self.assertFalse(output.exists())
+
+    def test_213_capture_rejects_symlink_output(self):
+        link = Path(self.temp.name) / "output-link"
+        original = Path.is_symlink
+        with patch.object(Path, "is_symlink", lambda path: True if path == link else original(path)):
+            self.assert_reason("APPROVED_SNAPSHOT_OUTPUT_EXISTS", lambda: self.capture(self.zip_from_snapshot(), link))
+
+    def test_214_snapshot_manifest_failures(self):
+        cases = {
+            "format_version": "wrong",
+            "decision_id": "wrong",
+        }
+        for field, value in cases.items():
+            with self.subTest(field=field):
+                manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+                manifest[field] = value
+                self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+                self.assert_reason("APPROVED_SNAPSHOT_MANIFEST_INVALID", self.validate_snapshot)
+                self.manifest.write_bytes(self.versioned[rel000.APPROVED_SNAPSHOT_MANIFEST_PATH])
+
+    def test_215_snapshot_anchor_and_file_list_failures(self):
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["capture"]["artifact_id"] = 1
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        self.assert_reason("APPROVED_SNAPSHOT_MANIFEST_INVALID", self.validate_snapshot)
+        self.manifest.write_bytes(self.versioned[rel000.APPROVED_SNAPSHOT_MANIFEST_PATH])
+        (self.snapshot / "extra.json").write_text("{}", encoding="utf-8")
+        self.assert_reason("APPROVED_SNAPSHOT_FILE_LIST_INVALID", self.validate_snapshot)
+
+    def test_216_snapshot_missing_modified_and_not_versioned_fail(self):
+        target = self.snapshot / "rel000-rollback-evidence.json"
+        original = target.read_bytes()
+        target.unlink()
+        self.assert_reason("APPROVED_SNAPSHOT_FILE_LIST_INVALID", self.validate_snapshot)
+        target.write_bytes(original + b"\n")
+        self.assert_reason("APPROVED_SNAPSHOT_FILE_SIZE_MISMATCH", self.validate_snapshot)
+        target.write_bytes(original)
+        self.assert_reason(
+            "APPROVED_SNAPSHOT_NOT_VERSIONED",
+            lambda: self.validate_snapshot(loader=lambda relative: b"wrong" if relative.endswith(target.name) else self.versioned[relative]),
+        )
+
+    def test_217_snapshot_rejects_path_traversal_and_symlink(self):
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["files"][0]["name"] = "../escape.json"
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        self.assert_reason("APPROVED_SNAPSHOT_MANIFEST_INVALID", self.validate_snapshot)
+        self.manifest.write_bytes(self.versioned[rel000.APPROVED_SNAPSHOT_MANIFEST_PATH])
+        target = self.snapshot / "rel000-rollback-evidence.json"
+        original = Path.is_symlink
+        with patch.object(Path, "is_symlink", lambda path: True if path == target else original(path)):
+            self.assert_reason("APPROVED_SNAPSHOT_LINK_REJECTED", self.validate_snapshot)
+
+    def test_218_snapshot_rejects_technical_provenance_inventory_and_ext_drift(self):
+        report_name = "rel000-internal-release-report.json"
+        self.assert_reason(
+            "APPROVED_TECHNICAL_EVIDENCE_INVALID",
+            lambda: self.validate_semantic_mutation(report_name, lambda value: value.__setitem__("technical_evidence_status", "FAILED")),
+        )
+
+    def test_219_snapshot_rejects_provenance_drift(self):
+        self.assert_reason(
+            "APPROVED_ARTIFACT_PROVENANCE_INVALID",
+            lambda: self.validate_semantic_mutation(
+                "rel000-internal-release-report.json",
+                lambda value: value["execution_provenance"].__setitem__("mixed_attempt_evidence", True),
+            ),
+        )
+
+    def test_220_snapshot_rejects_inventory_drift(self):
+        self.assert_reason(
+            "APPROVED_TECHNICAL_EVIDENCE_INVALID",
+            lambda: self.validate_semantic_mutation(
+                "rel000-internal-release-report.json",
+                lambda value: value.__setitem__("mvp0_p0_items_verified", 29),
+            ),
+        )
+
+    def test_221_snapshot_rejects_fabricated_historical_ext_state(self):
+        self.assert_reason(
+            "APPROVED_ARTIFACT_SCHEMA_DRIFT",
+            lambda: self.validate_semantic_mutation(
+                "rel000-internal-release-report.json",
+                lambda value: value.__setitem__("ext001_started", False),
+            ),
+        )
+
+    def test_222_snapshot_rejects_missing_or_invalid_manifest(self):
+        original = self.manifest.read_bytes()
+        self.manifest.unlink()
+        self.assert_reason("APPROVED_SNAPSHOT_MISSING", self.validate_snapshot)
+        self.manifest.write_text("{", encoding="utf-8")
+        self.assert_reason("APPROVED_SNAPSHOT_MANIFEST_INVALID", self.validate_snapshot)
+        self.manifest.write_bytes(original)
+
+    def test_223_snapshot_rejects_historical_anchor_drift(self):
+        cases = {
+            "artifact_id": 1,
+            "artifact_zip_sha256": "0" * 64,
+            "source_sha": "0" * 40,
+        }
+        original = self.manifest.read_bytes()
+        for field, value in cases.items():
+            with self.subTest(field=field):
+                manifest = json.loads(original)
+                manifest["capture"][field] = value
+                self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+                self.assert_reason("APPROVED_SNAPSHOT_MANIFEST_INVALID", self.validate_snapshot)
+        self.manifest.write_bytes(original)
+
+    def test_224_snapshot_rejects_duplicate_or_incomplete_manifest_list(self):
+        original = self.manifest.read_bytes()
+        for mutate in (
+            lambda files: files.append(copy.deepcopy(files[0])),
+            lambda files: files.pop(),
+        ):
+            manifest = json.loads(original)
+            mutate(manifest["files"])
+            self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assert_reason("APPROVED_SNAPSHOT_MANIFEST_INVALID", self.validate_snapshot)
+        self.manifest.write_bytes(original)
+
+    def test_225_snapshot_rejects_same_size_hash_change_and_invalid_json(self):
+        target = self.snapshot / "rel000-cross-tenant-evidence.json"
+        original = target.read_bytes()
+        changed = b"!" + original[1:]
+        target.write_bytes(changed)
+        self.assert_reason("APPROVED_SNAPSHOT_FILE_HASH_MISMATCH", self.validate_snapshot)
+        expected = copy.deepcopy(rel000.APPROVED_SNAPSHOT_FILES)
+        expected[target.name] = {"size_bytes": len(changed), "sha256": rel000.hashlib.sha256(changed).hexdigest()}
+        with patch.object(rel000, "APPROVED_SNAPSHOT_FILES", expected):
+            rel000.write_json(self.manifest, rel000.approved_snapshot_manifest())
+            self.assert_reason(
+                "APPROVED_SNAPSHOT_JSON_INVALID",
+                lambda: self.validate_snapshot(loader=lambda relative: (self.root / relative).read_bytes()),
+            )
 
 
 class WorkflowProvenanceTests(unittest.TestCase):
@@ -2201,6 +2944,40 @@ class WorkflowPhysicalGuardsTests(unittest.TestCase):
         )
         self.assertIn('Where-Object { $_.Value -cne "success" }', upstream_guard["run"])
         self.assertIn('throw "REL000_AUTHORITATIVE_UPSTREAM_FAILED:', upstream_guard["run"])
+
+    def test_203_owner_decision_and_durable_snapshot_are_explicit_inputs(self):
+        validation = next(
+            step
+            for step in self.workflow["jobs"]["rel000"]["steps"]
+            if step.get("name") == "Validate and generate redacted REL-000 evidence"
+        )
+        self.assertEqual(
+            "docs/releases/mvp-0-owner-decision.json",
+            validation["env"]["REL000_DECISION_RECORD_PATH"],
+        )
+        self.assertEqual(
+            rel000.APPROVED_SNAPSHOT_MANIFEST_PATH,
+            validation["env"]["REL000_APPROVED_EVIDENCE_MANIFEST_PATH"],
+        )
+        self.assertEqual(
+            rel000.APPROVED_SNAPSHOT_DIRECTORY,
+            validation["env"]["REL000_APPROVED_EVIDENCE_DIRECTORY"],
+        )
+        self.assertNotIn("/actions/artifacts/8834236041", self.text)
+        self.assertNotIn("/artifacts/8834236041/zip", self.text)
+        self.assertNotIn("REL000_APPROVED_ARTIFACT_METADATA_PATH", self.text)
+        self.assertNotIn("REL000_APPROVED_ARTIFACT_ZIP_PATH", self.text)
+
+    def test_204_owner_decision_is_not_a_published_fifth_file(self):
+        publication = next(
+            step
+            for step in self.workflow["jobs"]["rel000"]["steps"]
+            if step.get("name") == "Publish only redacted REL-000 evidence"
+        )
+        self.assertEqual("${{ runner.temp }}/rel000-output", publication["with"]["path"])
+        self.assertNotIn("mvp-0-owner-decision.json", publication["with"]["path"])
+        self.assertNotIn("rel000-approved-evidence", self.text)
+        self.assertNotIn("retry", self.text.lower())
 
 
 class SharpRemediationPolicyTests(unittest.TestCase):

@@ -1,225 +1,172 @@
-# Reporte de decisión interna MVP-0
+# Reporte de liberación interna MVP-0
 
-## Estado del paquete
+## Estado
 
-Este documento acompaña la evidencia automatizada de REL-000. No representa
-una aprobación del propietario.
+Este documento resume la evidencia y la decisión de REL-000. No sustituye
+ninguna de sus dos fuentes autoritativas:
+
+- los cuatro JSON históricos preservados byte por byte son la fuente de
+  evidencia técnica;
+- `docs/releases/mvp-0-owner-decision.json` es la fuente de aprobación humana;
+- este Markdown sólo explica la correlación entre ambas capas.
 
 ```text
-format_version = paquetenvia-rel000-v1
 release = MVP-0_INTERNAL
-base_main_sha = 78117e6551b3f758dd82190d3fae325a95dc14c6
-normative_version = 0.6
-rel000_def_001_status = RESOLVED
-normative_scope_status = RESOLVED
-normative_scope_decision = FIN001_MOVED_TO_MVP1
-dependency_security_status = REMEDIATED_PENDING_MERGE
-owner_approval_status = PENDING
-release_candidate_status = BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION
+approved_evidence_main_sha = 3b23a26d97e31424ba023aa4ecf204142ece0445
+approved_workflow_run_id = 30750187893
+approved_workflow_run_attempt = 1
+approved_artifact_id = 8834236041
+approved_artifact_digest = sha256:66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172
+approved_evidence_storage = VERSIONED_REDACTED_SNAPSHOT
+approved_evidence_snapshot_manifest_path = docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json
+approved_evidence_snapshot_file_count = 4
+approved_evidence_live_artifact_required = false
+approved_artifact_original_expires_at = 2026-08-16T13:38:41Z
+dependency_security_status = PASSED
+technical_evidence_status = PASSED
+owner_approval_status = APPROVED
+release_candidate_status = APPROVED_FOR_MVP0_INTERNAL
 ```
 
-El estado técnico final de cada corrida sólo es autoritativo en
-`rel000-internal-release-report.json`, generado con artifacts OPS-001, OPS-002
-y resultados estructurados por test de esa misma corrida. La documentación no
-reemplaza la correlación dinámica de SHAs, run, attempt, artifact ID y digests.
+El SHA del commit que contiene la decisión se registra dinámicamente como
+`decision_record_sha`; no reemplaza `approved_evidence_main_sha`.
+
+## Decisión del project owner
+
+```text
+decision_id = REL-000-OWNER-001
+decision_statement = Apruebo REL-000
+decision_reason = Aprobación explícita del project owner posterior al cierre técnico y a la validación completa de la evidencia REL-000.
+decided_by = project_owner
+decided_on = 2026-08-02
+```
+
+La decisión aprueba exclusivamente `MVP-0_INTERNAL` con datos sintéticos. No
+autoriza piloto, producción, deployment, go-live, clientes reales, PII real,
+pricing real, pagos, facturación, repartidores externos, SLA, RPO productivo o
+PITR. EXT-001 no comenzó y no se inicia automáticamente por esta aprobación.
+
+## Evidencia técnica aprobada
+
+La evidencia aprobada corresponde a Foundation CI `30750187893`, attempt 1,
+ejecutada sobre `3b23a26d97e31424ba023aa4ecf204142ece0445` con 13/13 jobs en
+`success`. El artifact `8834236041`, nombre
+`rel000-mvp0-internal-release-evidence`, tiene digest:
+
+```text
+sha256:66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172
+```
+
+El ZIP contiene exclusivamente:
+
+- `rel000-internal-release-report.json`;
+- `rel000-p0-evidence.json`;
+- `rel000-cross-tenant-evidence.json`;
+- `rel000-rollback-evidence.json`.
+
+Su reporte registra seguridad `PASSED`, evidencia técnica `PASSED`, provenance
+de diez producers en attempt 1, `aggregator_attempt=1` y
+`mixed_attempt_evidence=false`. Históricamente registra 29 elementos evaluados,
+28 `VERIFIED`, REL-000 como único `BLOCKED` y owner approval `PENDING`.
+
+## Preservación durable de la evidencia
+
+El artifact histórico expira originalmente el `2026-08-16T13:38:41Z`. Mientras
+seguía vivo se descargó una sola vez, se verificó el digest del ZIP y se
+capturaron sus cuatro JSON sin reformatearlos ni regenerarlos. El ZIP y la
+metadata cruda de GitHub no se versionan.
+
+El snapshot durable vive en
+`docs/releases/evidence/rel-000-owner-001/` y su manifest conserva el ID, run,
+attempt, SHA, digest y expiración originales. Los archivos preservados son:
+
+| Archivo | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `rel000-cross-tenant-evidence.json` | 27804 | `d3a9dc7343ddb2c9f00e3484e89789c639ee555c3fd17e2aff81c047515e5bcd` |
+| `rel000-internal-release-report.json` | 17749 | `ed30fbbad93369aece753be930e1b6b9d51e12a219e5e9e7560e74082ce68a92` |
+| `rel000-p0-evidence.json` | 54623 | `5db1e0a0e8c4759198e55c1a8be6f4d9090a9ca6edb1e3cb807f8812ecad7525` |
+| `rel000-rollback-evidence.json` | 18565 | `267e01eb480349eefb50060d9ee8fe2c7c5dc78ca812a543a2e547f93af37eeb` |
+
+Foundation CI ya no consulta ni descarga `8834236041`. La expiración queda
+registrada como provenance histórica y no invalida el snapshot en el futuro.
+La validación normal falla cerrado ante drift del manifest, paths, Git blobs,
+allowlist, tamaños, hashes, JSON, contenido técnico, secretos o PII.
+
+## Estado de EXT-001
+
+El schema del artifact histórico no modelaba `ext001_started`; su ausencia no se
+interpreta como `false`. La fuente autoritativa separada es:
+
+```text
+approved_evidence_ext001_source_path = tests/fixtures/rel-000/item-evidence.json
+approved_evidence_ext001_source_sha = 3b23a26d97e31424ba023aa4ecf204142ece0445
+approved_evidence_ext001_source_blob_sha = 5bdf2c7845aceb84806f3cc0f0fdf3bcc6bbe9ae
+approved_evidence_ext001_started = false
+technical_artifact_contains_ext001_started = false
+ext001_state_source = VERSIONED_ITEM_EVIDENCE
+```
+
+Ambas fuentes están ancladas al mismo SHA aprobado. La nueva evidencia de la
+rama modela explícitamente `ext001_started=false` dentro de
+`rel000-internal-release-report.json`, sin crear un quinto archivo.
 
 ## Inventario MVP-0/P0
 
-AI-08 contiene 29 items con `release=MVP-0` y `priority=P0`, incluido REL-000.
-La evaluación de la base fusionada es:
+La decisión válida permite la transición fail-closed:
 
 ```text
 P0 expected = 29
 P0 evaluated = 29
-P0 verified = 28
-P0 blocked = 1
-blocked_ids = ["REL-000"]
+P0 verified = 29
+P0 blocked = 0
+blocked_ids = []
+REL-000 = VERIFIED
+MVP-0 approved = YES, limitado a MVP-0_INTERNAL
 ```
 
-- `VERIFIED` (28): ARC-001, ARC-002, AUD-001, DBA-001, DRV-001, DRV-002,
-  DRV-003, DSP-001, DSP-002, FND-001, FND-002, GEO-001, OBS-001, OPS-001,
-  OPS-002, ORD-001, ORD-002, POD-001, PRC-001, PRC-002, RTM-001, RTM-002,
-  SEC-001, SEC-002, TEN-001, TEN-002, TEN-003 y TRK-001.
-- `PARTIAL` (0): ninguno.
-- `NOT_STARTED` (0): ninguno dentro de la evidencia atribuible evaluada.
-- `BLOCKED` (1): REL-000.
+Sólo cambia REL-000. Los otros 28 elementos permanecen byte por byte iguales
+en el fixture de atribución. FIN-001 continúa en MVP-1 y EXT-001 permanece no
+iniciado.
 
-REL-000 permanece bloqueado hasta que la remediación de seguridad se fusione y
-el propietario tome una decisión explícita posterior; no se cuenta como
-aprobado.
-FIN-001 pertenece a MVP-1 y por ello no aparece en este inventario, sin que se
-infiera implementado o verificado a partir de los guards COD existentes.
+## Separación y validación fail-closed
 
-## REL-000-DEF-001
+El validador rechaza un decision record ausente, inválido, duplicado, no
+versionado en el HEAD o con cualquier drift de ID, statement, razón, actor,
+fecha, SHA, run, attempt, artifact o digest. También rechaza:
 
-Estado: **RESOLVED**.
+- snapshot ausente, no versionado, enlazado, con manifest, tamaños, hashes o
+  contenido diferente;
+- seguridad o evidencia técnica distinta de `PASSED`;
+- Issues #5 o #30 abiertos;
+- fuente EXT-001 ausente, blob distinto, schema inválido, tipo no booleano o
+  valor `true`;
+- cualquier ampliación a piloto, producción o uso de datos reales;
+- aprobación inferida por CI, merge, artifact o metadata del PR.
 
-El project owner aprobó la opción A el 2026-07-31. FIN-001 pasa completo a
-MVP-1, conserva prioridad P0 y las dependencias DSP-002, EXT-001 y RTE-001. No
-existe una variante mínima de FIN-001 dentro de MVP-0. REL-000 deja de depender
-normativamente de FIN-001; EXT-001 continúa dependiendo de REL-000 y no queda
-autorizado ni iniciado. La decisión no constituye aprobación de REL-000 o
-MVP-0_INTERNAL.
-
-```text
-resolution = FIN001_MOVED_TO_MVP1
-resolved_by = project_owner
-resolved_on = 2026-07-31
-```
-
-## Cobertura cross-tenant
-
-El manifest cerrado contiene 25 categorías: identidad, organización activa,
-RLS transaccional, pooling/retry, provisioning, memberships, quotes, orders,
-acceptances, transiciones, drivers, assignments, stops, ubicación, ambos
-outbox, OperationsHub, DriverHub, tracking, dashboard, POD, proofs, auditoría,
-restore y tenant señuelo.
-
-Los conteos executed/passed sólo se derivan de resultados estructurados que
-coinciden exactamente en job, proyecto, nombre completo, categoría, SHA, run y
-attempt, con `executed=true`, `outcome=PASSED` y `skipped=false`. La fuente y su
-marker son una guardia adicional, no evidencia de ejecución. Missing, failed,
-skipped e incidents deben ser cero.
-
-## OPS-001 y OPS-002
-
-OPS-001 se acepta únicamente desde `delivery-simulation-results` de la misma
-corrida. Exige 20 entregas, 180 eventos sin huecos, realtime 160/160, auditoría
-340/340, tenant secundario cero, recuperación de lease, poison aislado, dos
-corridas consecutivas y cancelación real seguida de recuperación completa.
-
-OPS-002 se acepta únicamente desde `ops002-backup-restore-results` de la misma
-corrida. Exige restore green, 70/70 guardas, pérdida observada cero, RPO no
-establecido, target limpio, source destruido, restart real, RLS, append-only
-completo antes/después, objetos íntegros y cero plaintext residual.
-
-Los producers registran provenance por archivo. El agregador valida nombres,
-IDs, digest de upload, digest de contenido, run, attempt, source HEAD, tested
-SHA, base main y relación Git.
-
-Los jobs que sustentan el manifest publican artifacts internos de ejecución
-derivados de TRX, JUnit o JSON del runner real. Esos inputs no forman parte del
-artifact público REL-000: la allowlist final conserva exactamente cuatro JSON y
-excluye TRX, JUnit y resultados raw.
-
-## Gates y riesgos abiertos
-
-GATE-002 permanece resuelto por la decisión ya registrada en AI-10. Continúan
-abiertos:
-
-```text
-GATE-001
-GATE-003
-GATE-004
-GATE-005
-GATE-006
-GATE-007
-GATE-008
-GATE-009
-GATE-010
-GATE-011
-GATE-012
-GATE-013
-GATE-014
-GATE-015
-GATE-016
-GATE-017
-RTM-001-CUSTOMER-SUPPORT-ROLE
-Issue #5
-```
-
-REL-000-DEF-001 figura en `resolved_decisions`; no es un gate abierto.
-
-Issue #5 sigue abierto mientras esta remediación permanece en Draft y rastrea
-el finding high heredado de `sharp 0.34.5` (GHSA-f88m-g3jw-g9cj). Issue #30,
-propietario histórico de los nueve advisories de Next.js y el advisory de
-brace-expansion, permanece cerrado como `completed` después de PR #33.
-
-| Fuente | Total | High | Moderate | Alcance |
-|---|---:|---:|---:|---|
-| Issue #5 | 1 | 1 | 0 | sharp |
-| Base main real | 1 | 1 | 0 | sharp 0.34.5 |
-| Rama de remediación | 0 | 0 | 0 | ninguno |
-| Delta de la rama | -1 | -1 | 0 | sin advisories ni paquetes nuevos |
-
-Resultado B: remediación mediante override oficial, exacto y controlado.
-Next.js y eslint-config-next permanecen en 16.2.11 porque incluso la versión
-estable 16.2.12 declara `sharp ^0.34.5`, rango que excluye Sharp 0.35.x. El
-selector pnpm `next@16.2.11>sharp` fija únicamente ese edge en Sharp 0.35.3,
-versión estable parcheada. El lockfile contiene una sola versión de Sharp, no
-existe dependencia directa, no hay prereleases y los overrides existentes no
-cambian.
-
-El smoke test carga Sharp desde el dependency graph de Next.js y produce un PNG
-sintético en memoria. La validación local no representa el runtime de Vercel;
-la CI Linux prueba instalación nativa, smoke, lint, typecheck, Vitest y build.
-Paquetenvia no importa Sharp, no usa `next/image` ni ejecuta procesamiento de
-imágenes en una Server Action. Issue #5 queda `REMEDIATED_PENDING_MERGE`, la
-seguridad no se reporta `PASSED` dentro del Draft y owner approval continúa
-pendiente.
-
-## Rollback matrix
-
-Cada item MVP-0/P0 cuenta con una fila estructurada en
-`tests/fixtures/rel-000/rollback-evidence.json`; la salida validada es
-`rel000-rollback-evidence.json`. Las 29 filas tienen referencia, comando y
-prueba. FIN-001 no aparece porque pertenece a MVP-1; no se afirma que sus
-rollbacks funcionales fueron ejecutados. La matriz distingue referencia
-declarada de ejecución demostrada y no afirma que cada comando individual fue
-ejecutado.
-
-| Componentes | Items | Tipo | Preserva datos | Estado |
-|---|---|---|---:|---|
-| Foundation y arquitectura | FND-001, ARC-001, ARC-002, FND-002 | revert de tooling/código | sí | VERIFIED |
-| Seguridad y tenancy | SEC-001, SEC-002, TEN-001, TEN-002, TEN-003, DBA-001, AUD-001 | revert de capa aplicativa/tooling | sí | VERIFIED |
-| Geografía, pricing y órdenes | GEO-001, PRC-001, PRC-002, ORD-001, ORD-002 | revert de capa aplicativa | sí | VERIFIED |
-| Drivers y dispatch | DSP-001, DSP-002, DRV-001, DRV-002, DRV-003 | revert aplicativa/UI | sí | VERIFIED |
-| Realtime, tracking y dashboard | RTM-001, RTM-002, TRK-001, OBS-001 | revert aplicativa/worker/UI | sí | VERIFIED |
-| POD y operaciones | POD-001, OPS-001, OPS-002 | revert aplicativa/test tooling | sí | VERIFIED |
-| Gate REL-000 | REL-000 | revert no destructivo del gate | sí | VERIFIED |
-
-La matriz no autoriza rollback de datos, DDL inverso ni eliminación de backups,
-keys o artifacts externos.
+Una variable de entorno no concede aprobación: el runner exige las rutas
+canónicas del registro, manifest y directorio versionados, comprueba que sus
+bytes pertenecen al source HEAD y valida las fuentes aprobadas antes de aplicar
+la transición. La validación de expiración y acceso vivo sólo pertenece al
+comando administrativo de captura inicial.
 
 ## Rollback REL-000
 
-Para retirar exclusivamente REL-000:
+El rollback es administrativo y no destructivo:
 
-- retirar el job agregador y provenance de la evidencia fuente;
-- retirar tooling, manifests y documentos REL-000;
-- conservar los doce jobs previos y toda funcionalidad MVP-0;
-- conservar migrations, datos y artifacts externos;
-- no ejecutar DDL;
-- no borrar backups ni keys;
-- no modificar `docs/normative/v0.6/`.
+1. revertir el decision record, el cambio de REL-000 en el fixture y la capa de
+   validación de aprobación;
+2. conservar la evidencia técnica histórica, los doce jobs productores y sus
+   artifacts;
+3. conservar aplicaciones, migrations, datos, backups y claves;
+4. no ejecutar DDL ni eliminar evidencia externa.
 
-Las pruebas focales ejecutan 145 casos Python, dos guardas físicas y 14 escenarios
-end-to-end del wrapper/generador. Demuestran que una generación
-fallida/cancelada no publica un reporte exitoso, que se eliminan staging/output
-parciales, que un output previo o evidencia de otro SHA/run/manifest se rechaza,
-que cleanup no sigue enlaces y que inputs y destinos ajenos se preservan. Los
-conteos del JSON final se calculan a partir de lo realmente
-descubierto/ejecutado/pasado.
+La decisión no altera retroactivamente PR #35, run `30750187893`, artifact
+`8834236041` ni sus cuatro JSON.
 
-## Restricciones de liberación
+## Estado de la rama de decisión
 
-MVP-0_INTERNAL usa únicamente datos sintéticos.
-No autoriza PII real.
-No autoriza cotizaciones reales.
-No autoriza pricing público.
-No autoriza mensajes a clientes.
-No autoriza repartidores externos.
-No autoriza piloto.
-No autoriza producción.
-No resuelve hosting ni residencia.
-No establece SLA.
-No establece RPO productivo.
-No implementa PITR.
-No inicia EXT-001.
+La aprobación es `APPROVED IN BRANCH EVIDENCE`. Será final en `main` sólo tras
+revisión independiente, autorización separada para promover/fusionar, Foundation
+CI verde sobre el nuevo `main` y validación del artifact resultante.
 
-Technical evidence prepared.
-Owner approval pending.
-REL-000 not approved.
-EXT-001 not started.
-No merge.
-No auto-merge.
+No merge. No auto-merge. EXT-001 no iniciado.

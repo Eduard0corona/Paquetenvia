@@ -1,0 +1,38 @@
+{
+  "format_version": "paquetenvia-mvp0-owner-decision-v1",
+  "decision_id": "REL-000-OWNER-001",
+  "release": "MVP-0_INTERNAL",
+  "decision": "APPROVE",
+  "decision_statement": "Apruebo REL-000",
+  "decision_reason": "Aprobación explícita del project owner posterior al cierre técnico y a la validación completa de la evidencia REL-000.",
+  "decided_by": "project_owner",
+  "decided_on": "2026-08-02",
+  "approved_evidence": {
+    "main_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+    "workflow_run_id": "30750187893",
+    "workflow_run_attempt": 1,
+    "artifact_id": 8834236041,
+    "artifact_name": "rel000-mvp0-internal-release-evidence",
+    "artifact_digest": "sha256:66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172"
+  },
+  "evidence_preservation": {
+    "mode": "VERSIONED_REDACTED_SNAPSHOT",
+    "manifest_path": "docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json",
+    "snapshot_directory": "docs/releases/evidence/rel-000-owner-001",
+    "historical_artifact_live_access_required": false
+  },
+  "scope": {
+    "synthetic_internal_mvp0_only": true,
+    "pilot_authorized": false,
+    "production_authorized": false,
+    "deployment_authorized": false,
+    "go_live_authorized": false,
+    "real_customers_authorized": false,
+    "real_pii_authorized": false,
+    "real_pricing_authorized": false,
+    "payments_authorized": false,
+    "invoicing_authorized": false,
+    "external_drivers_authorized": false,
+    "ext001_started": false
+  }
+}

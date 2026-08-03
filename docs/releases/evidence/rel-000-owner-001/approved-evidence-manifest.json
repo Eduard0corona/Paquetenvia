@@ -1,0 +1,40 @@
+{
+  "format_version": "paquetenvia-rel000-approved-evidence-snapshot-v1",
+  "decision_id": "REL-000-OWNER-001",
+  "release": "MVP-0_INTERNAL",
+  "capture": {
+    "source": "GITHUB_ACTIONS_ARTIFACT",
+    "artifact_id": 8834236041,
+    "artifact_name": "rel000-mvp0-internal-release-evidence",
+    "artifact_zip_size_bytes": 17147,
+    "artifact_zip_sha256": "66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172",
+    "workflow_run_id": "30750187893",
+    "workflow_run_attempt": 1,
+    "source_sha": "3b23a26d97e31424ba023aa4ecf204142ece0445",
+    "created_at": "2026-08-02T13:38:42Z",
+    "original_expires_at": "2026-08-16T13:38:41Z",
+    "captured_while_live": true
+  },
+  "files": [
+    {
+      "name": "rel000-cross-tenant-evidence.json",
+      "size_bytes": 27804,
+      "sha256": "d3a9dc7343ddb2c9f00e3484e89789c639ee555c3fd17e2aff81c047515e5bcd"
+    },
+    {
+      "name": "rel000-internal-release-report.json",
+      "size_bytes": 17749,
+      "sha256": "ed30fbbad93369aece753be930e1b6b9d51e12a219e5e9e7560e74082ce68a92"
+    },
+    {
+      "name": "rel000-p0-evidence.json",
+      "size_bytes": 54623,
+      "sha256": "5db1e0a0e8c4759198e55c1a8be6f4d9090a9ca6edb1e3cb807f8812ecad7525"
+    },
+    {
+      "name": "rel000-rollback-evidence.json",
+      "size_bytes": 18565,
+      "sha256": "267e01eb480349eefb50060d9ee8fe2c7c5dc78ca812a543a2e547f93af37eeb"
+    }
+  ]
+}

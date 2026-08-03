@@ -2,10 +2,10 @@
 
 ## Objetivo
 
-REL-000 reúne evidencia técnica trazable para que el propietario de producto y
-tecnología decida sobre `MVP-0_INTERNAL`. No agrega funcionalidad de producto y
-no sustituye la decisión humana. El resultado técnico continúa bloqueando la
-liberación; el estado del propietario permanece `PENDING`.
+REL-000 separa evidencia técnica trazable y decisión humana versionada para
+`MVP-0_INTERNAL`. No agrega funcionalidad de producto. La evidencia técnica
+permanece inmutable y la aprobación sólo se aplica cuando el registro
+`paquetenvia-mvp0-owner-decision-v1` supera todas las guardas fail-closed.
 
 La normativa canónica es `docs/normative/v0.6/`. El gate la lee y verifica sus
 checksums, pero nunca la modifica. El inventario MVP-0/P0 se deriva de
@@ -351,16 +351,17 @@ Fuentes primarias consultadas:
   [recomendación del mantenedor](https://github.com/vercel/next.js/issues/96064#issuecomment-5052143831);
 - [issue lovell/sharp#4567](https://github.com/lovell/sharp/issues/4567).
 
-La base autorizada contiene exactamente un advisory high en `sharp 0.34.5`; el
-audit de la rama queda en cero y el lockfile contiene sólo `sharp 0.35.3`:
+La base histórica anterior a la remediación contenía un advisory high en
+`sharp 0.34.5`. La base aprobada `3b23a26d97e31424ba023aa4ecf204142ece0445`
+ya contiene sólo `sharp 0.35.3`, audit cero e Issues #5/#30 cerrados:
 
 ```text
-issue_5_remediation_status = REMEDIATED_PENDING_MERGE
+issue_5_remediation_status = REMEDIATED
 issue_30_remediation_status = REMEDIATED
-sharp_remediation_status = REMEDIATED_PENDING_MERGE
-dependency_security_status = REMEDIATED_PENDING_MERGE
-release_candidate_status = BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION
-owner_approval_status = PENDING
+sharp_remediation_status = REMEDIATED
+dependency_security_status = PASSED
+release_candidate_status = APPROVED_FOR_MVP0_INTERNAL
+owner_approval_status = APPROVED
 ```
 
 El smoke test resuelve Sharp desde el paquete Next.js, carga el módulo nativo y
@@ -373,8 +374,8 @@ El modo de remediación falla ante base distinta, audit omitido o no parseable,
 critical, advisory o paquete nuevo, aumento de severidad, issue cerrado con su
 advisory presente, archivo no autorizado, lockfile inconsistente, prerelease,
 override incompatible, versión vulnerable duplicada o smoke test ausente o
-fallido. La suite focal deriva su conteo de los tests descubiertos; la corrida
-actual exige y pasa 145/145, sin fallos ni skips.
+fallido. La suite focal deriva su conteo de los tests descubiertos y exige que
+todos los casos descubiertos sean ejecutados y aprobados, sin fallos ni skips.
 
 ## Rollback REL-000
 
@@ -395,3 +396,96 @@ gate REL-000, 14 escenarios lanzan el wrapper/generador real en subprocess,
 verifican cancelación/fallo en distintas fases, rechazos por SHA/run/manifest,
 guardas contra links, limpieza de staging/output y preservación de inputs y
 destinos ajenos.
+
+## Fase de decisión humana
+
+La fase técnica y la fase humana son independientes:
+
+1. La evidencia técnica aprobada sigue siendo el artifact `8834236041` de
+   Foundation CI `30750187893`, attempt 1, sobre
+   `3b23a26d97e31424ba023aa4ecf204142ece0445`, con digest
+   `sha256:66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172`.
+2. La decisión humana proviene exclusivamente de
+   `docs/releases/mvp-0-owner-decision.json`, formato
+   `paquetenvia-mvp0-owner-decision-v1`.
+3. `approved_evidence_sha` conserva el SHA de la evidencia técnica;
+   `decision_record_sha` registra el HEAD que versiona la decisión. Nunca se
+   sustituyen entre sí.
+
+### Snapshot durable de la evidencia aprobada
+
+El artifact `8834236041` fue la fuente externa original y expira el
+`2026-08-16T13:38:41Z`. Durante una captura administrativa única, mientras
+seguía disponible, se validaron su metadata, digest ZIP
+`66f8465a79fd4f082cc715724087f507bb9b528fc57a31aa1241accfab676172`,
+contenido técnico y escaneo de secretos/PII. Los cuatro JSON se copiaron
+byte-for-byte a `docs/releases/evidence/rel-000-owner-001/`; no se versionaron
+el ZIP, URLs de descarga, headers ni metadata cruda.
+
+`capture-approved-evidence` es el único comando que consulta la expiración y
+exige el ZIP vivo. Rechaza anclas, tamaños, hashes, JSON o contenido distintos,
+outputs preexistentes, links/reparse points y limpia cualquier output parcial.
+No forma parte del flujo normal de Foundation CI.
+
+La validación normal usa exclusivamente:
+
+```text
+REL000_APPROVED_EVIDENCE_MANIFEST_PATH = docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json
+REL000_APPROVED_EVIDENCE_DIRECTORY = docs/releases/evidence/rel-000-owner-001
+REL000_DECISION_RECORD_PATH = docs/releases/mvp-0-owner-decision.json
+```
+
+El validador comprueba paths canónicos, cinco Git blobs versionados, allowlist,
+ausencia de links o traversal, manifest exacto, cuatro tamaños y hashes, JSON,
+provenance, estados técnicos históricos y escaneo de secretos/PII. No usa la
+fecha actual: la expiración original es provenance histórica, no una futura
+dependencia operacional de CI.
+
+El artifact histórico no contiene `ext001_started` y esa ausencia no se toma
+como `false`. La fuente separada es
+`tests/fixtures/rel-000/item-evidence.json` en el SHA aprobado, blob
+`5bdf2c7845aceb84806f3cc0f0fdf3bcc6bbe9ae`, donde el booleano top-level es
+explícitamente `false`. La evidencia nueva publica esta provenance como:
+
+```text
+technical_artifact_contains_ext001_started = false
+ext001_state_source = VERSIONED_ITEM_EVIDENCE
+ext001_state_source_sha = 3b23a26d97e31424ba023aa4ecf204142ece0445
+ext001_started = false
+```
+
+El runner acepta `-DecisionRecordPath`, `-ApprovedEvidenceManifestPath` y
+`-ApprovedEvidenceDirectory`, pero rechaza cualquier ruta distinta de las
+ubicaciones canónicas. Una variable de entorno aislada nunca concede
+aprobación. El orden es: validar el snapshot técnico histórico y la evidencia
+actual, validar el decision record versionado, comprobar la fuente EXT-001,
+ejecutar la suite, aplicar la transición y publicar exclusivamente los cuatro
+JSON permitidos.
+
+La validación falla ante registro ausente, JSON/schema/ID/statement/razón/fecha
+o actor incorrectos, anclas diferentes, snapshot ausente o no versionado,
+manifest/tamaños/hashes/contenido/provenance distintos, links o archivos extra,
+issues de seguridad abiertos,
+seguridad/evidencia técnica no `PASSED`, decisión duplicada, fuente EXT-001
+ausente o modificada, o cualquier flag de alcance habilitado.
+
+El estado resultante es:
+
+```text
+owner_approval_status = APPROVED
+release_candidate_status = APPROVED_FOR_MVP0_INTERNAL
+technical_gate_outcome = OWNER_APPROVED_INTERNAL_RELEASE
+result = REL000_OWNER_APPROVED
+release_scope = MVP-0_INTERNAL
+synthetic_data_only = true
+MVP-0/P0 = 29/29 VERIFIED
+blocked_ids = []
+pilot_authorized = false
+production_authorized = false
+ext001_started = false
+```
+
+La aprobación no inicia EXT-001. Sólo lo vuelve elegible para una autorización
+posterior, separada y explícita. Tampoco autoriza piloto, producción,
+deployment, clientes reales, PII, pricing, pagos, facturación, repartidores
+externos, SLA, RPO productivo o PITR.
