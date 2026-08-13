@@ -1,5 +1,24 @@
 # Changelog
 
+## Decisiones funcionales NTF-001 — 2026-08-04
+
+- El Project owner aprobó `orders.created` como trigger inicial,
+  `OWNER_ORG_DISPATCHERS` como audiencia lógica inicial e `IN_APP` como canal
+  lógico inicial de la primera vertical de NTF-001.
+- La vertical es exclusivamente sintética: utiliza un provider fake
+  determinista, template neutral, versionado y tenant-scoped, sin fallback
+  cross-tenant, conexiones externas, secretos ni PII real.
+- `SENT` significa aceptación por el sink sintético, no lectura humana. No se
+  autorizan email, SMS, WhatsApp, push, inbox, dashboard, endpoint, read model,
+  destinatarios reales ni provider real.
+- Esta actualización es únicamente documental y de gobernanza. No modifica
+  AI-05, AI-06, AI-08, AI-10, AI-12 o AI-18, ni código, SQL, migrations, roles,
+  tests funcionales o composición runtime.
+- La implementación todavía no está autorizada; NTF-001 y MVP-1 continúan sin
+  iniciar. GATE-001, GATE-004 y GATE-007 permanecen sin resolver.
+- El registro prepara una autorización posterior y separada. No autoriza
+  deployment, piloto, producción o go-live, y no inicia EXT-001.
+
 ## Resolución de alcance REL-000-DEF-001 — 2026-07-31
 
 - El project owner aprobó la opción A: FIN-001 pasa completo de MVP-0 a MVP-1.
