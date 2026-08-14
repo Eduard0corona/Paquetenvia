@@ -1,5 +1,5 @@
 {
-  "issue_number": 30,
-  "title": "Security: remediate inherited Next.js and brace-expansion advisories before release approval",
-  "url": "https://github.com/Eduard0corona/Paquetenvia/issues/30"
+  "issue_number": 38,
+  "title": "SEC-2026-08: remediate current web transitive dependency advisories",
+  "url": "https://github.com/Eduard0corona/Paquetenvia/issues/38"
 }
