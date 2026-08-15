@@ -1725,6 +1725,22 @@ class OwnerApprovalDecisionTests(unittest.TestCase):
             "additional_security_tracking_issue": {"number": 30, "url": "https://example.invalid"},
         }
 
+    def remediation_report(self) -> dict:
+        report = self.approved_report()
+        report.update(
+            {
+                "dependency_security_status": "REMEDIATED_PENDING_MERGE",
+                "release_candidate_status": "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION",
+                "known_security_issues": [{"id": "Issue #38", "state": "OPEN", "url": "https://example.invalid"}],
+                "additional_security_tracking_issue": {
+                    "number": 40,
+                    "state": "OPEN",
+                    "url": "https://example.invalid",
+                },
+            }
+        )
+        return report
+
     def approval(self) -> dict:
         return {
             "record": self.record,
@@ -1927,7 +1943,9 @@ class OwnerApprovalDecisionTests(unittest.TestCase):
                 self.assertEqual("PENDING", report["owner_approval_status"])
 
     def test_194_valid_approval_emits_internal_state_and_explicit_ext_false(self):
-        report = rel000.apply_owner_approval(self.approved_report(), self.approval())
+        report = rel000.apply_owner_approval(
+            self.approved_report(), self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+        )
         rel000.validate_approved_owner_state(report)
         self.assertEqual("APPROVED", report["owner_approval_status"])
         self.assertEqual("APPROVED_FOR_MVP0_INTERNAL", report["release_candidate_status"])
@@ -1992,13 +2010,81 @@ class OwnerApprovalDecisionTests(unittest.TestCase):
         security["dependency_security_status"] = "FAILED"
         self.assert_reason(
             "OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED",
-            lambda: rel000.apply_owner_approval(security, self.approval()),
+            lambda: rel000.apply_owner_approval(
+                security, self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+            ),
+        )
+        pending = self.approved_report()
+        pending["dependency_security_status"] = "REMEDIATED_PENDING_MERGE"
+        self.assert_reason(
+            "OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED",
+            lambda: rel000.apply_owner_approval(
+                pending, self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+            ),
         )
         technical = self.approved_report()
         technical["technical_evidence_status"] = "FAILED"
         self.assert_reason(
             "OWNER_APPROVAL_TECHNICAL_EVIDENCE_NOT_PASSED",
-            lambda: rel000.apply_owner_approval(technical, self.approval()),
+            lambda: rel000.apply_owner_approval(
+                technical, self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+            ),
+        )
+
+    def test_200a_security_remediation_preserves_pending_merge_state(self):
+        report = rel000.apply_owner_approval(
+            self.remediation_report(), self.approval(), rel000.SECURITY_REMEDIATION
+        )
+        rel000.validate_security_remediation_owner_state(report)
+        self.assertEqual("APPROVED", report["owner_approval_status"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", report["dependency_security_status"])
+        self.assertNotEqual("PASSED", report["dependency_security_status"])
+        self.assertEqual("BLOCKED_BY_SECURITY_REMEDIATION_MERGE", report["release_candidate_status"])
+        self.assertEqual("SECURITY_REMEDIATION_READY_FOR_MERGE", report["technical_gate_outcome"])
+        self.assertEqual("REL000_SECURITY_REMEDIATION_READY_FOR_MERGE", report["result"])
+        self.assertEqual("OPEN", report["known_security_issues"][0]["state"])
+        self.assertEqual("OPEN", report["additional_security_tracking_issue"]["state"])
+
+    def test_200b_security_remediation_rejects_other_dependency_states(self):
+        for status in ("BLOCKED", "PASSED"):
+            with self.subTest(status=status):
+                report = self.remediation_report()
+                report["dependency_security_status"] = status
+                self.assert_reason(
+                    "OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED",
+                    lambda report=report: rel000.apply_owner_approval(
+                        report, self.approval(), rel000.SECURITY_REMEDIATION
+                    ),
+                )
+
+    def test_200c_security_remediation_rejects_failed_technical_evidence(self):
+        report = self.remediation_report()
+        report["technical_evidence_status"] = "FAILED"
+        self.assert_reason(
+            "OWNER_APPROVAL_TECHNICAL_EVIDENCE_NOT_PASSED",
+            lambda: rel000.apply_owner_approval(
+                report, self.approval(), rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_200d_security_remediation_rejects_invalid_durable_approval(self):
+        approval = self.approval()
+        approval["artifact"]["storage"] = "LIVE_ARTIFACT"
+        self.assert_reason(
+            "SECURITY_REMEDIATION_OWNER_STATE_INVALID",
+            lambda: rel000.validate_security_remediation_owner_state(
+                rel000.apply_owner_approval(
+                    self.remediation_report(), approval, rel000.SECURITY_REMEDIATION
+                )
+            ),
+        )
+
+    def test_200e_owner_transition_rejects_unknown_mode(self):
+        self.assert_reason(
+            "REL000_MODE_INVALID",
+            lambda: rel000.apply_owner_approval(
+                self.approved_report(), self.approval(), "UNKNOWN"
+            ),
         )
 
     def test_201_live_artifact_metadata_fields_fail_closed(self):

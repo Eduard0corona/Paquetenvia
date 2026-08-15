@@ -4933,8 +4933,24 @@ def release_report(
     return result
 
 
-def apply_owner_approval(report: dict[str, Any], approval: dict[str, Any]) -> dict[str, Any]:
-    if report.get("dependency_security_status") != "PASSED":
+def apply_owner_approval(report: dict[str, Any], approval: dict[str, Any], mode: str) -> dict[str, Any]:
+    if mode == NORMAL_RELEASE_EVIDENCE:
+        expected_dependency_status = "PASSED"
+        transition = {
+            "release_candidate_status": "APPROVED_FOR_MVP0_INTERNAL",
+            "technical_gate_outcome": "OWNER_APPROVED_INTERNAL_RELEASE",
+            "result": "REL000_OWNER_APPROVED",
+        }
+    elif mode == SECURITY_REMEDIATION:
+        expected_dependency_status = "REMEDIATED_PENDING_MERGE"
+        transition = {
+            "release_candidate_status": "BLOCKED_BY_SECURITY_REMEDIATION_MERGE",
+            "technical_gate_outcome": "SECURITY_REMEDIATION_READY_FOR_MERGE",
+            "result": "REL000_SECURITY_REMEDIATION_READY_FOR_MERGE",
+        }
+    else:
+        fail("REL000_MODE_INVALID", "REL-000 owner approval requires an explicit supported mode.", mode=mode)
+    if report.get("dependency_security_status") != expected_dependency_status:
         fail("OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED", "Dependency security must pass before owner approval.")
     if report.get("technical_evidence_status") != "PASSED":
         fail("OWNER_APPROVAL_TECHNICAL_EVIDENCE_NOT_PASSED", "Technical evidence must pass before owner approval.")
@@ -4999,11 +5015,9 @@ def apply_owner_approval(report: dict[str, Any], approval: dict[str, Any]) -> di
             "invoicing_authorized": False,
             "external_drivers_authorized": False,
             "owner_approval_status": "APPROVED",
-            "release_candidate_status": "APPROVED_FOR_MVP0_INTERNAL",
-            "technical_gate_outcome": "OWNER_APPROVED_INTERNAL_RELEASE",
             "rel000_status": "VERIFIED",
             "mvp0_approved": True,
-            "result": "REL000_OWNER_APPROVED",
+            **transition,
         }
     )
     return approved
@@ -5051,6 +5065,57 @@ def validate_approved_owner_state(report: dict[str, Any]) -> None:
     ):
         if report.get(key) is not False:
             fail("OWNER_APPROVAL_SCOPE_INVALID", "The approved report expands internal MVP-0 scope.", field=key)
+
+
+def validate_security_remediation_owner_state(report: dict[str, Any]) -> None:
+    expected = {
+        "owner_approval_status": "APPROVED",
+        "release_candidate_status": "BLOCKED_BY_SECURITY_REMEDIATION_MERGE",
+        "technical_gate_outcome": "SECURITY_REMEDIATION_READY_FOR_MERGE",
+        "result": "REL000_SECURITY_REMEDIATION_READY_FOR_MERGE",
+        "dependency_security_status": "REMEDIATED_PENDING_MERGE",
+        "technical_evidence_status": "PASSED",
+        "approved_evidence_storage": "VERSIONED_REDACTED_SNAPSHOT",
+        "approved_evidence_snapshot_manifest_path": APPROVED_SNAPSHOT_MANIFEST_PATH,
+        "approved_evidence_snapshot_file_count": 4,
+        "approved_evidence_live_artifact_required": False,
+        "approved_artifact_original_id": APPROVED_ARTIFACT_ID,
+        "approved_artifact_original_digest": APPROVED_ARTIFACT_DIGEST,
+        "approved_artifact_original_expires_at": APPROVED_ARTIFACT_EXPIRES_AT,
+        "release_scope": "MVP-0_INTERNAL",
+        "synthetic_data_only": True,
+        "pilot_authorized": False,
+        "production_authorized": False,
+        "ext001_started": False,
+        "rel000_status": "VERIFIED",
+        "mvp0_approved": True,
+        "mvp0_p0_items_expected": 29,
+        "mvp0_p0_items_evaluated": 29,
+        "mvp0_p0_items_verified": 29,
+        "mvp0_p0_items_blocked": 0,
+        "blocked_ids": [],
+    }
+    if any(report.get(key) != value for key, value in expected.items()):
+        fail(
+            "SECURITY_REMEDIATION_OWNER_STATE_INVALID",
+            "The approved security remediation state is inconsistent.",
+        )
+    for key in (
+        "deployment_authorized",
+        "go_live_authorized",
+        "real_customers_authorized",
+        "real_pii_authorized",
+        "real_pricing_authorized",
+        "payments_authorized",
+        "invoicing_authorized",
+        "external_drivers_authorized",
+    ):
+        if report.get(key) is not False:
+            fail(
+                "OWNER_APPROVAL_SCOPE_INVALID",
+                "The approved report expands internal MVP-0 scope.",
+                field=key,
+            )
 
 
 def validate_owner_state(report: dict[str, Any]) -> None:
@@ -5274,8 +5339,13 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         execution_provenance,
         focused_tests,
     )
-    report = apply_owner_approval(report, owner_approval)
-    validate_approved_owner_state(report)
+    report = apply_owner_approval(report, owner_approval, args.mode)
+    if args.mode == NORMAL_RELEASE_EVIDENCE:
+        validate_approved_owner_state(report)
+    elif args.mode == SECURITY_REMEDIATION:
+        validate_security_remediation_owner_state(report)
+    else:
+        fail("REL000_MODE_INVALID", "REL-000 validation requires an explicit supported mode.", mode=args.mode)
     for document in (p0, cross_tenant, rollback, report):
         assert_redacted(document)
 
