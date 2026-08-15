@@ -3419,6 +3419,85 @@ class SharpRemediationPolicyTests(unittest.TestCase):
         suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)]); result = focused_runner.execute_suite(suite, 1, stream=io.StringIO()); self.assertEqual(0, result["python_tests_skipped"])
 
 
+class NormalProjectReferenceLockfileTests(unittest.TestCase):
+    baseline = "988926c7892af98015be2be9559682f156b2748b"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-project-lock-tests-")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_ntf001_project_reference_locks_preserve_dependency_baseline(self):
+        result = rel000.validate_dependency_diff(
+            REPOSITORY_ROOT,
+            self.baseline,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+        )
+        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
+        self.assertEqual(
+            [
+                "src/Modules/Notifications/Notifications.Application/packages.lock.json",
+                "src/Modules/Notifications/Notifications.Domain/packages.lock.json",
+                "src/Modules/Notifications/Notifications.Infrastructure/packages.lock.json",
+                "src/Paqueteria.Worker/packages.lock.json",
+                "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+                "tests/Paqueteria.ContractTests/packages.lock.json",
+                "tests/Paqueteria.IntegrationTests/packages.lock.json",
+                "tests/Paqueteria.UnitTests/packages.lock.json",
+                "tools/Paqueteria.DatabaseMigrator/packages.lock.json",
+            ],
+            result["project_reference_lockfiles"],
+        )
+
+    def dependency_repo(self):
+        root = Path(self.temp.name) / "repo"
+        project = root / "sample/Sample.csproj"
+        lock = root / "sample/packages.lock.json"
+        project.parent.mkdir(parents=True)
+        project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\" />\n", encoding="utf-8")
+        source = REPOSITORY_ROOT / "tests/Paqueteria.UnitTests/packages.lock.json"
+        baseline_lock = subprocess.check_output(
+            ["git", "show", f"{self.baseline}:tests/Paqueteria.UnitTests/packages.lock.json"],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+        )
+        lock.write_text(baseline_lock, encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        return root, base, lock, source
+
+    def test_project_nodes_only_are_dependency_clean(self):
+        root, base, lock, source = self.dependency_repo()
+        current = json.loads(lock.read_text(encoding="utf-8"))
+        current["dependencies"]["net10.0"]["notifications.domain"] = {
+            "type": "Project",
+            "dependencies": {"Paqueteria.Domain": "[1.0.0, )"},
+        }
+        lock.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+        result = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE)
+        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
+        self.assertEqual(["sample/packages.lock.json"], result["project_reference_lockfiles"])
+
+    def test_package_node_drift_remains_fail_closed(self):
+        root, base, lock, source = self.dependency_repo()
+        current = json.loads(lock.read_text(encoding="utf-8"))
+        package = next(
+            node
+            for node in current["dependencies"]["net10.0"].values()
+            if node.get("type") != "Project" and "resolved" in node
+        )
+        package["resolved"] = "999.0.0"
+        lock.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE)
+        self.assertEqual("UNAUTHORIZED_DEPENDENCY_FILE_CHANGED", raised.exception.reason_code)
+
+
 class WebTransitiveRemediationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-web-transitive-tests-")
@@ -3526,7 +3605,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             },
         )
 
-    def dependency_repo(self):
+    def dependency_repo(self, source_sha=None):
         authorization = self.authorization()
         root = self.root / "repo"
         authorized_files = sorted(
@@ -3556,8 +3635,17 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip()
         for relative in authorized_files:
+            source = (
+                subprocess.check_output(
+                    ["git", "show", f"{source_sha}:{relative}"],
+                    cwd=REPOSITORY_ROOT,
+                    text=True,
+                )
+                if source_sha
+                else (REPOSITORY_ROOT / relative).read_text(encoding="utf-8")
+            )
             (root / relative).write_text(
-                (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"),
+                source,
                 encoding="utf-8",
             )
         return root, base, authorization
@@ -3597,11 +3685,18 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             ),
         )
 
-    def test_current_repository_matches_exact_dependency_authorization(self):
+    def test_validated_target_matches_exact_dependency_authorization(self):
         authorization = self.authorization()
+        self.assertEqual(
+            "988926c7892af98015be2be9559682f156b2748b",
+            authorization["validated_target_sha"],
+        )
+        root, base, authorization = self.dependency_repo(
+            authorization["validated_target_sha"]
+        )
         result = rel000.validate_dependency_diff(
-            REPOSITORY_ROOT,
-            authorization["authorized_base_sha"],
+            root,
+            base,
             rel000.SECURITY_REMEDIATION,
             authorization,
         )

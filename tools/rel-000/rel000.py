@@ -3895,6 +3895,107 @@ def validate_consolidated_security_baseline_diff(
     return result
 
 
+def _nuget_package_nodes(lock: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    dependencies = lock.get("dependencies")
+    if not isinstance(dependencies, dict):
+        fail("NUGET_LOCK_INVALID", "A NuGet lockfile has no dependency graph.")
+    packages: dict[tuple[str, str], dict[str, Any]] = {}
+    for framework, nodes in dependencies.items():
+        if not isinstance(framework, str) or not isinstance(nodes, dict):
+            fail("NUGET_LOCK_INVALID", "A NuGet lockfile dependency graph is invalid.")
+        for package, node in nodes.items():
+            if not isinstance(package, str) or not isinstance(node, dict):
+                fail("NUGET_LOCK_INVALID", "A NuGet lockfile package node is invalid.")
+            if node.get("type") != "Project":
+                packages[(framework, package)] = node
+    return packages
+
+
+def _base_nuget_package_catalog(
+    repository_root: Path,
+    base_main_sha: str,
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    catalog: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    paths = run_git(repository_root, "ls-tree", "-r", "--name-only", base_main_sha)
+    for relative in paths.splitlines():
+        if Path(relative).name != "packages.lock.json":
+            continue
+        raw = run_git(repository_root, "show", f"{base_main_sha}:{relative}")
+        try:
+            lock = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            fail(
+                "BASE_DEPENDENCY_LOCK_INVALID",
+                "A baseline NuGet lockfile is invalid.",
+                file=relative,
+                error=str(exc),
+            )
+        for key, node in _nuget_package_nodes(lock).items():
+            catalog.setdefault(key, []).append(node)
+    return catalog
+
+
+def validate_project_reference_lockfile_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+) -> list[str]:
+    """Accept only NuGet lock drift caused by project graph composition.
+
+    Existing lockfiles must preserve every non-Project node exactly. A lockfile
+    for a new project may contain only package nodes already present with the
+    same framework and exact resolved metadata in the baseline catalog.
+    """
+
+    lockfiles = sorted(
+        path for path in all_changed if Path(path).name == "packages.lock.json"
+    )
+    if not lockfiles:
+        return []
+    base_catalog: dict[tuple[str, str], list[dict[str, Any]]] | None = None
+    mechanical: list[str] = []
+    changed_set = set(all_changed)
+    for relative in lockfiles:
+        current = load_json(repository_root / relative)
+        if not isinstance(current, dict):
+            fail("NUGET_LOCK_INVALID", "A NuGet lockfile must be a JSON object.", file=relative)
+        current_packages = _nuget_package_nodes(current)
+        base_raw = run_git(
+            repository_root,
+            "show",
+            f"{base_main_sha}:{relative}",
+            allow_failure=True,
+        )
+        if base_raw:
+            try:
+                base = json.loads(base_raw)
+            except json.JSONDecodeError as exc:
+                fail(
+                    "BASE_DEPENDENCY_LOCK_INVALID",
+                    "A baseline NuGet lockfile is invalid.",
+                    file=relative,
+                    error=str(exc),
+                )
+            if current.get("version") != base.get("version") or current_packages != _nuget_package_nodes(base):
+                continue
+            mechanical.append(relative)
+            continue
+
+        project_files = [
+            path
+            for path in changed_set
+            if Path(path).parent.as_posix() == Path(relative).parent.as_posix()
+            and Path(path).suffix.lower() == ".csproj"
+        ]
+        if len(project_files) != 1:
+            continue
+        if base_catalog is None:
+            base_catalog = _base_nuget_package_catalog(repository_root, base_main_sha)
+        if all(node in base_catalog.get(key, []) for key, node in current_packages.items()):
+            mechanical.append(relative)
+    return mechanical
+
+
 def validate_dependency_diff(
     repository_root: Path,
     base_main_sha: str,
@@ -3912,6 +4013,11 @@ def validate_dependency_diff(
             if path.strip()
         }
     )
+    mechanical_project_lockfiles = validate_project_reference_lockfile_diff(
+        repository_root,
+        base_main_sha,
+        all_changed,
+    )
     allowed_dependency_files = (
         set(authorization["allowed_dependency_files"])
         if authorization is not None
@@ -3922,6 +4028,7 @@ def validate_dependency_diff(
         path
         for path in all_changed
         if Path(path).name in DEPENDENCY_FILE_NAMES
+        and path not in mechanical_project_lockfiles
         and path not in allowed_dependency_files
     )
     if unexpected_dependency_files:
@@ -3939,10 +4046,11 @@ def validate_dependency_diff(
             )
         return {
             "dependency_manifest_changed": False,
-            "dependency_lockfile_changed": False,
+            "dependency_lockfile_changed": bool(mechanical_project_lockfiles),
             "dependency_workspace_changed": False,
             "dependency_diff_against_base": "CLEAN",
-            "changed_dependency_files": [],
+            "changed_dependency_files": mechanical_project_lockfiles,
+            "project_reference_lockfiles": mechanical_project_lockfiles,
             "lockfile_consistency_verified": True,
             "vulnerable_lock_versions": [],
         }

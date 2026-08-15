@@ -81,6 +81,7 @@
       "id": "SEC-2026-08-SECURITY-BASELINE",
       "mode": "SECURITY_REMEDIATION",
       "authorized_base_sha": "efa7d59bf7781fb70307bda9a0be120aea21cf56",
+      "validated_target_sha": "988926c7892af98015be2be9559682f156b2748b",
       "authorized_source_branch": "fix/security-2026-08-web-transitives",
       "tracked_issue": 38,
       "tracked_issue_title": "SEC-2026-08: remediate current web transitive dependency advisories",
