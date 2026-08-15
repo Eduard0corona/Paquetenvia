@@ -58,7 +58,7 @@ internal sealed class PostgreSqlRealtimeOutboxStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await SetWorkerRoleAsync(connection, transaction, cancellationToken);
         await using var command = new NpgsqlCommand(
-            "SELECT * FROM security.claim_outbox(@worker_id,@batch_size,@lease);",
+            "SELECT * FROM security.claim_realtime_outbox(@worker_id,@batch_size,@lease);",
             connection,
             transaction);
         command.Parameters.Add(P("worker_id", NpgsqlDbType.Text, workerId));
@@ -168,7 +168,7 @@ internal sealed class PostgreSqlRealtimeOutboxStore(
         int maximumAttempts,
         CancellationToken cancellationToken) =>
         RequeueAsync(
-            "security.requeue_stale_outbox",
+            "security.requeue_stale_realtime_outbox",
             batchSize,
             maximumAttempts,
             cancellationToken);

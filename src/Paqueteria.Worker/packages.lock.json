@@ -60,6 +60,31 @@
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
+      "identity.application": {
+        "type": "Project",
+        "dependencies": {
+          "Identity.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "identity.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "identity.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Identity.Application": "[1.0.0, )",
+          "Identity.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "locations.application": {
         "type": "Project",
         "dependencies": {
@@ -73,6 +98,33 @@
         "dependencies": {
           "NetTopologySuite": "[2.6.0, )",
           "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "notifications.application": {
+        "type": "Project",
+        "dependencies": {
+          "Identity.Application": "[1.0.0, )",
+          "Notifications.Domain": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "notifications.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "notifications.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Identity.Application": "[1.0.0, )",
+          "Notifications.Application": "[1.0.0, )",
+          "Notifications.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
       "orders.application": {
@@ -97,6 +149,31 @@
           "Orders.Domain": "[1.0.0, )",
           "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Contracts": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
+      "organizations.application": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "organizations.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },

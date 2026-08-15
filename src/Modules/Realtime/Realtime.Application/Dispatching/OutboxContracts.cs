@@ -7,10 +7,11 @@ public static class RealtimeOutboxTopics
     public const string OrderStatusChanged = "orders.status-changed";
     public const string OrderTimelineEventAdded = "orders.timeline-event-added";
     public const string AssignmentChanged = "dispatch.assignment-changed";
+    public const string NotificationStatusChanged = "notifications.status-changed";
     public const string DriverLocationUpdated = "drivers.location-updated";
 
     public static bool IsBusinessTopic(string value) =>
-        value is OrderStatusChanged or OrderTimelineEventAdded or AssignmentChanged;
+        value is OrderStatusChanged or OrderTimelineEventAdded or AssignmentChanged or NotificationStatusChanged;
 
     public static bool IsLocationTopic(string value) => value == DriverLocationUpdated;
 }
@@ -110,6 +111,22 @@ public sealed record ParsedAssignmentChanged(
         EventId,
         OwnerOrganizationId,
         OrderId,
+        AggregateVersion,
+        OccurredAt);
+
+public sealed record ParsedNotificationStatusChanged(
+    Guid EventId,
+    Guid OwnerOrganizationId,
+    Guid NotificationId,
+    long AggregateVersion,
+    DateTimeOffset OccurredAt,
+    string Channel,
+    string Status,
+    int Attempts)
+    : ParsedBusinessOutboxEvent(
+        EventId,
+        OwnerOrganizationId,
+        NotificationId,
         AggregateVersion,
         OccurredAt);
 
@@ -302,6 +319,22 @@ public static class RealtimeOutboxEnvelopeFactory
                 value.AssignmentId,
                 value.DriverId,
                 value.AssignmentStatus,
+                value.OccurredAt));
+
+    public static RealtimeEnvelope<NotificationStatusChangedPayload> Notification(
+        ParsedNotificationStatusChanged value) =>
+        new(
+            value.EventId,
+            RealtimeEventTypes.NotificationStatusChanged,
+            value.OccurredAt,
+            value.NotificationId,
+            value.AggregateVersion,
+            null,
+            new(
+                value.NotificationId,
+                value.Channel,
+                value.Status,
+                value.Attempts,
                 value.OccurredAt));
 
     public static RealtimeEnvelope<DriverLocationUpdatedPayload> Location(ParsedDriverLocationUpdated value) =>
