@@ -90,7 +90,7 @@ SECURITY_REMEDIATION = "SECURITY_REMEDIATION"
 REL000_MODES = {NORMAL_RELEASE_EVIDENCE, SECURITY_REMEDIATION}
 REMEDIATION_POLICY_FORMAT = "paquetenvia-rel000-security-remediation-policy-v2"
 SHARP_REMEDIATION_ID = "ISSUE-5-SHARP-035-REMEDIATION"
-WEB_TRANSITIVE_REMEDIATION_ID = "SEC-2026-08-WEB-TRANSITIVES"
+WEB_TRANSITIVE_REMEDIATION_ID = "SEC-2026-08-SECURITY-BASELINE"
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -210,8 +210,10 @@ SECURITY_REMEDIATION_DEPENDENCY_FILES = {
     "apps/web/pnpm-workspace.yaml",
 }
 DEPENDENCY_FILE_NAMES = {
+    "Directory.Packages.props",
     "package.json",
     "package-lock.json",
+    "packages.lock.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "yarn.lock",
@@ -389,10 +391,25 @@ def load_remediation_policy(path: Path) -> dict[str, Any]:
             branch_totals = authorization.get("expected_branch_totals")
             expected_packages = authorization.get("expected_base_packages")
             replacements = authorization.get("expected_lock_version_replacements")
+            nuget_versions = authorization.get("expected_nuget_versions")
+            issue_advisories = authorization.get("issue_advisories")
             reconciliation = authorization.get("nanoid_source_reconciliation")
             if (
                 authorization.get("tracked_issue_title")
                 != "SEC-2026-08: remediate current web transitive dependency advisories"
+                or authorization.get("related_tracked_issue") != 40
+                or authorization.get("related_tracked_issue_title")
+                != "SEC-2026-08: remediate transitive SSH.NET advisory"
+                or issue_advisories
+                != {
+                    "38": [
+                        "GHSA-fxqj-rqcc-2cmp",
+                        "GHSA-rgw5-rvv9-x895",
+                        "GHSA-2v37-7h3g-55p8",
+                        "GHSA-5p4m-2wfm-xmqj",
+                    ],
+                    "40": ["GHSA-q939-rpr3-3284"],
+                }
                 or not isinstance(branch_totals, dict)
                 or set(branch_totals) != {"total", "critical", "high", "moderate", "low"}
                 or any(not isinstance(value, int) or value < 0 for value in branch_totals.values())
@@ -415,6 +432,19 @@ def load_remediation_policy(path: Path) -> dict[str, Any]:
                 )
                 or not isinstance(authorization.get("expected_lock_package_count"), int)
                 or authorization["expected_lock_package_count"] < 1
+                or nuget_versions
+                != {
+                    "Testcontainers.PostgreSql": {"from": "4.13.0", "to": "4.14.0"},
+                    "Testcontainers": {"from": "4.13.0", "to": "4.14.0"},
+                    "SSH.NET": {"from": "2025.1.0", "to": "2026.0.0"},
+                    "BouncyCastle.Cryptography": {"from": "2.6.2", "to": "2.7.0"},
+                }
+                or authorization.get("expected_nuget_dependency_path")
+                != "Testcontainers.PostgreSql 4.13.0 -> Testcontainers 4.13.0 -> SSH.NET 2025.1.0"
+                or authorization.get("expected_nuget_advisory") != "GHSA-q939-rpr3-3284"
+                or authorization.get("expected_nuget_cve") != "CVE-2026-48798"
+                or authorization.get("direct_ssh_net_pin_allowed") is not False
+                or authorization.get("central_package_transitive_pinning_allowed") is not False
                 or authorization.get("prohibited_prereleases") is not True
                 or authorization.get("manual_lockfile_edits_allowed") is not False
                 or not isinstance(reconciliation, dict)
@@ -1249,6 +1279,7 @@ def validate_owner_approval(
     issue5: dict[str, Any],
     issue30: dict[str, Any],
     source_head_sha: str,
+    authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     expected_path = (repository_root / OWNER_DECISION_PATH).resolve()
     try:
@@ -1280,7 +1311,16 @@ def validate_owner_approval(
             duplicates.append(candidate.resolve())
     if duplicates != [expected_path]:
         fail("OWNER_DECISION_DUPLICATED", "The owner decision ID must exist in exactly one decision record.")
-    validate_owner_approval_issues(issue5, issue30)
+    if authorization is not None and authorization.get("id") == WEB_TRANSITIVE_REMEDIATION_ID:
+        if issue5.get("state") != "CLOSED":
+            fail("OWNER_APPROVAL_ISSUE_5_OPEN", "Issue #5 must remain historically closed.")
+        if issue30.get("state") not in {"OPEN", "CLOSED"}:
+            fail("OWNER_APPROVAL_SECURITY_ISSUE_INVALID", "Issue #38 has an invalid state.")
+        related = issue30.get("related_issue") or {}
+        if not isinstance(related, dict) or related.get("state") not in {"OPEN", "CLOSED"}:
+            fail("OWNER_APPROVAL_SECURITY_ISSUE_INVALID", "Issue #40 has an invalid state.")
+    else:
+        validate_owner_approval_issues(issue5, issue30)
     artifact = validate_approved_evidence_snapshot(
         repository_root,
         approved_evidence_manifest_path,
@@ -3697,6 +3737,164 @@ def validate_web_transitive_remediation_diff(
     }
 
 
+def validate_consolidated_security_baseline_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_all = set(authorization["allowed_dependency_files"]) | set(
+        authorization["allowed_non_dependency_files"]
+    )
+    if set(all_changed) != allowed_all:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The consolidated remediation must contain exactly its ten authorized files.",
+            expected=sorted(allowed_all),
+            actual=all_changed,
+        )
+    required = set(authorization["required_dependency_files"])
+    if set(changed_dependency_files) != required:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The consolidated dependency files do not match the exact authorization.",
+            expected=sorted(required),
+            actual=changed_dependency_files,
+        )
+
+    web_dependency_files = {
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml",
+    }
+    web_authorization = copy.deepcopy(authorization)
+    web_authorization["allowed_dependency_files"] = sorted(web_dependency_files)
+    web_authorization["required_dependency_files"] = sorted(web_dependency_files)
+    web_changed = sorted(
+        path
+        for path in all_changed
+        if path in web_dependency_files
+        or path in set(authorization["allowed_non_dependency_files"])
+    )
+    result = validate_web_transitive_remediation_diff(
+        repository_root,
+        base_main_sha,
+        web_changed,
+        sorted(web_dependency_files),
+        web_authorization,
+    )
+
+    props_path = "Directory.Packages.props"
+    base_props = run_git(repository_root, "show", f"{base_main_sha}:{props_path}")
+    current_props = (repository_root / props_path).read_text(encoding="utf-8")
+    expected_props = base_props.replace(
+        '<PackageVersion Include="Testcontainers.PostgreSql" Version="4.13.0" />',
+        '<PackageVersion Include="Testcontainers.PostgreSql" Version="4.14.0" />',
+    )
+    if expected_props == base_props or current_props.rstrip() != expected_props:
+        fail(
+            "NUGET_CENTRAL_VERSION_CHANGE_INVALID",
+            "Only Testcontainers.PostgreSql 4.13.0 -> 4.14.0 is authorized centrally.",
+        )
+    forbidden_props = (
+        "CentralPackageTransitivePinningEnabled",
+        "NuGetAuditMode",
+        "NuGetAuditLevel",
+        "NuGetAuditSuppress",
+        "NoWarn",
+    )
+    if any(value in current_props for value in forbidden_props) or "SSH.NET" in current_props:
+        fail(
+            "NUGET_SECURITY_POLICY_BYPASS_REJECTED",
+            "Direct SSH.NET pinning, transitive pinning, and NuGet audit suppression are forbidden.",
+        )
+
+    versions = authorization["expected_nuget_versions"]
+    lock_paths = (
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json",
+    )
+    for lock_path in lock_paths:
+        try:
+            base_lock = json.loads(
+                run_git(repository_root, "show", f"{base_main_sha}:{lock_path}")
+            )
+        except json.JSONDecodeError as exc:
+            fail("BASE_DEPENDENCY_LOCK_INVALID", "The base NuGet lockfile is invalid.", error=str(exc))
+        current_lock = load_json(repository_root / lock_path)
+        expected_lock = copy.deepcopy(base_lock)
+        base_packages = base_lock.get("dependencies", {}).get("net10.0", {})
+        current_packages = current_lock.get("dependencies", {}).get("net10.0", {})
+        expected_packages = expected_lock.get("dependencies", {}).get("net10.0", {})
+        if not all(
+            package in base_packages and package in current_packages
+            for package in versions
+        ):
+            fail("NUGET_LOCK_GRAPH_INVALID", "An authorized NuGet package is missing from a lockfile.", file=lock_path)
+        for package, replacement in versions.items():
+            base_node = base_packages[package]
+            current_node = current_packages[package]
+            if (
+                base_node.get("resolved") != replacement["from"]
+                or current_node.get("resolved") != replacement["to"]
+                or not isinstance(current_node.get("contentHash"), str)
+                or not current_node["contentHash"]
+                or current_node.get("contentHash") == base_node.get("contentHash")
+                or _semver_tuple(replacement["to"]) is None
+            ):
+                fail(
+                    "NUGET_LOCK_VERSION_INVALID",
+                    "A NuGet package does not match its exact stable before/after authorization.",
+                    file=lock_path,
+                    package=package,
+                )
+            expected_node = copy.deepcopy(base_node)
+            expected_node["resolved"] = replacement["to"]
+            expected_node["contentHash"] = current_node["contentHash"]
+            if package == "Testcontainers.PostgreSql":
+                expected_node["requested"] = "[4.14.0, )"
+                expected_node["dependencies"]["Testcontainers"] = "4.14.0"
+            elif package == "Testcontainers":
+                expected_node["dependencies"]["SSH.NET"] = "2026.0.0"
+            elif package == "SSH.NET":
+                expected_node["dependencies"]["BouncyCastle.Cryptography"] = "2.7.0"
+            if current_node != expected_node:
+                fail(
+                    "NUGET_LOCK_GRAPH_INVALID",
+                    "The generated NuGet lock graph changed outside the four authorized packages.",
+                    file=lock_path,
+                    package=package,
+                )
+            expected_packages[package] = expected_node
+        if current_lock != expected_lock:
+            fail(
+                "NUGET_LOCK_SCOPE_INVALID",
+                "The NuGet lockfile changed outside the exact generated four-package graph.",
+                file=lock_path,
+            )
+
+    for project in repository_root.rglob("*.csproj"):
+        if re.search(r"PackageReference[^>]+(?:Include|Update)=['\"]SSH\.NET['\"]", project.read_text(encoding="utf-8"), re.IGNORECASE):
+            fail(
+                "DIRECT_SSH_NET_DEPENDENCY_REJECTED",
+                "SSH.NET must remain transitive and must not be pinned directly.",
+                file=project.relative_to(repository_root).as_posix(),
+            )
+
+    result.update(
+        {
+            "remediation_id": authorization["id"],
+            "changed_dependency_files": changed_dependency_files,
+            "nuget_lockfiles_regenerated": list(lock_paths),
+            "nuget_versions": {
+                package: replacement["to"] for package, replacement in versions.items()
+            },
+            "nuget_dependency_path": authorization["expected_nuget_dependency_path"],
+        }
+    )
+    return result
+
+
 def validate_dependency_diff(
     repository_root: Path,
     base_main_sha: str,
@@ -3759,7 +3957,7 @@ def validate_dependency_diff(
             authorization,
         )
     if authorization is not None and authorization.get("id") == WEB_TRANSITIVE_REMEDIATION_ID:
-        return validate_web_transitive_remediation_diff(
+        return validate_consolidated_security_baseline_diff(
             repository_root,
             base_main_sha,
             all_changed,
@@ -4033,23 +4231,40 @@ def validate_issue_and_audit(
         fail("ISSUE5_SCOPE_MISREPRESENTED", "Issue #5 must track only its sharp advisory.")
     issue5_state = str(issue.get("state", "")).upper()
     additional_state = str(additional_issue.get("state", "")).upper()
+    related_issue = additional_issue.get("related_issue")
+    if related_issue is None:
+        related_issue = {}
+    if not isinstance(related_issue, dict):
+        fail("ADDITIONAL_SECURITY_TRACKING_INVALID", "The related security Issue is invalid.")
+    related_state = str(related_issue.get("state", "")).upper()
     policy_tracks_additional = (
         authorization is not None
         and authorization.get("id") == WEB_TRANSITIVE_REMEDIATION_ID
     )
-    expected_additional_number = (
-        authorization["tracked_issue"] if policy_tracks_additional else 30
+    consolidated_tracking = policy_tracks_additional or (
+        int(additional_issue.get("number", 0)) == 38
+        and int(related_issue.get("number", 0)) == 40
     )
+    expected_additional_number = 38 if consolidated_tracking else 30
     expected_additional_title = (
         authorization["tracked_issue_title"]
         if policy_tracks_additional
+        else "SEC-2026-08: remediate current web transitive dependency advisories"
+        if consolidated_tracking
         else ADDITIONAL_SECURITY_ISSUE_TITLE
     )
     expected_additional_ids = {
         value.lower()
         for value in (
-            authorization["expected_base_advisories"]
+            authorization["issue_advisories"]["38"]
             if policy_tracks_additional
+            else [
+                "GHSA-fxqj-rqcc-2cmp",
+                "GHSA-rgw5-rvv9-x895",
+                "GHSA-2v37-7h3g-55p8",
+                "GHSA-5p4m-2wfm-xmqj",
+            ]
+            if consolidated_tracking
             else ISSUE30_ADVISORIES
         )
     }
@@ -4066,6 +4281,22 @@ def validate_issue_and_audit(
         fail(
             "ADDITIONAL_SECURITY_TRACKING_INVALID",
             "The additional security Issue does not match the exact remediation tracking contract.",
+        )
+    expected_related_ids = {"ghsa-q939-rpr3-3284"} if consolidated_tracking else set()
+    if consolidated_tracking and (
+        int(related_issue.get("number", 0)) != 40
+        or related_state not in {"OPEN", "CLOSED"}
+        or related_issue.get("title")
+        != "SEC-2026-08: remediate transitive SSH.NET advisory"
+        or {
+            str(value).lower()
+            for value in related_issue.get("tracked_advisory_ids") or []
+        }
+        != expected_related_ids
+    ):
+        fail(
+            "RELATED_SECURITY_TRACKING_INVALID",
+            "Issue #40 does not match the exact SSH.NET remediation tracking contract.",
         )
     if issue5_state not in {"OPEN", "CLOSED"}:
         fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 has an invalid state.")
@@ -4105,6 +4336,12 @@ def validate_issue_and_audit(
                 "The active remediation tracking Issue must remain open until merge.",
                 issue=additional_issue["number"],
             )
+        if policy_tracks_additional and related_state != "OPEN":
+            fail(
+                "RELATED_SECURITY_ISSUE_STATE_INVALID",
+                "Issue #40 must remain open until the consolidated remediation merges.",
+                issue=40,
+            )
         for key, expected in expected_base_totals.items():
             if base_totals[key] != expected:
                 fail(
@@ -4119,13 +4356,17 @@ def validate_issue_and_audit(
         expected_packages = authorization.get("expected_base_packages") if authorization else None
         if expected_packages is not None:
             actual_packages = {
-                item["advisory_id"]: item["package"] for item in base["advisories"]
+                item["advisory_id"].lower(): item["package"] for item in base["advisories"]
             }
-            if actual_packages != expected_packages:
+            normalized_expected_packages = {
+                advisory_id.lower(): package
+                for advisory_id, package in expected_packages.items()
+            }
+            if actual_packages != normalized_expected_packages:
                 fail(
                     "BASE_AFFECTED_PACKAGES_UNEXPECTED",
                     "The base advisory-to-package mapping differs from the authorization.",
-                    expected=expected_packages,
+                    expected=normalized_expected_packages,
                     actual=actual_packages,
                 )
         expected_branch_totals = (
@@ -4232,6 +4473,7 @@ def validate_issue_and_audit(
 
     issue5_present = bool(branch_ids & issue5_ids)
     additional_present = branch_ids & expected_additional_ids
+    related_present = branch_ids & expected_related_ids
     if issue5_present and issue5_state == "CLOSED":
         fail(
             "SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT",
@@ -4243,6 +4485,12 @@ def validate_issue_and_audit(
             "SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT",
             "The tracking Issue is closed while one or more advisories remain present.",
             issue=additional_issue["number"],
+        )
+    if related_present and related_state == "CLOSED":
+        fail(
+            "SECURITY_ISSUE_CLOSED_WHILE_ADVISORY_PRESENT",
+            "Issue #40 is closed while its SSH.NET advisory remains present.",
+            issue=40,
         )
     issue5_status = (
         "UNRESOLVED"
@@ -4261,11 +4509,20 @@ def validate_issue_and_audit(
         additional_status = (
             "REMEDIATED_PENDING_MERGE" if additional_state == "OPEN" else "REMEDIATED"
         )
+    related_status = (
+        "UNRESOLVED"
+        if related_present
+        else "REMEDIATED_PENDING_MERGE"
+        if related_state == "OPEN"
+        else "REMEDIATED"
+        if consolidated_tracking
+        else "NOT_APPLICABLE"
+    )
     removed_ids = base_ids - branch_ids
     if branch_ids:
         dependency_security_status = "BLOCKED"
         release_candidate_status = "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION"
-    elif issue5_state == "OPEN" or additional_state == "OPEN":
+    elif issue5_state == "OPEN" or additional_state == "OPEN" or related_state == "OPEN":
         dependency_security_status = "REMEDIATED_PENDING_MERGE"
         release_candidate_status = (
             "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION"
@@ -4278,6 +4535,8 @@ def validate_issue_and_audit(
         advisory_id: (
             "Issue #5"
             if advisory_id == ISSUE5_ADVISORY.lower()
+            else "Issue #40"
+            if advisory_id in expected_related_ids
             else f"Issue #{additional_issue['number']}"
         )
         for advisory_id in base_ids
@@ -4317,6 +4576,20 @@ def validate_issue_and_audit(
                 "tracked_advisories": len(expected_additional_ids),
                 "remediation_status": additional_status,
             },
+            *(
+                [
+                    {
+                        "id": "Issue #40",
+                        "state": related_state,
+                        "title": related_issue.get("title"),
+                        "url": related_issue.get("url"),
+                        "tracked_advisories": 1,
+                        "remediation_status": related_status,
+                    }
+                ]
+                if consolidated_tracking
+                else []
+            ),
         ],
         "dependency_advisories": redacted_advisories,
         "remediated_advisories": [
@@ -4332,6 +4605,10 @@ def validate_issue_and_audit(
                 or (
                     tracking_by_id[advisory_id] == f"Issue #{additional_issue['number']}"
                     and additional_state == "OPEN"
+                )
+                or (
+                    tracking_by_id[advisory_id] == "Issue #40"
+                    and related_state == "OPEN"
                 )
                 else "REMEDIATED",
             }
@@ -4351,6 +4628,11 @@ def validate_issue_and_audit(
             "number": additional_issue["number"],
             "url": additional_issue["url"],
         },
+        "related_security_issue": (
+            {"number": 40, "url": related_issue.get("url")}
+            if consolidated_tracking
+            else None
+        ),
         "issue_5_remediation_status": issue5_status,
         "issue_30_remediation_status": (
             additional_status
@@ -4358,6 +4640,7 @@ def validate_issue_and_audit(
             else "HISTORICAL_REMEDIATED"
         ),
         "additional_security_remediation_status": additional_status,
+        "related_security_remediation_status": related_status,
         "sharp_remediation_status": (
             "BLOCKED_BY_UPSTREAM_COMPATIBILITY" if issue5_present else issue5_status
         ),
@@ -4898,6 +5181,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         issue,
         additional_issue,
         trace["source_head_sha"],
+        authorization,
     )
     p0 = validate_item_evidence(
         repository_root,
@@ -5059,6 +5343,7 @@ def sanitize_audit(
     output_path: Path,
     command_executed: bool,
     command_exit_code: int,
+    nuget_input_paths: list[Path] | None = None,
 ) -> None:
     raw = load_json(input_path)
     if not isinstance(raw, dict):
@@ -5148,6 +5433,53 @@ def sanitize_audit(
                         ),
                     }
                 )
+    for nuget_path in nuget_input_paths or []:
+        nuget = load_json(nuget_path)
+        projects = nuget.get("projects") if isinstance(nuget, dict) else None
+        if nuget.get("version") != 1 or not isinstance(projects, list):
+            fail("AUDIT_PARSE_FAILED", "The NuGet audit JSON is invalid.", file=nuget_path.name)
+        for project in projects:
+            for framework in project.get("frameworks") or []:
+                for collection, dependency_kind in (
+                    ("topLevelPackages", "direct"),
+                    ("transitivePackages", "transitive"),
+                ):
+                    for package in framework.get(collection) or []:
+                        package_id = str(package.get("id") or "")
+                        installed_version = str(package.get("resolvedVersion") or "")
+                        for vulnerability in package.get("vulnerabilities") or []:
+                            url = str(vulnerability.get("advisoryurl") or "")
+                            match = re.search(r"GHSA-[0-9a-z-]+", url, re.IGNORECASE)
+                            if not match or not package_id or not installed_version:
+                                fail(
+                                    "AUDIT_PARSE_FAILED",
+                                    "A NuGet vulnerability entry is incomplete.",
+                                    file=nuget_path.name,
+                                )
+                            advisory_id = match.group(0).upper()
+                            patched_range = (
+                                ">=2026.0.0"
+                                if advisory_id == "GHSA-Q939-RPR3-3284"
+                                else "consult-advisory"
+                            )
+                            advisories.append(
+                                {
+                                    "advisory_id": advisory_id,
+                                    "package": package_id,
+                                    "installed_versions": [installed_version],
+                                    "severity": str(vulnerability.get("severity") or "").lower(),
+                                    "affected_range": installed_version,
+                                    "patched_range": patched_range,
+                                    "direct_or_transitive": dependency_kind,
+                                    "dependency_path_count": 1,
+                                    "fix_available": advisory_id == "GHSA-Q939-RPR3-3284",
+                                    "fix_compatibility": (
+                                        "compatible_patch_available"
+                                        if advisory_id == "GHSA-Q939-RPR3-3284"
+                                        else "requires_compatibility_assessment"
+                                    ),
+                                }
+                            )
     unique: dict[tuple[str, str, str], dict[str, Any]] = {}
     for advisory in advisories:
         key = (
@@ -5211,7 +5543,11 @@ def sanitize_audit(
     write_json(output_path, sanitized)
 
 
-def sanitize_issue(input_path: Path, output_path: Path) -> None:
+def sanitize_issue(
+    input_path: Path,
+    output_path: Path,
+    related_input_path: Path | None = None,
+) -> None:
     raw = load_json(input_path)
     html_url = raw.get("html_url") or raw.get("url")
     if not isinstance(html_url, str) or not html_url.startswith("https://github.com/"):
@@ -5248,6 +5584,11 @@ def sanitize_issue(input_path: Path, output_path: Path) -> None:
             }
         ),
     }
+    if related_input_path is not None:
+        related_output = output_path.with_name(f"{output_path.stem}-related.json")
+        sanitize_issue(related_input_path, related_output)
+        sanitized["related_issue"] = load_json(related_output)
+        related_output.unlink()
     write_json(output_path, sanitized)
 
 
@@ -5269,10 +5610,12 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--output", type=Path, required=True)
     audit.add_argument("--command-executed", action="store_true", required=True)
     audit.add_argument("--command-exit-code", type=int, required=True)
+    audit.add_argument("--nuget-input", type=Path, action="append")
 
     issue = subparsers.add_parser("sanitize-issue")
     issue.add_argument("--input", type=Path, required=True)
     issue.add_argument("--output", type=Path, required=True)
+    issue.add_argument("--related-input", type=Path)
 
     resolve_mode = subparsers.add_parser("resolve-mode")
     resolve_mode.add_argument("--policy", type=Path, required=True)
@@ -5401,10 +5744,11 @@ def main() -> int:
                 args.output,
                 args.command_executed,
                 args.command_exit_code,
+                args.nuget_input,
             )
             return 0
         if args.command == "sanitize-issue":
-            sanitize_issue(args.input, args.output)
+            sanitize_issue(args.input, args.output, args.related_input)
             return 0
         if args.command == "resolve-mode":
             print(

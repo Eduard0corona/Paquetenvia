@@ -3387,6 +3387,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             ),
             self.advisory("GHSA-2v37-7h3g-55p8", "nanoid", "high", "3.3.16"),
             self.advisory("GHSA-5p4m-2wfm-xmqj", "js-yaml", "high", "4.3.0"),
+            self.advisory("GHSA-q939-rpr3-3284", "SSH.NET", "high", "2025.1.0"),
         ]
 
     @staticmethod
@@ -3422,7 +3423,14 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
                 "url": "https://github.com/example/issues/38",
                 "tracked_advisory_ids": tracked_ids
                 if tracked_ids is not None
-                else authorization["expected_base_advisories"],
+                else authorization["issue_advisories"]["38"],
+                "related_issue": {
+                    "number": 40,
+                    "state": issue_state,
+                    "title": authorization["related_tracked_issue_title"],
+                    "url": "https://github.com/example/issues/40",
+                    "tracked_advisory_ids": authorization["issue_advisories"]["40"],
+                },
             },
             self.audit(self.base_advisories()),
             branch if branch is not None else self.audit([]),
@@ -3435,11 +3443,12 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
     def dependency_repo(self):
         authorization = self.authorization()
         root = self.root / "repo"
-        for relative in (
-            "apps/web/package.json",
-            "apps/web/pnpm-lock.yaml",
-            "apps/web/pnpm-workspace.yaml",
-        ):
+        authorized_files = sorted(
+            set(authorization["allowed_dependency_files"])
+            | set(authorization["allowed_non_dependency_files"])
+        )
+        input_files = sorted(set(authorized_files) | {"apps/web/package.json"})
+        for relative in input_files:
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             content = subprocess.check_output(
@@ -3460,7 +3469,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         base = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip()
-        for relative in ("apps/web/pnpm-lock.yaml", "apps/web/pnpm-workspace.yaml"):
+        for relative in authorized_files:
             (root / relative).write_text(
                 (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"),
                 encoding="utf-8",
@@ -3512,6 +3521,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         )
         self.assertEqual(475, result["lock_package_count"])
         self.assertEqual(["nanoid@3.3.18"], [key for key in result["added_lock_package_keys"] if key.startswith("nanoid@")])
+        self.assertEqual("2026.0.0", result["nuget_versions"]["SSH.NET"])
 
     def test_nanoid_source_reconciliation_is_exact(self):
         reconciliation = self.authorization()["nanoid_source_reconciliation"]
@@ -3523,7 +3533,13 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
     def test_exact_dependency_files_and_non_dependency_allowlist(self):
         authorization = self.authorization()
         self.assertEqual(
-            {"apps/web/pnpm-lock.yaml", "apps/web/pnpm-workspace.yaml"},
+            {
+                "apps/web/pnpm-lock.yaml",
+                "apps/web/pnpm-workspace.yaml",
+                "Directory.Packages.props",
+                "tests/Paqueteria.ContractTests/packages.lock.json",
+                "tests/Paqueteria.IntegrationTests/packages.lock.json",
+            },
             set(authorization["required_dependency_files"]),
         )
         self.assertEqual(
@@ -3612,6 +3628,8 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
         self.assertEqual("Issue #38", result["known_security_issues"][1]["id"])
         self.assertEqual(4, result["known_security_issues"][1]["tracked_advisories"])
+        self.assertEqual("Issue #40", result["known_security_issues"][2]["id"])
+        self.assertEqual(1, result["known_security_issues"][2]["tracked_advisories"])
 
     def test_issue_38_wrong_advisory_set_is_rejected(self):
         self.assert_reason(
@@ -3622,6 +3640,84 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
                 self.authorization(),
             ),
         )
+
+    def test_issue_40_is_required_with_exact_ssh_net_advisory(self):
+        inputs = list(self.security_inputs())
+        inputs[1].pop("related_issue")
+        self.assert_reason(
+            "RELATED_SECURITY_TRACKING_INVALID",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs,
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+            ),
+        )
+
+    def test_nuget_lock_drift_outside_exact_graph_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        lock = root / "tests/Paqueteria.ContractTests/packages.lock.json"
+        lock.write_text(
+            lock.read_text(encoding="utf-8").replace(
+                '"resolved": "2.7.0"', '"resolved": "2.6.2"', 1
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "NUGET_LOCK_VERSION_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_combined_audit_sanitizer_deduplicates_nuget_projects(self):
+        web_input = self.root / "web-audit.json"
+        nuget_input = self.root / "nuget-audit.json"
+        output = self.root / "combined-audit.json"
+        web_input.write_text('{"vulnerabilities": {}}', encoding="utf-8")
+        package = {
+            "id": "SSH.NET",
+            "resolvedVersion": "2025.1.0",
+            "vulnerabilities": [
+                {
+                    "severity": "High",
+                    "advisoryurl": "https://github.com/advisories/GHSA-q939-rpr3-3284",
+                }
+            ],
+        }
+        nuget_input.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "projects": [
+                        {
+                            "frameworks": [
+                                {"transitivePackages": [package]},
+                                {"transitivePackages": [package]},
+                            ]
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rel000.sanitize_audit(web_input, output, True, 0, [nuget_input])
+        audit = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(1, audit["totals"]["total"])
+        self.assertEqual("GHSA-Q939-RPR3-3284", audit["advisories"][0]["advisory_id"])
+        self.assertEqual(2, audit["advisories"][0]["dependency_path_count"])
+
+    def test_closed_consolidated_tracking_passes_zero_audit_on_main(self):
+        inputs = list(self.security_inputs(issue_state="CLOSED"))
+        inputs[2] = self.audit([])
+        inputs[3] = self.audit([])
+        inputs[4] = {
+            "dependency_diff_against_base": "CLEAN",
+            "vulnerable_lock_versions": [],
+        }
+        result = rel000.validate_issue_and_audit(
+            *inputs,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+        )
+        self.assertEqual("PASSED", result["dependency_security_status"])
 
     def test_issue_38_must_remain_open_until_merge(self):
         self.assert_reason(
@@ -3657,7 +3753,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         )
         self.assertEqual(38, fixture["issue_number"])
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
-        self.assertIn("SEC-2026-08-WEB-TRANSITIVES", workflow)
+        self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
 
 
