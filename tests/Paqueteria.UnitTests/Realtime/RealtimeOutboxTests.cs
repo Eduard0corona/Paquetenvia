@@ -23,6 +23,7 @@ public sealed class RealtimeOutboxTests
     [InlineData(RealtimeOutboxTopics.OrderStatusChanged)]
     [InlineData(RealtimeOutboxTopics.OrderTimelineEventAdded)]
     [InlineData(RealtimeOutboxTopics.AssignmentChanged)]
+    [InlineData(RealtimeOutboxTopics.NotificationStatusChanged)]
     public void Business_topic_allowlist_is_exact(string topic)
     {
         Assert.True(RealtimeOutboxTopics.IsBusinessTopic(topic));
@@ -94,6 +95,36 @@ public sealed class RealtimeOutboxTests
 
         Assert.IsType<ParsedOrderTimelineEventAdded>(timeline);
         Assert.IsType<ParsedAssignmentChanged>(assignment);
+    }
+
+    [Fact]
+    public void Notification_status_parser_reuses_the_operations_contract_and_aggregate_version()
+    {
+        var notificationId = Guid.Parse("00000000-0000-0000-0000-000000000808");
+        var claimed = Business(
+            RealtimeOutboxTopics.NotificationStatusChanged,
+            JsonSerializer.Serialize(new
+            {
+                schema_version = "notification-status-changed-v1",
+                notification_id = notificationId,
+                channel = "IN_APP",
+                status = "SENT",
+                attempts = 1,
+                occurred_at = OccurredAt,
+            })) with
+        {
+            AggregateType = "Notification",
+            AggregateId = notificationId,
+            AggregateVersion = 2,
+        };
+
+        var parsed = Assert.IsType<ParsedNotificationStatusChanged>(RealtimeOutboxParser.Parse(claimed));
+        var envelope = RealtimeOutboxEnvelopeFactory.Notification(parsed);
+
+        Assert.Equal(RealtimeEventTypes.NotificationStatusChanged, envelope.EventType);
+        Assert.Equal(notificationId, envelope.AggregateId);
+        Assert.Equal(2, envelope.AggregateVersion);
+        Assert.Equal(new NotificationStatusChangedPayload(notificationId, "IN_APP", "SENT", 1, OccurredAt), envelope.Payload);
     }
 
     [Fact]

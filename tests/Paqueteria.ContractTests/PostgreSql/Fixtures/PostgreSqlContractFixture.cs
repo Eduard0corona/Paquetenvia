@@ -14,6 +14,7 @@ using Orders.Infrastructure.Persistence;
 using Drivers.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence;
 using Custody.Infrastructure.Persistence;
+using Notifications.Infrastructure.Persistence;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -348,6 +349,22 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             custodyOptions,
             new TenantDatabaseExecutionState());
         await custody.Database.MigrateAsync().ConfigureAwait(false);
+
+        await using var notificationsConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await notificationsConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", notificationsConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var notificationsOptions = new DbContextOptionsBuilder<NotificationsDbContext>()
+            .UseNpgsql(notificationsConnection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(NotificationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform");
+            }).Options;
+        await using var notifications = new NotificationsDbContext(notificationsOptions);
+        await notifications.Database.MigrateAsync().ConfigureAwait(false);
     }
 
     private async Task ExecuteAdminScriptAsync(string sql)

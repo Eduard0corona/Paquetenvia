@@ -492,6 +492,33 @@
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
+      "notifications.application": {
+        "type": "Project",
+        "dependencies": {
+          "Identity.Application": "[1.0.0, )",
+          "Notifications.Domain": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "notifications.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "notifications.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Identity.Application": "[1.0.0, )",
+          "Notifications.Application": "[1.0.0, )",
+          "Notifications.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "orders.application": {
         "type": "Project",
         "dependencies": {

@@ -67,9 +67,9 @@ public sealed class RealtimeArchitectureTests
             "*.cs",
             SearchOption.AllDirectories);
         var source = string.Join('\n', sourceFiles.Select(File.ReadAllText));
-        Assert.Contains("security.claim_outbox", source, StringComparison.Ordinal);
+        Assert.Contains("security.claim_realtime_outbox", source, StringComparison.Ordinal);
         Assert.Contains("security.settle_outbox", source, StringComparison.Ordinal);
-        Assert.Contains("security.requeue_stale_outbox", source, StringComparison.Ordinal);
+        Assert.Contains("security.requeue_stale_realtime_outbox", source, StringComparison.Ordinal);
         Assert.Contains("security.claim_location_outbox", source, StringComparison.Ordinal);
         Assert.Contains("security.settle_location_outbox", source, StringComparison.Ordinal);
         Assert.Contains("security.requeue_stale_location_outbox", source, StringComparison.Ordinal);

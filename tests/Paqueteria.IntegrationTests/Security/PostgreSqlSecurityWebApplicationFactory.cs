@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Notifications.Infrastructure.Persistence;
 using Npgsql;
 using Paqueteria.Contracts.Tracking;
 using Paqueteria.Infrastructure.Database.Baseline;
@@ -62,6 +64,7 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
         _adminConnectionString = adminConnectionString;
         var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, adminConnectionString);
+        await ApplyNotificationsMigrationAsync(adminConnectionString);
 
         await using var admin = NpgsqlDataSource.Create(adminConnectionString);
         await using (var command = admin.CreateCommand($$"""
@@ -292,6 +295,53 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
             connection);
         command.Parameters.AddWithValue("id", outboxId);
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    internal async Task<(Guid OutboxId, Guid NotificationId, int AggregateVersion, DateTimeOffset OccurredAt)>
+        EnqueueRealtimeNotificationAsync()
+    {
+        var outboxId = Guid.NewGuid();
+        var notificationId = Guid.NewGuid();
+        var sourceEventId = Guid.NewGuid();
+        const int aggregateVersion = 2;
+        var occurredAt = new DateTimeOffset(2026, 8, 15, 18, 0, 0, TimeSpan.Zero);
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO notifications.notifications(
+              id,owner_org_id,order_id,recipient_user_id,channel,status,attempts,version,
+              template_key,template_version,variables_snapshot,source_event_id,
+              last_provider_attempt_code,last_attempt_at,created_at,updated_at,sent_at)
+            VALUES(
+              @notification,'11111111-1111-1111-1111-111111111111',NULL,gen_random_uuid(),
+              'IN_APP','SENT',1,@version,'orders.created.operations',1,
+              jsonb_build_object('order_public_id','ORD_abcdefghijklmnopqrstuv','order_status','DRAFT','occurred_at',@occurred::text),
+              @source,'SYNTHETIC_ACCEPTED',@occurred,@occurred,@occurred,@occurred);
+            INSERT INTO notifications.notification_status_events(
+              id,owner_org_id,notification_id,version,status,attempts,provider_attempt_code,occurred_at)
+            VALUES(gen_random_uuid(),'11111111-1111-1111-1111-111111111111',@notification,@version,
+              'SENT',1,'SYNTHETIC_ACCEPTED',@occurred);
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,
+              payload,priority,status,attempts,available_at,created_at)
+            VALUES(
+              @outbox,'11111111-1111-1111-1111-111111111111',
+              '{"organization_ids":["11111111-1111-1111-1111-111111111111"]}',
+              'notifications.status-changed','Notification',@notification,@version,
+              jsonb_build_object(
+                'schema_version','notification-status-changed-v1','notification_id',@notification,
+                'channel','IN_APP','status','SENT','attempts',1,'occurred_at',@occurred),
+              50,'PENDING',0,clock_timestamp(),clock_timestamp());
+            """,
+            connection);
+        command.Parameters.AddWithValue("outbox", outboxId);
+        command.Parameters.AddWithValue("notification", notificationId);
+        command.Parameters.AddWithValue("source", sourceEventId);
+        command.Parameters.AddWithValue("version", aggregateVersion);
+        command.Parameters.AddWithValue("occurred", occurredAt);
+        await command.ExecuteNonQueryAsync();
+        return (outboxId, notificationId, aggregateVersion, occurredAt);
     }
 
     internal async Task<Guid> EnqueueDelayedStatusFromEvidenceAsync(Guid orderEventId)
@@ -1101,9 +1151,9 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     {
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
-            "security.claim_outbox(text,integer,interval)",
+            "security.claim_realtime_outbox(text,integer,interval)",
             "security.settle_outbox(uuid,uuid,text,text,timestamptz)",
-            "security.requeue_stale_outbox(interval,integer,integer)",
+            "security.requeue_stale_realtime_outbox(interval,integer,integer)",
             "security.claim_location_outbox(text,integer,interval)",
             "security.settle_location_outbox(uuid,uuid,text,text,timestamptz)",
             "security.requeue_stale_location_outbox(interval,integer,integer)",
@@ -1121,6 +1171,26 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
                 : $"REVOKE EXECUTE ON FUNCTION {signature} FROM paqueteria_worker",
             connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task ApplyNotificationsMigrationAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
+        {
+            await role.ExecuteNonQueryAsync();
+        }
+
+        var options = new DbContextOptionsBuilder<NotificationsDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(NotificationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform");
+            })
+            .Options;
+        await using var context = new NotificationsDbContext(options);
+        await context.Database.MigrateAsync();
     }
 
     internal async Task SetWorkerBypassRlsAsync(bool enabled)

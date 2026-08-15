@@ -417,7 +417,7 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
 
     private async Task<IReadOnlyList<Claim>> ClaimAsync(bool location, int batchSize, string workerId)
     {
-        var function = location ? "security.claim_location_outbox" : "security.claim_outbox";
+        var function = location ? "security.claim_location_outbox" : "security.claim_unowned_outbox";
         await using var connection = await fixture.WorkerDataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
         await ExecuteAsync(connection, transaction, "SET LOCAL ROLE paqueteria_worker");
@@ -450,7 +450,7 @@ public sealed class OutboxLifecycleContractTests(PostgreSqlContractFixture fixtu
 
     private async Task<int> RequeueAsync(bool location, int maxAttempts)
     {
-        var function = location ? "security.requeue_stale_location_outbox" : "security.requeue_stale_outbox";
+        var function = location ? "security.requeue_stale_location_outbox" : "security.requeue_stale_unowned_outbox";
         return await WorkerScalarAsync<int>($"SELECT {function}(interval '0 seconds',100,@max)", P("max", maxAttempts));
     }
 

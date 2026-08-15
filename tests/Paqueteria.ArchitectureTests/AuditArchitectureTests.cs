@@ -47,11 +47,9 @@ public sealed class AuditArchitectureTests
     }
 
     [Fact]
-    public void Productive_worker_remains_disconnected_from_PostgreSql_and_auditing()
+    public void Productive_worker_uses_module_ports_without_direct_database_or_audit_dependencies()
     {
         var metadata = ProjectMetadataReader.Read(SolutionCatalog.Worker);
-        Assert.DoesNotContain(metadata.ProjectReferencePaths, reference =>
-            reference.Contains("Organizations", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(metadata.PackageReferences, package =>
             package.Contains("Npgsql", StringComparison.OrdinalIgnoreCase));
 

@@ -253,6 +253,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                 data.OrganizationId,
                 orders[0].OrderId,
                 cancellationToken);
+            await CompleteUnownedOutboxAsync(poisonId, cancellationToken);
             await RunBoundedAsync(
                 orders,
                 4,
@@ -1272,7 +1273,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             await using (var claim = new NpgsqlCommand(
                              """
                              SELECT id,lease_token,topic
-                             FROM security.claim_outbox(
+                             FROM security.claim_notifications_outbox(
                                'ops001-non-realtime-consumer',20,interval '30 seconds')
                              """,
                              connection,
@@ -1311,6 +1312,40 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         }
 
         Assert.Equal(Ops001ScenarioData.OrderCount, completed);
+    }
+
+    private async Task CompleteUnownedOutboxAsync(
+        Guid expectedOutboxId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(
+            fixture.Database.WorkerConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await SetWorkerRoleAsync(connection, transaction, cancellationToken);
+        Guid claimedId;
+        Guid leaseToken;
+        await using (var claim = new NpgsqlCommand(
+                         "SELECT id,lease_token FROM security.claim_unowned_outbox('ops001-unowned',1,interval '30 seconds')",
+                         connection,
+                         transaction))
+        await using (var reader = await claim.ExecuteReaderAsync(cancellationToken))
+        {
+            Assert.True(await reader.ReadAsync(cancellationToken));
+            claimedId = reader.GetGuid(0);
+            leaseToken = reader.GetGuid(1);
+            Assert.False(await reader.ReadAsync(cancellationToken));
+        }
+
+        Assert.Equal(expectedOutboxId, claimedId);
+        await using var settle = new NpgsqlCommand(
+            "SELECT security.settle_outbox(@id,@lease,'DEAD','UNKNOWN_TOPIC',NULL)",
+            connection,
+            transaction);
+        settle.Parameters.Add(P("id", claimedId));
+        settle.Parameters.Add(P("lease", leaseToken));
+        Assert.True(await settle.ExecuteScalarAsync(cancellationToken) is true);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<Guid> ReadStatusOutboxIdAsync(

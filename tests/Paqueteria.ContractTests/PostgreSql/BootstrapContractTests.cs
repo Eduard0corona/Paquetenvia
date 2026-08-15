@@ -18,6 +18,8 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
     [
         "claim_outbox", "settle_outbox", "requeue_stale_outbox", "purge_outbox",
         "claim_location_outbox", "settle_location_outbox", "requeue_stale_location_outbox", "purge_location_outbox",
+        "claim_realtime_outbox", "claim_notifications_outbox", "claim_unowned_outbox",
+        "requeue_stale_realtime_outbox", "recover_stale_notifications_outbox", "requeue_stale_unowned_outbox",
     ];
 
     [PostgreSqlContractFact]
@@ -40,21 +42,21 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             new NpgsqlParameter<string[]>("schemas", ExpectedSchemas));
         Assert.Equal(ExpectedSchemas.Order(StringComparer.Ordinal), schemas);
 
-        Assert.Equal(44, await ScalarAsync<int>("""
+        Assert.Equal(47, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas.Where(name => name != "extensions").ToArray())));
 
-        Assert.Equal(35, await ScalarAsync<int>("""
+        Assert.Equal(37, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
               AND c.relrowsecurity AND c.relforcerowsecurity
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas)));
-        Assert.Equal(35, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
+        Assert.Equal(37, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
 
         var lifecycle = await QueryStringsAsync(
             "SELECT proname FROM pg_proc JOIN pg_namespace n ON n.oid=pronamespace WHERE n.nspname='security' AND proname=ANY(@names) ORDER BY proname",
@@ -211,7 +213,7 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             SELECT count(*)::integer FROM information_schema.role_table_grants
             WHERE grantee='paqueteria_maintenance'
             """));
-        Assert.Equal(4, await ScalarAsync<int>("""
+        Assert.Equal(12, await ScalarAsync<int>("""
             SELECT count(*)::integer FROM information_schema.role_table_grants
             WHERE grantee='paqueteria_outbox_executor'
             """));
@@ -223,9 +225,13 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
 
         foreach (var function in new[]
         {
-            "security.claim_outbox(text,integer,interval)",
             "security.settle_outbox(uuid,uuid,text,text,timestamptz)",
-            "security.requeue_stale_outbox(interval,integer,integer)",
+            "security.claim_realtime_outbox(text,integer,interval)",
+            "security.claim_notifications_outbox(text,integer,interval)",
+            "security.claim_unowned_outbox(text,integer,interval)",
+            "security.requeue_stale_realtime_outbox(interval,integer,integer)",
+            "security.recover_stale_notifications_outbox(text,integer,integer,interval)",
+            "security.requeue_stale_unowned_outbox(interval,integer,integer)",
             "security.claim_location_outbox(text,integer,interval)",
             "security.settle_location_outbox(uuid,uuid,text,text,timestamptz)",
             "security.requeue_stale_location_outbox(interval,integer,integer)",
@@ -235,6 +241,11 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             Assert.False(await HasFunctionPrivilegeAsync("paqueteria_app", function));
             Assert.False(await HasFunctionPrivilegeAsync("paqueteria_maintenance", function));
         }
+
+        Assert.False(await HasFunctionPrivilegeAsync(
+            "paqueteria_worker", "security.claim_outbox(text,integer,interval)"));
+        Assert.False(await HasFunctionPrivilegeAsync(
+            "paqueteria_worker", "security.requeue_stale_outbox(interval,integer,integer)"));
 
         foreach (var function in new[]
         {
