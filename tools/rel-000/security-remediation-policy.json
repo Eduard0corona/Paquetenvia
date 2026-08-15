@@ -27,12 +27,11 @@
         "apps/web/pnpm-lock.yaml",
         "apps/web/pnpm-workspace.yaml"
       ]
-    }
-  ],
-  "active_remediations": [
+    },
     {
       "id": "ISSUE-5-SHARP-035-REMEDIATION",
       "mode": "SECURITY_REMEDIATION",
+      "status": "MERGED",
       "authorized_base_sha": "78117e6551b3f758dd82190d3fae325a95dc14c6",
       "authorized_source_branch": "fix/security-sharp-035-override",
       "tracked_issue": 5,
@@ -75,6 +74,124 @@
       },
       "target_sharp_version": "0.35.3",
       "require_sharp_runtime_smoke": true
+    }
+  ],
+  "active_remediations": [
+    {
+      "id": "SEC-2026-08-SECURITY-BASELINE",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "efa7d59bf7781fb70307bda9a0be120aea21cf56",
+      "authorized_source_branch": "fix/security-2026-08-web-transitives",
+      "tracked_issue": 38,
+      "tracked_issue_title": "SEC-2026-08: remediate current web transitive dependency advisories",
+      "related_tracked_issue": 40,
+      "related_tracked_issue_title": "SEC-2026-08: remediate transitive SSH.NET advisory",
+      "issue_advisories": {
+        "38": [
+          "GHSA-fxqj-rqcc-2cmp",
+          "GHSA-rgw5-rvv9-x895",
+          "GHSA-2v37-7h3g-55p8",
+          "GHSA-5p4m-2wfm-xmqj"
+        ],
+        "40": ["GHSA-q939-rpr3-3284"]
+      },
+      "expected_base_advisories": [
+        "GHSA-fxqj-rqcc-2cmp",
+        "GHSA-rgw5-rvv9-x895",
+        "GHSA-2v37-7h3g-55p8",
+        "GHSA-5p4m-2wfm-xmqj",
+        "GHSA-q939-rpr3-3284"
+      ],
+      "expected_base_totals": {
+        "total": 5,
+        "critical": 0,
+        "high": 4,
+        "moderate": 1,
+        "low": 0
+      },
+      "expected_base_packages": {
+        "GHSA-fxqj-rqcc-2cmp": "postcss",
+        "GHSA-rgw5-rvv9-x895": "brace-expansion",
+        "GHSA-2v37-7h3g-55p8": "nanoid",
+        "GHSA-5p4m-2wfm-xmqj": "js-yaml",
+        "GHSA-q939-rpr3-3284": "SSH.NET"
+      },
+      "expected_branch_totals": {
+        "total": 0,
+        "critical": 0,
+        "high": 0,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [],
+      "allowed_dependency_files": [
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml",
+        "Directory.Packages.props",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json"
+      ],
+      "required_dependency_files": [
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml",
+        "Directory.Packages.props",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "expected_direct_versions": {
+        "next": "16.2.11",
+        "eslint-config-next": "16.2.11",
+        "react": "19.2.7",
+        "react-dom": "19.2.7"
+      },
+      "allowed_overrides": {
+        "postcss": "8.5.23",
+        "brace-expansion@<1.1.18": "1.1.18",
+        "brace-expansion@>=4.0.0 <5.0.9": "5.0.9",
+        "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+        "js-yaml@>=4.0.0 <4.3.1": "4.3.1",
+        "next@16.2.11>sharp": "0.35.3"
+      },
+      "expected_lock_version_replacements": {
+        "postcss": {"from": ["8.5.21"], "to": ["8.5.23"]},
+        "brace-expansion": {"from": ["1.1.17", "5.0.8"], "to": ["1.1.18", "5.0.9"]},
+        "nanoid": {"from": ["3.3.16"], "to": ["3.3.18"]},
+        "js-yaml": {"from": ["4.3.0"], "to": ["4.3.1"]},
+        "sharp": {"from": ["0.35.3"], "to": ["0.35.3"]}
+      },
+      "expected_lock_package_count": 475,
+      "expected_nuget_versions": {
+        "Testcontainers.PostgreSql": {"from": "4.13.0", "to": "4.14.0"},
+        "Testcontainers": {"from": "4.13.0", "to": "4.14.0"},
+        "SSH.NET": {"from": "2025.1.0", "to": "2026.0.0"},
+        "BouncyCastle.Cryptography": {"from": "2.6.2", "to": "2.7.0"}
+      },
+      "expected_nuget_dependency_path": "Testcontainers.PostgreSql 4.13.0 -> Testcontainers 4.13.0 -> SSH.NET 2025.1.0",
+      "expected_nuget_advisory": "GHSA-q939-rpr3-3284",
+      "expected_nuget_cve": "CVE-2026-48798",
+      "direct_ssh_net_pin_allowed": false,
+      "central_package_transitive_pinning_allowed": false,
+      "target_sharp_version": "0.35.3",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false,
+      "nanoid_source_reconciliation": {
+        "observed_on": "2026-08-14",
+        "github_advisory_id": "GHSA-2v37-7h3g-55p8",
+        "github_advisory_affected_range": "<3.3.18",
+        "github_advisory_first_patched_version": "3.3.18",
+        "upstream_3_3_17": "partial zero-size fix",
+        "upstream_3_3_18": "completes the missing async/index.native.js guard",
+        "pnpm_3_3_17_result": "ONE_HIGH_ADVISORY",
+        "pnpm_3_3_18_result": "AUDIT_ZERO"
+      }
     }
   ]
 }

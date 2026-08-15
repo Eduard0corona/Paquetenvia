@@ -1357,7 +1357,7 @@ jobs:
       REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
       REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
-      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-sharp-035-override' && 'ISSUE-5-SHARP-035-REMEDIATION' || '' }}
+      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
       REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -1414,6 +1414,13 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
+
+      - name: Set up repository .NET SDK for consolidated audit
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
 
       - name: Capture and sanitize workflow provenance
         env:
@@ -1482,10 +1489,16 @@ jobs:
           issue_number="$(
             python -c 'import json; print(json.load(open("tests/fixtures/rel-000/security-tracking.json", encoding="utf-8"))["issue_number"])'
           )"
+          related_issue_number="$(
+            python -c 'import json; policy=json.load(open("tools/rel-000/security-remediation-policy.json", encoding="utf-8")); print(next(item for item in policy["active_remediations"] if item["id"] == "SEC-2026-08-SECURITY-BASELINE")["related_tracked_issue"])'
+          )"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" \
             > "$RUNNER_TEMP/rel000-security-tracking-raw.json"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${related_issue_number}" \
+            > "$RUNNER_TEMP/rel000-related-security-tracking-raw.json"
           python ./tools/rel-000/rel000.py sanitize-issue \
             --input "$RUNNER_TEMP/rel000-security-tracking-raw.json" \
+            --related-input "$RUNNER_TEMP/rel000-related-security-tracking-raw.json" \
             --output "$RUNNER_TEMP/rel000-security-tracking.json"
 
       - name: Resolve explicit REL-000 mode and verify the branch lockfile
@@ -1511,13 +1524,31 @@ jobs:
           set -euo pipefail
           base_source="$RUNNER_TEMP/rel000-base-source"
           mkdir "$base_source"
-          git archive "$REL000_BASE_MAIN_SHA" \
-            apps/web/package.json \
-            apps/web/pnpm-lock.yaml \
-            apps/web/pnpm-workspace.yaml |
+          git archive "$REL000_BASE_MAIN_SHA" |
             tar -x -C "$base_source"
 
           pnpm --dir "$base_source/apps/web" install --frozen-lockfile --lockfile-only
+          CI=false dotnet restore "$base_source/tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj" --locked-mode
+          CI=false dotnet restore "$base_source/tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj" --locked-mode
+          dotnet restore tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --locked-mode
+          dotnet restore tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj --locked-mode
+
+          dotnet package list \
+            --project "$base_source/tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj" \
+            --vulnerable --include-transitive --format json --no-restore \
+            > "$RUNNER_TEMP/rel000-base-contract-nuget-audit.json"
+          dotnet package list \
+            --project "$base_source/tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj" \
+            --vulnerable --include-transitive --format json --no-restore \
+            > "$RUNNER_TEMP/rel000-base-integration-nuget-audit.json"
+          dotnet package list \
+            --project tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj \
+            --vulnerable --include-transitive --format json --no-restore \
+            > "$RUNNER_TEMP/rel000-branch-contract-nuget-audit.json"
+          dotnet package list \
+            --project tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj \
+            --vulnerable --include-transitive --format json --no-restore \
+            > "$RUNNER_TEMP/rel000-branch-integration-nuget-audit.json"
 
           set +e
           pnpm --dir "$base_source/apps/web" audit --json \
@@ -1534,11 +1565,15 @@ jobs:
           done
           python ./tools/rel-000/rel000.py sanitize-audit \
             --input "$RUNNER_TEMP/rel000-base-audit-raw.json" \
+            --nuget-input "$RUNNER_TEMP/rel000-base-contract-nuget-audit.json" \
+            --nuget-input "$RUNNER_TEMP/rel000-base-integration-nuget-audit.json" \
             --output "$RUNNER_TEMP/rel000-base-audit.json" \
             --command-executed \
             --command-exit-code "$base_audit_exit"
           python ./tools/rel-000/rel000.py sanitize-audit \
             --input "$RUNNER_TEMP/rel000-branch-audit-raw.json" \
+            --nuget-input "$RUNNER_TEMP/rel000-branch-contract-nuget-audit.json" \
+            --nuget-input "$RUNNER_TEMP/rel000-branch-integration-nuget-audit.json" \
             --output "$RUNNER_TEMP/rel000-branch-audit.json" \
             --command-executed \
             --command-exit-code "$branch_audit_exit"
@@ -1598,11 +1633,17 @@ jobs:
             "rel000-issue5-raw.json",
             "rel000-issue5.json",
             "rel000-security-tracking-raw.json",
+            "rel000-related-security-tracking-raw.json",
             "rel000-security-tracking.json",
+            "rel000-security-tracking-related.json",
             "rel000-base-audit-raw.json",
             "rel000-base-audit.json",
+            "rel000-base-contract-nuget-audit.json",
+            "rel000-base-integration-nuget-audit.json",
             "rel000-branch-audit-raw.json",
             "rel000-branch-audit.json",
+            "rel000-branch-contract-nuget-audit.json",
+            "rel000-branch-integration-nuget-audit.json",
             "rel000-sharp-runtime-smoke.json",
             "rel000-workflow-provenance.json"
           )) {

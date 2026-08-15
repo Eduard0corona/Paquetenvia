@@ -1725,6 +1725,22 @@ class OwnerApprovalDecisionTests(unittest.TestCase):
             "additional_security_tracking_issue": {"number": 30, "url": "https://example.invalid"},
         }
 
+    def remediation_report(self) -> dict:
+        report = self.approved_report()
+        report.update(
+            {
+                "dependency_security_status": "REMEDIATED_PENDING_MERGE",
+                "release_candidate_status": "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION",
+                "known_security_issues": [{"id": "Issue #38", "state": "OPEN", "url": "https://example.invalid"}],
+                "additional_security_tracking_issue": {
+                    "number": 40,
+                    "state": "OPEN",
+                    "url": "https://example.invalid",
+                },
+            }
+        )
+        return report
+
     def approval(self) -> dict:
         return {
             "record": self.record,
@@ -1927,7 +1943,9 @@ class OwnerApprovalDecisionTests(unittest.TestCase):
                 self.assertEqual("PENDING", report["owner_approval_status"])
 
     def test_194_valid_approval_emits_internal_state_and_explicit_ext_false(self):
-        report = rel000.apply_owner_approval(self.approved_report(), self.approval())
+        report = rel000.apply_owner_approval(
+            self.approved_report(), self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+        )
         rel000.validate_approved_owner_state(report)
         self.assertEqual("APPROVED", report["owner_approval_status"])
         self.assertEqual("APPROVED_FOR_MVP0_INTERNAL", report["release_candidate_status"])
@@ -1992,13 +2010,81 @@ class OwnerApprovalDecisionTests(unittest.TestCase):
         security["dependency_security_status"] = "FAILED"
         self.assert_reason(
             "OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED",
-            lambda: rel000.apply_owner_approval(security, self.approval()),
+            lambda: rel000.apply_owner_approval(
+                security, self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+            ),
+        )
+        pending = self.approved_report()
+        pending["dependency_security_status"] = "REMEDIATED_PENDING_MERGE"
+        self.assert_reason(
+            "OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED",
+            lambda: rel000.apply_owner_approval(
+                pending, self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+            ),
         )
         technical = self.approved_report()
         technical["technical_evidence_status"] = "FAILED"
         self.assert_reason(
             "OWNER_APPROVAL_TECHNICAL_EVIDENCE_NOT_PASSED",
-            lambda: rel000.apply_owner_approval(technical, self.approval()),
+            lambda: rel000.apply_owner_approval(
+                technical, self.approval(), rel000.NORMAL_RELEASE_EVIDENCE
+            ),
+        )
+
+    def test_200a_security_remediation_preserves_pending_merge_state(self):
+        report = rel000.apply_owner_approval(
+            self.remediation_report(), self.approval(), rel000.SECURITY_REMEDIATION
+        )
+        rel000.validate_security_remediation_owner_state(report)
+        self.assertEqual("APPROVED", report["owner_approval_status"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", report["dependency_security_status"])
+        self.assertNotEqual("PASSED", report["dependency_security_status"])
+        self.assertEqual("BLOCKED_BY_SECURITY_REMEDIATION_MERGE", report["release_candidate_status"])
+        self.assertEqual("SECURITY_REMEDIATION_READY_FOR_MERGE", report["technical_gate_outcome"])
+        self.assertEqual("REL000_SECURITY_REMEDIATION_READY_FOR_MERGE", report["result"])
+        self.assertEqual("OPEN", report["known_security_issues"][0]["state"])
+        self.assertEqual("OPEN", report["additional_security_tracking_issue"]["state"])
+
+    def test_200b_security_remediation_rejects_other_dependency_states(self):
+        for status in ("BLOCKED", "PASSED"):
+            with self.subTest(status=status):
+                report = self.remediation_report()
+                report["dependency_security_status"] = status
+                self.assert_reason(
+                    "OWNER_APPROVAL_DEPENDENCY_SECURITY_NOT_PASSED",
+                    lambda report=report: rel000.apply_owner_approval(
+                        report, self.approval(), rel000.SECURITY_REMEDIATION
+                    ),
+                )
+
+    def test_200c_security_remediation_rejects_failed_technical_evidence(self):
+        report = self.remediation_report()
+        report["technical_evidence_status"] = "FAILED"
+        self.assert_reason(
+            "OWNER_APPROVAL_TECHNICAL_EVIDENCE_NOT_PASSED",
+            lambda: rel000.apply_owner_approval(
+                report, self.approval(), rel000.SECURITY_REMEDIATION
+            ),
+        )
+
+    def test_200d_security_remediation_rejects_invalid_durable_approval(self):
+        approval = self.approval()
+        approval["artifact"]["storage"] = "LIVE_ARTIFACT"
+        self.assert_reason(
+            "SECURITY_REMEDIATION_OWNER_STATE_INVALID",
+            lambda: rel000.validate_security_remediation_owner_state(
+                rel000.apply_owner_approval(
+                    self.remediation_report(), approval, rel000.SECURITY_REMEDIATION
+                )
+            ),
+        )
+
+    def test_200e_owner_transition_rejects_unknown_mode(self):
+        self.assert_reason(
+            "REL000_MODE_INVALID",
+            lambda: rel000.apply_owner_approval(
+                self.approved_report(), self.approval(), "UNKNOWN"
+            ),
         )
 
     def test_201_live_artifact_metadata_fields_fail_closed(self):
@@ -2984,11 +3070,26 @@ class SharpRemediationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-sharp-tests-")
         self.root = Path(self.temp.name)
-        self.policy_value = json.loads(
+        current_policy = json.loads(
             (REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json").read_text(
                 encoding="utf-8"
             )
         )
+        sharp = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.SHARP_REMEDIATION_ID
+            )
+        )
+        sharp.pop("status", None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.SHARP_REMEDIATION_ID
+        ]
+        self.policy_value["active_remediations"] = [sharp]
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -3316,6 +3417,430 @@ class SharpRemediationPolicyTests(unittest.TestCase):
 
     def test_130_dynamic_skipped_zero(self):
         suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)]); result = focused_runner.execute_suite(suite, 1, stream=io.StringIO()); self.assertEqual(0, result["python_tests_skipped"])
+
+
+class WebTransitiveRemediationPolicyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-web-transitive-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
+        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.WEB_TRANSITIVE_REMEDIATION_ID
+            )
+        )
+
+    @staticmethod
+    def advisory(advisory_id: str, package: str, severity: str, version: str):
+        return {
+            "advisory_id": advisory_id,
+            "package": package,
+            "installed_versions": [version],
+            "severity": severity,
+            "affected_range": "authorized-base-range",
+            "patched_range": "authorized-target-range",
+            "direct_or_transitive": "transitive",
+            "dependency_path_count": 1,
+            "fix_available": True,
+            "fix_compatibility": "compatible_patch_available",
+        }
+
+    def base_advisories(self):
+        return [
+            self.advisory("GHSA-fxqj-rqcc-2cmp", "postcss", "moderate", "8.5.21"),
+            self.advisory(
+                "GHSA-rgw5-rvv9-x895",
+                "brace-expansion",
+                "high",
+                "1.1.17,5.0.8",
+            ),
+            self.advisory("GHSA-2v37-7h3g-55p8", "nanoid", "high", "3.3.16"),
+            self.advisory("GHSA-5p4m-2wfm-xmqj", "js-yaml", "high", "4.3.0"),
+            self.advisory("GHSA-q939-rpr3-3284", "SSH.NET", "high", "2025.1.0"),
+        ]
+
+    @staticmethod
+    def audit(advisories):
+        values = copy.deepcopy(advisories)
+        totals = {
+            key: sum(item["severity"] == key for item in values)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(values)
+        return {
+            "command_executed": True,
+            "command_exit_code": 1 if values else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "advisories": values,
+        }
+
+    def security_inputs(self, *, branch=None, issue_state="OPEN", tracked_ids=None):
+        authorization = self.authorization()
+        return (
+            {
+                "number": 5,
+                "state": "CLOSED",
+                "title": "Sharp historical remediation",
+                "url": "https://github.com/example/issues/5",
+                "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+            },
+            {
+                "number": 38,
+                "state": issue_state,
+                "title": authorization["tracked_issue_title"],
+                "url": "https://github.com/example/issues/38",
+                "tracked_advisory_ids": tracked_ids
+                if tracked_ids is not None
+                else authorization["issue_advisories"]["38"],
+                "related_issue": {
+                    "number": 40,
+                    "state": issue_state,
+                    "title": authorization["related_tracked_issue_title"],
+                    "url": "https://github.com/example/issues/40",
+                    "tracked_advisory_ids": authorization["issue_advisories"]["40"],
+                },
+            },
+            self.audit(self.base_advisories()),
+            branch if branch is not None else self.audit([]),
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+        )
+
+    def dependency_repo(self):
+        authorization = self.authorization()
+        root = self.root / "repo"
+        authorized_files = sorted(
+            set(authorization["allowed_dependency_files"])
+            | set(authorization["allowed_non_dependency_files"])
+        )
+        input_files = sorted(set(authorized_files) | {"apps/web/package.json"})
+        for relative in input_files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = subprocess.check_output(
+                ["git", "show", f"{authorization['authorized_base_sha']}:{relative}"],
+                cwd=REPOSITORY_ROOT,
+                text=True,
+            )
+            path.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True
+        )
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        for relative in authorized_files:
+            (root / relative).write_text(
+                (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        return root, base, authorization
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    def test_web_transitive_policy_is_the_only_active_authorization(self):
+        policy = self.policy()
+        self.assertEqual(
+            [rel000.WEB_TRANSITIVE_REMEDIATION_ID],
+            [item["id"] for item in policy["active_remediations"]],
+        )
+        historical = {item["id"]: item for item in policy["historical_remediations"]}
+        self.assertEqual("MERGED", historical[rel000.SHARP_REMEDIATION_ID]["status"])
+
+    def test_web_transitive_mode_requires_exact_branch_and_id(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["id"],
+            ),
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED",
+            lambda: rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"]
+            ),
+        )
+
+    def test_current_repository_matches_exact_dependency_authorization(self):
+        authorization = self.authorization()
+        result = rel000.validate_dependency_diff(
+            REPOSITORY_ROOT,
+            authorization["authorized_base_sha"],
+            rel000.SECURITY_REMEDIATION,
+            authorization,
+        )
+        self.assertEqual(475, result["lock_package_count"])
+        self.assertEqual(["nanoid@3.3.18"], [key for key in result["added_lock_package_keys"] if key.startswith("nanoid@")])
+        self.assertEqual("2026.0.0", result["nuget_versions"]["SSH.NET"])
+
+    def test_nanoid_source_reconciliation_is_exact(self):
+        reconciliation = self.authorization()["nanoid_source_reconciliation"]
+        self.assertEqual("<3.3.18", reconciliation["github_advisory_affected_range"])
+        self.assertEqual("3.3.18", reconciliation["github_advisory_first_patched_version"])
+        self.assertEqual("ONE_HIGH_ADVISORY", reconciliation["pnpm_3_3_17_result"])
+        self.assertEqual("AUDIT_ZERO", reconciliation["pnpm_3_3_18_result"])
+
+    def test_exact_dependency_files_and_non_dependency_allowlist(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            {
+                "apps/web/pnpm-lock.yaml",
+                "apps/web/pnpm-workspace.yaml",
+                "Directory.Packages.props",
+                "tests/Paqueteria.ContractTests/packages.lock.json",
+                "tests/Paqueteria.IntegrationTests/packages.lock.json",
+            },
+            set(authorization["required_dependency_files"]),
+        )
+        self.assertEqual(
+            {
+                ".github/workflows/ci.yml",
+                "tests/fixtures/rel-000/security-tracking.json",
+                "tools/rel-000/rel000.py",
+                "tools/rel-000/security-remediation-policy.json",
+                "tools/rel-000/test_rel000.py",
+            },
+            set(authorization["allowed_non_dependency_files"]),
+        )
+
+    def test_package_manifest_change_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["dependencies"]["nanoid"] = "3.3.18"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_nanoid_3_3_17_target_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        workspace = root / "apps/web/pnpm-workspace.yaml"
+        workspace.write_text(
+            workspace.read_text(encoding="utf-8")
+            .replace("nanoid@>=3.0.0 <3.3.18", "nanoid@>=3.0.0 <3.3.17")
+            .replace(": 3.3.18", ": 3.3.17"),
+            encoding="utf-8",
+        )
+        lock = root / "apps/web/pnpm-lock.yaml"
+        lock.write_text(lock.read_text(encoding="utf-8").replace("nanoid@3.3.18", "nanoid@3.3.17").replace("nanoid: 3.3.18", "nanoid: 3.3.17"), encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_release_age_exclusion_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        workspace = root / "apps/web/pnpm-workspace.yaml"
+        workspace.write_text(
+            workspace.read_text(encoding="utf-8").replace(
+                "overrides:\n",
+                "minimumReleaseAgeExclude:\n  - postcss@8.5.23\noverrides:\n",
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "RELEASE_AGE_EXCLUSION_RETAINED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_sharp_integrity_drift_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        lock = root / "apps/web/pnpm-lock.yaml"
+        lock.write_text(
+            lock.read_text(encoding="utf-8").replace(
+                "sha512-ej0zVHuZGHCiABXcNxeYhpRnPNPAcvbG8RMdBAhDAxLKkCRVSpK3Iyu7qbqw3JMzoj0REeM6f3tJLtVwl0023Q==",
+                "sha512-unauthorized-integrity",
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "SHARP_LOCK_INTEGRITY_CHANGED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_unexpected_file_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "unexpected.txt"
+        path.write_text("outside allowlist", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_issue_38_and_zero_audit_are_pending_merge(self):
+        result = rel000.validate_issue_and_audit(
+            *self.security_inputs(),
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+        )
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual("Issue #38", result["known_security_issues"][1]["id"])
+        self.assertEqual(4, result["known_security_issues"][1]["tracked_advisories"])
+        self.assertEqual("Issue #40", result["known_security_issues"][2]["id"])
+        self.assertEqual(1, result["known_security_issues"][2]["tracked_advisories"])
+
+    def test_issue_38_wrong_advisory_set_is_rejected(self):
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_TRACKING_INVALID",
+            lambda: rel000.validate_issue_and_audit(
+                *self.security_inputs(tracked_ids=["GHSA-1111-2222-3333"]),
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+            ),
+        )
+
+    def test_issue_40_is_required_with_exact_ssh_net_advisory(self):
+        inputs = list(self.security_inputs())
+        inputs[1].pop("related_issue")
+        self.assert_reason(
+            "RELATED_SECURITY_TRACKING_INVALID",
+            lambda: rel000.validate_issue_and_audit(
+                *inputs,
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+            ),
+        )
+
+    def test_nuget_lock_drift_outside_exact_graph_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        lock = root / "tests/Paqueteria.ContractTests/packages.lock.json"
+        lock.write_text(
+            lock.read_text(encoding="utf-8").replace(
+                '"resolved": "2.7.0"', '"resolved": "2.6.2"', 1
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "NUGET_LOCK_VERSION_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_combined_audit_sanitizer_deduplicates_nuget_projects(self):
+        web_input = self.root / "web-audit.json"
+        nuget_input = self.root / "nuget-audit.json"
+        output = self.root / "combined-audit.json"
+        web_input.write_text('{"vulnerabilities": {}}', encoding="utf-8")
+        package = {
+            "id": "SSH.NET",
+            "resolvedVersion": "2025.1.0",
+            "vulnerabilities": [
+                {
+                    "severity": "High",
+                    "advisoryurl": "https://github.com/advisories/GHSA-q939-rpr3-3284",
+                }
+            ],
+        }
+        nuget_input.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "projects": [
+                        {
+                            "frameworks": [
+                                {"transitivePackages": [package]},
+                                {"transitivePackages": [package]},
+                            ]
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rel000.sanitize_audit(web_input, output, True, 0, [nuget_input])
+        audit = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(1, audit["totals"]["total"])
+        self.assertEqual("GHSA-Q939-RPR3-3284", audit["advisories"][0]["advisory_id"])
+        self.assertEqual(2, audit["advisories"][0]["dependency_path_count"])
+
+    def test_closed_consolidated_tracking_passes_zero_audit_on_main(self):
+        inputs = list(self.security_inputs(issue_state="CLOSED"))
+        inputs[2] = self.audit([])
+        inputs[3] = self.audit([])
+        inputs[4] = {
+            "dependency_diff_against_base": "CLEAN",
+            "vulnerable_lock_versions": [],
+        }
+        result = rel000.validate_issue_and_audit(
+            *inputs,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+        )
+        self.assertEqual("PASSED", result["dependency_security_status"])
+
+    def test_issue_38_must_remain_open_until_merge(self):
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: rel000.validate_issue_and_audit(
+                *self.security_inputs(issue_state="CLOSED"),
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+            ),
+        )
+
+    def test_nanoid_3_3_17_branch_audit_is_rejected(self):
+        nanoid = self.advisory(
+            "GHSA-2v37-7h3g-55p8", "nanoid", "high", "3.3.17"
+        )
+        self.assert_reason(
+            "BRANCH_AUDIT_NOT_ZERO",
+            lambda: rel000.validate_issue_and_audit(
+                *self.security_inputs(branch=self.audit([nanoid])),
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+            ),
+        )
+
+    def test_fixture_and_ci_bind_exact_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(38, fixture["issue_number"])
+        self.assertIn("fix/security-2026-08-web-transitives", workflow)
+        self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
+        self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
 
 
 if __name__ == "__main__":
