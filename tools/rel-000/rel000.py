@@ -3935,16 +3935,171 @@ def _base_nuget_package_catalog(
     return catalog
 
 
-def validate_project_reference_lockfile_diff(
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _baseline_central_package_versions(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: set[str],
+) -> dict[str, tuple[str, str]]:
+    props_path = "Directory.Packages.props"
+    if props_path in all_changed:
+        fail(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            "Directory.Packages.props must remain byte-identical to the baseline.",
+        )
+    baseline_raw = run_git(repository_root, "show", f"{base_main_sha}:{props_path}")
+    current_path = repository_root / props_path
+    if not current_path.is_file() or current_path.read_text(encoding="utf-8").strip() != baseline_raw:
+        fail(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            "Directory.Packages.props must remain byte-identical to the baseline.",
+        )
+    try:
+        root = ET.fromstring(baseline_raw)
+    except ET.ParseError as exc:
+        fail(
+            "BASE_DEPENDENCY_MANIFEST_INVALID",
+            "The baseline central package manifest is invalid XML.",
+            error=str(exc),
+        )
+    central_enabled = any(
+        _xml_local_name(element.tag).casefold() == "managepackageversionscentrally"
+        and (element.text or "").strip().casefold() == "true"
+        for element in root.iter()
+    )
+    if not central_enabled:
+        fail(
+            "BASE_DEPENDENCY_MANIFEST_INVALID",
+            "The baseline does not enable Central Package Management.",
+        )
+    versions: dict[str, tuple[str, str]] = {}
+    for element in root.iter():
+        if _xml_local_name(element.tag).casefold() != "packageversion":
+            continue
+        package = element.attrib.get("Include")
+        version = element.attrib.get("Version")
+        if not package or not version:
+            fail(
+                "BASE_DEPENDENCY_MANIFEST_INVALID",
+                "A baseline PackageVersion must use explicit Include and Version attributes.",
+            )
+        key = package.casefold()
+        if key in versions:
+            fail(
+                "BASE_DEPENDENCY_MANIFEST_INVALID",
+                "The baseline central package manifest contains a duplicate package ID.",
+                package=package,
+            )
+        versions[key] = (package, version)
+    return versions
+
+
+def _new_project_package_references(
+    project_path: Path,
+    relative: str,
+) -> dict[str, str]:
+    try:
+        root = ET.parse(project_path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        fail(
+            "NUGET_NEW_PROJECT_INVALID",
+            "A new project associated with a NuGet lockfile is invalid XML.",
+            file=relative,
+            error=str(exc),
+        )
+    forbidden_properties = {
+        "restoreadditionalprojectsources",
+        "restoreconfigfile",
+        "restorefallbackfolders",
+        "restoresources",
+        "directorypackagespropspath",
+        "centralpackagetransitivepinningenabled",
+        "centralpackageversionoverrideenabled",
+    }
+    package_references: dict[str, str] = {}
+    for element in root.iter():
+        name = _xml_local_name(element.tag).casefold()
+        if name == "import" or name in forbidden_properties or (
+            "source" in name and ("restore" in name or "package" in name)
+        ):
+            fail(
+                "NUGET_NEW_PROJECT_SOURCE_OVERRIDE",
+                "A new project must not override package sources or import dependency settings.",
+                file=relative,
+            )
+        if name in {"packageversion", "packagedownload", "globalpackagereference"}:
+            fail(
+                "NUGET_NEW_PROJECT_LOCAL_PACKAGE_DECLARATION",
+                "A new project must use baseline Central Package Management only.",
+                file=relative,
+            )
+        if name == "managepackageversionscentrally" and (
+            element.text or ""
+        ).strip().casefold() != "true":
+            fail(
+                "NUGET_NEW_PROJECT_CPM_DISABLED",
+                "A new project must not disable Central Package Management.",
+                file=relative,
+            )
+        if name != "packagereference":
+            continue
+        attribute_names = {key.casefold() for key in element.attrib}
+        if "condition" in attribute_names or "update" in attribute_names:
+            fail(
+                "NUGET_NEW_PROJECT_PACKAGE_REFERENCE_INVALID",
+                "A new project PackageReference must be unconditional and use Include.",
+                file=relative,
+            )
+        package = element.attrib.get("Include")
+        if not package or "$" in package:
+            fail(
+                "NUGET_NEW_PROJECT_PACKAGE_REFERENCE_INVALID",
+                "A new project PackageReference must use a literal package ID.",
+                file=relative,
+            )
+        local_version = any(
+            key.casefold() in {"version", "versionoverride"}
+            for key in element.attrib
+        ) or any(
+            _xml_local_name(child.tag).casefold() in {"version", "versionoverride"}
+            for child in element
+        )
+        if local_version:
+            fail(
+                "NUGET_NEW_PROJECT_LOCAL_VERSION",
+                "A new project PackageReference must not contain Version or VersionOverride.",
+                file=relative,
+                package=package,
+            )
+        key = package.casefold()
+        if key in package_references:
+            fail(
+                "NUGET_NEW_PROJECT_PACKAGE_REFERENCE_INVALID",
+                "A new project contains a duplicate PackageReference.",
+                file=relative,
+                package=package,
+            )
+        package_references[key] = package
+    return package_references
+
+
+def _requested_version_matches_central(requested: Any, version: str) -> bool:
+    return isinstance(requested, str) and requested == f"[{version}, )"
+
+
+def validate_baseline_package_graph_lockfile_diff(
     repository_root: Path,
     base_main_sha: str,
     all_changed: list[str],
 ) -> list[str]:
-    """Accept only NuGet lock drift caused by project graph composition.
+    """Accept only lock drift whose full package graph exists in the baseline.
 
-    Existing lockfiles must preserve every non-Project node exactly. A lockfile
-    for a new project may contain only package nodes already present with the
-    same framework and exact resolved metadata in the baseline catalog.
+    Existing locks may change only Project nodes. New locks must have one
+    corresponding changed project, use baseline Central Package Management,
+    and contain exact baseline package metadata for every non-Project node.
     """
 
     lockfiles = sorted(
@@ -3953,7 +4108,7 @@ def validate_project_reference_lockfile_diff(
     if not lockfiles:
         return []
     base_catalog: dict[tuple[str, str], list[dict[str, Any]]] | None = None
-    mechanical: list[str] = []
+    baseline_graph_only: list[str] = []
     changed_set = set(all_changed)
     for relative in lockfiles:
         current = load_json(repository_root / relative)
@@ -3978,7 +4133,7 @@ def validate_project_reference_lockfile_diff(
                 )
             if current.get("version") != base.get("version") or current_packages != _nuget_package_nodes(base):
                 continue
-            mechanical.append(relative)
+            baseline_graph_only.append(relative)
             continue
 
         project_files = [
@@ -3989,11 +4144,55 @@ def validate_project_reference_lockfile_diff(
         ]
         if len(project_files) != 1:
             continue
+        central_versions = _baseline_central_package_versions(
+            repository_root,
+            base_main_sha,
+            changed_set,
+        )
+        project_relative = project_files[0]
+        direct_references = _new_project_package_references(
+            repository_root / project_relative,
+            project_relative,
+        )
+        for key, package in direct_references.items():
+            if key not in central_versions:
+                fail(
+                    "NUGET_NEW_PROJECT_DIRECT_PACKAGE_NOT_BASELINE_CENTRAL",
+                    "A new project directly references a package not approved centrally in the baseline.",
+                    file=project_relative,
+                    package=package,
+                )
+        lock_direct: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        for (framework, package), node in current_packages.items():
+            if node.get("type") == "Direct":
+                lock_direct.setdefault(package.casefold(), []).append((framework, node))
+        if set(lock_direct) != set(direct_references):
+            fail(
+                "NUGET_NEW_PROJECT_DIRECT_GRAPH_MISMATCH",
+                "The new project PackageReferences do not match the direct lockfile graph.",
+                file=relative,
+            )
+        for key, package in direct_references.items():
+            _, central_version = central_versions[key]
+            for framework, node in lock_direct[key]:
+                if (
+                    node.get("resolved") != central_version
+                    or not _requested_version_matches_central(
+                        node.get("requested"), central_version
+                    )
+                ):
+                    fail(
+                        "NUGET_NEW_PROJECT_CENTRAL_VERSION_MISMATCH",
+                        "A new project lockfile did not resolve its exact baseline central version.",
+                        file=relative,
+                        framework=framework,
+                        package=package,
+                    )
         if base_catalog is None:
             base_catalog = _base_nuget_package_catalog(repository_root, base_main_sha)
         if all(node in base_catalog.get(key, []) for key, node in current_packages.items()):
-            mechanical.append(relative)
-    return mechanical
+            baseline_graph_only.append(relative)
+    return baseline_graph_only
 
 
 def validate_dependency_diff(
@@ -4013,7 +4212,7 @@ def validate_dependency_diff(
             if path.strip()
         }
     )
-    mechanical_project_lockfiles = validate_project_reference_lockfile_diff(
+    baseline_package_graph_lockfiles = validate_baseline_package_graph_lockfile_diff(
         repository_root,
         base_main_sha,
         all_changed,
@@ -4028,7 +4227,7 @@ def validate_dependency_diff(
         path
         for path in all_changed
         if Path(path).name in DEPENDENCY_FILE_NAMES
-        and path not in mechanical_project_lockfiles
+        and path not in baseline_package_graph_lockfiles
         and path not in allowed_dependency_files
     )
     if unexpected_dependency_files:
@@ -4046,11 +4245,11 @@ def validate_dependency_diff(
             )
         return {
             "dependency_manifest_changed": False,
-            "dependency_lockfile_changed": bool(mechanical_project_lockfiles),
+            "dependency_lockfile_changed": bool(baseline_package_graph_lockfiles),
             "dependency_workspace_changed": False,
             "dependency_diff_against_base": "CLEAN",
-            "changed_dependency_files": mechanical_project_lockfiles,
-            "project_reference_lockfiles": mechanical_project_lockfiles,
+            "changed_dependency_files": baseline_package_graph_lockfiles,
+            "baseline_package_graph_lockfiles": baseline_package_graph_lockfiles,
             "lockfile_consistency_verified": True,
             "vulnerable_lock_versions": [],
         }

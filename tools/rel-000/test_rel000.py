@@ -3419,7 +3419,7 @@ class SharpRemediationPolicyTests(unittest.TestCase):
         suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)]); result = focused_runner.execute_suite(suite, 1, stream=io.StringIO()); self.assertEqual(0, result["python_tests_skipped"])
 
 
-class NormalProjectReferenceLockfileTests(unittest.TestCase):
+class BaselinePackageGraphLockfileTests(unittest.TestCase):
     baseline = "988926c7892af98015be2be9559682f156b2748b"
 
     def setUp(self) -> None:
@@ -3428,7 +3428,13 @@ class NormalProjectReferenceLockfileTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_ntf001_project_reference_locks_preserve_dependency_baseline(self):
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def test_k_ntf001_lockfiles_preserve_the_baseline_package_graph(self):
         result = rel000.validate_dependency_diff(
             REPOSITORY_ROOT,
             self.baseline,
@@ -3447,14 +3453,20 @@ class NormalProjectReferenceLockfileTests(unittest.TestCase):
                 "tests/Paqueteria.UnitTests/packages.lock.json",
                 "tools/Paqueteria.DatabaseMigrator/packages.lock.json",
             ],
-            result["project_reference_lockfiles"],
+            result["baseline_package_graph_lockfiles"],
         )
 
-    def dependency_repo(self):
+    def existing_lock_repo(self):
         root = Path(self.temp.name) / "repo"
         project = root / "sample/Sample.csproj"
         lock = root / "sample/packages.lock.json"
         project.parent.mkdir(parents=True)
+        (root / "Directory.Packages.props").write_text(
+            "<Project><PropertyGroup>"
+            "<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>"
+            "</PropertyGroup></Project>\n",
+            encoding="utf-8",
+        )
         project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\" />\n", encoding="utf-8")
         source = REPOSITORY_ROOT / "tests/Paqueteria.UnitTests/packages.lock.json"
         baseline_lock = subprocess.check_output(
@@ -3471,8 +3483,74 @@ class NormalProjectReferenceLockfileTests(unittest.TestCase):
         base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         return root, base, lock, source
 
-    def test_project_nodes_only_are_dependency_clean(self):
-        root, base, lock, source = self.dependency_repo()
+    def new_project_repo(self):
+        root = Path(self.temp.name) / "repo"
+        catalog = root / "catalog"
+        catalog.mkdir(parents=True)
+        (root / "Directory.Packages.props").write_text(
+            "<Project><PropertyGroup>"
+            "<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>"
+            "</PropertyGroup><ItemGroup>"
+            '<PackageVersion Include="Baseline.Direct" Version="1.2.3" />'
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+        (catalog / "Catalog.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk" />\n', encoding="utf-8"
+        )
+        direct = {
+            "type": "Direct",
+            "requested": "[1.2.3, )",
+            "resolved": "1.2.3",
+            "contentHash": "baseline-direct-hash",
+            "dependencies": {"Baseline.Transitive": "4.5.6"},
+        }
+        transitive = {
+            "type": "Transitive",
+            "resolved": "4.5.6",
+            "contentHash": "baseline-transitive-hash",
+        }
+        baseline_lock = {
+            "version": 2,
+            "dependencies": {
+                "net10.0": {
+                    "Baseline.Direct": direct,
+                    "Baseline.Transitive": transitive,
+                }
+            },
+        }
+        (catalog / "packages.lock.json").write_text(
+            json.dumps(baseline_lock, indent=2) + "\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        project = root / "new/New.csproj"
+        lock = root / "new/packages.lock.json"
+        project.parent.mkdir(parents=True)
+        return root, base, project, lock, copy.deepcopy(baseline_lock)
+
+    @staticmethod
+    def write_new_project(project: Path, package_body: str = "") -> None:
+        project.write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+            f"{package_body}"
+            '<ProjectReference Include="../catalog/Catalog.csproj" />'
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def write_lock(lock: Path, value: dict[str, Any]) -> None:
+        lock.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+    def test_a_existing_lock_allows_only_project_node_changes(self):
+        root, base, lock, source = self.existing_lock_repo()
         current = json.loads(lock.read_text(encoding="utf-8"))
         current["dependencies"]["net10.0"]["notifications.domain"] = {
             "type": "Project",
@@ -3481,10 +3559,13 @@ class NormalProjectReferenceLockfileTests(unittest.TestCase):
         lock.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
         result = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE)
         self.assertEqual("CLEAN", result["dependency_diff_against_base"])
-        self.assertEqual(["sample/packages.lock.json"], result["project_reference_lockfiles"])
+        self.assertEqual(
+            ["sample/packages.lock.json"],
+            result["baseline_package_graph_lockfiles"],
+        )
 
-    def test_package_node_drift_remains_fail_closed(self):
-        root, base, lock, source = self.dependency_repo()
+    def test_b_existing_lock_package_node_drift_fails_closed(self):
+        root, base, lock, source = self.existing_lock_repo()
         current = json.loads(lock.read_text(encoding="utf-8"))
         package = next(
             node
@@ -3496,6 +3577,118 @@ class NormalProjectReferenceLockfileTests(unittest.TestCase):
         with self.assertRaises(rel000.ValidationFailure) as raised:
             rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE)
         self.assertEqual("UNAUTHORIZED_DEPENDENCY_FILE_CHANGED", raised.exception.reason_code)
+
+    def test_c_new_project_with_only_project_references_is_clean(self):
+        root, base, project, lock, current = self.new_project_repo()
+        self.write_new_project(project)
+        current["dependencies"]["net10.0"] = {
+            "catalog": {"type": "Project"}
+        }
+        self.write_lock(lock, current)
+        result = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE)
+        self.assertEqual(
+            ["new/packages.lock.json"],
+            result["baseline_package_graph_lockfiles"],
+        )
+
+    def test_d_new_project_allows_baseline_central_direct_package(self):
+        root, base, project, lock, current = self.new_project_repo()
+        self.write_new_project(
+            project, '<PackageReference Include="Baseline.Direct" />'
+        )
+        self.write_lock(lock, current)
+        result = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE)
+        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
+        self.assertEqual(
+            ["new/packages.lock.json"],
+            result["baseline_package_graph_lockfiles"],
+        )
+
+    def test_e_transitive_baseline_package_cannot_be_promoted_to_direct(self):
+        root, base, project, lock, current = self.new_project_repo()
+        self.write_new_project(
+            project, '<PackageReference Include="Baseline.Transitive" />'
+        )
+        nodes = current["dependencies"]["net10.0"]
+        nodes.pop("Baseline.Direct")
+        nodes["Baseline.Transitive"]["type"] = "Direct"
+        nodes["Baseline.Transitive"]["requested"] = "[4.5.6, )"
+        self.write_lock(lock, current)
+        self.assert_reason(
+            "NUGET_NEW_PROJECT_DIRECT_PACKAGE_NOT_BASELINE_CENTRAL",
+            lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
+    def test_f_new_direct_package_id_fails_closed(self):
+        root, base, project, lock, current = self.new_project_repo()
+        self.write_new_project(project, '<PackageReference Include="New.Package" />')
+        current["dependencies"]["net10.0"] = {
+            "New.Package": {
+                "type": "Direct",
+                "requested": "[1.0.0, )",
+                "resolved": "1.0.0",
+                "contentHash": "new-hash",
+            }
+        }
+        self.write_lock(lock, current)
+        self.assert_reason(
+            "NUGET_NEW_PROJECT_DIRECT_PACKAGE_NOT_BASELINE_CENTRAL",
+            lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
+    def test_g_local_package_reference_version_fails_closed(self):
+        root, base, project, lock, current = self.new_project_repo()
+        self.write_new_project(
+            project,
+            '<PackageReference Include="Baseline.Direct" Version="1.2.3" />',
+        )
+        self.write_lock(lock, current)
+        self.assert_reason(
+            "NUGET_NEW_PROJECT_LOCAL_VERSION",
+            lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
+    def test_h_package_reference_version_override_fails_closed(self):
+        root, base, project, lock, current = self.new_project_repo()
+        self.write_new_project(
+            project,
+            '<PackageReference Include="Baseline.Direct" VersionOverride="1.2.3" />',
+        )
+        self.write_lock(lock, current)
+        self.assert_reason(
+            "NUGET_NEW_PROJECT_LOCAL_VERSION",
+            lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
+    def test_i_new_lock_package_metadata_drift_fails_closed(self):
+        root, base, project, lock, current = self.new_project_repo()
+        self.write_new_project(
+            project, '<PackageReference Include="Baseline.Direct" />'
+        )
+        current["dependencies"]["net10.0"]["Baseline.Transitive"][
+            "contentHash"
+        ] = "altered-hash"
+        self.write_lock(lock, current)
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
+    def test_j_custom_restore_source_fails_closed(self):
+        root, base, project, lock, current = self.new_project_repo()
+        project.write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+            "<RestoreAdditionalProjectSources>https://packages.invalid/v3/index.json"
+            "</RestoreAdditionalProjectSources></PropertyGroup><ItemGroup>"
+            '<PackageReference Include="Baseline.Direct" />'
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+        self.write_lock(lock, current)
+        self.assert_reason(
+            "NUGET_NEW_PROJECT_SOURCE_OVERRIDE",
+            lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
 
 
 class WebTransitiveRemediationPolicyTests(unittest.TestCase):
