@@ -120,20 +120,28 @@ tenant.
 
 ## Rollback y limitaciones
 
-Rollback operativo:
+El downgrade de schema EF y el rollback operativo de routing son operaciones
+distintas. `Migration.Down()` no ejecuta el rollback operativo: falla cerrado
+con `NTF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED`. Esto impide que EF elimine la fila
+de `platform.__ef_migrations_history_notifications` mientras el schema y los
+datos NTF permanecen aplicados.
+
+Rollback operativo de routing:
 
 1. deshabilitar/detener el dispatcher Notifications;
 2. drenar o terminalizar todas las filas Notifications-owned;
-3. ejecutar la evolución Down sólo cuando no existan filas activas;
-4. restaurar EXECUTE de la claim/recovery global anterior y revocar las claims
-   NTF al worker;
-5. validar Realtime y location outbox.
+3. ejecutar `OperationalRollbackSql` bajo el rol autorizado sólo cuando no
+   existan filas activas;
+4. desplegar o revertir al worker anterior;
+5. validar que se restauró EXECUTE de la claim/recovery global anterior y se
+   revocaron las claims/recovery NTF al worker;
+6. validar Realtime y location outbox.
 
-La guarda de rollback falla cerrado mientras exista una fila Notifications en
-PENDING/RETRY/PROCESSING. El rollback no elimina Notifications, templates,
-historial ni outbox; tampoco reconstruye eventos. La migración permanece como
-evidencia durable y cualquier retirada posterior de estructuras requiere otro
-paquete autorizado.
+La guarda del rollback operativo falla cerrado mientras exista una fila
+Notifications en PENDING/RETRY/PROCESSING. El rollback conserva la entrada de
+migration history, las tablas Notifications, templates, status history y sus
+datos; no reconstruye eventos. Una futura retirada física del schema requiere
+otro paquete y otra migración explícitamente autorizados.
 
 NTF-001 no implementa inbox, UI, providers externos, email/SMS/push, EXT-001,
 deployment, piloto ni producción.

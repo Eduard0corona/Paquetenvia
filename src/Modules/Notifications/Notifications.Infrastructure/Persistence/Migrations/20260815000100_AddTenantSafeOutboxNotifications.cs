@@ -11,7 +11,20 @@ public sealed class AddTenantSafeOutboxNotifications : Migration
 
     protected override void Up(MigrationBuilder migrationBuilder) => migrationBuilder.Sql(UpSql);
 
-    protected override void Down(MigrationBuilder migrationBuilder) => migrationBuilder.Sql(DownSql);
+    protected override void Down(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.Sql(SchemaDowngradeNotSupportedSql);
+
+    public const string SchemaDowngradeNotSupportedSql =
+        """
+        DO $schema_downgrade$
+        BEGIN
+          RAISE EXCEPTION USING
+            MESSAGE = 'NTF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED',
+            DETAIL = 'Use the NTF-001 operational routing rollback and deploy the previous worker version; schema and migration history must remain applied.',
+            ERRCODE = 'P0001';
+        END
+        $schema_downgrade$;
+        """;
 
     public const string UpSql =
         """
@@ -570,7 +583,7 @@ public sealed class AddTenantSafeOutboxNotifications : Migration
         SET ROLE paqueteria_migrator;
         """;
 
-    public const string DownSql =
+    public const string OperationalRollbackSql =
         """
         RESET ROLE;
         SET ROLE paqueteria_outbox_executor;
