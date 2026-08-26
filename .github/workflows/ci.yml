@@ -1002,12 +1002,41 @@ jobs:
     name: Validate local infrastructure
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CI: "true"
     outputs:
       execution-artifact-id: ${{ steps.upload-infrastructure-execution.outputs.artifact-id }}
       execution-artifact-digest: ${{ steps.upload-infrastructure-execution.outputs.artifact-digest }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Restore integrated development hosts
+        shell: pwsh
+        run: |
+          dotnet restore Paqueteria.sln --locked-mode
+          dotnet restore ./tools/Paqueteria.DevSeed/Paqueteria.DevSeed.csproj --locked-mode
+          pnpm --dir apps/web install --frozen-lockfile
 
       - name: Generate synthetic CI environment
         shell: pwsh
@@ -1040,6 +1069,14 @@ jobs:
           ./tools/test-local-environment.ps1
           -EnvironmentFile ./deploy/.env.ci
           -CI
+          -TimeoutSeconds 300
+
+      - name: Run integrated manual environment acceptance
+        shell: pwsh
+        run: >-
+          ./tools/test-dev-platform.ps1
+          -CI
+          -EnvironmentFile ./deploy/.env.ci
           -TimeoutSeconds 300
 
       - name: Correlate executed infrastructure smoke

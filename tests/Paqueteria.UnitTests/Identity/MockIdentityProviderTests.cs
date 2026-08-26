@@ -28,6 +28,19 @@ public sealed class MockIdentityProviderTests
         Assert.Null(result.Identity);
     }
 
+    [Fact]
+    public async Task Local_dispatcher_profile_contains_only_subject_and_mfa()
+    {
+        var result = await _provider.AuthenticateAsync(
+            MockIdentityProfiles.LocalDispatcherMfa,
+            default);
+
+        Assert.True(result.IsValid);
+        Assert.Equal("local-subject-dispatcher-mfa", result.Identity?.Subject);
+        Assert.True(result.Identity?.MfaSatisfied);
+        Assert.Equal(2, result.Identity!.GetType().GetProperties().Length);
+    }
+
     [Theory]
     [InlineData(MockIdentityProfiles.SuspendedUser)]
     [InlineData(MockIdentityProfiles.DisabledUser)]
