@@ -42,6 +42,17 @@ siguen requiriendo autorización normativa explícita.
 
 ## Infraestructura local
 
+Para una sesión manual integrada (infraestructura, baseline, seed sintético,
+API, Worker y web), use el happy path:
+
+```powershell
+pwsh .\tools\dev-platform.ps1 Bootstrap
+pwsh .\tools\dev-platform.ps1 Start
+```
+
+Consulte la [guía de pruebas manuales](docs/development/manual-testing.md) para
+el recorrido, las guardas de seguridad, persistencia, logs y reset acotado.
+
 FND-002 levanta PostGIS, Redis, MinIO y Mailpit; no levanta la API, el Worker ni
 el cliente web. Desde la raíz del repositorio:
 
