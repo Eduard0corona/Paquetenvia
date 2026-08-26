@@ -255,6 +255,11 @@ function Invoke-Bootstrap {
     Ensure-Directories
     Ensure-EnvironmentFile
     Invoke-Doctor
+    Invoke-Checked $dotnetCommand @("restore", (Join-Path $repositoryRoot "Paqueteria.sln"), "--locked-mode")
+    Invoke-Checked $dotnetCommand @("restore", $devSeedProject)
+    Push-Location (Join-Path $repositoryRoot "apps/web")
+    try { Invoke-Checked $pnpmCommand.FilePath (@($pnpmCommand.Prefix) + @("install", "--frozen-lockfile")) }
+    finally { Pop-Location }
     & $localEnvironment Up -EnvironmentFile $resolvedEnvironmentFile -TimeoutSeconds $TimeoutSeconds
     if ($LASTEXITCODE -ne 0) { throw "FND-002 local environment failed to start." }
     Ensure-ApplicationDatabase
@@ -408,12 +413,16 @@ function Wait-Http([string] $Uri, [string] $Label) {
 function Invoke-Start {
     if (-not (Test-Path $accessPath)) { Invoke-Bootstrap }
     Ensure-Directories
+    $apiProject = Join-Path $repositoryRoot "src/Paqueteria.Api/Paqueteria.Api.csproj"
+    $workerProject = Join-Path $repositoryRoot "src/Paqueteria.Worker/Paqueteria.Worker.csproj"
+    Invoke-Checked $dotnetCommand @("build", $apiProject, "--no-restore", "--configuration", "Debug")
+    Invoke-Checked $dotnetCommand @("build", $workerProject, "--no-restore", "--configuration", "Debug")
     Set-HostConfiguration Api
     $env:ASPNETCORE_URLS = $apiUrl
-    Start-OwnedProcess Api $dotnetCommand @("run", "--no-restore", "--project", "src/Paqueteria.Api/Paqueteria.Api.csproj")
+    Start-OwnedProcess Api $dotnetCommand @((Join-Path $repositoryRoot "src/Paqueteria.Api/bin/Debug/net10.0/Paqueteria.Api.dll"))
     Set-HostConfiguration Worker
     $env:ASPNETCORE_URLS = $workerUrl
-    Start-OwnedProcess Worker $dotnetCommand @("run", "--no-restore", "--project", "src/Paqueteria.Worker/Paqueteria.Worker.csproj")
+    Start-OwnedProcess Worker $dotnetCommand @((Join-Path $repositoryRoot "src/Paqueteria.Worker/bin/Debug/net10.0/Paqueteria.Worker.dll"))
     Clear-WebSensitiveEnvironment
     $env:NODE_ENV = "development"
     $env:PAQUETERIA_DEV_PORTAL_ENABLED = "true"
@@ -527,9 +536,10 @@ function Invoke-FreshOrder {
     $order = Invoke-RestMethod -Method Post -Uri "$apiUrl/api/v1/orders" -Headers $orderHeaders -ContentType "application/json" -Body $orderBody
     $context = Get-EnvironmentContext
     $query = "SELECT count(*)||':'||COALESCE(string_agg(n.status,','),'none') FROM notifications.notifications n JOIN platform.outbox_events e ON e.id=n.source_event_id WHERE e.aggregate_id='$($order.id)';"
+    $database = Get-ApplicationDatabaseName $context
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
-        $result = Invoke-DockerCompose -Context $context -Arguments @("exec", "-T", "postgres", "psql", "-U", $context.Environment["POSTGRES_USER"], "-d", $context.Environment["POSTGRES_DB"], "-Atc", $query) -CaptureOutput
+        $result = Invoke-DockerCompose -Context $context -Arguments @("exec", "-T", "postgres", "psql", "-U", $context.Environment["POSTGRES_USER"], "-d", $database, "-Atc", $query) -CaptureOutput
         if ($result.Output -notmatch '^0:') { break }
         Start-Sleep -Milliseconds 500
     } while ([DateTimeOffset]::UtcNow -lt $deadline)

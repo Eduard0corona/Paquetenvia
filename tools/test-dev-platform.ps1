@@ -126,6 +126,20 @@ if ($Full) {
         Invoke-Platform Stop
         Invoke-Platform Reset @("-Force")
     }
+    catch {
+        $failure = $_
+        Write-Host "Redacted local host diagnostics:"
+        foreach ($path in Get-ChildItem (Join-Path $repositoryRoot ".local/logs") -Filter "*.err.log" -ErrorAction SilentlyContinue) {
+            Write-Host "[$($path.Name)]"
+            Get-Content $path.FullName -Tail 80 | ForEach-Object {
+                $_ `
+                    -replace '(?i)(Host|Database|Username|Password)=([^;\s]+)', '$1=[redacted]' `
+                    -replace '(?i)(Bearer\s+)[A-Za-z0-9._~-]+', '$1[redacted]' `
+                    -replace '(?i)(secret|token|key)(["'':=\s]+)[A-Za-z0-9+/_.~-]{12,}', '$1$2[redacted]'
+            }
+        }
+        throw $failure
+    }
     finally {
         & $shellCommand $platform Stop *> $null
     }

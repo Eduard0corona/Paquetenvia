@@ -33,8 +33,9 @@ pwsh ./tools/dev-platform.ps1 PrintAccess
 `tools/local-environment.ps1 Up`, espera healthchecks, crea una base de aplicación
 local aislada del database de health de FND-002, aplica allí el baseline y las
 migraciones oficiales, crea logins locales `NOINHERIT/NOBYPASSRLS` y ejecuta el
-seeder con guardas de Development y opt-in explícito. Ejecutarlo otra vez no crea
-duplicados.
+seeder con guardas de Development y opt-in explícito. También restaura las
+dependencias fijadas y construye API/Worker secuencialmente antes de iniciarlos.
+Ejecutarlo otra vez no crea duplicados.
 
 Abra `http://127.0.0.1:3000/dev`. Active primero **Synthetic dispatcher (MFA)**
 y navegue a Operations. Después vuelva a `/dev`, cambie a **Synthetic own
