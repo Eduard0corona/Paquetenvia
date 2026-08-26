@@ -42,17 +42,21 @@ function Assert-ManualEndpoints {
     $organization = "11111111-1111-1111-1111-111111111111"
     $dispatcherHeaders = @{ Authorization="Bearer local-dispatcher-mfa"; "X-Organization-Id"=$organization }
     $driverHeaders = @{ Authorization="Bearer active-driver"; "X-Organization-Id"=$organization }
-    $operations = Invoke-WebRequest "$api/api/v1/operations/dashboard" -Headers $dispatcherHeaders -UseBasicParsing
+    Write-Host "Checking Operations REST..."
+    $operations = Invoke-WebRequest "$api/api/v1/operations/dashboard" -Headers $dispatcherHeaders -UseBasicParsing -TimeoutSec 30
     if ($operations.StatusCode -ne 200) { throw "Operations REST is not ready." }
-    $driver = Invoke-WebRequest "$api/api/v1/driver/me/stops" -Headers $driverHeaders -UseBasicParsing
+    Write-Host "Checking Driver REST..."
+    $driver = Invoke-WebRequest "$api/api/v1/driver/me/stops" -Headers $driverHeaders -UseBasicParsing -TimeoutSec 30
     if ($driver.StatusCode -ne 200) { throw "Driver REST is not ready." }
     $access = Get-Content (Join-Path $repositoryRoot ".local/access.json") -Raw | ConvertFrom-Json
-    $tracking = Invoke-WebRequest $access.samples.trackingUrl -UseBasicParsing
+    Write-Host "Checking public tracking page..."
+    $tracking = Invoke-WebRequest $access.samples.trackingUrl -UseBasicParsing -TimeoutSec 30
     if ($tracking.StatusCode -ne 200) { throw "Public tracking sample is not ready." }
     try {
         $decoyHeaders = $dispatcherHeaders.Clone()
         $decoyHeaders["X-Organization-Id"] = "33333333-3333-3333-3333-333333333333"
-        Invoke-WebRequest "$api/api/v1/operations/dashboard" -Headers $decoyHeaders -UseBasicParsing -ErrorAction Stop | Out-Null
+        Write-Host "Checking decoy tenant rejection..."
+        Invoke-WebRequest "$api/api/v1/operations/dashboard" -Headers $decoyHeaders -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop | Out-Null
         throw "Decoy tenant was unexpectedly visible."
     }
     catch {
@@ -119,7 +123,14 @@ if ($Full) {
         Invoke-Platform Bootstrap
         Invoke-Platform Bootstrap
         Invoke-Platform Start
-        Invoke-Platform Status
+        $status = @(Invoke-Platform Status)
+        $status | Write-Host
+        $statusText = $status -join "`n"
+        foreach ($application in @("api", "worker", "web")) {
+            if ($statusText -notmatch "(?m)^\s*$application\s+running\(pid=\d+\)") {
+                throw "Status did not report $application as an owned running process."
+            }
+        }
         Invoke-Platform PrintAccess
         Invoke-Platform Scenario @("-Name", "FreshOrder")
         Assert-ManualEndpoints

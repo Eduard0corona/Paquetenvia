@@ -421,20 +421,28 @@ function Invoke-Start {
     $workerProject = Join-Path $repositoryRoot "src/Paqueteria.Worker/Paqueteria.Worker.csproj"
     Invoke-Checked $dotnetCommand @("build", $apiProject, "--no-restore", "--configuration", "Debug")
     Invoke-Checked $dotnetCommand @("build", $workerProject, "--no-restore", "--configuration", "Debug")
+    $apiHost = Join-Path $repositoryRoot $(if ($runningOnWindows) {
+        "src/Paqueteria.Api/bin/Debug/net10.0/Paqueteria.Api.exe"
+    } else { "src/Paqueteria.Api/bin/Debug/net10.0/Paqueteria.Api" })
+    $workerHost = Join-Path $repositoryRoot $(if ($runningOnWindows) {
+        "src/Paqueteria.Worker/bin/Debug/net10.0/Paqueteria.Worker.exe"
+    } else { "src/Paqueteria.Worker/bin/Debug/net10.0/Paqueteria.Worker" })
+    $node = Get-Command node -ErrorAction Stop
+    $nextCli = Join-Path $repositoryRoot "apps/web/node_modules/next/dist/bin/next"
     Set-HostConfiguration Api
     $env:ASPNETCORE_URLS = $apiUrl
-    Start-OwnedProcess Api $dotnetCommand @((Join-Path $repositoryRoot "src/Paqueteria.Api/bin/Debug/net10.0/Paqueteria.Api.dll"))
+    Start-OwnedProcess Api $apiHost @()
     Set-HostConfiguration Worker
     $env:ASPNETCORE_URLS = $workerUrl
-    Start-OwnedProcess Worker $dotnetCommand @((Join-Path $repositoryRoot "src/Paqueteria.Worker/bin/Debug/net10.0/Paqueteria.Worker.dll"))
+    Start-OwnedProcess Worker $workerHost @()
     Clear-WebSensitiveEnvironment
     $env:NODE_ENV = "development"
     $env:PAQUETERIA_DEV_PORTAL_ENABLED = "true"
     $env:NEXT_PUBLIC_API_BASE_URL = $apiUrl
     Start-OwnedProcess `
         -Name Web `
-        -FilePath $pnpmCommand.FilePath `
-        -Arguments (@($pnpmCommand.Prefix) + @("dev", "--hostname", "127.0.0.1", "--port", "3000")) `
+        -FilePath $node.Path `
+        -Arguments @($nextCli, "dev", "--hostname", "127.0.0.1", "--port", "3000") `
         -ProcessWorkingDirectory (Join-Path $repositoryRoot "apps/web")
     try {
         Wait-Http "$apiUrl/health/live" "API live"
