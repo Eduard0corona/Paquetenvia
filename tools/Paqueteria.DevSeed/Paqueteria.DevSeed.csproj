@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
