@@ -77,6 +77,20 @@ function Get-RepositoryDotnet {
 
 $dotnetCommand = Get-RepositoryDotnet
 
+function Get-RepositoryPnpm {
+    $direct = Get-Command pnpm -ErrorAction SilentlyContinue
+    if ($null -ne $direct) {
+        return [pscustomobject]@{ FilePath = $direct.Path; Prefix = @() }
+    }
+    $corepack = Get-Command corepack -ErrorAction SilentlyContinue
+    if ($null -ne $corepack) {
+        return [pscustomobject]@{ FilePath = $corepack.Path; Prefix = @("pnpm") }
+    }
+    throw "pnpm is unavailable. Install the repository version or enable Corepack."
+}
+
+$pnpmCommand = Get-RepositoryPnpm
+
 function Ensure-Directories {
     foreach ($path in @($localRoot, $pidRoot, $logRoot)) {
         New-Item -ItemType Directory -Path $path -Force | Out-Null
@@ -181,7 +195,7 @@ function Invoke-Doctor {
         throw "PowerShell 7 is required; current engine is $($PSVersionTable.PSVersion). Install pwsh and retry."
     }
     $failures = [System.Collections.Generic.List[string]]::new()
-    foreach ($tool in @("docker", "node", "corepack")) {
+    foreach ($tool in @("docker", "node")) {
         if ($null -eq (Get-Command $tool -ErrorAction SilentlyContinue)) { $failures.Add($tool) }
     }
     if ($failures.Count -gt 0) { throw "Missing required tools: $($failures -join ', ')." }
@@ -194,7 +208,9 @@ function Invoke-Doctor {
     if ($observedNode -ne $expectedNode) { throw "Expected Node $expectedNode but resolved $observedNode." }
     $packageManager = (Get-Content (Join-Path $repositoryRoot "apps/web/package.json") -Raw | ConvertFrom-Json).packageManager
     $expectedPnpm = $packageManager.Split('@')[-1]
-    $observedPnpm = (& corepack pnpm --version).Trim()
+    Push-Location (Join-Path $repositoryRoot "apps/web")
+    try { $observedPnpm = (& $pnpmCommand.FilePath @($pnpmCommand.Prefix) --version).Trim() }
+    finally { Pop-Location }
     if ($observedPnpm -ne $expectedPnpm) { throw "Expected pnpm $expectedPnpm but resolved $observedPnpm." }
     if (-not (Test-Path -LiteralPath $resolvedEnvironmentFile -PathType Leaf)) {
         throw "Local environment file is missing: $resolvedEnvironmentFile. Bootstrap may synthesize it after Doctor passes."
@@ -315,7 +331,12 @@ function Clear-WebSensitiveEnvironment {
     }
 }
 
-function Start-OwnedProcess([string] $Name, [string] $FilePath, [string[]] $Arguments) {
+function Start-OwnedProcess(
+    [string] $Name,
+    [string] $FilePath,
+    [string[]] $Arguments,
+    [string] $ProcessWorkingDirectory = $repositoryRoot
+) {
     $pidPath = Join-Path $pidRoot "$($Name.ToLowerInvariant()).json"
     if (Test-Path $pidPath) {
         $record = Read-JsonFile $pidPath
@@ -334,7 +355,7 @@ function Start-OwnedProcess([string] $Name, [string] $FilePath, [string[]] $Argu
         PassThru = $true
         RedirectStandardOutput = (Join-Path $logRoot "$($Name.ToLowerInvariant()).out.log")
         RedirectStandardError = (Join-Path $logRoot "$($Name.ToLowerInvariant()).err.log")
-        WorkingDirectory = $repositoryRoot
+        WorkingDirectory = $ProcessWorkingDirectory
     }
     if ($runningOnWindows) { $start.WindowStyle = "Hidden" }
     $process = Start-Process @start
@@ -371,7 +392,11 @@ function Invoke-Start {
     $env:NODE_ENV = "development"
     $env:PAQUETERIA_DEV_PORTAL_ENABLED = "true"
     $env:NEXT_PUBLIC_API_BASE_URL = $apiUrl
-    Start-OwnedProcess Web corepack @("pnpm", "--dir", "apps/web", "dev", "--hostname", "127.0.0.1", "--port", "3000")
+    Start-OwnedProcess `
+        -Name Web `
+        -FilePath $pnpmCommand.FilePath `
+        -Arguments (@($pnpmCommand.Prefix) + @("dev", "--hostname", "127.0.0.1", "--port", "3000")) `
+        -ProcessWorkingDirectory (Join-Path $repositoryRoot "apps/web")
     try {
         Wait-Http "$apiUrl/health/live" "API live"
         Wait-Http "$apiUrl/health/ready" "API ready"
