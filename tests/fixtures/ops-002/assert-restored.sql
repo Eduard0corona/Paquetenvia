@@ -102,11 +102,12 @@ BEGIN
     ((SELECT count(*) FROM platform.__ef_migrations_history_drivers)),
     ((SELECT count(*) FROM platform.__ef_migrations_history_identity)),
     ((SELECT count(*) FROM platform.__ef_migrations_history_locations)),
+    ((SELECT count(*) FROM platform.__ef_migrations_history_notifications)),
     ((SELECT count(*) FROM platform.__ef_migrations_history_orders)),
     ((SELECT count(*) FROM platform.__ef_migrations_history_organizations)),
     ((SELECT count(*) FROM platform.__ef_migrations_history_pricing))
   ) histories(row_count);
-  IF history_count <> 8 OR invalid_history_count <> 0 THEN
+  IF history_count <> 9 OR invalid_history_count <> 0 THEN
     RAISE EXCEPTION 'OPS002_MIGRATION_HISTORY_ASSERTION_FAILED';
   END IF;
 
@@ -146,7 +147,10 @@ BEGIN
   IF has_table_privilege('paqueteria_app','platform.outbox_events','SELECT') OR
      has_table_privilege('paqueteria_worker','platform.outbox_events','UPDATE') OR
      NOT has_table_privilege('paqueteria_app','platform.outbox_events','INSERT') OR
-     NOT has_function_privilege('paqueteria_worker','security.claim_outbox(text,integer,interval)','EXECUTE') THEN
+     has_function_privilege('paqueteria_worker','security.claim_outbox(text,integer,interval)','EXECUTE') OR
+     NOT has_function_privilege('paqueteria_worker','security.claim_realtime_outbox(text,integer,interval)','EXECUTE') OR
+     NOT has_function_privilege('paqueteria_worker','security.claim_notifications_outbox(text,integer,interval)','EXECUTE') OR
+     NOT has_function_privilege('paqueteria_worker','security.claim_unowned_outbox(text,integer,interval)','EXECUTE') THEN
     RAISE EXCEPTION 'OPS002_GRANT_ASSERTION_FAILED';
   END IF;
 

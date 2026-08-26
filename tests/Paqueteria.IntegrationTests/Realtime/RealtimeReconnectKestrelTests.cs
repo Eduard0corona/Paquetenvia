@@ -79,6 +79,46 @@ public sealed class RealtimeReconnectKestrelTests(
         Assert.Equal("PROCESSED", await WaitForLocationProcessedAsync(locationOutboxId));
     }
 
+    [Fact]
+    public async Task Notification_status_changed_reaches_only_the_operations_tenant_group()
+    {
+        var recorder = new RealtimeAuthorizationRecorder();
+        await using var host = new RealtimeKestrelWebApplicationFactory(
+            database.ApplicationConnectionString,
+            recorder,
+            workerConnectionString: database.WorkerConnectionString);
+        var baseAddress = host.Start();
+        await using var authorized = CreateOperationsConnection(
+            baseAddress,
+            PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,
+            () => Task.FromResult<string?>(MockIdentityProfiles.ActivePlatformAdminMfa));
+        await using var foreign = CreateOperationsConnection(
+            baseAddress,
+            PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+            () => Task.FromResult<string?>(MockIdentityProfiles.ActiveMultiOrganization));
+        var received = Completion<RealtimeEnvelope<NotificationStatusChangedPayload>>();
+        var leaked = Completion<RealtimeEnvelope<NotificationStatusChangedPayload>>();
+        authorized.On("NotificationStatusChanged", (RealtimeEnvelope<NotificationStatusChangedPayload> value) =>
+            received.TrySetResult(value));
+        foreign.On("NotificationStatusChanged", (RealtimeEnvelope<NotificationStatusChangedPayload> value) =>
+            leaked.TrySetResult(value));
+        await authorized.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(await recorder.WaitForNextOperationsAcceptedAsync(TimeSpan.FromSeconds(5)));
+        await foreign.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(await recorder.WaitForNextOperationsAcceptedAsync(TimeSpan.FromSeconds(5)));
+
+        var enqueued = await database.EnqueueRealtimeNotificationAsync();
+        var terminal = await WaitForOutboxResultAsync(enqueued.OutboxId);
+        Assert.Equal("PROCESSED", terminal.Status);
+        var delivered = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(enqueued.OutboxId, delivered.EventId);
+        Assert.Equal(enqueued.NotificationId, delivered.Payload.NotificationId);
+        Assert.Equal(enqueued.AggregateVersion, delivered.AggregateVersion);
+        Assert.Equal("SENT", delivered.Payload.Status);
+        Assert.Equal(1, delivered.Payload.Attempts);
+        await AssertNotCompletedAsync(leaked.Task, TimeSpan.FromMilliseconds(400));
+    }
+
     private async Task<(string? Status, string? LastError)> WaitForOutboxResultAsync(Guid id)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));

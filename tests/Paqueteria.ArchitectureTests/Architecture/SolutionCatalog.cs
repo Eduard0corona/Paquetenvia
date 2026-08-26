@@ -152,6 +152,33 @@ internal static class SolutionCatalog
         ],
         allowedCrossModuleDependencies: ["Organizations"]);
 
+    internal static readonly ProjectComponent NotificationsDomain = Component(
+        "Notifications.Domain",
+        ProjectRole.ModuleDomain,
+        typeof(Notifications.Domain.AssemblyReference).Assembly,
+        "src/Modules/Notifications/Notifications.Domain/Notifications.Domain.csproj",
+        "Notifications",
+        ["Paqueteria.Domain"]);
+
+    internal static readonly ProjectComponent NotificationsApplication = Component(
+        "Notifications.Application",
+        ProjectRole.ModuleApplication,
+        typeof(Notifications.Application.AssemblyReference).Assembly,
+        "src/Modules/Notifications/Notifications.Application/Notifications.Application.csproj",
+        "Notifications",
+        ["Notifications.Domain", "Identity.Application", "Organizations.Application", "Paqueteria.Application"]);
+
+    internal static readonly ProjectComponent NotificationsInfrastructure = Component(
+        "Notifications.Infrastructure",
+        ProjectRole.ModuleInfrastructure,
+        typeof(Notifications.Infrastructure.AssemblyReference).Assembly,
+        "src/Modules/Notifications/Notifications.Infrastructure/Notifications.Infrastructure.csproj",
+        "Notifications",
+        [
+            "Notifications.Application", "Notifications.Domain", "Identity.Application",
+            "Organizations.Application", "Paqueteria.Application", "Paqueteria.Infrastructure",
+        ]);
+
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
         [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody, Reporting];
 
@@ -199,6 +226,9 @@ internal static class SolutionCatalog
             "Orders.Infrastructure",
             "Pricing.Infrastructure",
             "Custody.Infrastructure",
+            "Identity.Infrastructure",
+            "Organizations.Infrastructure",
+            "Notifications.Infrastructure",
         ]);
 
     internal static IReadOnlyList<ProjectComponent> All { get; } =
@@ -217,6 +247,9 @@ internal static class SolutionCatalog
         .. Realtime.Components,
         .. Custody.Components,
         .. Reporting.Components,
+        NotificationsDomain,
+        NotificationsApplication,
+        NotificationsInfrastructure,
         Api,
         Worker,
     ];

@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Custody.Infrastructure;
+using Identity.Infrastructure.Notifications;
+using Notifications.Infrastructure;
+using Organizations.Infrastructure.Notifications;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,6 +13,9 @@ builder.Services.AddCustodyInfrastructure(
     builder.Configuration,
     builder.Environment,
     addValidationWorker: true);
+builder.Services.AddOrganizationsNotificationAudienceReader(builder.Configuration);
+builder.Services.AddIdentityNotificationAudienceReader(builder.Configuration);
+builder.Services.AddNotificationsInfrastructure(builder.Configuration);
 builder.Services
     .AddHealthChecks()
     .AddCheck("process", () => HealthCheckResult.Healthy(), tags: ["live"]);

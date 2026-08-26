@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Notifications.Domain/Notifications.Domain.csproj" />
+    <ProjectReference Include="../../Identity/Identity.Application/Identity.Application.csproj" />
+    <ProjectReference Include="../../Organizations/Organizations.Application/Organizations.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
+  </ItemGroup>
+</Project>

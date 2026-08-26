@@ -44,6 +44,9 @@
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Application\Realtime.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Endpoints\Realtime.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Notifications\Notifications.Application\Notifications.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Notifications\Notifications.Domain\Notifications.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Notifications\Notifications.Infrastructure\Notifications.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Application\Reporting.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />

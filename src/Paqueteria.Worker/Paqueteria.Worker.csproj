@@ -4,5 +4,8 @@
     <ProjectReference Include="..\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Identity\Identity.Infrastructure\Identity.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Notifications\Notifications.Infrastructure\Notifications.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

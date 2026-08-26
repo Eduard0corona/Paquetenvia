@@ -53,6 +53,9 @@ internal sealed class RealtimeOutboxProcessor(
                     case ParsedAssignmentChanged assignment:
                         await PublishAssignmentAsync(assignment, timeout.Token);
                         break;
+                    case ParsedNotificationStatusChanged notification:
+                        await PublishNotificationAsync(notification, timeout.Token);
+                        break;
                     default:
                         throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic);
                 }
@@ -364,6 +367,23 @@ internal sealed class RealtimeOutboxProcessor(
         }
     }
 
+    private async Task PublishNotificationAsync(
+        ParsedNotificationStatusChanged value,
+        CancellationToken cancellationToken)
+    {
+        const string lane = "business";
+        var eventType = RealtimeEventTypes.NotificationStatusChanged;
+        using (telemetry.MeasurePublish(lane, eventType))
+        {
+            await publisher.PublishOperationsNotificationStatusChangedAsync(
+                OperationsAudience.ForOrganization(value.OwnerOrganizationId),
+                RealtimeOutboxEnvelopeFactory.Notification(value),
+                cancellationToken);
+        }
+
+        telemetry.AudienceDelivered(lane, eventType, "operations", "published");
+    }
+
     private static void ValidateOrderEvidence(
         OrderEventEvidence? persisted,
         Guid orderEventId,
@@ -511,6 +531,7 @@ internal sealed class RealtimeOutboxProcessor(
         ParsedOrderStatusChanged => RealtimeEventTypes.OrderStatusChanged,
         ParsedOrderTimelineEventAdded => RealtimeEventTypes.OrderTimelineEventAdded,
         ParsedAssignmentChanged => RealtimeEventTypes.AssignmentChanged,
+        ParsedNotificationStatusChanged => RealtimeEventTypes.NotificationStatusChanged,
         _ => throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic),
     };
 

@@ -50,14 +50,14 @@ public sealed class OrganizationsArchitectureTests
     }
 
     [Fact]
-    public void Worker_does_not_reference_tenant_request_or_organizations_module()
+    public void Worker_does_not_reference_tenant_request_or_organizations_endpoints()
     {
         var metadata = ProjectMetadataReader.Read(SolutionCatalog.Worker);
         Assert.DoesNotContain(metadata.ProjectReferencePaths, reference =>
-            reference.Contains("Organizations", StringComparison.OrdinalIgnoreCase));
+            reference.Contains("Organizations.Endpoints", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(
             SolutionCatalog.Worker.Assembly.GetReferencedAssemblies(),
-            reference => reference.Name?.Contains("Organizations", StringComparison.OrdinalIgnoreCase) == true);
+            reference => reference.Name?.Contains("Organizations.Endpoints", StringComparison.OrdinalIgnoreCase) == true);
     }
 
     [Fact]

@@ -18,6 +18,8 @@ using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
 using Custody.Infrastructure.Persistence;
 using Custody.Infrastructure.Persistence.Migrations;
+using Notifications.Infrastructure.Persistence;
+using Notifications.Infrastructure.Persistence.Migrations;
 
 internal sealed record ModuleMigrationState(
     string Module,
@@ -45,6 +47,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AdoptCanonicalCustodyProofsBaseline.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260725_AdoptCanonicalCustodyProofsBaseline.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", AddTenantSafeOutboxNotifications.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260815000100_AddTenantSafeOutboxNotifications.cs"),
     ];
 
     public static IReadOnlyList<ModuleMigrationState> VerifySources()
@@ -60,10 +64,13 @@ internal sealed class ModuleMigrationCoordinator
             }
 
             var source = File.ReadAllText(path);
-            if (!source.Contains(contract.MigrationId, StringComparison.Ordinal) ||
-                source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) ||
-                source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) ||
-                source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal))
+            var validEvolution = contract.Module == "Notifications"
+                ? source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+                  !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase)
+                : !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                  !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                  !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+            if (!source.Contains(contract.MigrationId, StringComparison.Ordinal) || !validEvolution)
             {
                 throw new BaselineVerificationException(
                     $"{contract.Module} adoption migration is destructive or has an unexpected identifier.");
@@ -146,6 +153,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "Custody").Status == "PENDING")
         {
             await MigrateCustodyAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "Notifications").Status == "PENDING")
+        {
+            await MigrateNotificationsAsync(connectionString, cancellationToken);
         }
         await AssertAsync(connectionString, cancellationToken);
     }
@@ -364,6 +375,20 @@ internal sealed class ModuleMigrationCoordinator
             })
             .Options;
         await using var context = new CustodyDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    private static async Task MigrateNotificationsAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<NotificationsDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(NotificationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform");
+            })
+            .Options;
+        await using var context = new NotificationsDbContext(options);
         await context.Database.MigrateAsync(cancellationToken);
     }
 

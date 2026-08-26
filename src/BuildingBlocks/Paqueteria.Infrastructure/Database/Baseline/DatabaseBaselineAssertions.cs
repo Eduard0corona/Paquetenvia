@@ -273,7 +273,8 @@ public sealed class DatabaseBaselineAssertions
                     '__ef_migrations_history_pricing',
                     '__ef_migrations_history_orders',
                     '__ef_migrations_history_dispatch',
-                    '__ef_migrations_history_custody'
+                    '__ef_migrations_history_custody',
+                    '__ef_migrations_history_notifications'
                   )
                   AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
                 """,
@@ -323,17 +324,36 @@ public sealed class DatabaseBaselineAssertions
             connection,
             transaction,
             """
-            WITH expected(signature,owner) AS (VALUES
-              ('security.resolve_identity_context(text)','paqueteria_bootstrap'),
-              ('security.get_public_tracking_projection(text)','paqueteria_bootstrap'),
-              ('security.claim_outbox(text,integer,interval)','paqueteria_outbox_executor'),
-              ('security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)','paqueteria_outbox_executor'),
-              ('security.requeue_stale_outbox(interval,integer,integer)','paqueteria_outbox_executor'),
-              ('security.claim_location_outbox(text,integer,interval)','paqueteria_outbox_executor'),
-              ('security.settle_location_outbox(uuid,uuid,text,text,timestamp with time zone)','paqueteria_outbox_executor'),
-              ('security.requeue_stale_location_outbox(interval,integer,integer)','paqueteria_outbox_executor'),
-              ('security.purge_outbox(timestamp with time zone,timestamp with time zone,integer,boolean)','paqueteria_maintenance'),
-              ('security.purge_location_outbox(timestamp with time zone,timestamp with time zone,integer,boolean)','paqueteria_maintenance'))
+            WITH expected_all(signature,owner,ntf) AS (VALUES
+              ('security.resolve_identity_context(text)','paqueteria_bootstrap',false),
+              ('security.get_public_tracking_projection(text)','paqueteria_bootstrap',false),
+              ('security.claim_outbox(text,integer,interval)','paqueteria_outbox_executor',false),
+              ('security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)','paqueteria_outbox_executor',false),
+              ('security.requeue_stale_outbox(interval,integer,integer)','paqueteria_outbox_executor',false),
+              ('security.claim_location_outbox(text,integer,interval)','paqueteria_outbox_executor',false),
+              ('security.settle_location_outbox(uuid,uuid,text,text,timestamp with time zone)','paqueteria_outbox_executor',false),
+              ('security.requeue_stale_location_outbox(interval,integer,integer)','paqueteria_outbox_executor',false),
+              ('security.purge_outbox(timestamp with time zone,timestamp with time zone,integer,boolean)','paqueteria_maintenance',false),
+              ('security.purge_location_outbox(timestamp with time zone,timestamp with time zone,integer,boolean)','paqueteria_maintenance',false),
+              ('security.resolve_outbox_consumer(text)','paqueteria_outbox_executor',true),
+              ('security.claim_realtime_outbox(text,integer,interval)','paqueteria_outbox_executor',true),
+              ('security.claim_notifications_outbox(text,integer,interval)','paqueteria_outbox_executor',true),
+              ('security.claim_unowned_outbox(text,integer,interval)','paqueteria_outbox_executor',true),
+              ('security.requeue_stale_realtime_outbox(interval,integer,integer)','paqueteria_outbox_executor',true),
+              ('security.recover_stale_notifications_outbox(text,integer,integer,interval)','paqueteria_outbox_executor',true),
+              ('security.requeue_stale_unowned_outbox(interval,integer,integer)','paqueteria_outbox_executor',true),
+              ('security.read_owner_dispatcher_ids(uuid,integer)','paqueteria_outbox_executor',true),
+              ('security.read_active_notification_users(uuid[])','paqueteria_outbox_executor',true),
+              ('security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamp with time zone)','paqueteria_outbox_executor',true),
+              ('security.expand_order_created_notifications(uuid,uuid,uuid,text,text,timestamp with time zone,uuid[])','paqueteria_outbox_executor',true),
+              ('security.read_notification_delivery(uuid,uuid)','paqueteria_outbox_executor',true),
+              ('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)','paqueteria_outbox_executor',true),
+              ('security.finalize_notification_max_attempts(uuid,uuid,uuid,integer,timestamp with time zone)','paqueteria_outbox_executor',true),
+              ('notifications.provision_default_templates()','paqueteria_outbox_executor',true)),
+            expected(signature,owner) AS (
+              SELECT signature,owner FROM expected_all
+              WHERE NOT ntf OR to_regprocedure('security.resolve_outbox_consumer(text)') IS NOT NULL
+            )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
             LEFT JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(expected.signature)
@@ -532,7 +552,36 @@ public sealed class DatabaseBaselineAssertions
             }
         }
 
-        foreach (var signature in SensitiveFunctions.Skip(3))
+        var ntfInstalled = await ScalarAsync<bool>(
+            connection,
+            transaction,
+            "SELECT to_regprocedure('security.resolve_outbox_consumer(text)') IS NOT NULL",
+            cancellationToken).ConfigureAwait(false);
+        var workerFunctions = ntfInstalled
+            ? new[]
+            {
+                "security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)",
+                "security.purge_outbox(timestamp with time zone,timestamp with time zone,integer,boolean)",
+                "security.claim_location_outbox(text,integer,interval)",
+                "security.settle_location_outbox(uuid,uuid,text,text,timestamp with time zone)",
+                "security.requeue_stale_location_outbox(interval,integer,integer)",
+                "security.purge_location_outbox(timestamp with time zone,timestamp with time zone,integer,boolean)",
+                "security.resolve_outbox_consumer(text)",
+                "security.claim_realtime_outbox(text,integer,interval)",
+                "security.claim_notifications_outbox(text,integer,interval)",
+                "security.claim_unowned_outbox(text,integer,interval)",
+                "security.requeue_stale_realtime_outbox(interval,integer,integer)",
+                "security.recover_stale_notifications_outbox(text,integer,integer,interval)",
+                "security.requeue_stale_unowned_outbox(interval,integer,integer)",
+                "security.read_owner_dispatcher_ids(uuid,integer)",
+                "security.read_active_notification_users(uuid[])",
+                "security.expand_order_created_notifications(uuid,uuid,uuid,text,text,timestamp with time zone,uuid[])",
+                "security.read_notification_delivery(uuid,uuid)",
+                "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)",
+                "security.finalize_notification_max_attempts(uuid,uuid,uuid,integer,timestamp with time zone)",
+            }
+            : SensitiveFunctions.Skip(3).ToArray();
+        foreach (var signature in workerFunctions)
         {
             if (!await HasFunctionPrivilegeAsync(connection, transaction, "paqueteria_worker", signature, cancellationToken).ConfigureAwait(false))
             {
@@ -542,6 +591,21 @@ public sealed class DatabaseBaselineAssertions
             if (await HasFunctionPrivilegeAsync(connection, transaction, "paqueteria_app", signature, cancellationToken).ConfigureAwait(false))
             {
                 violations.Add($"paqueteria_app has forbidden EXECUTE on {signature}.");
+            }
+        }
+
+        if (ntfInstalled)
+        {
+            foreach (var obsolete in new[]
+            {
+                "security.claim_outbox(text,integer,interval)",
+                "security.requeue_stale_outbox(interval,integer,integer)",
+            })
+            {
+                if (await HasFunctionPrivilegeAsync(connection, transaction, "paqueteria_worker", obsolete, cancellationToken).ConfigureAwait(false))
+                {
+                    violations.Add($"paqueteria_worker retains forbidden EXECUTE on {obsolete} after NTF-001 cutover.");
+                }
             }
         }
     }

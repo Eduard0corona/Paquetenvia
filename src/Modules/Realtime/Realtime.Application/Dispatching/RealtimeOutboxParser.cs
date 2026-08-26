@@ -45,6 +45,7 @@ public static class RealtimeOutboxParser
                 RealtimeOutboxTopics.OrderStatusChanged => ParseStatus(message, document.RootElement),
                 RealtimeOutboxTopics.OrderTimelineEventAdded => ParseTimeline(message, document.RootElement),
                 RealtimeOutboxTopics.AssignmentChanged => ParseAssignment(message, document.RootElement),
+                RealtimeOutboxTopics.NotificationStatusChanged => ParseNotification(message, document.RootElement),
                 _ => throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic),
             };
         }
@@ -255,12 +256,53 @@ public static class RealtimeOutboxParser
             status);
     }
 
+    private static ParsedNotificationStatusChanged ParseNotification(
+        ClaimedBusinessOutboxMessage message,
+        JsonElement root)
+    {
+        RequireExactProperties(
+            root,
+            "schema_version",
+            "notification_id",
+            "channel",
+            "status",
+            "attempts",
+            "occurred_at");
+        RequireSchema(root, "notification-status-changed-v1");
+        var notificationId = RequireGuid(root, "notification_id");
+        var channel = RequireString(root, "channel");
+        var status = RequireString(root, "status");
+        var attemptsElement = root.GetProperty("attempts");
+        var occurredAt = RequireUtcTimestamp(root, "occurred_at");
+        if (notificationId != message.AggregateId ||
+            channel != "IN_APP" ||
+            status is not ("PENDING" or "SENT" or "FAILED") ||
+            attemptsElement.ValueKind != JsonValueKind.Number ||
+            !attemptsElement.TryGetInt32(out var attempts) ||
+            attempts < 0)
+        {
+            throw InvalidPayload();
+        }
+
+        return new(
+            message.Id,
+            message.OwnerOrganizationId,
+            notificationId,
+            message.AggregateVersion!.Value,
+            occurredAt,
+            channel,
+            status,
+            attempts);
+    }
+
     private static void ValidateBusinessColumns(ClaimedBusinessOutboxMessage message)
     {
         if (message.Id == Guid.Empty ||
             message.OwnerOrganizationId == Guid.Empty ||
             message.AggregateId == Guid.Empty ||
-            message.AggregateType != "Order" ||
+            message.AggregateType != (message.Topic == RealtimeOutboxTopics.NotificationStatusChanged
+                ? "Notification"
+                : "Order") ||
             message.AggregateVersion is null or < 0 ||
             message.LeaseToken == Guid.Empty)
         {

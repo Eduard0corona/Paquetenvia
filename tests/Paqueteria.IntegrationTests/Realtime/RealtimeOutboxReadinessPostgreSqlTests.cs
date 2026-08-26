@@ -22,9 +22,9 @@ public sealed class RealtimeOutboxReadinessPostgreSqlTests(
     }
 
     [Theory]
-    [InlineData("security.claim_outbox(text,integer,interval)")]
+    [InlineData("security.claim_realtime_outbox(text,integer,interval)")]
     [InlineData("security.settle_outbox(uuid,uuid,text,text,timestamptz)")]
-    [InlineData("security.requeue_stale_outbox(interval,integer,integer)")]
+    [InlineData("security.requeue_stale_realtime_outbox(interval,integer,integer)")]
     [InlineData("security.claim_location_outbox(text,integer,interval)")]
     [InlineData("security.settle_location_outbox(uuid,uuid,text,text,timestamptz)")]
     [InlineData("security.requeue_stale_location_outbox(interval,integer,integer)")]
