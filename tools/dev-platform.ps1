@@ -43,6 +43,18 @@ $runningOnWindows = $env:OS -eq "Windows_NT"
 
 . (Join-Path $PSScriptRoot "local-environment.common.ps1")
 
+function Test-RepositorySdk([string] $Observed) {
+    try {
+        $requested = [version]$requiredSdk
+        $resolved = [version]$Observed
+        return $resolved.Major -eq $requested.Major -and
+            $resolved.Minor -eq $requested.Minor -and
+            [math]::Floor($resolved.Build / 100) -eq [math]::Floor($requested.Build / 100) -and
+            $resolved.Build -ge $requested.Build
+    }
+    catch { return $false }
+}
+
 function Get-RepositoryDotnet {
     $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
     $pathCommand = Get-Command dotnet -ErrorAction SilentlyContinue
@@ -56,7 +68,7 @@ function Get-RepositoryDotnet {
     foreach ($candidate in $candidates) {
         try {
             $observedSdk = (& $candidate --version 2>$null).Trim()
-            if ($LASTEXITCODE -eq 0 -and $observedSdk -eq $requiredSdk) { return $candidate }
+            if ($LASTEXITCODE -eq 0 -and (Test-RepositorySdk $observedSdk)) { return $candidate }
         }
         catch { continue }
     }
@@ -174,7 +186,9 @@ function Invoke-Doctor {
     }
     if ($failures.Count -gt 0) { throw "Missing required tools: $($failures -join ', ')." }
     $observedSdk = (& $dotnetCommand --version).Trim()
-    if ($observedSdk -ne $requiredSdk) { throw "Expected .NET SDK $requiredSdk but resolved $observedSdk." }
+    if (-not (Test-RepositorySdk $observedSdk)) {
+        throw "Expected .NET SDK feature band 10.0.1xx at or above $requiredSdk but resolved $observedSdk."
+    }
     $expectedNode = (Get-Content (Join-Path $repositoryRoot ".nvmrc") -Raw).Trim().TrimStart('v')
     $observedNode = (& node --version).Trim().TrimStart('v')
     if ($observedNode -ne $expectedNode) { throw "Expected Node $expectedNode but resolved $observedNode." }
