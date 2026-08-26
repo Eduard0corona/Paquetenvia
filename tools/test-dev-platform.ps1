@@ -79,6 +79,9 @@ Assert-Contains $platform 'PAQUETERIA_LOCAL_DEV_SEED_ENABLED = "true"'
 Assert-Contains $platform '$applicationDatabaseSuffix = "_dev_platform"'
 Assert-Contains $platform '"createdb", "--username"'
 Assert-Contains $platform '@("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")'
+Assert-Contains $platform 'function Get-ListeningProcessId'
+Assert-Contains $platform 'Set-WebListenerOwnership'
+Assert-Contains $platform 'Stop-OwnedProcessRecord $record.supervisor'
 
 $oldEnvironment = $env:DOTNET_ENVIRONMENT
 $oldOptIn = $env:PAQUETERIA_LOCAL_DEV_SEED_ENABLED

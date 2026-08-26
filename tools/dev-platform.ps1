@@ -454,6 +454,69 @@ function Start-OwnedProcess(
     })
 }
 
+function Get-ListeningProcessId([int] $Port) {
+    if ($runningOnWindows) {
+        $connections = @(Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        $processIds = @($connections | Select-Object -ExpandProperty OwningProcess -Unique)
+    }
+    else {
+        $processIds = @()
+        $socketTool = Get-Command ss -ErrorAction SilentlyContinue
+        if ($null -ne $socketTool) {
+            $listeners = @(& $socketTool.Source -ltnp 2>$null | Where-Object { $_ -match "127\.0\.0\.1:$Port\b" })
+            $processIds = @($listeners | ForEach-Object {
+                [regex]::Matches($_, 'pid=(\d+)') | ForEach-Object { [int]$_.Groups[1].Value }
+            } | Select-Object -Unique)
+        }
+        if ($processIds.Count -eq 0) {
+            $lsof = Get-Command lsof -ErrorAction SilentlyContinue
+            if ($null -ne $lsof) {
+                $processIds = @(& $lsof.Source -nP "-iTCP:$Port" -sTCP:LISTEN -t 2>$null |
+                    Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ } | Select-Object -Unique)
+            }
+        }
+    }
+    if ($processIds.Count -ne 1) {
+        throw "Expected exactly one process listening on 127.0.0.1:$Port; found $($processIds.Count)."
+    }
+    return [int]$processIds[0]
+}
+
+function Set-WebListenerOwnership {
+    $pidPath = Join-Path $pidRoot "web.json"
+    $supervisorRecord = Read-JsonFile $pidPath
+    $listenerPid = Get-ListeningProcessId 3000
+    $listener = Get-Process -Id $listenerPid -ErrorAction Stop
+    $webWorkingDirectory = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot "apps/web"))
+    if ($runningOnWindows) {
+        $details = Get-CimInstance Win32_Process -Filter "ProcessId=$listenerPid" -ErrorAction Stop
+        $identityText = [string]$details.CommandLine
+        $belongsToCheckout = $identityText.Replace('\', '/').Contains($webWorkingDirectory.Replace('\', '/'))
+    }
+    else {
+        $readlink = Get-Command readlink -ErrorAction Stop
+        $actualWorkingDirectory = [string](& $readlink.Source -f "/proc/$listenerPid/cwd")
+        $belongsToCheckout = $actualWorkingDirectory -eq $webWorkingDirectory
+    }
+    if (-not $belongsToCheckout) {
+        throw "The process listening on 127.0.0.1:3000 does not belong to this checkout."
+    }
+    $record = [ordered]@{
+        name = "Web"
+        pid = $listenerPid
+        startTimeUtc = $listener.StartTime.ToUniversalTime().ToString("O")
+        processPath = [System.IO.Path]::GetFullPath($listener.Path)
+        repositoryRoot = $repositoryRoot
+    }
+    if ($null -ne $supervisorRecord -and $supervisorRecord.pid -ne $listenerPid) {
+        $supervisor = Get-Process -Id $supervisorRecord.pid -ErrorAction SilentlyContinue
+        if (Test-OwnedProcess $supervisorRecord $supervisor) {
+            $record["supervisor"] = $supervisorRecord
+        }
+    }
+    Write-JsonFile $pidPath ([pscustomobject]$record)
+}
+
 function Wait-Http([string] $Uri, [string] $Label) {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
@@ -501,6 +564,7 @@ function Invoke-Start {
         Wait-Http "$workerUrl/health/live" "Worker live"
         Wait-Http "$workerUrl/health/ready" "Worker ready"
         Wait-Http "$webUrl/health" "Web"
+        Set-WebListenerOwnership
     }
     catch {
         Write-Host "Startup failed. Inspect $logRoot/api.err.log, worker.err.log or web.err.log."
@@ -548,25 +612,31 @@ function Stop-ProcessTree([int] $RootPid) {
     Stop-Process -Id $RootPid -Force -ErrorAction SilentlyContinue
 }
 
+function Stop-OwnedProcessRecord($Record) {
+    if ($null -eq $Record) { return }
+    $process = Get-Process -Id $Record.pid -ErrorAction SilentlyContinue
+    if (-not (Test-OwnedProcess $Record $process)) { return }
+    if ($runningOnWindows) {
+        Stop-ProcessTree -RootPid $Record.pid
+    }
+    else {
+        Stop-Process -Id $Record.pid -ErrorAction SilentlyContinue
+        Wait-Process -Id $Record.pid -Timeout 5 -ErrorAction SilentlyContinue
+        if (Get-Process -Id $Record.pid -ErrorAction SilentlyContinue) {
+            Stop-Process -Id $Record.pid -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-Stop {
     foreach ($name in @("Web", "Worker", "Api")) {
         $path = Join-Path $pidRoot "$($name.ToLowerInvariant()).json"
         $record = Read-JsonFile $path
         if ($null -eq $record) { continue }
-        $process = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
-        $owned = Test-OwnedProcess $record $process
-        if ($owned) {
-            if ($runningOnWindows) {
-                Stop-ProcessTree -RootPid $record.pid
-            }
-            else {
-                Stop-Process -Id $record.pid -ErrorAction SilentlyContinue
-                Wait-Process -Id $record.pid -Timeout 5 -ErrorAction SilentlyContinue
-                if (Get-Process -Id $record.pid -ErrorAction SilentlyContinue) {
-                    Stop-Process -Id $record.pid -Force -ErrorAction SilentlyContinue
-                }
-            }
+        if ($null -ne $record.psobject.Properties["supervisor"]) {
+            Stop-OwnedProcessRecord $record.supervisor
         }
+        Stop-OwnedProcessRecord $record
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     }
     Write-Host "Host processes stopped. FND-002 containers, volumes and seed were preserved."
