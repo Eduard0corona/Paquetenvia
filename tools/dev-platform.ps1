@@ -38,6 +38,7 @@ $organizationId = "11111111-1111-1111-1111-111111111111"
 $apiUrl = "http://127.0.0.1:5080"
 $workerUrl = "http://127.0.0.1:5081"
 $webUrl = "http://127.0.0.1:3000"
+$applicationDatabaseSuffix = "_dev_platform"
 $requiredSdk = "10.0.101"
 $runningOnWindows = $env:OS -eq "Windows_NT"
 
@@ -142,12 +143,36 @@ function Get-RuntimeState {
     return $runtime
 }
 
+function Get-ApplicationDatabaseName($Context) {
+    $name = "$($Context.Environment["POSTGRES_DB"])$applicationDatabaseSuffix"
+    if ($name.Length -gt 63 -or $name -notmatch '^[a-zA-Z_][a-zA-Z0-9_]*$') {
+        throw "The derived development database name is not a valid PostgreSQL identifier."
+    }
+    return $name
+}
+
+function Ensure-ApplicationDatabase {
+    $context = Get-EnvironmentContext
+    $database = Get-ApplicationDatabaseName $context
+    $adminUser = $context.Environment["POSTGRES_USER"]
+    $query = "SELECT 1 FROM pg_database WHERE datname = '$database';"
+    $probe = Invoke-DockerCompose `
+        -Context $context `
+        -Arguments @("exec", "-T", "postgres", "psql", "--username", $adminUser, "--dbname", "postgres", "--tuples-only", "--no-align", "--command", $query) `
+        -CaptureOutput
+    if ($probe.Output.Trim() -eq "1") { return }
+    Invoke-DockerCompose `
+        -Context $context `
+        -Arguments @("exec", "-T", "postgres", "createdb", "--username", $adminUser, "--owner", $adminUser, "--template", "template0", $database) | Out-Null
+    Write-Host "Created the isolated local application database '$database'."
+}
+
 function Get-Connections {
     $context = Get-EnvironmentContext
     $runtime = Get-RuntimeState
     $hostName = "127.0.0.1"
     $port = $context.Environment["POSTGRES_HOST_PORT"]
-    $database = $context.Environment["POSTGRES_DB"]
+    $database = Get-ApplicationDatabaseName $context
     $adminUser = $context.Environment["POSTGRES_USER"]
     $adminPassword = $context.Environment["POSTGRES_PASSWORD"]
     return [pscustomobject]@{
@@ -232,6 +257,7 @@ function Invoke-Bootstrap {
     Invoke-Doctor
     & $localEnvironment Up -EnvironmentFile $resolvedEnvironmentFile -TimeoutSeconds $TimeoutSeconds
     if ($LASTEXITCODE -ne 0) { throw "FND-002 local environment failed to start." }
+    Ensure-ApplicationDatabase
     $connections = Get-Connections
     $previousAdmin = [Environment]::GetEnvironmentVariable("PAQUETERIA_LOCAL_ADMIN_CONNECTION", "Process")
     $previousPath = $env:PATH

@@ -30,7 +30,8 @@ pwsh ./tools/dev-platform.ps1 PrintAccess
 ```
 
 `Bootstrap` es idempotente: sintetiza `deploy/.env.local` cuando falta, reutiliza
-`tools/local-environment.ps1 Up`, espera healthchecks, aplica el baseline y las
+`tools/local-environment.ps1 Up`, espera healthchecks, crea una base de aplicación
+local aislada del database de health de FND-002, aplica allí el baseline y las
 migraciones oficiales, crea logins locales `NOINHERIT/NOBYPASSRLS` y ejecuta el
 seeder con guardas de Development y opt-in explícito. Ejecutarlo otra vez no crea
 duplicados.
