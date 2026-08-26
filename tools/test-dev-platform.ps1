@@ -74,6 +74,7 @@ Assert-Contains $platform 'IdentityBootstrap__Provider = "PostgreSql"'
 Assert-Contains $platform 'PAQUETERIA_LOCAL_DEV_SEED_ENABLED = "true"'
 Assert-Contains $platform '$applicationDatabaseSuffix = "_dev_platform"'
 Assert-Contains $platform '"createdb", "--username"'
+Assert-Contains $platform '@("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")'
 
 $oldEnvironment = $env:DOTNET_ENVIRONMENT
 $oldOptIn = $env:PAQUETERIA_LOCAL_DEV_SEED_ENABLED

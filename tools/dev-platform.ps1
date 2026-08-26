@@ -338,14 +338,18 @@ function Set-HostConfiguration([string] $Kind) {
         [Environment]::SetEnvironmentVariable($envName, $connections.Context.Environment["ProofStorage__$key"], "Process")
     }
     $env:Drivers__Eligibility__PolicyVersion = "LOCAL-SYNTHETIC-v1"
-    $env:Drivers__Eligibility__RequiredDocumentTypesByVehicleType__MOTORCYCLE__0 = "IDENTITY"
     $env:Drivers__Eligibility__NonExpiringDocumentTypes__0 = "IDENTITY"
-    $env:Drivers__Eligibility__VehicleCapacity__MOTORCYCLE__MaximumPackageCount = "10"
-    $env:Drivers__Eligibility__VehicleCapacity__MOTORCYCLE__MaximumTotalWeightGrams = "50000"
-    $env:Drivers__Eligibility__VehicleCapacity__MOTORCYCLE__MaximumSinglePackageWeightGrams = "10000"
-    $env:Drivers__Eligibility__VehicleCapacity__MOTORCYCLE__MaximumLengthMillimeters = "2000"
-    $env:Drivers__Eligibility__VehicleCapacity__MOTORCYCLE__MaximumWidthMillimeters = "2000"
-    $env:Drivers__Eligibility__VehicleCapacity__MOTORCYCLE__MaximumHeightMillimeters = "2000"
+    foreach ($vehicleType in @("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")) {
+        $prefix = "Drivers__Eligibility__VehicleCapacity__$vehicleType"
+        [Environment]::SetEnvironmentVariable(
+            "Drivers__Eligibility__RequiredDocumentTypesByVehicleType__$vehicleType`__0", "IDENTITY", "Process")
+        [Environment]::SetEnvironmentVariable("$prefix`__MaximumPackageCount", "10", "Process")
+        [Environment]::SetEnvironmentVariable("$prefix`__MaximumTotalWeightGrams", "50000", "Process")
+        [Environment]::SetEnvironmentVariable("$prefix`__MaximumSinglePackageWeightGrams", "10000", "Process")
+        [Environment]::SetEnvironmentVariable("$prefix`__MaximumLengthMillimeters", "2000", "Process")
+        [Environment]::SetEnvironmentVariable("$prefix`__MaximumWidthMillimeters", "2000", "Process")
+        [Environment]::SetEnvironmentVariable("$prefix`__MaximumHeightMillimeters", "2000", "Process")
+    }
 }
 
 function Clear-WebSensitiveEnvironment {
