@@ -11,6 +11,7 @@ public static class MockIdentityProfiles
     public const string ActivePlatformAdminNoMfa = "active-platform-admin-no-mfa";
     public const string ActiveMultiOrganization = "active-multi-org";
     public const string ActiveDispatcher = "active-dispatcher";
+    public const string LocalDispatcherMfa = "local-dispatcher-mfa";
     public const string ActiveDriver = "active-driver";
     public const string SecondaryDriver = "secondary-driver";
     public const string SuspendedUser = "suspended-user";
@@ -32,6 +33,7 @@ public static class MockIdentityProfiles
             [ActivePlatformAdminNoMfa] = External("mock-subject-platform-admin-no-mfa", false),
             [ActiveMultiOrganization] = External("mock-subject-multi-org", true),
             [ActiveDispatcher] = External("mock-subject-active-dispatcher", false),
+            [LocalDispatcherMfa] = External("local-subject-dispatcher-mfa", true),
             [ActiveDriver] = External("mock-subject-active-driver", false),
             [SecondaryDriver] = External("mock-subject-secondary-driver", false),
             [SuspendedUser] = External("mock-subject-suspended", true),
@@ -60,6 +62,9 @@ public static class MockIdentityProfiles
                 Membership(OperationsOrganizationId, OrganizationRole.Dispatcher, false)),
             ["mock-subject-active-dispatcher"] = Context(
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10",
+                Membership(ViewerOrganizationId, OrganizationRole.Dispatcher, true)),
+            ["local-subject-dispatcher-mfa"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa20",
                 Membership(ViewerOrganizationId, OrganizationRole.Dispatcher, true)),
             ["mock-subject-active-driver"] = Context(
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11",

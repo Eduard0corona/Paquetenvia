@@ -76,6 +76,16 @@ p {
   background: var(--accent-dark);
 }
 
+.devShell { min-height: 100svh; padding: 2rem; background: #ecfeff; }
+.devCard { width: min(100%, 48rem); margin: 0 auto; padding: 2rem; border: 1px solid #99f6e4; border-radius: 1rem; background: white; box-shadow: 0 1rem 3rem rgb(15 118 110 / 12%); }
+.devCard h1 { font-size: clamp(2rem, 7vw, 3.5rem); }
+.devLabel { display: block; margin: 1.5rem 0 0.5rem; font-weight: 700; }
+.devCard select { width: 100%; min-height: 44px; border: 1px solid #94a3b8; border-radius: 0.5rem; padding: 0.65rem; background: white; color: #0f172a; }
+.devActions, .devLinks { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; }
+.devActions button, .devLinks a { min-height: 44px; border: 0; border-radius: 0.6rem; padding: 0.75rem 1rem; background: var(--accent); color: white; font: inherit; font-weight: 700; text-decoration: none; cursor: pointer; }
+.devActions .devSecondary { background: #475569; }
+.devStatus { padding: 0.75rem; border-radius: 0.5rem; background: #f1f5f9; color: #0f172a; font-weight: 700; }
+
 .health {
   display: flex;
   align-items: center;
