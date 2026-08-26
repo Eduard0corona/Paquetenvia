@@ -50,8 +50,10 @@ function Get-RepositoryDotnet {
         (Get-Command dotnet -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
     foreach ($candidate in $candidates) {
-        $sdkRoot = Join-Path (Split-Path -Parent $candidate) "sdk/$requiredSdk"
-        if (Test-Path -LiteralPath $sdkRoot -PathType Container) { return $candidate }
+        $installedSdks = @(& $candidate --list-sdks 2>$null)
+        if ($LASTEXITCODE -eq 0 -and @($installedSdks | Where-Object { $_ -match "^$([regex]::Escape($requiredSdk))\s" }).Count -eq 1) {
+            return $candidate
+        }
     }
     throw "The repository requires .NET SDK $requiredSdk, but it was not found."
 }
