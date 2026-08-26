@@ -366,6 +366,37 @@ function Clear-WebSensitiveEnvironment {
     }
 }
 
+function ConvertTo-PosixShellLiteral([string] $Value) {
+    $quote = [string][char]39
+    $doubleQuote = [string][char]34
+    $replacement = "$quote$doubleQuote$quote$doubleQuote$quote"
+    return "$quote$($Value.Replace($quote, $replacement))$quote"
+}
+
+function Test-OwnedProcess($Record, $Process) {
+    if ($null -eq $Record -or $null -eq $Process -or
+        $null -eq $Record.psobject.Properties["startTimeUtc"] -or
+        $null -eq $Record.psobject.Properties["processPath"]) {
+        return $false
+    }
+    try {
+        $recordedStart = [DateTimeOffset]::Parse(
+            $Record.startTimeUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind)
+        $actualStart = [DateTimeOffset]$Process.StartTime.ToUniversalTime()
+        $startMatches = [Math]::Abs(($actualStart - $recordedStart).TotalSeconds) -lt 1
+        $actualPath = [System.IO.Path]::GetFullPath($Process.Path)
+        $expectedPath = [System.IO.Path]::GetFullPath($Record.processPath)
+        $comparer = if ($runningOnWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
+        return $startMatches -and
+            $Record.repositoryRoot -eq $repositoryRoot -and
+            ($comparer.Equals($actualPath, $expectedPath) -or
+                $comparer.Equals([IO.Path]::GetFileName($actualPath), [IO.Path]::GetFileName($expectedPath)))
+    }
+    catch { return $false }
+}
+
 function Start-OwnedProcess(
     [string] $Name,
     [string] $FilePath,
@@ -376,29 +407,49 @@ function Start-OwnedProcess(
     if (Test-Path $pidPath) {
         $record = Read-JsonFile $pidPath
         $existing = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
-        if ($null -ne $existing -and
-            $existing.StartTime.ToUniversalTime().Ticks -eq $record.startTimeUtcTicks -and
-            $record.repositoryRoot -eq $repositoryRoot -and
-            $existing.Path -eq $record.processPath) {
+        if (Test-OwnedProcess $record $existing) {
             return
         }
         Remove-Item -LiteralPath $pidPath -Force
     }
-    $start = @{
-        FilePath = $FilePath
-        ArgumentList = $Arguments
-        PassThru = $true
-        RedirectStandardOutput = (Join-Path $logRoot "$($Name.ToLowerInvariant()).out.log")
-        RedirectStandardError = (Join-Path $logRoot "$($Name.ToLowerInvariant()).err.log")
-        WorkingDirectory = $ProcessWorkingDirectory
+    $outputPath = Join-Path $logRoot "$($Name.ToLowerInvariant()).out.log"
+    $errorPath = Join-Path $logRoot "$($Name.ToLowerInvariant()).err.log"
+    $expectedProcessPath = [System.IO.Path]::GetFullPath($FilePath)
+    if ($runningOnWindows) {
+        $start = @{
+            FilePath = $FilePath
+            PassThru = $true
+            RedirectStandardOutput = $outputPath
+            RedirectStandardError = $errorPath
+            WorkingDirectory = $ProcessWorkingDirectory
+            WindowStyle = "Hidden"
+        }
+        if ($Arguments.Count -gt 0) { $start.ArgumentList = $Arguments }
+        $process = Start-Process @start
     }
-    if ($runningOnWindows) { $start.WindowStyle = "Hidden" }
-    $process = Start-Process @start
+    else {
+        $command = "exec " + ((@($FilePath) + $Arguments | ForEach-Object {
+            ConvertTo-PosixShellLiteral $_
+        }) -join " ") +
+            " >> " + (ConvertTo-PosixShellLiteral $outputPath) +
+            " 2>> " + (ConvertTo-PosixShellLiteral $errorPath)
+        $start = [System.Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = "/bin/sh"
+        $start.WorkingDirectory = $ProcessWorkingDirectory
+        $start.UseShellExecute = $false
+        $start.ArgumentList.Add("-c")
+        $start.ArgumentList.Add($command)
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $start
+        if (-not $process.Start()) { throw "Failed to start $Name." }
+        Start-Sleep -Milliseconds 100
+        $process.Refresh()
+    }
     Write-JsonFile $pidPath ([pscustomobject]@{
         name = $Name
         pid = $process.Id
-        startTimeUtcTicks = $process.StartTime.ToUniversalTime().Ticks
-        processPath = $process.Path
+        startTimeUtc = $process.StartTime.ToUniversalTime().ToString("O")
+        processPath = $expectedProcessPath
         repositoryRoot = $repositoryRoot
     })
 }
@@ -466,9 +517,7 @@ function Get-OwnedProcessStatus([string] $Name) {
     if ($null -eq $record) { return "stopped" }
     $process = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
     if ($null -eq $process) { return "stopped" }
-    if ($process.StartTime.ToUniversalTime().Ticks -ne $record.startTimeUtcTicks -or
-        $record.repositoryRoot -ne $repositoryRoot -or
-        $process.Path -ne $record.processPath) { return "unowned" }
+    if (-not (Test-OwnedProcess $record $process)) { return "unowned" }
     return "running(pid=$($record.pid))"
 }
 
@@ -505,12 +554,18 @@ function Invoke-Stop {
         $record = Read-JsonFile $path
         if ($null -eq $record) { continue }
         $process = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
-        $owned = $null -ne $process -and
-            $process.StartTime.ToUniversalTime().Ticks -eq $record.startTimeUtcTicks -and
-            $record.repositoryRoot -eq $repositoryRoot -and
-            $process.Path -eq $record.processPath
+        $owned = Test-OwnedProcess $record $process
         if ($owned) {
-            if ($runningOnWindows) { Stop-ProcessTree -RootPid $record.pid } else { Stop-Process -Id $record.pid -Force }
+            if ($runningOnWindows) {
+                Stop-ProcessTree -RootPid $record.pid
+            }
+            else {
+                Stop-Process -Id $record.pid -ErrorAction SilentlyContinue
+                Wait-Process -Id $record.pid -Timeout 5 -ErrorAction SilentlyContinue
+                if (Get-Process -Id $record.pid -ErrorAction SilentlyContinue) {
+                    Stop-Process -Id $record.pid -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     }
