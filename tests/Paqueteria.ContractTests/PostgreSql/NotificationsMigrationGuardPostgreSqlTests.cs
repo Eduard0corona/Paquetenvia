@@ -55,10 +55,23 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
 
         await ExecuteAsync(connection, "RESET ROLE");
         await ExecuteAsync(connection, "DELETE FROM platform.outbox_events WHERE id=@id", new NpgsqlParameter("id", source));
-        await using (var context = CreateNotificationsContext(connectionString))
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await using (var context = CreateNotificationsContext(connection))
         {
             await context.Database.MigrateAsync();
         }
+        await using (var migrationAssertion = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+              SELECT 1 FROM platform.__ef_migrations_history_notifications
+              WHERE "MigrationId"='20260815000100_AddTenantSafeOutboxNotifications'
+            )
+            """,
+            connection))
+        {
+            Assert.True(await migrationAssertion.ExecuteScalarAsync() is true);
+        }
+        await ExecuteAsync(connection, "RESET ROLE");
         var active = Guid.NewGuid();
         await ExecuteAsync(connection,
             """
@@ -81,6 +94,7 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
             new NpgsqlParameter("id", active));
         await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
         await ExecuteAsync(connection, AddTenantSafeOutboxNotifications.OperationalRollbackSql);
+        await ExecuteAsync(connection, "RESET ROLE");
         await using var assertion = new NpgsqlCommand(
             """
             SELECT EXISTS (
@@ -118,12 +132,31 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
         var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
 
-        await using var context = CreateNotificationsContext(connectionString);
-        await context.Database.MigrateAsync();
+        await using (var migrationConnection = new NpgsqlConnection(connectionString))
+        {
+            await migrationConnection.OpenAsync();
+            await ExecuteAsync(migrationConnection, "SET ROLE paqueteria_migrator");
+            await using (var context = CreateNotificationsContext(migrationConnection))
+            {
+                await context.Database.MigrateAsync();
+                await using (var migrationAssertion = new NpgsqlCommand(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1 FROM platform.__ef_migrations_history_notifications
+                      WHERE "MigrationId"='20260815000100_AddTenantSafeOutboxNotifications'
+                    )
+                    """,
+                    migrationConnection))
+                {
+                    Assert.True(await migrationAssertion.ExecuteScalarAsync() is true);
+                }
 
-        var migrator = context.GetService<IMigrator>();
-        var downgrade = await Assert.ThrowsAsync<PostgresException>(() => migrator.MigrateAsync("0"));
-        Assert.Equal("NTF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", downgrade.MessageText);
+                var migrator = context.GetService<IMigrator>();
+                var downgrade = await Assert.ThrowsAsync<PostgresException>(() => migrator.MigrateAsync("0"));
+                Assert.Equal("NTF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", downgrade.MessageText);
+            }
+            await ExecuteAsync(migrationConnection, "RESET ROLE");
+        }
 
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
@@ -145,11 +178,14 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
         Assert.True(await assertion.ExecuteScalarAsync() is true);
     }
 
-    private static NotificationsDbContext CreateNotificationsContext(string connectionString)
+    private static NotificationsDbContext CreateNotificationsContext(NpgsqlConnection connection)
     {
         var options = new DbContextOptionsBuilder<NotificationsDbContext>()
-            .UseNpgsql(connectionString, postgres =>
-                postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform"))
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(NotificationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform");
+            })
             .Options;
         return new NotificationsDbContext(options);
     }
