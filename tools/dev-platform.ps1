@@ -45,15 +45,20 @@ $runningOnWindows = $env:OS -eq "Windows_NT"
 
 function Get-RepositoryDotnet {
     $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    $pathCommand = Get-Command dotnet -ErrorAction SilentlyContinue
     $candidates = @(
         (Join-Path $userProfile ".dotnet/dotnet.exe"),
-        (Get-Command dotnet -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+        (Join-Path $userProfile ".dotnet/dotnet"),
+        $(if (-not [string]::IsNullOrWhiteSpace($env:DOTNET_ROOT)) { Join-Path $env:DOTNET_ROOT "dotnet.exe" }),
+        $(if (-not [string]::IsNullOrWhiteSpace($env:DOTNET_ROOT)) { Join-Path $env:DOTNET_ROOT "dotnet" }),
+        $(if ($null -ne $pathCommand) { $pathCommand.Path })
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
     foreach ($candidate in $candidates) {
-        $installedSdks = @(& $candidate --list-sdks 2>$null)
-        if ($LASTEXITCODE -eq 0 -and @($installedSdks | Where-Object { $_ -match "^$([regex]::Escape($requiredSdk))\s" }).Count -eq 1) {
-            return $candidate
+        try {
+            $observedSdk = (& $candidate --version 2>$null).Trim()
+            if ($LASTEXITCODE -eq 0 -and $observedSdk -eq $requiredSdk) { return $candidate }
         }
+        catch { continue }
     }
     throw "The repository requires .NET SDK $requiredSdk, but it was not found."
 }
