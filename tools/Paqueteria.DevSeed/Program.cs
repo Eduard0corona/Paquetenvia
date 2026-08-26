@@ -17,16 +17,16 @@ if ((args.Length != 1 || args[0] is not ("bootstrap" or "seed" or "status")) &&
     return Fail("Usage: Paqueteria.DevSeed <bootstrap|seed|status|tracking order-id>");
 }
 
-if (args[0] == "tracking")
-{
-    await IssueTrackingAsync(Guid.Parse(args[1]), Required(AppConnectionEnvironment));
-    return 0;
-}
-
 if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"), RequiredEnvironment, StringComparison.Ordinal) ||
     !string.Equals(Environment.GetEnvironmentVariable(RequiredOptIn), "true", StringComparison.Ordinal))
 {
     return Fail("DevSeed is restricted to Development with explicit local opt-in.");
+}
+
+if (args[0] == "tracking")
+{
+    await IssueTrackingAsync(Guid.Parse(args[1]), Required(AppConnectionEnvironment));
+    return 0;
 }
 
 var adminConnection = Required(AdminConnectionEnvironment);
@@ -58,6 +58,7 @@ static async Task IssueTrackingAsync(Guid orderId, string appConnection)
         })
         .Build();
     var services = new ServiceCollection();
+    services.AddSingleton<IConfiguration>(configuration);
     services.AddOrdersInfrastructure(configuration);
     await using var provider = services.BuildServiceProvider();
     await using var scope = provider.CreateAsyncScope();

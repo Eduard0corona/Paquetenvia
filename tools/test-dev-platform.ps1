@@ -85,6 +85,8 @@ try {
     $env:PAQUETERIA_LOCAL_DEV_SEED_ENABLED = "true"
     & $dotnet run --no-restore --project $seedProject -- status *> $null
     if ($LASTEXITCODE -eq 0) { throw "DevSeed accepted Production." }
+    & $dotnet run --no-restore --project $seedProject -- tracking 77777777-7777-7777-7777-777777777777 *> $null
+    if ($LASTEXITCODE -eq 0) { throw "DevSeed tracking accepted Production." }
     $env:DOTNET_ENVIRONMENT = "Development"
     $env:PAQUETERIA_LOCAL_DEV_SEED_ENABLED = "false"
     & $dotnet run --no-restore --project $seedProject -- status *> $null
