@@ -616,14 +616,24 @@ items:
   - offer API
   - eligibility filter
   - driver offer UI
+  - driver-scoped eligible offers read API
   acceptance_criteria:
+  - muestra expiración antes de aceptar
   - muestra comisión antes de aceptar
   - aceptación atómica
-  - aceptar/rechazar libre
+  - GET /driver/me/external-offers deriva el driver autenticado y no acepta driver_id
+  - GET devuelve sólo ofertas del tenant activo, OPEN, no expiradas y actualmente elegibles
+  - GET pagina con cursor en items y next_cursor sin page-size configurable
+  - load, refresh y reconnect reconstruyen ofertas desde REST/PostgreSQL; SignalR sólo notifica para refetch
+  - aceptar usa el POST normativo; No me interesa es dismiss local no durable y sin request al servidor
+  - dismiss no cambia status, no afecta a otros drivers y puede reaparecer tras reload o reconnect
+  - external offers no define REJECTED ni endpoint reject
   - crear oferta exige Idempotency-Key
   required_tests:
   - concurrency 50 acceptors
   - eligibility e2e
+  - eligible offers REST recovery e2e
+  - local dismiss does not mutate server state
   approval_gate: null
 - id: NTF-001
   epic: Notifications

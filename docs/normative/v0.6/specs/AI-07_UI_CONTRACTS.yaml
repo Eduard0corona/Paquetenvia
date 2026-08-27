@@ -133,6 +133,38 @@ screen_contracts:
     - masked phone or relay
     - no client account history
     completion: cannot complete without required POD unless supervisor override ID
+  external_driver_offers:
+    release: MVP-1
+    host_route: /driver/stops
+    source: GET /driver/me/external-offers
+    authority: REST API + PostgreSQL
+    recovery:
+    - initial load fetches the REST collection
+    - refresh fetches the REST collection
+    - reconnect fetches the REST collection
+    - ExternalOfferChanged only triggers a REST refetch
+    server_filters:
+    - active tenant
+    - authenticated driver without driver_id input
+    - OPEN
+    - not expired
+    - currently eligible
+    must_show_before_accept:
+    - order_id
+    - commission
+    - expires_at
+    accept:
+      request: POST /external-offers/{offerId}/accept
+      idempotency_key: required
+    dismiss:
+      label: No me interesa
+      scope: local UI only
+      durable: false
+      server_request: none
+      changes_offer_status: false
+      affects_other_drivers: false
+      may_reappear_after_reload_or_reconnect: true
+      rejected_status_or_endpoint: forbidden
   public_tracking:
     show:
     - brand
