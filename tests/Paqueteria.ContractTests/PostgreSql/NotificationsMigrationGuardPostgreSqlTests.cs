@@ -33,6 +33,7 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
 
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
+        await AssertSecuritySchemaBaselineAsync(connection);
         await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
         await using var context = CreateNotificationsContext(connection);
         var migrator = context.GetService<IMigrator>();
@@ -250,6 +251,8 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
                   security.resolve_outbox_consumer('dispatch.external-offer-changed'),
                   pg_get_userbyid(target_function.proowner),
                   pg_get_userbyid(history.relowner),
+                  pg_get_userbyid(namespace.nspowner),
+                  has_schema_privilege('paqueteria_outbox_executor','security','CREATE'),
                   EXISTS (
                     SELECT 1
                     FROM platform.__ef_migrations_history_notifications
@@ -272,12 +275,32 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
             Assert.Equal(expectedConsumer, reader.GetString(0));
             Assert.Equal("paqueteria_outbox_executor", reader.GetString(1));
             Assert.Equal("paqueteria_migrator", reader.GetString(2));
-            Assert.Equal(routeMigrationApplied, reader.GetBoolean(3));
+            Assert.Equal("paqueteria_migrator", reader.GetString(3));
+            Assert.False(reader.GetBoolean(4));
+            Assert.Equal(routeMigrationApplied, reader.GetBoolean(5));
             Assert.False(await reader.ReadAsync());
         }
         finally
         {
             await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
         }
+    }
+
+    private static async Task AssertSecuritySchemaBaselineAsync(NpgsqlConnection connection)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+              pg_get_userbyid(nspowner),
+              has_schema_privilege('paqueteria_outbox_executor','security','CREATE')
+            FROM pg_catalog.pg_namespace
+            WHERE nspname='security';
+            """,
+            connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("paqueteria_migrator", reader.GetString(0));
+        Assert.False(reader.GetBoolean(1));
+        Assert.False(await reader.ReadAsync());
     }
 }

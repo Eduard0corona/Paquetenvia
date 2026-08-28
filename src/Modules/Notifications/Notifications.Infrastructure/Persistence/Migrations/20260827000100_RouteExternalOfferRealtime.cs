@@ -12,6 +12,8 @@ public sealed class RouteExternalOfferRealtime : Migration
     protected override void Up(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
+            GRANT CREATE ON SCHEMA security TO paqueteria_outbox_executor;
+
             RESET ROLE;
             SET ROLE paqueteria_outbox_executor;
 
@@ -30,12 +32,16 @@ public sealed class RouteExternalOfferRealtime : Migration
 
             RESET ROLE;
             SET ROLE paqueteria_migrator;
+
+            REVOKE CREATE ON SCHEMA security FROM paqueteria_outbox_executor;
             """);
 
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
             -- NTF-001 rollback blocked from destructive table/function removal; only the EXT-001 topic is withdrawn.
+            GRANT CREATE ON SCHEMA security TO paqueteria_outbox_executor;
+
             RESET ROLE;
             SET ROLE paqueteria_outbox_executor;
 
@@ -53,5 +59,7 @@ public sealed class RouteExternalOfferRealtime : Migration
 
             RESET ROLE;
             SET ROLE paqueteria_migrator;
+
+            REVOKE CREATE ON SCHEMA security FROM paqueteria_outbox_executor;
             """);
 }
