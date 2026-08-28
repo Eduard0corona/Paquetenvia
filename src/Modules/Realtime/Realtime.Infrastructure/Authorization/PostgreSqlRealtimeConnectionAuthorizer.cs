@@ -49,7 +49,7 @@ internal sealed class PostgreSqlRealtimeConnectionAuthorizer(
           AND m.role='DRIVER'
           AND m.status='ACTIVE'
           AND o.status='ACTIVE'
-          AND d.driver_type='OWN'
+          AND d.driver_type IN ('OWN','EXTERNAL')
           AND d.status='ACTIVE'
         LIMIT 1;
         """;

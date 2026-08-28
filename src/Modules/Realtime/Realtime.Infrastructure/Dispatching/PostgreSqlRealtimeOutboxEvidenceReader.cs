@@ -63,11 +63,11 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                     SELECT a.id,a.order_id,a.driver_id,a.owner_org_id,a.operator_org_id,a.status,
                            e.aggregate_version,e.id,e.occurred_at,
                            (
-                             a.assignment_type='OWN'
+                             a.assignment_type IN ('OWN','EXTERNAL')
                              AND a.status IN ('ACCEPTED','ACTIVE')
                              AND p.id=a.driver_id
                              AND p.org_id=a.owner_org_id
-                             AND p.driver_type='OWN'
+                             AND p.driver_type=a.assignment_type
                              AND p.status='ACTIVE'
                              AND u.status='ACTIVE'
                              AND EXISTS (
@@ -133,7 +133,7 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                       JOIN drivers.driver_profiles p
                         ON p.id=a.driver_id
                        AND p.org_id=a.owner_org_id
-                       AND p.driver_type='OWN'
+                       AND p.driver_type=a.assignment_type
                        AND p.status='ACTIVE'
                       JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
                       JOIN organizations.organization_memberships m
@@ -191,6 +191,76 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                     Convert.ToDouble(reader.GetValue(5), System.Globalization.CultureInfo.InvariantCulture),
                     reader.GetFieldValue<DateTimeOffset>(6),
                     reader.GetBoolean(7));
+            },
+            cancellationToken);
+
+    public Task<ExternalOfferEvidence?> ReadExternalOfferAsync(
+        Guid ownerOrganizationId,
+        Guid offerId,
+        IReadOnlyList<Guid> requestedAudienceDriverIds,
+        CancellationToken cancellationToken) =>
+        ExecuteTenantReadAsync(
+            ownerOrganizationId,
+            async (connection, transaction, token) =>
+            {
+                const string offerSql =
+                    """
+                    SELECT id,owner_org_id,status,commission_cents,expires_at,version,accepted_by_driver_id
+                    FROM dispatch.external_offers
+                    WHERE id=@offer AND owner_org_id=@owner
+                    """;
+                ExternalOfferEvidence? offer;
+                await using (var command = new NpgsqlCommand(offerSql, connection, transaction))
+                {
+                    command.Parameters.Add(P("offer", NpgsqlDbType.Uuid, offerId));
+                    command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+                    await using var reader = await command.ExecuteReaderAsync(token);
+                    if (!await reader.ReadAsync(token)) return null;
+                    offer = new ExternalOfferEvidence(
+                        reader.GetGuid(0),
+                        reader.GetGuid(1),
+                        reader.GetString(2),
+                        reader.GetInt64(3),
+                        reader.GetFieldValue<DateTimeOffset>(4),
+                        reader.GetInt32(5),
+                        reader.IsDBNull(6) ? null : reader.GetGuid(6),
+                        []);
+                }
+
+                if (requestedAudienceDriverIds.Count == 0) return offer;
+                const string audienceSql =
+                    """
+                    SELECT p.id
+                    FROM drivers.driver_profiles p
+                    JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
+                    JOIN organizations.organization_memberships m
+                      ON m.user_id=p.user_id AND m.organization_id=p.org_id
+                     AND m.role='DRIVER' AND m.status='ACTIVE'
+                    WHERE p.org_id=@owner AND p.driver_type='EXTERNAL' AND p.status='ACTIVE'
+                      AND p.id=ANY(@drivers)
+                    ORDER BY p.id
+                    """;
+                var authorized = new List<Guid>();
+                await using (var command = new NpgsqlCommand(audienceSql, connection, transaction))
+                {
+                    command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+                    command.Parameters.Add(new NpgsqlParameter<Guid[]>(
+                        "drivers", NpgsqlDbType.Array | NpgsqlDbType.Uuid)
+                    {
+                        TypedValue = requestedAudienceDriverIds.ToArray(),
+                    });
+                    await using var reader = await command.ExecuteReaderAsync(token);
+                    while (await reader.ReadAsync(token)) authorized.Add(reader.GetGuid(0));
+                }
+                return new ExternalOfferEvidence(
+                    offer.OfferId,
+                    offer.OwnerOrganizationId,
+                    offer.Status,
+                    offer.CommissionCents,
+                    offer.ExpiresAt,
+                    offer.Version,
+                    offer.AcceptedByDriverId,
+                    authorized);
             },
             cancellationToken);
 

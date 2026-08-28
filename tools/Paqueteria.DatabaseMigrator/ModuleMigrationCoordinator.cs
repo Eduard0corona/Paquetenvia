@@ -47,8 +47,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AdoptCanonicalCustodyProofsBaseline.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260725_AdoptCanonicalCustodyProofsBaseline.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", AddTenantSafeOutboxNotifications.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260815000100_AddTenantSafeOutboxNotifications.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", RouteExternalOfferRealtime.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260827000100_RouteExternalOfferRealtime.cs"),
     ];
 
     public static IReadOnlyList<ModuleMigrationState> VerifySources()
@@ -229,6 +229,8 @@ internal sealed class ModuleMigrationCoordinator
                 [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
             "Orders" =>
                 [AdoptCanonicalOrdersBaseline.MigrationId, AddRealtimeResynchronizationCursor.MigrationId],
+            "Notifications" =>
+                [AddTenantSafeOutboxNotifications.MigrationId, RouteExternalOfferRealtime.MigrationId],
             _ => [contract.MigrationId],
         };
         var status = ids.SequenceEqual(expectedIds, StringComparer.Ordinal)

@@ -24,6 +24,7 @@ public static class NotificationOutboxTopics
         "orders.status-changed",
         "orders.timeline-event-added",
         "dispatch.assignment-changed",
+        "dispatch.external-offer-changed",
         StatusChanged,
     ];
 

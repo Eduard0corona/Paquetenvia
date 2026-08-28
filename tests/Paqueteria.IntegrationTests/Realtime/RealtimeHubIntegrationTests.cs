@@ -136,6 +136,41 @@ public sealed class RealtimeHubIntegrationTests(
     }
 
     [Fact]
+    public async Task External_offer_change_reaches_operations_and_only_the_target_driver_group()
+    {
+        await using var operations = CreateConnection(
+            "/hubs/operations",
+            MockIdentityProfiles.ActiveDispatcher,
+            RealtimeWebApplicationFactory.OrganizationA);
+        await using var driver = CreateConnection(
+            "/hubs/driver",
+            MockIdentityProfiles.ActiveDriver,
+            RealtimeWebApplicationFactory.OrganizationA);
+        var operationsReceived = NewCompletion<RealtimeEnvelope<ExternalOfferChangedPayload>>();
+        var driverReceived = NewCompletion<RealtimeEnvelope<ExternalOfferChangedPayload>>();
+        operations.On("ExternalOfferChanged", (RealtimeEnvelope<ExternalOfferChangedPayload> value) =>
+            operationsReceived.TrySetResult(value));
+        driver.On("ExternalOfferChanged", (RealtimeEnvelope<ExternalOfferChangedPayload> value) =>
+            driverReceived.TrySetResult(value));
+        await operations.StartAsync();
+        await driver.StartAsync();
+        await Task.Delay(50);
+
+        var message = ExternalOfferMessage();
+        await Publisher().PublishOperationsExternalOfferChangedAsync(
+            OperationsAudience.ForOrganization(RealtimeWebApplicationFactory.OrganizationA),
+            message,
+            default);
+        await Publisher().PublishDriverExternalOfferChangedAsync(
+            DriverAudience.ForDriver(RealtimeWebApplicationFactory.DriverA),
+            message,
+            default);
+
+        Assert.Equal(message.EventId, (await operationsReceived.Task.WaitAsync(TimeSpan.FromSeconds(3))).EventId);
+        Assert.Equal(message.EventId, (await driverReceived.Task.WaitAsync(TimeSpan.FromSeconds(3))).EventId);
+    }
+
+    [Fact]
     public async Task Driver_rejects_missing_invalid_non_driver_suspended_and_cross_tenant_connections()
     {
         await AssertConnectionRejectedAsync(
@@ -458,6 +493,20 @@ public sealed class RealtimeHubIntegrationTests(
                 RealtimeWebApplicationFactory.DriverA,
                 "ACCEPTED",
                 OccurredAt));
+
+    private static RealtimeEnvelope<ExternalOfferChangedPayload> ExternalOfferMessage() =>
+        new(
+            Guid.NewGuid(),
+            RealtimeEventTypes.ExternalOfferChanged,
+            OccurredAt,
+            Guid.Parse("77777777-7777-7777-7777-777777777778"),
+            1,
+            null,
+            new ExternalOfferChangedPayload(
+                Guid.Parse("77777777-7777-7777-7777-777777777778"),
+                "OPEN",
+                12_345,
+                OccurredAt.AddHours(2)));
 
     private static PublicRealtimeEnvelope<PublicOrderStatusChangedPayload> PublicStatusMessage() =>
         new(

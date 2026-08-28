@@ -53,6 +53,9 @@ internal sealed class RealtimeOutboxProcessor(
                     case ParsedAssignmentChanged assignment:
                         await PublishAssignmentAsync(assignment, timeout.Token);
                         break;
+                    case ParsedExternalOfferChanged externalOffer:
+                        await PublishExternalOfferAsync(externalOffer, timeout.Token);
+                        break;
                     case ParsedNotificationStatusChanged notification:
                         await PublishNotificationAsync(notification, timeout.Token);
                         break;
@@ -384,6 +387,59 @@ internal sealed class RealtimeOutboxProcessor(
         telemetry.AudienceDelivered(lane, eventType, "operations", "published");
     }
 
+    private async Task PublishExternalOfferAsync(
+        ParsedExternalOfferChanged value,
+        CancellationToken cancellationToken)
+    {
+        var persisted = await evidence.ReadExternalOfferAsync(
+            value.OwnerOrganizationId,
+            value.OfferId,
+            value.AudienceDriverIds,
+            cancellationToken);
+        if (persisted is null ||
+            persisted.OfferId != value.OfferId ||
+            persisted.OwnerOrganizationId != value.OwnerOrganizationId ||
+            persisted.Status != value.Status ||
+            persisted.CommissionCents != value.CommissionCents ||
+            persisted.Version != value.AggregateVersion ||
+            !UtcMicrosecondPrecision.AreEqual(persisted.ExpiresAt, value.ExpiresAt) ||
+            !persisted.AuthorizedAudienceDriverIds.Order()
+                .SequenceEqual(value.AudienceDriverIds.Order()))
+        {
+            throw new OutboxMessageException(RealtimeOutboxErrorCodes.InvalidAudienceEvidence);
+        }
+        if (value.Status == "ACCEPTED" &&
+            (persisted.AcceptedByDriverId is not { } acceptedDriverId ||
+             value.AudienceDriverIds.Count != 1 ||
+             value.AudienceDriverIds[0] != acceptedDriverId))
+        {
+            throw new OutboxMessageException(RealtimeOutboxErrorCodes.InvalidAudienceEvidence);
+        }
+
+        const string lane = "business";
+        var eventType = RealtimeEventTypes.ExternalOfferChanged;
+        var message = RealtimeOutboxEnvelopeFactory.ExternalOffer(value);
+        using (telemetry.MeasurePublish(lane, eventType))
+        {
+            await publisher.PublishOperationsExternalOfferChangedAsync(
+                OperationsAudience.ForOrganization(value.OwnerOrganizationId),
+                message,
+                cancellationToken);
+        }
+        telemetry.AudienceDelivered(lane, eventType, "operations", "published");
+        foreach (var driverId in value.AudienceDriverIds)
+        {
+            using (telemetry.MeasurePublish(lane, eventType))
+            {
+                await publisher.PublishDriverExternalOfferChangedAsync(
+                    DriverAudience.ForDriver(driverId),
+                    message,
+                    cancellationToken);
+            }
+            telemetry.AudienceDelivered(lane, eventType, "driver", "published");
+        }
+    }
+
     private static void ValidateOrderEvidence(
         OrderEventEvidence? persisted,
         Guid orderEventId,
@@ -531,6 +587,7 @@ internal sealed class RealtimeOutboxProcessor(
         ParsedOrderStatusChanged => RealtimeEventTypes.OrderStatusChanged,
         ParsedOrderTimelineEventAdded => RealtimeEventTypes.OrderTimelineEventAdded,
         ParsedAssignmentChanged => RealtimeEventTypes.AssignmentChanged,
+        ParsedExternalOfferChanged => RealtimeEventTypes.ExternalOfferChanged,
         ParsedNotificationStatusChanged => RealtimeEventTypes.NotificationStatusChanged,
         _ => throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic),
     };
