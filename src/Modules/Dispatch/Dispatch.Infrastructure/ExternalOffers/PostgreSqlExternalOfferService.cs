@@ -505,7 +505,7 @@ public sealed class PostgreSqlExternalOfferService(
               ON m.user_id=p.user_id AND m.organization_id=p.org_id
              AND m.role='DRIVER' AND m.status='ACTIVE'
             WHERE p.user_id=@actor AND p.org_id=@organization
-              AND p.driver_type='EXTERNAL' AND p.status='ACTIVE'
+              AND p.driver_type='EXTERNAL'
             """;
         await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
