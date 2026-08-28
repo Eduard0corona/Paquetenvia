@@ -218,6 +218,47 @@ public sealed class DriverEligibilityPolicyTests
         Assert.True(result.IsEligible);
     }
 
+    [Fact]
+    public void External_policy_reuses_documents_capacity_and_service_area_rules()
+    {
+        var own = Command();
+        var command = new EvaluateExternalDriverEligibilityCommand(
+            own.ActorId,
+            own.OrganizationId,
+            own.DriverId,
+            own.CityId,
+            own.ServiceAreaId,
+            own.Capacity,
+            own.EvaluatedAt);
+
+        var result = DriverEligibilityPolicy.EvaluateExternal(
+            command,
+            Snapshot() with { DriverType = "EXTERNAL" },
+            Policy());
+
+        Assert.True(result.IsEligible);
+        Assert.Empty(result.Rejections);
+    }
+
+    [Fact]
+    public void External_policy_rejects_an_own_driver_without_weakening_other_guards()
+    {
+        var own = Command();
+        var result = DriverEligibilityPolicy.EvaluateExternal(
+            new EvaluateExternalDriverEligibilityCommand(
+                own.ActorId,
+                own.OrganizationId,
+                own.DriverId,
+                own.CityId,
+                own.ServiceAreaId,
+                own.Capacity,
+                own.EvaluatedAt),
+            Snapshot(),
+            Policy());
+
+        Assert.Equal([DriverEligibilityRejectionCodes.DriverTypeNotExternal], Codes(result));
+    }
+
     private static readonly Guid DriverId = Guid.Parse("10000000-0000-0000-0000-000000000001");
     private static readonly Guid UserId = Guid.Parse("10000000-0000-0000-0000-000000000002");
     private static readonly Guid OrganizationId = Guid.Parse("10000000-0000-0000-0000-000000000003");

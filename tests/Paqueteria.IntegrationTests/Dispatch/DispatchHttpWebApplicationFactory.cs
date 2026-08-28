@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Dispatch.Application.Assignments;
+using Dispatch.Application.ExternalOffers;
 using Dispatch.Application.Stops;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -18,6 +19,8 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10");
     internal static readonly Guid DriverActorId =
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11");
+    internal static readonly Guid ExternalDriverActorId =
+        Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa13");
     internal static readonly Guid AdminMfaId =
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2");
     internal static readonly Guid AdminNoMfaId =
@@ -71,12 +74,14 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         {
             services.RemoveAll<IAssignmentService>();
             services.RemoveAll<IDriverStopsQuery>();
+            services.RemoveAll<IExternalOfferService>();
             services.AddSingleton<IAssignmentService>(service);
             services.AddSingleton<IDriverStopsQuery>(service);
+            services.AddSingleton<IExternalOfferService>(service);
         });
     }
 
-    private sealed class StubDispatchService : IAssignmentService, IDriverStopsQuery
+    private sealed class StubDispatchService : IAssignmentService, IDriverStopsQuery, IExternalOfferService
     {
         private readonly ConcurrentDictionary<(Guid Tenant, string Key), Stored> stored = new();
         private int effects;
@@ -185,6 +190,54 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                 ? Task.FromResult(Stops)
                 : throw new DriverStopsForbiddenException();
         }
+
+        public Task<ExternalOfferResult> CreateAsync(
+            CreateExternalOfferCommand command,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (command.ActorId != DispatcherId && command.ActorId != AdminMfaId)
+                throw new ExternalOfferForbiddenException();
+            var result = new ExternalOfferResult(
+                Guid.NewGuid(), command.OrderId, "OPEN",
+                new MoneyResult("MXN", command.CommissionCents), command.ExpiresAt,
+                null, null, 1);
+            externalOffers[result.Id] = result;
+            return Task.FromResult(result);
+        }
+
+        public Task<ExternalOfferPageResult> ListEligibleAsync(
+            Guid actorId,
+            Guid organizationId,
+            string? cursor,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (actorId != ExternalDriverActorId) throw new ExternalOfferForbiddenException();
+            return Task.FromResult(new ExternalOfferPageResult(
+                externalOffers.Values.Where(value => value.Status == "OPEN").ToArray(), null));
+        }
+
+        public Task<AssignmentResult> AcceptAsync(
+            AcceptExternalOfferCommand command,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (command.ActorId != ExternalDriverActorId) throw new ExternalOfferForbiddenException();
+            if (!externalOffers.TryGetValue(command.OfferId, out var offer) || offer.Status != "OPEN")
+                throw new ExternalOfferConflictException(ExternalOfferConflictCode.OfferUnavailable);
+            externalOffers[offer.Id] = offer with
+            {
+                Status = "ACCEPTED",
+                AcceptedByDriverId = ExternalDriverActorId,
+                AcceptedAt = DateTimeOffset.UtcNow,
+                Version = 2,
+            };
+            return Task.FromResult(new AssignmentResult(
+                Guid.NewGuid(), offer.OrderId, ExternalDriverActorId, "ACCEPTED", offer.Commission));
+        }
+
+        private readonly ConcurrentDictionary<Guid, ExternalOfferResult> externalOffers = new();
 
         private sealed record Stored(
             string Signature,

@@ -79,7 +79,7 @@ public sealed class PostgreSqlDriverStopsQuery(
             FROM drivers.driver_profiles p
             JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
             WHERE p.user_id=@actor_id AND p.org_id=@organization_id
-              AND p.driver_type='OWN' AND p.status='ACTIVE'
+              AND p.driver_type IN ('OWN','EXTERNAL') AND p.status='ACTIVE'
               AND EXISTS (
                 SELECT 1 FROM organizations.organization_memberships m
                 WHERE m.user_id=p.user_id AND m.organization_id=p.org_id

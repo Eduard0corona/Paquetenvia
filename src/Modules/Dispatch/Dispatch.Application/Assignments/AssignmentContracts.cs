@@ -179,6 +179,12 @@ public interface IDispatchDriverEligibilityReader
         DbTransaction transaction,
         EvaluateOwnDriverEligibilityCommand command,
         CancellationToken cancellationToken);
+
+    Task<DriverEligibilitySnapshot?> ReadAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        EvaluateExternalDriverEligibilityCommand command,
+        CancellationToken cancellationToken);
 }
 
 public sealed record AssignmentVisibilityOrder(

@@ -89,7 +89,7 @@ public sealed class DispatchArchitectureTests
     }
 
     [Fact]
-    public void Dispatch_does_not_implement_external_offers_routes_positions_signalr_or_generic_repositories()
+    public void Dispatch_implements_EXT001_without_routes_positions_signalr_or_generic_repositories()
     {
         var root = TestRepository.GetPath("src/Modules/Dispatch");
         var sources = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
@@ -99,7 +99,8 @@ public sealed class DispatchArchitectureTests
             .ToArray();
         var source = string.Join('\n', sources);
 
-        Assert.DoesNotContain("ExternalOffer", source, StringComparison.Ordinal);
+        Assert.Contains("PostgreSqlExternalOfferService", source, StringComparison.Ordinal);
+        Assert.Contains("IExternalOfferService", source, StringComparison.Ordinal);
         Assert.DoesNotContain("RouteStop", source, StringComparison.Ordinal);
         Assert.DoesNotContain("DriverPosition", source, StringComparison.Ordinal);
         Assert.DoesNotContain("SignalR", source, StringComparison.Ordinal);
