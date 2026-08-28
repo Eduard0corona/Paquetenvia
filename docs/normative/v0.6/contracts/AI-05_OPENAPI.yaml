@@ -274,6 +274,35 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /driver/me/external-offers:
+    get:
+      tags:
+      - Driver
+      operationId: listMyEligibleExternalOffers
+      description: >-
+        Returns only offers that belong to the active tenant, are OPEN, have
+        not expired and remain eligible for the authenticated driver at read
+        time. The authenticated driver is derived from the access token; this
+        operation accepts no driver_id. REST/PostgreSQL are authoritative on
+        initial load, refresh and reconnect. ExternalOfferChanged only
+        notifies the client to refetch this resource.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Eligible external offers for the authenticated driver
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalOfferPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /driver/me/stops:
     get:
       tags:
@@ -1257,6 +1286,7 @@ components:
       - order_id
       - status
       - commission
+      - expires_at
       - version
       properties:
         id:
@@ -1274,6 +1304,9 @@ components:
           - CANCELLED
         commission:
           $ref: '#/components/schemas/Money'
+        expires_at:
+          type: string
+          format: date-time
         accepted_by_driver_id:
           type:
           - string
@@ -1287,6 +1320,20 @@ components:
         version:
           type: integer
           minimum: 1
+    ExternalOfferPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExternalOffer'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     DriverStop:
       type: object
       required:
