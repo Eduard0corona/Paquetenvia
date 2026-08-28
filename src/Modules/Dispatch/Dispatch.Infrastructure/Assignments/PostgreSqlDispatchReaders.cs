@@ -203,6 +203,37 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
         DbConnection connection,
         DbTransaction transaction,
         EvaluateOwnDriverEligibilityCommand eligibility,
+        CancellationToken cancellationToken) =>
+        await ReadAsync(
+            connection,
+            transaction,
+            eligibility.DriverId,
+            eligibility.OrganizationId,
+            eligibility.CityId,
+            eligibility.ServiceAreaId,
+            cancellationToken);
+
+    public async Task<DriverEligibilitySnapshot?> ReadAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        EvaluateExternalDriverEligibilityCommand eligibility,
+        CancellationToken cancellationToken) =>
+        await ReadAsync(
+            connection,
+            transaction,
+            eligibility.DriverId,
+            eligibility.OrganizationId,
+            eligibility.CityId,
+            eligibility.ServiceAreaId,
+            cancellationToken);
+
+    private static async Task<DriverEligibilitySnapshot?> ReadAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid driverId,
+        Guid organizationId,
+        Guid cityId,
+        Guid? serviceAreaId,
         CancellationToken cancellationToken)
     {
         const string sql =
@@ -237,10 +268,10 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
             sql,
             (NpgsqlConnection)connection,
             (NpgsqlTransaction)transaction);
-        command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, eligibility.DriverId));
-        command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, eligibility.OrganizationId));
-        command.Parameters.Add(P("service_area_id", NpgsqlDbType.Uuid, eligibility.ServiceAreaId));
-        command.Parameters.Add(P("city_id", NpgsqlDbType.Uuid, eligibility.CityId));
+        command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, driverId));
+        command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, organizationId));
+        command.Parameters.Add(P("service_area_id", NpgsqlDbType.Uuid, serviceAreaId));
+        command.Parameters.Add(P("city_id", NpgsqlDbType.Uuid, cityId));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
         DriverProfileRow? profile = null;

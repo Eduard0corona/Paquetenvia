@@ -14,19 +14,25 @@ namespace Paqueteria.ContractTests;
 public sealed class DispatchImplementationContractTests
 {
     [Fact]
-    public void Implementation_exposes_exactly_the_two_DSP002_routes()
+    public void Implementation_exposes_the_two_DSP002_and_three_EXT001_routes()
     {
         var path = Path.Combine(
             RepositoryPaths.Root,
             "src", "Modules", "Dispatch", "Dispatch.Endpoints", "DispatchEndpoints.cs");
         var source = File.ReadAllText(path);
 
-        Assert.Equal(1, Count(source, "endpoints.MapPost("));
-        Assert.Equal(1, Count(source, "endpoints.MapGet("));
+        Assert.Equal(3, Count(source, "endpoints.MapPost("));
+        Assert.Equal(2, Count(source, "endpoints.MapGet("));
         Assert.Contains("MapPost(\"/api/v1/orders/{orderId}/assignments\"", source, StringComparison.Ordinal);
         Assert.Contains("MapGet(\"/api/v1/driver/me/stops\"", source, StringComparison.Ordinal);
+        Assert.Contains("MapPost(\"/api/v1/external-offers\"", source, StringComparison.Ordinal);
+        Assert.Contains("MapPost(\"/api/v1/external-offers/{offerId}/accept\"", source, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/api/v1/driver/me/external-offers\"", source, StringComparison.Ordinal);
         Assert.Contains(".WithName(\"assignDriver\")", source, StringComparison.Ordinal);
         Assert.Contains(".WithName(\"listMyStops\")", source, StringComparison.Ordinal);
+        Assert.Contains(".WithName(\"createExternalOffer\")", source, StringComparison.Ordinal);
+        Assert.Contains(".WithName(\"acceptExternalOffer\")", source, StringComparison.Ordinal);
+        Assert.Contains(".WithName(\"listMyEligibleExternalOffers\")", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPut(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPatch(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapDelete(", source, StringComparison.Ordinal);
@@ -46,6 +52,14 @@ public sealed class DispatchImplementationContractTests
             "order_public_id",
             "status",
             "stop_type");
+        AssertJsonProperties<CreateExternalOfferRequest>(
+            "commission_cents", "eligible_constraints", "expires_at", "order_id");
+        AssertJsonProperties<ExternalOfferConstraintsRequest>(
+            "requires_cod", "service_area_ids", "vehicle_types");
+        AssertJsonProperties<ExternalOfferResponse>(
+            "accepted_at", "accepted_by_driver_id", "commission", "expires_at", "id",
+            "order_id", "status", "version");
+        AssertJsonProperties<ExternalOfferPageResponse>("items", "next_cursor");
 
         var stopNames = typeof(DriverStopResponse).GetProperties()
             .Select(property => property.Name)

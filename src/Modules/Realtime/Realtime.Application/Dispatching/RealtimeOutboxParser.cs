@@ -45,6 +45,7 @@ public static class RealtimeOutboxParser
                 RealtimeOutboxTopics.OrderStatusChanged => ParseStatus(message, document.RootElement),
                 RealtimeOutboxTopics.OrderTimelineEventAdded => ParseTimeline(message, document.RootElement),
                 RealtimeOutboxTopics.AssignmentChanged => ParseAssignment(message, document.RootElement),
+                RealtimeOutboxTopics.ExternalOfferChanged => ParseExternalOffer(message, document.RootElement),
                 RealtimeOutboxTopics.NotificationStatusChanged => ParseNotification(message, document.RootElement),
                 _ => throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic),
             };
@@ -295,14 +296,70 @@ public static class RealtimeOutboxParser
             attempts);
     }
 
+    private static ParsedExternalOfferChanged ParseExternalOffer(
+        ClaimedBusinessOutboxMessage message,
+        JsonElement root)
+    {
+        RequireExactProperties(
+            root,
+            "schema_version",
+            "offer_id",
+            "status",
+            "commission_cents",
+            "expires_at",
+            "audience_driver_ids");
+        RequireSchema(root, "external-offer-changed-v1");
+        var offerId = RequireGuid(root, "offer_id");
+        var status = RequireString(root, "status");
+        var commissionElement = root.GetProperty("commission_cents");
+        var expiresAt = RequireUtcTimestamp(root, "expires_at");
+        var audienceElement = root.GetProperty("audience_driver_ids");
+        if (offerId != message.AggregateId ||
+            status is not ("OPEN" or "ACCEPTED" or "EXPIRED" or "CANCELLED") ||
+            commissionElement.ValueKind != JsonValueKind.Number ||
+            !commissionElement.TryGetInt64(out var commissionCents) ||
+            commissionCents < 0 ||
+            audienceElement.ValueKind != JsonValueKind.Array ||
+            audienceElement.GetArrayLength() > 500)
+        {
+            throw InvalidPayload();
+        }
+
+        var audience = new List<Guid>(audienceElement.GetArrayLength());
+        foreach (var item in audienceElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String ||
+                !Guid.TryParseExact(item.GetString(), "D", out var driverId) ||
+                driverId == Guid.Empty || audience.Contains(driverId))
+            {
+                throw InvalidPayload();
+            }
+            audience.Add(driverId);
+        }
+
+        return new(
+            message.Id,
+            message.OwnerOrganizationId,
+            offerId,
+            message.AggregateVersion!.Value,
+            UtcMicrosecondPrecision.Normalize(message.CreatedAt),
+            status,
+            commissionCents,
+            expiresAt,
+            audience);
+    }
+
     private static void ValidateBusinessColumns(ClaimedBusinessOutboxMessage message)
     {
         if (message.Id == Guid.Empty ||
             message.OwnerOrganizationId == Guid.Empty ||
             message.AggregateId == Guid.Empty ||
-            message.AggregateType != (message.Topic == RealtimeOutboxTopics.NotificationStatusChanged
-                ? "Notification"
-                : "Order") ||
+            message.AggregateType != (message.Topic switch
+            {
+                RealtimeOutboxTopics.NotificationStatusChanged => "Notification",
+                RealtimeOutboxTopics.ExternalOfferChanged => "ExternalOffer",
+                _ => "Order",
+            }) ||
             message.AggregateVersion is null or < 0 ||
             message.LeaseToken == Guid.Empty)
         {

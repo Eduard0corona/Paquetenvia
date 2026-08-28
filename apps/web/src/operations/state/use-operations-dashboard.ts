@@ -52,6 +52,13 @@ export interface OperationsDashboardState {
   refresh(): void;
   loadMore(): void;
   requestOrganizationChange(organizationId: string): Promise<void>;
+  publishExternalOffer(
+    orderId: string,
+    commissionCents: number,
+    expiresAt: string,
+    vehicleType: "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER",
+    idempotencyKey: string,
+  ): Promise<void>;
   readonly canChangeOrganization: boolean;
 }
 
@@ -376,6 +383,26 @@ export function useOperationsDashboard(
     await session.requestOrganizationChange(organizationId);
   }, []);
 
+  const publishExternalOffer = useCallback(
+    async (
+      orderId: string,
+      commissionCents: number,
+      expiresAt: string,
+      vehicleType: "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER",
+      idempotencyKey: string,
+    ) => {
+      const api = apiRef.current;
+      if (api === null) throw new OperationsApiError("unauthorized");
+      await api.publishExternalOffer(
+        { orderId, commissionCents, expiresAt, vehicleType },
+        idempotencyKey,
+      );
+      seenCursorsRef.current.clear();
+      await performLoad("replace", "manual");
+    },
+    [performLoad],
+  );
+
   const activeOrganizationName =
     contexts.find(
       (context) =>
@@ -401,6 +428,7 @@ export function useOperationsDashboard(
     },
     loadMore: () => void performLoad("append", "pagination"),
     requestOrganizationChange,
+    publishExternalOffer,
     canChangeOrganization,
   };
 }

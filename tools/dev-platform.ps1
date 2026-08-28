@@ -7,7 +7,7 @@ param(
     [ValidateSet("All", "Api", "Worker", "Web")]
     [string] $Component = "All",
 
-    [ValidateSet("FreshOrder")]
+    [ValidateSet("FreshOrder", "ExternalOffer")]
     [string] $Name = "FreshOrder",
 
     [int] $TimeoutSeconds = 240,
@@ -283,7 +283,8 @@ function Invoke-Bootstrap {
         organization = [pscustomobject]@{ id = $organizationId; name = "Synthetic Local Organization" }
         profiles = @(
             [pscustomobject]@{ name = "dispatcher"; credential = "local-dispatcher-mfa"; role = "DISPATCHER"; mfa = $true },
-            [pscustomobject]@{ name = "driver"; credential = "active-driver"; role = "DRIVER"; mfa = $false }
+            [pscustomobject]@{ name = "driver"; credential = "active-driver"; role = "DRIVER"; mfa = $false },
+            [pscustomobject]@{ name = "external-driver"; credential = "external-driver"; role = "DRIVER"; mfa = $false }
         )
         urls = [pscustomobject]@{ dev = "$webUrl/dev"; operations = "$webUrl/ops/dashboard"; driver = "$webUrl/driver/stops" }
     }
@@ -690,6 +691,50 @@ function Invoke-FreshOrder {
     } | ConvertTo-Json
 }
 
+function Invoke-ExternalOffer {
+    Wait-Http "$apiUrl/health/ready" "API ready"
+    $nonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $order = New-SeedOrder "external-offer-$nonce"
+    $order = Move-SeedOrder $order "external-offer-$nonce" "CONFIRMED" 1
+    $order = Move-SeedOrder $order "external-offer-$nonce" "READY_FOR_PICKUP" 2
+    $expiresAt = [DateTimeOffset]::UtcNow.AddMinutes(30).ToString("O")
+    $offer = Invoke-ApiPost "/api/v1/external-offers" "local-dispatcher-mfa" "local-external-offer-create-$nonce" @{
+        order_id = $order.id
+        commission_cents = 12500
+        expires_at = $expiresAt
+        eligible_constraints = @{ vehicle_types = @("MOTORCYCLE") }
+    }
+    $driverHeaders = @{
+        Authorization = "Bearer external-driver"
+        "X-Organization-Id" = $organizationId
+    }
+    $page = Invoke-RestMethod -Method Get -Uri "$apiUrl/api/v1/driver/me/external-offers" -Headers $driverHeaders
+    $visible = @($page.items) | Where-Object { $_.id -eq $offer.id }
+    if ($visible.Count -ne 1 -or $visible[0].commission.amount_cents -ne 12500 -or [string]::IsNullOrWhiteSpace($visible[0].expires_at)) {
+        throw "ExternalOffer was not visible to the synthetic eligible external driver."
+    }
+    $accepted = Invoke-ApiPost "/api/v1/external-offers/$($offer.id)/accept" "external-driver" "local-external-offer-accept-$nonce" @{}
+    $context = Get-EnvironmentContext
+    $database = Get-ApplicationDatabaseName $context
+    $query = "SELECT count(*)||':'||min(a.assignment_type)||':'||min(a.cost_cents) FROM dispatch.assignments a WHERE a.order_id='$($order.id)';"
+    $result = Invoke-DockerCompose -Context $context -Arguments @(
+        "exec", "-T", "postgres", "psql", "-U", $context.Environment["POSTGRES_USER"],
+        "-d", $database, "-Atc", $query) -CaptureOutput
+    if ($result.Output.Trim() -ne "1:EXTERNAL:12500") {
+        throw "ExternalOffer acceptance did not create exactly one EXTERNAL assignment at the offered commission."
+    }
+    [pscustomobject]@{
+        publicId = $order.public_id
+        offerId = $offer.id
+        commissionCents = $visible[0].commission.amount_cents
+        expiresAt = $visible[0].expires_at
+        assignmentId = $accepted.id
+        assignment = $result.Output.Trim()
+        operationsUrl = "$webUrl/ops/dashboard"
+        driverUrl = "$webUrl/driver/stops"
+    } | ConvertTo-Json
+}
+
 function Invoke-ApiPost(
     [string] $Path,
     [string] $Credential,
@@ -876,7 +921,10 @@ try {
         Logs { Invoke-Logs }
         Stop { Invoke-Stop }
         Seed { Invoke-SeedScenarios }
-        Scenario { if ($Name -eq "FreshOrder") { Invoke-FreshOrder } }
+        Scenario {
+            if ($Name -eq "FreshOrder") { Invoke-FreshOrder }
+            elseif ($Name -eq "ExternalOffer") { Invoke-ExternalOffer }
+        }
         Reset { Invoke-Reset }
         PrintAccess { Invoke-PrintAccess }
     }

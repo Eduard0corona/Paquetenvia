@@ -7,11 +7,13 @@ public static class RealtimeOutboxTopics
     public const string OrderStatusChanged = "orders.status-changed";
     public const string OrderTimelineEventAdded = "orders.timeline-event-added";
     public const string AssignmentChanged = "dispatch.assignment-changed";
+    public const string ExternalOfferChanged = "dispatch.external-offer-changed";
     public const string NotificationStatusChanged = "notifications.status-changed";
     public const string DriverLocationUpdated = "drivers.location-updated";
 
     public static bool IsBusinessTopic(string value) =>
-        value is OrderStatusChanged or OrderTimelineEventAdded or AssignmentChanged or NotificationStatusChanged;
+        value is OrderStatusChanged or OrderTimelineEventAdded or AssignmentChanged or
+            ExternalOfferChanged or NotificationStatusChanged;
 
     public static bool IsLocationTopic(string value) => value == DriverLocationUpdated;
 }
@@ -114,6 +116,26 @@ public sealed record ParsedAssignmentChanged(
         AggregateVersion,
         OccurredAt);
 
+public sealed record ParsedExternalOfferChanged(
+    Guid EventId,
+    Guid OwnerOrganizationId,
+    Guid OfferId,
+    long AggregateVersion,
+    DateTimeOffset OccurredAt,
+    string Status,
+    long CommissionCents,
+    DateTimeOffset ExpiresAt,
+    IReadOnlyList<Guid> AudienceDriverIds)
+    : ParsedBusinessOutboxEvent(
+        EventId,
+        OwnerOrganizationId,
+        OfferId,
+        AggregateVersion,
+        OccurredAt)
+{
+    public IReadOnlyList<Guid> AudienceDriverIds { get; } = AudienceDriverIds.ToArray();
+}
+
 public sealed record ParsedNotificationStatusChanged(
     Guid EventId,
     Guid OwnerOrganizationId,
@@ -175,6 +197,19 @@ public sealed record DriverPositionEvidence(
     DateTimeOffset CapturedAt,
     bool PublishRealtime);
 
+public sealed record ExternalOfferEvidence(
+    Guid OfferId,
+    Guid OwnerOrganizationId,
+    string Status,
+    long CommissionCents,
+    DateTimeOffset ExpiresAt,
+    int Version,
+    Guid? AcceptedByDriverId,
+    IReadOnlyList<Guid> AuthorizedAudienceDriverIds)
+{
+    public IReadOnlyList<Guid> AuthorizedAudienceDriverIds { get; } = AuthorizedAudienceDriverIds.ToArray();
+}
+
 public interface IRealtimeOutboxEvidenceReader
 {
     Task<OrderEventEvidence?> ReadOrderEventAsync(
@@ -197,6 +232,12 @@ public interface IRealtimeOutboxEvidenceReader
     Task<DriverPositionEvidence?> ReadDriverPositionAsync(
         Guid ownerOrganizationId,
         Guid driverPositionId,
+        CancellationToken cancellationToken);
+
+    Task<ExternalOfferEvidence?> ReadExternalOfferAsync(
+        Guid ownerOrganizationId,
+        Guid offerId,
+        IReadOnlyList<Guid> requestedAudienceDriverIds,
         CancellationToken cancellationToken);
 }
 
@@ -320,6 +361,21 @@ public static class RealtimeOutboxEnvelopeFactory
                 value.DriverId,
                 value.AssignmentStatus,
                 value.OccurredAt));
+
+    public static RealtimeEnvelope<ExternalOfferChangedPayload> ExternalOffer(
+        ParsedExternalOfferChanged value) =>
+        new(
+            value.EventId,
+            RealtimeEventTypes.ExternalOfferChanged,
+            value.OccurredAt,
+            value.OfferId,
+            value.AggregateVersion,
+            null,
+            new(
+                value.OfferId,
+                value.Status,
+                value.CommissionCents,
+                value.ExpiresAt));
 
     public static RealtimeEnvelope<NotificationStatusChangedPayload> Notification(
         ParsedNotificationStatusChanged value) =>

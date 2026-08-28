@@ -19,6 +19,15 @@ public sealed record EvaluateOwnDriverEligibilityCommand(
     DriverCapacityRequirement Capacity,
     DateTimeOffset EvaluatedAt);
 
+public sealed record EvaluateExternalDriverEligibilityCommand(
+    Guid ActorId,
+    Guid OrganizationId,
+    Guid DriverId,
+    Guid CityId,
+    Guid? ServiceAreaId,
+    DriverCapacityRequirement Capacity,
+    DateTimeOffset EvaluatedAt);
+
 public sealed record DriverEligibilityRejection(string Code);
 
 public sealed record DriverEligibilityResult(
@@ -43,6 +52,7 @@ public static class DriverEligibilityRejectionCodes
 {
     public const string DriverUnavailable = "DRIVER_UNAVAILABLE";
     public const string DriverTypeNotOwn = "DRIVER_TYPE_NOT_OWN";
+    public const string DriverTypeNotExternal = "DRIVER_TYPE_NOT_EXTERNAL";
     public const string DriverStatusNotActive = "DRIVER_STATUS_NOT_ACTIVE";
     public const string UserNotActive = "USER_NOT_ACTIVE";
     public const string DriverMembershipNotActive = "DRIVER_MEMBERSHIP_NOT_ACTIVE";

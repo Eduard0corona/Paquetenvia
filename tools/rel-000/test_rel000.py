@@ -1098,13 +1098,28 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_owner_state(report),
         )
 
-    def test_32_ext001_started(self):
+    def test_32_mvp0_item_evidence_rejects_ext001_started(self):
         self.assert_reason(
             "EXT001_ALREADY_STARTED",
-            lambda: rel000.validate_extension_not_started(
-                self.root, {"ext001_started": True}
-            ),
+            lambda: rel000.validate_mvp0_extension_state({"ext001_started": True}),
         )
+
+    def test_32a_post_mvp0_ext_paths_do_not_change_historical_state(self):
+        tracked = subprocess.run(
+            ["git", "-C", str(REPOSITORY_ROOT), "ls-files"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.splitlines()
+        post_mvp0_ext_paths = [
+            path
+            for path in tracked
+            if re.search(r"(^|[/_-])ext-?001([/_.-]|$)", path, re.IGNORECASE)
+        ]
+
+        self.assertGreaterEqual(len(post_mvp0_ext_paths), 1)
+        rel000.validate_mvp0_extension_state({"ext001_started": False})
 
     def test_33_open_gate_removed(self):
         open_ids = sorted(rel000.REQUIRED_OPEN_DECISIONS - {"GATE-017"})
@@ -1985,14 +2000,14 @@ class OwnerApprovalDecisionTests(unittest.TestCase):
             lambda: rel000.validate_ext001_state_source(self.root, rel000.APPROVED_EVIDENCE_MAIN_SHA),
         )
 
-    def test_198_current_ext_source_missing_or_wrong_type_fails(self):
+    def test_198_mvp0_ext_state_missing_or_wrong_type_fails(self):
         self.assert_reason(
             "EXT001_STARTED_FIELD_MISSING",
-            lambda: rel000.validate_extension_not_started(self.root, {}),
+            lambda: rel000.validate_mvp0_extension_state({}),
         )
         self.assert_reason(
             "EXT001_STARTED_FIELD_TYPE_INVALID",
-            lambda: rel000.validate_extension_not_started(self.root, {"ext001_started": "false"}),
+            lambda: rel000.validate_mvp0_extension_state({"ext001_started": "false"}),
         )
 
     def test_199_open_security_issues_fail(self):

@@ -5473,22 +5473,13 @@ def validate_owner_state(report: dict[str, Any]) -> None:
             fail("FORBIDDEN_RELEASE_STATUS", "The report asserts a forbidden release status.", status=word)
 
 
-def validate_extension_not_started(repository_root: Path, raw_item_evidence: dict[str, Any]) -> None:
+def validate_mvp0_extension_state(raw_item_evidence: dict[str, Any]) -> None:
     if "ext001_started" not in raw_item_evidence:
-        fail("EXT001_STARTED_FIELD_MISSING", "The current item evidence omits ext001_started.")
+        fail("EXT001_STARTED_FIELD_MISSING", "The approved MVP-0 item evidence omits ext001_started.")
     if not isinstance(raw_item_evidence["ext001_started"], bool):
         fail("EXT001_STARTED_FIELD_TYPE_INVALID", "ext001_started must be a JSON boolean.")
     if raw_item_evidence["ext001_started"]:
-        fail("EXT001_ALREADY_STARTED", "EXT-001 must remain not started after internal approval.")
-    tracked = run_git(repository_root, "ls-files").splitlines()
-    forbidden = [
-        path
-        for path in tracked
-        if re.search(r"(^|[/_-])ext-?001([/_.-]|$)", path, re.IGNORECASE)
-        and path != "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml"
-    ]
-    if forbidden:
-        fail("EXT001_ALREADY_STARTED", "Tracked implementation evidence indicates EXT-001 started.", files=forbidden)
+        fail("EXT001_ALREADY_STARTED", "The approved MVP-0 evidence indicates EXT-001 had already started.")
 
 
 def assert_output_is_fresh(output_directory: Path) -> None:
@@ -5529,7 +5520,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     normative_evidence = validate_normative_checksums(normative["root"])
     selected, all_items = normative_items(normative)
     item_input = load_json(args.item_evidence)
-    validate_extension_not_started(repository_root, item_input)
+    validate_mvp0_extension_state(item_input)
     issue = load_json(args.issue5)
     additional_issue = load_json(args.security_tracking_issue)
     job_results = json.loads(args.job_results_json)

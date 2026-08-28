@@ -1,8 +1,10 @@
 using System.Data.Common;
 using System.Text.Json;
 using Dispatch.Application.Assignments;
+using Dispatch.Application.ExternalOffers;
 using Dispatch.Infrastructure;
 using Dispatch.Infrastructure.Assignments;
+using Dispatch.Infrastructure.ExternalOffers;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
 using Dispatch.Infrastructure.Stops;
@@ -26,6 +28,160 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
 {
     private static readonly DateTimeOffset OccurredAt =
         new(2026, 7, 23, 21, 0, 0, TimeSpan.Zero);
+
+    [PostgreSqlContractFact]
+    public async Task External_offer_has_one_winner_and_forty_nine_uniform_conflicts_under_real_concurrency()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var actors = await scenario.CreateExternalDriversAsync(50);
+        var creator = CreateExternalOfferService(fixture.AppDataSource);
+        var createCommand = new CreateExternalOfferCommand(
+                scenario.DispatcherUserId,
+                scenario.OrganizationId,
+                $"ext-create-{Guid.NewGuid():N}",
+                scenario.OrderId,
+                12_345,
+                OccurredAt.AddHours(2),
+                new ExternalOfferConstraints(["MOTORCYCLE"], [], false),
+                false,
+                "ext-001-concurrency-create");
+        var offer = await creator.CreateAsync(createCommand, default);
+        Assert.Equal(offer, await creator.CreateAsync(createCommand, default));
+        var changedCreate = await Assert.ThrowsAsync<ExternalOfferConflictException>(() =>
+            creator.CreateAsync(createCommand with { CommissionCents = 12_346 }, default));
+        Assert.Equal(ExternalOfferConflictCode.IdempotencyConflict, changedCreate.Code);
+
+        var page = await CreateExternalOfferService(fixture.AppDataSource)
+            .ListEligibleAsync(actors[0], scenario.OrganizationId, null, default);
+        Assert.Contains(page.Items, item => item.Id == offer.Id && item.Commission.AmountCents == 12_345);
+
+        using var gate = new ManualResetEventSlim(false);
+        var attempts = actors.Select((actorId, index) => Task.Run(async () =>
+        {
+            gate.Wait();
+            var acceptCommand = new AcceptExternalOfferCommand(
+                actorId,
+                scenario.OrganizationId,
+                $"ext-accept-{index:D2}-{Guid.NewGuid():N}",
+                offer.Id,
+                $"ext-001-concurrency-{index:D2}");
+            try
+            {
+                var result = await CreateExternalOfferService(fixture.AppDataSource)
+                    .AcceptAsync(acceptCommand, default);
+                return (Result: result, Conflict: (ExternalOfferConflictCode?)null, Command: acceptCommand);
+            }
+            catch (ExternalOfferConflictException exception)
+            {
+                return (Result: (AssignmentResult?)null, Conflict: (ExternalOfferConflictCode?)exception.Code, Command: acceptCommand);
+            }
+        })).ToArray();
+
+        gate.Set();
+        var outcomes = await Task.WhenAll(attempts);
+        var winner = Assert.Single(outcomes, value => value.Result is not null).Result!;
+        Assert.Equal(49, outcomes.Count(value => value.Conflict == ExternalOfferConflictCode.OfferUnavailable));
+        Assert.Equal("ACCEPTED", winner.Status);
+        Assert.Equal("MXN", winner.Cost.Currency);
+        Assert.Equal(12_345, winner.Cost.AmountCents);
+        var winningCommand = Assert.Single(outcomes, value => value.Result is not null).Command;
+        Assert.Equal(
+            winner,
+            await CreateExternalOfferService(fixture.AppDataSource).AcceptAsync(winningCommand, default));
+
+        await using var query = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT
+              (SELECT count(*) FROM dispatch.external_offers WHERE id=@offer AND status='ACCEPTED'),
+              (SELECT accepted_by_driver_id FROM dispatch.external_offers WHERE id=@offer),
+              (SELECT count(*) FROM dispatch.assignments WHERE order_id=@order AND assignment_type='EXTERNAL'),
+              (SELECT cost_cents FROM dispatch.assignments WHERE order_id=@order),
+              (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org
+                 AND action IN ('EXTERNAL_OFFER_CREATED','EXTERNAL_OFFER_ACCEPTED','ASSIGNMENT_CREATED')),
+              (SELECT count(*) FROM platform.outbox_events WHERE owner_org_id=@org
+                 AND ((aggregate_id=@offer AND topic='dispatch.external-offer-changed')
+                   OR (aggregate_id=@order AND topic IN ('orders.status-changed','orders.timeline-event-added','dispatch.assignment-changed')))),
+              (SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@org
+                 AND scope='EXT-001:ACCEPT_EXTERNAL_OFFER' AND response_status=200);
+            """);
+        query.Parameters.AddWithValue("offer", offer.Id);
+        query.Parameters.AddWithValue("order", scenario.OrderId);
+        query.Parameters.AddWithValue("org", scenario.OrganizationId);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1L, reader.GetInt64(0));
+        Assert.Equal(winner.DriverId, reader.GetGuid(1));
+        Assert.Equal(1L, reader.GetInt64(2));
+        Assert.Equal(12_345L, reader.GetInt64(3));
+        Assert.Equal(3L, reader.GetInt64(4));
+        Assert.Equal(5L, reader.GetInt64(5));
+        Assert.Equal(1L, reader.GetInt64(6));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Eligible_read_is_tenant_scoped_rechecks_driver_and_excludes_expired_offers()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var actor = Assert.Single(await scenario.CreateExternalDriversAsync(1));
+        var offer = await CreateExternalOfferService(fixture.AppDataSource).CreateAsync(
+            new CreateExternalOfferCommand(
+                scenario.DispatcherUserId,
+                scenario.OrganizationId,
+                $"ext-read-{Guid.NewGuid():N}",
+                scenario.OrderId,
+                5000,
+                OccurredAt.AddMinutes(30),
+                new ExternalOfferConstraints(["MOTORCYCLE"], [], false),
+                false,
+                "ext-001-read"),
+            default);
+
+        var eligible = await CreateExternalOfferService(fixture.AppDataSource)
+            .ListEligibleAsync(actor, scenario.OrganizationId, null, default);
+        Assert.Equal(offer.Id, Assert.Single(eligible.Items).Id);
+
+        await scenario.ExecuteAdminAsync(
+            "UPDATE drivers.driver_profiles SET status='SUSPENDED' WHERE user_id=@actor;",
+            P("actor", actor));
+        Assert.Empty((await CreateExternalOfferService(fixture.AppDataSource)
+            .ListEligibleAsync(actor, scenario.OrganizationId, null, default)).Items);
+        var ineligible = await Assert.ThrowsAsync<ExternalOfferConflictException>(() =>
+            CreateExternalOfferService(fixture.AppDataSource).AcceptAsync(
+                new AcceptExternalOfferCommand(
+                    actor,
+                    scenario.OrganizationId,
+                    $"ext-ineligible-{Guid.NewGuid():N}",
+                    offer.Id,
+                    "ext-001-ineligible"),
+                default));
+        Assert.Equal(ExternalOfferConflictCode.DriverIneligible, ineligible.Code);
+        await scenario.ExecuteAdminAsync(
+            "UPDATE drivers.driver_profiles SET status='ACTIVE' WHERE user_id=@actor;",
+            P("actor", actor));
+
+        var afterExpiry = CreateExternalOfferService(
+            fixture.AppDataSource,
+            OccurredAt.AddHours(1));
+        Assert.Empty((await afterExpiry.ListEligibleAsync(
+            actor, scenario.OrganizationId, null, default)).Items);
+        var expired = await Assert.ThrowsAsync<ExternalOfferConflictException>(() =>
+            afterExpiry.AcceptAsync(
+                new AcceptExternalOfferCommand(
+                    actor,
+                    scenario.OrganizationId,
+                    $"ext-expired-{Guid.NewGuid():N}",
+                    offer.Id,
+                    "ext-001-expired"),
+                default));
+        Assert.Equal(ExternalOfferConflictCode.OfferExpired, expired.Code);
+
+        await Assert.ThrowsAsync<ExternalOfferForbiddenException>(() =>
+            CreateExternalOfferService(fixture.AppDataSource).ListEligibleAsync(
+                actor,
+                Guid.Parse("33333333-3333-3333-3333-333333333333"),
+                null,
+                default));
+    }
 
     [PostgreSqlContractFact]
     public async Task Coordinator_creates_one_accepted_assignment_transition_event_outbox_audits_and_replay()
@@ -789,6 +945,35 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             NullLogger<PostgreSqlAssignmentToOrderCoordinator>.Instance);
     }
 
+    private static PostgreSqlExternalOfferService CreateExternalOfferService(
+        NpgsqlDataSource dataSource,
+        DateTimeOffset? now = null)
+    {
+        var state = new TenantDatabaseExecutionState();
+        var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
+            .UseNpgsql(dataSource, postgres => postgres.EnableRetryOnFailure())
+            .AddInterceptors(
+                new TenantTransactionGuardInterceptor(state),
+                new TenantSaveChangesGuardInterceptor(state))
+            .Options;
+        var context = new DispatchDbContext(dbOptions, state);
+        return new PostgreSqlExternalOfferService(
+            new TenantTransactionContext<DispatchDbContext>(context, state),
+            Options.Create(new DispatchOptions
+            {
+                Provider = DispatchProviderKind.PostgreSql,
+                AssignmentPolicyVersion = "ext-001-contract-v1",
+            }),
+            Options.Create(EligibilityOptions()),
+            new DispatchAssignmentAuthorizer(),
+            new PostgreSqlDispatchAuthorizationReader(),
+            new PostgreSqlDispatchDriverEligibilityReader(),
+            new OrderTransitionGuardRegistry(),
+            new PostgreSqlAppendOnlyAuditWriter(state),
+            new AuditPayloadRedactor(),
+            new FixedClock(now ?? OccurredAt));
+    }
+
     private static PostgreSqlDriverStopsQuery CreateStopsQuery(NpgsqlDataSource dataSource)
     {
         var state = new TenantDatabaseExecutionState();
@@ -1180,10 +1365,14 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
     private sealed class DispatchScenario : IAsyncDisposable
     {
         private readonly SyntheticOrderScenario order;
+        private readonly List<Guid> driverUserIds = [];
+        private readonly List<Guid> driverDocumentIds = [];
 
         private DispatchScenario(PostgreSqlContractFixture fixture)
         {
             order = new SyntheticOrderScenario(fixture);
+            driverUserIds.Add(DriverUserId);
+            driverDocumentIds.Add(DriverDocumentId);
         }
 
         public Guid OrganizationId => order.OrganizationId;
@@ -1254,21 +1443,69 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
                 P("user", DispatcherUserId),
                 P("org", OrganizationId));
 
+        public async Task<IReadOnlyList<Guid>> CreateExternalDriversAsync(int count)
+        {
+            if (count < 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count));
+            }
+
+            await ExecuteAdminAsync(
+                "UPDATE drivers.driver_profiles SET driver_type='EXTERNAL' WHERE id=@driver;",
+                P("driver", DriverId));
+            var actors = new List<Guid>(count) { DriverUserId };
+            for (var index = 1; index < count; index++)
+            {
+                var userId = Guid.NewGuid();
+                var driverId = Guid.NewGuid();
+                var documentId = Guid.NewGuid();
+                actors.Add(userId);
+                await ExecuteAdminAsync(
+                    """
+                    INSERT INTO identity.users(id,identity_subject,status,created_at)
+                    VALUES (@user,@subject,'ACTIVE',@created);
+                    INSERT INTO organizations.organization_memberships(
+                      id,user_id,organization_id,role,status,is_default,granted_at)
+                    VALUES (@membership,@user,@org,'DRIVER','ACTIVE',true,@created);
+                    INSERT INTO drivers.driver_profiles(
+                      id,user_id,org_id,home_city_id,driver_type,vehicle_type,status,created_at)
+                    VALUES (@driver,@user,@org,@city,'EXTERNAL','MOTORCYCLE','ACTIVE',@created);
+                    INSERT INTO drivers.driver_documents(
+                      id,driver_id,org_id,document_type,object_key,sha256,expires_at,status,created_at)
+                    VALUES (@document,@driver,@org,'IDENTITY',@object_key,
+                      decode(repeat('cd',32),'hex'),@expires,'VALID',@created);
+                    """,
+                    P("user", userId),
+                    P("subject", $"ext001-{userId:N}"),
+                    P("created", OccurredAt.AddDays(-1)),
+                    P("membership", Guid.NewGuid()),
+                    P("org", OrganizationId),
+                    P("driver", driverId),
+                    P("city", order.CityId),
+                    P("document", documentId),
+                    P("object_key", $"synthetic/ext001/{driverId:N}"),
+                    P("expires", OccurredAt.AddDays(30)));
+                driverUserIds.Add(userId);
+                driverDocumentIds.Add(documentId);
+            }
+
+            return actors;
+        }
+
         public async ValueTask DisposeAsync()
         {
             await ExecuteAdminAsync(
                 """
-                DELETE FROM dispatch.assignments WHERE driver_id=@driver;
-                DELETE FROM drivers.driver_documents WHERE id=@document;
-                DELETE FROM drivers.driver_profiles WHERE id=@driver;
-                DELETE FROM organizations.organization_memberships WHERE id=@membership;
-                DELETE FROM identity.users WHERE id=@driver_user;
+                DELETE FROM dispatch.assignments WHERE order_id=@order;
+                DELETE FROM dispatch.external_offers WHERE order_id=@order;
+                DELETE FROM drivers.driver_documents WHERE id=ANY(@documents);
                 """,
-                P("document", DriverDocumentId),
-                P("driver", DriverId),
-                P("membership", DriverMembershipId),
-                P("driver_user", DriverUserId));
+                P("order", OrderId),
+                P("documents", driverDocumentIds.ToArray()));
             await order.DisposeAsync();
+            await ExecuteAdminAsync(
+                "DELETE FROM identity.users WHERE id=ANY(@users);",
+                P("users", driverUserIds.ToArray()));
         }
     }
 }

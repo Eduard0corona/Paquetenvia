@@ -136,6 +136,7 @@ if ($Full) {
         }
         Invoke-Platform PrintAccess
         Invoke-Platform Scenario @("-Name", "FreshOrder")
+        Invoke-Platform Scenario @("-Name", "ExternalOffer")
         Assert-ManualEndpoints
         Invoke-Platform Stop
         Invoke-Platform Start

@@ -43,6 +43,50 @@ public static class DriverEligibilityPolicy
         DriverEligibilityPolicyConfiguration policy)
     {
         ArgumentNullException.ThrowIfNull(command);
+        return Evaluate(
+            command.OrganizationId,
+            command.DriverId,
+            command.CityId,
+            command.ServiceAreaId,
+            command.Capacity,
+            command.EvaluatedAt,
+            "OWN",
+            DriverEligibilityRejectionCodes.DriverTypeNotOwn,
+            snapshot,
+            policy);
+    }
+
+    public static DriverEligibilityResult EvaluateExternal(
+        EvaluateExternalDriverEligibilityCommand command,
+        DriverEligibilitySnapshot? snapshot,
+        DriverEligibilityPolicyConfiguration policy)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return Evaluate(
+            command.OrganizationId,
+            command.DriverId,
+            command.CityId,
+            command.ServiceAreaId,
+            command.Capacity,
+            command.EvaluatedAt,
+            "EXTERNAL",
+            DriverEligibilityRejectionCodes.DriverTypeNotExternal,
+            snapshot,
+            policy);
+    }
+
+    private static DriverEligibilityResult Evaluate(
+        Guid organizationId,
+        Guid driverId,
+        Guid cityId,
+        Guid? serviceAreaId,
+        DriverCapacityRequirement capacity,
+        DateTimeOffset evaluatedAt,
+        string requiredDriverType,
+        string driverTypeRejectionCode,
+        DriverEligibilitySnapshot? snapshot,
+        DriverEligibilityPolicyConfiguration policy)
+    {
         ArgumentNullException.ThrowIfNull(policy);
 
         if (snapshot is null)
@@ -52,33 +96,35 @@ public static class DriverEligibilityPolicy
 
         var codes = new List<string>();
 
-        AddWhen(codes, snapshot.DriverType != "OWN", DriverEligibilityRejectionCodes.DriverTypeNotOwn);
+        AddWhen(codes, snapshot.OrganizationId != organizationId || snapshot.DriverId != driverId,
+            DriverEligibilityRejectionCodes.DriverUnavailable);
+        AddWhen(codes, snapshot.DriverType != requiredDriverType, driverTypeRejectionCode);
         AddWhen(codes, snapshot.ProfileStatus != "ACTIVE", DriverEligibilityRejectionCodes.DriverStatusNotActive);
         AddWhen(codes, snapshot.UserStatus != "ACTIVE", DriverEligibilityRejectionCodes.UserNotActive);
         AddWhen(codes, !snapshot.HasActiveDriverMembership,
             DriverEligibilityRejectionCodes.DriverMembershipNotActive);
-        AddWhen(codes, snapshot.HomeCityId != command.CityId, DriverEligibilityRejectionCodes.HomeCityMismatch);
+        AddWhen(codes, snapshot.HomeCityId != cityId, DriverEligibilityRejectionCodes.HomeCityMismatch);
 
-        if (command.ServiceAreaId is { } serviceAreaId)
+        if (serviceAreaId is { } requiredServiceAreaId)
         {
-            AddWhen(codes, serviceAreaId == Guid.Empty, DriverEligibilityRejectionCodes.ServiceAreaRequired);
-            AddWhen(codes, serviceAreaId != Guid.Empty && snapshot.ServiceAreaEligible != true,
+            AddWhen(codes, requiredServiceAreaId == Guid.Empty, DriverEligibilityRejectionCodes.ServiceAreaRequired);
+            AddWhen(codes, requiredServiceAreaId != Guid.Empty && snapshot.ServiceAreaEligible != true,
                 DriverEligibilityRejectionCodes.ServiceAreaNotEligible);
         }
 
-        EvaluateDocuments(command, snapshot, policy, codes);
-        EvaluateCapacity(command.Capacity, snapshot.VehicleType, policy, codes);
+        EvaluateDocuments(evaluatedAt, snapshot, policy, codes);
+        EvaluateCapacity(capacity, snapshot.VehicleType, policy, codes);
 
         return Result(snapshot.DriverId, snapshot.VehicleType, policy.PolicyVersion, codes);
     }
 
     private static void EvaluateDocuments(
-        EvaluateOwnDriverEligibilityCommand command,
+        DateTimeOffset evaluatedAt,
         DriverEligibilitySnapshot snapshot,
         DriverEligibilityPolicyConfiguration policy,
         List<string> codes)
     {
-        if (command.EvaluatedAt == default ||
+        if (evaluatedAt == default ||
             !policy.RequiredDocumentTypesByVehicleType.TryGetValue(snapshot.VehicleType, out var requiredTypes))
         {
             Add(codes, DriverEligibilityRejectionCodes.DocumentPolicyUnavailable);
@@ -106,7 +152,7 @@ public static class DriverEligibilityPolicy
             {
                 Add(codes, DriverEligibilityRejectionCodes.DocumentExpiryMissing);
             }
-            else if (document.ExpiresAt <= command.EvaluatedAt)
+            else if (document.ExpiresAt <= evaluatedAt)
             {
                 Add(codes, DriverEligibilityRejectionCodes.DocumentExpired);
             }

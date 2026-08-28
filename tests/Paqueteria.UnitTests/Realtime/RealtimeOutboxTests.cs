@@ -23,6 +23,7 @@ public sealed class RealtimeOutboxTests
     [InlineData(RealtimeOutboxTopics.OrderStatusChanged)]
     [InlineData(RealtimeOutboxTopics.OrderTimelineEventAdded)]
     [InlineData(RealtimeOutboxTopics.AssignmentChanged)]
+    [InlineData(RealtimeOutboxTopics.ExternalOfferChanged)]
     [InlineData(RealtimeOutboxTopics.NotificationStatusChanged)]
     public void Business_topic_allowlist_is_exact(string topic)
     {
@@ -95,6 +96,33 @@ public sealed class RealtimeOutboxTests
 
         Assert.IsType<ParsedOrderTimelineEventAdded>(timeline);
         Assert.IsType<ParsedAssignmentChanged>(assignment);
+    }
+
+    [Fact]
+    public void External_offer_parser_keeps_internal_audience_out_of_the_public_envelope()
+    {
+        var offerId = Guid.Parse("00000000-0000-0000-0000-000000000809");
+        var parsed = Assert.IsType<ParsedExternalOfferChanged>(
+            RealtimeOutboxParser.Parse(Business(
+                RealtimeOutboxTopics.ExternalOfferChanged,
+                JsonSerializer.Serialize(new
+                {
+                    schema_version = "external-offer-changed-v1",
+                    offer_id = offerId,
+                    status = "OPEN",
+                    commission_cents = 12_345,
+                    expires_at = OccurredAt.AddHours(2),
+                    audience_driver_ids = new[] { DriverId },
+                })) with
+                {
+                    AggregateType = "ExternalOffer",
+                    AggregateId = offerId,
+                }));
+
+        var envelope = RealtimeOutboxEnvelopeFactory.ExternalOffer(parsed);
+        Assert.Equal([DriverId], parsed.AudienceDriverIds);
+        Assert.Equal(12_345, envelope.Payload.CommissionCents);
+        Assert.DoesNotContain("audience", JsonSerializer.Serialize(envelope), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

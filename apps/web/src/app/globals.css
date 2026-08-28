@@ -599,6 +599,29 @@ p {
   width: 100%;
 }
 
+.opsExternalOffer {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+  border-top: 1px solid #d9e2ec;
+  padding-top: 1rem;
+}
+
+.opsExternalOffer label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.opsExternalOffer input,
+.opsExternalOffer select {
+  min-width: 0;
+  border: 1px solid #9fb3c8;
+  border-radius: 0.4rem;
+  padding: 0.55rem;
+  font: inherit;
+}
+
 .opsLoadMore {
   margin: 1rem auto;
 }

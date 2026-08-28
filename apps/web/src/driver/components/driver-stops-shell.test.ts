@@ -42,4 +42,15 @@ describe("driver stops generic shell", () => {
   it("does not render the internal route UUID as detail text", () => {
     expect(component).not.toContain(">{orderId}<");
   });
+
+  it("shows commission and expiration before the external offer accept action", () => {
+    const commission = component.indexOf("formatCommission(offer.commission.amount_cents)");
+    const expiration = component.indexOf("formatTimestamp(offer.expires_at)");
+    const accept = component.indexOf("Aceptar oferta");
+    expect(commission).toBeGreaterThan(0);
+    expect(expiration).toBeGreaterThan(commission);
+    expect(accept).toBeGreaterThan(expiration);
+    expect(component).toContain("No me interesa");
+    expect(component).not.toContain("REJECTED");
+  });
 });

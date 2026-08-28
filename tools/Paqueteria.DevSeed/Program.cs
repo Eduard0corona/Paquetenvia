@@ -123,7 +123,8 @@ static async Task SeedPrerequisitesAsync(NpgsqlConnection connection)
         INSERT INTO identity.users(id,identity_subject,status)
         VALUES
           ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa20','local-subject-dispatcher-mfa','ACTIVE'),
-          ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11','mock-subject-active-driver','ACTIVE')
+          ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11','mock-subject-active-driver','ACTIVE'),
+          ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa13','mock-subject-external-driver','ACTIVE')
         ON CONFLICT (id) DO UPDATE SET
           identity_subject=EXCLUDED.identity_subject,status='ACTIVE';
 
@@ -131,7 +132,8 @@ static async Task SeedPrerequisitesAsync(NpgsqlConnection connection)
           id,user_id,organization_id,role,status,is_default)
         VALUES
           ('dddddddd-dddd-dddd-dddd-dddddddddd20','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa20','11111111-1111-1111-1111-111111111111','DISPATCHER','ACTIVE',true),
-          ('dddddddd-dddd-dddd-dddd-dddddddddd11','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11','11111111-1111-1111-1111-111111111111','DRIVER','ACTIVE',true)
+          ('dddddddd-dddd-dddd-dddd-dddddddddd11','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11','11111111-1111-1111-1111-111111111111','DRIVER','ACTIVE',true),
+          ('dddddddd-dddd-dddd-dddd-dddddddddd13','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa13','11111111-1111-1111-1111-111111111111','DRIVER','ACTIVE',false)
         ON CONFLICT (id) DO UPDATE SET status='ACTIVE',is_default=EXCLUDED.is_default;
 
         INSERT INTO locations.cities(id,country_code,state_code,name,timezone,status)
@@ -169,9 +171,22 @@ static async Task SeedPrerequisitesAsync(NpgsqlConnection connection)
           'OWN','MOTORCYCLE','ACTIVE')
         ON CONFLICT (id) DO UPDATE SET status='ACTIVE';
 
+        INSERT INTO drivers.driver_profiles(id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
+        VALUES (
+          '55555555-5555-5555-5555-555555555553','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa13',
+          '11111111-1111-1111-1111-111111111111','44444444-4444-4444-4444-444444444441',
+          'EXTERNAL','MOTORCYCLE','ACTIVE')
+        ON CONFLICT (id) DO UPDATE SET driver_type='EXTERNAL',status='ACTIVE';
+
         INSERT INTO drivers.driver_service_areas(driver_id,service_area_id,org_id,status)
         VALUES (
           '55555555-5555-5555-5555-555555555551','44444444-4444-4444-4444-444444444442',
+          '11111111-1111-1111-1111-111111111111','ACTIVE')
+        ON CONFLICT (driver_id,service_area_id) DO UPDATE SET status='ACTIVE';
+
+        INSERT INTO drivers.driver_service_areas(driver_id,service_area_id,org_id,status)
+        VALUES (
+          '55555555-5555-5555-5555-555555555553','44444444-4444-4444-4444-444444444442',
           '11111111-1111-1111-1111-111111111111','ACTIVE')
         ON CONFLICT (driver_id,service_area_id) DO UPDATE SET status='ACTIVE';
 
@@ -181,6 +196,13 @@ static async Task SeedPrerequisitesAsync(NpgsqlConnection connection)
           '11111111-1111-1111-1111-111111111111','IDENTITY',
           'synthetic/local/driver-document',decode(repeat('11',32),'hex'),'VALID')
         ON CONFLICT (id) DO UPDATE SET status='VALID';
+
+        INSERT INTO drivers.driver_documents(id,driver_id,org_id,document_type,object_key,sha256,expires_at,status)
+        VALUES (
+          '55555555-5555-5555-5555-555555555554','55555555-5555-5555-5555-555555555553',
+          '11111111-1111-1111-1111-111111111111','IDENTITY',
+          'synthetic/local/external-driver-document',decode(repeat('13',32),'hex'),'2099-01-01T00:00:00Z','VALID')
+        ON CONFLICT (id) DO UPDATE SET expires_at=EXCLUDED.expires_at,status='VALID';
         """;
 
     await using var command = new NpgsqlCommand(sql, connection, transaction);
@@ -194,7 +216,7 @@ static async Task ReportStatusAsync(NpgsqlConnection connection)
         SELECT
           EXISTS(SELECT 1 FROM pg_roles WHERE rolname='paqueteria_local_app' AND rolcanlogin AND NOT rolinherit AND NOT rolbypassrls),
           EXISTS(SELECT 1 FROM pg_roles WHERE rolname='paqueteria_local_worker' AND rolcanlogin AND NOT rolinherit AND NOT rolbypassrls),
-          (SELECT count(*) FROM identity.users WHERE identity_subject IN ('local-subject-dispatcher-mfa','mock-subject-active-driver')),
+          (SELECT count(*) FROM identity.users WHERE identity_subject IN ('local-subject-dispatcher-mfa','mock-subject-active-driver','mock-subject-external-driver')),
           (SELECT count(*) FROM organizations.organizations WHERE id IN ('11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333')),
           pg_has_role('paqueteria_local_app','paqueteria_app','member')
             AND NOT pg_has_role('paqueteria_local_app','paqueteria_worker','member'),
@@ -206,13 +228,13 @@ static async Task ReportStatusAsync(NpgsqlConnection connection)
     await using var command = new NpgsqlCommand(sql, connection);
     await using var reader = await command.ExecuteReaderAsync();
     await reader.ReadAsync();
-    if (!reader.GetBoolean(0) || !reader.GetBoolean(1) || reader.GetInt64(2) != 2 || reader.GetInt64(3) != 2 ||
+    if (!reader.GetBoolean(0) || !reader.GetBoolean(1) || reader.GetInt64(2) != 3 || reader.GetInt64(3) != 2 ||
         !reader.GetBoolean(4) || !reader.GetBoolean(5) || !reader.GetBoolean(6))
     {
         throw new InvalidOperationException("Local runtime roles or deterministic seed are incomplete.");
     }
 
-    Console.WriteLine("DevSeed ready: runtime roles=2, synthetic identities=2, organizations=2.");
+    Console.WriteLine("DevSeed ready: runtime roles=2, synthetic identities=3, organizations=2.");
 }
 
 static async Task ExecuteAsync(NpgsqlConnection connection, string sql)

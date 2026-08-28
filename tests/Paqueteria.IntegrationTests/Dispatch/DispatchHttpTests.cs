@@ -554,6 +554,53 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         Assert.DoesNotContain("assignment_id", body, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task EXT001_create_list_and_accept_use_the_contracted_actor_derived_surface()
+    {
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
+        using var create = ExternalOfferCreateRequest(Guid.NewGuid(), Key(), expiresAt);
+        using var created = await client.SendAsync(create);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var offerId = createdJson.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal(12_345, createdJson.RootElement.GetProperty("commission").GetProperty("amount_cents").GetInt64());
+        Assert.True(createdJson.RootElement.TryGetProperty("expires_at", out _));
+
+        using var list = ExternalOfferRequest(HttpMethod.Get, "/api/v1/driver/me/external-offers", MockIdentityProfiles.ExternalDriver);
+        using var listed = await client.SendAsync(list);
+        Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+        var listBody = await listed.Content.ReadAsStringAsync();
+        Assert.Contains(offerId.ToString("D"), listBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("driver_id", list.RequestUri!.Query, StringComparison.OrdinalIgnoreCase);
+
+        using var accept = ExternalOfferRequest(
+            HttpMethod.Post,
+            $"/api/v1/external-offers/{offerId:D}/accept",
+            MockIdentityProfiles.ExternalDriver,
+            Key());
+        using var accepted = await client.SendAsync(accept);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        using var acceptedJson = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync());
+        Assert.Equal("ACCEPTED", acceptedJson.RootElement.GetProperty("status").GetString());
+        Assert.Equal(12_345, acceptedJson.RootElement.GetProperty("cost").GetProperty("amount_cents").GetInt64());
+    }
+
+    [Fact]
+    public async Task EXT001_denies_own_driver_and_requires_idempotency_for_mutations()
+    {
+        using var ownList = ExternalOfferRequest(
+            HttpMethod.Get,
+            "/api/v1/driver/me/external-offers",
+            MockIdentityProfiles.ActiveDriver);
+        using var ownResponse = await client.SendAsync(ownList);
+        Assert.Equal(HttpStatusCode.Forbidden, ownResponse.StatusCode);
+
+        using var missingKey = ExternalOfferCreateRequest(
+            Guid.NewGuid(), null, DateTimeOffset.UtcNow.AddHours(1));
+        using var missingKeyResponse = await client.SendAsync(missingKey);
+        Assert.Equal(HttpStatusCode.Conflict, missingKeyResponse.StatusCode);
+    }
+
     private static HttpRequestMessage AssignmentRequest(
         Guid orderId,
         string? key,
@@ -614,6 +661,41 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         request.Headers.Add(
             "X-Organization-Id",
             MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
+        return request;
+    }
+
+    private static HttpRequestMessage ExternalOfferCreateRequest(
+        Guid orderId,
+        string? key,
+        DateTimeOffset expiresAt)
+    {
+        var request = ExternalOfferRequest(
+            HttpMethod.Post,
+            "/api/v1/external-offers",
+            MockIdentityProfiles.ActiveDispatcher,
+            key);
+        request.Content = JsonContent.Create(new
+        {
+            order_id = orderId,
+            commission_cents = 12_345,
+            expires_at = expiresAt,
+            eligible_constraints = new { vehicle_types = new[] { "MOTORCYCLE" } },
+        });
+        return request;
+    }
+
+    private static HttpRequestMessage ExternalOfferRequest(
+        HttpMethod method,
+        string path,
+        string profile,
+        string? key = null)
+    {
+        var request = new HttpRequestMessage(method, path);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", profile);
+        request.Headers.Add(
+            "X-Organization-Id",
+            MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
+        if (key is not null) request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
         return request;
     }
 
