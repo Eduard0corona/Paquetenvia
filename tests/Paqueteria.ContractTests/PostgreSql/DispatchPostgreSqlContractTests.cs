@@ -145,6 +145,16 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             P("actor", actor));
         Assert.Empty((await CreateExternalOfferService(fixture.AppDataSource)
             .ListEligibleAsync(actor, scenario.OrganizationId, null, default)).Items);
+        var ineligible = await Assert.ThrowsAsync<ExternalOfferConflictException>(() =>
+            CreateExternalOfferService(fixture.AppDataSource).AcceptAsync(
+                new AcceptExternalOfferCommand(
+                    actor,
+                    scenario.OrganizationId,
+                    $"ext-ineligible-{Guid.NewGuid():N}",
+                    offer.Id,
+                    "ext-001-ineligible"),
+                default));
+        Assert.Equal(ExternalOfferConflictCode.DriverIneligible, ineligible.Code);
         await scenario.ExecuteAdminAsync(
             "UPDATE drivers.driver_profiles SET status='ACTIVE' WHERE user_id=@actor;",
             P("actor", actor));
@@ -1355,10 +1365,14 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
     private sealed class DispatchScenario : IAsyncDisposable
     {
         private readonly SyntheticOrderScenario order;
+        private readonly List<Guid> driverUserIds = [];
+        private readonly List<Guid> driverDocumentIds = [];
 
         private DispatchScenario(PostgreSqlContractFixture fixture)
         {
             order = new SyntheticOrderScenario(fixture);
+            driverUserIds.Add(DriverUserId);
+            driverDocumentIds.Add(DriverDocumentId);
         }
 
         public Guid OrganizationId => order.OrganizationId;
@@ -1444,6 +1458,7 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             {
                 var userId = Guid.NewGuid();
                 var driverId = Guid.NewGuid();
+                var documentId = Guid.NewGuid();
                 actors.Add(userId);
                 await ExecuteAdminAsync(
                     """
@@ -1467,9 +1482,11 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
                     P("org", OrganizationId),
                     P("driver", driverId),
                     P("city", order.CityId),
-                    P("document", Guid.NewGuid()),
+                    P("document", documentId),
                     P("object_key", $"synthetic/ext001/{driverId:N}"),
                     P("expires", OccurredAt.AddDays(30)));
+                driverUserIds.Add(userId);
+                driverDocumentIds.Add(documentId);
             }
 
             return actors;
@@ -1481,27 +1498,14 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
                 """
                 DELETE FROM dispatch.assignments WHERE order_id=@order;
                 DELETE FROM dispatch.external_offers WHERE order_id=@order;
-                DELETE FROM drivers.driver_documents
-                WHERE driver_id IN (
-                  SELECT p.id FROM drivers.driver_profiles p
-                  JOIN identity.users u ON u.id=p.user_id
-                  WHERE u.identity_subject LIKE 'ext001-%');
-                DELETE FROM drivers.driver_profiles
-                WHERE user_id IN (SELECT id FROM identity.users WHERE identity_subject LIKE 'ext001-%');
-                DELETE FROM organizations.organization_memberships
-                WHERE user_id IN (SELECT id FROM identity.users WHERE identity_subject LIKE 'ext001-%');
-                DELETE FROM identity.users WHERE identity_subject LIKE 'ext001-%';
-                DELETE FROM drivers.driver_documents WHERE id=@document;
-                DELETE FROM drivers.driver_profiles WHERE id=@driver;
-                DELETE FROM organizations.organization_memberships WHERE id=@membership;
-                DELETE FROM identity.users WHERE id=@driver_user;
+                DELETE FROM drivers.driver_documents WHERE id=ANY(@documents);
                 """,
                 P("order", OrderId),
-                P("document", DriverDocumentId),
-                P("driver", DriverId),
-                P("membership", DriverMembershipId),
-                P("driver_user", DriverUserId));
+                P("documents", driverDocumentIds.ToArray()));
             await order.DisposeAsync();
+            await ExecuteAdminAsync(
+                "DELETE FROM identity.users WHERE id=ANY(@users);",
+                P("users", driverUserIds.ToArray()));
         }
     }
 }
