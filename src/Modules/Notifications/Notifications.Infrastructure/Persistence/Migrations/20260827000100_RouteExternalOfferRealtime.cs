@@ -12,6 +12,9 @@ public sealed class RouteExternalOfferRealtime : Migration
     protected override void Up(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
+            RESET ROLE;
+            SET ROLE paqueteria_outbox_executor;
+
             CREATE OR REPLACE FUNCTION security.resolve_outbox_consumer(p_topic text) RETURNS text
             LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
             SET search_path=pg_catalog,security,pg_temp AS $fn$
@@ -24,12 +27,18 @@ public sealed class RouteExternalOfferRealtime : Migration
                 ELSE 'UNROUTED'
               END;
             $fn$;
+
+            RESET ROLE;
+            SET ROLE paqueteria_migrator;
             """);
 
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
             -- NTF-001 rollback blocked from destructive table/function removal; only the EXT-001 topic is withdrawn.
+            RESET ROLE;
+            SET ROLE paqueteria_outbox_executor;
+
             CREATE OR REPLACE FUNCTION security.resolve_outbox_consumer(p_topic text) RETURNS text
             LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
             SET search_path=pg_catalog,security,pg_temp AS $fn$
@@ -41,5 +50,8 @@ public sealed class RouteExternalOfferRealtime : Migration
                 ELSE 'UNROUTED'
               END;
             $fn$;
+
+            RESET ROLE;
+            SET ROLE paqueteria_migrator;
             """);
 }

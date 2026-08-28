@@ -17,6 +17,37 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
     private const string Image = "postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d";
 
     [PostgreSqlContractFact]
+    public async Task External_offer_routing_migration_preserves_function_and_history_owners_across_up_down_up()
+    {
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        await using var container = new PostgreSqlBuilder(Image)
+            .WithDatabase("paqueteria_ext001_routing")
+            .WithUsername("postgres")
+            .WithPassword(password)
+            .WithCleanUp(true)
+            .Build();
+        await container.StartAsync();
+        var connectionString = container.GetConnectionString();
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await using var context = CreateNotificationsContext(connection);
+        var migrator = context.GetService<IMigrator>();
+
+        await migrator.MigrateAsync();
+        await AssertRoutingStateAsync(connection, "REALTIME", routeMigrationApplied: true);
+
+        await migrator.MigrateAsync(AddTenantSafeOutboxNotifications.MigrationId);
+        await AssertRoutingStateAsync(connection, "UNROUTED", routeMigrationApplied: false);
+
+        await migrator.MigrateAsync();
+        await AssertRoutingStateAsync(connection, "REALTIME", routeMigrationApplied: true);
+    }
+
+    [PostgreSqlContractFact]
     public async Task Cutover_and_operational_rollback_are_fail_closed_on_active_owned_rows()
     {
         var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
@@ -198,5 +229,55 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.AddRange(parameters);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AssertRoutingStateAsync(
+        NpgsqlConnection connection,
+        string expectedConsumer,
+        bool routeMigrationApplied)
+    {
+        await using (var roleCommand = new NpgsqlCommand("SELECT current_user;", connection))
+        {
+            Assert.Equal("paqueteria_migrator", await roleCommand.ExecuteScalarAsync());
+        }
+
+        await ExecuteAsync(connection, "RESET ROLE");
+        try
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT
+                  security.resolve_outbox_consumer('dispatch.external-offer-changed'),
+                  pg_get_userbyid(target_function.proowner),
+                  pg_get_userbyid(history.relowner),
+                  EXISTS (
+                    SELECT 1
+                    FROM platform.__ef_migrations_history_notifications
+                    WHERE "MigrationId"=@migration_id
+                  )
+                FROM pg_catalog.pg_proc target_function
+                JOIN pg_catalog.pg_namespace namespace ON namespace.oid=target_function.pronamespace
+                CROSS JOIN pg_catalog.pg_class history
+                JOIN pg_catalog.pg_namespace history_namespace ON history_namespace.oid=history.relnamespace
+                WHERE namespace.nspname='security'
+                  AND target_function.proname='resolve_outbox_consumer'
+                  AND pg_get_function_identity_arguments(target_function.oid)='p_topic text'
+                  AND history_namespace.nspname='platform'
+                  AND history.relname='__ef_migrations_history_notifications';
+                """,
+                connection);
+            command.Parameters.AddWithValue("migration_id", RouteExternalOfferRealtime.MigrationId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(expectedConsumer, reader.GetString(0));
+            Assert.Equal("paqueteria_outbox_executor", reader.GetString(1));
+            Assert.Equal("paqueteria_migrator", reader.GetString(2));
+            Assert.Equal(routeMigrationApplied, reader.GetBoolean(3));
+            Assert.False(await reader.ReadAsync());
+        }
+        finally
+        {
+            await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        }
     }
 }
