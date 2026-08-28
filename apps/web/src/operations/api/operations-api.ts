@@ -23,6 +23,18 @@ export interface OperationsDashboardApi {
   organizationContexts(
     signal?: AbortSignal,
   ): Promise<readonly OperationsOrganizationContext[]>;
+  publishExternalOffer(
+    input: PublishExternalOfferInput,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
+}
+
+export interface PublishExternalOfferInput {
+  readonly orderId: string;
+  readonly commissionCents: number;
+  readonly expiresAt: string;
+  readonly vehicleType: "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER";
 }
 
 export class OperationsApiError extends Error {
@@ -32,6 +44,7 @@ export class OperationsApiError extends Error {
       | "forbidden"
       | "not_found"
       | "invalid"
+      | "conflict"
       | "unavailable"
       | "network",
   ) {
@@ -111,6 +124,45 @@ export function createOperationsApi(
     }
   }
 
+  async function postExternalOffer(
+    input: PublishExternalOfferInput,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    assertUuid(input.orderId);
+    if (!Number.isSafeInteger(input.commissionCents) || input.commissionCents < 0)
+      throw new OperationsApiError("invalid");
+    const token = await session.getAccessToken();
+    if (!token) throw new OperationsApiError("unauthorized");
+    let response: Response;
+    try {
+      response = await fetch(new URL("/api/v1/external-offers", base), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Organization-Id": session.organizationId,
+          "Idempotency-Key": idempotencyKey,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          order_id: input.orderId,
+          commission_cents: input.commissionCents,
+          expires_at: input.expiresAt,
+          eligible_constraints: { vehicle_types: [input.vehicleType] },
+        }),
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal,
+      });
+    } catch {
+      if (signal?.aborted) throw signal.reason;
+      throw new OperationsApiError("network");
+    }
+    if (!response.ok) throw classify(response.status);
+  }
+
   return {
     async list(filters, signal) {
       return (await get(
@@ -137,6 +189,7 @@ export function createOperationsApi(
         signal,
       )) as readonly OperationsOrganizationContext[];
     },
+    publishExternalOffer: postExternalOffer,
   };
 }
 
@@ -223,6 +276,7 @@ function classify(status: number): OperationsApiError {
   if (status === 401) return new OperationsApiError("unauthorized");
   if (status === 403) return new OperationsApiError("forbidden");
   if (status === 404) return new OperationsApiError("not_found");
+  if (status === 409) return new OperationsApiError("conflict");
   if (status === 400) return new OperationsApiError("invalid");
   return new OperationsApiError("unavailable");
 }

@@ -140,7 +140,11 @@ export function OperationsDashboardShell() {
               </h2>
               <div className="opsCards">
                 {items.map((item) => (
-                  <OperationsOrderCard key={item.order_id} order={item} />
+                  <OperationsOrderCard
+                    key={item.order_id}
+                    order={item}
+                    onPublishExternalOffer={state.publishExternalOffer}
+                  />
                 ))}
               </div>
             </section>

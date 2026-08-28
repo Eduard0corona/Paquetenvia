@@ -8,6 +8,7 @@ import {
   createDriverStopsApi,
   DriverStopsApiError,
 } from "../api/driver-stops-api";
+import { createExternalOffersApi } from "../api/external-offers-api";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
 import {
   driverStopStatusLabel,
@@ -46,6 +47,10 @@ import {
   DriverStopsController,
   type DriverStopsViewState,
 } from "../state/driver-stops-controller";
+import {
+  ExternalOffersController,
+  type ExternalOffersState,
+} from "../state/external-offers-controller";
 import { disabledDriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
 import styles from "./driver-stops.module.css";
 
@@ -62,6 +67,12 @@ const unavailableOperationsState: DriverOperationsState = Object.freeze({
   mutating: false,
   message: null,
 });
+const unavailableExternalOffersState: ExternalOffersState = Object.freeze({
+  offers: [],
+  loading: true,
+  pendingOfferId: null,
+  message: null,
+});
 
 export function DriverStopsExperience() {
   const [session, setSession] = useState<DriverSession | null>(null);
@@ -69,9 +80,14 @@ export function DriverStopsExperience() {
   const [operationsState, setOperationsState] = useState<DriverOperationsState>(
     unavailableOperationsState,
   );
+  const [externalOffersState, setExternalOffersState] =
+    useState<ExternalOffersState>(unavailableExternalOffersState);
   const [route, setRoute] = useState<DriverStopsRoute | null>(null);
   const controllerRef = useRef<DriverStopsController | null>(null);
   const operationsControllerRef = useRef<DriverOperationsController | null>(
+    null,
+  );
+  const externalOffersControllerRef = useRef<ExternalOffersController | null>(
     null,
   );
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -103,6 +119,9 @@ export function DriverStopsExperience() {
       process.env.NODE_ENV,
     );
     const stopsApi = createDriverStopsApi({ baseUrl, session });
+    const externalOffersController = new ExternalOffersController(
+      createExternalOffersApi(baseUrl, session),
+    );
     const controller = new DriverStopsController({
       baseUrl,
       session,
@@ -110,6 +129,10 @@ export function DriverStopsExperience() {
       cache: new IndexedDbDriverStopsCache(),
       realtimeFactory: defaultDriverStopsRealtimeFactory,
       telemetry: disabledDriverStopsTelemetry,
+      refreshExternalOffersFromSignal: () =>
+        externalOffersController.scheduleRefresh(),
+      resynchronizeExternalOffersFromRest: () =>
+        externalOffersController.refreshForReconnect(),
     });
     const operationsController = new DriverOperationsController({
       session,
@@ -140,21 +163,31 @@ export function DriverStopsExperience() {
     });
     controllerRef.current = controller;
     operationsControllerRef.current = operationsController;
+    externalOffersControllerRef.current = externalOffersController;
     const unsubscribe = controller.subscribe((next) => {
       if (active) setState(next);
     });
     const unsubscribeOperations = operationsController.subscribe((next) => {
       if (active) setOperationsState(next);
     });
+    const unsubscribeExternalOffers = externalOffersController.subscribe(
+      (next) => {
+        if (active) setExternalOffersState(next);
+      },
+    );
     void controller.start();
     void operationsController.start();
+    void externalOffersController.start();
 
     return () => {
       active = false;
       unsubscribe();
       unsubscribeOperations();
+      unsubscribeExternalOffers();
       controllerRef.current = null;
       operationsControllerRef.current = null;
+      externalOffersControllerRef.current = null;
+      externalOffersController.dispose();
       void operationsController.dispose();
       void controller.dispose();
     };
@@ -302,11 +335,22 @@ export function DriverStopsExperience() {
           }
         />
       ) : route.kind === "list" ? (
-        <StopList
-          state={state}
-          projectedStops={projection.stops}
-          retry={retry}
-        />
+        <>
+          <ExternalOffersPanel
+            state={externalOffersState}
+            onAccept={(offerId) =>
+              void externalOffersControllerRef.current?.accept(offerId)
+            }
+            onDismiss={(offerId) =>
+              externalOffersControllerRef.current?.dismiss(offerId)
+            }
+          />
+          <StopList
+            state={state}
+            projectedStops={projection.stops}
+            retry={retry}
+          />
+        </>
       ) : (
         <StopDetail
           orderId={null}
@@ -324,6 +368,78 @@ export function DriverStopsExperience() {
         />
       )}
     </DriverShell>
+  );
+}
+
+function ExternalOffersPanel({
+  state,
+  onAccept,
+  onDismiss,
+}: Readonly<{
+  state: ExternalOffersState;
+  onAccept: (offerId: string) => void;
+  onDismiss: (offerId: string) => void;
+}>) {
+  if (state.loading && state.offers.length === 0) {
+    return <p className={styles.liveMessage}>Consultando ofertas externas...</p>;
+  }
+  if (state.offers.length === 0 && !state.message) return null;
+  return (
+    <section
+      className={styles.externalOffers}
+      aria-labelledby="external-offers-heading"
+    >
+      <h2 id="external-offers-heading">Ofertas externas disponibles</h2>
+      <p className={styles.liveMessage} aria-live="polite">
+        {state.message}
+      </p>
+      <ul className={styles.stopList}>
+        {state.offers.map((offer) => {
+          const pending = state.pendingOfferId === offer.id;
+          return (
+            <li className={styles.stopCard} key={offer.id}>
+              <div className={styles.cardHeading}>
+                <div>
+                  <p className={styles.cardLabel}>Oferta para orden</p>
+                  <h3>{offer.order_id}</h3>
+                </div>
+                <span className={styles.badge}>Externa</span>
+              </div>
+              <dl className={styles.stopFacts}>
+                <div>
+                  <dt>Comision</dt>
+                  <dd>{formatCommission(offer.commission.amount_cents)}</dd>
+                </div>
+                <div>
+                  <dt>Expira</dt>
+                  <dd>{formatTimestamp(offer.expires_at)}</dd>
+                </div>
+                <div>
+                  <dt>Estado</dt>
+                  <dd>Disponible</dd>
+                </div>
+              </dl>
+              <div className={styles.offerActions}>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => onAccept(offer.id)}
+                >
+                  {pending ? "Aceptando..." : "Aceptar oferta"}
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => onDismiss(offer.id)}
+                >
+                  No me interesa
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -914,6 +1030,13 @@ function formatTimestamp(value: string | null): string {
     timeStyle: "short",
     timeZone: "America/Mazatlan",
   }).format(new Date(value));
+}
+
+function formatCommission(amountCents: number): string {
+  return new Intl.NumberFormat("es-MX", {
+    style: "currency",
+    currency: "MXN",
+  }).format(amountCents / 100);
 }
 
 function toOperationalStatus(

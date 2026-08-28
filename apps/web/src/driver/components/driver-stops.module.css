@@ -368,6 +368,43 @@
   font-size: 0.9rem;
 }
 
+.externalOffers {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.externalOffers > h2 {
+  margin: 0;
+}
+
+.offerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.offerActions button {
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 0.7rem 1rem;
+  background: #fff;
+  color: var(--accent-dark);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.offerActions button:first-child {
+  background: var(--accent);
+  color: #fff;
+}
+
+.offerActions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .detail,
 .statusPanel {
   padding: clamp(1rem, 5vw, 1.5rem);

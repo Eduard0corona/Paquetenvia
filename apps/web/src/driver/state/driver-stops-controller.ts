@@ -47,6 +47,8 @@ export interface DriverStopsControllerOptions {
   readonly cache: DriverStopsCache;
   readonly realtimeFactory: DriverStopsRealtimeFactory;
   readonly telemetry: DriverStopsTelemetry;
+  readonly refreshExternalOffersFromSignal?: () => void;
+  readonly resynchronizeExternalOffersFromRest?: () => Promise<void>;
   readonly now?: () => Date;
   readonly debounceMilliseconds?: number;
 }
@@ -289,6 +291,10 @@ export class DriverStopsController {
           const stops = await this.refresh("reconnect");
           return stops;
         },
+        refreshExternalOffersFromSignal:
+          this.options.refreshExternalOffersFromSignal,
+        resynchronizeExternalOffersFromRest:
+          this.options.resynchronizeExternalOffersFromRest,
         stateChanged: (realtime) => {
           this.options.telemetry.realtimeStateChanged(realtime);
           this.setState({ ...this.state, realtime });
