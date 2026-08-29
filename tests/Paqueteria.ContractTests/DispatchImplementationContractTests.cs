@@ -124,7 +124,7 @@ public sealed class DispatchImplementationContractTests
             ["assignment_type", "cost_cents", "driver_id"],
             RequiredPropertyNames(request));
         Assert.Equal(
-            ["cost", "driver_id", "id", "order_id", "status"],
+            ["cost", "driver_id", "id", "order_id", "route_id", "status"],
             RequiredPropertyNames(assignment));
         Assert.Equal(["amount_cents", "currency"], RequiredPropertyNames(money));
         Assert.Equal(
