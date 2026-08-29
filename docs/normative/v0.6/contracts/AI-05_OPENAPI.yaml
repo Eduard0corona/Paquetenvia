@@ -12,6 +12,7 @@ tags:
 - name: Quotes
 - name: Orders
 - name: Dispatch
+- name: Routing
 - name: Driver
 - name: Tracking
 - name: Proofs
@@ -174,8 +175,10 @@ paths:
       description: >-
         DSP-002 creates only OWN assignments. EXTERNAL and ALLY_CAPACITY remain
         reserved vocabulary and are rejected until their owning backlog items
-        are implemented. route_id may be omitted or null; a non-null route is
-        rejected until Routing is implemented. Pure request-shape validation
+        are implemented. This operation continues to accept route_id only when
+        omitted or null. RTE-001 links an existing OWN assignment through
+        POST /routes/{routeId}/stops; route_id is not an alternate Routing
+        command on assignment creation. Pure request-shape validation
         may return 409 INVALID_REQUEST before capability evaluation and never
         opens the productive transaction or reads persisted state. For every
         structurally valid request, current tenant-aware capability is read
@@ -222,6 +225,236 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/DispatchAssignmentConflict'
+  /routes:
+    post:
+      tags:
+      - Routing
+      operationId: createRoute
+      description: >-
+        Creates a tenant-owned manual route for an OWN, ACTIVE driver who is
+        currently eligible under DSP-001 in the active OrganizationContext.
+        City and optional service area must be coherent with that driver. The
+        route starts DRAFT at version 1. Every successful mutation is audited
+        and emits RouteChanged only through the transactional outbox after
+        commit. Reusing the same Idempotency-Key and canonical request returns
+        the stored 201 without creating another route; an idempotency mismatch
+        returns 409. EXTERNAL and ALLY_CAPACITY routing are not enabled by
+        RTE-001.
+      x-required-capability: Dispatch
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRouteRequest'
+      responses:
+        '201':
+          description: DRAFT route created at version 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Route'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/RoutingConflict'
+    get:
+      tags:
+      - Routing
+      operationId: listRoutes
+      description: >-
+        Returns only routes visible in the active OrganizationContext. The
+        server owns the bounded page size; clients cannot configure it. Access
+        follows the existing Operations read capability.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/RouteStatus'
+      - name: driver_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: scheduled_for
+        in: query
+        schema:
+          type: string
+          format: date
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Cursor-paginated tenant routes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoutePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /routes/{routeId}:
+    get:
+      tags:
+      - Routing
+      operationId: getRoute
+      description: >-
+        Returns the authoritative route and every current stop ordered by
+        sequence ascending. Clients reconstruct state from this resource on
+        load, refresh, reconnect and after RouteChanged. Access follows the
+        existing Operations read capability.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/RouteId'
+      responses:
+        '200':
+          description: Authoritative route detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+  /routes/{routeId}/stops:
+    post:
+      tags:
+      - Routing
+      operationId: addRouteStop
+      description: >-
+        Adds one DELIVERY stop to a DRAFT route and links the existing OWN
+        ACCEPTED or ACTIVE assignment for an order visible in the active tenant
+        to that route in the same transaction.
+        The route driver must be OWN and ACTIVE; assignment.driver_id must equal
+        route.driver_id; the order and driver must remain compatible under
+        DSP-001. A stable PostgreSQL serialization decision by order_id prevents
+        duplicates and membership in another DRAFT, PLANNED or ACTIVE route.
+        The inserted sequence is the next contiguous integer and route.version
+        increments exactly once. Audit and RouteChanged outbox records commit
+        atomically. The client cannot supply stop_type. Reusing the same
+        Idempotency-Key and canonical request returns the stored success without
+        another mutation; a different request for the key returns 409.
+      x-required-capability: Dispatch
+      x-rte-001-assignment-types:
+      - OWN
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/RouteId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddRouteStopRequest'
+      responses:
+        '201':
+          description: Stop and assignment route link created atomically
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/RoutingConflict'
+  /routes/{routeId}/stops/{stopId}:
+    delete:
+      tags:
+      - Routing
+      operationId: removeRouteStop
+      description: >-
+        Removes a stop only from a DRAFT route after checking expected_version.
+        In one transaction it clears route_id only on the linked assignment,
+        compacts the remaining sequence to 1..N, increments route.version once,
+        and writes audit plus RouteChanged outbox evidence. Reusing the same
+        Idempotency-Key and canonical request is safe and returns the stored
+        success; an idempotency mismatch returns 409.
+      x-required-capability: Dispatch
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/RouteId'
+      - $ref: '#/components/parameters/RouteStopId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: expected_version
+        in: query
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+      responses:
+        '200':
+          description: Updated route after atomic stop removal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/RoutingConflict'
+  /routes/{routeId}/stops/order:
+    put:
+      tags:
+      - Routing
+      operationId: reorderRouteStops
+      description: >-
+        Reorders a DRAFT route under a route lock. stop_ids must contain every
+        current stop exactly once, with no duplicate, foreign or missing ID.
+        The server writes contiguous sequence values 1..N and increments the
+        route version exactly once in the same transaction as audit and the
+        RouteChanged outbox record. A stale expected_version returns 409. Of two
+        concurrent reorders using the same version exactly one succeeds and the
+        other receives 409. Idempotent replay returns the stored success without
+        another version increment.
+      x-required-capability: Dispatch
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/RouteId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReorderRouteStopsRequest'
+      responses:
+        '200':
+          description: Route stops reordered atomically
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/RoutingConflict'
   /external-offers:
     post:
       tags:
@@ -777,6 +1010,20 @@ components:
       schema:
         type: string
         format: uuid
+    RouteId:
+      name: routeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RouteStopId:
+      name: stopId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     OrganizationContext:
       name: X-Organization-Id
       in: header
@@ -794,6 +1041,16 @@ components:
             $ref: '#/components/schemas/Problem'
     Conflict:
       description: State, idempotency or concurrency conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RoutingConflict:
+      description: >-
+        RTE-001 stale version, duplicate route membership, active-route
+        conflict, route or assignment state conflict, driver/order
+        incompatibility, eligibility/capacity rejection or idempotency mismatch.
+        Internal evidence and cross-tenant existence are never exposed.
       content:
         application/problem+json:
           schema:
@@ -1228,16 +1485,23 @@ components:
           - 'null'
           format: uuid
           description: >-
-            Optional global route reference. DSP-002 accepts only omission or
-            null and rejects every non-null UUID until RTE-001 implements
-            Routing.
+            Optional global route reference. DSP-002 assignment creation accepts
+            only omission or null. RTE-001 links an existing OWN ACCEPTED or
+            ACTIVE assignment exclusively through POST /routes/{routeId}/stops;
+            this field is not an alternate Routing command. Once linked,
+            route_id may be non-null only when the route belongs to the active
+            tenant, is DRAFT, has the same driver, the order remains compatible,
+            and no other active route association exists. EXTERNAL and
+            ALLY_CAPACITY routing remain disabled.
           x-dsp-002-support: omitted-or-null-only
+          x-rte-001-link-authority: POST /routes/{routeId}/stops
     Assignment:
       type: object
       required:
       - id
       - order_id
       - driver_id
+      - route_id
       - status
       - cost
       properties:
@@ -1250,6 +1514,14 @@ components:
         driver_id:
           type: string
           format: uuid
+        route_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: >-
+            RTE-001 may populate this only for an OWN assignment linked
+            atomically through the authoritative route-stop mutation.
         status:
           type: string
           enum:
@@ -2034,27 +2306,173 @@ components:
           - string
           - 'null'
           format: date-time
+    RouteStatus:
+      type: string
+      enum:
+      - DRAFT
+      - PLANNED
+      - ACTIVE
+      - COMPLETED
+      - CANCELLED
+    CreateRouteRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - driver_id
+      - city_id
+      properties:
+        driver_id:
+          type: string
+          format: uuid
+        city_id:
+          type: string
+          format: uuid
+        service_area_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        scheduled_for:
+          type:
+          - string
+          - 'null'
+          format: date
+    AddRouteStopRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - order_id
+      - expected_version
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        expected_version:
+          type: integer
+          minimum: 1
+    ReorderRouteStopsRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - expected_version
+      - stop_ids
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        stop_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+          description: Must contain every current route stop exactly once.
+    RouteStop:
+      type: object
+      required:
+      - id
+      - order_id
+      - sequence
+      - stop_type
+      - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          minimum: 1
+        stop_type:
+          type: string
+          enum:
+          - PICKUP
+          - DELIVERY
+          - RETURN
+          description: RTE-001 creates only DELIVERY stops.
+        status:
+          type: string
+          enum:
+          - PENDING
+          - ARRIVED
+          - COMPLETED
+          - FAILED
+          - SKIPPED
     Route:
       type: object
       required:
       - id
       - status
       - version
+      - driver_id
+      - city_id
+      - service_area_id
+      - scheduled_for
+      - assignment_cost_cents_total
+      - stop_count
       properties:
         id:
           type: string
           format: uuid
         status:
-          type: string
-          enum:
-          - DRAFT
-          - PLANNED
-          - ACTIVE
-          - COMPLETED
-          - CANCELLED
+          $ref: '#/components/schemas/RouteStatus'
         version:
           type: integer
           minimum: 1
+        driver_id:
+          type: string
+          format: uuid
+        city_id:
+          type: string
+          format: uuid
+        service_area_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        scheduled_for:
+          type:
+          - string
+          - 'null'
+          format: date
+        assignment_cost_cents_total:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Server-side SUM of cost_cents for ACCEPTED or ACTIVE assignments
+            currently linked to the route. The total is calculated, not stored.
+        stop_count:
+          type: integer
+          minimum: 0
+    RouteDetail:
+      allOf:
+      - $ref: '#/components/schemas/Route'
+      - type: object
+        required:
+        - stops
+        properties:
+          stops:
+            type: array
+            description: Current route stops ordered by sequence ascending.
+            items:
+              $ref: '#/components/schemas/RouteStop'
+    RoutePage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     EligibleConstraints:
       type: object
       required:

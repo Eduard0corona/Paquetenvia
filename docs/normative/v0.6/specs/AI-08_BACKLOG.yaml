@@ -683,12 +683,30 @@ items:
   - route/stop module
   - drag reorder
   acceptance_criteria:
-  - capacidad validada
-  - costo calculable
-  - ordenes de $45/$52 ligadas a ruta
+  - REST create/list/get and add/remove/reorder are authoritative
+  - only existing OWN assignments are eligible; EXTERNAL and ALLY_CAPACITY routing remain disabled
+  - route.driver_id equals assignment.driver_id for every linked order
+  - DSP-001 eligibility and per-order Driver capacity are rechecked when an order is added
+  - one order cannot belong simultaneously to multiple DRAFT, PLANNED or ACTIVE routes
+  - route stop sequence is contiguous and unique
+  - every mutation of an existing route uses optimistic versioning and increments route.version exactly once
+  - stale reorder returns a conflict and exactly one same-version concurrent reorder succeeds
+  - route stop and assignment.route_id are updated atomically
+  - RouteChanged is emitted post-commit through outbox and clients recover through REST
+  - route cost is calculated server-side from ACCEPTED/ACTIVE assignment cost_cents using bigint cents
+  - already-valid 4500/5200-cent orders may be linked without changing Pricing snapshots, consolidated_route or financial_override
   required_tests:
   - route constraints
   - Playwright reorder
+  - tenant isolation and uniform missing/cross-tenant responses
+  - duplicate and multi-active-route race
+  - stale-version concurrent reorder race
+  - assignment and route-stop atomicity
+  - DSP-001 eligibility and per-order capacity
+  - REST load, refresh and reconnect recovery
+  - RouteChanged audience and transactional outbox
+  - Playwright drag and keyboard reorder
+  - valid 4500/5200-cent order route fixture
   approval_gate: null
 - id: INC-001
   epic: Incidents

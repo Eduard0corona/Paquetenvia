@@ -44,6 +44,19 @@ routes:
     - proofs
     - incidents
     - price_audit
+  /ops/routes:
+    roles:
+    - platform_admin
+    - dispatcher
+    - customer_support
+    mutation_roles:
+    - dispatcher
+    - platform_admin
+    mutation_requirements:
+      platform_admin: existing MFA policy applies
+    read_only_roles:
+    - customer_support
+    release: MVP-1
   /driver/stops:
     roles:
     - own_driver
@@ -110,6 +123,54 @@ screen_contracts:
     forbidden:
     - show another ally private tariff
     - bulk status change without preview
+    add_to_route_contract:
+      authority: POST /routes/{routeId}/stops
+      assignment_scope: existing OWN assignment only
+      navigation: /ops/routes
+      optimistic_ui_as_authority: forbidden
+  route_planner:
+    release: MVP-1
+    route: /ops/routes
+    authority: REST API + PostgreSQL
+    sources:
+      list: GET /routes
+      detail: GET /routes/{routeId}
+      create: POST /routes
+      add_order: POST /routes/{routeId}/stops
+      remove_order: DELETE /routes/{routeId}/stops/{stopId}
+      reorder: PUT /routes/{routeId}/stops/order
+    mutation_roles:
+    - dispatcher
+    - platform_admin
+    mutation_requirements:
+      platform_admin: existing MFA policy applies
+    read_only_roles:
+    - customer_support
+    must_support:
+    - list routes
+    - create route
+    - open route detail
+    - add order
+    - remove order
+    - show OWN driver
+    - show scheduled date
+    - show assignment cost total
+    - show contiguous stop sequence
+    - drag reorder
+    - keyboard-accessible reorder alternative
+    recovery:
+    - load fetches the REST collection or detail
+    - refresh fetches the REST collection or detail
+    - reconnect fetches the current route detail
+    - RouteChanged only triggers a REST refetch
+    concurrency:
+    - every mutation of an existing route sends the current expected_version
+    - a version conflict discards speculative state and forces REST refetch
+    - optimistic UI is never authoritative
+    scope:
+    - existing OWN assignments only
+    - EXTERNAL routing is unavailable
+    - ALLY_CAPACITY routing is unavailable
   create_order:
     validation:
     - Culiacán coverage
