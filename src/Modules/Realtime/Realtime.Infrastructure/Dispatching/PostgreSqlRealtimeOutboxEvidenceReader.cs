@@ -264,6 +264,60 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
             },
             cancellationToken);
 
+    public Task<RouteEvidence?> ReadRouteAsync(
+        Guid ownerOrganizationId,
+        Guid routeId,
+        CancellationToken cancellationToken) =>
+        ExecuteTenantReadAsync(
+            ownerOrganizationId,
+            async (connection, transaction, token) =>
+            {
+                const string routeSql =
+                    """
+                    SELECT id,operator_org_id,driver_id,version,updated_at
+                    FROM routes.routes
+                    WHERE id=@route AND operator_org_id=@owner
+                    """;
+                Guid driverId;
+                int version;
+                DateTimeOffset updatedAt;
+                await using (var command = new NpgsqlCommand(routeSql, connection, transaction))
+                {
+                    command.Parameters.Add(P("route", NpgsqlDbType.Uuid, routeId));
+                    command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+                    await using var reader = await command.ExecuteReaderAsync(token);
+                    if (!await reader.ReadAsync(token)) return null;
+                    driverId = reader.GetGuid(2);
+                    version = reader.GetInt32(3);
+                    updatedAt = reader.GetFieldValue<DateTimeOffset>(4);
+                }
+
+                const string stopsSql =
+                    """
+                    SELECT id
+                    FROM routes.route_stops
+                    WHERE route_id=@route AND operator_org_id=@owner
+                    ORDER BY sequence,id
+                    """;
+                var stopIds = new List<Guid>();
+                await using (var command = new NpgsqlCommand(stopsSql, connection, transaction))
+                {
+                    command.Parameters.Add(P("route", NpgsqlDbType.Uuid, routeId));
+                    command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+                    await using var reader = await command.ExecuteReaderAsync(token);
+                    while (await reader.ReadAsync(token)) stopIds.Add(reader.GetGuid(0));
+                }
+
+                return new RouteEvidence(
+                    routeId,
+                    ownerOrganizationId,
+                    driverId,
+                    version,
+                    updatedAt,
+                    stopIds);
+            },
+            cancellationToken);
+
     private async Task<T> ExecuteTenantReadAsync<T>(
         Guid ownerOrganizationId,
         Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> read,

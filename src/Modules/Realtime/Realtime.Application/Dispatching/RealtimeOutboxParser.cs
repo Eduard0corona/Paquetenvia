@@ -46,6 +46,7 @@ public static class RealtimeOutboxParser
                 RealtimeOutboxTopics.OrderTimelineEventAdded => ParseTimeline(message, document.RootElement),
                 RealtimeOutboxTopics.AssignmentChanged => ParseAssignment(message, document.RootElement),
                 RealtimeOutboxTopics.ExternalOfferChanged => ParseExternalOffer(message, document.RootElement),
+                RealtimeOutboxTopics.RouteChanged => ParseRoute(message, document.RootElement),
                 RealtimeOutboxTopics.NotificationStatusChanged => ParseNotification(message, document.RootElement),
                 _ => throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic),
             };
@@ -349,6 +350,54 @@ public static class RealtimeOutboxParser
             audience);
     }
 
+    private static ParsedRouteChanged ParseRoute(
+        ClaimedBusinessOutboxMessage message,
+        JsonElement root)
+    {
+        RequireExactProperties(
+            root,
+            "schema_version",
+            "route_id",
+            "route_version",
+            "changed_stop_ids",
+            "occurred_at");
+        RequireSchema(root, "route-changed-v1");
+        var routeId = RequireGuid(root, "route_id");
+        var versionElement = root.GetProperty("route_version");
+        var changedElement = root.GetProperty("changed_stop_ids");
+        var occurredAt = RequireUtcTimestamp(root, "occurred_at");
+        if (routeId != message.AggregateId ||
+            versionElement.ValueKind != JsonValueKind.Number ||
+            !versionElement.TryGetInt64(out var routeVersion) ||
+            routeVersion != message.AggregateVersion ||
+            routeVersion < 1 ||
+            changedElement.ValueKind != JsonValueKind.Array ||
+            changedElement.GetArrayLength() > 500)
+        {
+            throw InvalidPayload();
+        }
+
+        var changedStopIds = new List<Guid>(changedElement.GetArrayLength());
+        foreach (var item in changedElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String ||
+                !Guid.TryParseExact(item.GetString(), "D", out var stopId) ||
+                stopId == Guid.Empty || changedStopIds.Contains(stopId))
+            {
+                throw InvalidPayload();
+            }
+            changedStopIds.Add(stopId);
+        }
+
+        return new(
+            message.Id,
+            message.OwnerOrganizationId,
+            routeId,
+            routeVersion,
+            occurredAt,
+            changedStopIds);
+    }
+
     private static void ValidateBusinessColumns(ClaimedBusinessOutboxMessage message)
     {
         if (message.Id == Guid.Empty ||
@@ -358,6 +407,7 @@ public static class RealtimeOutboxParser
             {
                 RealtimeOutboxTopics.NotificationStatusChanged => "Notification",
                 RealtimeOutboxTopics.ExternalOfferChanged => "ExternalOffer",
+                RealtimeOutboxTopics.RouteChanged => "Route",
                 _ => "Order",
             }) ||
             message.AggregateVersion is null or < 0 ||

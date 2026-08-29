@@ -17,7 +17,7 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
     private const string Image = "postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d";
 
     [PostgreSqlContractFact]
-    public async Task External_offer_routing_migration_preserves_function_and_history_owners_across_up_down_up()
+    public async Task Realtime_topic_migrations_preserve_function_history_and_schema_owners_across_up_down_up()
     {
         var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
         await using var container = new PostgreSqlBuilder(Image)
@@ -39,13 +39,16 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
         var migrator = context.GetService<IMigrator>();
 
         await migrator.MigrateAsync();
-        await AssertRoutingStateAsync(connection, "REALTIME", routeMigrationApplied: true);
+        await AssertRoutingStateAsync(connection, "REALTIME", "REALTIME", routeMigrationApplied: true);
+
+        await migrator.MigrateAsync(RouteExternalOfferRealtime.MigrationId);
+        await AssertRoutingStateAsync(connection, "REALTIME", "UNROUTED", routeMigrationApplied: false);
 
         await migrator.MigrateAsync(AddTenantSafeOutboxNotifications.MigrationId);
-        await AssertRoutingStateAsync(connection, "UNROUTED", routeMigrationApplied: false);
+        await AssertRoutingStateAsync(connection, "UNROUTED", "UNROUTED", routeMigrationApplied: false);
 
         await migrator.MigrateAsync();
-        await AssertRoutingStateAsync(connection, "REALTIME", routeMigrationApplied: true);
+        await AssertRoutingStateAsync(connection, "REALTIME", "REALTIME", routeMigrationApplied: true);
     }
 
     [PostgreSqlContractFact]
@@ -234,7 +237,8 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
 
     private static async Task AssertRoutingStateAsync(
         NpgsqlConnection connection,
-        string expectedConsumer,
+        string expectedExternalConsumer,
+        string expectedRouteConsumer,
         bool routeMigrationApplied)
     {
         await using (var roleCommand = new NpgsqlCommand("SELECT current_user;", connection))
@@ -249,6 +253,7 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
                 """
                 SELECT
                   security.resolve_outbox_consumer('dispatch.external-offer-changed'),
+                  security.resolve_outbox_consumer('routes.route-changed'),
                   pg_get_userbyid(target_function.proowner),
                   pg_get_userbyid(history.relowner),
                   pg_get_userbyid(namespace.nspowner),
@@ -269,15 +274,16 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
                   AND history.relname='__ef_migrations_history_notifications';
                 """,
                 connection);
-            command.Parameters.AddWithValue("migration_id", RouteExternalOfferRealtime.MigrationId);
+            command.Parameters.AddWithValue("migration_id", RouteManualRouteRealtime.MigrationId);
             await using var reader = await command.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
-            Assert.Equal(expectedConsumer, reader.GetString(0));
-            Assert.Equal("paqueteria_outbox_executor", reader.GetString(1));
-            Assert.Equal("paqueteria_migrator", reader.GetString(2));
+            Assert.Equal(expectedExternalConsumer, reader.GetString(0));
+            Assert.Equal(expectedRouteConsumer, reader.GetString(1));
+            Assert.Equal("paqueteria_outbox_executor", reader.GetString(2));
             Assert.Equal("paqueteria_migrator", reader.GetString(3));
-            Assert.False(reader.GetBoolean(4));
-            Assert.Equal(routeMigrationApplied, reader.GetBoolean(5));
+            Assert.Equal("paqueteria_migrator", reader.GetString(4));
+            Assert.False(reader.GetBoolean(5));
+            Assert.Equal(routeMigrationApplied, reader.GetBoolean(6));
             Assert.False(await reader.ReadAsync());
         }
         finally
