@@ -26,6 +26,8 @@ using Custody.Endpoints;
 using Custody.Infrastructure;
 using Reporting.Endpoints;
 using Reporting.Infrastructure;
+using Routing.Endpoints;
+using Routing.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -53,6 +55,8 @@ builder.Services.AddRealtimeEndpoints(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddReportingInfrastructure(builder.Configuration);
 builder.Services.AddReportingEndpoints();
+builder.Services.AddRoutingInfrastructure(builder.Configuration);
+builder.Services.AddRoutingEndpoints();
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
@@ -126,6 +130,7 @@ app.MapDriverLocationEndpoints();
 app.MapRealtimeHubs();
 app.MapProofEndpoints();
 app.MapOperationsDashboardEndpoints();
+app.MapRouteEndpoints();
 
 app.Run();
 

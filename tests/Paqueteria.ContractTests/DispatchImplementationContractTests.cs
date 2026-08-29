@@ -43,7 +43,7 @@ public sealed class DispatchImplementationContractTests
     {
         AssertJsonProperties<CreateAssignmentRequest>(
             "assignment_type", "cost_cents", "driver_id", "route_id");
-        AssertJsonProperties<AssignmentResponse>("cost", "driver_id", "id", "order_id", "status");
+        AssertJsonProperties<AssignmentResponse>("cost", "driver_id", "id", "order_id", "route_id", "status");
         AssertJsonProperties<MoneyResponse>("amount_cents", "currency");
         AssertJsonProperties<DriverStopResponse>(
             "address_summary",

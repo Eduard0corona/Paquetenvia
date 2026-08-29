@@ -152,6 +152,22 @@ internal static class SolutionCatalog
         ],
         allowedCrossModuleDependencies: ["Organizations"]);
 
+    internal static readonly ModuleDefinition Routing = Module(
+        "Routing",
+        typeof(Routing.Domain.AssemblyReference).Assembly,
+        typeof(Routing.Application.AssemblyReference).Assembly,
+        typeof(Routing.Infrastructure.AssemblyReference).Assembly,
+        typeof(Routing.Endpoints.AssemblyReference).Assembly,
+        additionalApplicationReferences: ["Drivers.Application"],
+        additionalInfrastructureReferences: ["Paqueteria.Application", "Drivers.Application"],
+        additionalEndpointReferences:
+        [
+            "Organizations.Application",
+            "Organizations.Endpoints",
+            "Paqueteria.Application",
+        ],
+        allowedCrossModuleDependencies: ["Drivers", "Organizations"]);
+
     internal static readonly ProjectComponent NotificationsDomain = Component(
         "Notifications.Domain",
         ProjectRole.ModuleDomain,
@@ -180,7 +196,7 @@ internal static class SolutionCatalog
         ]);
 
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
-        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody, Reporting];
+        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody, Reporting, Routing];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -213,6 +229,8 @@ internal static class SolutionCatalog
             "Custody.Infrastructure",
             "Reporting.Endpoints",
             "Reporting.Infrastructure",
+            "Routing.Endpoints",
+            "Routing.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -247,6 +265,7 @@ internal static class SolutionCatalog
         .. Realtime.Components,
         .. Custody.Components,
         .. Reporting.Components,
+        .. Routing.Components,
         NotificationsDomain,
         NotificationsApplication,
         NotificationsInfrastructure,

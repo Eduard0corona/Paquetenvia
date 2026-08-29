@@ -346,7 +346,8 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         assignment.OrderId,
                         assignment.DriverId,
                         assignment.Status.ToContractValue(),
-                        new Dispatch.Application.Assignments.MoneyResult("MXN", assignment.CostCents));
+                        new Dispatch.Application.Assignments.MoneyResult("MXN", assignment.CostCents),
+                        assignment.RouteId);
                     await failureInjector.OnStageAsync(
                         AssignmentTransactionStage.BeforeIdempotencyCompletion,
                         token);

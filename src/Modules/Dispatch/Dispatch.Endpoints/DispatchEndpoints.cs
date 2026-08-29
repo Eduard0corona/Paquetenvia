@@ -369,7 +369,8 @@ public static class DispatchEndpoints
         result.OrderId,
         result.DriverId,
         result.Status,
-        new MoneyResponse(result.Cost.Currency, result.Cost.AmountCents));
+        new MoneyResponse(result.Cost.Currency, result.Cost.AmountCents),
+        result.RouteId);
 
     private static ExternalOfferResponse ToResponse(ExternalOfferResult result) => new(
         result.Id,
@@ -443,7 +444,8 @@ public sealed record AssignmentResponse(
     [property: JsonPropertyName("order_id")] Guid OrderId,
     [property: JsonPropertyName("driver_id")] Guid DriverId,
     [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("cost")] MoneyResponse Cost);
+    [property: JsonPropertyName("cost")] MoneyResponse Cost,
+    [property: JsonPropertyName("route_id")] Guid? RouteId);
 
 public sealed record DriverStopResponse(
     [property: JsonPropertyName("order_id")] Guid OrderId,
