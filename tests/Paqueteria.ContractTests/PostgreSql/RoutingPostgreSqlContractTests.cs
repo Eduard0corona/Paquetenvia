@@ -364,14 +364,18 @@ public sealed class RoutingPostgreSqlContractTests(PostgreSqlContractFixture fix
         }
 
         public CreateRouteCommand CreateRoute(string key) => new(
-            DispatcherId, OrganizationId, key, DriverId, scenario.CityId, null, ScheduledFor, false, key);
+            DispatcherId, OrganizationId, ValidIdempotencyKey(key), DriverId, scenario.CityId, null,
+            ScheduledFor, false, key);
         public AddRouteStopCommand Add(Guid route, Guid order, int version, string key) => new(
-            DispatcherId, OrganizationId, key, route, order, version, false, key);
+            DispatcherId, OrganizationId, ValidIdempotencyKey(key), route, order, version, false, key);
         public RemoveRouteStopCommand Remove(Guid route, Guid stop, int version, string key) => new(
-            DispatcherId, OrganizationId, key, route, stop, version, false, key);
+            DispatcherId, OrganizationId, ValidIdempotencyKey(key), route, stop, version, false, key);
         public ReorderRouteStopsCommand Reorder(Guid route, int version, IReadOnlyList<Guid> stops, string key) => new(
-            DispatcherId, OrganizationId, key, route, version, stops, false, key);
+            DispatcherId, OrganizationId, ValidIdempotencyKey(key), route, version, stops, false, key);
         public Task ExecuteAsync(string sql, params NpgsqlParameter[] parameters) => scenario.ExecuteAdminAsync(sql, parameters);
+
+        private static string ValidIdempotencyKey(string logicalKey) =>
+            $"rte001-contract-{logicalKey}";
 
         public async Task<bool> AssignmentIsUnroutedAsync(Guid orderId)
         {

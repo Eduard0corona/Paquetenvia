@@ -750,14 +750,14 @@ function Invoke-ManualRoute {
         $orders += $order
     }
 
-    $route = Invoke-ApiPost "/api/v1/routes" "local-dispatcher-mfa" "local-$alias-create-v1" @{
+    $route = Invoke-ManualRouteRequest "create-route" "Post" "/api/v1/routes" "local-$alias-create-v1" @{
         driver_id = "55555555-5555-5555-5555-555555555551"
         city_id = "33333333-3333-3333-3333-333333333333"
         service_area_id = $null
         scheduled_for = [DateOnly]::FromDateTime([DateTime]::UtcNow.AddDays(1)).ToString("yyyy-MM-dd")
     }
     foreach ($index in 0..2) {
-        $route = Invoke-ApiPost "/api/v1/routes/$($route.id)/stops" "local-dispatcher-mfa" "local-$alias-add-$index-v1" @{
+        $route = Invoke-ManualRouteRequest "add-stop[$index]" "Post" "/api/v1/routes/$($route.id)/stops" "local-$alias-add-$index-v1" @{
             order_id = $orders[$index].id
             expected_version = $route.version
         }
@@ -766,29 +766,17 @@ function Invoke-ManualRoute {
         throw "ManualRoute did not create three OWN stops with the expected 3000-cent cost."
     }
 
-    $headers = @{
-        Authorization = "Bearer local-dispatcher-mfa"
-        "X-Organization-Id" = $organizationId
-        "Idempotency-Key" = "local-$alias-reorder-v1"
-    }
     $reversedStopIds = @($route.stops | Sort-Object sequence -Descending | ForEach-Object { $_.id })
-    $route = Invoke-RestMethod `
-        -Method Put `
-        -Uri "$apiUrl/api/v1/routes/$($route.id)/stops/order" `
-        -Headers $headers `
-        -ContentType "application/json" `
-        -Body (@{ expected_version=$route.version; stop_ids=$reversedStopIds } | ConvertTo-Json -Depth 5)
+    $route = Invoke-ManualRouteRequest "reorder" "Put" "/api/v1/routes/$($route.id)/stops/order" "local-$alias-reorder-v1" @{
+        expected_version=$route.version
+        stop_ids=$reversedStopIds
+    }
     if ((@($route.stops | Sort-Object sequence | ForEach-Object { $_.id }) -join ',') -ne ($reversedStopIds -join ',')) {
         throw "ManualRoute reorder did not persist the requested contiguous sequence."
     }
 
     $removedStopId = $route.stops[1].id
-    $removeHeaders = $headers.Clone()
-    $removeHeaders["Idempotency-Key"] = "local-$alias-remove-v1"
-    $route = Invoke-RestMethod `
-        -Method Delete `
-        -Uri "$apiUrl/api/v1/routes/$($route.id)/stops/$removedStopId`?expected_version=$($route.version)" `
-        -Headers $removeHeaders
+    $route = Invoke-ManualRouteRequest "remove" "Delete" "/api/v1/routes/$($route.id)/stops/$removedStopId`?expected_version=$($route.version)" "local-$alias-remove-v1"
     if ($route.stops.Count -ne 2 -or $route.assignment_cost_cents_total -ne 2000 -or
         (@($route.stops | Sort-Object sequence | ForEach-Object { $_.sequence }) -join ',') -ne '1,2') {
         throw "ManualRoute remove did not compact stops or preserve the expected 2000-cent cost."
@@ -821,6 +809,58 @@ function Invoke-ManualRoute {
         routeChangedOutbox = $outbox.Output.Trim()
         operationsUrl = "$webUrl/ops/routes?routeId=$($route.id)"
     } | ConvertTo-Json -Depth 5
+}
+
+function Invoke-ManualRouteRequest(
+    [string] $Operation,
+    [ValidateSet("Post", "Put", "Delete")] [string] $Method,
+    [string] $Path,
+    [string] $IdempotencyKey,
+    $Body = $null
+) {
+    $headers = @{
+        Authorization = "Bearer local-dispatcher-mfa"
+        "X-Organization-Id" = $organizationId
+        "Idempotency-Key" = $IdempotencyKey
+    }
+    try {
+        $parameters = @{
+            Method = $Method
+            Uri = "$apiUrl$Path"
+            Headers = $headers
+        }
+        if ($null -ne $Body) {
+            $parameters.ContentType = "application/json"
+            $parameters.Body = $Body | ConvertTo-Json -Depth 10
+        }
+        return Invoke-RestMethod @parameters
+    }
+    catch {
+        $status = if ($null -ne $_.Exception.Response) {
+            [int]$_.Exception.Response.StatusCode
+        } else {
+            0
+        }
+        $problem = $null
+        if (-not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+            try { $problem = $_.ErrorDetails.Message | ConvertFrom-Json } catch { $problem = $null }
+        }
+        $code = if ($null -ne $problem -and $null -ne $problem.psobject.Properties["code"]) {
+            [string]$problem.code
+        } else {
+            "UNAVAILABLE"
+        }
+        $title = if ($null -ne $problem -and $null -ne $problem.psobject.Properties["title"]) {
+            [string]$problem.title
+        } else {
+            "UNAVAILABLE"
+        }
+        $code = ($code -replace '[^A-Za-z0-9_.-]', '?')
+        $title = ($title -replace '[^A-Za-z0-9 ._-]', '?')
+        if ($code.Length -gt 80) { $code = $code.Substring(0, 80) }
+        if ($title.Length -gt 120) { $title = $title.Substring(0, 120) }
+        throw "ManualRoute operation=$Operation status=$status code=$code title=$title"
+    }
 }
 
 function Invoke-ApiPost(
