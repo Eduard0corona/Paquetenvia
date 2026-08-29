@@ -118,6 +118,14 @@ events:
     - route_version
     - changed_stop_ids
     - occurred_at
+    origin: Committed Routing mutation -> transactional outbox -> authorized OperationsHub and affected DriverHub groups
+    rules:
+    - never emitted before the Routing transaction commits
+    - server derives Operations and affected Driver audiences; clients cannot select groups
+    - payload contains no PII
+    - event only invalidates client state and triggers GET /routes/{routeId}
+    - load, refresh and reconnect reconstruct route state from REST
+    - clients ignore route versions older than the last applied version
   DriverLocationUpdated:
     audience:
     - operations
