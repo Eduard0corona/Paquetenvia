@@ -744,6 +744,89 @@ p {
   text-align: center;
 }
 
+.opsRouteLayout {
+  display: grid;
+  grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+  gap: 1rem;
+  max-width: 92rem;
+  margin: 1rem auto;
+}
+
+.opsRoutePanel,
+.opsRouteDetail {
+  border: 1px solid #b7cbc7;
+  border-radius: 0.9rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.opsRoutePanel form,
+.opsRouteAdd {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.opsRoutePanel label,
+.opsRouteAdd label {
+  display: grid;
+  gap: 0.25rem;
+  color: #304d49;
+  font-weight: 650;
+}
+
+.opsRoutePanel input,
+.opsRouteAdd input {
+  min-width: 0;
+  border: 1px solid #81918f;
+  border-radius: 0.5rem;
+  padding: 0.65rem;
+  font: inherit;
+}
+
+.opsRouteList,
+.opsRouteStops {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.opsRouteList button {
+  display: grid;
+  width: 100%;
+  gap: 0.2rem;
+  border: 1px solid #b7cbc7;
+  border-radius: 0.6rem;
+  background: #f7fbfa;
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.opsRouteList button[aria-current="true"] {
+  border-color: #0c6660;
+  box-shadow: 0 0 0 2px rgb(12 102 96 / 20%);
+}
+
+.opsRouteStops li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid #b7cbc7;
+  border-radius: 0.65rem;
+  padding: 0.75rem;
+}
+
+.opsRouteStops small,
+.opsRouteList span {
+  display: block;
+  color: #526966;
+}
+
+.opsDrag { cursor: grab; font-weight: 900; }
+.opsStopActions { display: flex; gap: 0.35rem; }
+.opsStopActions button { min-width: 2.75rem; min-height: 2.75rem; }
+
 @media (max-width: 768px) {
   .opsHeader {
     flex-direction: column;
@@ -779,6 +862,10 @@ p {
   .opsPositionViewport {
     min-height: 18rem;
   }
+
+  .opsRouteLayout { grid-template-columns: 1fr; }
+  .opsRouteStops li { grid-template-columns: auto minmax(0, 1fr); }
+  .opsStopActions { grid-column: 1 / -1; }
 }
 
 @media (max-width: 360px) {

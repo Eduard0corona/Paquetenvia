@@ -123,6 +123,12 @@ export function OperationsOrderCard({
       <Link className="opsPrimary" href={operationsOrderHref(order.order_id)}>
         Abrir orden
       </Link>
+      {order.assignment?.assignment_type === "OWN" &&
+      ["ACCEPTED", "ACTIVE"].includes(order.assignment.status) ? (
+        <Link className="opsPrimary" href={`/ops/routes?orderId=${encodeURIComponent(order.order_id)}`}>
+          Agregar a ruta
+        </Link>
+      ) : null}
     </article>
   );
 }
