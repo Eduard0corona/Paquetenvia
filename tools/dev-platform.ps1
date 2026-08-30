@@ -752,7 +752,7 @@ function Invoke-ManualRoute {
 
     $route = Invoke-ManualRouteRequest "create-route" "Post" "/api/v1/routes" "local-$alias-create-v1" @{
         driver_id = "55555555-5555-5555-5555-555555555551"
-        city_id = "33333333-3333-3333-3333-333333333333"
+        city_id = "44444444-4444-4444-4444-444444444441"
         service_area_id = $null
         scheduled_for = [DateOnly]::FromDateTime([DateTime]::UtcNow.AddDays(1)).ToString("yyyy-MM-dd")
     }
