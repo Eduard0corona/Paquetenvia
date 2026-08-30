@@ -792,7 +792,7 @@ function Invoke-ManualRoute {
 
     $context = Get-EnvironmentContext
     $database = Get-ApplicationDatabaseName $context
-    $query = "SELECT count(*)||':'||COALESCE(min(status),'none') FROM platform.outbox_events WHERE aggregate_type='Route' AND aggregate_id='$($route.id)' AND event_type='RouteChanged';"
+    $query = "SELECT count(*)||':'||COALESCE(min(status),'none') FROM platform.outbox_events WHERE aggregate_type='Route' AND aggregate_id='$($route.id)' AND topic='routes.route-changed';"
     $outbox = Invoke-DockerCompose -Context $context -Arguments @(
         "exec", "-T", "postgres", "psql", "-U", $context.Environment["POSTGRES_USER"],
         "-d", $database, "-Atc", $query) -CaptureOutput
