@@ -254,6 +254,12 @@
       ],
       "allowed_non_dependency_files": [
         ".github/workflows/ci.yml",
+        "apps/web/next.config.ts",
+        "tests/Paqueteria.IntegrationTests/Driver/DriverOfflineOperationsPwaPlaywrightTests.cs",
+        "tests/Paqueteria.IntegrationTests/Driver/DriverStopsNextServer.cs",
+        "tests/Paqueteria.IntegrationTests/Driver/DriverStopsPwaPlaywrightTests.cs",
+        "tests/Paqueteria.IntegrationTests/Realtime/RealtimeKestrelWebApplicationFactory.cs",
+        "tests/Paqueteria.IntegrationTests/Tracking/PublicTrackingPwaPlaywrightTests.cs",
         "tests/fixtures/rel-000/security-tracking.json",
         "tools/rel-000/rel000.py",
         "tools/rel-000/security-remediation-policy.json",

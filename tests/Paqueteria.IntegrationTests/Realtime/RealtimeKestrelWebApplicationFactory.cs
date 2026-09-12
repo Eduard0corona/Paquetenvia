@@ -1,3 +1,6 @@
+using System.Net;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Drivers.Application.Locations;
 using Drivers.Infrastructure.Locations;
 using Dispatch.Application.Stops;
@@ -41,7 +44,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         string allowedOrigin = "http://127.0.0.1",
         bool enableDispatch = false,
         bool enableDriverApiCors = false,
-        IReadOnlyDictionary<string, string?>? configurationOverrides = null)
+        IReadOnlyDictionary<string, string?>? configurationOverrides = null,
+        bool useHttps = false)
     {
         _connectionString = connectionString;
         _workerConnectionString = workerConnectionString;
@@ -53,7 +57,47 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         _enableDriverApiCors = enableDriverApiCors;
         _configurationOverrides =
             configurationOverrides ?? new Dictionary<string, string?>();
-        UseKestrel(port);
+        if (useHttps)
+        {
+            UseKestrel(options => options.Listen(
+                IPAddress.Loopback,
+                port,
+                listen => listen.UseHttps(EphemeralLoopbackCertificate.Value)));
+        }
+        else
+        {
+            UseKestrel(port);
+        }
+    }
+
+    /// <summary>
+    /// Self-signed loopback certificate created in memory for the current test
+    /// process. It is never written to disk, never versioned and never added to
+    /// a host trust store; only the Playwright browser context that talks to
+    /// this listener ignores its TLS error.
+    /// </summary>
+    private static readonly Lazy<X509Certificate2> EphemeralLoopbackCertificate =
+        new(CreateEphemeralLoopbackCertificate);
+
+    private static X509Certificate2 CreateEphemeralLoopbackCertificate()
+    {
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest(
+            "CN=localhost",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        var alternativeNames = new SubjectAlternativeNameBuilder();
+        alternativeNames.AddDnsName("localhost");
+        alternativeNames.AddIpAddress(IPAddress.Loopback);
+        request.CertificateExtensions.Add(alternativeNames.Build());
+        using var certificate = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddDays(-1),
+            DateTimeOffset.UtcNow.AddDays(1));
+        // Re-import so Kestrel can use the private key on every host platform.
+        return X509CertificateLoader.LoadPkcs12(
+            certificate.Export(X509ContentType.Pfx),
+            password: null);
     }
 
     internal Uri Start()

@@ -29,9 +29,10 @@ public sealed class PublicTrackingPwaPlaywrightTests(
             {
                 ["PublicTracking:AllowedOrigins:0"] = nextOrigin,
                 ["PublicTracking:LookupPermitLimit"] = "1000",
-            });
+            },
+            useHttps: true);
         var apiAddress = api.Start();
-        await using var web = await DriverStopsNextServer.StartAsync(
+        await using var web = await DriverStopsNextServer.StartProductionAsync(
             apiAddress.GetLeftPart(UriPartial.Authority),
             nextPort);
         using var playwright = await Playwright.CreateAsync();
@@ -54,6 +55,9 @@ public sealed class PublicTrackingPwaPlaywrightTests(
                         Height = scenario.Height,
                     },
                     TimezoneId = scenario.TimezoneId,
+                    // Scoped to this context only: the API listens on loopback
+                    // TLS with a certificate generated for this test process.
+                    IgnoreHTTPSErrors = true,
                 });
             var page = await context.NewPageAsync();
             if (scenario.TimezoneId is not null)
@@ -115,9 +119,13 @@ public sealed class PublicTrackingPwaPlaywrightTests(
             Assert.Equal(
                 "no-referrer",
                 (await response.AllHeadersAsync())["referrer-policy"]);
-            Assert.Contains(
-                "no-cache",
-                (await response.AllHeadersAsync())["cache-control"]);
+            var cacheControl = (await response.AllHeadersAsync())["cache-control"]
+                .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Select(directive => directive.ToLowerInvariant())
+                .ToArray();
+            Assert.Contains("no-store", cacheControl);
+            Assert.Contains("private", cacheControl);
+            Assert.DoesNotContain("public", cacheControl);
             Assert.Equal(
                 "noindex, nofollow, noarchive",
                 (await response.AllHeadersAsync())["x-robots-tag"]);

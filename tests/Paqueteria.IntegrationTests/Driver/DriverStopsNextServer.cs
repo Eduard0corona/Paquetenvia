@@ -41,9 +41,121 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    internal static async Task<DriverStopsNextServer> StartAsync(
+    private enum NextRuntime
+    {
+        Development,
+        Production,
+    }
+
+    private static readonly SemaphoreSlim BuildGate = new(1, 1);
+    private static readonly HashSet<string> BuiltConfigurations = [];
+
+    /// <summary>
+    /// Builds <c>.next</c> once per <c>NEXT_PUBLIC_API_BASE_URL</c>. That value
+    /// is inlined into the client bundle, so a build produced for a different
+    /// API origin is never reused.
+    /// </summary>
+    private static async Task EnsureProductionBuildAsync(string web, string? apiBaseUrl)
+    {
+        var configuration = apiBaseUrl?.TrimEnd('/')
+            ?? throw new InvalidOperationException(
+                "The production Next.js runtime requires an explicit API base URL.");
+        await BuildGate.WaitAsync();
+        try
+        {
+            if (!BuiltConfigurations.Add(configuration))
+            {
+                return;
+            }
+
+            var output = new StringBuilder();
+            using var build = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = OperatingSystem.IsWindows()
+                        ? FindExecutableOnPath("node.exe")
+                        : FindExecutableOnPath("node"),
+                    Arguments = $"\"{FindNextScript(web)}\" build",
+                    WorkingDirectory = web,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                },
+            };
+            build.StartInfo.Environment["NEXT_PUBLIC_API_BASE_URL"] = configuration;
+            build.OutputDataReceived += (_, args) =>
+            {
+                if (args.Data is not null)
+                {
+                    lock (output) output.AppendLine(args.Data);
+                }
+            };
+            build.ErrorDataReceived += (_, args) =>
+            {
+                if (args.Data is not null)
+                {
+                    lock (output) output.AppendLine(args.Data);
+                }
+            };
+            if (!build.Start())
+            {
+                BuiltConfigurations.Remove(configuration);
+                throw new InvalidOperationException("next build did not start.");
+            }
+            build.BeginOutputReadLine();
+            build.BeginErrorReadLine();
+            try
+            {
+                await build.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(15));
+            }
+            catch
+            {
+                BuiltConfigurations.Remove(configuration);
+                TryTerminate(build);
+                throw;
+            }
+            if (build.ExitCode != 0)
+            {
+                BuiltConfigurations.Remove(configuration);
+                string failure;
+                lock (output) failure = output.ToString();
+                throw new InvalidOperationException(
+                    $"next build failed with exit code {build.ExitCode}." +
+                    $"{Environment.NewLine}{failure}");
+            }
+        }
+        finally
+        {
+            BuildGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Starts the Next.js development server. Use it only for suites that
+    /// assert development-runtime behaviour.
+    /// </summary>
+    internal static Task<DriverStopsNextServer> StartAsync(
         string? apiBaseUrl = null,
-        int? requestedPort = null)
+        int? requestedPort = null) =>
+        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort);
+
+    /// <summary>
+    /// Builds the deployable artifact and serves it with <c>next start</c>.
+    /// PWA suites assert hydration, real assets, the Service Worker, offline
+    /// navigation, caching and CSP, which are contracts of the deployable
+    /// artifact rather than of the development runtime.
+    /// </summary>
+    internal static Task<DriverStopsNextServer> StartProductionAsync(
+        string apiBaseUrl,
+        int? requestedPort = null) =>
+        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort);
+
+    private static async Task<DriverStopsNextServer> StartCoreAsync(
+        NextRuntime runtime,
+        string? apiBaseUrl,
+        int? requestedPort)
     {
         await ServerGate.WaitAsync();
         FileStream? crossProcessLease = null;
@@ -51,6 +163,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         {
             crossProcessLease = await AcquireCrossProcessLeaseAsync();
             return await StartOwnedAsync(
+                runtime,
                 apiBaseUrl,
                 requestedPort,
                 crossProcessLease);
@@ -64,12 +177,17 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     }
 
     private static async Task<DriverStopsNextServer> StartOwnedAsync(
+        NextRuntime runtime,
         string? apiBaseUrl,
         int? requestedPort,
         FileStream crossProcessLease)
     {
         var root = FindRepositoryRoot();
         var web = Path.Combine(root, "apps", "web");
+        if (runtime is NextRuntime.Production)
+        {
+            await EnsureProductionBuildAsync(web, apiBaseUrl);
+        }
         var port = requestedPort ?? ReservePort();
         var output = new StringBuilder();
         var process = new Process
@@ -79,8 +197,9 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                 FileName = OperatingSystem.IsWindows()
                     ? FindExecutableOnPath("node.exe")
                     : FindExecutableOnPath("node"),
-                Arguments =
-                    $"\"{FindNextScript(web)}\" dev --hostname 127.0.0.1 --port {port}",
+                Arguments = runtime is NextRuntime.Production
+                    ? $"\"{FindNextScript(web)}\" start --hostname 127.0.0.1 --port {port}"
+                    : $"\"{FindNextScript(web)}\" dev --hostname 127.0.0.1 --port {port}",
                 WorkingDirectory = web,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -254,6 +373,46 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
 
 public sealed class DriverStopsNextServerFixture : IAsyncLifetime
 {
+    /// <summary>
+    /// Reserved test network origin. Nothing listens here and the <c>.test</c>
+    /// TLD never resolves, so no traffic leaves the machine. The driver suites
+    /// fulfil every expected API call in the browser by design; production
+    /// requires an HTTPS API origin and this value satisfies that rule without
+    /// weakening <c>resolveDriverApiBaseUrl</c> or deploying a stub service.
+    /// </summary>
+    internal const string TestApiOrigin = "https://driver-api.paquetenvia.test";
+
+    private DriverStopsNextServer? _server;
+
+    internal Uri BaseAddress =>
+        _server?.BaseAddress
+        ?? throw new InvalidOperationException("Next.js is not running.");
+
+    public async Task InitializeAsync() =>
+        _server = await DriverStopsNextServer.StartProductionAsync(TestApiOrigin);
+
+    public async Task DisposeAsync()
+    {
+        if (_server is not null)
+        {
+            await _server.DisposeAsync();
+        }
+    }
+}
+
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class DriverStopsPwaCollection :
+    ICollectionFixture<DriverStopsNextServerFixture>
+{
+    public const string Name = "DriverStopsPwa";
+}
+
+/// <summary>
+/// Development-runtime server for suites that have not been migrated to the
+/// deployable artifact yet.
+/// </summary>
+public sealed class DriverStopsDevNextServerFixture : IAsyncLifetime
+{
     private DriverStopsNextServer? _server;
 
     internal Uri BaseAddress =>
@@ -273,8 +432,8 @@ public sealed class DriverStopsNextServerFixture : IAsyncLifetime
 }
 
 [CollectionDefinition(Name, DisableParallelization = true)]
-public sealed class DriverStopsPwaCollection :
-    ICollectionFixture<DriverStopsNextServerFixture>
+public sealed class DriverOfflineOperationsPwaCollection :
+    ICollectionFixture<DriverStopsDevNextServerFixture>
 {
-    public const string Name = "DriverStopsPwa";
+    public const string Name = "DriverOfflineOperationsPwa";
 }

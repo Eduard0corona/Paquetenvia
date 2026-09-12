@@ -4,9 +4,9 @@ using Microsoft.Playwright;
 
 namespace Paqueteria.IntegrationTests.Driver;
 
-[Collection(DriverStopsPwaCollection.Name)]
+[Collection(DriverOfflineOperationsPwaCollection.Name)]
 public sealed class DriverOfflineOperationsPwaPlaywrightTests(
-    DriverStopsNextServerFixture server)
+    DriverStopsDevNextServerFixture server)
 {
     private const string OrderId = "22222222-2222-4222-8222-222222222222";
     private const string OrganizationId = "11111111-1111-4111-8111-111111111111";
