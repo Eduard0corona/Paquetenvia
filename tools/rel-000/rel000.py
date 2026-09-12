@@ -91,6 +91,7 @@ REL000_MODES = {NORMAL_RELEASE_EVIDENCE, SECURITY_REMEDIATION}
 REMEDIATION_POLICY_FORMAT = "paquetenvia-rel000-security-remediation-policy-v2"
 SHARP_REMEDIATION_ID = "ISSUE-5-SHARP-035-REMEDIATION"
 WEB_TRANSITIVE_REMEDIATION_ID = "SEC-2026-08-SECURITY-BASELINE"
+NEXT_CRITICAL_REMEDIATION_ID = "SEC-2026-09-NEXT-CRITICAL"
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -457,6 +458,70 @@ def load_remediation_policy(path: Path) -> dict[str, Any]:
                 fail(
                     "REMEDIATION_POLICY_INVALID",
                     "The web-transitive remediation authorization is incomplete or inconsistent.",
+                )
+        if authorization.get("id") == NEXT_CRITICAL_REMEDIATION_ID:
+            issue_advisories = authorization.get("issue_advisories")
+            version_changes = authorization.get("expected_direct_version_changes")
+            branch_totals = authorization.get("expected_branch_totals")
+            expected_ids = [
+                "GHSA-p293-qw3h-jr36",
+                "GHSA-2xp9-vwfh-vxw4",
+                "GHSA-c83g-rgw3-j3cx",
+                "GHSA-73wf-gq98-2v4g",
+                "GHSA-rgj7-g3m4-5g8c",
+                "GHSA-2883-xcg3-v3hh",
+                "GHSA-82fw-gwwq-j7x9",
+                "GHSA-w5vr-8v7q-w6rv",
+            ]
+            if (
+                authorization.get("tracked_issue") != 48
+                or authorization.get("tracked_issue_title")
+                != "SEC-2026-09: remediate Next.js critical advisories"
+                or issue_advisories != {"48": expected_ids}
+                or authorization.get("expected_base_advisories") != expected_ids
+                or authorization.get("expected_base_totals")
+                != {"total": 9, "critical": 2, "high": 4, "moderate": 3, "low": 0}
+                or branch_totals
+                != {"total": 0, "critical": 0, "high": 0, "moderate": 0, "low": 0}
+                or set(authorization.get("allowed_direct_packages") or [])
+                != {"next", "eslint-config-next", "vitest"}
+                or version_changes
+                != {
+                    "next": {"from": "16.2.11", "to": "16.3.3"},
+                    "eslint-config-next": {"from": "16.2.11", "to": "16.3.3"},
+                    "vitest": {"from": "4.1.10", "to": "4.1.11"},
+                }
+                or authorization.get("expected_cves")
+                != {
+                    "GHSA-p293-qw3h-jr36": "CVE-2026-75604",
+                    "GHSA-2xp9-vwfh-vxw4": None,
+                }
+                or authorization.get("next_affected_range") != ">=16.0.0 <16.3.3"
+                or authorization.get("next_first_patched_version") != "16.3.3"
+                or authorization.get("allowed_overrides")
+                != {
+                    "postcss": "8.5.23",
+                    "brace-expansion@<1.1.18": "1.1.18",
+                    "brace-expansion@>=4.0.0 <5.0.9": "5.0.9",
+                    "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+                    "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+                    "browserslist@<=4.28.6": "4.28.7",
+                    "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+                    "next@16.3.3>sharp": "0.35.4",
+                }
+                or authorization.get("expected_lock_package_count") != 475
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", str(authorization.get("expected_lockfile_sha256", ""))
+                )
+                is None
+                or authorization.get("target_sharp_version") != "0.35.4"
+                or authorization.get("require_sharp_runtime_smoke") is not True
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The Next.js critical remediation authorization is incomplete or inconsistent.",
                 )
     return policy
 
@@ -1311,13 +1376,15 @@ def validate_owner_approval(
             duplicates.append(candidate.resolve())
     if duplicates != [expected_path]:
         fail("OWNER_DECISION_DUPLICATED", "The owner decision ID must exist in exactly one decision record.")
-    if authorization is not None and authorization.get("id") == WEB_TRANSITIVE_REMEDIATION_ID:
+    if authorization is not None and isinstance(authorization.get("issue_advisories"), dict):
         if issue5.get("state") != "CLOSED":
             fail("OWNER_APPROVAL_ISSUE_5_OPEN", "Issue #5 must remain historically closed.")
         if issue30.get("state") not in {"OPEN", "CLOSED"}:
-            fail("OWNER_APPROVAL_SECURITY_ISSUE_INVALID", "Issue #38 has an invalid state.")
+            fail("OWNER_APPROVAL_SECURITY_ISSUE_INVALID", "The remediation Issue has an invalid state.")
         related = issue30.get("related_issue") or {}
-        if not isinstance(related, dict) or related.get("state") not in {"OPEN", "CLOSED"}:
+        if authorization.get("related_tracked_issue") is not None and (
+            not isinstance(related, dict) or related.get("state") not in {"OPEN", "CLOSED"}
+        ):
             fail("OWNER_APPROVAL_SECURITY_ISSUE_INVALID", "Issue #40 has an invalid state.")
     else:
         validate_owner_approval_issues(issue5, issue30)
@@ -4195,6 +4262,166 @@ def validate_baseline_package_graph_lockfile_diff(
     return baseline_graph_only
 
 
+def validate_next_critical_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_all = set(authorization["allowed_dependency_files"]) | set(
+        authorization["allowed_non_dependency_files"]
+    )
+    unexpected = sorted(set(all_changed) - allowed_all)
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The Next.js remediation changed a file outside its exact authorization.",
+            files=unexpected,
+        )
+    required = set(authorization["required_dependency_files"])
+    if set(changed_dependency_files) != required:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The Next.js remediation dependency files do not match the exact authorization.",
+            expected=sorted(required),
+            actual=changed_dependency_files,
+        )
+
+    package_path = repository_root / "apps/web/package.json"
+    current_package = load_json(package_path)
+    try:
+        base_package = json.loads(
+            run_git(repository_root, "show", f"{base_main_sha}:apps/web/package.json")
+        )
+    except json.JSONDecodeError as exc:
+        fail("BASE_DEPENDENCY_MANIFEST_INVALID", "The base package manifest is invalid.", error=str(exc))
+    version_changes = authorization["expected_direct_version_changes"]
+    if set(version_changes) != set(authorization["allowed_direct_packages"]):
+        fail(
+            "SECURITY_REMEDIATION_DIRECT_SCOPE_INVALID",
+            "The direct dependency authorization is inconsistent.",
+        )
+    next_version = current_package.get("dependencies", {}).get("next")
+    eslint_next_version = current_package.get("devDependencies", {}).get(
+        "eslint-config-next"
+    )
+    if eslint_next_version != next_version:
+        fail(
+            "NEXT_DEPENDENCY_ALIGNMENT_INVALID",
+            "Next.js and eslint-config-next must remain aligned stable versions.",
+        )
+    expected_package = copy.deepcopy(base_package)
+    for package, replacement in version_changes.items():
+        section = "dependencies" if package == "next" else "devDependencies"
+        actual_version = current_package.get(section, {}).get(package)
+        if _semver_tuple(str(actual_version)) is None:
+            fail(
+                "PRERELEASE_DEPENDENCY_REJECTED",
+                "Prerelease dependency versions are forbidden.",
+                package=package,
+            )
+        if base_package.get(section, {}).get(package) != replacement["from"]:
+            fail(
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+                "A base direct dependency differs from its exact authorization.",
+                package=package,
+            )
+        if actual_version != replacement["to"]:
+            fail(
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+                "A direct dependency differs from its exact minimum patched target.",
+                package=package,
+            )
+        expected_package[section][package] = replacement["to"]
+    if current_package != expected_package:
+        fail(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            "Only the three exact authorized direct dependency updates are permitted.",
+        )
+    if next_version != authorization["next_first_patched_version"]:
+        fail(
+            "SECURITY_REMEDIATION_VERSION_INVALID",
+            "Next.js must use the exact minimum patched version.",
+        )
+
+    if any(
+        "sharp" in (current_package.get(section) or {})
+        for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+    ):
+        fail("DIRECT_SHARP_DEPENDENCY_REJECTED", "Sharp must remain transitive and optional.")
+    current_workspace = (repository_root / "apps/web/pnpm-workspace.yaml").read_text(
+        encoding="utf-8"
+    )
+    current_overrides = _workspace_overrides(current_workspace)
+    if current_overrides != authorization["allowed_overrides"]:
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "The workspace overrides differ from the exact Next.js remediation authorization.",
+            expected=authorization["allowed_overrides"],
+            actual=current_overrides,
+        )
+
+    lock_path = repository_root / "apps/web/pnpm-lock.yaml"
+    lock_bytes = lock_path.read_bytes()
+    lock_text = lock_bytes.decode("utf-8")
+    lock_hash = hashlib.sha256(lock_bytes).hexdigest()
+    if lock_hash != authorization["expected_lockfile_sha256"]:
+        fail(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            "The pnpm lockfile differs from the exact authorized generated graph.",
+            expected=authorization["expected_lockfile_sha256"],
+            actual=lock_hash,
+        )
+    lock_keys = _lock_package_keys(lock_text)
+    if len(lock_keys) != authorization["expected_lock_package_count"]:
+        fail(
+            "LOCKFILE_PACKAGE_COUNT_CHANGED",
+            "The remediation lockfile package count changed.",
+            expected=authorization["expected_lock_package_count"],
+            actual=len(lock_keys),
+        )
+    exact_versions = {
+        "next": "16.3.3",
+        "eslint-config-next": "16.3.3",
+        "vitest": "4.1.11",
+        "sharp": "0.35.4",
+        "browserslist": "4.28.7",
+        "baseline-browser-mapping": "2.11.0",
+        "js-yaml": "4.3.2",
+    }
+    for package, expected_version in exact_versions.items():
+        versions = {
+            version for version in _lock_versions(lock_text, package) if ">" not in version
+        }
+        if versions != {expected_version}:
+            fail(
+                "SECURITY_REMEDIATION_LOCK_VERSION_INVALID",
+                "A security target differs from its exact authorized lockfile version.",
+                package=package,
+                expected=expected_version,
+                actual=sorted(versions),
+            )
+    if f"next@{next_version}>sharp: {authorization['target_sharp_version']}" not in lock_text:
+        fail("LOCKFILE_INCONSISTENT", "The lockfile does not apply the authorized Sharp edge.")
+
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": True,
+        "dependency_lockfile_changed": True,
+        "dependency_workspace_changed": True,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": changed_dependency_files,
+        "lockfile_consistency_verified": True,
+        "lockfile_sha256": lock_hash,
+        "lock_package_count": len(lock_keys),
+        "vulnerable_lock_versions": [],
+        "sharp_versions": [authorization["target_sharp_version"]],
+        "sharp_override_selector": f"next@{next_version}>sharp",
+        "sharp_override_version": authorization["target_sharp_version"],
+    }
+
+
 def validate_dependency_diff(
     repository_root: Path,
     base_main_sha: str,
@@ -4265,6 +4492,14 @@ def validate_dependency_diff(
         )
     if authorization is not None and authorization.get("id") == WEB_TRANSITIVE_REMEDIATION_ID:
         return validate_consolidated_security_baseline_diff(
+            repository_root,
+            base_main_sha,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if authorization is not None and authorization.get("id") == NEXT_CRITICAL_REMEDIATION_ID:
+        return validate_next_critical_remediation_diff(
             repository_root,
             base_main_sha,
             all_changed,
@@ -4544,15 +4779,20 @@ def validate_issue_and_audit(
     if not isinstance(related_issue, dict):
         fail("ADDITIONAL_SECURITY_TRACKING_INVALID", "The related security Issue is invalid.")
     related_state = str(related_issue.get("state", "")).upper()
-    policy_tracks_additional = (
-        authorization is not None
-        and authorization.get("id") == WEB_TRANSITIVE_REMEDIATION_ID
+    policy_tracks_additional = authorization is not None and isinstance(
+        authorization.get("issue_advisories"), dict
     )
     consolidated_tracking = policy_tracks_additional or (
         int(additional_issue.get("number", 0)) == 38
         and int(related_issue.get("number", 0)) == 40
     )
-    expected_additional_number = 38 if consolidated_tracking else 30
+    expected_additional_number = (
+        int(authorization["tracked_issue"])
+        if policy_tracks_additional
+        else 38
+        if consolidated_tracking
+        else 30
+    )
     expected_additional_title = (
         authorization["tracked_issue_title"]
         if policy_tracks_additional
@@ -4563,7 +4803,7 @@ def validate_issue_and_audit(
     expected_additional_ids = {
         value.lower()
         for value in (
-            authorization["issue_advisories"]["38"]
+            authorization["issue_advisories"][str(authorization["tracked_issue"])]
             if policy_tracks_additional
             else [
                 "GHSA-fxqj-rqcc-2cmp",
@@ -4589,12 +4829,35 @@ def validate_issue_and_audit(
             "ADDITIONAL_SECURITY_TRACKING_INVALID",
             "The additional security Issue does not match the exact remediation tracking contract.",
         )
-    expected_related_ids = {"ghsa-q939-rpr3-3284"} if consolidated_tracking else set()
-    if consolidated_tracking and (
-        int(related_issue.get("number", 0)) != 40
+    related_tracking_required = (
+        policy_tracks_additional and authorization.get("related_tracked_issue") is not None
+    ) or (not policy_tracks_additional and consolidated_tracking)
+    expected_related_number = (
+        int(authorization["related_tracked_issue"])
+        if policy_tracks_additional and authorization.get("related_tracked_issue") is not None
+        else 40
+    )
+    expected_related_ids = (
+        {
+            value.lower()
+            for value in authorization["issue_advisories"].get(
+                str(expected_related_number), []
+            )
+        }
+        if policy_tracks_additional
+        else {"ghsa-q939-rpr3-3284"}
+        if consolidated_tracking
+        else set()
+    )
+    expected_related_title = (
+        authorization.get("related_tracked_issue_title")
+        if policy_tracks_additional
+        else "SEC-2026-08: remediate transitive SSH.NET advisory"
+    )
+    if related_tracking_required and (
+        int(related_issue.get("number", 0)) != expected_related_number
         or related_state not in {"OPEN", "CLOSED"}
-        or related_issue.get("title")
-        != "SEC-2026-08: remediate transitive SSH.NET advisory"
+        or related_issue.get("title") != expected_related_title
         or {
             str(value).lower()
             for value in related_issue.get("tracked_advisory_ids") or []
@@ -4603,7 +4866,7 @@ def validate_issue_and_audit(
     ):
         fail(
             "RELATED_SECURITY_TRACKING_INVALID",
-            "Issue #40 does not match the exact SSH.NET remediation tracking contract.",
+            "The related Issue does not match the exact remediation tracking contract.",
         )
     if issue5_state not in {"OPEN", "CLOSED"}:
         fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 has an invalid state.")
@@ -4643,11 +4906,11 @@ def validate_issue_and_audit(
                 "The active remediation tracking Issue must remain open until merge.",
                 issue=additional_issue["number"],
             )
-        if policy_tracks_additional and related_state != "OPEN":
+        if related_tracking_required and related_state != "OPEN":
             fail(
                 "RELATED_SECURITY_ISSUE_STATE_INVALID",
-                "Issue #40 must remain open until the consolidated remediation merges.",
-                issue=40,
+                "The related security Issue must remain open until the remediation merges.",
+                issue=expected_related_number,
             )
         for key, expected in expected_base_totals.items():
             if base_totals[key] != expected:
@@ -4822,14 +5085,16 @@ def validate_issue_and_audit(
         else "REMEDIATED_PENDING_MERGE"
         if related_state == "OPEN"
         else "REMEDIATED"
-        if consolidated_tracking
+        if related_tracking_required
         else "NOT_APPLICABLE"
     )
     removed_ids = base_ids - branch_ids
     if branch_ids:
         dependency_security_status = "BLOCKED"
         release_candidate_status = "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION"
-    elif issue5_state == "OPEN" or additional_state == "OPEN" or related_state == "OPEN":
+    elif issue5_state == "OPEN" or additional_state == "OPEN" or (
+        related_tracking_required and related_state == "OPEN"
+    ):
         dependency_security_status = "REMEDIATED_PENDING_MERGE"
         release_candidate_status = (
             "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION"
@@ -4842,7 +5107,7 @@ def validate_issue_and_audit(
         advisory_id: (
             "Issue #5"
             if advisory_id == ISSUE5_ADVISORY.lower()
-            else "Issue #40"
+            else f"Issue #{expected_related_number}"
             if advisory_id in expected_related_ids
             else f"Issue #{additional_issue['number']}"
         )
@@ -4886,7 +5151,7 @@ def validate_issue_and_audit(
             *(
                 [
                     {
-                        "id": "Issue #40",
+                        "id": f"Issue #{expected_related_number}",
                         "state": related_state,
                         "title": related_issue.get("title"),
                         "url": related_issue.get("url"),
@@ -4894,7 +5159,7 @@ def validate_issue_and_audit(
                         "remediation_status": related_status,
                     }
                 ]
-                if consolidated_tracking
+                if related_tracking_required
                 else []
             ),
         ],
@@ -4914,7 +5179,7 @@ def validate_issue_and_audit(
                     and additional_state == "OPEN"
                 )
                 or (
-                    tracking_by_id[advisory_id] == "Issue #40"
+                    tracking_by_id[advisory_id] == f"Issue #{expected_related_number}"
                     and related_state == "OPEN"
                 )
                 else "REMEDIATED",
@@ -4936,8 +5201,8 @@ def validate_issue_and_audit(
             "url": additional_issue["url"],
         },
         "related_security_issue": (
-            {"number": 40, "url": related_issue.get("url")}
-            if consolidated_tracking
+            {"number": expected_related_number, "url": related_issue.get("url")}
+            if related_tracking_required
             else None
         ),
         "issue_5_remediation_status": issue5_status,

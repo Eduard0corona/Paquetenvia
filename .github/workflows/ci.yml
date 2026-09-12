@@ -1394,7 +1394,7 @@ jobs:
       REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
       REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
-      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
+      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-09-next-critical' && 'SEC-2026-09-NEXT-CRITICAL' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
       REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -1524,7 +1524,7 @@ jobs:
         run: |
           set -euo pipefail
           issue_number="$(
-            python -c 'import json; print(json.load(open("tests/fixtures/rel-000/security-tracking.json", encoding="utf-8"))["issue_number"])'
+            python -c 'import json, os; data=json.load(open("tests/fixtures/rel-000/security-tracking.json", encoding="utf-8")); print(data.get("remediation_issues", {}).get(os.environ.get("REL000_REMEDIATION_ID"), data["issue_number"]))'
           )"
           related_issue_number="$(
             python -c 'import json; policy=json.load(open("tools/rel-000/security-remediation-policy.json", encoding="utf-8")); print(next(item for item in policy["active_remediations"] if item["id"] == "SEC-2026-08-SECURITY-BASELINE")["related_tracked_issue"])'
