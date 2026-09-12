@@ -27,12 +27,12 @@ No reutilices esas credenciales fuera del equipo local.
 | --- | --- | ---: | --- | --- | --- |
 | PostgreSQL + PostGIS | `postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d` | 5432 | `POSTGRES_HOST_PORT` (5432) | `postgres_data` | `pg_isready` |
 | Redis con AOF | `redis:8.2.7-alpine` | 6379 | `REDIS_HOST_PORT` (6379) | `redis_data` | `redis-cli PING` autenticado |
-| MinIO API | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | 9000 | `MINIO_API_HOST_PORT` (9000) | `minio_data` | `mc ready local` |
+| MinIO API | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | 9000 | `MINIO_API_HOST_PORT` (9000) | `minio_data` | `mc ready local` |
 | MinIO consola | misma imagen | 9001 | `MINIO_CONSOLE_HOST_PORT` (9001) | `minio_data` | mismo servicio |
 | SMTP mock | `axllent/mailpit:v1.30.3` | 1025 | `MAIL_SMTP_HOST_PORT` (1025) | `mailpit_data` | `/mailpit readyz` |
 | Mailpit UI/API | misma imagen | 8025 | `MAIL_UI_HOST_PORT` (8025) | `mailpit_data` | mismo servicio |
 
-El bootstrap de MinIO usa `minio/mc:RELEASE.2025-08-13T08-35-41Z`. Todas las
+El bootstrap de MinIO usa `quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z`. Todas las
 imágenes conservan además un digest `sha256` en el Compose. PostgreSQL 18 usa el
 montaje oficial `/var/lib/postgresql`, que contiene el `PGDATA` versionado;
 Redis Alpine reduce el tamaño sin cambiar su persistencia AOF; las versiones de
