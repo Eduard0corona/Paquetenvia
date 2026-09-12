@@ -15,7 +15,6 @@ const lowerEventId = asUuid("10000000-0000-0000-0000-000000000004");
 const currentEventId = asUuid("10000000-0000-0000-0000-000000000006");
 const higherEventId = asUuid("10000000-0000-0000-0000-000000000007");
 const crossTenantEventId = asUuid("10000000-0000-0000-0000-000000000099");
-const reconnectDelays = [0, 250, 500, 1_000, 2_000] as const;
 const hosts = new Set<ControlledHost>();
 
 describe("real managed SignalR reconnect", () => {
@@ -49,7 +48,6 @@ describe("real managed SignalR reconnect", () => {
           tokenFactoryCount += 1;
           return "synthetic-dispatcher-token";
         },
-        reconnectDelaysMilliseconds: reconnectDelays,
         onReconnecting: () => {
           lifecycle.push("Reconnecting");
           reconnecting.resolve();
@@ -152,7 +150,6 @@ describe("real managed SignalR reconnect", () => {
         baseUrl,
         organizationId: organizationA,
         tokenFactory: async () => "synthetic-dispatcher-token",
-        reconnectDelaysMilliseconds: reconnectDelays,
         onReconnecting: () => reconnecting.resolve(),
         onReconnected: () => reconnected.resolve(),
         resynchronizeFromRest: async () => {
