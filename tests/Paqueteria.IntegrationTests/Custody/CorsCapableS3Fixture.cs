@@ -89,13 +89,20 @@ public sealed class CorsCapableS3Fixture : IAsyncLifetime
                 AuthenticationRegion = "us-east-1",
             });
 
-    public IReadOnlyDictionary<string, string?> CreateProofStorageConfiguration() =>
+    /// <summary>
+    /// Proof storage settings for this container. <paramref name="publicPresignUrl"/>
+    /// lets a test presign browser uploads for another origin that relays to
+    /// the container, such as a loopback TLS listener; the API and worker keep
+    /// talking to the container directly.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> CreateProofStorageConfiguration(
+        string? publicPresignUrl = null) =>
         new Dictionary<string, string?>
         {
             ["ProofStorage:Provider"] = "S3Compatible",
             ["ProofStorage:ThreatScanner"] = "Synthetic",
             ["ProofStorage:ServiceUrl"] = Endpoint,
-            ["ProofStorage:PublicPresignUrl"] = Endpoint,
+            ["ProofStorage:PublicPresignUrl"] = publicPresignUrl ?? Endpoint,
             ["ProofStorage:Region"] = "us-east-1",
             ["ProofStorage:Bucket"] = Bucket,
             ["ProofStorage:ForcePathStyle"] = "true",

@@ -422,6 +422,13 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         string organizationId = "11111111-1111-1111-1111-111111111111",
         string token = "synthetic-driver-token")
     {
+        // Registered first so the per-test API routes below take precedence:
+        // any call to the reserved test origin that a test did not fulfil is
+        // blocked here instead of reaching the network, and the assertions that
+        // depend on it then fail.
+        await page.RouteAsync(
+            $"{DriverStopsNextServerFixture.TestApiOrigin}/**",
+            route => route.AbortAsync("blockedbyclient"));
         await page.RouteAsync(
             "**/hubs/driver/negotiate**",
             route => route.AbortAsync());

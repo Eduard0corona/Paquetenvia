@@ -3450,12 +3450,7 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
         return raised.exception
 
     def test_k_changed_lockfiles_preserve_the_baseline_package_graph(self):
-        result = rel000.validate_dependency_diff(
-            REPOSITORY_ROOT,
-            self.baseline,
-            rel000.NORMAL_RELEASE_EVIDENCE,
-        )
-        changed_lockfiles = sorted(
+        all_changed = sorted(
             {
                 path.replace("\\", "/")
                 for output in (
@@ -3470,17 +3465,19 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
                     ),
                 )
                 for path in output.splitlines()
-                if Path(path).name == "packages.lock.json"
+                if path.strip()
             }
         )
-        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
-        self.assertTrue(result["lockfile_consistency_verified"])
-        self.assertTrue(changed_lockfiles)
-        self.assertEqual(
-            changed_lockfiles,
-            result["baseline_package_graph_lockfiles"],
+        changed_lockfiles = sorted(
+            path for path in all_changed if Path(path).name == "packages.lock.json"
         )
-        self.assertEqual(changed_lockfiles, result["changed_dependency_files"])
+        lockfiles = rel000.validate_baseline_package_graph_lockfile_diff(
+            REPOSITORY_ROOT,
+            self.baseline,
+            all_changed,
+        )
+        self.assertTrue(changed_lockfiles)
+        self.assertEqual(changed_lockfiles, lockfiles)
 
     def existing_lock_repo(self):
         root = Path(self.temp.name) / "repo"
@@ -3826,6 +3823,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
 
     def dependency_repo(self, source_sha=None):
         authorization = self.authorization()
+        source_sha = source_sha or authorization["validated_target_sha"]
         root = self.root / "repo"
         authorized_files = sorted(
             set(authorization["allowed_dependency_files"])
@@ -3877,11 +3875,11 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             authorization or self.authorization(),
         )
 
-    def test_web_transitive_policy_is_the_only_active_authorization(self):
+    def test_web_transitive_authorization_remains_active_and_unchanged(self):
         policy = self.policy()
         self.assertEqual(
-            [rel000.WEB_TRANSITIVE_REMEDIATION_ID],
-            [item["id"] for item in policy["active_remediations"]],
+            {rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.NEXT_CRITICAL_REMEDIATION_ID},
+            {item["id"] for item in policy["active_remediations"]},
         )
         historical = {item["id"]: item for item in policy["historical_remediations"]}
         self.assertEqual("MERGED", historical[rel000.SHARP_REMEDIATION_ID]["status"])
@@ -4152,9 +4150,272 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(38, fixture["issue_number"])
+        self.assertEqual(48, fixture["remediation_issues"][rel000.NEXT_CRITICAL_REMEDIATION_ID])
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
+        self.assertIn("fix/security-2026-09-next-critical", workflow)
+        self.assertIn("SEC-2026-09-NEXT-CRITICAL", workflow)
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
+
+
+class NextCriticalRemediationPolicyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-next-critical-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
+        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.NEXT_CRITICAL_REMEDIATION_ID
+            )
+        )
+
+    def dependency_repo(self):
+        authorization = self.authorization()
+        root = self.root / "repo"
+        files = authorization["required_dependency_files"]
+        for relative in files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(
+                subprocess.check_output(
+                    ["git", "show", f"{authorization['authorized_base_sha']}:{relative}"],
+                    cwd=REPOSITORY_ROOT,
+                )
+            )
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True
+        )
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        for relative in files:
+            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+        return root, base, authorization
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    @staticmethod
+    def advisory(advisory_id: str, package: str, severity: str, version: str):
+        return {
+            "advisory_id": advisory_id,
+            "package": package,
+            "installed_versions": [version],
+            "severity": severity,
+            "affected_range": "authorized-base-range",
+            "patched_range": "authorized-target-range",
+            "direct_or_transitive": "direct" if package in {"next", "vitest"} else "transitive",
+            "dependency_path_count": 1,
+            "fix_available": True,
+            "fix_compatibility": "compatible_patch_available",
+        }
+
+    def base_advisories(self):
+        return [
+            self.advisory("GHSA-p293-qw3h-jr36", "next", "critical", "16.2.11"),
+            self.advisory("GHSA-2xp9-vwfh-vxw4", "next", "critical", "16.2.11"),
+            self.advisory("GHSA-c83g-rgw3-j3cx", "browserslist", "high", "4.28.6"),
+            self.advisory("GHSA-73wf-gq98-2v4g", "browserslist", "high", "4.28.6"),
+            self.advisory("GHSA-rgj7-g3m4-5g8c", "sharp", "high", "0.35.3"),
+            self.advisory("GHSA-2883-xcg3-v3hh", "js-yaml", "high", "4.3.1"),
+            self.advisory("GHSA-82fw-gwwq-j7x9", "vitest", "moderate", "4.1.10"),
+            self.advisory("GHSA-82fw-gwwq-j7x9", "@vitest/mocker", "moderate", "4.1.10"),
+            self.advisory(
+                "GHSA-w5vr-8v7q-w6rv", "baseline-browser-mapping", "moderate", "2.10.43"
+            ),
+        ]
+
+    @staticmethod
+    def audit(advisories):
+        values = copy.deepcopy(advisories)
+        totals = {
+            key: sum(item["severity"] == key for item in values)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(values)
+        return {
+            "command_executed": True,
+            "command_exit_code": 1 if values else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "advisories": values,
+        }
+
+    def test_next_critical_mode_requires_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], authorization["id"]
+            ),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+
+    def test_wrong_base_sha_is_rejected(self):
+        authorization = self.authorization()
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                self.policy(),
+                authorization["authorized_source_branch"],
+                "0" * 40,
+                authorization["id"],
+            ),
+        )
+
+    def test_expected_advisory_ids_and_cve_are_exact(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            set(authorization["expected_base_advisories"]),
+            set(authorization["issue_advisories"]["48"]),
+        )
+        self.assertEqual(
+            "CVE-2026-75604", authorization["expected_cves"]["GHSA-p293-qw3h-jr36"]
+        )
+
+    def test_vulnerable_and_target_versions_are_exact(self):
+        changes = self.authorization()["expected_direct_version_changes"]
+        self.assertEqual({"from": "16.2.11", "to": "16.3.3"}, changes["next"])
+        self.assertEqual(changes["next"], changes["eslint-config-next"])
+        self.assertEqual("16.3.3", self.authorization()["next_first_patched_version"])
+
+    def test_previous_next_version_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["dependencies"]["next"] = "16.3.2"
+        value["devDependencies"]["eslint-config-next"] = "16.3.2"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_VERSION_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_prerelease_next_version_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["dependencies"]["next"] = "16.3.3-rc.0"
+        value["devDependencies"]["eslint-config-next"] = "16.3.3-rc.0"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_file_outside_allowlist_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        (root / "unexpected.txt").write_text("outside allowlist", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_generated_lockfile_drift_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/pnpm-lock.yaml"
+        path.write_bytes(path.read_bytes() + b"\n")
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_unauthorized_package_manifest_drift_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["dependencies"]["unauthorized"] = "1.0.0"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_next_and_eslint_config_alignment_is_required(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["devDependencies"]["eslint-config-next"] = "16.3.2"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "NEXT_DEPENDENCY_ALIGNMENT_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_exact_generated_dependency_graph_is_accepted(self):
+        root, base, authorization = self.dependency_repo()
+        result = self.validate_dependency(root, base, authorization)
+        self.assertEqual(475, result["lock_package_count"])
+        self.assertEqual("0.35.4", result["sharp_override_version"])
+
+    def test_zero_target_audit_has_no_critical_and_is_pending_merge(self):
+        authorization = self.authorization()
+        issue5 = {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+        tracking = {
+            "number": 48,
+            "state": "OPEN",
+            "title": authorization["tracked_issue_title"],
+            "url": "https://github.com/example/issues/48",
+            "tracked_advisory_ids": authorization["issue_advisories"]["48"],
+        }
+        result = rel000.validate_issue_and_audit(
+            issue5,
+            tracking,
+            self.audit(self.base_advisories()),
+            self.audit([]),
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+            rel000.SECURITY_REMEDIATION,
+            authorization,
+        )
+        self.assertEqual(0, result["branch_totals"]["critical"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
 
 
 if __name__ == "__main__":
