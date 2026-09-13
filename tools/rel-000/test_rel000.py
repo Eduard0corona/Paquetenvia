@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import argparse
+import contextlib
 import copy
 import importlib.util
 import json
@@ -4416,6 +4418,603 @@ class NextCriticalRemediationPolicyTests(unittest.TestCase):
         )
         self.assertEqual(0, result["branch_totals"]["critical"])
         self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+
+
+class TestedProvenanceResolutionTests(unittest.TestCase):
+    """Regression coverage for issue #52: the authoritative pull_request base is the
+    first parent of the tested merge commit, never ``pull_request.base.sha``.
+
+    Historical context (SEC-2026-09 / PR #49): the event base SHA stayed pinned at the
+    pull request creation baseline while GitHub regenerated the merge ref on top of the
+    advanced main, so REL-000 received contradictory provenance and failed closed.
+    """
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-tested-provenance-")
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.email", "rel000@example.invalid")
+        self.git("config", "user.name", "REL-000 Tests")
+        self.git("config", "commit.gpgsign", "false")
+        # A: baseline when the pull request was created.
+        self.commit_file("main.txt", "A")
+        self.A = self.head()
+        # H: pull request head branched from A.
+        (self.repo / "feature.txt").write_text("H\n", encoding="utf-8")
+        self.git("add", "feature.txt")
+        self.git("commit", "-qm", "H")
+        self.H = self.head()
+        # B: main advanced after the pull request was created.
+        self.git("checkout", "-q", self.A)
+        self.commit_file("main.txt", "B")
+        self.B = self.head()
+        # M: the merge ref GitHub actually tests = merge(B, H), first parent B.
+        tree = self.git("rev-parse", f"{self.B}^{{tree}}")
+        self.M = self.git("commit-tree", tree, "-p", self.B, "-p", self.H, "-m", "merge")
+        self.git("checkout", "-q", self.M)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def git(self, *arguments: str, cwd: Path | None = None) -> str:
+        return subprocess.check_output(
+            ["git", *arguments], cwd=cwd or self.repo, text=True, encoding="utf-8"
+        ).strip()
+
+    def head(self) -> str:
+        return self.git("rev-parse", "HEAD")
+
+    def commit_file(self, name: str, content: str) -> None:
+        (self.repo / name).write_text(content + "\n", encoding="utf-8")
+        self.git("add", name)
+        self.git("commit", "-qm", content)
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def resolve(self, event_name="pull_request", tested=None, source=None, event_base=None, repo=None):
+        return rel000.resolve_tested_provenance(
+            repo or self.repo,
+            event_name,
+            tested or self.M,
+            source or self.H,
+            event_base,
+        )
+
+    # A. stale event base must not override the tested merge parent.
+    def test_stale_pull_request_base_sha_does_not_override_tested_merge_parent(self):
+        resolved = self.resolve(event_base=self.A)
+        self.assertEqual(self.B, resolved["base_main_sha"])
+        self.assertEqual(self.H, resolved["source_head_sha"])
+        self.assertEqual(self.M, resolved["tested_git_sha"])
+        self.assertEqual("source_head_is_ancestor_of_tested_commit", resolved["git_relationship"])
+        self.assertEqual("tested_merge_first_parent", resolved["base_resolution"])
+        self.assertEqual(self.A, resolved["event_pull_request_base_sha"])
+        self.assertIs(False, resolved["event_pull_request_base_sha_authoritative"])
+        self.assertIs(False, resolved["event_pull_request_base_sha_matches_tested_base"])
+        self.assertNotEqual(self.A, resolved["base_main_sha"])
+
+    # B. a fresh pull request where the event base already equals the tested parent.
+    def test_matching_pull_request_base_sha_resolves_to_tested_merge_parent(self):
+        resolved = self.resolve(event_base=self.B)
+        self.assertEqual(self.B, resolved["base_main_sha"])
+        self.assertIs(True, resolved["event_pull_request_base_sha_matches_tested_base"])
+
+    def test_pull_request_resolution_ignores_absent_event_base(self):
+        resolved = self.resolve()
+        self.assertEqual(self.B, resolved["base_main_sha"])
+        self.assertIsNone(resolved["event_pull_request_base_sha"])
+        self.assertIsNone(resolved["event_pull_request_base_sha_matches_tested_base"])
+
+    # C. push to main keeps source = tested = base = github.sha.
+    def test_push_main_resolves_source_tested_and_base_to_same_commit(self):
+        self.git("checkout", "-q", self.B)
+        resolved = self.resolve(event_name="push", tested=self.B, source=self.B)
+        self.assertEqual(self.B, resolved["source_head_sha"])
+        self.assertEqual(self.B, resolved["tested_git_sha"])
+        self.assertEqual(self.B, resolved["base_main_sha"])
+        self.assertEqual("same_commit", resolved["git_relationship"])
+        self.assertEqual("push_same_commit", resolved["base_resolution"])
+
+    def test_push_never_invents_a_parent_as_base(self):
+        self.git("checkout", "-q", self.B)
+        resolved = self.resolve(event_name="push", tested=self.B, source=self.B)
+        self.assertNotEqual(self.A, resolved["base_main_sha"])
+
+    def test_push_with_foreign_source_head_fails_closed(self):
+        self.git("checkout", "-q", self.B)
+        self.assert_reason(
+            "PUSH_SOURCE_TESTED_MISMATCH",
+            lambda: self.resolve(event_name="push", tested=self.B, source=self.H),
+        )
+
+    # D. malformed tested commit: not a merge, or parents unavailable.
+    def test_non_merge_tested_commit_fails_closed(self):
+        self.git("checkout", "-q", self.H)
+        failure = self.assert_reason(
+            "TESTED_COMMIT_NOT_MERGE",
+            lambda: self.resolve(tested=self.H, source=self.A),
+        )
+        self.assertEqual(1, failure.details["parent_count"])
+
+    def test_merge_with_unavailable_parents_fails_closed(self):
+        self.git("branch", "-q", "tested-merge", self.M)
+        shallow = self.root / "shallow-1"
+        self.git(
+            "clone", "-q", "--depth", "1", "--branch", "tested-merge",
+            self.repo.as_uri(), str(shallow), cwd=self.root,
+        )
+        self.assertEqual(self.M, self.git("rev-parse", "HEAD", cwd=shallow))
+        self.assert_reason(
+            "TESTED_MERGE_PARENT_UNAVAILABLE",
+            lambda: self.resolve(repo=shallow),
+        )
+
+    def test_fetch_depth_two_is_sufficient_to_prove_tested_merge_parents(self):
+        self.git("branch", "-q", "tested-merge", self.M)
+        shallow = self.root / "shallow-2"
+        self.git(
+            "clone", "-q", "--depth", "2", "--branch", "tested-merge",
+            self.repo.as_uri(), str(shallow), cwd=self.root,
+        )
+        resolved = self.resolve(repo=shallow, event_base=self.A)
+        self.assertEqual(self.B, resolved["base_main_sha"])
+        self.assertEqual(self.H, resolved["source_head_sha"])
+
+    def test_tested_commit_absent_from_checkout_fails_closed(self):
+        self.assert_reason(
+            "TESTED_SHA_CHECKOUT_MISMATCH",
+            lambda: self.resolve(tested="f" * 40),
+        )
+
+    def test_tested_commit_differs_from_checkout_fails_closed(self):
+        self.git("checkout", "-q", self.B)
+        self.assert_reason(
+            "TESTED_SHA_CHECKOUT_MISMATCH",
+            lambda: self.resolve(),
+        )
+
+    # E. declared source must be the second parent of the tested merge.
+    def test_source_head_not_second_parent_of_tested_merge_fails_closed(self):
+        failure = self.assert_reason(
+            "TESTED_MERGE_SOURCE_MISMATCH",
+            lambda: self.resolve(source=self.A),
+        )
+        self.assertEqual(self.H, failure.details["tested_merge_second_parent"])
+
+    def test_source_head_equal_to_tested_base_fails_closed(self):
+        self.assert_reason(
+            "TESTED_MERGE_SOURCE_MISMATCH",
+            lambda: self.resolve(source=self.B),
+        )
+
+    def test_pull_request_with_source_equal_to_tested_fails_closed(self):
+        self.assert_reason(
+            "PULL_REQUEST_SOURCE_IS_TESTED",
+            lambda: self.resolve(tested=self.M, source=self.M),
+        )
+
+    def test_unsupported_event_fails_closed(self):
+        self.assert_reason(
+            "EVENT_NAME_UNSUPPORTED",
+            lambda: self.resolve(event_name="workflow_dispatch"),
+        )
+
+    def test_malformed_inputs_fail_closed(self):
+        self.assert_reason("TESTED_GIT_SHA_MALFORMED", lambda: self.resolve(tested="HEAD"))
+        self.assert_reason("SOURCE_HEAD_SHA_MALFORMED", lambda: self.resolve(source="refs/pull/1/head"))
+        self.assert_reason(
+            "EVENT_PULL_REQUEST_BASE_SHA_MALFORMED",
+            lambda: self.resolve(event_base="main"),
+        )
+
+    # REL-000 itself enforces the same topology on its declared trace.
+    def test_rel000_traceability_rejects_stale_event_base_as_base_main_sha(self):
+        failure = self.assert_reason(
+            "TESTED_MERGE_BASE_MISMATCH",
+            lambda: rel000.validate_traceability(
+                self.repo, self.H, self.M, self.A, "source_head_is_ancestor_of_tested_commit"
+            ),
+        )
+        self.assertEqual(self.B, failure.details["tested_merge_first_parent"])
+        self.assertEqual(self.A, failure.details["declared_base_main_sha"])
+
+    def test_rel000_traceability_accepts_tested_merge_first_parent(self):
+        trace = rel000.validate_traceability(
+            self.repo, self.H, self.M, self.B, "source_head_is_ancestor_of_tested_commit"
+        )
+        self.assertEqual(
+            {
+                "source_head_sha": self.H,
+                "tested_git_sha": self.M,
+                "base_main_sha": self.B,
+                "git_relationship": "source_head_is_ancestor_of_tested_commit",
+            },
+            trace,
+        )
+
+    def test_rel000_traceability_preserves_push_semantics(self):
+        self.git("checkout", "-q", self.B)
+        trace = rel000.validate_traceability(self.repo, self.B, self.B, self.B, "same_commit")
+        self.assertEqual(self.B, trace["base_main_sha"])
+        self.assertEqual("same_commit", trace["git_relationship"])
+
+    def test_resolver_command_exports_only_resolved_values_to_github_env(self):
+        github_env = self.root / "github.env"
+        github_env.write_text("EXISTING=1\n", encoding="utf-8")
+        output = self.root / "resolved.json"
+        args = argparse.Namespace(
+            repository_root=self.repo,
+            event_name="pull_request",
+            tested_git_sha=self.M,
+            source_head_sha=self.H,
+            event_pull_request_base_sha=self.A,
+            output=output,
+            github_env=github_env,
+        )
+        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+            resolved = rel000.resolve_tested_provenance_command(args)
+        self.assertEqual(self.B, resolved["base_main_sha"])
+        self.assertEqual(
+            [
+                "EXISTING=1",
+                f"REL000_SOURCE_HEAD_SHA={self.H}",
+                f"REL000_TESTED_GIT_SHA={self.M}",
+                f"REL000_BASE_MAIN_SHA={self.B}",
+                "REL000_GIT_RELATIONSHIP=source_head_is_ancestor_of_tested_commit",
+            ],
+            github_env.read_text(encoding="utf-8").splitlines(),
+        )
+        self.assertNotIn(self.A, github_env.read_text(encoding="utf-8"))
+        self.assertEqual(resolved, json.loads(output.read_text(encoding="utf-8")))
+        self.assertEqual(resolved, json.loads(stdout.getvalue()))
+
+    # H. security remediation validates against the tested base, never the event base.
+    def remediation_policy(self, authorized_base_sha: str) -> Path:
+        policy = json.loads(
+            (REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for authorization in policy["active_remediations"]:
+            if authorization["id"] == rel000.NEXT_CRITICAL_REMEDIATION_ID:
+                authorization["authorized_base_sha"] = authorized_base_sha
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(policy), encoding="utf-8")
+        return path
+
+    def test_security_remediation_authorizes_tested_base_despite_stale_event_base(self):
+        resolved = self.resolve(event_base=self.A)
+        policy = rel000.load_remediation_policy(self.remediation_policy(self.B))
+        authorization = rel000.validate_mode_authorization(
+            rel000.SECURITY_REMEDIATION,
+            policy,
+            "fix/security-2026-09-next-critical",
+            resolved["base_main_sha"],
+            rel000.NEXT_CRITICAL_REMEDIATION_ID,
+        )
+        self.assertEqual(self.B, authorization["authorized_base_sha"])
+
+    def test_security_remediation_rejects_policy_pinned_to_stale_event_base(self):
+        resolved = self.resolve(event_base=self.A)
+        policy = rel000.load_remediation_policy(self.remediation_policy(self.A))
+        failure = self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                "fix/security-2026-09-next-critical",
+                resolved["base_main_sha"],
+                rel000.NEXT_CRITICAL_REMEDIATION_ID,
+            ),
+        )
+        self.assertEqual(self.A, failure.details["expected"])
+        self.assertEqual(self.B, failure.details["actual"])
+
+
+class ProducerBaseProvenanceTests(unittest.TestCase):
+    """Producers and REL-000 must share one authoritative tested base (issue #52)."""
+
+    STALE_BASE = "a" * 40
+    TESTED_BASE = "b" * 40
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-producer-base-")
+        self.root = Path(self.temp.name)
+        self.fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/partial-rerun-provenance.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.run_id = self.fixture["workflow_run_id"]
+        self.source = self.fixture["head_sha"]
+        self.tested = "c" * 40
+        self.trace = {
+            "source_head_sha": self.source,
+            "tested_git_sha": self.tested,
+            "base_main_sha": self.TESTED_BASE,
+        }
+        self.executions = self.root / "executions"
+        self.executions.mkdir()
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def workflow_provenance(self, *, partial: bool = False) -> Path:
+        payload = copy.deepcopy(self.fixture)
+        if not partial:
+            payload["current_attempt"] = 1
+            payload["jobs"] = [job for job in payload["jobs"] if job["run_attempt"] == 1]
+            for job in payload["jobs"]:
+                job["status"] = "completed"
+                job["conclusion"] = "success"
+            jobs = {job["job_key"]: job for job in payload["jobs"]}
+            for artifact in payload["artifacts"]:
+                artifact["producer_attempt"] = 1
+                artifact["producer_job_id"] = jobs[artifact["job_key"]]["job_id"]
+        path = self.root / "workflow-provenance.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def producer_attempts(self, *, partial: bool) -> dict[str, int]:
+        if not partial:
+            return {job: 1 for job in rel000.EXECUTION_EVIDENCE_JOBS}
+        return {
+            artifact["job_key"]: artifact["producer_attempt"]
+            for artifact in self.fixture["artifacts"]
+        }
+
+    def write_manifest(self, job: str, base_main_sha: str, attempt: int) -> None:
+        directory = self.executions / rel000.EXECUTION_ARTIFACT_NAMES[job]
+        directory.mkdir(parents=True)
+        result_file = directory / "results.json"
+        result_file.write_text(json.dumps({"job": job}), encoding="utf-8")
+        digest = rel000.sha256_file(result_file)
+        files = [{"path": "results.json", "bytes": result_file.stat().st_size, "sha256": digest}]
+        manifest = {
+            "format_version": rel000.EXECUTION_EVIDENCE_VERSION,
+            "artifact_name": rel000.EXECUTION_ARTIFACT_NAMES[job],
+            "job": job,
+            "workflow_run_id": self.run_id,
+            "workflow_run_attempt": str(attempt),
+            "source_head_sha": self.source,
+            "tested_git_sha": self.tested,
+            "base_main_sha": base_main_sha,
+            "result_files": files,
+            "content_digest": rel000.canonical_content_digest(files),
+            "tests": [
+                {
+                    "job": job,
+                    "test_project": "tests/example.csproj",
+                    "fully_qualified_test_name": f"{job}.required",
+                    "category": "Example",
+                    "outcome": "PASSED",
+                    "executed": True,
+                    "skipped": False,
+                    "duration": "00:00:00.100",
+                    "trx_or_result_digest": digest,
+                }
+            ],
+        }
+        rel000.write_json(directory / "rel000-execution-results.json", manifest)
+
+    def load(self, bases: dict[str, str], *, partial: bool = False, attempt: int | None = None):
+        attempts = self.producer_attempts(partial=partial)
+        for job, base in bases.items():
+            self.write_manifest(job, base, attempts[job])
+        return rel000.load_execution_evidence(
+            self.executions,
+            self.workflow_provenance(partial=partial),
+            self.trace,
+            self.run_id,
+            attempt if attempt is not None else (2 if partial else 1),
+        )
+
+    def test_all_producers_sharing_tested_base_pass(self):
+        tests, artifacts, report = self.load(
+            {job: self.TESTED_BASE for job in rel000.EXECUTION_EVIDENCE_JOBS}
+        )
+        self.assertEqual(set(rel000.EXECUTION_EVIDENCE_JOBS), set(artifacts))
+        self.assertEqual(
+            {self.TESTED_BASE}, {artifact["base_main_sha"] for artifact in artifacts.values()}
+        )
+        self.assertEqual({self.TESTED_BASE}, {result["base_main_sha"] for result in tests})
+        self.assertFalse(report["mixed_attempt_evidence"])
+
+    # F. one producer carrying the stale event base is rejected.
+    def test_producer_artifact_with_stale_base_is_rejected(self):
+        bases = {job: self.TESTED_BASE for job in rel000.EXECUTION_EVIDENCE_JOBS}
+        bases["dotnet"] = self.STALE_BASE
+        failure = self.assert_reason("EXECUTION_RESULT_SHA_MISMATCH", lambda: self.load(bases))
+        self.assertEqual("base_main_sha", failure.details["field"])
+
+    # G. mixed producer bases are rejected even when every SHA is individually valid.
+    def test_mixed_producer_bases_are_rejected(self):
+        bases = {}
+        for index, job in enumerate(sorted(rel000.EXECUTION_EVIDENCE_JOBS)):
+            bases[job] = self.STALE_BASE if index % 2 else self.TESTED_BASE
+        self.assertEqual(2, len(set(bases.values())))
+        self.assert_reason("EXECUTION_RESULT_SHA_MISMATCH", lambda: self.load(bases))
+
+    def test_all_producers_agreeing_on_stale_base_are_rejected_by_rel000(self):
+        self.assert_reason(
+            "EXECUTION_RESULT_SHA_MISMATCH",
+            lambda: self.load({job: self.STALE_BASE for job in rel000.EXECUTION_EVIDENCE_JOBS}),
+        )
+
+    # I. partial rerun: same run ID never legitimizes a stale-base artifact.
+    def test_partial_rerun_keeps_latest_producer_semantics_with_tested_base(self):
+        tests, artifacts, report = self.load(
+            {job: self.TESTED_BASE for job in rel000.EXECUTION_EVIDENCE_JOBS}, partial=True
+        )
+        self.assertTrue(report["mixed_attempt_evidence"])
+        self.assertEqual(2, artifacts["realtime-e2e"]["producer_attempt"])
+        self.assertEqual(
+            {self.TESTED_BASE}, {artifact["base_main_sha"] for artifact in artifacts.values()}
+        )
+
+    def test_partial_rerun_same_run_id_does_not_accept_stale_base_artifact(self):
+        bases = {job: self.TESTED_BASE for job in rel000.EXECUTION_EVIDENCE_JOBS}
+        bases["realtime-e2e"] = self.STALE_BASE
+        self.assert_reason("EXECUTION_RESULT_SHA_MISMATCH", lambda: self.load(bases, partial=True))
+
+    # J. full rerun: attempt-one artifacts stay rejected regardless of base.
+    def test_full_rerun_rejects_attempt_one_artifact_even_with_tested_base(self):
+        bases = {job: self.TESTED_BASE for job in rel000.EXECUTION_EVIDENCE_JOBS}
+        self.assert_reason(
+            "WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_MISMATCH",
+            lambda: self.load(bases, attempt=2),
+        )
+
+    def test_ops_artifact_provenance_with_stale_base_is_rejected(self):
+        directory = self.root / "ops001"
+        directory.mkdir()
+        (directory / "report.json").write_text("{}", encoding="utf-8")
+        rel000.create_provenance(
+            directory,
+            "delivery-simulation-results",
+            self.run_id,
+            "1",
+            self.source,
+            self.tested,
+            self.STALE_BASE,
+            "source_head_is_ancestor_of_tested_commit",
+        )
+        failure = self.assert_reason(
+            "ARTIFACT_SHA_MISMATCH",
+            lambda: rel000.validate_artifact(
+                directory,
+                "delivery-simulation-results",
+                "1",
+                "d" * 64,
+                {**self.trace, "git_relationship": "source_head_is_ancestor_of_tested_commit"},
+                self.run_id,
+                "1",
+                lambda path: path.endswith(".json"),
+            ),
+        )
+        self.assertEqual("base_main_sha", failure.details["field"])
+
+
+class TestedBaseWorkflowGuardTests(unittest.TestCase):
+    """Physical guards: Foundation never lets the event base SHA become base_main_sha."""
+
+    PROVENANCE_JOBS = sorted(rel000.EXECUTION_EVIDENCE_JOBS | {"rel000"})
+    RESOLVE_STEP = "Resolve tested provenance"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.path = REPOSITORY_ROOT / ".github/workflows/ci.yml"
+        cls.text = cls.path.read_text(encoding="utf-8")
+        import yaml
+
+        cls.workflow = yaml.safe_load(cls.text)
+
+    def evidence_steps(self, job_key: str) -> list[dict[str, Any]]:
+        return [
+            step
+            for step in self.workflow["jobs"][job_key]["steps"]
+            if "rel000.py collect-results" in str(step.get("run", ""))
+            or "rel000.py provenance" in str(step.get("run", ""))
+        ]
+
+    def test_event_pull_request_base_sha_is_never_an_authoritative_base(self):
+        for line_number, line in enumerate(self.text.splitlines(), start=1):
+            if "pull_request.base.sha" not in line:
+                continue
+            self.assertIn("--event-pull-request-base-sha", line, f"ci.yml:{line_number}")
+            self.assertNotIn("base-main-sha", line, f"ci.yml:{line_number}")
+            self.assertNotIn("BASE_MAIN_SHA", line, f"ci.yml:{line_number}")
+            self.assertNotIn("||", line, f"ci.yml:{line_number}")
+        self.assertNotIn('--base-main-sha "${{', self.text)
+        self.assertNotIn("REL000_BASE_MAIN_SHA:", self.text)
+        self.assertNotIn("REL000_GIT_RELATIONSHIP:", self.text)
+        for job in self.workflow["jobs"].values():
+            for name in (
+                "REL000_BASE_MAIN_SHA",
+                "REL000_SOURCE_HEAD_SHA",
+                "REL000_TESTED_GIT_SHA",
+                "REL000_GIT_RELATIONSHIP",
+            ):
+                self.assertNotIn(name, job.get("env", {}))
+
+    def test_every_evidence_producer_and_rel000_resolve_tested_provenance_first(self):
+        for job_key in self.PROVENANCE_JOBS:
+            steps = self.workflow["jobs"][job_key]["steps"]
+            checkout, resolve = steps[0], steps[1]
+            self.assertEqual("actions/checkout@v5", checkout["uses"], job_key)
+            self.assertIn(checkout.get("with", {}).get("fetch-depth"), {0, 2}, job_key)
+            self.assertEqual(self.RESOLVE_STEP, resolve.get("name"), job_key)
+            run = resolve["run"]
+            self.assertIn("python ./tools/rel-000/rel000.py resolve-tested-provenance", run)
+            self.assertIn('--event-name "${{ github.event_name }}"', run)
+            self.assertIn('--tested-git-sha "${{ github.sha }}"', run)
+            self.assertIn(
+                '--source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"', run
+            )
+            self.assertIn(
+                '--event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"', run
+            )
+            self.assertIn('--github-env "$GITHUB_ENV"', run)
+            self.assertNotIn("base-main-sha", run)
+            self.assertNotIn("if", resolve)
+            self.assertEqual(
+                1, sum(step.get("name") == self.RESOLVE_STEP for step in steps), job_key
+            )
+
+    def test_every_structured_evidence_uses_resolved_provenance(self):
+        for job_key in sorted(rel000.EXECUTION_EVIDENCE_JOBS):
+            evidence = self.evidence_steps(job_key)
+            self.assertTrue(evidence, job_key)
+            for step in evidence:
+                run = step["run"]
+                self.assertIn('--source-head-sha "$REL000_SOURCE_HEAD_SHA"', run, job_key)
+                self.assertIn('--tested-git-sha "$REL000_TESTED_GIT_SHA"', run, job_key)
+                self.assertIn('--base-main-sha "$REL000_BASE_MAIN_SHA"', run, job_key)
+                if "rel000.py provenance" in run:
+                    self.assertIn('--git-relationship "$REL000_GIT_RELATIONSHIP"', run, job_key)
+                self.assertNotIn("github.sha", run, job_key)
+                self.assertNotIn("pull_request", run, job_key)
+        rel000_steps = self.workflow["jobs"]["rel000"]["steps"]
+        provenance_capture = next(
+            step
+            for step in rel000_steps
+            if step.get("name") == "Capture and sanitize workflow provenance"
+        )
+        self.assertIn('--head-sha "$REL000_SOURCE_HEAD_SHA"', provenance_capture["run"])
+        audits = next(
+            step
+            for step in rel000_steps
+            if step.get("name") == "Capture and sanitize real base and branch audits"
+        )
+        self.assertIn('git archive "$REL000_BASE_MAIN_SHA"', audits["run"])
+        validation = next(
+            step
+            for step in rel000_steps
+            if step.get("name") == "Validate and generate redacted REL-000 evidence"
+        )
+        self.assertNotIn("REL000_BASE_MAIN_SHA", validation.get("env", {}))
+
+    def test_jobs_without_structured_evidence_do_not_resolve_provenance(self):
+        for job_key in ("normative", "web"):
+            names = [step.get("name") for step in self.workflow["jobs"][job_key]["steps"]]
+            self.assertNotIn(self.RESOLVE_STEP, names, job_key)
+        self.assertEqual(13, len(self.workflow["jobs"]))
+        self.assertEqual(
+            len(self.PROVENANCE_JOBS),
+            self.text.count(f"- name: {self.RESOLVE_STEP}"),
+        )
 
 
 if __name__ == "__main__":
