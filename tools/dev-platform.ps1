@@ -7,7 +7,7 @@ param(
     [ValidateSet("All", "Api", "Worker", "Web")]
     [string] $Component = "All",
 
-    [ValidateSet("FreshOrder", "ExternalOffer")]
+    [ValidateSet("FreshOrder", "ExternalOffer", "ManualRoute")]
     [string] $Name = "FreshOrder",
 
     [int] $TimeoutSeconds = 240,
@@ -321,6 +321,7 @@ function Set-HostConfiguration([string] $Kind) {
     $env:PublicTracking__Provider = "PostgreSql"
     $env:Drivers__Provider = "PostgreSql"
     $env:Dispatch__Provider = "PostgreSql"
+    $env:Routing__Provider = "PostgreSql"
     $env:OperationsDashboard__Provider = "PostgreSql"
     $env:Realtime__Provider = "SignalR"
     $env:Realtime__Backplane = "InProcess"
@@ -735,6 +736,133 @@ function Invoke-ExternalOffer {
     } | ConvertTo-Json
 }
 
+function Invoke-ManualRoute {
+    Wait-Http "$apiUrl/health/ready" "API ready"
+    $nonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $alias = "manual-route-$nonce"
+    $orders = @()
+    foreach ($suffix in @("a", "b", "c")) {
+        $orderAlias = "$alias-$suffix"
+        $order = New-SeedOrder $orderAlias
+        $order = Move-SeedOrder $order $orderAlias "CONFIRMED" 1
+        $order = Move-SeedOrder $order $orderAlias "READY_FOR_PICKUP" 2
+        Assign-SeedOrder $order $orderAlias
+        $orders += $order
+    }
+
+    $route = Invoke-ManualRouteRequest "create-route" "Post" "/api/v1/routes" "local-$alias-create-v1" @{
+        driver_id = "55555555-5555-5555-5555-555555555551"
+        city_id = "44444444-4444-4444-4444-444444444441"
+        service_area_id = $null
+        scheduled_for = [DateOnly]::FromDateTime([DateTime]::UtcNow.AddDays(1)).ToString("yyyy-MM-dd")
+    }
+    foreach ($index in 0..2) {
+        $route = Invoke-ManualRouteRequest "add-stop[$index]" "Post" "/api/v1/routes/$($route.id)/stops" "local-$alias-add-$index-v1" @{
+            order_id = $orders[$index].id
+            expected_version = $route.version
+        }
+    }
+    if ($route.stops.Count -ne 3 -or $route.assignment_cost_cents_total -ne 3000) {
+        throw "ManualRoute did not create three OWN stops with the expected 3000-cent cost."
+    }
+
+    $reversedStopIds = @($route.stops | Sort-Object sequence -Descending | ForEach-Object { $_.id })
+    $route = Invoke-ManualRouteRequest "reorder" "Put" "/api/v1/routes/$($route.id)/stops/order" "local-$alias-reorder-v1" @{
+        expected_version=$route.version
+        stop_ids=$reversedStopIds
+    }
+    if ((@($route.stops | Sort-Object sequence | ForEach-Object { $_.id }) -join ',') -ne ($reversedStopIds -join ',')) {
+        throw "ManualRoute reorder did not persist the requested contiguous sequence."
+    }
+
+    $removedStopId = $route.stops[1].id
+    $route = Invoke-ManualRouteRequest "remove" "Delete" "/api/v1/routes/$($route.id)/stops/$removedStopId`?expected_version=$($route.version)" "local-$alias-remove-v1"
+    if ($route.stops.Count -ne 2 -or $route.assignment_cost_cents_total -ne 2000 -or
+        (@($route.stops | Sort-Object sequence | ForEach-Object { $_.sequence }) -join ',') -ne '1,2') {
+        throw "ManualRoute remove did not compact stops or preserve the expected 2000-cent cost."
+    }
+
+    $detail = Invoke-RestMethod -Method Get -Uri "$apiUrl/api/v1/routes/$($route.id)" -Headers @{
+        Authorization = "Bearer local-dispatcher-mfa"
+        "X-Organization-Id" = $organizationId
+    }
+    if ($detail.version -ne $route.version -or $detail.stops.Count -ne 2) {
+        throw "ManualRoute authoritative REST recovery did not match the final mutation response."
+    }
+
+    $context = Get-EnvironmentContext
+    $database = Get-ApplicationDatabaseName $context
+    $query = "SELECT count(*)||':'||COALESCE(min(status),'none') FROM platform.outbox_events WHERE aggregate_type='Route' AND aggregate_id='$($route.id)' AND topic='routes.route-changed';"
+    $outbox = Invoke-DockerCompose -Context $context -Arguments @(
+        "exec", "-T", "postgres", "psql", "-U", $context.Environment["POSTGRES_USER"],
+        "-d", $database, "-Atc", $query) -CaptureOutput
+    if ($outbox.Output.Trim() -notmatch '^[1-9][0-9]*:(PENDING|CLAIMED|PROCESSED)$') {
+        throw "ManualRoute did not produce RouteChanged transactional outbox evidence."
+    }
+
+    [pscustomobject]@{
+        routeId = $route.id
+        version = $route.version
+        stopCount = $route.stops.Count
+        assignmentCostCentsTotal = $route.assignment_cost_cents_total
+        orderPublicIds = @($orders | ForEach-Object { $_.public_id })
+        routeChangedOutbox = $outbox.Output.Trim()
+        operationsUrl = "$webUrl/ops/routes?routeId=$($route.id)"
+    } | ConvertTo-Json -Depth 5
+}
+
+function Invoke-ManualRouteRequest(
+    [string] $Operation,
+    [ValidateSet("Post", "Put", "Delete")] [string] $Method,
+    [string] $Path,
+    [string] $IdempotencyKey,
+    $Body = $null
+) {
+    $headers = @{
+        Authorization = "Bearer local-dispatcher-mfa"
+        "X-Organization-Id" = $organizationId
+        "Idempotency-Key" = $IdempotencyKey
+    }
+    try {
+        $parameters = @{
+            Method = $Method
+            Uri = "$apiUrl$Path"
+            Headers = $headers
+        }
+        if ($null -ne $Body) {
+            $parameters.ContentType = "application/json"
+            $parameters.Body = $Body | ConvertTo-Json -Depth 10
+        }
+        return Invoke-RestMethod @parameters
+    }
+    catch {
+        $status = if ($null -ne $_.Exception.Response) {
+            [int]$_.Exception.Response.StatusCode
+        } else {
+            0
+        }
+        $problem = $null
+        if (-not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+            try { $problem = $_.ErrorDetails.Message | ConvertFrom-Json } catch { $problem = $null }
+        }
+        $code = if ($null -ne $problem -and $null -ne $problem.psobject.Properties["code"]) {
+            [string]$problem.code
+        } else {
+            "UNAVAILABLE"
+        }
+        $title = if ($null -ne $problem -and $null -ne $problem.psobject.Properties["title"]) {
+            [string]$problem.title
+        } else {
+            "UNAVAILABLE"
+        }
+        $code = ($code -replace '[^A-Za-z0-9_.-]', '?')
+        $title = ($title -replace '[^A-Za-z0-9 ._-]', '?')
+        if ($code.Length -gt 80) { $code = $code.Substring(0, 80) }
+        if ($title.Length -gt 120) { $title = $title.Substring(0, 120) }
+        throw "ManualRoute operation=$Operation status=$status code=$code title=$title"
+    }
+}
+
 function Invoke-ApiPost(
     [string] $Path,
     [string] $Credential,
@@ -924,6 +1052,8 @@ try {
         Scenario {
             if ($Name -eq "FreshOrder") { Invoke-FreshOrder }
             elseif ($Name -eq "ExternalOffer") { Invoke-ExternalOffer }
+            elseif ($Name -eq "ManualRoute") { Invoke-ManualRoute }
+            else { throw "Unknown scenario '$Name'. Expected FreshOrder, ExternalOffer or ManualRoute." }
         }
         Reset { Invoke-Reset }
         PrintAccess { Invoke-PrintAccess }

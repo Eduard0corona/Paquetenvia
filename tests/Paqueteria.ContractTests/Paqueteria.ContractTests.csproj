@@ -47,5 +47,9 @@
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Application\Reporting.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Routing\Routing.Application\Routing.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Routing\Routing.Domain\Routing.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Routing\Routing.Endpoints\Routing.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Routing\Routing.Infrastructure\Routing.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

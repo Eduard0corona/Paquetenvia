@@ -24,6 +24,7 @@ public sealed class RealtimeOutboxTests
     [InlineData(RealtimeOutboxTopics.OrderTimelineEventAdded)]
     [InlineData(RealtimeOutboxTopics.AssignmentChanged)]
     [InlineData(RealtimeOutboxTopics.ExternalOfferChanged)]
+    [InlineData(RealtimeOutboxTopics.RouteChanged)]
     [InlineData(RealtimeOutboxTopics.NotificationStatusChanged)]
     public void Business_topic_allowlist_is_exact(string topic)
     {
@@ -123,6 +124,39 @@ public sealed class RealtimeOutboxTests
         Assert.Equal([DriverId], parsed.AudienceDriverIds);
         Assert.Equal(12_345, envelope.Payload.CommissionCents);
         Assert.DoesNotContain("audience", JsonSerializer.Serialize(envelope), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Route_parser_maps_exact_non_PII_payload_and_version()
+    {
+        var routeId = Guid.Parse("00000000-0000-0000-0000-000000000810");
+        var stopIds = new[]
+        {
+            Guid.Parse("00000000-0000-0000-0000-000000000811"),
+            Guid.Parse("00000000-0000-0000-0000-000000000812"),
+        };
+        var parsed = Assert.IsType<ParsedRouteChanged>(
+            RealtimeOutboxParser.Parse(Business(
+                RealtimeOutboxTopics.RouteChanged,
+                JsonSerializer.Serialize(new
+                {
+                    schema_version = "route-changed-v1",
+                    route_id = routeId,
+                    route_version = 12,
+                    changed_stop_ids = stopIds,
+                    occurred_at = OccurredAt,
+                })) with
+                {
+                    AggregateType = "Route",
+                    AggregateId = routeId,
+                }));
+
+        var envelope = RealtimeOutboxEnvelopeFactory.Route(parsed);
+        Assert.Equal(routeId, envelope.Payload.RouteId);
+        Assert.Equal(12, envelope.Payload.RouteVersion);
+        Assert.Equal(stopIds, envelope.Payload.ChangedStopIds);
+        Assert.Equal(RealtimeEventTypes.RouteChanged, envelope.EventType);
+        Assert.DoesNotContain("driver", JsonSerializer.Serialize(envelope), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

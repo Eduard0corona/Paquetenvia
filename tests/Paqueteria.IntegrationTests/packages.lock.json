@@ -916,7 +916,9 @@
           "Realtime.Endpoints": "[1.0.0, )",
           "Realtime.Infrastructure": "[1.0.0, )",
           "Reporting.Endpoints": "[1.0.0, )",
-          "Reporting.Infrastructure": "[1.0.0, )"
+          "Reporting.Infrastructure": "[1.0.0, )",
+          "Routing.Endpoints": "[1.0.0, )",
+          "Routing.Infrastructure": "[1.0.0, )"
         }
       },
       "paqueteria.application": {
@@ -1046,6 +1048,40 @@
           "Paqueteria.Infrastructure": "[1.0.0, )",
           "Reporting.Application": "[1.0.0, )",
           "Reporting.Domain": "[1.0.0, )"
+        }
+      },
+      "routing.application": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Routing.Domain": "[1.0.0, )"
+        }
+      },
+      "routing.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "routing.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Routing.Application": "[1.0.0, )"
+        }
+      },
+      "routing.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Drivers.Application": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )",
+          "Routing.Application": "[1.0.0, )",
+          "Routing.Domain": "[1.0.0, )"
         }
       },
       "AWSSDK.S3": {

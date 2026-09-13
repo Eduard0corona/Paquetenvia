@@ -457,16 +457,16 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         Assert.Equal(body, await replay.Content.ReadAsStringAsync());
         using var json = JsonDocument.Parse(body);
         Assert.Equal(
-            ["cost", "driver_id", "id", "order_id", "status"],
+            ["cost", "driver_id", "id", "order_id", "route_id", "status"],
             json.RootElement.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
         Assert.Equal("ACCEPTED", json.RootElement.GetProperty("status").GetString());
         Assert.Equal("MXN", json.RootElement.GetProperty("cost").GetProperty("currency").GetString());
         Assert.Equal((long)int.MaxValue + 1,
             json.RootElement.GetProperty("cost").GetProperty("amount_cents").GetInt64());
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("route_id").ValueKind);
         Assert.Equal(before + 1, factory.Effects);
         Assert.DoesNotContain("owner", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("operator", body, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("route", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("accepted_at", body, StringComparison.OrdinalIgnoreCase);
     }
 

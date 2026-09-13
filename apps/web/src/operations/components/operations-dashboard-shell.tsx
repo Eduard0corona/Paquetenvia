@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
@@ -53,6 +54,7 @@ export function OperationsDashboardShell() {
           >
             Actualizar
           </button>
+          <Link className="opsPrimary" href="/ops/routes">Rutas manuales</Link>
         </div>
       </header>
 

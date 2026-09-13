@@ -56,6 +56,9 @@ internal sealed class RealtimeOutboxProcessor(
                     case ParsedExternalOfferChanged externalOffer:
                         await PublishExternalOfferAsync(externalOffer, timeout.Token);
                         break;
+                    case ParsedRouteChanged route:
+                        await PublishRouteAsync(route, timeout.Token);
+                        break;
                     case ParsedNotificationStatusChanged notification:
                         await PublishNotificationAsync(notification, timeout.Token);
                         break;
@@ -440,6 +443,46 @@ internal sealed class RealtimeOutboxProcessor(
         }
     }
 
+    private async Task PublishRouteAsync(
+        ParsedRouteChanged value,
+        CancellationToken cancellationToken)
+    {
+        var persisted = await evidence.ReadRouteAsync(
+            value.OwnerOrganizationId,
+            value.RouteId,
+            cancellationToken);
+        if (persisted is null ||
+            persisted.RouteId != value.RouteId ||
+            persisted.OwnerOrganizationId != value.OwnerOrganizationId ||
+            persisted.Version < value.AggregateVersion ||
+            UtcMicrosecondPrecision.Normalize(persisted.UpdatedAt) <
+                UtcMicrosecondPrecision.Normalize(value.OccurredAt))
+        {
+            throw new OutboxMessageException(RealtimeOutboxErrorCodes.InvalidAudienceEvidence);
+        }
+
+        const string lane = "business";
+        var eventType = RealtimeEventTypes.RouteChanged;
+        var message = RealtimeOutboxEnvelopeFactory.Route(value);
+        using (telemetry.MeasurePublish(lane, eventType))
+        {
+            await publisher.PublishOperationsRouteChangedAsync(
+                OperationsAudience.ForOrganization(value.OwnerOrganizationId),
+                message,
+                cancellationToken);
+        }
+        telemetry.AudienceDelivered(lane, eventType, "operations", "published");
+
+        using (telemetry.MeasurePublish(lane, eventType))
+        {
+            await publisher.PublishDriverRouteChangedAsync(
+                DriverAudience.ForDriver(persisted.DriverId),
+                message,
+                cancellationToken);
+        }
+        telemetry.AudienceDelivered(lane, eventType, "driver", "published");
+    }
+
     private static void ValidateOrderEvidence(
         OrderEventEvidence? persisted,
         Guid orderEventId,
@@ -588,6 +631,7 @@ internal sealed class RealtimeOutboxProcessor(
         ParsedOrderTimelineEventAdded => RealtimeEventTypes.OrderTimelineEventAdded,
         ParsedAssignmentChanged => RealtimeEventTypes.AssignmentChanged,
         ParsedExternalOfferChanged => RealtimeEventTypes.ExternalOfferChanged,
+        ParsedRouteChanged => RealtimeEventTypes.RouteChanged,
         ParsedNotificationStatusChanged => RealtimeEventTypes.NotificationStatusChanged,
         _ => throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic),
     };

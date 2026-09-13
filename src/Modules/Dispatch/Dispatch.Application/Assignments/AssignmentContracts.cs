@@ -26,7 +26,8 @@ public sealed record AssignmentResult(
     Guid OrderId,
     Guid DriverId,
     string Status,
-    MoneyResult Cost);
+    MoneyResult Cost,
+    Guid? RouteId = null);
 
 public interface IAssignmentService
 {

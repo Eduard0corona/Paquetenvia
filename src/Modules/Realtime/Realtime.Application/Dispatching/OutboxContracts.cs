@@ -8,12 +8,13 @@ public static class RealtimeOutboxTopics
     public const string OrderTimelineEventAdded = "orders.timeline-event-added";
     public const string AssignmentChanged = "dispatch.assignment-changed";
     public const string ExternalOfferChanged = "dispatch.external-offer-changed";
+    public const string RouteChanged = "routes.route-changed";
     public const string NotificationStatusChanged = "notifications.status-changed";
     public const string DriverLocationUpdated = "drivers.location-updated";
 
     public static bool IsBusinessTopic(string value) =>
         value is OrderStatusChanged or OrderTimelineEventAdded or AssignmentChanged or
-            ExternalOfferChanged or NotificationStatusChanged;
+            ExternalOfferChanged or RouteChanged or NotificationStatusChanged;
 
     public static bool IsLocationTopic(string value) => value == DriverLocationUpdated;
 }
@@ -136,6 +137,23 @@ public sealed record ParsedExternalOfferChanged(
     public IReadOnlyList<Guid> AudienceDriverIds { get; } = AudienceDriverIds.ToArray();
 }
 
+public sealed record ParsedRouteChanged(
+    Guid EventId,
+    Guid OwnerOrganizationId,
+    Guid RouteId,
+    long AggregateVersion,
+    DateTimeOffset OccurredAt,
+    IReadOnlyList<Guid> ChangedStopIds)
+    : ParsedBusinessOutboxEvent(
+        EventId,
+        OwnerOrganizationId,
+        RouteId,
+        AggregateVersion,
+        OccurredAt)
+{
+    public IReadOnlyList<Guid> ChangedStopIds { get; } = ChangedStopIds.ToArray();
+}
+
 public sealed record ParsedNotificationStatusChanged(
     Guid EventId,
     Guid OwnerOrganizationId,
@@ -210,6 +228,17 @@ public sealed record ExternalOfferEvidence(
     public IReadOnlyList<Guid> AuthorizedAudienceDriverIds { get; } = AuthorizedAudienceDriverIds.ToArray();
 }
 
+public sealed record RouteEvidence(
+    Guid RouteId,
+    Guid OwnerOrganizationId,
+    Guid DriverId,
+    int Version,
+    DateTimeOffset UpdatedAt,
+    IReadOnlyList<Guid> StopIds)
+{
+    public IReadOnlyList<Guid> StopIds { get; } = StopIds.ToArray();
+}
+
 public interface IRealtimeOutboxEvidenceReader
 {
     Task<OrderEventEvidence?> ReadOrderEventAsync(
@@ -238,6 +267,11 @@ public interface IRealtimeOutboxEvidenceReader
         Guid ownerOrganizationId,
         Guid offerId,
         IReadOnlyList<Guid> requestedAudienceDriverIds,
+        CancellationToken cancellationToken);
+
+    Task<RouteEvidence?> ReadRouteAsync(
+        Guid ownerOrganizationId,
+        Guid routeId,
         CancellationToken cancellationToken);
 }
 
@@ -376,6 +410,20 @@ public static class RealtimeOutboxEnvelopeFactory
                 value.Status,
                 value.CommissionCents,
                 value.ExpiresAt));
+
+    public static RealtimeEnvelope<RouteChangedPayload> Route(ParsedRouteChanged value) =>
+        new(
+            value.EventId,
+            RealtimeEventTypes.RouteChanged,
+            value.OccurredAt,
+            value.RouteId,
+            value.AggregateVersion,
+            null,
+            new(
+                value.RouteId,
+                value.AggregateVersion,
+                value.ChangedStopIds,
+                value.OccurredAt));
 
     public static RealtimeEnvelope<NotificationStatusChangedPayload> Notification(
         ParsedNotificationStatusChanged value) =>

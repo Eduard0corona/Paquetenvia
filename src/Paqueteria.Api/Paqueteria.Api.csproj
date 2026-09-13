@@ -32,5 +32,7 @@
     <ProjectReference Include="..\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Routing\Routing.Endpoints\Routing.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Routing\Routing.Infrastructure\Routing.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

@@ -171,6 +171,42 @@ public sealed class RealtimeHubIntegrationTests(
     }
 
     [Fact]
+    public async Task Route_change_reaches_operations_and_the_server_selected_driver_group()
+    {
+        await using var operations = CreateConnection(
+            "/hubs/operations",
+            MockIdentityProfiles.ActiveDispatcher,
+            RealtimeWebApplicationFactory.OrganizationA);
+        await using var driver = CreateConnection(
+            "/hubs/driver",
+            MockIdentityProfiles.ActiveDriver,
+            RealtimeWebApplicationFactory.OrganizationA);
+        var operationsReceived = NewCompletion<RealtimeEnvelope<RouteChangedPayload>>();
+        var driverReceived = NewCompletion<RealtimeEnvelope<RouteChangedPayload>>();
+        operations.On("RouteChanged", (RealtimeEnvelope<RouteChangedPayload> value) =>
+            operationsReceived.TrySetResult(value));
+        driver.On("RouteChanged", (RealtimeEnvelope<RouteChangedPayload> value) =>
+            driverReceived.TrySetResult(value));
+        await operations.StartAsync();
+        await driver.StartAsync();
+        await Task.Delay(50);
+
+        var message = RouteMessage();
+        await Publisher().PublishOperationsRouteChangedAsync(
+            OperationsAudience.ForOrganization(RealtimeWebApplicationFactory.OrganizationA),
+            message,
+            default);
+        await Publisher().PublishDriverRouteChangedAsync(
+            DriverAudience.ForDriver(RealtimeWebApplicationFactory.DriverA),
+            message,
+            default);
+
+        Assert.Equal(message.EventId, (await operationsReceived.Task.WaitAsync(TimeSpan.FromSeconds(3))).EventId);
+        Assert.Equal(message.EventId, (await driverReceived.Task.WaitAsync(TimeSpan.FromSeconds(3))).EventId);
+        Assert.Equal(message.Payload.ChangedStopIds, (await operationsReceived.Task).Payload.ChangedStopIds);
+    }
+
+    [Fact]
     public async Task Driver_rejects_missing_invalid_non_driver_suspended_and_cross_tenant_connections()
     {
         await AssertConnectionRejectedAsync(
@@ -507,6 +543,23 @@ public sealed class RealtimeHubIntegrationTests(
                 "OPEN",
                 12_345,
                 OccurredAt.AddHours(2)));
+
+    private static RealtimeEnvelope<RouteChangedPayload> RouteMessage()
+    {
+        var routeId = Guid.Parse("77777777-7777-7777-7777-777777777779");
+        return new(
+            Guid.NewGuid(),
+            RealtimeEventTypes.RouteChanged,
+            OccurredAt,
+            routeId,
+            4,
+            null,
+            new RouteChangedPayload(
+                routeId,
+                4,
+                [Guid.Parse("88888888-8888-8888-8888-888888888881")],
+                OccurredAt));
+    }
 
     private static PublicRealtimeEnvelope<PublicOrderStatusChangedPayload> PublicStatusMessage() =>
         new(

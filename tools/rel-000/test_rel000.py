@@ -3449,31 +3449,35 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
         self.assertEqual(expected, raised.exception.reason_code)
         return raised.exception
 
-    def test_k_ntf001_lockfiles_preserve_the_baseline_package_graph(self):
-        all_changed = subprocess.check_output(
-            ["git", "diff", "--name-only", self.baseline],
-            cwd=REPOSITORY_ROOT,
-            text=True,
-        ).splitlines()
+    def test_k_changed_lockfiles_preserve_the_baseline_package_graph(self):
+        all_changed = sorted(
+            {
+                path.replace("\\", "/")
+                for output in (
+                    rel000.run_git(
+                        REPOSITORY_ROOT, "diff", "--name-only", self.baseline
+                    ),
+                    rel000.run_git(
+                        REPOSITORY_ROOT,
+                        "ls-files",
+                        "--others",
+                        "--exclude-standard",
+                    ),
+                )
+                for path in output.splitlines()
+                if path.strip()
+            }
+        )
+        changed_lockfiles = sorted(
+            path for path in all_changed if Path(path).name == "packages.lock.json"
+        )
         lockfiles = rel000.validate_baseline_package_graph_lockfile_diff(
             REPOSITORY_ROOT,
             self.baseline,
             all_changed,
         )
-        self.assertEqual(
-            [
-                "src/Modules/Notifications/Notifications.Application/packages.lock.json",
-                "src/Modules/Notifications/Notifications.Domain/packages.lock.json",
-                "src/Modules/Notifications/Notifications.Infrastructure/packages.lock.json",
-                "src/Paqueteria.Worker/packages.lock.json",
-                "tests/Paqueteria.ArchitectureTests/packages.lock.json",
-                "tests/Paqueteria.ContractTests/packages.lock.json",
-                "tests/Paqueteria.IntegrationTests/packages.lock.json",
-                "tests/Paqueteria.UnitTests/packages.lock.json",
-                "tools/Paqueteria.DatabaseMigrator/packages.lock.json",
-            ],
-            lockfiles,
-        )
+        self.assertTrue(changed_lockfiles)
+        self.assertEqual(changed_lockfiles, lockfiles)
 
     def existing_lock_repo(self):
         root = Path(self.temp.name) / "repo"
