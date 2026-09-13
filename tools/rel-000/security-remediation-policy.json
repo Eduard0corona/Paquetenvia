@@ -193,6 +193,110 @@
         "pnpm_3_3_17_result": "ONE_HIGH_ADVISORY",
         "pnpm_3_3_18_result": "AUDIT_ZERO"
       }
+    },
+    {
+      "id": "SEC-2026-09-NEXT-CRITICAL",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "3a7950aca36c7b55bd9e6a0f351469471044b085",
+      "authorized_source_branch": "fix/security-2026-09-next-critical",
+      "tracked_issue": 48,
+      "tracked_issue_title": "SEC-2026-09: remediate Next.js critical advisories",
+      "issue_advisories": {
+        "48": [
+          "GHSA-p293-qw3h-jr36",
+          "GHSA-2xp9-vwfh-vxw4",
+          "GHSA-c83g-rgw3-j3cx",
+          "GHSA-73wf-gq98-2v4g",
+          "GHSA-rgj7-g3m4-5g8c",
+          "GHSA-2883-xcg3-v3hh",
+          "GHSA-82fw-gwwq-j7x9",
+          "GHSA-w5vr-8v7q-w6rv"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-p293-qw3h-jr36",
+        "GHSA-2xp9-vwfh-vxw4",
+        "GHSA-c83g-rgw3-j3cx",
+        "GHSA-73wf-gq98-2v4g",
+        "GHSA-rgj7-g3m4-5g8c",
+        "GHSA-2883-xcg3-v3hh",
+        "GHSA-82fw-gwwq-j7x9",
+        "GHSA-w5vr-8v7q-w6rv"
+      ],
+      "expected_base_totals": {
+        "total": 9,
+        "critical": 2,
+        "high": 4,
+        "moderate": 3,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 0,
+        "critical": 0,
+        "high": 0,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [
+        "next",
+        "eslint-config-next",
+        "vitest"
+      ],
+      "allowed_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "required_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        "apps/web/next-env.d.ts",
+        "apps/web/next.config.ts",
+        "tests/Paqueteria.IntegrationTests/Custody/CorsCapableS3Fixture.cs",
+        "tests/Paqueteria.IntegrationTests/Driver/DriverOfflineOperationsPwaPlaywrightTests.cs",
+        "tests/Paqueteria.IntegrationTests/Driver/DriverOfflineOperationsRealPipelineTests.cs",
+        "tests/Paqueteria.IntegrationTests/Driver/DriverStopsNextServer.cs",
+        "tests/Paqueteria.IntegrationTests/Driver/DriverStopsPwaPlaywrightTests.cs",
+        "tests/Paqueteria.IntegrationTests/Driver/LoopbackTlsTunnel.cs",
+        "tests/Paqueteria.IntegrationTests/Realtime/RealtimeKestrelWebApplicationFactory.cs",
+        "tests/Paqueteria.IntegrationTests/Tracking/PublicTrackingPwaPlaywrightTests.cs",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py",
+        "tools/security/sharp-runtime-smoke.mjs"
+      ],
+      "expected_direct_version_changes": {
+        "next": {"from": "16.2.11", "to": "16.3.3"},
+        "eslint-config-next": {"from": "16.2.11", "to": "16.3.3"},
+        "vitest": {"from": "4.1.10", "to": "4.1.11"}
+      },
+      "expected_cves": {
+        "GHSA-p293-qw3h-jr36": "CVE-2026-75604",
+        "GHSA-2xp9-vwfh-vxw4": null
+      },
+      "next_affected_range": ">=16.0.0 <16.3.3",
+      "next_first_patched_version": "16.3.3",
+      "allowed_overrides": {
+        "postcss": "8.5.23",
+        "brace-expansion@<1.1.18": "1.1.18",
+        "brace-expansion@>=4.0.0 <5.0.9": "5.0.9",
+        "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+        "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+        "browserslist@<=4.28.6": "4.28.7",
+        "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+        "next@16.3.3>sharp": "0.35.4"
+      },
+      "expected_lock_package_count": 475,
+      "expected_lockfile_sha256": "e9706ab2b331261306248a17bcf05e0b314219d82f5a8f60803de6e42df2c544",
+      "target_sharp_version": "0.35.4",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
     }
   ]
 }
