@@ -197,7 +197,7 @@
     {
       "id": "SEC-2026-09-NEXT-CRITICAL",
       "mode": "SECURITY_REMEDIATION",
-      "authorized_base_sha": "7c4ed021227b6fa906074c4e971522f563beec94",
+      "authorized_base_sha": "3a7950aca36c7b55bd9e6a0f351469471044b085",
       "authorized_source_branch": "fix/security-2026-09-next-critical",
       "tracked_issue": 48,
       "tracked_issue_title": "SEC-2026-09: remediate Next.js critical advisories",
