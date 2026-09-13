@@ -33,7 +33,15 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             available: false);
         var nextPort = DriverStopsNextServer.ReservePort();
         var nextOrigin = $"http://127.0.0.1:{nextPort}";
-        var proofSettings = storage.CreateProofStorageConfiguration();
+        // The deployable artifact requires an HTTPS API origin and HTTPS signed
+        // upload URLs. The API listens on loopback TLS; the storage container
+        // speaks plain HTTP, so browser uploads are presigned for a loopback
+        // TLS tunnel that relays them, byte for byte, to the real bucket.
+        await using var storageTls = LoopbackTlsTunnel.Start(
+            new Uri(storage.Endpoint),
+            RealtimeKestrelWebApplicationFactory.LoopbackCertificate);
+        var storageOrigin = storageTls.Origin.GetLeftPart(UriPartial.Authority);
+        var proofSettings = storage.CreateProofStorageConfiguration(storageOrigin);
         await using var api = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             new RealtimeAuthorizationRecorder(),
@@ -41,9 +49,10 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             allowedOrigin: nextOrigin,
             enableDispatch: true,
             enableDriverApiCors: true,
-            configurationOverrides: proofSettings);
+            configurationOverrides: proofSettings,
+            useHttps: true);
         var apiAddress = api.Start();
-        await using var web = await DriverStopsNextServer.StartAsync(
+        await using var web = await DriverStopsNextServer.StartProductionAsync(
             apiAddress.GetLeftPart(UriPartial.Authority),
             nextPort);
         await using var worker = BuildProofWorkerProvider(
@@ -62,7 +71,14 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             using var playwright = await Playwright.CreateAsync();
             await using var browser = await playwright.Chromium.LaunchAsync(
                 new BrowserTypeLaunchOptions { Headless = true });
-            await using var context = await browser.NewContextAsync();
+            await using var context = await browser.NewContextAsync(
+                new BrowserNewContextOptions
+                {
+                    // Scoped to this context only: the API and the storage
+                    // tunnel listen on loopback TLS with a certificate
+                    // generated for this test process.
+                    IgnoreHTTPSErrors = true,
+                });
             var page = await context.NewPageAsync();
             var requests = new ConcurrentQueue<BrowserRequestObservation>();
             var responses = new ConcurrentQueue<BrowserResponseObservation>();
@@ -98,6 +114,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                     page,
                     new Uri(apiAddress, "/health/live").AbsoluteUri,
                     new Uri(web.BaseAddress, "/not-a-driver-shell").AbsoluteUri,
+                    storageOrigin,
                     storage.Endpoint);
                 await page.GetByRole(
                         AriaRole.Button,
@@ -184,7 +201,6 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                 evidence.ClientCaptureTimes,
                 timestamp => Assert.Equal(TimeSpan.Zero, timestamp.Offset));
 
-            var storageOrigin = new Uri(storage.Endpoint).GetLeftPart(UriPartial.Authority);
             var apiOrigin = apiAddress.GetLeftPart(UriPartial.Authority);
             var successfulPreflights = responses
                 .Where(response =>
@@ -442,32 +458,49 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         throw new TimeoutException($"Expected {expected} queued proof blobs.");
     }
 
+    /// <summary>
+    /// Polls IndexedDB until an operation reaches the status. Playwright's
+    /// <c>WaitForFunctionAsync</c> treats a returned <c>Promise</c> as truthy
+    /// on its first evaluation, so asynchronous predicates must be re-run here.
+    /// </summary>
     private static async Task WaitForOperationStatusAsync(
         IPage page,
         string expectedStatus)
     {
-        await page.WaitForFunctionAsync(
-            """
-            expected => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
-              open.onerror = () => reject(open.error);
-              open.onsuccess = () => {
-                const db = open.result;
-                const request = db.transaction("operations", "readonly")
-                  .objectStore("operations").getAll();
-                request.onsuccess = () => {
-                  db.close();
-                  resolve(request.result.some(value => value.status === expected));
-                };
-                request.onerror = () => {
-                  db.close();
-                  reject(request.error);
-                };
-              };
-            })
-            """,
-            expectedStatus,
-            new PageWaitForFunctionOptions { Timeout = 30_000 });
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        do
+        {
+            var reached = await page.EvaluateAsync<bool>(
+                """
+                expected => new Promise((resolve, reject) => {
+                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+                  open.onerror = () => reject(open.error);
+                  open.onsuccess = () => {
+                    const db = open.result;
+                    const request = db.transaction("operations", "readonly")
+                      .objectStore("operations").getAll();
+                    request.onsuccess = () => {
+                      db.close();
+                      resolve(request.result.some(value => value.status === expected));
+                    };
+                    request.onerror = () => {
+                      db.close();
+                      reject(request.error);
+                    };
+                  };
+                })
+                """,
+                expectedStatus);
+            if (reached)
+            {
+                return;
+            }
+            await Task.Delay(100);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        throw new TimeoutException(
+            $"No queued driver operation reached {expectedStatus}.");
     }
 
     private static Task<int> ReadStoreCountAsync(IPage page, string store) =>

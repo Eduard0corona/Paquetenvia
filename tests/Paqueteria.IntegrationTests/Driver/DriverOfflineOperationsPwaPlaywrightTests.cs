@@ -4,12 +4,19 @@ using Microsoft.Playwright;
 
 namespace Paqueteria.IntegrationTests.Driver;
 
-[Collection(DriverOfflineOperationsPwaCollection.Name)]
+[Collection(DriverStopsPwaCollection.Name)]
 public sealed class DriverOfflineOperationsPwaPlaywrightTests(
-    DriverStopsDevNextServerFixture server)
+    DriverStopsNextServerFixture server)
 {
     private const string OrderId = "22222222-2222-4222-8222-222222222222";
     private const string OrganizationId = "11111111-1111-4111-8111-111111111111";
+
+    /// <summary>
+    /// Reserved synthetic signed-upload origin, fulfilled by Playwright before
+    /// any network access. The deployable artifact only accepts HTTPS signed
+    /// upload URLs, exactly as it does against real object storage.
+    /// </summary>
+    private const string SyntheticStorageOrigin = "https://storage.synthetic.test";
     private static readonly byte[] SyntheticPng =
         [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -495,7 +502,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             var shellContainsData = await page.EvaluateAsync<bool>(
                 """
                 async () => {
-                  const cache = await caches.open("paquetenvia-driver-shell-v3");
+                  const cache = await caches.open("paquetenvia-driver-shell-v5");
                   const response = await cache.match("/driver/stops");
                   const text = response ? await response.text() : "";
                   return text.includes("ORD_DRV002_ORG_A") ||
@@ -550,14 +557,16 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await page.ReloadAsync();
         await page.WaitForFunctionAsync(
             "() => navigator.serviceWorker.controller !== null");
-        await page.WaitForFunctionAsync(
+        await WaitForBrowserConditionAsync(
+            page,
             """
             async () => {
-              const cache = await caches.open("paquetenvia-driver-shell-v3");
+              const cache = await caches.open("paquetenvia-driver-shell-v5");
               return (await cache.keys()).some(
                 key => new URL(key.url).pathname.startsWith("/_next/static/"));
             }
-            """);
+            """,
+            "the driver shell cache does not hold static assets");
     }
 
     private static Task WaitForOperationCountAsync(IPage page, int count) =>
@@ -566,10 +575,11 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     private static Task WaitForProofCountAsync(IPage page, int count) =>
         WaitForStoreCountAsync(page, "proof_blobs", count);
 
-    private static async Task WaitForOperationStatusAsync(
+    private static Task WaitForOperationStatusAsync(
         IPage page,
         string status) =>
-        await page.WaitForFunctionAsync(
+        WaitForBrowserConditionAsync(
+            page,
             """
             status => new Promise((resolve, reject) => {
               const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
@@ -589,44 +599,93 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
               };
             })
             """,
+            $"no queued operation reached {status}",
             status);
+
+    /// <summary>
+    /// Polls an asynchronous browser predicate. Playwright's
+    /// <c>WaitForFunctionAsync</c> treats a returned <c>Promise</c> as a truthy
+    /// value on its first evaluation, so IndexedDB and Cache Storage checks
+    /// must be re-evaluated here until they resolve to <c>true</c>.
+    /// </summary>
+    private static async Task WaitForBrowserConditionAsync(
+        IPage page,
+        string predicate,
+        string failure,
+        object? argument = null)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            if (await page.EvaluateAsync<bool>(predicate, argument))
+            {
+                return;
+            }
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"Timed out: {failure}. Queue: {await ReadOperationsAsync(page)}");
+            }
+            await Task.Delay(100);
+        }
+    }
 
     private static async Task WaitForStoreCountAsync(
         IPage page,
         string storeName,
         int expected)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
         while (true)
         {
-            var actual = await page.EvaluateAsync<int>(
-                """
-                storeName => new Promise((resolve, reject) => {
-                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
-                  open.onerror = () => reject(open.error);
-                  open.onsuccess = () => {
-                    const database = open.result;
-                    const request = database.transaction(storeName, "readonly")
-                      .objectStore(storeName).count();
-                    request.onerror = () => {
-                      database.close();
-                      reject(request.error);
-                    };
-                    request.onsuccess = () => {
-                      database.close();
-                      resolve(request.result);
-                    };
-                  };
-                })
-                """,
-                storeName);
+            var actual = await ReadStoreCountAsync(page, storeName);
             if (actual == expected)
             {
                 return;
             }
-            await Task.Delay(100, timeout.Token);
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"Expected {expected} entries in {storeName} but found {actual}. " +
+                    $"Queue: {await ReadOperationsAsync(page)}");
+            }
+            await Task.Delay(100);
         }
     }
+
+    /// <summary>
+    /// Queue diagnostics without proof bytes, tokens or signed URLs.
+    /// </summary>
+    private static Task<string> ReadOperationsAsync(IPage page) =>
+        page.EvaluateAsync<string>(
+            """
+            () => new Promise((resolve, reject) => {
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const request = database.transaction("operations", "readonly")
+                  .objectStore("operations").getAll();
+                request.onerror = () => {
+                  database.close();
+                  reject(request.error);
+                };
+                request.onsuccess = () => {
+                  database.close();
+                  resolve(JSON.stringify(request.result.map(operation => ({
+                    kind: operation.kind,
+                    status: operation.status,
+                    safeError: operation.safeError,
+                    attemptCount: operation.attemptCount,
+                    expectedVersion: operation.expectedVersion,
+                    uploadAccepted: operation.uploadAccepted,
+                    hasSession: operation.uploadSessionId !== null,
+                    hasProof: operation.proofId !== null,
+                  }))));
+                };
+              };
+            })
+            """);
 
     private static async Task InstallSessionAsync(
         IPage page,
@@ -769,7 +828,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 "**/api/v1/orders/*/proof-upload-sessions",
                 RouteSessionAsync);
             await page.RouteAsync("**/api/v1/orders/*/proofs", RouteFinalizeAsync);
-            await page.RouteAsync("http://storage.synthetic.test/**", async route =>
+            await page.RouteAsync($"{SyntheticStorageOrigin}/**", async route =>
             {
                 bool abort;
                 lock (gate)
@@ -914,7 +973,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                     id = sessionId,
                     status = "CREATED",
                     upload_url =
-                        $"http://storage.synthetic.test/quarantine/{sessionId}?X-Amz-Signature=synthetic",
+                        $"{SyntheticStorageOrigin}/quarantine/{sessionId}?X-Amz-Signature=synthetic",
                     object_key = $"quarantine/private/{sessionId}",
                     expires_at = "2099-01-01T00:00:00.000Z",
                     required_headers = new Dictionary<string, string>

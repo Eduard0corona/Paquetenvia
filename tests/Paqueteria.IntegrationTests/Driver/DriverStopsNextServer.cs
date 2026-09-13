@@ -48,24 +48,32 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     }
 
     private static readonly SemaphoreSlim BuildGate = new(1, 1);
-    private static readonly HashSet<string> BuiltConfigurations = [];
 
     /// <summary>
-    /// Builds <c>.next</c> once per <c>NEXT_PUBLIC_API_BASE_URL</c>. That value
-    /// is inlined into the client bundle, so a build produced for a different
-    /// API origin is never reused.
+    /// Builds <c>.next</c> for the requested <c>NEXT_PUBLIC_API_BASE_URL</c>.
+    /// That value is inlined into the client bundle, so the artifact records
+    /// the origin it was built for and is rebuilt whenever a different origin
+    /// is requested, even by another test process sharing the checkout.
     /// </summary>
     private static async Task EnsureProductionBuildAsync(string web, string? apiBaseUrl)
     {
         var configuration = apiBaseUrl?.TrimEnd('/')
             ?? throw new InvalidOperationException(
                 "The production Next.js runtime requires an explicit API base URL.");
+        var marker = Path.Combine(web, ".next", "paquetenvia-test-api-origin");
         await BuildGate.WaitAsync();
         try
         {
-            if (!BuiltConfigurations.Add(configuration))
+            if (File.Exists(marker))
             {
-                return;
+                if (string.Equals(
+                        (await File.ReadAllTextAsync(marker)).Trim(),
+                        configuration,
+                        StringComparison.Ordinal))
+                {
+                    return;
+                }
+                File.Delete(marker);
             }
 
             var output = new StringBuilder();
@@ -101,7 +109,6 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
             };
             if (!build.Start())
             {
-                BuiltConfigurations.Remove(configuration);
                 throw new InvalidOperationException("next build did not start.");
             }
             build.BeginOutputReadLine();
@@ -112,19 +119,18 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
             }
             catch
             {
-                BuiltConfigurations.Remove(configuration);
                 TryTerminate(build);
                 throw;
             }
             if (build.ExitCode != 0)
             {
-                BuiltConfigurations.Remove(configuration);
                 string failure;
                 lock (output) failure = output.ToString();
                 throw new InvalidOperationException(
                     $"next build failed with exit code {build.ExitCode}." +
                     $"{Environment.NewLine}{failure}");
             }
+            await File.WriteAllTextAsync(marker, configuration);
         }
         finally
         {
@@ -405,35 +411,4 @@ public sealed class DriverStopsPwaCollection :
     ICollectionFixture<DriverStopsNextServerFixture>
 {
     public const string Name = "DriverStopsPwa";
-}
-
-/// <summary>
-/// Development-runtime server for suites that have not been migrated to the
-/// deployable artifact yet.
-/// </summary>
-public sealed class DriverStopsDevNextServerFixture : IAsyncLifetime
-{
-    private DriverStopsNextServer? _server;
-
-    internal Uri BaseAddress =>
-        _server?.BaseAddress
-        ?? throw new InvalidOperationException("Next.js is not running.");
-
-    public async Task InitializeAsync() =>
-        _server = await DriverStopsNextServer.StartAsync();
-
-    public async Task DisposeAsync()
-    {
-        if (_server is not null)
-        {
-            await _server.DisposeAsync();
-        }
-    }
-}
-
-[CollectionDefinition(Name, DisableParallelization = true)]
-public sealed class DriverOfflineOperationsPwaCollection :
-    ICollectionFixture<DriverStopsDevNextServerFixture>
-{
-    public const string Name = "DriverOfflineOperationsPwa";
 }

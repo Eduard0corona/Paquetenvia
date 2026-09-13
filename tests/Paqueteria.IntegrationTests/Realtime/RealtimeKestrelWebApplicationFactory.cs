@@ -74,10 +74,18 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     /// Self-signed loopback certificate created in memory for the current test
     /// process. It is never written to disk, never versioned and never added to
     /// a host trust store; only the Playwright browser context that talks to
-    /// this listener ignores its TLS error.
+    /// the loopback listeners using it ignores their TLS error.
     /// </summary>
     private static readonly Lazy<X509Certificate2> EphemeralLoopbackCertificate =
         new(CreateEphemeralLoopbackCertificate);
+
+    /// <summary>
+    /// The process-local loopback certificate, shared with other loopback TLS
+    /// listeners of the same test (for example the signed-upload tunnel) so a
+    /// single browser context exception covers every origin under test.
+    /// </summary>
+    internal static X509Certificate2 LoopbackCertificate =>
+        EphemeralLoopbackCertificate.Value;
 
     private static X509Certificate2 CreateEphemeralLoopbackCertificate()
     {
