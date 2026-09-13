@@ -54,6 +54,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -86,9 +97,9 @@ jobs:
           --artifact-name rel000-execution-dotnet
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "auto=./TestResults/dotnet/dotnet*.trx"
           --output ./TestResults/dotnet/rel000-execution-results.json
 
@@ -114,6 +125,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -163,9 +185,9 @@ jobs:
           --artifact-name rel000-execution-runtime-contracts
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj|PostgreSqlContract=./TestResults/runtime-contracts/runtime-contracts.trx"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|SecureProofUpload=./TestResults/runtime-contracts/secure-proof-runtime.trx"
           --output ./TestResults/runtime-contracts/rel000-execution-results.json
@@ -261,6 +283,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -315,9 +348,9 @@ jobs:
           --artifact-name rel000-execution-realtime-e2e
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --junit "apps/web/src/realtime/real-reconnect.e2e.ts=./TestResults/realtime-e2e/realtime-e2e.xml"
           --output ./TestResults/realtime-e2e/rel000-execution-results.json
 
@@ -343,6 +376,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -407,9 +451,9 @@ jobs:
           --artifact-name rel000-execution-outbox-signalr-delivery
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OutboxSignalRDelivery=./TestResults/outbox-signalr-delivery/outbox-signalr-delivery.trx"
           --output ./TestResults/outbox-signalr-delivery/rel000-execution-results.json
 
@@ -467,6 +511,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -543,9 +598,9 @@ jobs:
           --artifact-name rel000-execution-driver-stops-pwa
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverStopsPwa=./TestResults/driver-stops-pwa/driver-stops-pwa.trx"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverOfflineOperationsPwa=./TestResults/driver-stops-pwa/driver-offline-operations-pwa.trx"
           --output ./TestResults/driver-stops-pwa/rel000-execution-results.json
@@ -604,6 +659,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -704,9 +770,9 @@ jobs:
           --artifact-name rel000-execution-public-tracking
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|PublicTrackingPostgreSql=./TestResults/public-tracking/public-tracking-postgresql.trx"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|Uncategorized=./TestResults/public-tracking/public-tracking-lifetime.trx"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OutboxSignalRDelivery=./TestResults/public-tracking/public-tracking-outbox.trx"
@@ -767,6 +833,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -843,9 +920,9 @@ jobs:
           --artifact-name rel000-execution-operations-dashboard
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OperationsDashboardPostgreSql=./TestResults/operations-dashboard/operations-dashboard-postgresql.trx"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|OperationsDashboardPwa=./TestResults/operations-dashboard/operations-dashboard-pwa.trx"
           --output ./TestResults/operations-dashboard/rel000-execution-results.json
@@ -898,15 +975,20 @@ jobs:
       artifact-digest: ${{ steps.upload-delivery-simulation.outputs.artifact-digest }}
     env:
       CI: "true"
-      REL000_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      REL000_TESTED_GIT_SHA: ${{ github.sha }}
-      REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-      REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -1010,6 +1092,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -1086,9 +1179,9 @@ jobs:
           --artifact-name rel000-execution-infrastructure
           --workflow-run-id "${{ github.run_id }}"
           --workflow-run-attempt "${{ github.run_attempt }}"
-          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          --tested-git-sha "${{ github.sha }}"
-          --base-main-sha "${{ github.event.pull_request.base.sha || github.sha }}"
+          --source-head-sha "$REL000_SOURCE_HEAD_SHA"
+          --tested-git-sha "$REL000_TESTED_GIT_SHA"
+          --base-main-sha "$REL000_BASE_MAIN_SHA"
           --structured "tools/test-local-environment.ps1=./TestResults/infrastructure/infrastructure-smoke.json"
           --output ./TestResults/infrastructure/rel000-execution-results.json
 
@@ -1130,16 +1223,21 @@ jobs:
       OPS002_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       OPS002_TESTED_GIT_SHA: ${{ github.sha }}
       OPS002_PULL_REQUEST_EVENT: ${{ github.event_name == 'pull_request' }}
-      REL000_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      REL000_TESTED_GIT_SHA: ${{ github.sha }}
-      REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-      REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
     steps:
       - name: Check out clean repository
         uses: actions/checkout@v5
         with:
           clean: true
           fetch-depth: 0
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -1389,10 +1487,6 @@ jobs:
       issues: read
     env:
       CI: "true"
-      REL000_SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      REL000_TESTED_GIT_SHA: ${{ github.sha }}
-      REL000_BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-      REL000_GIT_RELATIONSHIP: ${{ github.event_name == 'pull_request' && 'source_head_is_ancestor_of_tested_commit' || 'same_commit' }}
       REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
       REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-09-next-critical' && 'SEC-2026-09-NEXT-CRITICAL' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
       REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
@@ -1413,6 +1507,15 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Resolve tested provenance
+        run: >-
+          python ./tools/rel-000/rel000.py resolve-tested-provenance
+          --event-name "${{ github.event_name }}"
+          --tested-git-sha "${{ github.sha }}"
+          --source-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          --event-pull-request-base-sha "${{ github.event.pull_request.base.sha }}"
+          --github-env "$GITHUB_ENV"
 
       - name: Verify every authoritative upstream job succeeded
         shell: pwsh
