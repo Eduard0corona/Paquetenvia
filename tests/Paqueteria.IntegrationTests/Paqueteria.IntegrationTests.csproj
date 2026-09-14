@@ -40,5 +40,6 @@
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Paqueteria.Api\Paqueteria.Api.csproj" />
+    <ProjectReference Include="..\..\tools\Paqueteria.SyntheticVerification\Paqueteria.SyntheticVerification.csproj" />
   </ItemGroup>
 </Project>

@@ -53,5 +53,6 @@
     <ProjectReference Include="..\..\src\Modules\Routing\Routing.Application\Routing.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Routing\Routing.Domain\Routing.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Routing\Routing.Infrastructure\Routing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\tools\Paqueteria.SyntheticVerification\Paqueteria.SyntheticVerification.csproj" />
   </ItemGroup>
 </Project>
