@@ -17,9 +17,15 @@ export const localProfiles = {
 
 export function isDevPortalEnabled(
   nodeEnvironment: string | undefined,
+  deploymentClass: string | undefined,
   explicitOptIn: string | undefined,
 ): boolean {
-  return nodeEnvironment === "development" && explicitOptIn === "true";
+  return (
+    explicitOptIn === "true" &&
+    (nodeEnvironment === "development" ||
+      (nodeEnvironment === "production" &&
+        deploymentClass === "DEV_SYNTHETIC"))
+  );
 }
 
 export function resolveLocalProfile(value: string) {

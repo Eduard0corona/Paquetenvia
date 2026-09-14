@@ -8,6 +8,7 @@ export default function DevelopmentPortalPage() {
   if (
     !isDevPortalEnabled(
       process.env.NODE_ENV,
+      process.env.PAQUETERIA_DEPLOYMENT_CLASS,
       process.env.PAQUETERIA_DEV_PORTAL_ENABLED,
     )
   ) {
