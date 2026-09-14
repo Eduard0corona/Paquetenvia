@@ -1,6 +1,7 @@
 using Custody.Application.ProofUploads;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using Paqueteria.Application.Security;
 
 namespace Custody.Infrastructure.ProofStorage;
 
@@ -14,7 +15,9 @@ public sealed class ProofStorageHealthCheck(
     {
         if (!storage.IsEnabled)
         {
-            return environment.IsDevelopment() || environment.IsEnvironment("Testing")
+            return environment.IsDevelopment() ||
+                   environment.IsEnvironment("Testing") ||
+                   SyntheticEnvironmentPolicy.IsDevSynthetic(environment.EnvironmentName)
                 ? HealthCheckResult.Healthy(
                     "Proof storage is intentionally disabled; proof operations fail closed.")
                 : HealthCheckResult.Unhealthy(

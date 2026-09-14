@@ -12,6 +12,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Tenancy;
@@ -34,10 +35,10 @@ public static class DependencyInjection
             .Validate(options => options.Provider != LocationsProviderKind.PostgreSql ||
                     !string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria")),
                 "Locations:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
-            .Validate(options => options.GeocodingProvider != GeocodingProviderKind.Mock || IsNonProduction(environment),
-                "The mock geocoding provider is allowed only in Development or Testing.")
-            .Validate(options => options.PiiProtector != LocationPiiProtectorKind.Mock || IsNonProduction(environment),
-                "The mock PII protector is allowed only in Development or Testing.")
+            .Validate(options => options.GeocodingProvider != GeocodingProviderKind.Mock || IsMockProviderAllowed(environment),
+                "The mock geocoding provider is allowed only in Development, Testing, or authorized DevSynthetic.")
+            .Validate(options => options.PiiProtector != LocationPiiProtectorKind.Mock || IsMockProviderAllowed(environment),
+                "The mock PII protector is DEV_SYNTHETIC_ONLY outside Development and Testing; it is not a Staging or Production pattern.")
             .Validate(options => options.Provider != LocationsProviderKind.PostgreSql ||
                     options.GeocodingProvider != GeocodingProviderKind.Disabled,
                 "PostgreSQL location creation requires a geocoding provider.")
@@ -116,8 +117,10 @@ public static class DependencyInjection
         return services;
     }
 
-    private static bool IsNonProduction(IHostEnvironment environment) =>
-        environment.IsDevelopment() || environment.IsEnvironment("Testing");
+    private static bool IsMockProviderAllowed(IHostEnvironment environment) =>
+        environment.IsDevelopment() ||
+        environment.IsEnvironment("Testing") ||
+        SyntheticEnvironmentPolicy.IsDevSynthetic(environment.EnvironmentName);
 }
 
 internal sealed class LocationsDataSource(NpgsqlDataSource value) : IAsyncDisposable
