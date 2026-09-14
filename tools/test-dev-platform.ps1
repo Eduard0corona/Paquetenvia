@@ -71,6 +71,7 @@ if ($csproj -match "PackageReference") {
     throw "DevSeed must remain ProjectReference-only."
 }
 Assert-Contains $portalPolicy 'nodeEnvironment === "development"'
+Assert-Contains $portalPolicy 'deploymentClass === "DEV_SYNTHETIC"'
 Assert-Contains $portalPolicy 'explicitOptIn === "true"'
 Assert-Contains $portalPage "notFound()"
 Assert-Contains $platform 'Authentication__Provider = "Mock"'
@@ -85,6 +86,8 @@ Assert-Contains $platform 'Stop-OwnedProcessRecord $record.supervisor'
 
 $oldEnvironment = $env:DOTNET_ENVIRONMENT
 $oldOptIn = $env:PAQUETERIA_LOCAL_DEV_SEED_ENABLED
+$oldDeploymentClass = $env:PAQUETERIA_DEPLOYMENT_CLASS
+$oldSyntheticSeedOptIn = $env:PAQUETERIA_SYNTHETIC_SEED_ENABLED
 try {
     $oldErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -98,11 +101,22 @@ try {
     $env:PAQUETERIA_LOCAL_DEV_SEED_ENABLED = "false"
     & $dotnet run --no-restore --project $seedProject -- status *> $null
     if ($LASTEXITCODE -eq 0) { throw "DevSeed accepted a missing explicit opt-in." }
+    $env:DOTNET_ENVIRONMENT = "DevSynthetic"
+    $env:PAQUETERIA_DEPLOYMENT_CLASS = "DEV_SYNTHETIC"
+    $env:PAQUETERIA_SYNTHETIC_SEED_ENABLED = "true"
+    foreach ($forbiddenCommand in @("bootstrap", "status")) {
+        & $dotnet run --no-restore --project $seedProject -- $forbiddenCommand *> $null
+        if ($LASTEXITCODE -eq 0) { throw "DevSeed accepted $forbiddenCommand in DevSynthetic." }
+    }
+    & $dotnet run --no-restore --project $seedProject -- tracking 77777777-7777-7777-7777-777777777777 *> $null
+    if ($LASTEXITCODE -eq 0) { throw "DevSeed accepted tracking in DevSynthetic." }
 }
 finally {
     $ErrorActionPreference = $oldErrorActionPreference
     $env:DOTNET_ENVIRONMENT = $oldEnvironment
     $env:PAQUETERIA_LOCAL_DEV_SEED_ENABLED = $oldOptIn
+    $env:PAQUETERIA_DEPLOYMENT_CLASS = $oldDeploymentClass
+    $env:PAQUETERIA_SYNTHETIC_SEED_ENABLED = $oldSyntheticSeedOptIn
 }
 
 $newFiles = @(
