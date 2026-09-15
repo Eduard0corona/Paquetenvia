@@ -952,6 +952,18 @@
           "Paqueteria.Application": "[1.0.0, )"
         }
       },
+      "paqueteria.worker": {
+        "type": "Project",
+        "dependencies": {
+          "Custody.Infrastructure": "[1.0.0, )",
+          "Identity.Infrastructure": "[1.0.0, )",
+          "Notifications.Infrastructure": "[1.0.0, )",
+          "Orders.Infrastructure": "[1.0.0, )",
+          "Organizations.Infrastructure": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )",
+          "Pricing.Infrastructure": "[1.0.0, )"
+        }
+      },
       "pricing.application": {
         "type": "Project",
         "dependencies": {

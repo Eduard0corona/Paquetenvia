@@ -13,7 +13,7 @@ using Testcontainers.PostgreSql;
 
 namespace Paqueteria.IntegrationTests.Security;
 
-public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
+public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     public const string Image = "postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d";
     public const string ValidTrackingToken = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
@@ -33,15 +33,23 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
     private string _applicationConnectionString = string.Empty;
     private string _workerConnectionString = string.Empty;
     private readonly TrackingTokenHasher? _trackingTokenHasher;
+    private readonly bool _seedSyntheticData;
 
     public PostgreSqlSecurityWebApplicationFactory()
+        : this(seedSyntheticData: true)
     {
     }
 
     internal PostgreSqlSecurityWebApplicationFactory(
         TrackingTokenHasher trackingTokenHasher)
+        : this(seedSyntheticData: true)
     {
         _trackingTokenHasher = trackingTokenHasher;
+    }
+
+    internal PostgreSqlSecurityWebApplicationFactory(bool seedSyntheticData)
+    {
+        _seedSyntheticData = seedSyntheticData;
     }
 
     public string PostgreSqlVersion { get; private set; } = string.Empty;
@@ -77,7 +85,10 @@ public sealed class PostgreSqlSecurityWebApplicationFactory : WebApplicationFact
             await command.ExecuteNonQueryAsync();
         }
 
-        await SeedSyntheticDataAsync(admin);
+        if (_seedSyntheticData)
+        {
+            await SeedSyntheticDataAsync(admin);
+        }
         await using (var version = admin.CreateCommand(
             "SELECT current_setting('server_version'), public.PostGIS_Version()"))
         await using (var reader = await version.ExecuteReaderAsync())
