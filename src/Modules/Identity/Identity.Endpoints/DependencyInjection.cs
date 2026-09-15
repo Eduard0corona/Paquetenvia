@@ -12,6 +12,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Paqueteria.Application.Security;
 
 namespace Identity.Endpoints;
 
@@ -31,8 +32,9 @@ public static class DependencyInjection
             .Validate(
                 options => options.Provider != IdentityProviderKind.Mock ||
                     environment.IsDevelopment() ||
-                    environment.IsEnvironment("Testing"),
-                "Authentication:Provider=Mock is permitted only in Development or Testing.")
+                    environment.IsEnvironment("Testing") ||
+                    SyntheticEnvironmentPolicy.IsDevSynthetic(environment.EnvironmentName),
+                "Authentication:Provider=Mock is permitted only in Development, Testing, or authorized DevSynthetic.")
             .ValidateOnStart();
 
         services

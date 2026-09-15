@@ -3,9 +3,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Orders.Application.Tracking;
 using Orders.Infrastructure;
+using Paqueteria.Application.Security;
 
 const string RequiredEnvironment = "Development";
 const string RequiredOptIn = "PAQUETERIA_LOCAL_DEV_SEED_ENABLED";
+const string SyntheticSeedOptIn = "PAQUETERIA_SYNTHETIC_SEED_ENABLED";
 const string AdminConnectionEnvironment = "PAQUETERIA_LOCAL_ADMIN_CONNECTION";
 const string AppPasswordEnvironment = "PAQUETERIA_LOCAL_APP_PASSWORD";
 const string WorkerPasswordEnvironment = "PAQUETERIA_LOCAL_WORKER_PASSWORD";
@@ -17,10 +19,18 @@ if ((args.Length != 1 || args[0] is not ("bootstrap" or "seed" or "status")) &&
     return Fail("Usage: Paqueteria.DevSeed <bootstrap|seed|status|tracking order-id>");
 }
 
-if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"), RequiredEnvironment, StringComparison.Ordinal) ||
-    !string.Equals(Environment.GetEnvironmentVariable(RequiredOptIn), "true", StringComparison.Ordinal))
+var environmentName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+var isLocalDevelopment =
+    string.Equals(environmentName, RequiredEnvironment, StringComparison.Ordinal) &&
+    string.Equals(Environment.GetEnvironmentVariable(RequiredOptIn), "true", StringComparison.Ordinal);
+var isDevSyntheticSeed =
+    args[0] == "seed" &&
+    SyntheticEnvironmentPolicy.IsDevSynthetic(environmentName) &&
+    string.Equals(Environment.GetEnvironmentVariable(SyntheticSeedOptIn), "true", StringComparison.Ordinal);
+
+if (!isLocalDevelopment && !isDevSyntheticSeed)
 {
-    return Fail("DevSeed is restricted to Development with explicit local opt-in.");
+    return Fail("DevSeed command is not authorized for this environment and explicit opt-in.");
 }
 
 if (args[0] == "tracking")
@@ -43,7 +53,14 @@ if (args[0] is "bootstrap" or "seed")
     await SeedPrerequisitesAsync(connection);
 }
 
-await ReportStatusAsync(connection);
+if (isDevSyntheticSeed)
+{
+    await ReportSyntheticSeedStatusAsync(connection);
+}
+else
+{
+    await ReportStatusAsync(connection);
+}
 return 0;
 
 static async Task IssueTrackingAsync(Guid orderId, string appConnection)
@@ -235,6 +252,24 @@ static async Task ReportStatusAsync(NpgsqlConnection connection)
     }
 
     Console.WriteLine("DevSeed ready: runtime roles=2, synthetic identities=3, organizations=2.");
+}
+
+static async Task ReportSyntheticSeedStatusAsync(NpgsqlConnection connection)
+{
+    const string sql = """
+        SELECT
+          (SELECT count(*) FROM identity.users WHERE identity_subject IN ('local-subject-dispatcher-mfa','mock-subject-active-driver','mock-subject-external-driver')),
+          (SELECT count(*) FROM organizations.organizations WHERE id IN ('11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333'));
+        """;
+    await using var command = new NpgsqlCommand(sql, connection);
+    await using var reader = await command.ExecuteReaderAsync();
+    await reader.ReadAsync();
+    if (reader.GetInt64(0) != 3 || reader.GetInt64(1) != 2)
+    {
+        throw new InvalidOperationException("Deterministic synthetic prerequisites are incomplete.");
+    }
+
+    Console.WriteLine("DevSynthetic prerequisites ready: synthetic identities=3, organizations=2.");
 }
 
 static async Task ExecuteAsync(NpgsqlConnection connection, string sql)

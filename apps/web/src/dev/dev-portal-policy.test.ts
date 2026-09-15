@@ -7,10 +7,18 @@ import {
 
 describe("development portal policy", () => {
   it("requires Development and an exact explicit opt-in", () => {
-    expect(isDevPortalEnabled("development", "true")).toBe(true);
-    expect(isDevPortalEnabled("production", "true")).toBe(false);
-    expect(isDevPortalEnabled("development", "TRUE")).toBe(false);
-    expect(isDevPortalEnabled("development", undefined)).toBe(false);
+    expect(isDevPortalEnabled("development", undefined, "true")).toBe(true);
+    expect(isDevPortalEnabled("development", "PRODUCTION", "true")).toBe(true);
+    expect(isDevPortalEnabled("development", undefined, "TRUE")).toBe(false);
+    expect(isDevPortalEnabled("development", undefined, undefined)).toBe(false);
+  });
+
+  it("requires the exact server-side DevSynthetic class in production", () => {
+    expect(isDevPortalEnabled("production", "DEV_SYNTHETIC", "true")).toBe(true);
+    expect(isDevPortalEnabled("production", undefined, "true")).toBe(false);
+    expect(isDevPortalEnabled("production", "PRODUCTION", "true")).toBe(false);
+    expect(isDevPortalEnabled("production", "DEV_SYNTHETIC", undefined)).toBe(false);
+    expect(isDevPortalEnabled("test", "DEV_SYNTHETIC", "true")).toBe(false);
   });
 
   it("rejects arbitrary identity input", () => {

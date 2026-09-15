@@ -158,6 +158,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Routing.Infrastructure", "s
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Routing.Endpoints", "src\Modules\Routing\Routing.Endpoints\Routing.Endpoints.csproj", "{34009BDC-67D3-4B1D-BE5C-97623A2C8DD5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Paqueteria.SyntheticVerification", "tools\Paqueteria.SyntheticVerification\Paqueteria.SyntheticVerification.csproj", "{76892767-2ABD-4000-AEA8-215E10B8FBB1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -900,6 +902,18 @@ Global
 		{34009BDC-67D3-4B1D-BE5C-97623A2C8DD5}.Release|x64.Build.0 = Release|Any CPU
 		{34009BDC-67D3-4B1D-BE5C-97623A2C8DD5}.Release|x86.ActiveCfg = Release|Any CPU
 		{34009BDC-67D3-4B1D-BE5C-97623A2C8DD5}.Release|x86.Build.0 = Release|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Debug|x64.Build.0 = Debug|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Debug|x86.Build.0 = Debug|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Release|x64.ActiveCfg = Release|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Release|x64.Build.0 = Release|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Release|x86.ActiveCfg = Release|Any CPU
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -980,5 +994,6 @@ Global
 		{D3020DB9-05F8-42B1-81AD-378F055B5D09} = {39B7A766-255B-E3E4-CB41-043D09D4799C}
 		{2059A998-816F-479C-A4FC-1A6B318D5129} = {39B7A766-255B-E3E4-CB41-043D09D4799C}
 		{34009BDC-67D3-4B1D-BE5C-97623A2C8DD5} = {39B7A766-255B-E3E4-CB41-043D09D4799C}
+		{76892767-2ABD-4000-AEA8-215E10B8FBB1} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 EndGlobal
