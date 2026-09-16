@@ -72,14 +72,26 @@ internal static class AzureOwnershipBridge
     internal static async Task CleanupAndAssertAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
     {
-        // AI-18 has transferred the schema to this role. Revoke as its current owner.
-        await ExecuteAsync(connection, transaction, "SET LOCAL ROLE paqueteria_migrator", cancellationToken).ConfigureAwait(false);
-        await ExecuteAsync(connection, transaction, """
-            REVOKE CREATE ON SCHEMA security
-            FROM paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance;
-            """, cancellationToken).ConfigureAwait(false);
-        await ExecuteAsync(connection, transaction, "RESET ROLE", cancellationToken).ConfigureAwait(false);
-        await ExecuteAsync(connection, transaction, RevokeDatabaseCreate, cancellationToken).ConfigureAwait(false);
+        var stage = "set-schema-owner-role";
+        try
+        {
+            // AI-18 has transferred the schema to this role. Revoke as its current owner.
+            await ExecuteAsync(connection, transaction, "SET LOCAL ROLE paqueteria_migrator", cancellationToken).ConfigureAwait(false);
+            stage = "revoke-security-create";
+            await ExecuteAsync(connection, transaction, """
+                REVOKE CREATE ON SCHEMA security
+                FROM paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance;
+                """, cancellationToken).ConfigureAwait(false);
+            stage = "reset-schema-owner-role";
+            await ExecuteAsync(connection, transaction, "RESET ROLE", cancellationToken).ConfigureAwait(false);
+            stage = "revoke-database-create";
+            await ExecuteAsync(connection, transaction, RevokeDatabaseCreate, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException exception)
+        {
+            throw new InvalidOperationException(
+                $"E-002 cleanup failed at {stage} (SQLSTATE {exception.SqlState}).", exception);
+        }
 
         await using var assertion = new NpgsqlCommand("""
             SELECT NOT has_schema_privilege('paqueteria_bootstrap', 'security', 'CREATE')
