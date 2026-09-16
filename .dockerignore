@@ -1,0 +1,9 @@
+.git
+.local
+TestResults
+**/bin
+**/obj
+**/node_modules
+**/.next
+**/.env*
+!deploy/.env.example

@@ -1,0 +1,19 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0.101 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore tools/Paqueteria.DatabaseMigrator/Paqueteria.DatabaseMigrator.csproj --locked-mode \
+    && dotnet restore tools/Paqueteria.DevSeed/Paqueteria.DevSeed.csproj --locked-mode \
+    && dotnet publish tools/Paqueteria.DatabaseMigrator/Paqueteria.DatabaseMigrator.csproj -c Release -o /out/migrator --no-restore \
+    && dotnet publish tools/Paqueteria.DevSeed/Paqueteria.DevSeed.csproj -c Release -o /out/devseed --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+ARG SOURCE_SHA
+LABEL org.opencontainers.image.revision=${SOURCE_SHA}
+WORKDIR /app
+COPY --from=build /out/migrator /app/migrator
+COPY --from=build /out/devseed /app/devseed
+COPY --from=build /src/Paqueteria.sln /app/Paqueteria.sln
+COPY --from=build /src/database/migrations/v0.6-baseline.json /app/database/migrations/v0.6-baseline.json
+COPY --from=build /src/docs/normative/v0.6/database/AI-06_SCHEMA.sql /app/docs/normative/v0.6/database/AI-06_SCHEMA.sql
+COPY --from=build /src/docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql /app/docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql
+ENTRYPOINT ["dotnet", "/app/migrator/Paqueteria.DatabaseMigrator.dll"]

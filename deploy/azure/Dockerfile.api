@@ -1,0 +1,14 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0.101 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore src/Paqueteria.Api/Paqueteria.Api.csproj --locked-mode \
+    && dotnet publish src/Paqueteria.Api/Paqueteria.Api.csproj -c Release -o /out --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+ARG SOURCE_SHA
+LABEL org.opencontainers.image.revision=${SOURCE_SHA}
+WORKDIR /app
+COPY --from=build /out ./
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "Paqueteria.Api.dll"]
