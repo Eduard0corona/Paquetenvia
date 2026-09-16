@@ -6,7 +6,7 @@ RUN dotnet restore tools/Paqueteria.DatabaseMigrator/Paqueteria.DatabaseMigrator
     && dotnet publish tools/Paqueteria.DatabaseMigrator/Paqueteria.DatabaseMigrator.csproj -c Release -o /out/migrator --no-restore \
     && dotnet publish tools/Paqueteria.DevSeed/Paqueteria.DevSeed.csproj -c Release -o /out/devseed --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 ARG SOURCE_SHA
 LABEL org.opencontainers.image.revision=${SOURCE_SHA}
 WORKDIR /app
