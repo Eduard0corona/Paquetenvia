@@ -142,7 +142,7 @@ public sealed class DatabaseBaselineDeployer(
         catch (PostgresException exception)
         {
             throw new InvalidOperationException(
-                $"Baseline step {step.Id} failed (SQLSTATE {exception.SqlState}, position {exception.Position}, schema {exception.SchemaName ?? "<none>"}).",
+                $"Baseline step {step.Id} failed (SQLSTATE {exception.SqlState}, position {exception.Position}, internal position {exception.InternalPosition}, context {exception.Where ?? "<none>"}).",
                 exception);
         }
         stopwatch.Stop();
