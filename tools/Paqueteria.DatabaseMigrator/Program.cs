@@ -33,6 +33,16 @@ internal static partial class DatabaseMigratorProgram
             var moduleMigrations = new ModuleMigrationCoordinator();
             switch (options.Command)
             {
+                case "preflight":
+                    var preflight = await AzureRolePreflight.RunAsync(
+                        connectionString, cancellation.Token).ConfigureAwait(false);
+                    Console.WriteLine("PG18_ROLE_SWITCH_PREFLIGHT_OK");
+                    Console.WriteLine($"createrole_self_grant={preflight.CreateroleSelfGrant}");
+                    Console.WriteLine($"admin_set_role={preflight.AdminSetRole}");
+                    Console.WriteLine($"runtime_set_role={preflight.RuntimeSetRole}");
+                    Console.WriteLine($"runtime_nobypassrls={preflight.RuntimeNoBypassRls}");
+                    return 0;
+
                 case "plan":
                     var plan = await deployer.PlanAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintPlan(plan);
@@ -88,6 +98,11 @@ internal static partial class DatabaseMigratorProgram
         {
             Console.Error.WriteLine(exception.Message);
             return 4;
+        }
+        catch (AzureRolePreflightException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return 6;
         }
         catch (OperationCanceledException)
         {
@@ -184,7 +199,7 @@ internal static partial class DatabaseMigratorProgram
     }
 
     private static void PrintUsage() => Console.Error.WriteLine(
-        "Usage: Paqueteria.DatabaseMigrator <verify|plan|apply|assert> [--connection-env NAME] [--confirm-initial-baseline]");
+        "Usage: Paqueteria.DatabaseMigrator <verify|preflight|plan|apply|assert> [--connection-env NAME] [--confirm-initial-baseline]");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
@@ -200,7 +215,7 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         }
 
         var command = arguments[0].ToLowerInvariant();
-        if (command is not ("verify" or "plan" or "apply" or "assert"))
+        if (command is not ("verify" or "preflight" or "plan" or "apply" or "assert"))
         {
             throw new CommandLineException($"Unknown command '{arguments[0]}'.");
         }
