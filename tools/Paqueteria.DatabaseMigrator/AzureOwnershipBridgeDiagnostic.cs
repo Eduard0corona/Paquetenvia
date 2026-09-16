@@ -14,6 +14,7 @@ internal static class AzureOwnershipBridgeDiagnostic
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var stage = "prepare";
+        var rolledBack = false;
 
         try
         {
@@ -70,6 +71,7 @@ internal static class AzureOwnershipBridgeDiagnostic
             }
 
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            rolledBack = true;
             stage = "rollback-verification";
             await using var absence = new NpgsqlCommand($"""
                 SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}')
@@ -86,7 +88,7 @@ internal static class AzureOwnershipBridgeDiagnostic
         }
         finally
         {
-            if (transaction.Connection is not null)
+            if (!rolledBack)
             {
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             }
