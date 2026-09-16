@@ -24,6 +24,7 @@ from typing import Any, Callable, Iterable
 
 FORMAT_VERSION = "paquetenvia-rel000-v1"
 SOURCE_PROVENANCE_VERSION = "paquetenvia-rel000-source-v1"
+TESTED_PROVENANCE_VERSION = "paquetenvia-rel000-tested-provenance-v1"
 EXECUTION_EVIDENCE_VERSION = "paquetenvia-rel000-execution-v2"
 WORKFLOW_PROVENANCE_VERSION = "paquetenvia-rel000-workflow-provenance-v1"
 OWNER_DECISION_FORMAT = "paquetenvia-mvp0-owner-decision-v1"
@@ -846,6 +847,173 @@ def validate_sha(value: str, reason_code: str, field: str) -> str:
     return normalized
 
 
+def git_commit_exists(repository_root: Path, sha: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(repository_root), "cat-file", "-e", f"{sha}^{{commit}}"],
+        check=False,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def tested_commit_parents(repository_root: Path, tested_git_sha: str) -> list[str]:
+    """Return the raw parent list of a commit object, independent of shallow grafts."""
+    raw = run_git(repository_root, "cat-file", "-p", f"{tested_git_sha}^{{commit}}")
+    parents: list[str] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            break
+        if line.startswith("parent "):
+            parents.append(line.split(" ", 1)[1].strip().lower())
+    return parents
+
+
+def resolve_tested_merge_base(
+    repository_root: Path,
+    tested_git_sha: str,
+    source_head_sha: str,
+) -> str:
+    """Resolve the authoritative base of a pull_request merge ref from its topology.
+
+    GitHub tests ``refs/pull/N/merge`` = merge(base_branch_tip, pull_request_head).
+    The first parent of that merge commit is the baseline that was actually tested;
+    ``github.event.pull_request.base.sha`` can lag behind it once the base branch
+    advances after the pull request was created, so it is never consulted here.
+    """
+    tested = validate_sha(tested_git_sha, "TESTED_GIT_SHA_MALFORMED", "tested_git_sha")
+    source = validate_sha(source_head_sha, "SOURCE_HEAD_SHA_MALFORMED", "source_head_sha")
+    if not git_commit_exists(repository_root, tested):
+        fail(
+            "GIT_SHA_NOT_IN_CHECKOUT",
+            "tested_git_sha is not available in the checkout.",
+            field="tested_git_sha",
+        )
+    parents = tested_commit_parents(repository_root, tested)
+    if len(parents) != 2 or len(set(parents)) != 2:
+        fail(
+            "TESTED_COMMIT_NOT_MERGE",
+            "The tested pull_request commit is not a two-parent merge commit.",
+            tested_git_sha=tested,
+            parent_count=len(parents),
+        )
+    for parent in parents:
+        if not git_commit_exists(repository_root, parent):
+            fail(
+                "TESTED_MERGE_PARENT_UNAVAILABLE",
+                "A parent of the tested merge commit is not available in the checkout.",
+                parent=parent,
+            )
+    base, merged_source = parents
+    if merged_source != source:
+        fail(
+            "TESTED_MERGE_SOURCE_MISMATCH",
+            "The declared source HEAD is not the second parent of the tested merge commit.",
+            declared_source_head_sha=source,
+            tested_merge_second_parent=merged_source,
+        )
+    return base
+
+
+def resolve_tested_provenance(
+    repository_root: Path,
+    event_name: str,
+    tested_git_sha: str,
+    source_head_sha: str,
+    event_pull_request_base_sha: str | None = None,
+) -> dict[str, Any]:
+    """Single authoritative resolution of the checkout that Foundation actually tested.
+
+    ``push``: source = tested = base = the pushed commit.
+    ``pull_request``: base = first parent of the tested merge commit, after proving
+    the merge topology. The event base SHA is only recorded as diagnostic metadata.
+    Any other event, or a topology that cannot be proven, fails closed.
+    """
+    tested = validate_sha(tested_git_sha, "TESTED_GIT_SHA_MALFORMED", "tested_git_sha")
+    source = validate_sha(source_head_sha, "SOURCE_HEAD_SHA_MALFORMED", "source_head_sha")
+    event_base: str | None = None
+    if str(event_pull_request_base_sha or "").strip():
+        event_base = validate_sha(
+            event_pull_request_base_sha,
+            "EVENT_PULL_REQUEST_BASE_SHA_MALFORMED",
+            "event_pull_request_base_sha",
+        )
+    checkout = run_git(repository_root, "rev-parse", "HEAD").lower()
+    if checkout != tested:
+        fail(
+            "TESTED_SHA_CHECKOUT_MISMATCH",
+            "tested_git_sha does not match the checked-out commit.",
+            expected=tested,
+            actual=checkout,
+        )
+    if event_name == "push":
+        if source != tested:
+            fail(
+                "PUSH_SOURCE_TESTED_MISMATCH",
+                "A push event tests exactly the pushed commit.",
+                source_head_sha=source,
+                tested_git_sha=tested,
+            )
+        base = tested
+        relationship = "same_commit"
+        resolution = "push_same_commit"
+    elif event_name == "pull_request":
+        if source == tested:
+            fail(
+                "PULL_REQUEST_SOURCE_IS_TESTED",
+                "A pull_request event tests a merge commit, never the source HEAD itself.",
+            )
+        base = resolve_tested_merge_base(repository_root, tested, source)
+        relationship = "source_head_is_ancestor_of_tested_commit"
+        resolution = "tested_merge_first_parent"
+    else:
+        fail(
+            "EVENT_NAME_UNSUPPORTED",
+            "Foundation provenance is only defined for push and pull_request events.",
+            event_name=event_name,
+        )
+    return {
+        "format_version": TESTED_PROVENANCE_VERSION,
+        "event_name": event_name,
+        "source_head_sha": source,
+        "tested_git_sha": tested,
+        "base_main_sha": base,
+        "git_relationship": relationship,
+        "base_resolution": resolution,
+        "event_pull_request_base_sha": event_base,
+        "event_pull_request_base_sha_authoritative": False,
+        "event_pull_request_base_sha_matches_tested_base": (
+            None if event_base is None else event_base == base
+        ),
+    }
+
+
+def resolve_tested_provenance_command(args: argparse.Namespace) -> dict[str, Any]:
+    resolved = resolve_tested_provenance(
+        args.repository_root.resolve(),
+        args.event_name,
+        args.tested_git_sha,
+        args.source_head_sha,
+        args.event_pull_request_base_sha,
+    )
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        write_json(args.output, resolved)
+    if args.github_env is not None:
+        lines = "".join(
+            f"{name}={resolved[field]}\n"
+            for name, field in (
+                ("REL000_SOURCE_HEAD_SHA", "source_head_sha"),
+                ("REL000_TESTED_GIT_SHA", "tested_git_sha"),
+                ("REL000_BASE_MAIN_SHA", "base_main_sha"),
+                ("REL000_GIT_RELATIONSHIP", "git_relationship"),
+            )
+        )
+        with args.github_env.open("a", encoding="utf-8") as stream:
+            stream.write(lines)
+    print(json.dumps(resolved, ensure_ascii=False, sort_keys=True))
+    return resolved
+
+
 def load_owner_decision(path: Path) -> dict[str, Any]:
     if not path.is_file():
         fail("OWNER_DECISION_RECORD_MISSING", "The versioned owner decision record is missing.")
@@ -1453,6 +1621,17 @@ def validate_traceability(
             "SOURCE_HEAD_NOT_ANCESTOR",
             "source_head_sha is not an ancestor of tested_git_sha.",
         )
+    if source != tested:
+        # pull_request shape: the only authoritative base is the first parent of the
+        # tested merge commit. A stale event base SHA must not pass as base_main_sha.
+        resolved_base = resolve_tested_merge_base(repository_root, tested, source)
+        if base != resolved_base:
+            fail(
+                "TESTED_MERGE_BASE_MISMATCH",
+                "base_main_sha is not the first parent of the tested merge commit.",
+                declared_base_main_sha=base,
+                tested_merge_first_parent=resolved_base,
+            )
     return {
         "source_head_sha": source,
         "tested_git_sha": tested,
@@ -6255,6 +6434,15 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_mode.add_argument("--source-branch", required=True)
     resolve_mode.add_argument("--remediation-id", default="")
 
+    resolve_provenance = subparsers.add_parser("resolve-tested-provenance")
+    resolve_provenance.add_argument("--repository-root", type=Path, default=Path("."))
+    resolve_provenance.add_argument("--event-name", required=True)
+    resolve_provenance.add_argument("--tested-git-sha", required=True)
+    resolve_provenance.add_argument("--source-head-sha", required=True)
+    resolve_provenance.add_argument("--event-pull-request-base-sha", default="")
+    resolve_provenance.add_argument("--output", type=Path)
+    resolve_provenance.add_argument("--github-env", type=Path)
+
     collect = subparsers.add_parser("collect-results")
     collect.add_argument("--job", choices=sorted(EXECUTION_EVIDENCE_JOBS), required=True)
     collect.add_argument("--artifact-name", required=True)
@@ -6391,6 +6579,9 @@ def main() -> int:
                     args.remediation_id,
                 )
             )
+            return 0
+        if args.command == "resolve-tested-provenance":
+            resolve_tested_provenance_command(args)
             return 0
         if args.command == "collect-results":
             collect_execution_results(args)
