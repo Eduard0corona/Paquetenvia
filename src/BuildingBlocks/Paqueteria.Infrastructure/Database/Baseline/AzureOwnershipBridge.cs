@@ -72,10 +72,13 @@ internal static class AzureOwnershipBridge
     internal static async Task CleanupAndAssertAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
     {
+        // AI-18 has transferred the schema to this role. Revoke as its current owner.
+        await ExecuteAsync(connection, transaction, "SET LOCAL ROLE paqueteria_migrator", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, """
             REVOKE CREATE ON SCHEMA security
             FROM paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance;
             """, cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "RESET ROLE", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, RevokeDatabaseCreate, cancellationToken).ConfigureAwait(false);
 
         await using var assertion = new NpgsqlCommand("""
