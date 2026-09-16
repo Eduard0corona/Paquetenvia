@@ -135,7 +135,16 @@ public sealed class DatabaseBaselineDeployer(
         {
             CommandTimeout = 180,
         };
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException exception)
+        {
+            throw new InvalidOperationException(
+                $"Baseline step {step.Id} failed (SQLSTATE {exception.SqlState}, position {exception.Position}, schema {exception.SchemaName ?? "<none>"}).",
+                exception);
+        }
         stopwatch.Stop();
         return stopwatch.Elapsed;
     }
