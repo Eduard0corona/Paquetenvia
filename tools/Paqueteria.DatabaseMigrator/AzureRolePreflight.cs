@@ -11,6 +11,7 @@ internal static class AzureRolePreflight
         var suffix = Guid.NewGuid().ToString("N")[..16];
         var role = $"azr001_preflight_role_{suffix}";
         var login = $"azr001_preflight_login_{suffix}";
+        var bypassRole = $"azr001_preflight_bypass_{suffix}";
         var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var stage = "connect";
         await using var admin = new NpgsqlConnection(privilegedConnectionString);
@@ -26,6 +27,18 @@ internal static class AzureRolePreflight
                 throw new InvalidOperationException();
             }
 
+            stage = "deployment-role-attributes";
+            await using (var attributes = new NpgsqlCommand(
+                "SELECT rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user", admin))
+            await using (var reader = await attributes.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+                    reader.GetBoolean(0) || !reader.GetBoolean(1))
+                {
+                    throw new InvalidOperationException();
+                }
+            }
+
             stage = "self-grant-setting";
             var selfGrant = Convert.ToString(await ScalarAsync(
                 admin, "SELECT current_setting('createrole_self_grant', true)", cancellationToken)) ?? string.Empty;
@@ -35,6 +48,15 @@ internal static class AzureRolePreflight
             await NonQueryAsync(admin,
                 $"CREATE ROLE {login} LOGIN NOINHERIT NOBYPASSRLS PASSWORD '{password}'",
                 cancellationToken);
+
+            stage = "create-bypassrls-role";
+            await NonQueryAsync(admin, $"CREATE ROLE {bypassRole} NOLOGIN BYPASSRLS", cancellationToken);
+            var bypassCreated = await ScalarAsync(admin,
+                $"SELECT rolbypassrls FROM pg_roles WHERE rolname = '{bypassRole}'", cancellationToken);
+            if (bypassCreated is not true)
+            {
+                throw new InvalidOperationException();
+            }
 
             stage = "admin-set-role";
             await NonQueryAsync(admin, $"SET ROLE {role}", cancellationToken);
@@ -87,7 +109,7 @@ internal static class AzureRolePreflight
                 throw new InvalidOperationException();
             }
 
-            return new AzureRolePreflightResult(selfGrant, true, true, true);
+            return new AzureRolePreflightResult(selfGrant, true, true, true, true);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -102,6 +124,7 @@ internal static class AzureRolePreflight
                     await NonQueryAsync(admin, "RESET ROLE", CancellationToken.None);
                     await NonQueryAsync(admin, $"DROP ROLE IF EXISTS {login}", CancellationToken.None);
                     await NonQueryAsync(admin, $"DROP ROLE IF EXISTS {role}", CancellationToken.None);
+                    await NonQueryAsync(admin, $"DROP ROLE IF EXISTS {bypassRole}", CancellationToken.None);
                 }
                 catch (Exception)
                 {
@@ -132,7 +155,8 @@ internal sealed record AzureRolePreflightResult(
     string CreateroleSelfGrant,
     bool AdminSetRole,
     bool RuntimeSetRole,
-    bool RuntimeNoBypassRls);
+    bool RuntimeNoBypassRls,
+    bool BypassRlsRoleCreated);
 
 internal sealed class AzureRolePreflightException(string stage) : Exception(
     $"PG18 role-switch preflight failed at {stage}; STOP_FOR_CONTRACT_REVIEW.");

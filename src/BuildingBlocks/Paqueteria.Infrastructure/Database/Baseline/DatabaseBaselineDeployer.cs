@@ -31,9 +31,11 @@ public sealed class DatabaseBaselineDeployer(
     public async Task<DatabaseBaselineApplyResult> ApplyAsync(
         VerifiedDatabaseBaseline baseline,
         string connectionString,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        AzureOwnershipBridgeSelection? ownershipBridge = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
+        ownershipBridge?.AssertAllowed();
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -74,8 +76,23 @@ public sealed class DatabaseBaselineDeployer(
                 throw new InvalidOperationException($"PostgreSQL 18 is required; server_version_num is {postgresVersionNumber}.");
             }
 
+            if (ownershipBridge is not null)
+            {
+                await AzureOwnershipBridge.PreludeAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+            }
+
             var schemaDuration = await ExecuteStepAsync(connection, transaction, baseline.Steps[0], cancellationToken).ConfigureAwait(false);
+            if (ownershipBridge is not null)
+            {
+                await AzureOwnershipBridge.GrantSecurityCreateAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+            }
+
             var rolesDuration = await ExecuteStepAsync(connection, transaction, baseline.Steps[1], cancellationToken).ConfigureAwait(false);
+            if (ownershipBridge is not null)
+            {
+                await AzureOwnershipBridge.CleanupAndAssertAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+            }
+
             var assertionReport = await _assertions.AssertAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new DatabaseBaselineApplyResult(

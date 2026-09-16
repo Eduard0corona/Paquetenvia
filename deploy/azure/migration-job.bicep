@@ -108,6 +108,10 @@ resource migrationJob 'Microsoft.App/jobs@2025-01-01' = {
               value: 'DEV_SYNTHETIC'
             }
             {
+              name: 'PAQUETERIA_DB_DEPLOYMENT_PROVIDER'
+              value: 'AZURE_POSTGRESQL_FLEXIBLE_SERVER'
+            }
+            {
               name: 'PAQUETERIA_MIGRATION_CONNECTION'
               secretRef: 'pg-migrate-conn'
             }

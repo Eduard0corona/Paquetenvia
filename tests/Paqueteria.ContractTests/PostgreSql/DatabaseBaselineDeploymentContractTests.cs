@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Npgsql;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Database.Baseline;
@@ -36,6 +37,96 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         finally
         {
             await fixture.DropIsolatedDatabaseAsync(connectionString);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_applies_canonical_baseline_as_non_superuser_and_cleans_grants()
+    {
+        var adminConnectionString = await fixture.CreateIsolatedDatabaseAsync("ownershipbridge");
+        var database = new NpgsqlConnectionStringBuilder(adminConnectionString).Database;
+        var login = $"azr001_bridge_test_{Guid.NewGuid():N}";
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        try
+        {
+            await using (var admin = new NpgsqlConnection(fixture.DeploymentConnectionString))
+            {
+                await admin.OpenAsync();
+                await using var setup = new NpgsqlCommand($$"""
+                    CREATE ROLE {{login}} LOGIN CREATEROLE BYPASSRLS NOSUPERUSER PASSWORD '{{password}}';
+                    ALTER DATABASE "{{database}}" OWNER TO {{login}};
+                    GRANT paqueteria_migrator, paqueteria_app, paqueteria_worker,
+                          paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance
+                    TO {{login}} WITH ADMIN TRUE, SET TRUE;
+                    """, admin);
+                await setup.ExecuteNonQueryAsync();
+            }
+
+            await using (var admin = new NpgsqlConnection(adminConnectionString))
+            {
+                await admin.OpenAsync();
+                await using var postgis = new NpgsqlCommand("CREATE EXTENSION postgis", admin);
+                await postgis.ExecuteNonQueryAsync();
+            }
+
+            var deploymentBuilder = new NpgsqlConnectionStringBuilder(adminConnectionString)
+            {
+                Username = login,
+                Password = password,
+                Pooling = false,
+            };
+            var deploymentConnectionString = deploymentBuilder.ConnectionString;
+            await using (var deployment = new NpgsqlConnection(deploymentConnectionString))
+            {
+                await deployment.OpenAsync();
+                await using var pgcrypto = new NpgsqlCommand(
+                    "CREATE SCHEMA extensions; CREATE EXTENSION pgcrypto WITH SCHEMA extensions", deployment);
+                await pgcrypto.ExecuteNonQueryAsync();
+            }
+
+            var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+            Assert.Equal(CanonicalBaselineContract.SchemaSha256, baseline.Steps[0].Sha256);
+            Assert.Equal(CanonicalBaselineContract.RolesSha256, baseline.Steps[1].Sha256);
+
+            var bridge = new AzureOwnershipBridgeSelection(
+                "DevSynthetic", "DEV_SYNTHETIC", "AZURE_POSTGRESQL_FLEXIBLE_SERVER");
+            var deployer = new DatabaseBaselineDeployer();
+            var first = await deployer.ApplyAsync(baseline, deploymentConnectionString,
+                ownershipBridge: bridge);
+            var second = await deployer.ApplyAsync(baseline, deploymentConnectionString,
+                ownershipBridge: bridge);
+
+            Assert.Equal(DatabaseBaselineApplyStatus.Applied, first.Status);
+            Assert.Equal(DatabaseBaselineApplyStatus.AlreadyApplied, second.Status);
+            Assert.True(first.Assertions.Checks >= 10);
+            Assert.Equal(DatabaseBaselineStatus.Applied,
+                (await deployer.PlanAsync(baseline, deploymentConnectionString)).State.Status);
+
+            await using var verify = new NpgsqlConnection(deploymentConnectionString);
+            await verify.OpenAsync();
+            await using var check = new NpgsqlCommand("""
+                SELECT NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+                   AND NOT has_schema_privilege('paqueteria_bootstrap', 'security', 'CREATE')
+                   AND NOT has_schema_privilege('paqueteria_outbox_executor', 'security', 'CREATE')
+                   AND NOT has_schema_privilege('paqueteria_maintenance', 'security', 'CREATE')
+                   AND NOT has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
+                   AND (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'security') = 'paqueteria_migrator'
+                   AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
+                        WHERE oid = 'security.resolve_identity_context(text)'::regprocedure) = 'paqueteria_bootstrap'
+                   AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
+                        WHERE oid = 'security.claim_outbox(text,integer,interval)'::regprocedure) = 'paqueteria_outbox_executor'
+                   AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
+                        WHERE oid = 'security.purge_outbox(timestamptz,timestamptz,integer,boolean)'::regprocedure) = 'paqueteria_maintenance'
+                """, verify);
+            Assert.True((bool)(await check.ExecuteScalarAsync())!);
+        }
+        finally
+        {
+            await fixture.DropIsolatedDatabaseAsync(adminConnectionString);
+            await using var admin = new NpgsqlConnection(fixture.DeploymentConnectionString);
+            await admin.OpenAsync();
+            await using var cleanup = new NpgsqlCommand($"DROP ROLE IF EXISTS {login}", admin);
+            await cleanup.ExecuteNonQueryAsync();
         }
     }
 
