@@ -90,9 +90,11 @@ resource migrationJob 'Microsoft.App/jobs@2025-01-01' = {
             '/app/migrator/Paqueteria.DatabaseMigrator.dll'
           ]
           args: [
-            'preflight'
+            'apply'
             '--connection-env'
             'PAQUETERIA_MIGRATION_CONNECTION'
+            '--confirm-initial-baseline'
+            '--azure-ownership-bridge'
           ]
           env: [
             {

@@ -29,6 +29,7 @@ internal static partial class DatabaseMigratorProgram
             }
 
             var connectionString = ReadConnectionString(options.ConnectionEnvironment!);
+            E002SemanticAssertions.AssertConnectionReset(connectionString);
             var deployer = new DatabaseBaselineDeployer();
             var moduleMigrations = new ModuleMigrationCoordinator();
             switch (options.Command)
@@ -58,6 +59,12 @@ internal static partial class DatabaseMigratorProgram
                     IReadOnlyList<ModuleMigrationState> modulePlan;
                     if (plan.State.Status != DatabaseBaselineStatus.Clean)
                     {
+                        if (plan.State.Status == DatabaseBaselineStatus.Applied)
+                        {
+                            await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                            await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
+                        }
+
                         modulePlan = await moduleMigrations.PlanAsync(connectionString, cancellation.Token);
                     }
                     else
@@ -79,18 +86,36 @@ internal static partial class DatabaseMigratorProgram
                     if (options.AzureOwnershipBridge)
                     {
                         ownershipBridge = ReadAzureOwnershipBridgeSelection(connectionString);
-                        await AzureRolePreflight.RunAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     }
 
                     var result = await deployer.ApplyAsync(
                         baseline, connectionString, cancellation.Token, ownershipBridge).ConfigureAwait(false);
-                    await moduleMigrations.ApplyAsync(connectionString, cancellation.Token).ConfigureAwait(false);
+                    var beforeState = await AssertE002SemanticAsync(connectionString, cancellation.Token)
+                        .ConfigureAwait(false);
+                    var beforeModules = await moduleMigrations.PlanAsync(connectionString, cancellation.Token)
+                        .ConfigureAwait(false);
+                    if (ownershipBridge is not null && result.Status == DatabaseBaselineApplyStatus.AlreadyApplied)
+                    {
+                        if (beforeState != E002NotificationState.Pending ||
+                            beforeModules.Count != 9 ||
+                            beforeModules.Take(8).Any(module => module.Status != "APPLIED") ||
+                            beforeModules[8].Module != "Notifications" || beforeModules[8].Status != "PENDING")
+                        {
+                            throw new InvalidOperationException(
+                                "E002_APPLIED_PATH_MODULE_STATE_UNEXPECTED; STOP_FOR_CONTRACT_REVIEW");
+                        }
+                    }
+
+                    await moduleMigrations.ApplyAsync(connectionString, cancellation.Token,
+                        ownershipBridge is not null).ConfigureAwait(false);
+                    await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintApplyResult(result);
                     PrintModulePlan(await moduleMigrations.AssertAsync(connectionString, cancellation.Token));
                     return 0;
 
                 case "assert":
                     var report = await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                    await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     var moduleReport = await moduleMigrations.AssertAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintAssertionReport(report);
                     PrintModulePlan(moduleReport);
@@ -147,6 +172,24 @@ internal static partial class DatabaseMigratorProgram
         }
 
         return value;
+    }
+
+    private static async Task<E002NotificationState> AssertE002SemanticAsync(
+        string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = new Npgsql.NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var state = await E002NotificationStateReader.ReadAsync(connection,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (state == E002NotificationState.Drift)
+        {
+            throw new InvalidOperationException("E002_ROUTINE_MAP_STATE_UNRESOLVED; STOP_FOR_CONTRACT_REVIEW");
+        }
+
+        var semantic = await new E002SemanticAssertions().AssertAsync(
+            connection, state, cancellationToken: cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"E002_SEMANTIC_APPLIED state={state} map={semantic.RoutineMap} identities={semantic.ControlledIdentities} execute_rows={semantic.NormalizedExecuteRows}");
+        return state;
     }
 
     private static AzureOwnershipBridgeSelection ReadAzureOwnershipBridgeSelection(string connectionString)

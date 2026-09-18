@@ -48,6 +48,18 @@ internal static class AzureOwnershipBridge
     internal static async Task PreludeAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
     {
+        await ExecuteAsync(connection, transaction, "SET LOCAL createrole_self_grant = ''", cancellationToken)
+            .ConfigureAwait(false);
+        await using (var selfGrant = new NpgsqlCommand(
+            "SELECT current_setting('createrole_self_grant')", connection, transaction))
+        {
+            if (await selfGrant.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not string value ||
+                value.Length != 0)
+            {
+                throw new InvalidOperationException("E002_PLATFORM_SELF_GRANT_NOT_SETTABLE; STOP_FOR_CONTRACT_REVIEW");
+            }
+        }
+
         await using (var attributes = new NpgsqlCommand(
             "SELECT rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user", connection, transaction))
         await using (var reader = await attributes.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
@@ -60,6 +72,23 @@ internal static class AzureOwnershipBridge
         }
 
         await ExecuteAsync(connection, transaction, PrecreateRoles, cancellationToken).ConfigureAwait(false);
+        foreach (var role in new[] { "paqueteria_migrator", "paqueteria_bootstrap",
+                     "paqueteria_outbox_executor", "paqueteria_maintenance" })
+        {
+            await using var capability = new NpgsqlCommand("""
+                SELECT pg_catalog.pg_has_role(session_user,@role,'SET'),
+                       pg_catalog.pg_has_role(session_user,@role,'USAGE')
+                """, connection, transaction);
+            capability.Parameters.AddWithValue("role", role);
+            await using var reader = await capability.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (!reader.GetBoolean(0) || (role == "paqueteria_migrator" && !reader.GetBoolean(1)))
+            {
+                throw new InvalidOperationException(
+                    $"E002_PLATFORM_ROLE_ADMIN; effective capability missing for {role}; STOP_FOR_CONTRACT_REVIEW");
+            }
+        }
+
         await ExecuteAsync(connection, transaction, GrantDatabaseCreate, cancellationToken).ConfigureAwait(false);
     }
 

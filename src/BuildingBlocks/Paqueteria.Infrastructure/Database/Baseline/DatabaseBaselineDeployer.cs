@@ -94,6 +94,12 @@ public sealed class DatabaseBaselineDeployer(
             }
 
             var assertionReport = await _assertions.AssertAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+            if (ownershipBridge is not null)
+            {
+                await new E002SemanticAssertions().AssertAsync(
+                    connection, E002NotificationState.Pending, transaction, cancellationToken).ConfigureAwait(false);
+            }
+
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new DatabaseBaselineApplyResult(
                 DatabaseBaselineApplyStatus.Applied,
