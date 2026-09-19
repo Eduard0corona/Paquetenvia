@@ -78,6 +78,7 @@ describe("real managed SignalR reconnect", () => {
     try {
       await connection.start();
       expect(connection.state).toBe(HubConnectionState.Connected);
+      await expectRegistration(baseUrl, organizationA);
       await publish(baseUrl, organizationA, 1, firstEventId);
       await initialApplied.promiseWithTimeout(5_000);
       expect(localVersion).toBe(1);
@@ -105,6 +106,7 @@ describe("real managed SignalR reconnect", () => {
         "managed connection to report its recovered state and REST snapshot",
       );
       expect(connection.state).toBe(HubConnectionState.Connected);
+      await expectRegistration(baseUrl, organizationA);
       expect(lifecycle.length).toBeGreaterThanOrEqual(2);
       expect(lifecycle.length % 2).toBe(0);
       for (let index = 0; index < lifecycle.length; index += 2) {
@@ -209,13 +211,8 @@ class ControlledHost {
     if (this.stopped) return;
     this.stopped = true;
     if (this.process.exitCode === null) {
-      this.process.kill();
-      await Promise.race([
-        once(this.process, "exit"),
-        delay(5_000).then(() => {
-          if (this.process.exitCode === null) this.process.kill("SIGKILL");
-        }),
-      ]);
+      this.process.kill("SIGKILL");
+      await once(this.process, "exit");
     }
   }
 }
@@ -291,6 +288,22 @@ async function expectStats(
     },
     5_000,
     "authorization and WebSocket transport evidence",
+  );
+}
+
+async function expectRegistration(
+  baseUrl: string,
+  organizationId: string,
+): Promise<void> {
+  await waitFor(
+    async () => {
+      const response = await fetch(
+        `${baseUrl}/__test/registrations/${organizationId}`,
+      );
+      return response.status === 204;
+    },
+    5_000,
+    "server-side organization group registration",
   );
 }
 
