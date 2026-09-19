@@ -64,6 +64,15 @@ public sealed class DriverStopsRealtimePlaywrightTests(
             .WaitForAsync();
         Assert.Equal(1, Volatile.Read(ref restRequests));
 
+        // The initial REST/UI state does not imply the DriverHub connection has
+        // been registered in the driver group yet; publishing before that
+        // would lose the AssignmentChanged signal this test depends on.
+        Assert.True(
+            await recorder.WaitForDriverAcceptedAsync(
+                scenario.DriverId,
+                TimeSpan.FromSeconds(20)),
+            "DriverHub did not accept the driver connection.");
+
         await database.MakeBusinessOutboxAvailableAsync(scenario.AssignmentOutboxId);
         await page.WaitForFunctionAsync(
             "() => document.body.textContent.includes('Actualizado')");

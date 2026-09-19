@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -236,6 +237,9 @@ internal sealed class RealtimeAuthorizationRecorder : IRealtimeTelemetry
     private readonly SemaphoreSlim _operationsAccepted = new(0);
     private readonly SemaphoreSlim _tracking = new(0);
     private readonly SemaphoreSlim _trackingAccepted = new(0);
+    private readonly SemaphoreSlim _driverAccepted = new(0);
+    private readonly ConcurrentQueue<Guid> _pendingDriverAuthorizations = new();
+    private readonly ConcurrentDictionary<Guid, byte> _acceptedDriverIds = new();
     private int _operationsCount;
     private int _trackingCount;
     private Exception? _trackingException;
@@ -271,6 +275,36 @@ internal sealed class RealtimeAuthorizationRecorder : IRealtimeTelemetry
     internal void RecordTrackingException(Exception exception) =>
         Volatile.Write(ref _trackingException, exception);
 
+    /// <summary>
+    /// Records a driver authorization that DriverHub accepted; the hub emits
+    /// <c>ConnectionAccepted("driver", ...)</c> for it only after the driver and
+    /// assignment group registrations of that same connection completed.
+    /// </summary>
+    internal void RecordDriverAuthorized(Guid driverId) =>
+        _pendingDriverAuthorizations.Enqueue(driverId);
+
+    /// <summary>
+    /// Completes once DriverHub has accepted a connection for
+    /// <paramref name="driverId"/>, i.e. after its server-side group
+    /// registration finished. An acceptance that happened before the wait
+    /// started is still observed; rejected connections never satisfy it.
+    /// </summary>
+    internal async Task<bool> WaitForDriverAcceptedAsync(Guid driverId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!_acceptedDriverIds.ContainsKey(driverId))
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero ||
+                !await _driverAccepted.WaitAsync(remaining))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public IDisposable MeasureAuthorization(string hub, string authKind) =>
         EmptyMeasurement.Instance;
 
@@ -286,6 +320,15 @@ internal sealed class RealtimeAuthorizationRecorder : IRealtimeTelemetry
         else if (hub == "tracking")
         {
             _trackingAccepted.Release();
+        }
+        else if (hub == "driver")
+        {
+            if (_pendingDriverAuthorizations.TryDequeue(out var driverId))
+            {
+                _acceptedDriverIds.TryAdd(driverId, 0);
+            }
+
+            _driverAccepted.Release();
         }
     }
 
@@ -373,11 +416,19 @@ internal sealed class RecordingRealtimeConnectionAuthorizer(
         return inner.AuthorizeOperationsAsync(request, cancellationToken);
     }
 
-    public ValueTask<ConnectionAuthorizationResult<DriverConnectionAuthorization>>
+    public async ValueTask<ConnectionAuthorizationResult<DriverConnectionAuthorization>>
         AuthorizeDriverAsync(
             PrivateRealtimeConnectionRequest request,
-            CancellationToken cancellationToken) =>
-        inner.AuthorizeDriverAsync(request, cancellationToken);
+            CancellationToken cancellationToken)
+    {
+        var result = await inner.AuthorizeDriverAsync(request, cancellationToken);
+        if (result.IsAuthorized && result.Authorization is not null)
+        {
+            recorder.RecordDriverAuthorized(result.Authorization.DriverId);
+        }
+
+        return result;
+    }
 
     public async ValueTask<ConnectionAuthorizationResult<TrackingConnectionAuthorization>>
         AuthorizeTrackingAsync(
