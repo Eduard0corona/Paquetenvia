@@ -1,0 +1,164 @@
+name: Validation - driver PWA registration barrier
+
+on:
+  push:
+    branches:
+      - "validation/driver-pwa-registration-barrier-**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CI: "true"
+
+jobs:
+  cold-exact-testcase:
+    name: Cold exact testcase (probe ${{ matrix.probe }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: [1, 2, 3]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Restore locked integration dependencies
+        run: >-
+          dotnet restore
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --locked-mode
+
+      - name: Build driver PWA tests
+        run: >-
+          dotnet build
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-restore
+
+      - name: Install frozen web dependencies
+        run: pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        shell: pwsh
+        run: >-
+          ./tests/Paqueteria.IntegrationTests/bin/Release/net10.0/playwright.ps1
+          install
+          --with-deps
+          chromium
+
+      - name: Execute exact realtime testcase once
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
+        run: >-
+          dotnet test
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --filter "FullyQualifiedName~Real_DriverHub_signal_debounces_and_resynchronizes_from_REST"
+          --logger "trx;LogFileName=cold-exact-${{ matrix.probe }}.trx"
+          --results-directory ./TestResults/cold-exact
+
+      - name: Publish evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cold-exact-${{ matrix.probe }}
+          path: ./TestResults/cold-exact
+          if-no-files-found: error
+          retention-days: 7
+
+  foundation-shape-driver-pwa:
+    name: Foundation-shape Category=DriverStopsPwa
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Restore locked integration dependencies
+        run: >-
+          dotnet restore
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --locked-mode
+
+      - name: Build driver PWA tests
+        run: >-
+          dotnet build
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-restore
+
+      - name: Install frozen web dependencies
+        run: pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        shell: pwsh
+        run: >-
+          ./tests/Paqueteria.IntegrationTests/bin/Release/net10.0/playwright.ps1
+          install
+          --with-deps
+          chromium
+
+      - name: Execute stops and real DriverHub flows
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
+        run: >-
+          dotnet test
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=DriverStopsPwa"
+          --logger "trx;LogFileName=driver-stops-pwa.trx"
+          --results-directory ./TestResults/driver-stops-pwa
+
+      - name: Publish evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: driver-stops-pwa
+          path: ./TestResults/driver-stops-pwa
+          if-no-files-found: error
+          retention-days: 7
