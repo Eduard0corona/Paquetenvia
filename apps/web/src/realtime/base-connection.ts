@@ -21,6 +21,10 @@ export class ManagedRealtimeConnection {
     return this.connection.state;
   }
 
+  public get connectionId(): string | null {
+    return this.connection.connectionId;
+  }
+
   public start(): Promise<void> {
     return this.connection.start();
   }
@@ -62,6 +66,10 @@ export function buildManagedConnection(
       options.onResynchronizationError?.(error);
       await connection.stop();
     }
+  });
+
+  connection.onclose((error) => {
+    options.onClosed?.(error);
   });
 
   return {

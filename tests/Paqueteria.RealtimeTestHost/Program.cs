@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.SignalR;
@@ -8,6 +9,10 @@ using Realtime.Application.Events;
 using Realtime.Application.Observability;
 using Realtime.Endpoints.Hubs;
 
+DiagnosticProbe.Emit("host_process_startup", new
+{
+    command_line_argument_count = args.Length,
+});
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Services.AddSingleton<TestRealtimeState>();
@@ -22,6 +27,15 @@ builder.Services.AddSignalR()
     });
 
 var app = builder.Build();
+app.Lifetime.ApplicationStarted.Register(() =>
+    DiagnosticProbe.Emit("host_application_started", new
+    {
+        urls = app.Urls.Order(StringComparer.Ordinal).ToArray(),
+    }));
+app.Lifetime.ApplicationStopping.Register(() =>
+    DiagnosticProbe.Emit("host_application_stopping"));
+app.Lifetime.ApplicationStopped.Register(() =>
+    DiagnosticProbe.Emit("host_application_stopped"));
 app.Use(async (context, next) =>
 {
     if (!context.Request.Path.StartsWithSegments("/hubs/operations", StringComparison.Ordinal))
@@ -95,6 +109,14 @@ app.MapPost(
         IHubContext<OperationsHub, IOperationsClient> hub,
         CancellationToken cancellationToken) =>
     {
+        var group = $"org:{organizationId:D}".ToLowerInvariant();
+        DiagnosticProbe.Emit("server_publish_request_received", new
+        {
+            organization_id = organizationId.ToString("D"),
+            aggregate_version = version,
+            event_id = eventId.ToString("D"),
+            group,
+        });
         var message = new RealtimeEnvelope<OrderStatusChangedPayload>(
             eventId,
             RealtimeEventTypes.OrderStatusChanged,
@@ -107,13 +129,71 @@ app.MapPost(
                 "READY_FOR_PICKUP",
                 "ASSIGNED",
                 TestRealtimeState.OccurredAt));
-        await hub.Clients.Group($"org:{organizationId:D}".ToLowerInvariant())
+        DiagnosticProbe.Emit("server_publish_dispatch_begin", new
+        {
+            organization_id = organizationId.ToString("D"),
+            aggregate_version = version,
+            event_id = eventId.ToString("D"),
+            group,
+        });
+        await hub.Clients.Group(group)
             .OrderStatusChanged(message)
             .WaitAsync(cancellationToken);
+        DiagnosticProbe.Emit("server_publish_dispatch_complete", new
+        {
+            organization_id = organizationId.ToString("D"),
+            aggregate_version = version,
+            event_id = eventId.ToString("D"),
+            group,
+        });
+        DiagnosticProbe.Emit("server_publish_response_returned", new
+        {
+            response_status = StatusCodes.Status204NoContent,
+            aggregate_version = version,
+            event_id = eventId.ToString("D"),
+        });
         return Results.NoContent();
     });
 app.MapHub<OperationsHub>("/hubs/operations");
 app.Run();
+
+internal static class DiagnosticProbe
+{
+    private static readonly long ProcessStartedAt = Stopwatch.GetTimestamp();
+
+    internal static void Emit(string eventName, object? details = null)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("PAQUETERIA_REALTIME_DIAGNOSTICS"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var testElapsed = long.TryParse(
+            Environment.GetEnvironmentVariable("PAQUETERIA_DIAGNOSTIC_TEST_STARTED_UNIX_MS"),
+            out var testStartedAt)
+            ? now.ToUnixTimeMilliseconds() - testStartedAt
+            : (long?)null;
+        Console.Error.WriteLine(
+            $"RTDIAG {JsonSerializer.Serialize(new
+            {
+                schema = "paquetenvia-realtime-correlation-v1",
+                repetition = Environment.GetEnvironmentVariable("PAQUETERIA_DIAGNOSTIC_REPETITION"),
+                testcase = Environment.GetEnvironmentVariable("PAQUETERIA_DIAGNOSTIC_TESTCASE"),
+                process_role = "realtime-test-host",
+                pid = Environment.ProcessId,
+                correlation_id = Environment.GetEnvironmentVariable("PAQUETERIA_DIAGNOSTIC_CORRELATION_ID"),
+                utc = now.ToString("O"),
+                elapsed_ms = testElapsed,
+                process_elapsed_ms = Stopwatch.GetElapsedTime(ProcessStartedAt).TotalMilliseconds,
+                @event = eventName,
+                details,
+            })}");
+    }
+}
 
 internal sealed class TestRealtimeState
 {

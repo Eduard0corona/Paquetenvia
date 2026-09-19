@@ -15,6 +15,7 @@ export interface BaseRealtimeConnectionOptions {
   readonly reconnectDelaysMilliseconds?: readonly number[];
   readonly onReconnecting?: (error?: Error) => void;
   readonly onReconnected?: (connectionId?: string) => void;
+  readonly onClosed?: (error?: Error) => void;
   readonly onResynchronized?: () => void;
   readonly onResynchronizationError?: (error: unknown) => void;
   readonly suppressLogging?: boolean;

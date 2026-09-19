@@ -1,0 +1,155 @@
+name: SignalR correlation probe
+
+on:
+  push:
+    branches:
+      - diagnostic/signalr-correlation-81985ef6
+
+permissions:
+  contents: read
+
+jobs:
+  signalr-correlation:
+    name: Run SignalR control and correlation samples
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ORIGINAL_HEAD: 81985ef68ed20875b178b44debcd045a58953085
+    steps:
+      - name: Check out unmodified control
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.ORIGINAL_HEAD }}
+          fetch-depth: 2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Record runner environment
+        shell: bash
+        run: |
+          mkdir --parents "$RUNNER_TEMP/signalr-correlation"
+          {
+            echo "runner_os=${{ runner.os }}"
+            echo "runner_arch=${{ runner.arch }}"
+            echo "image_os=${ImageOS:-unknown}"
+            echo "image_version=${ImageVersion:-unknown}"
+            echo "kernel=$(uname -a)"
+            echo "dotnet=$(dotnet --version)"
+            echo "node=$(node --version)"
+            echo "pnpm=$(pnpm --version)"
+            cat /etc/os-release
+          } > "$RUNNER_TEMP/signalr-correlation/runner-info.txt"
+
+      - name: Build unmodified control host
+        run: |
+          dotnet restore ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --locked-mode
+          dotnet build ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --configuration Release --no-restore
+          pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Run unmodified control sample
+        id: control
+        shell: bash
+        env:
+          PAQUETERIA_TEST_HOST_DLL: ${{ github.workspace }}/tests/Paqueteria.RealtimeTestHost/bin/Release/net10.0/Paqueteria.RealtimeTestHost.dll
+        run: |
+          set +e
+          set -u -o pipefail
+          output="$RUNNER_TEMP/signalr-correlation/control"
+          mkdir --parents "$output"
+          failures=0
+          for repetition in $(seq 1 10); do
+            tag=$(printf '%02d' "$repetition")
+            started=$(date --utc --iso-8601=ns)
+            pnpm --dir apps/web exec vitest run --config vitest.e2e.config.ts --reporter=junit --outputFile="$output/repetition-$tag.xml" > "$output/repetition-$tag.log" 2>&1
+            exit_code=$?
+            completed=$(date --utc --iso-8601=ns)
+            if [ "$exit_code" -ne 0 ]; then
+              failures=$((failures + 1))
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$tag" "$exit_code" "$started" "$completed" >> "$output/status.tsv"
+          done
+          echo "failures=$failures" >> "$GITHUB_OUTPUT"
+
+      - name: Check out instrumented diagnostic commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          clean: true
+
+      - name: Record diagnostic diff
+        shell: bash
+        run: |
+          git diff --stat "$ORIGINAL_HEAD"...HEAD > "$RUNNER_TEMP/signalr-correlation/diagnostic-diff-stat.txt"
+          git diff --name-status "$ORIGINAL_HEAD"...HEAD > "$RUNNER_TEMP/signalr-correlation/diagnostic-diff-files.txt"
+
+      - name: Build instrumented diagnostic host
+        run: |
+          dotnet restore ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --locked-mode
+          dotnet build ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --configuration Release --no-restore
+          pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Run correlated diagnostic sample
+        id: instrumented
+        shell: bash
+        env:
+          PAQUETERIA_TEST_HOST_DLL: ${{ github.workspace }}/tests/Paqueteria.RealtimeTestHost/bin/Release/net10.0/Paqueteria.RealtimeTestHost.dll
+          PAQUETERIA_REALTIME_DIAGNOSTICS: "1"
+        run: |
+          set +e
+          set -u -o pipefail
+          output="$RUNNER_TEMP/signalr-correlation/instrumented"
+          mkdir --parents "$output"
+          failures=0
+          for repetition in $(seq 1 20); do
+            tag=$(printf '%02d' "$repetition")
+            started=$(date --utc --iso-8601=ns)
+            PAQUETERIA_DIAGNOSTIC_REPETITION="$tag" pnpm --dir apps/web exec vitest run --config vitest.e2e.config.ts --reporter=junit --outputFile="$output/repetition-$tag.xml" > "$output/repetition-$tag.log" 2>&1
+            exit_code=$?
+            completed=$(date --utc --iso-8601=ns)
+            if [ "$exit_code" -ne 0 ]; then
+              failures=$((failures + 1))
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$tag" "$exit_code" "$started" "$completed" >> "$output/status.tsv"
+          done
+          echo "failures=$failures" >> "$GITHUB_OUTPUT"
+
+      - name: Publish correlation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signalr-correlation-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signalr-correlation
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Conclude diagnostic execution
+        if: always()
+        shell: bash
+        run: |
+          control_failures="${{ steps.control.outputs.failures }}"
+          instrumented_failures="${{ steps.instrumented.outputs.failures }}"
+          if [ -z "$control_failures" ] || [ -z "$instrumented_failures" ]; then
+            echo "Diagnostic execution did not complete both bounded samples." >&2
+            exit 1
+          fi
+          if [ "$control_failures" -ne 0 ] || [ "$instrumented_failures" -ne 0 ]; then
+            echo "One or more diagnostic repetitions reproduced a failure." >&2
+            exit 1
+          fi
