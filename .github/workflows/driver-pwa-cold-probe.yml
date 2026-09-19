@@ -9,6 +9,9 @@ name: Driver PWA cold probe
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - diagnostic/driver-pwa-cold-probe-22c6bb3
 
 permissions:
   contents: read
