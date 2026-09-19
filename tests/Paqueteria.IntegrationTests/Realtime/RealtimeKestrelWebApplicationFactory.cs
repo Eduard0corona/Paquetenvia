@@ -33,6 +33,9 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     private readonly bool _enableDispatch;
     private readonly bool _enableDriverApiCors;
     private readonly IReadOnlyDictionary<string, string?> _configurationOverrides;
+    // DIAGNOSTIC ONLY (driver PWA cold probe): optional observation hooks.
+    private readonly Action<ILoggingBuilder>? _configureLogging;
+    private readonly Action<IServiceCollection>? _configureDiagnosticServices;
 
     internal RealtimeKestrelWebApplicationFactory(
         string connectionString,
@@ -45,9 +48,13 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         bool enableDispatch = false,
         bool enableDriverApiCors = false,
         IReadOnlyDictionary<string, string?>? configurationOverrides = null,
-        bool useHttps = false)
+        bool useHttps = false,
+        Action<ILoggingBuilder>? configureLogging = null,
+        Action<IServiceCollection>? configureDiagnosticServices = null)
     {
         _connectionString = connectionString;
+        _configureLogging = configureLogging;
+        _configureDiagnosticServices = configureDiagnosticServices;
         _workerConnectionString = workerConnectionString;
         _failureInjector = failureInjector;
         _logProvider = logProvider;
@@ -127,6 +134,11 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         if (_logProvider is not null)
         {
             builder.ConfigureLogging(logging => logging.AddProvider(_logProvider));
+        }
+
+        if (_configureLogging is not null)
+        {
+            builder.ConfigureLogging(_configureLogging);
         }
 
         builder.ConfigureAppConfiguration(configuration =>
@@ -226,6 +238,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 new RecordingRealtimeConnectionAuthorizer(
                     provider.GetRequiredService<PostgreSqlRealtimeConnectionAuthorizer>(),
                     provider.GetRequiredService<RealtimeAuthorizationRecorder>()));
+            _configureDiagnosticServices?.Invoke(services);
         });
     }
 }
@@ -238,7 +251,16 @@ internal sealed class RealtimeAuthorizationRecorder : IRealtimeTelemetry
     private readonly SemaphoreSlim _trackingAccepted = new(0);
     private int _operationsCount;
     private int _trackingCount;
+    private int _driverAcceptedCount;
     private Exception? _trackingException;
+
+    /// <summary>
+    /// DIAGNOSTIC ONLY (driver PWA cold probe). When set, hub lifecycle
+    /// telemetry is appended to the timeline. Nothing waits on it.
+    /// </summary>
+    internal RealtimeDiagnosticTimeline? Diagnostics { get; init; }
+
+    internal int DriverAcceptedCount => Volatile.Read(ref _driverAcceptedCount);
 
     internal int OperationsCount => Volatile.Read(ref _operationsCount);
     internal int TrackingCount => Volatile.Read(ref _trackingCount);
@@ -271,14 +293,25 @@ internal sealed class RealtimeAuthorizationRecorder : IRealtimeTelemetry
     internal void RecordTrackingException(Exception exception) =>
         Volatile.Write(ref _trackingException, exception);
 
-    public IDisposable MeasureAuthorization(string hub, string authKind) =>
-        EmptyMeasurement.Instance;
+    public IDisposable MeasureAuthorization(string hub, string authKind)
+    {
+        if (Diagnostics is null)
+        {
+            return EmptyMeasurement.Instance;
+        }
+
+        Diagnostics.Record("hub", $"OnConnectedAsync begin hub={hub}");
+        return new DiagnosticMeasurement(Diagnostics, hub);
+    }
 
     public IDisposable MeasurePublication(string eventType) =>
         EmptyMeasurement.Instance;
 
     public void ConnectionAccepted(string hub, string authKind)
     {
+        // DriverHub raises this only after Groups.AddToGroupAsync(Driver(id))
+        // and every assignment group registration completed.
+        Diagnostics?.Record("hub", $"ConnectionAccepted hub={hub} (group registration complete)");
         if (hub == "operations")
         {
             _operationsAccepted.Release();
@@ -287,22 +320,34 @@ internal sealed class RealtimeAuthorizationRecorder : IRealtimeTelemetry
         {
             _trackingAccepted.Release();
         }
+        else if (hub == "driver")
+        {
+            Interlocked.Increment(ref _driverAcceptedCount);
+        }
     }
 
-    public void ConnectionRejected(string hub, string authKind)
-    {
-    }
+    public void ConnectionRejected(string hub, string authKind) =>
+        Diagnostics?.Record("hub", $"ConnectionRejected hub={hub}");
 
-    public void ConnectionClosed(string hub)
-    {
-    }
+    public void ConnectionClosed(string hub) =>
+        Diagnostics?.Record("hub", $"ConnectionClosed hub={hub}");
 
-    public void PublicationSucceeded(string eventType)
-    {
-    }
+    public void PublicationSucceeded(string eventType) =>
+        Diagnostics?.Record("hub", $"PublicationSucceeded event_type={eventType}");
 
-    public void PublicationFailed(string eventType)
+    public void PublicationFailed(string eventType) =>
+        Diagnostics?.Record("hub", $"PublicationFailed event_type={eventType}");
+
+    /// <summary>
+    /// DIAGNOSTIC ONLY. Records the end of OnConnectedAsync whichever path it
+    /// took (accepted, rejected or faulted).
+    /// </summary>
+    private sealed class DiagnosticMeasurement(
+        RealtimeDiagnosticTimeline timeline,
+        string hub) : IDisposable
     {
+        public void Dispose() =>
+            timeline.Record("hub", $"OnConnectedAsync end hub={hub}");
     }
 
     private sealed class EmptyMeasurement : IDisposable
@@ -373,11 +418,36 @@ internal sealed class RecordingRealtimeConnectionAuthorizer(
         return inner.AuthorizeOperationsAsync(request, cancellationToken);
     }
 
-    public ValueTask<ConnectionAuthorizationResult<DriverConnectionAuthorization>>
+    public async ValueTask<ConnectionAuthorizationResult<DriverConnectionAuthorization>>
         AuthorizeDriverAsync(
             PrivateRealtimeConnectionRequest request,
-            CancellationToken cancellationToken) =>
-        inner.AuthorizeDriverAsync(request, cancellationToken);
+            CancellationToken cancellationToken)
+    {
+        var diagnostics = recorder.Diagnostics;
+        if (diagnostics is null)
+        {
+            return await inner.AuthorizeDriverAsync(request, cancellationToken);
+        }
+
+        diagnostics.Record("hub", "AuthorizeDriverAsync begin");
+        try
+        {
+            var result = await inner.AuthorizeDriverAsync(request, cancellationToken);
+            diagnostics.Record(
+                "hub",
+                result.IsAuthorized && result.Authorization is { } authorization
+                    ? $"AuthorizeDriverAsync authorized driver={RealtimeDiagnosticTimeline.Short(authorization.DriverId)} assignment_groups={authorization.AssignmentIds.Length}"
+                    : $"AuthorizeDriverAsync NOT authorized status={result.Status}");
+            return result;
+        }
+        catch (Exception exception)
+        {
+            diagnostics.Record(
+                "hub",
+                $"AuthorizeDriverAsync FAILED {exception.GetType().Name}: {exception.Message}");
+            throw;
+        }
+    }
 
     public async ValueTask<ConnectionAuthorizationResult<TrackingConnectionAuthorization>>
         AuthorizeTrackingAsync(

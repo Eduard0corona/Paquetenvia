@@ -1,0 +1,131 @@
+# DIAGNOSTIC ONLY - driver PWA cold CI correlation probe.
+#
+# Runs exactly one testcase
+# (Real_DriverHub_signal_debounces_and_resynchronizes_from_REST) as the first
+# and only Driver PWA testcase of a fresh GitHub-hosted runner, N independent
+# times, and uploads the compact diagnostic timeline of every probe. It is not a
+# Foundation rerun: no other job, gate, retry or provenance step is executed.
+name: Driver PWA cold probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cold-probe:
+    name: Cold probe ${{ matrix.probe }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: [1, 2, 3, 4]
+    env:
+      CI: "true"
+      PAQUETENVIA_DIAG_DIR: ./TestResults/driver-pwa-cold-probe
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Record runner environment
+        shell: bash
+        run: |
+          mkdir -p "$PAQUETENVIA_DIAG_DIR"
+          {
+            echo "probe=${{ matrix.probe }}"
+            echo "sha=${{ github.sha }}"
+            echo "run_id=${{ github.run_id }}"
+            echo "run_attempt=${{ github.run_attempt }}"
+            echo "runner_name=$RUNNER_NAME"
+            echo "image_os=$ImageOS"
+            echo "image_version=$ImageVersion"
+            echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+          } | tee "$PAQUETENVIA_DIAG_DIR/runner.txt"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Restore locked integration dependencies
+        run: >-
+          dotnet restore
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --locked-mode
+
+      - name: Build driver PWA tests
+        run: >-
+          dotnet build
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-restore
+
+      - name: Install frozen web dependencies
+        run: pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        shell: pwsh
+        run: >-
+          ./tests/Paqueteria.IntegrationTests/bin/Release/net10.0/playwright.ps1
+          install
+          --with-deps
+          chromium
+
+      - name: Execute the single cold testcase
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
+        run: >-
+          dotnet test
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --filter "FullyQualifiedName~DriverStopsRealtimePlaywrightTests.Real_DriverHub_signal_debounces_and_resynchronizes_from_REST"
+          --logger "trx;LogFileName=driver-pwa-cold-probe.trx"
+          --results-directory ./TestResults/driver-pwa-cold-probe
+
+      - name: Capture container diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          for container_id in $(docker ps --all --quiet --filter "label=org.testcontainers.lang=dotnet"); do
+            docker logs --tail 100 "$container_id" > "$PAQUETENVIA_DIAG_DIR/container-$container_id.log" 2>&1 || true
+          done
+
+      - name: Publish probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: driver-pwa-cold-probe-${{ matrix.probe }}
+          path: ./TestResults/driver-pwa-cold-probe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Clean driver stops resources
+        if: always()
+        shell: bash
+        run: |
+          container_ids=$(docker ps --all --quiet --filter "label=org.testcontainers.lang=dotnet")
+          if [ -n "$container_ids" ]; then
+            docker rm --force $container_ids
+          fi
+          network_ids=$(docker network ls --quiet --filter "label=org.testcontainers.lang=dotnet")
+          if [ -n "$network_ids" ]; then
+            docker network rm $network_ids
+          fi
