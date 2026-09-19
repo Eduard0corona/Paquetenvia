@@ -1,0 +1,83 @@
+name: Validate SignalR reconnect fix
+
+on:
+  push:
+    branches:
+      - validation/signalr-reconnect-fix-81985ef6
+
+permissions:
+  contents: read
+
+jobs:
+  realtime-reconnect:
+    name: Repeat real SignalR reconnect
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PAQUETERIA_TEST_HOST_DLL: ${{ github.workspace }}/tests/Paqueteria.RealtimeTestHost/bin/Release/net10.0/Paqueteria.RealtimeTestHost.dll
+    steps:
+      - name: Check out validation branch
+        uses: actions/checkout@v5
+
+      - name: Record runner image
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Restore controlled host
+        run: dotnet restore ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --locked-mode
+
+      - name: Build controlled host
+        run: dotnet build ./tests/Paqueteria.RealtimeTestHost/Paqueteria.RealtimeTestHost.csproj --configuration Release --no-restore
+
+      - name: Install web dependencies
+        run: pnpm --dir apps/web install --frozen-lockfile
+
+      - name: Execute 20 real reconnect repetitions
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p ./TestResults/realtime-fix
+          passed=0
+          failed=0
+          for iteration in $(seq 1 20); do
+            result="TestResults/realtime-fix/run-${iteration}.xml"
+            if pnpm --dir apps/web exec vitest run \
+              --config vitest.e2e.config.ts \
+              --reporter=junit \
+              --outputFile="../../${result}"; then
+              passed=$((passed + 1))
+              echo "repetition ${iteration}/20: PASS"
+            else
+              failed=$((failed + 1))
+              echo "repetition ${iteration}/20: FAIL"
+            fi
+          done
+          echo "REPETITIONS=20 PASSED=${passed} FAILED=${failed}"
+          test "${failed}" -eq 0
+
+      - name: Publish realtime validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signalr-reconnect-fix-results
+          path: ./TestResults/realtime-fix
+          if-no-files-found: warn
+          retention-days: 7
