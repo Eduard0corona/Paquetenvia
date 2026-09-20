@@ -73,6 +73,9 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             await using (var mutate = new NpgsqlCommand("""
                 ALTER ROLE paqueteria_worker NOINHERIT;
                 GRANT CREATE ON SCHEMA security TO paqueteria_outbox_executor;
+                GRANT USAGE ON SCHEMA notifications TO paqueteria_maintenance;
+                ALTER FUNCTION security.purge_outbox(timestamptz,timestamptz,integer,boolean) OWNER TO paqueteria_migrator;
+                ALTER FUNCTION security.claim_outbox(text,integer,interval) RESET search_path;
                 """, connection, transaction))
             {
                 await mutate.ExecuteNonQueryAsync();
@@ -85,6 +88,17 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                     transaction));
             Assert.Contains(exception.Violations, value => value.Contains("role attributes differ: paqueteria_worker"));
             Assert.Contains(exception.Violations, value => value.Contains("temporary CREATE residue: security/paqueteria_outbox_executor"));
+            // E-002 v0.8 §36: each failed invariant is classified by its own normative guard, not a generic code.
+            Assert.Contains("E002_ROLE_ATTRIBUTE_MISMATCH", exception.GuardCodes);
+            Assert.Contains("E002_BASELINE_SECURITY_ACL_MISMATCH", exception.GuardCodes);
+            Assert.Contains("E002_NOTIFICATIONS_ACL_RESTORE_MISMATCH", exception.GuardCodes);
+            Assert.Contains("E002_OWNER_MAP_MISMATCH", exception.GuardCodes);
+            Assert.Contains("E002_SECURITY_DEFINER_UNSAFE", exception.GuardCodes);
+            Assert.Contains(exception.Violations, value =>
+                value.StartsWith("E002_OWNER_MAP_MISMATCH: routine owner differs: security.purge_outbox", StringComparison.Ordinal));
+            Assert.Contains(exception.Violations, value =>
+                value.StartsWith("E002_SECURITY_DEFINER_UNSAFE: search_path unsafe or missing: security.claim_outbox", StringComparison.Ordinal));
+            Assert.StartsWith("E002_SEMANTIC_PARTIAL; STOP_FOR_CONTRACT_REVIEW", exception.Message, StringComparison.Ordinal);
             await transaction.RollbackAsync();
 
             await new E002SemanticAssertions().AssertAsync(connection, E002NotificationState.Pending);
@@ -167,7 +181,9 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
         await using (var second = await source.OpenConnectionAsync())
         await using (var user = new NpgsqlCommand("SELECT current_user", second))
         {
-            Assert.Equal(originalUser, await user.ExecuteScalarAsync());
+            // E-002 v0.9 Amendment 5: a leaked SET ROLE on the next pooled lease is E002_CONNECTION_ROLE_STATE_LEAK.
+            Assert.True(string.Equals(originalUser, await user.ExecuteScalarAsync() as string, StringComparison.Ordinal),
+                "E002_CONNECTION_ROLE_STATE_LEAK; STOP_FOR_CONTRACT_REVIEW");
         }
 
         builder.NoResetOnClose = true;
@@ -286,6 +302,7 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             Assert.Contains(exception.Violations, value =>
                 value.Contains("Grantee = paqueteria_worker", StringComparison.Ordinal) &&
                 value.Contains("Grantor = paqueteria_app", StringComparison.Ordinal));
+            Assert.Equal(["E002_ROUTINE_ACL_MISMATCH"], exception.GuardCodes);
             await transaction.RollbackAsync();
             await new E002SemanticAssertions().AssertAsync(connection, E002NotificationState.Pending);
         }
@@ -346,6 +363,84 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             Environment.SetEnvironmentVariable(variable, previous);
             await fixture.DropIsolatedDatabaseAsync(connectionString);
         }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Fully_applied_second_apply_is_a_successful_read_only_no_op()
+    {
+        var connectionString = await fixture.CreateIsolatedDatabaseAsync("e002noop");
+        const string variable = "PAQUETERIA_E002_NOOP_TEST_DB";
+        var previous = Environment.GetEnvironmentVariable(variable);
+        var output = Console.Out;
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, connectionString);
+            Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(
+                ["apply", "--connection-env", variable, "--confirm-initial-baseline"]));
+            Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None),
+                state => Assert.Equal("APPLIED", state.Status));
+            var membershipsBefore = await CountMembershipsAsync(connectionString);
+            var fingerprintBefore = await CatalogFingerprintAsync(connectionString);
+
+            // E-002 v0.8 §35: the same apply command on a 9/9 APPLIED database is a successful read-only no-op.
+            await using var capture = new StringWriter();
+            Console.SetOut(capture);
+            var exitCode = await DatabaseMigratorProgram.RunAsync(
+                ["apply", "--connection-env", variable, "--confirm-initial-baseline"]);
+            Console.SetOut(output);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("E002_APPLIED_PATH_NO_OP modules=9/9 APPLIED bridge_activation=0", capture.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("E002_APPLIED_PATH_MODULE_STATE_UNEXPECTED", capture.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Result: AlreadyApplied", capture.ToString(), StringComparison.Ordinal);
+            Assert.Equal(membershipsBefore, await CountMembershipsAsync(connectionString));
+            Assert.Equal(fingerprintBefore, await CatalogFingerprintAsync(connectionString));
+        }
+        finally
+        {
+            Console.SetOut(output);
+            Environment.SetEnvironmentVariable(variable, previous);
+            await fixture.DropIsolatedDatabaseAsync(connectionString);
+        }
+    }
+
+    [Fact]
+    public void Notifications_bridge_bearing_migration_never_suppresses_the_transaction()
+    {
+        // E-002 v0.8 §32: static validation, executable acceptance. Bridge-bearing migrations must not opt out of
+        // the EF migration transaction (suppressTransaction: true has no authorized use in the Notifications module).
+        var root = RepositoryRootLocator.Find();
+        var migrations = Directory.GetFiles(
+            Path.Combine(root, "src", "Modules", "Notifications"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => path.Contains($"{Path.DirectorySeparatorChar}Migrations{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .ToArray();
+        Assert.NotEmpty(migrations);
+        var suppressed = migrations
+            .Where(path => File.ReadAllText(path).Contains("suppressTransaction: true", StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(suppressed.Length == 0,
+            $"E002_TRANSACTION_SUPPRESSED; STOP_FOR_CONTRACT_REVIEW: {string.Join(", ", suppressed.Select(Path.GetFileName))}");
+    }
+
+    private static async Task<string> CatalogFingerprintAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("""
+            SELECT md5(string_agg(line, ';' ORDER BY line)) FROM (
+              SELECT format('%s:%s:%s', n.nspname, c.relname, pg_get_userbyid(c.relowner)) AS line
+              FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+              WHERE n.nspname NOT LIKE 'pg\_%' AND n.nspname <> 'information_schema'
+              UNION ALL
+              SELECT format('%s:%s:%s', n.nspname, p.oid::regprocedure::text, pg_get_userbyid(p.proowner))
+              FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+              WHERE n.nspname NOT LIKE 'pg\_%' AND n.nspname <> 'information_schema'
+              UNION ALL
+              SELECT format('%s:%s', n.nspname, n.nspacl::text) FROM pg_namespace n
+              WHERE n.nspname NOT LIKE 'pg\_%' AND n.nspname <> 'information_schema'
+            ) lines
+            """, connection);
+        return (string)(await command.ExecuteScalarAsync())!;
     }
 
     private static async Task<long> CountMembershipsAsync(string connectionString)

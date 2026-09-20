@@ -40,94 +40,234 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         }
     }
 
-    [PostgreSqlContractFact]
-    public async Task Azure_ownership_bridge_applies_canonical_baseline_as_non_superuser_and_cleans_grants()
+    private static readonly AzureOwnershipBridgeSelection Bridge = new(
+        "DevSynthetic", "DEV_SYNTHETIC", "AZURE_POSTGRESQL_FLEXIBLE_SERVER");
+
+    /// <summary>
+    /// Emulates the Azure Flexible Server deployment principal on plain PostgreSQL: a non-superuser login with
+    /// CREATEROLE/BYPASSRLS, azure_pg_admin membership, effective ADMIN/SET authority over the (cluster-wide,
+    /// pre-existing) canonical roles, the azure.extensions allowlist and PostGIS 3.6 already in public.
+    /// The extensions schema is intentionally NOT pre-created (E-002 v0.9 Amendment 2).
+    /// </summary>
+    private sealed class AzureLikeEnvironment(PostgreSqlContractFixture fixture) : IAsyncDisposable
     {
-        var adminConnectionString = await fixture.CreateIsolatedDatabaseAsync("ownershipbridge");
-        var database = new NpgsqlConnectionStringBuilder(adminConnectionString).Database;
-        var login = $"azr001_bridge_test_{Guid.NewGuid():N}";
-        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        try
+        public string AdminConnectionString { get; private set; } = string.Empty;
+
+        public string DeploymentConnectionString { get; private set; } = string.Empty;
+
+        private string _login = string.Empty;
+
+        public async Task<AzureLikeEnvironment> InitializeAsync(string purpose, bool bypassRls = true,
+            bool azureAdmin = true, string? allowlist = "POSTGIS,PGCRYPTO")
         {
+            AdminConnectionString = await fixture.CreateIsolatedDatabaseAsync(purpose);
+            var database = new NpgsqlConnectionStringBuilder(AdminConnectionString).Database;
+            _login = $"azr001_bridge_test_{Guid.NewGuid():N}";
+            var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             await using (var admin = new NpgsqlConnection(fixture.DeploymentConnectionString))
             {
                 await admin.OpenAsync();
                 await using var setup = new NpgsqlCommand($$"""
-                    CREATE ROLE {{login}} LOGIN CREATEROLE BYPASSRLS NOSUPERUSER PASSWORD '{{password}}';
-                    ALTER DATABASE "{{database}}" OWNER TO {{login}};
+                    CREATE ROLE {{_login}} LOGIN CREATEROLE {{(bypassRls ? "BYPASSRLS" : "NOBYPASSRLS")}} NOSUPERUSER PASSWORD '{{password}}';
+                    ALTER DATABASE "{{database}}" OWNER TO {{_login}};
                     GRANT paqueteria_migrator, paqueteria_app, paqueteria_worker,
                           paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance
-                    TO {{login}} WITH ADMIN TRUE, SET TRUE;
+                    TO {{_login}} WITH ADMIN TRUE, SET TRUE;
+                    DO $$ BEGIN CREATE ROLE azure_pg_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+                    {{(azureAdmin ? $"GRANT azure_pg_admin TO {_login};" : string.Empty)}}
+                    {{(allowlist is null ? string.Empty : $"ALTER DATABASE \"{database}\" SET azure.extensions = '{allowlist}';")}}
                     """, admin);
                 await setup.ExecuteNonQueryAsync();
             }
 
-            await using (var admin = new NpgsqlConnection(adminConnectionString))
+            await using (var admin = new NpgsqlConnection(AdminConnectionString))
             {
                 await admin.OpenAsync();
                 await using var postgis = new NpgsqlCommand("CREATE EXTENSION postgis", admin);
                 await postgis.ExecuteNonQueryAsync();
             }
 
-            var deploymentBuilder = new NpgsqlConnectionStringBuilder(adminConnectionString)
+            DeploymentConnectionString = new NpgsqlConnectionStringBuilder(AdminConnectionString)
             {
-                Username = login,
+                Username = _login,
                 Password = password,
                 Pooling = false,
-            };
-            var deploymentConnectionString = deploymentBuilder.ConnectionString;
-            await using (var deployment = new NpgsqlConnection(deploymentConnectionString))
-            {
-                await deployment.OpenAsync();
-                await using var pgcrypto = new NpgsqlCommand(
-                    "CREATE SCHEMA extensions; CREATE EXTENSION pgcrypto WITH SCHEMA extensions", deployment);
-                await pgcrypto.ExecuteNonQueryAsync();
-            }
-
-            var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
-            Assert.Equal(CanonicalBaselineContract.SchemaSha256, baseline.Steps[0].Sha256);
-            Assert.Equal(CanonicalBaselineContract.RolesSha256, baseline.Steps[1].Sha256);
-
-            var bridge = new AzureOwnershipBridgeSelection(
-                "DevSynthetic", "DEV_SYNTHETIC", "AZURE_POSTGRESQL_FLEXIBLE_SERVER");
-            var deployer = new DatabaseBaselineDeployer();
-            var first = await deployer.ApplyAsync(baseline, deploymentConnectionString,
-                ownershipBridge: bridge);
-            var second = await deployer.ApplyAsync(baseline, deploymentConnectionString,
-                ownershipBridge: bridge);
-
-            Assert.Equal(DatabaseBaselineApplyStatus.Applied, first.Status);
-            Assert.Equal(DatabaseBaselineApplyStatus.AlreadyApplied, second.Status);
-            Assert.True(first.Assertions.Checks >= 10);
-            Assert.Equal(DatabaseBaselineStatus.Applied,
-                (await deployer.PlanAsync(baseline, deploymentConnectionString)).State.Status);
-
-            await using var verify = new NpgsqlConnection(deploymentConnectionString);
-            await verify.OpenAsync();
-            await using var check = new NpgsqlCommand("""
-                SELECT NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
-                   AND NOT has_schema_privilege('paqueteria_bootstrap', 'security', 'CREATE')
-                   AND NOT has_schema_privilege('paqueteria_outbox_executor', 'security', 'CREATE')
-                   AND NOT has_schema_privilege('paqueteria_maintenance', 'security', 'CREATE')
-                   AND NOT has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
-                   AND (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'security') = 'paqueteria_migrator'
-                   AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
-                        WHERE oid = 'security.resolve_identity_context(text)'::regprocedure) = 'paqueteria_bootstrap'
-                   AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
-                        WHERE oid = 'security.claim_outbox(text,integer,interval)'::regprocedure) = 'paqueteria_outbox_executor'
-                   AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
-                        WHERE oid = 'security.purge_outbox(timestamptz,timestamptz,integer,boolean)'::regprocedure) = 'paqueteria_maintenance'
-                """, verify);
-            Assert.True((bool)(await check.ExecuteScalarAsync())!);
+            }.ConnectionString;
+            return this;
         }
-        finally
+
+        public async Task<bool> ScalarAsync(string sql)
         {
-            await fixture.DropIsolatedDatabaseAsync(adminConnectionString);
+            await using var connection = new NpgsqlConnection(DeploymentConnectionString);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(sql, connection);
+            return (bool)(await command.ExecuteScalarAsync())!;
+        }
+
+        public async Task<E002AclSnapshot> DatabaseAclAsync()
+        {
+            await using var connection = new NpgsqlConnection(DeploymentConnectionString);
+            await connection.OpenAsync();
+            return await E002AclSnapshot.ReadDatabaseAsync(connection, null, "test", CancellationToken.None);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await fixture.DropIsolatedDatabaseAsync(AdminConnectionString);
             await using var admin = new NpgsqlConnection(fixture.DeploymentConnectionString);
             await admin.OpenAsync();
-            await using var cleanup = new NpgsqlCommand($"DROP ROLE IF EXISTS {login}", admin);
+            await using var cleanup = new NpgsqlCommand($"DROP ROLE IF EXISTS {_login}", admin);
             await cleanup.ExecuteNonQueryAsync();
         }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_applies_canonical_baseline_as_non_superuser_and_cleans_grants()
+    {
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("ownershipbridge");
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        Assert.Equal(CanonicalBaselineContract.SchemaSha256, baseline.Steps[0].Sha256);
+        Assert.Equal(CanonicalBaselineContract.RolesSha256, baseline.Steps[1].Sha256);
+
+        var databaseAclBefore = await environment.DatabaseAclAsync();
+        Assert.True(await environment.ScalarAsync(
+            "SELECT datacl IS NULL FROM pg_database WHERE datname = current_database()"));
+
+        var stages = new List<string>();
+        var deployer = new DatabaseBaselineDeployer(stageObserver: stages.Add);
+        var first = await deployer.ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+        var firstStages = stages.ToArray();
+        var second = await deployer.ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+
+        Assert.Equal(DatabaseBaselineApplyStatus.Applied, first.Status);
+        Assert.Equal(DatabaseBaselineApplyStatus.AlreadyApplied, second.Status);
+        Assert.True(first.Assertions.Checks >= 10);
+        Assert.Equal(DatabaseBaselineStatus.Applied,
+            (await deployer.PlanAsync(baseline, environment.DeploymentConnectionString)).State.Status);
+
+        // E-002 v0.8 §14/§18: platform preflight, then AI-06 first, then the bridge prelude
+        // (role pre-creation, capability gate, temporary CREATE), then AI-18, then cleanup in §19 order
+        // with the database CREATE revoked before SET ROLE and the ACL restoration asserted after RESET ROLE.
+        Assert.Equal(
+        [
+            "e002-platform-preflight", "ai06", "e002-prelude", "e002-role-precreation", "e002-capability-gate",
+            "e002-grant-database-create", "e002-grant-security-create", "ai18", "e002-cleanup",
+            "e002-revoke-database-create", "e002-set-role-migrator", "e002-revoke-security-create",
+            "e002-reset-role", "e002-database-acl-restoration", "canonical-assertions",
+        ], firstStages);
+        // §35: the AlreadyApplied second execution activates no bridge stage (read-only assertions only).
+        Assert.Empty(stages.Skip(firstStages.Length));
+
+        // E-002 v0.8 §20: NULL-aware normalized database ACL restored exactly (raw NULL before, explicit after).
+        Assert.True(databaseAclBefore.SetEquals(await environment.DatabaseAclAsync()));
+        Assert.True(await environment.ScalarAsync("""
+            SELECT NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+               AND NOT has_schema_privilege('paqueteria_bootstrap', 'security', 'CREATE')
+               AND NOT has_schema_privilege('paqueteria_outbox_executor', 'security', 'CREATE')
+               AND NOT has_schema_privilege('paqueteria_maintenance', 'security', 'CREATE')
+               AND NOT has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
+               AND (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'security') = 'paqueteria_migrator'
+               AND (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'extensions') = 'paqueteria_migrator'
+               AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
+                    WHERE oid = 'security.resolve_identity_context(text)'::regprocedure) = 'paqueteria_bootstrap'
+               AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
+                    WHERE oid = 'security.claim_outbox(text,integer,interval)'::regprocedure) = 'paqueteria_outbox_executor'
+               AND (SELECT pg_get_userbyid(proowner) FROM pg_proc
+                    WHERE oid = 'security.purge_outbox(timestamptz,timestamptz,integer,boolean)'::regprocedure) = 'paqueteria_maintenance'
+            """));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_restores_explicit_and_non_default_database_acls()
+    {
+        // Explicit-default equivalent (GRANT of an already-default privilege materializes datacl) plus a
+        // representative non-default entry that E-002 must leave untouched.
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgeacl");
+        await using (var admin = new NpgsqlConnection(environment.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var grant = new NpgsqlCommand($"""
+                GRANT CONNECT ON DATABASE "{admin.Database}" TO PUBLIC;
+                GRANT CONNECT ON DATABASE "{admin.Database}" TO paqueteria_app;
+                """, admin);
+            await grant.ExecuteNonQueryAsync();
+        }
+
+        var before = await environment.DatabaseAclAsync();
+        Assert.False(await environment.ScalarAsync(
+            "SELECT datacl IS NULL FROM pg_database WHERE datname = current_database()"));
+        Assert.Contains(before.Entries, entry => entry is { Grantee: "paqueteria_app", Privilege: "CONNECT" });
+
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        var result = await new DatabaseBaselineDeployer().ApplyAsync(
+            baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+        Assert.Equal(DatabaseBaselineApplyStatus.Applied, result.Status);
+        Assert.True(before.SetEquals(await environment.DatabaseAclAsync()));
+    }
+
+    [Fact]
+    public void Database_acl_restoration_mismatch_emits_normative_guard()
+    {
+        var before = new E002AclSnapshot("database", [new E002AclEntry("PUBLIC", "owner", "CONNECT", false)]);
+        var after = new E002AclSnapshot("database",
+            [new E002AclEntry("PUBLIC", "owner", "CONNECT", false), new E002AclEntry("paqueteria_migrator", "owner", "CREATE", false)]);
+        var reordered = new E002AclSnapshot("database",
+            [new E002AclEntry("paqueteria_migrator", "owner", "CREATE", false), new E002AclEntry("PUBLIC", "owner", "CONNECT", false)]);
+
+        E002AclSnapshot.AssertDatabaseRestored(after, reordered, "test");
+        var exception = Assert.Throws<E002GuardException>(() => E002AclSnapshot.AssertDatabaseRestored(before, after, "test"));
+        Assert.Equal("E002_DATABASE_ACL_RESTORE_MISMATCH", exception.GuardCode);
+        Assert.StartsWith("E002_DATABASE_ACL_RESTORE_MISMATCH; STOP_FOR_CONTRACT_REVIEW", exception.Message, StringComparison.Ordinal);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Preexisting_temporary_create_privilege_fails_closed_before_mutation_and_is_not_removed()
+    {
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgeprestate");
+        await using (var admin = new NpgsqlConnection(environment.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var grant = new NpgsqlCommand(
+                $"GRANT CREATE ON DATABASE \"{admin.Database}\" TO paqueteria_migrator", admin);
+            await grant.ExecuteNonQueryAsync();
+        }
+
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        var exception = await Assert.ThrowsAsync<E002GuardException>(() => new DatabaseBaselineDeployer()
+            .ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge));
+
+        Assert.Equal("E002_CREATE_PRESTATE_PRESENT", exception.GuardCode);
+        // Rolled back: no AI-06 object survives and the pre-existing privilege was not silently revoked.
+        Assert.True(await environment.ScalarAsync("""
+            SELECT to_regnamespace('security') IS NULL AND to_regnamespace('extensions') IS NULL
+               AND has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
+            """));
+    }
+
+    public static TheoryData<string, bool, bool, string?> PlatformPreflightFailures => new()
+    {
+        { "E002_PLATFORM_DEPLOYMENT_ROLE_ATTRIBUTES", false, true, "POSTGIS,PGCRYPTO" },
+        { "E002_PLATFORM_AZURE_ADMIN_CAPABILITY", true, false, "POSTGIS,PGCRYPTO" },
+        { "E002_PLATFORM_EXTENSION_ALLOWLIST", true, true, "POSTGIS" },
+        { "E002_PLATFORM_EXTENSION_ALLOWLIST", true, true, null },
+    };
+
+    [Theory]
+    [MemberData(nameof(PlatformPreflightFailures))]
+    public async Task Platform_preflight_failures_emit_distinct_normative_guards_before_mutation(
+        string expectedGuard, bool bypassRls, bool azureAdmin, string? allowlist)
+    {
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync(
+            "bridgepreflight", bypassRls, azureAdmin, allowlist);
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        var stages = new List<string>();
+        var exception = await Assert.ThrowsAsync<E002GuardException>(() => new DatabaseBaselineDeployer(stageObserver: stages.Add)
+            .ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge));
+
+        Assert.Equal(expectedGuard, exception.GuardCode);
+        Assert.Equal("platform-preflight", exception.Phase);
+        Assert.Equal(["e002-platform-preflight"], stages);
+        Assert.True(await environment.ScalarAsync("SELECT to_regnamespace('security') IS NULL"));
     }
 
     [PostgreSqlContractFact]

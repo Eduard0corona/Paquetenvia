@@ -83,10 +83,9 @@ public sealed class DatabaseBaselineStateDetector
             .ToArray();
         var missing = expected.Except(present, StringComparer.Ordinal).ToArray();
 
-        // A managed service can install pgcrypto into extensions before the baseline.
-        // That schema alone is not an application baseline fragment.
-        var databaseObjectsPresent = presentSchemas.Count(schema => schema != "extensions") +
-            presentTables.Count + presentFunctions.Count;
+        // E-002 v0.9 Amendment 1/2: every ApplicationSchemas member, including extensions, is a canonical
+        // database object, so an extensions-only prestate is Partial. Roles are cluster-wide and never count.
+        var databaseObjectsPresent = presentSchemas.Count + presentTables.Count + presentFunctions.Count;
         var status = missing.Length == 0
             ? DatabaseBaselineStatus.Applied
             : databaseObjectsPresent == 0
