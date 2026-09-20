@@ -19,7 +19,7 @@ function Invoke-AzureCli {
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $templatePath = Join-Path $PSScriptRoot 'core.bicep'
 $vaultTemplatePath = Join-Path $PSScriptRoot 'vault.bicep'
-$expectedMain = 'b8dbb47664d58595f5f6a750c1f8856ea20e5acf'
+$expectedMain = '524a5c5735f83707cbdf3d675add31622f409a4f'
 $actualMain = (& git -C $repositoryRoot rev-parse origin/main).Trim()
 if ($LASTEXITCODE -ne 0 -or $actualMain -cne $expectedMain) {
     throw 'STOP_FOR_CONTRACT_REVIEW: origin/main differs from the AZR-001 frozen baseline.'

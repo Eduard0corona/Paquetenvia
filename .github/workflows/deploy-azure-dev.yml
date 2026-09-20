@@ -1,0 +1,116 @@
+name: Deploy Azure DEV-SYNTHETIC
+
+# AZR-001 v0.8 §27 deployment control plane.
+# - Single trigger: workflow_dispatch (no push / pull_request / schedule / repository_dispatch / workflow_run).
+# - GitHub Environment `azure-dev` guards every Azure control-plane job (OIDC via `id-token: write`).
+# - Concurrency group `azure-dev`, never cancelled in progress.
+# - §10 caller-origin matrix: the deployment workflow runs on a GitHub-hosted runner.
+# - Fail-closed provenance (§27 / AC-052): the dispatched ref must be the frozen AZR-001 baseline
+#   recorded in deploy/azure/deploy-core.ps1 and the exact head of a successful Foundation CI push run on main.
+# Phases C–H are not wired here yet; they are added by later bounded slices under Owner authorization.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tested_git_sha:
+        description: Foundation-certified commit SHA. Must equal the frozen AZR-001 baseline and the dispatched ref.
+        required: true
+        type: string
+      foundation_run_id:
+        description: Foundation CI run id (push on main) whose head is tested_git_sha and whose conclusion is success.
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: azure-dev
+  cancel-in-progress: false
+
+env:
+  BICEP_VERSION: v0.47.16
+  BICEP_SHA256: 64c345a58e0c3e48b1bc98a4e62d6b3adb1d238281297de3400aeafb2697aa5a
+
+jobs:
+  provenance:
+    name: Verify frozen provenance and static guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out tested_git_sha
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tested_git_sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install guard dependencies
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Fetch Foundation run record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.foundation_run_id }}" > "${{ runner.temp }}/foundation-run.json"
+
+      - name: Enforce frozen baseline gate (STOP_FOR_CONTRACT_REVIEW on any other SHA)
+        run: >-
+          python ./tools/azr-001/azr001_static_guards.py deploy-gate
+          --tested-git-sha "${{ inputs.tested_git_sha }}"
+          --dispatch-sha "${{ github.sha }}"
+          --foundation-run-id "${{ inputs.foundation_run_id }}"
+          --foundation-run-json "${{ runner.temp }}/foundation-run.json"
+
+      - name: Install pinned Bicep CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${RUNNER_TEMP}/bicep" "https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64"
+          echo "${BICEP_SHA256}  ${RUNNER_TEMP}/bicep" | sha256sum --check --strict
+          chmod +x "${RUNNER_TEMP}/bicep"
+
+      - name: Build and lint Bicep templates (offline)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/azr001-arm"
+          for template in deploy/azure/*.bicep; do
+            "${RUNNER_TEMP}/bicep" build "${template}" --outdir "${RUNNER_TEMP}/azr001-arm"
+            "${RUNNER_TEMP}/bicep" lint "${template}"
+          done
+
+      - name: Run AZR-001 §28 static guards
+        run: python ./tools/azr-001/azr001_static_guards.py check --arm-dir "${{ runner.temp }}/azr001-arm"
+
+  deploy-core:
+    name: Phase B shared infrastructure (deploy-core.ps1)
+    needs: provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: azure-dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Check out tested_git_sha
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tested_git_sha }}
+          fetch-depth: 0
+
+      - name: Azure login (OIDC, no stored credential)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy AZR-001 core infrastructure
+        shell: pwsh
+        run: ./deploy/azure/deploy-core.ps1 -SubscriptionId "${{ vars.AZURE_SUBSCRIPTION_ID }}"
