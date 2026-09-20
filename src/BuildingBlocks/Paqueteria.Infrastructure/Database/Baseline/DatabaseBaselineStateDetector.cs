@@ -83,7 +83,10 @@ public sealed class DatabaseBaselineStateDetector
             .ToArray();
         var missing = expected.Except(present, StringComparer.Ordinal).ToArray();
 
-        var databaseObjectsPresent = presentSchemas.Count + presentTables.Count + presentFunctions.Count;
+        // A managed service can install pgcrypto into extensions before the baseline.
+        // That schema alone is not an application baseline fragment.
+        var databaseObjectsPresent = presentSchemas.Count(schema => schema != "extensions") +
+            presentTables.Count + presentFunctions.Count;
         var status = missing.Length == 0
             ? DatabaseBaselineStatus.Applied
             : databaseObjectsPresent == 0

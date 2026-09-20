@@ -29,16 +29,42 @@ internal static partial class DatabaseMigratorProgram
             }
 
             var connectionString = ReadConnectionString(options.ConnectionEnvironment!);
+            E002SemanticAssertions.AssertConnectionReset(connectionString);
             var deployer = new DatabaseBaselineDeployer();
             var moduleMigrations = new ModuleMigrationCoordinator();
             switch (options.Command)
             {
+                case "preflight":
+                    var preflight = await AzureRolePreflight.RunAsync(
+                        connectionString, cancellation.Token).ConfigureAwait(false);
+                    Console.WriteLine("PG18_ROLE_SWITCH_PREFLIGHT_OK");
+                    Console.WriteLine($"createrole_self_grant={preflight.CreateroleSelfGrant}");
+                    Console.WriteLine($"admin_set_role={preflight.AdminSetRole}");
+                    Console.WriteLine($"runtime_set_role={preflight.RuntimeSetRole}");
+                    Console.WriteLine($"runtime_nobypassrls={preflight.RuntimeNoBypassRls}");
+                    Console.WriteLine($"bypassrls_role_created={preflight.BypassRlsRoleCreated}");
+                    return 0;
+
+                case "ownership-diagnostic":
+                    var diagnosticSelection = ReadAzureOwnershipBridgeSelection(connectionString);
+                    await AzureRolePreflight.RunAsync(connectionString, cancellation.Token).ConfigureAwait(false);
+                    await AzureOwnershipBridgeDiagnostic.RunAsync(
+                        connectionString, diagnosticSelection, cancellation.Token).ConfigureAwait(false);
+                    Console.WriteLine("AZR001_E002_DISPOSABLE_DIAGNOSTIC_OK");
+                    return 0;
+
                 case "plan":
                     var plan = await deployer.PlanAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintPlan(plan);
                     IReadOnlyList<ModuleMigrationState> modulePlan;
                     if (plan.State.Status != DatabaseBaselineStatus.Clean)
                     {
+                        if (plan.State.Status == DatabaseBaselineStatus.Applied)
+                        {
+                            await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                            await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
+                        }
+
                         modulePlan = await moduleMigrations.PlanAsync(connectionString, cancellation.Token);
                     }
                     else
@@ -56,14 +82,40 @@ internal static partial class DatabaseMigratorProgram
                         return 2;
                     }
 
-                    var result = await deployer.ApplyAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
-                    await moduleMigrations.ApplyAsync(connectionString, cancellation.Token).ConfigureAwait(false);
+                    AzureOwnershipBridgeSelection? ownershipBridge = null;
+                    if (options.AzureOwnershipBridge)
+                    {
+                        ownershipBridge = ReadAzureOwnershipBridgeSelection(connectionString);
+                    }
+
+                    var result = await deployer.ApplyAsync(
+                        baseline, connectionString, cancellation.Token, ownershipBridge).ConfigureAwait(false);
+                    var beforeState = await AssertE002SemanticAsync(connectionString, cancellation.Token)
+                        .ConfigureAwait(false);
+                    var beforeModules = await moduleMigrations.PlanAsync(connectionString, cancellation.Token)
+                        .ConfigureAwait(false);
+                    if (ownershipBridge is not null && result.Status == DatabaseBaselineApplyStatus.AlreadyApplied)
+                    {
+                        if (beforeState != E002NotificationState.Pending ||
+                            beforeModules.Count != 9 ||
+                            beforeModules.Take(8).Any(module => module.Status != "APPLIED") ||
+                            beforeModules[8].Module != "Notifications" || beforeModules[8].Status != "PENDING")
+                        {
+                            throw new InvalidOperationException(
+                                "E002_APPLIED_PATH_MODULE_STATE_UNEXPECTED; STOP_FOR_CONTRACT_REVIEW");
+                        }
+                    }
+
+                    await moduleMigrations.ApplyAsync(connectionString, cancellation.Token,
+                        ownershipBridge is not null).ConfigureAwait(false);
+                    await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintApplyResult(result);
                     PrintModulePlan(await moduleMigrations.AssertAsync(connectionString, cancellation.Token));
                     return 0;
 
                 case "assert":
                     var report = await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                    await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     var moduleReport = await moduleMigrations.AssertAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintAssertionReport(report);
                     PrintModulePlan(moduleReport);
@@ -88,6 +140,11 @@ internal static partial class DatabaseMigratorProgram
         {
             Console.Error.WriteLine(exception.Message);
             return 4;
+        }
+        catch (AzureRolePreflightException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return 6;
         }
         catch (OperationCanceledException)
         {
@@ -115,6 +172,40 @@ internal static partial class DatabaseMigratorProgram
         }
 
         return value;
+    }
+
+    private static async Task<E002NotificationState> AssertE002SemanticAsync(
+        string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = new Npgsql.NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var state = await E002NotificationStateReader.ReadAsync(connection,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (state == E002NotificationState.Drift)
+        {
+            throw new InvalidOperationException("E002_ROUTINE_MAP_STATE_UNRESOLVED; STOP_FOR_CONTRACT_REVIEW");
+        }
+
+        var semantic = await new E002SemanticAssertions().AssertAsync(
+            connection, state, cancellationToken: cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"E002_SEMANTIC_APPLIED state={state} map={semantic.RoutineMap} identities={semantic.ControlledIdentities} execute_rows={semantic.NormalizedExecuteRows}");
+        return state;
+    }
+
+    private static AzureOwnershipBridgeSelection ReadAzureOwnershipBridgeSelection(string connectionString)
+    {
+        var selection = new AzureOwnershipBridgeSelection(
+            Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? string.Empty,
+            Environment.GetEnvironmentVariable("PAQUETERIA_DEPLOYMENT_CLASS") ?? string.Empty,
+            Environment.GetEnvironmentVariable("PAQUETERIA_DB_DEPLOYMENT_PROVIDER") ?? string.Empty);
+        selection.AssertAllowed();
+        var host = new Npgsql.NpgsqlConnectionStringBuilder(connectionString).Host;
+        if (host is null || !host.EndsWith(".postgres.database.azure.com", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("E-002 requires an Azure PostgreSQL Flexible Server host.");
+        }
+
+        return selection;
     }
 
     private static void PrintVerifiedBaseline(VerifiedDatabaseBaseline baseline)
@@ -184,13 +275,14 @@ internal static partial class DatabaseMigratorProgram
     }
 
     private static void PrintUsage() => Console.Error.WriteLine(
-        "Usage: Paqueteria.DatabaseMigrator <verify|plan|apply|assert> [--connection-env NAME] [--confirm-initial-baseline]");
+        "Usage: Paqueteria.DatabaseMigrator <verify|preflight|ownership-diagnostic|plan|apply|assert> [--connection-env NAME] [--confirm-initial-baseline] [--azure-ownership-bridge]");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
 }
 
-internal sealed record CommandOptions(string Command, string? ConnectionEnvironment, bool ConfirmInitialBaseline)
+internal sealed record CommandOptions(string Command, string? ConnectionEnvironment,
+    bool ConfirmInitialBaseline, bool AzureOwnershipBridge)
 {
     internal static CommandOptions Parse(IReadOnlyList<string> arguments)
     {
@@ -200,13 +292,14 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         }
 
         var command = arguments[0].ToLowerInvariant();
-        if (command is not ("verify" or "plan" or "apply" or "assert"))
+        if (command is not ("verify" or "preflight" or "ownership-diagnostic" or "plan" or "apply" or "assert"))
         {
             throw new CommandLineException($"Unknown command '{arguments[0]}'.");
         }
 
         string? connectionEnvironment = null;
         var confirm = false;
+        var azureOwnershipBridge = false;
         for (var index = 1; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -217,12 +310,15 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                 case "--confirm-initial-baseline":
                     confirm = true;
                     break;
+                case "--azure-ownership-bridge":
+                    azureOwnershipBridge = true;
+                    break;
                 default:
                     throw new CommandLineException($"Unknown or incomplete option '{arguments[index]}'.");
             }
         }
 
-        if (command == "verify" && (connectionEnvironment is not null || confirm))
+        if (command == "verify" && (connectionEnvironment is not null || confirm || azureOwnershipBridge))
         {
             throw new CommandLineException("verify does not accept connection or confirmation options.");
         }
@@ -237,7 +333,12 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
             throw new CommandLineException("--confirm-initial-baseline is valid only for apply.");
         }
 
-        return new CommandOptions(command, connectionEnvironment, confirm);
+        if (azureOwnershipBridge && command != "apply")
+        {
+            throw new CommandLineException("--azure-ownership-bridge is valid only for apply.");
+        }
+
+        return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge);
     }
 }
 

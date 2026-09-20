@@ -1,6 +1,8 @@
 using Identity.Infrastructure.Persistence;
 using Identity.Infrastructure.Persistence.Migrations;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using Locations.Infrastructure.Persistence;
 using Locations.Infrastructure.Persistence.Migrations;
@@ -112,7 +114,8 @@ internal sealed class ModuleMigrationCoordinator
         return result;
     }
 
-    public async Task ApplyAsync(string connectionString, CancellationToken cancellationToken)
+    public async Task ApplyAsync(string connectionString, CancellationToken cancellationToken,
+        bool azureOwnershipBridge = false)
     {
         var before = await PlanAsync(connectionString, cancellationToken);
         var drift = before.FirstOrDefault(state => state.Status == "DRIFT");
@@ -156,7 +159,7 @@ internal sealed class ModuleMigrationCoordinator
         }
         if (before.Single(state => state.Module == "Notifications").Status == "PENDING")
         {
-            await MigrateNotificationsAsync(connectionString, cancellationToken);
+            await MigrateNotificationsAsync(connectionString, cancellationToken, azureOwnershipBridge);
         }
         await AssertAsync(connectionString, cancellationToken);
     }
@@ -384,9 +387,119 @@ internal sealed class ModuleMigrationCoordinator
         await context.Database.MigrateAsync(cancellationToken);
     }
 
-    private static async Task MigrateNotificationsAsync(string connectionString, CancellationToken cancellationToken)
+    private static async Task MigrateNotificationsAsync(string connectionString, CancellationToken cancellationToken,
+        bool azureOwnershipBridge)
     {
         await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        if (!azureOwnershipBridge)
+        {
+            await using var context = new NotificationsDbContext(NotificationsOptions(connection));
+            await context.Database.MigrateAsync(cancellationToken);
+            return;
+        }
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var interceptor = new E002Ntf001HistoryInterceptor();
+        var stage = "grant-temporary-create";
+        try
+        {
+            stage = "lock-and-reconfirm-notifications-pending";
+            await using (var advisory = new NpgsqlCommand(
+                "SELECT pg_catalog.pg_advisory_xact_lock(@key)", connection, transaction))
+            {
+                advisory.Parameters.AddWithValue("key", CanonicalBaselineContract.AdvisoryLockKey);
+                await advisory.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (await E002NotificationStateReader.ReadAsync(connection, transaction, cancellationToken) !=
+                E002NotificationState.Pending)
+            {
+                throw new InvalidOperationException(
+                    "E002_ROUTINE_MAP_STATE_UNRESOLVED; Notifications changed before migration; STOP_FOR_CONTRACT_REVIEW");
+            }
+
+            stage = "grant-temporary-create";
+            await using (var grant = new NpgsqlCommand("""
+                GRANT CREATE ON SCHEMA security,notifications TO paqueteria_outbox_executor
+                """, connection, transaction))
+            {
+                await grant.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            var options = new DbContextOptionsBuilder<NotificationsDbContext>()
+                .UseNpgsql(connection, postgres =>
+                {
+                    postgres.MigrationsAssembly(typeof(NotificationsDbContext).Assembly.FullName);
+                    postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform");
+                })
+                .AddInterceptors(interceptor)
+                .Options;
+            await using (var context = new NotificationsDbContext(options))
+            {
+                await using (var historyExists = new NpgsqlCommand(
+                    "SELECT to_regclass('platform.__ef_migrations_history_notifications') IS NOT NULL",
+                    connection, transaction))
+                {
+                    if (await historyExists.ExecuteScalarAsync(cancellationToken) is not true)
+                    {
+                        var createHistory = context.GetService<IHistoryRepository>().GetCreateScript();
+                        await using var create = new NpgsqlCommand(createHistory, connection, transaction);
+                        await create.ExecuteNonQueryAsync(cancellationToken);
+                    }
+                }
+
+                stage = "ntf001-ef-migration";
+                await context.Database.UseTransactionAsync(transaction, cancellationToken);
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            stage = "verify-transition-assertion";
+            if (!interceptor.TargetAssertionExecuted)
+            {
+                throw new InvalidOperationException(
+                    "E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID; NTF-001 history interception missing; STOP_FOR_CONTRACT_REVIEW");
+            }
+
+            stage = "revoke-temporary-create";
+            await using (var revoke = new NpgsqlCommand("""
+                REVOKE CREATE ON SCHEMA security,notifications FROM paqueteria_outbox_executor
+                """, connection, transaction))
+            {
+                await revoke.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "assert-target-applied";
+            await new E002SemanticAssertions().AssertAsync(
+                connection, E002NotificationState.Applied, transaction, cancellationToken);
+            stage = "commit";
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (PostgresException exception)
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw new InvalidOperationException(
+                $"E002_NTF_BRIDGE_FAILED stage={stage} SQLSTATE={exception.SqlState} message={exception.MessageText} " +
+                $"first_sqlstate={interceptor.FirstPostgresFailure?.SqlState ?? exception.SqlState} " +
+                $"first_message={interceptor.FirstPostgresFailure?.Message ?? exception.MessageText}; STOP_FOR_CONTRACT_REVIEW",
+                exception);
+        }
+        catch
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            throw;
+        }
+    }
+
+    private static DbContextOptions<NotificationsDbContext> NotificationsOptions(NpgsqlConnection connection)
+    {
         var options = new DbContextOptionsBuilder<NotificationsDbContext>()
             .UseNpgsql(connection, postgres =>
             {
@@ -394,8 +507,7 @@ internal sealed class ModuleMigrationCoordinator
                 postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform");
             })
             .Options;
-        await using var context = new NotificationsDbContext(options);
-        await context.Database.MigrateAsync(cancellationToken);
+        return options;
     }
 
     private static async Task<NpgsqlConnection> OpenAsMigratorAsync(

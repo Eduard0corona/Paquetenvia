@@ -596,6 +596,21 @@
       "paqueteria.contracts": {
         "type": "Project"
       },
+      "paqueteria.databasemigrator": {
+        "type": "Project",
+        "dependencies": {
+          "Custody.Infrastructure": "[1.0.0, )",
+          "Dispatch.Infrastructure": "[1.0.0, )",
+          "Drivers.Infrastructure": "[1.0.0, )",
+          "Identity.Infrastructure": "[1.0.0, )",
+          "Locations.Infrastructure": "[1.0.0, )",
+          "Notifications.Infrastructure": "[1.0.0, )",
+          "Orders.Infrastructure": "[1.0.0, )",
+          "Organizations.Infrastructure": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )",
+          "Pricing.Infrastructure": "[1.0.0, )"
+        }
+      },
       "paqueteria.domain": {
         "type": "Project"
       },

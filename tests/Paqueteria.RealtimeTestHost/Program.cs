@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,9 +12,10 @@ using Realtime.Endpoints.Hubs;
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Services.AddSingleton<TestRealtimeState>();
+builder.Services.AddSingleton<TestHubRegistrationFilter>();
 builder.Services.AddSingleton<IRealtimeConnectionAuthorizer, TestRealtimeConnectionAuthorizer>();
 builder.Services.AddSingleton<IRealtimeTelemetry, TestRealtimeTelemetry>();
-builder.Services.AddSignalR()
+builder.Services.AddSignalR(options => options.AddFilter<TestHubRegistrationFilter>())
     .AddJsonProtocol(options =>
     {
         options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
@@ -61,7 +63,7 @@ app.Use(async (context, next) =>
             .RecordTransport("WebSockets");
     }
 
-    context.Items["Realtime.PrivateConnectionRequest"] = new PrivateRealtimeConnectionRequest(
+    context.Items[TestRealtimeState.PrivateConnectionRequestItemKey] = new PrivateRealtimeConnectionRequest(
         TestRealtimeState.UserId,
         organizationId,
         false,
@@ -86,6 +88,12 @@ app.MapGet(
         authorization_count = state.AuthorizationCount,
         transport = state.Transport,
     }));
+app.MapGet(
+    "/__test/registrations/{organizationId:guid}",
+    (Guid organizationId, TestRealtimeState state) =>
+        state.IsRegistered(organizationId)
+            ? Results.NoContent()
+            : Results.NotFound());
 app.MapPost(
     "/__test/publish/{organizationId:guid}/{version:long}/{eventId:guid}",
     async (
@@ -118,6 +126,8 @@ app.Run();
 internal sealed class TestRealtimeState
 {
     internal const string ValidToken = "synthetic-dispatcher-token";
+    internal const string PrivateConnectionRequestItemKey =
+        "Realtime.PrivateConnectionRequest";
     internal static readonly Guid UserId =
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10");
     internal static readonly Guid OrganizationA =
@@ -129,6 +139,8 @@ internal sealed class TestRealtimeState
 
     private int _authorizationCount;
     private string _transport = "Unknown";
+    private readonly ConcurrentDictionary<string, Guid> _registrations =
+        new(StringComparer.Ordinal);
 
     internal long SnapshotVersion { get; } =
         long.TryParse(
@@ -145,6 +157,48 @@ internal sealed class TestRealtimeState
 
     internal void RecordTransport(string transport) =>
         Volatile.Write(ref _transport, transport);
+
+    internal void RecordRegistration(Guid organizationId, string connectionId) =>
+        _registrations[connectionId] = organizationId;
+
+    internal bool IsRegistered(Guid organizationId) =>
+        _registrations.Values.Any(registeredOrganizationId =>
+            registeredOrganizationId == organizationId);
+
+    internal void RemoveRegistration(string connectionId) =>
+        _registrations.TryRemove(connectionId, out _);
+}
+
+internal sealed class TestHubRegistrationFilter(TestRealtimeState state) : IHubFilter
+{
+    public async Task OnConnectedAsync(
+        HubLifetimeContext context,
+        Func<HubLifetimeContext, Task> next)
+    {
+        await next(context);
+        var request = context.Context.GetHttpContext()?
+            .Items[TestRealtimeState.PrivateConnectionRequestItemKey]
+            as PrivateRealtimeConnectionRequest;
+        if (request is not null)
+        {
+            state.RecordRegistration(request.OrganizationId, context.Context.ConnectionId);
+        }
+    }
+
+    public async Task OnDisconnectedAsync(
+        HubLifetimeContext context,
+        Exception? exception,
+        Func<HubLifetimeContext, Exception?, Task> next)
+    {
+        try
+        {
+            await next(context, exception);
+        }
+        finally
+        {
+            state.RemoveRegistration(context.Context.ConnectionId);
+        }
+    }
 }
 
 internal sealed class TestRealtimeConnectionAuthorizer(TestRealtimeState state)
