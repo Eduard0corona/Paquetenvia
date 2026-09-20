@@ -79,8 +79,6 @@ jobs:
         env:
           GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           TESTED_SHA: ${{ github.sha }}
         run: |
@@ -103,8 +101,10 @@ jobs:
           echo "::group::scope=target tree (tracked files at ${TESTED_SHA})"
           scan -v "${tree}:/scan:ro" "${GITLEAKS_IMAGE}" dir /scan --config /scan/.gitleaks.toml --no-banner --redact
           echo "::endgroup::"
+          # Introduced history is derived from the tested merge ref (its first parent is the tested base),
+          # never from the pull_request event payload.
           if [ "${EVENT_NAME}" = "pull_request" ]; then
-            range="${PR_BASE_SHA}..${PR_HEAD_SHA}"
+            range="${TESTED_SHA}^1..${TESTED_SHA}"
           elif [ -n "${PUSH_BEFORE_SHA}" ] && [ "${PUSH_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
             range="${PUSH_BEFORE_SHA}..${TESTED_SHA}"
           else
