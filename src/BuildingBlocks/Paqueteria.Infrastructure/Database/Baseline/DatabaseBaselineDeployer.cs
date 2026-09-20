@@ -6,10 +6,13 @@ namespace Paqueteria.Infrastructure.Database.Baseline;
 
 public sealed class DatabaseBaselineDeployer(
     DatabaseBaselineStateDetector? stateDetector = null,
-    DatabaseBaselineAssertions? assertions = null)
+    DatabaseBaselineAssertions? assertions = null,
+    Action<string>? stageObserver = null)
 {
     private readonly DatabaseBaselineStateDetector _stateDetector = stateDetector ?? new DatabaseBaselineStateDetector();
     private readonly DatabaseBaselineAssertions _assertions = assertions ?? new DatabaseBaselineAssertions();
+    // Sanitized stage trace (E-002 v0.8 §36 "phase"); lets regression coverage prove the §18 order.
+    private readonly Action<string>? _stageObserver = stageObserver;
 
     public async Task<DatabaseBaselinePlan> PlanAsync(
         VerifiedDatabaseBaseline baseline,
@@ -66,6 +69,13 @@ public sealed class DatabaseBaselineDeployer(
                     new DatabaseBaselineTimings(TimeSpan.Zero, TimeSpan.Zero, alreadyAppliedAssertions.Duration));
             }
 
+            // E-002 v0.8 §8 / v0.13 Amendment 3: the managed-service preflight runs before any mutation.
+            if (ownershipBridge is not null)
+            {
+                _stageObserver?.Invoke("e002-platform-preflight");
+                await AzureOwnershipBridge.PlatformPreflightAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+            }
+
             var postgresVersionNumber = await ExecuteScalarAsync<int>(
                 connection,
                 transaction,
@@ -76,23 +86,27 @@ public sealed class DatabaseBaselineDeployer(
                 throw new InvalidOperationException($"PostgreSQL 18 is required; server_version_num is {postgresVersionNumber}.");
             }
 
-            if (ownershipBridge is not null)
-            {
-                await AzureOwnershipBridge.PreludeAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
-            }
-
+            // E-002 v0.8 §14/§18: canonical AI-06 executes first; the bridge prelude follows it.
+            _stageObserver?.Invoke("ai06");
             var schemaDuration = await ExecuteStepAsync(connection, transaction, baseline.Steps[0], cancellationToken).ConfigureAwait(false);
+            E002AclSnapshot? databaseAclBefore = null;
             if (ownershipBridge is not null)
             {
-                await AzureOwnershipBridge.GrantSecurityCreateAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+                _stageObserver?.Invoke("e002-prelude");
+                databaseAclBefore = await AzureOwnershipBridge.PreludeAsync(
+                    connection, transaction, _stageObserver, cancellationToken).ConfigureAwait(false);
             }
 
+            _stageObserver?.Invoke("ai18");
             var rolesDuration = await ExecuteStepAsync(connection, transaction, baseline.Steps[1], cancellationToken).ConfigureAwait(false);
-            if (ownershipBridge is not null)
+            if (databaseAclBefore is not null)
             {
-                await AzureOwnershipBridge.CleanupAndAssertAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+                _stageObserver?.Invoke("e002-cleanup");
+                await AzureOwnershipBridge.CleanupAndAssertAsync(
+                    connection, transaction, databaseAclBefore, _stageObserver, cancellationToken).ConfigureAwait(false);
             }
 
+            _stageObserver?.Invoke("canonical-assertions");
             var assertionReport = await _assertions.AssertAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
             if (ownershipBridge is not null)
             {

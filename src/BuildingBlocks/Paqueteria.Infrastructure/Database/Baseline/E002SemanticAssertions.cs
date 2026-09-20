@@ -9,28 +9,26 @@ public sealed record E002SemanticReport(
     int ControlledIdentities,
     int NormalizedExecuteRows);
 
+/// <summary>
+/// E-002 v0.10 Amendment 1 SEMANTIC_PARTIAL classification. Each violation is prefixed with the exact
+/// E-002 v0.8 §36 guard code that names the failed invariant (e.g. "E002_ROLE_ATTRIBUTE_MISMATCH: ...").
+/// </summary>
 public sealed class E002SemanticException(IReadOnlyList<string> violations)
     : InvalidOperationException($"E002_SEMANTIC_PARTIAL; STOP_FOR_CONTRACT_REVIEW: {string.Join(" | ", violations)}")
 {
     public IReadOnlyList<string> Violations { get; } = violations;
+
+    public IReadOnlyList<string> GuardCodes { get; } = violations
+        .Select(violation => violation.Split(':', 2)[0])
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
 }
 
 public sealed class E002SemanticAssertions
 {
     private sealed record AclEntry(string Grantee, string Grantor, string Privilege, bool Grantable);
 
-    private static readonly (string Name, bool BypassRls)[] Roles =
-    [
-        ("paqueteria_migrator", false),
-        ("paqueteria_app", false),
-        ("paqueteria_worker", false),
-        ("paqueteria_bootstrap", true),
-        ("paqueteria_outbox_executor", true),
-        ("paqueteria_maintenance", true),
-    ];
-
-    private static readonly string[] SpecializedOwners =
-        ["paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance"];
+    private static string[] SpecializedOwners => E002Guards.SpecializedOwners;
 
     public async Task<E002SemanticReport> AssertAsync(
         NpgsqlConnection connection,
@@ -63,6 +61,7 @@ public sealed class E002SemanticAssertions
         var mapState = E002NotificationStateReader.SelectMap(state);
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
             connection, transaction, mapState, violations, cancellationToken).ConfigureAwait(false);
+        await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
             throw new E002SemanticException(violations.AsReadOnly());
@@ -105,21 +104,10 @@ public sealed class E002SemanticAssertions
         NpgsqlConnection connection, NpgsqlTransaction? transaction, ICollection<string> violations,
         CancellationToken cancellationToken)
     {
-        foreach (var (name, bypassRls) in Roles)
+        foreach (var name in await E002Guards.RoleAttributeMismatchesAsync(connection, transaction, cancellationToken)
+                     .ConfigureAwait(false))
         {
-            await using var command = new NpgsqlCommand("""
-                SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolinherit,rolreplication,rolbypassrls
-                FROM pg_catalog.pg_roles WHERE rolname=@name
-                """, connection, transaction);
-            command.Parameters.AddWithValue("name", name);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-                reader.GetBoolean(0) || reader.GetBoolean(1) || reader.GetBoolean(2) ||
-                reader.GetBoolean(3) || !reader.GetBoolean(4) || reader.GetBoolean(5) ||
-                reader.GetBoolean(6) != bypassRls)
-            {
-                violations.Add($"role attributes differ: {name}");
-            }
+            violations.Add($"E002_ROLE_ATTRIBUTE_MISMATCH: role attributes differ: {name}");
         }
     }
 
@@ -127,20 +115,10 @@ public sealed class E002SemanticAssertions
         NpgsqlConnection connection, NpgsqlTransaction? transaction, ICollection<string> violations,
         CancellationToken cancellationToken)
     {
-        foreach (var role in new[] { "paqueteria_migrator", "paqueteria_bootstrap",
-                     "paqueteria_outbox_executor", "paqueteria_maintenance" })
+        foreach (var role in await E002Guards.EffectiveCapabilityGapsAsync(connection, transaction, cancellationToken)
+                     .ConfigureAwait(false))
         {
-            await using var command = new NpgsqlCommand("""
-                SELECT pg_catalog.pg_has_role(session_user,@role,'SET'),
-                       pg_catalog.pg_has_role(session_user,@role,'USAGE')
-                """, connection, transaction);
-            command.Parameters.AddWithValue("role", role);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (!reader.GetBoolean(0) || (role == "paqueteria_migrator" && !reader.GetBoolean(1)))
-            {
-                violations.Add($"effective deployment capability missing: {role}");
-            }
+            violations.Add($"E002_EFFECTIVE_ROLE_CAPABILITY_MISSING: effective deployment capability missing: {role}");
         }
     }
 
@@ -159,7 +137,7 @@ public sealed class E002SemanticAssertions
         {
             if (reader.IsDBNull(1) || reader.GetString(1) != "paqueteria_migrator")
             {
-                violations.Add($"schema owner differs: {reader.GetString(0)}");
+                violations.Add($"E002_SEMANTIC_PARTIAL: schema owner differs: {reader.GetString(0)}");
             }
         }
     }
@@ -184,12 +162,12 @@ public sealed class E002SemanticAssertions
         if (!installed.TryGetValue("postgis", out var postgis) ||
             postgis.Schema != "public" || !postgis.Version.StartsWith("3.6", StringComparison.Ordinal))
         {
-            violations.Add("PostGIS 3.6 extension placement differs");
+            violations.Add("E002_SEMANTIC_PARTIAL: PostGIS 3.6 extension placement differs");
         }
 
         if (!installed.TryGetValue("pgcrypto", out var pgcrypto) || pgcrypto.Schema != "extensions")
         {
-            violations.Add("pgcrypto extension placement differs");
+            violations.Add("E002_SEMANTIC_PARTIAL: pgcrypto extension placement differs");
         }
     }
 
@@ -210,7 +188,7 @@ public sealed class E002SemanticAssertions
         {
             if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
             {
-                violations.Add("temporary database CREATE residue");
+                violations.Add("E002_SEMANTIC_PARTIAL: temporary database CREATE residue");
             }
         }
 
@@ -223,7 +201,7 @@ public sealed class E002SemanticAssertions
             command.Parameters.AddWithValue("schema", schema);
             if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
             {
-                violations.Add($"temporary CREATE residue: {schema}/{role}");
+                violations.Add($"E002_SEMANTIC_PARTIAL: temporary CREATE residue: {schema}/{role}");
             }
         }
     }
@@ -275,13 +253,15 @@ public sealed class E002SemanticAssertions
         var observed = new List<AclEntry>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            observed.Add(new AclEntry(reader.GetString(0), reader.GetString(1),
-                reader.GetString(2), reader.GetBoolean(3)));
+            var entry = E002Guards.ReadAclEntry(reader, $"schema:{schema}", "semantic-assertions");
+            observed.Add(new AclEntry(entry.Grantee, entry.Grantor, entry.Privilege, entry.Grantable));
         }
 
-        foreach (var missing in expected.Except(observed)) violations.Add($"{schema} ACL missing: {missing}");
-        foreach (var extra in observed.Except(expected)) violations.Add($"{schema} ACL unexpected: {extra}");
-        if (expected.Count != observed.Count) violations.Add($"{schema} ACL row cardinality differs");
+        // E-002 v0.8 §21 (security = canonical post-AI18 map) and §27 (notifications = exact restoration).
+        var guard = schema == "security" ? "E002_BASELINE_SECURITY_ACL_MISMATCH" : "E002_NOTIFICATIONS_ACL_RESTORE_MISMATCH";
+        foreach (var missing in expected.Except(observed)) violations.Add($"{guard}: {schema} ACL missing: {missing}");
+        foreach (var extra in observed.Except(expected)) violations.Add($"{guard}: {schema} ACL unexpected: {extra}");
+        if (expected.Count != observed.Count) violations.Add($"{guard}: {schema} ACL row cardinality differs");
     }
 
     private static async Task<(int Identities, int ExecuteRows)> AssertRoutineMapCoreAsync(
@@ -317,11 +297,17 @@ public sealed class E002SemanticAssertions
                 expectedOids.Add(reader.GetFieldValue<uint>(0));
                 if (reader.GetString(2) != routine.Owner)
                 {
-                    violations.Add($"routine owner differs: {routine.Signature}");
+                    violations.Add($"E002_OWNER_MAP_MISMATCH: routine owner differs: {routine.Signature}");
                 }
 
                 if (!reader.IsDBNull(5) && reader.GetString(5) == "EXECUTE")
                 {
+                    if (reader.IsDBNull(3) || reader.IsDBNull(4))
+                    {
+                        throw new E002GuardException("E002_ACL_NORMALIZATION_FAILURE", "semantic-assertions",
+                            "object=routine unresolved grantee/grantor OID");
+                    }
+
                     observed.Add(new AclEntry(reader.GetString(3), reader.GetString(4),
                         reader.GetString(5), reader.GetBoolean(6)));
                 }
@@ -329,18 +315,18 @@ public sealed class E002SemanticAssertions
 
             if (!found)
             {
-                violations.Add($"routine missing: {routine.Signature}");
+                violations.Add($"E002_OWNER_MAP_MISMATCH: routine missing: {routine.Signature}");
                 continue;
             }
 
             var expected = new[] { routine.Owner }.Concat(routine.Grantees)
                 .Select(grantee => new AclEntry(grantee, routine.Owner, "EXECUTE", false)).ToArray();
             foreach (var missing in expected.Except(observed))
-                violations.Add($"routine EXECUTE missing: {routine.Signature}/{missing}");
+                violations.Add($"E002_ROUTINE_ACL_MISMATCH: routine EXECUTE missing: {routine.Signature}/{missing}");
             foreach (var extra in observed.Except(expected))
-                violations.Add($"routine EXECUTE unexpected: {routine.Signature}/{extra}");
+                violations.Add($"E002_ROUTINE_ACL_MISMATCH: routine EXECUTE unexpected: {routine.Signature}/{extra}");
             if (expected.Length != observed.Count)
-                violations.Add($"routine EXECUTE row cardinality differs: {routine.Signature}");
+                violations.Add($"E002_ROUTINE_ACL_MISMATCH: routine EXECUTE row cardinality differs: {routine.Signature}");
             totalRows += observed.Count;
         }
 
@@ -359,7 +345,7 @@ public sealed class E002SemanticAssertions
             {
                 if (!expectedOids.Contains(reader.GetFieldValue<uint>(0)))
                 {
-                    violations.Add($"unexpected specialized-owner routine: {reader.GetString(1)}");
+                    violations.Add($"E002_OWNER_MAP_MISMATCH: unexpected specialized-owner routine: {reader.GetString(1)}");
                 }
             }
         }
@@ -367,9 +353,42 @@ public sealed class E002SemanticAssertions
         var expectedRows = map.Sum(routine => 1 + routine.Grantees.Count);
         if (totalRows != expectedRows)
         {
-            violations.Add($"routine EXECUTE total differs: expected {expectedRows}, observed {totalRows}");
+            violations.Add($"E002_ROUTINE_ACL_MISMATCH: routine EXECUTE total differs: expected {expectedRows}, observed {totalRows}");
         }
 
         return (expectedOids.Count, totalRows);
+    }
+
+    /// <summary>
+    /// E-002 v0.8 §31: every SECURITY DEFINER routine owned by a specialized privileged role must pin an explicit
+    /// search_path that starts with pg_catalog (no writable schema before trusted schemas) and ends with pg_temp.
+    /// </summary>
+    private static async Task AssertSecurityDefinerAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT p.oid::regprocedure::text, p.proconfig
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+            JOIN pg_catalog.pg_roles r ON r.oid=p.proowner
+            WHERE n.nspname IN ('security','notifications') AND p.prosecdef
+              AND r.rolname=ANY(@owners::text[])
+            """, connection, transaction);
+        command.Parameters.AddWithValue("owners", SpecializedOwners);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var searchPath = reader.IsDBNull(1)
+                ? null
+                : reader.GetFieldValue<string[]>(1)
+                    .FirstOrDefault(setting => setting.StartsWith("search_path=", StringComparison.Ordinal));
+            var schemas = searchPath?["search_path=".Length..]
+                .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) ?? [];
+            if (schemas.Length < 2 || schemas[0] != "pg_catalog" || schemas[^1] != "pg_temp" || schemas.Contains("public"))
+            {
+                violations.Add($"E002_SECURITY_DEFINER_UNSAFE: search_path unsafe or missing: {reader.GetString(0)}");
+            }
+        }
     }
 }

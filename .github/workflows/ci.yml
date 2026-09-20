@@ -10,10 +10,11 @@ permissions:
   contents: read
   issues: read
 
+# Temporary: self-hosted Foundation runner through 2026-10-01 due to GitHub-hosted Actions minute limits.
 jobs:
   normative:
     name: Validate normative baseline
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -45,7 +46,7 @@ jobs:
 
   dotnet:
     name: Build and test .NET
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       execution-artifact-id: ${{ steps.upload-dotnet-execution.outputs.artifact-id }}
       execution-artifact-digest: ${{ steps.upload-dotnet-execution.outputs.artifact-digest }}
@@ -115,7 +116,7 @@ jobs:
 
   runtime-contracts:
     name: Validate runtime contracts
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 20
     outputs:
       execution-artifact-id: ${{ steps.upload-runtime-execution.outputs.artifact-id }}
@@ -236,7 +237,7 @@ jobs:
 
   web:
     name: Validate web workspace
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -274,7 +275,7 @@ jobs:
 
   realtime-e2e:
     name: Validate real SignalR reconnect
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       execution-artifact-id: ${{ steps.upload-realtime-execution.outputs.artifact-id }}
       execution-artifact-digest: ${{ steps.upload-realtime-execution.outputs.artifact-digest }}
@@ -366,7 +367,7 @@ jobs:
 
   outbox-signalr-delivery:
     name: Validate outbox SignalR delivery
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-outbox-execution.outputs.artifact-id }}
@@ -501,7 +502,7 @@ jobs:
 
   driver-stops-pwa:
     name: Validate driver PWA
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-driver-execution.outputs.artifact-id }}
@@ -649,7 +650,7 @@ jobs:
 
   public-tracking:
     name: Validate public tracking
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-tracking-execution.outputs.artifact-id }}
@@ -823,7 +824,7 @@ jobs:
 
   operations-dashboard:
     name: Validate operations dashboard
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-operations-execution.outputs.artifact-id }}
@@ -968,7 +969,7 @@ jobs:
 
   delivery-simulation:
     name: Validate 20-delivery simulation
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 30
     outputs:
       artifact-id: ${{ steps.upload-delivery-simulation.outputs.artifact-id }}
@@ -1082,7 +1083,7 @@ jobs:
 
   infrastructure:
     name: Validate local infrastructure
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 20
     env:
       CI: "true"
@@ -1213,7 +1214,7 @@ jobs:
 
   backup-restore:
     name: Validate backup and restore
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 60
     outputs:
       artifact-id: ${{ steps.upload-backup-restore.outputs.artifact-id }}
@@ -1479,7 +1480,7 @@ jobs:
       - delivery-simulation
       - infrastructure
       - backup-restore
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 15
     permissions:
       actions: read

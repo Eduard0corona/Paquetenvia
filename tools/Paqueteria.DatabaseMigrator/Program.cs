@@ -90,20 +90,18 @@ internal static partial class DatabaseMigratorProgram
 
                     var result = await deployer.ApplyAsync(
                         baseline, connectionString, cancellation.Token, ownershipBridge).ConfigureAwait(false);
-                    var beforeState = await AssertE002SemanticAsync(connectionString, cancellation.Token)
-                        .ConfigureAwait(false);
+                    await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     var beforeModules = await moduleMigrations.PlanAsync(connectionString, cancellation.Token)
                         .ConfigureAwait(false);
-                    if (ownershipBridge is not null && result.Status == DatabaseBaselineApplyStatus.AlreadyApplied)
+                    if (result.Status == DatabaseBaselineApplyStatus.AlreadyApplied)
                     {
-                        if (beforeState != E002NotificationState.Pending ||
-                            beforeModules.Count != 9 ||
-                            beforeModules.Take(8).Any(module => module.Status != "APPLIED") ||
-                            beforeModules[8].Module != "Notifications" || beforeModules[8].Status != "PENDING")
-                        {
-                            throw new InvalidOperationException(
-                                "E002_APPLIED_PATH_MODULE_STATE_UNEXPECTED; STOP_FOR_CONTRACT_REVIEW");
-                        }
+                        // E-002 v0.8 §35: a fully applied database is a read-only no-op; a pending module set is the
+                        // ordinary Applied-baseline path (v0.12 Amendment 3), with bridge activation = 0 either way.
+                        var pendingModules = beforeModules.Where(module => module.Status == "PENDING")
+                            .Select(module => module.Module).ToArray();
+                        Console.WriteLine(pendingModules.Length == 0
+                            ? $"E002_APPLIED_PATH_NO_OP modules={beforeModules.Count}/{beforeModules.Count} APPLIED bridge_activation=0"
+                            : $"E002_APPLIED_PATH_PENDING modules={string.Join(",", pendingModules)} bridge_activation=0");
                     }
 
                     await moduleMigrations.ApplyAsync(connectionString, cancellation.Token,

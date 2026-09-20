@@ -43,6 +43,7 @@ $requiredSdk = "10.0.101"
 $runningOnWindows = $env:OS -eq "Windows_NT"
 
 . (Join-Path $PSScriptRoot "local-environment.common.ps1")
+. (Join-Path $PSScriptRoot "dev-platform-process-identity.ps1")
 
 function Test-RepositorySdk([string] $Observed) {
     try {
@@ -377,17 +378,11 @@ function ConvertTo-PosixShellLiteral([string] $Value) {
 
 function Test-OwnedProcess($Record, $Process) {
     if ($null -eq $Record -or $null -eq $Process -or
-        $null -eq $Record.psobject.Properties["startTimeUtc"] -or
         $null -eq $Record.psobject.Properties["processPath"]) {
         return $false
     }
     try {
-        $recordedStart = [DateTimeOffset]::Parse(
-            $Record.startTimeUtc,
-            [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::RoundtripKind)
-        $actualStart = [DateTimeOffset]$Process.StartTime.ToUniversalTime()
-        $startMatches = [Math]::Abs(($actualStart - $recordedStart).TotalSeconds) -lt 1
+        $startMatches = Test-ProcessIdentityMatch -Record $Record -Process $Process -RunningOnWindows:$runningOnWindows
         $actualPath = [System.IO.Path]::GetFullPath($Process.Path)
         $expectedPath = [System.IO.Path]::GetFullPath($Record.processPath)
         $comparer = if ($runningOnWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
@@ -447,13 +442,14 @@ function Start-OwnedProcess(
         Start-Sleep -Milliseconds 100
         $process.Refresh()
     }
-    Write-JsonFile $pidPath ([pscustomobject]@{
+    $record = [ordered]@{
         name = $Name
         pid = $process.Id
-        startTimeUtc = $process.StartTime.ToUniversalTime().ToString("O")
-        processPath = $expectedProcessPath
-        repositoryRoot = $repositoryRoot
-    })
+    }
+    $record += Get-ProcessIdentityRecord -Process $process -RunningOnWindows:$runningOnWindows
+    $record["processPath"] = $expectedProcessPath
+    $record["repositoryRoot"] = $repositoryRoot
+    Write-JsonFile $pidPath ([pscustomobject]$record)
 }
 
 function Get-ListeningProcessId([int] $Port) {
@@ -506,10 +502,10 @@ function Set-WebListenerOwnership {
     $record = [ordered]@{
         name = "Web"
         pid = $listenerPid
-        startTimeUtc = $listener.StartTime.ToUniversalTime().ToString("O")
-        processPath = [System.IO.Path]::GetFullPath($listener.Path)
-        repositoryRoot = $repositoryRoot
     }
+    $record += Get-ProcessIdentityRecord -Process $listener -RunningOnWindows:$runningOnWindows
+    $record["processPath"] = [System.IO.Path]::GetFullPath($listener.Path)
+    $record["repositoryRoot"] = $repositoryRoot
     if ($null -ne $supervisorRecord -and $supervisorRecord.pid -ne $listenerPid) {
         $supervisor = Get-Process -Id $supervisorRecord.pid -ErrorAction SilentlyContinue
         if (Test-OwnedProcess $supervisorRecord $supervisor) {
