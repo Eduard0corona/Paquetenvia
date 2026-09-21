@@ -51,8 +51,7 @@
         "docs/**",
         "**/*.md",
         ".gitignore",
-        ".local/**",
-        ".gitleaks.toml"
+        ".local/**"
       ],
       "jobs": []
     },
@@ -186,6 +185,23 @@
         ".github/workflows/claude-code-review.yml"
       ],
       "jobs": []
+    },
+    {
+      "name": "REL000_INPUT",
+      "patterns": [
+        "docs/releases/**",
+        "docs/normative/v0.6/**",
+        "tools/test-rel-000-internal-release.ps1",
+        "tools/backup-restore.common.ps1"
+      ],
+      "full": true
+    },
+    {
+      "name": "SECURITY_CONTROL",
+      "patterns": [
+        ".gitleaks.toml"
+      ],
+      "full": true
     },
     {
       "name": "CI_SELF",

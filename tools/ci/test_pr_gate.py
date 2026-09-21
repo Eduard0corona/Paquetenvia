@@ -20,9 +20,19 @@ ALL_JOBS = list(CONFIG["jobs"])
 REPOSITORY = "Eduard0corona/Paquetenvia"
 
 
-def plan_for(paths, head_ref="feature/x", labels=None):
+CERTIFIED = "c" * 40
+
+
+def plan_for(paths, head_ref="feature/x", labels=None, certified_main_sha=None):
     return classifier.classify_paths(
-        CONFIG, list(paths), head_ref=head_ref, head_repo=REPOSITORY, repository=REPOSITORY, labels=labels
+        CONFIG,
+        list(paths),
+        head_ref=head_ref,
+        head_repo=REPOSITORY,
+        repository=REPOSITORY,
+        labels=labels,
+        source_head_sha=CERTIFIED if head_ref == "main" else None,
+        certified_main_sha=certified_main_sha,
     )
 
 
@@ -62,12 +72,19 @@ class PassTests(unittest.TestCase):
         self.assertEqual("PASS", gate.evaluate(None, needs_for(plan), CONFIG)["verdict"])
 
     def test_main_backsync_success(self):
-        plan = plan_for(["apps/web/package.json"], head_ref="main")
+        plan = plan_for(["apps/web/package.json"], head_ref="main", certified_main_sha=CERTIFIED)
         self.assertEqual("MAIN_BACKSYNC", plan["classification"])
         evaluation = gate.evaluate(None, needs_for(plan), CONFIG)
         self.assertEqual("PASS", evaluation["verdict"])
         rel000 = next(row for row in evaluation["matrix"] if row["job"] == "rel000")
         self.assertEqual({"required": False, "result": "skipped"}, {"required": rel000["required"], "result": rel000["result"]})
+
+    def test_uncertified_main_backsync_is_full_and_requires_rel000(self):
+        plan = plan_for(["apps/web/package.json"], head_ref="main")
+        self.assertEqual("FULL", plan["classification"])
+        self.assertEqual("PASS", gate.evaluate(None, needs_for(plan), CONFIG)["verdict"])
+        evaluation = gate.evaluate(None, needs_for(plan, {"rel000": "skipped"}), CONFIG)
+        self.assertEqual([gate.REASON_REQUIRED_JOB_SKIPPED], reasons(evaluation))
 
     def test_explicit_plan_argument_is_used(self):
         plan = plan_for(["docs/adr/x.md"])

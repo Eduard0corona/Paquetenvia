@@ -19,15 +19,43 @@ import classify_changes as classifier  # noqa: E402
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "Eduard0corona/Paquetenvia"
+CERTIFIED = "c" * 40
+OTHER_SHA = "d" * 40
 CONFIG = classifier.load_config(classifier.DEFAULT_CONFIG_PATH)
 ALL_JOBS = list(CONFIG["jobs"])
 BACKEND = CONFIG["job_sets"]["BACKEND"]
 WEB_ALL = CONFIG["job_sets"]["WEB_ALL"]
 
 
-def classify(paths, head_ref="feature/x", labels=None, head_repo=REPOSITORY, repository=REPOSITORY):
+def classify(
+    paths,
+    head_ref="feature/x",
+    labels=None,
+    head_repo=REPOSITORY,
+    repository=REPOSITORY,
+    source_head_sha=None,
+    certified_main_sha=None,
+):
     return classifier.classify_paths(
-        CONFIG, list(paths), head_ref=head_ref, head_repo=head_repo, repository=repository, labels=labels
+        CONFIG,
+        list(paths),
+        head_ref=head_ref,
+        head_repo=head_repo,
+        repository=repository,
+        labels=labels,
+        source_head_sha=source_head_sha,
+        certified_main_sha=certified_main_sha,
+    )
+
+
+def backsync(paths, labels=None, source_head_sha=CERTIFIED, certified_main_sha=CERTIFIED, **kwargs):
+    return classify(
+        paths,
+        head_ref="main",
+        labels=labels,
+        source_head_sha=source_head_sha,
+        certified_main_sha=certified_main_sha,
+        **kwargs,
     )
 
 
@@ -89,16 +117,18 @@ def make_merge_repo(base_files: dict[str, str], source_files: dict[str, str]) ->
 
 class ImpactModelTests(unittest.TestCase):
     def test_docs_only_requires_universal_controls_only(self):
-        plan = classify(["docs/adr/0001.md", "README.md", ".gitignore", ".local/.gitignore", ".gitleaks.toml"])
+        plan = classify(["docs/adr/0001.md", "README.md", ".gitignore", ".local/.gitignore", "docs/development/guide.md"])
         self.assertEqual("SELECTIVE", plan["classification"])
         self.assertEqual({"secret-scan"}, jobs(plan))
         self.assertEqual(["DOCS"], plan["domains"])
         self.assertEqual([], plan["unmatched_paths"])
 
-    def test_normative_docs(self):
+    def test_normative_docs_are_rel000_inputs(self):
         plan = classify(["docs/normative/v0.6/contracts/AI-01.md"])
-        self.assertEqual({"secret-scan", "normative-contracts", "dotnet"}, jobs(plan))
-        self.assertEqual(["DOCS", "NORMATIVE"], plan["domains"])
+        self.assertEqual("FULL", plan["classification"])
+        self.assertEqual(["DOCS", "NORMATIVE", "REL000_INPUT"], plan["domains"])
+        self.assertIn("FULL:REL000_INPUT", plan["reasons"])
+        self.assertIn("rel000", jobs(plan))
 
     def test_driver_ui(self):
         plan = classify(["apps/web/src/driver/stops.tsx", "apps/web/src/app/driver/page.tsx"])
@@ -280,6 +310,40 @@ class FullTriggerTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assert_full(classify([path]), "FULL:CI_SELF")
 
+    def test_rel000_direct_inputs_force_full(self):
+        for path in (
+            "docs/releases/mvp-0-owner-decision.json",
+            "docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json",
+            "docs/releases/evidence/rel-000-owner-001/rel000-p0-evidence.json",
+            "docs/releases/mvp-0-internal-release-report.md",
+            "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml",
+            "docs/normative/v0.6/specs/AI-10_DECISIONS_AND_GATES.yaml",
+            "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
+            "tools/test-rel-000-internal-release.ps1",
+            "tools/backup-restore.common.ps1",
+        ):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assert_full(plan, "FULL:REL000_INPUT")
+                self.assertIn("REL000_INPUT", plan["domains"])
+
+    def test_ordinary_docs_and_tools_are_not_rel000_inputs(self):
+        for path in ("docs/adr/example.md", "docs/development/guide.md", "README.md"):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assertEqual("SELECTIVE", plan["classification"])
+                self.assertEqual({"secret-scan"}, jobs(plan))
+        plan = classify(["tools/dev-platform.ps1"])
+        self.assertEqual("SELECTIVE", plan["classification"])
+        self.assertNotIn("rel000", jobs(plan))
+
+    def test_gitleaks_config_is_a_security_control(self):
+        plan = classify([".gitleaks.toml"])
+        self.assert_full(plan, "FULL:SECURITY_CONTROL")
+        self.assertEqual(["SECURITY_CONTROL"], plan["domains"])
+        docs = next(domain for domain in CONFIG["domains"] if domain["name"] == "DOCS")
+        self.assertFalse(any(pattern.match(".gitleaks.toml") for pattern in docs["compiled"]))
+
     def test_unknown_path_forces_full_and_is_reported(self):
         plan = classify(["apps/web/src/newarea/x.ts", "docs/adr/y.md"])
         self.assert_full(plan, "FULL:UNMATCHED_PATHS")
@@ -311,34 +375,78 @@ class FullTriggerTests(unittest.TestCase):
 
 
 class MainBacksyncTests(unittest.TestCase):
-    def test_main_head_runs_everything_except_rel000(self):
-        plan = classify(["apps/web/package.json", "docs/adr/x.md"], head_ref="main")
+    def assert_backsync(self, plan):
         self.assertEqual("MAIN_BACKSYNC", plan["classification"])
         self.assertEqual(set(ALL_JOBS) - {"rel000"}, jobs(plan))
-        self.assertIn("MAIN_BACKSYNC:HEAD_IS_MAIN", plan["reasons"])
+        self.assertIn("MAIN_BACKSYNC:CERTIFIED_MAIN_HEAD", plan["reasons"])
+        self.assertFalse([r for r in plan["reasons"] if r.startswith("FULL:")])
 
-    def test_main_head_docs_only_still_runs_every_development_validation(self):
-        plan = classify(["docs/adr/x.md"], head_ref="main")
-        self.assertEqual("MAIN_BACKSYNC", plan["classification"])
-        self.assertEqual(set(ALL_JOBS) - {"rel000"}, jobs(plan))
-
-    def test_full_ci_label_expands_backsync_to_full(self):
-        plan = classify(["docs/adr/x.md"], head_ref="main", labels=["full-ci"])
+    def assert_uncertified_full(self, plan):
         self.assertEqual("FULL", plan["classification"])
         self.assertEqual(set(ALL_JOBS), jobs(plan))
+        self.assertIn("rel000", jobs(plan))
+        self.assertIn("FULL:MAIN_BACKSYNC_UNCERTIFIED", plan["reasons"])
+        self.assertNotIn("MAIN_BACKSYNC:CERTIFIED_MAIN_HEAD", plan["reasons"])
 
-    def test_path_derived_full_triggers_do_not_summon_rel000_on_backsync(self):
-        for path in ("services/new.cs", "tools/ci/classify_changes.py", "apps/web/pnpm-lock.yaml"):
+    def test_certified_main_head_runs_everything_except_rel000(self):
+        self.assert_backsync(backsync(["apps/web/package.json", "docs/adr/x.md"]))
+
+    def test_certified_main_head_docs_only_still_runs_every_development_validation(self):
+        self.assert_backsync(backsync(["docs/adr/x.md"]))
+
+    def test_path_derived_full_triggers_do_not_summon_rel000_on_certified_backsync(self):
+        for path in ("services/new.cs", "tools/ci/classify_changes.py", "apps/web/pnpm-lock.yaml", ".gitleaks.toml"):
             with self.subTest(path=path):
-                plan = classify([path], head_ref="main")
-                self.assertEqual("MAIN_BACKSYNC", plan["classification"])
-                self.assertNotIn("rel000", jobs(plan))
-                self.assertFalse([r for r in plan["reasons"] if r.startswith("FULL:")])
-        self.assertEqual(["services/new.cs"], classify(["services/new.cs"], head_ref="main")["unmatched_paths"])
+                self.assert_backsync(backsync([path]))
+        self.assertEqual(["services/new.cs"], backsync(["services/new.cs"])["unmatched_paths"])
 
-    def test_fork_main_head_is_rejected(self):
+    def test_certification_missing_fails_closed_to_full(self):
+        self.assert_uncertified_full(backsync(["docs/adr/x.md"], certified_main_sha=None))
+        self.assert_uncertified_full(backsync(["docs/adr/x.md"], certified_main_sha=""))
+        self.assert_uncertified_full(backsync(["docs/adr/x.md"], certified_main_sha="   "))
+
+    def test_certification_mismatch_fails_closed_to_full(self):
+        self.assert_uncertified_full(backsync(["docs/adr/x.md"], certified_main_sha=OTHER_SHA))
+        self.assert_uncertified_full(
+            backsync(["apps/web/pnpm-lock.yaml"], source_head_sha=OTHER_SHA, certified_main_sha=CERTIFIED)
+        )
+
+    def test_source_head_missing_fails_closed_to_full(self):
+        self.assert_uncertified_full(backsync(["docs/adr/x.md"], source_head_sha=None))
+
+    def test_certification_malformed_fails_closed_nonzero(self):
+        for bad in ("C" * 40, "abc", "c" * 39, CERTIFIED + " 1"):
+            with self.subTest(bad=bad), self.assertRaises(classifier.ClassifyError) as ctx:
+                backsync(["docs/adr/x.md"], certified_main_sha=bad)
+            self.assertEqual("CLASSIFY_SHA_MALFORMED", ctx.exception.code)
         with self.assertRaises(classifier.ClassifyError) as ctx:
-            classify(["docs/adr/x.md"], head_ref="main", head_repo="someone/Paquetenvia")
+            backsync(["docs/adr/x.md"], source_head_sha="nope")
+        self.assertEqual("CLASSIFY_SHA_MALFORMED", ctx.exception.code)
+
+    def test_branch_identity_alone_never_certifies(self):
+        """head_ref == main with certification for a different SHA is not a back-sync."""
+        self.assert_uncertified_full(backsync(["docs/adr/x.md"], source_head_sha=OTHER_SHA, certified_main_sha=CERTIFIED))
+
+    def test_uncertified_main_never_bypasses_rel000(self):
+        for path in ("docs/adr/x.md", "apps/web/pnpm-lock.yaml", "services/new.cs"):
+            for certified in (None, OTHER_SHA):
+                with self.subTest(path=path, certified=certified):
+                    self.assertIn("rel000", jobs(backsync([path], certified_main_sha=certified)))
+
+    def test_certification_evidence_is_irrelevant_for_non_main_heads(self):
+        plan = classify(["docs/adr/x.md"], head_ref="feature/x", source_head_sha=CERTIFIED, certified_main_sha=CERTIFIED)
+        self.assertEqual("SELECTIVE", plan["classification"])
+        self.assertEqual({"secret-scan"}, jobs(plan))
+
+    def test_full_ci_label_expands_certified_backsync_to_full(self):
+        plan = backsync(["docs/adr/x.md"], labels=["full-ci"])
+        self.assertEqual("FULL", plan["classification"])
+        self.assertEqual(set(ALL_JOBS), jobs(plan))
+        self.assertIn("FULL:LABEL_full-ci", plan["reasons"])
+
+    def test_fork_main_head_is_rejected_even_when_certified(self):
+        with self.assertRaises(classifier.ClassifyError) as ctx:
+            backsync(["docs/adr/x.md"], head_repo="someone/Paquetenvia")
         self.assertEqual("CLASSIFY_FORK_HEAD_FORBIDDEN", ctx.exception.code)
 
 
@@ -374,7 +482,8 @@ class InputSafetyTests(unittest.TestCase):
     def test_plan_validates_against_config(self):
         classifier.validate_plan(classify(["docs/adr/x.md"]), CONFIG)
         classifier.validate_plan(classify(["global.json"]), CONFIG)
-        classifier.validate_plan(classify(["docs/adr/x.md"], head_ref="main"), CONFIG)
+        classifier.validate_plan(backsync(["docs/adr/x.md"]), CONFIG)
+        classifier.validate_plan(backsync(["docs/adr/x.md"], certified_main_sha=None), CONFIG)
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -503,6 +612,35 @@ class GitProvenanceTests(unittest.TestCase):
             self.assertEqual({"secret-scan", "web", "driver-stops-pwa", "azr-static"}, set(plan["required_jobs"]))
             self.assertTrue(github_output.read_text(encoding="utf-8").startswith("plan={"))
 
+    def test_cli_backsync_requires_certified_main_sha(self):
+        repo = make_merge_repo({"README.md": "a\n"}, {"docs/adr/x.md": "x\n"})
+        base_args = [
+            "--repo-root", repo["root"],
+            "--tested-git-sha", repo["tested"],
+            "--source-head-sha", repo["source"],
+            "--head-ref", "main",
+            "--head-repo", REPOSITORY,
+            "--repository", REPOSITORY,
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "plan.json"
+
+            def run(extra):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    code = classifier.main(base_args + extra + ["--output", str(output)])
+                return code, (json.loads(output.read_text(encoding="utf-8")) if code == 0 else None)
+
+            code, plan = run([])
+            self.assertEqual((0, "FULL"), (code, plan["classification"]))
+            code, plan = run(["--certified-main-sha", "e" * 40])
+            self.assertEqual((0, "FULL"), (code, plan["classification"]))
+            self.assertIn("FULL:MAIN_BACKSYNC_UNCERTIFIED", plan["reasons"])
+            code, plan = run(["--certified-main-sha", repo["source"]])
+            self.assertEqual((0, "MAIN_BACKSYNC"), (code, plan["classification"]))
+            self.assertNotIn("rel000", plan["required_jobs"])
+            code, _ = run(["--certified-main-sha", "not-a-sha"])
+            self.assertEqual(1, code)
+
     def test_source_second_parent_mismatch_fails(self):
         repo = make_merge_repo({"README.md": "a\n"}, {"README.md": "b\n"})
         with self.assertRaises(classifier.ClassifyError) as ctx:
@@ -594,6 +732,23 @@ class Rel000SynchronisationTests(unittest.TestCase):
                 self.assertEqual("FULL", plan["classification"])
                 self.assertIn("rel000", plan["required_jobs"])
         self.assertEqual(set(self.rel000.DEPENDENCY_FILES), set(self.rel000.SECURITY_REMEDIATION_DEPENDENCY_FILES))
+
+    def test_rel000_repository_inputs_are_full(self):
+        """Paths rel000.py, the rel000 job and its runner script read from the tree stay FULL."""
+        for path in (
+            "docs/releases/mvp-0-owner-decision.json",
+            "docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json",
+            "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml",
+            "tools/test-rel-000-internal-release.ps1",
+            "tools/backup-restore.common.ps1",
+            "tools/rel-000/security-remediation-policy.json",
+            "tools/security/sharp-runtime-smoke.mjs",
+            "tests/fixtures/rel-000/security-tracking.json",
+        ):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assertEqual("FULL", plan["classification"])
+                self.assertIn("rel000", plan["required_jobs"])
 
     def test_rel000_tooling_and_fixtures_force_full(self):
         for path in ("tools/rel-000/rel000.py", "tools/rel-000/security-remediation-policy.json", "tests/fixtures/rel-000/rollback-evidence.json"):

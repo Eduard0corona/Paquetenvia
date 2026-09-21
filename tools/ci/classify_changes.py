@@ -17,7 +17,10 @@ Fail-closed rules:
 * an unmatched path, an empty diff, a dependency/CI self change or the ``full-ci``
   label yields ``FULL``;
 * ``FULL`` is never reduced by any later rule or label;
-* a head repository different from the repository is rejected.
+* a head repository different from the repository is rejected;
+* ``MAIN_BACKSYNC`` (head ``main``, every job except REL-000) requires explicit
+  certification evidence (``--certified-main-sha`` equal to the source head); an
+  uncertified ``main`` head classifies ``FULL``.
 """
 
 from __future__ import annotations
@@ -284,8 +287,16 @@ def classify_paths(
     head_repo: str,
     repository: str,
     labels: list[str] | None = None,
+    source_head_sha: str | None = None,
+    certified_main_sha: str | None = None,
 ) -> dict[str, Any]:
-    """Pure classification of an already-proven changed-path list."""
+    """Pure classification of an already-proven changed-path list.
+
+    ``certified_main_sha`` is the head SHA of a successful ``push``/``main`` Foundation
+    run (13/13), obtained by the calling workflow and passed in as trusted evidence.
+    ``MAIN_BACKSYNC`` is emitted only when the head is ``main`` and that evidence equals
+    ``source_head_sha`` exactly; branch identity alone never certifies anything.
+    """
     labels = sorted({str(label).strip() for label in (labels or []) if str(label).strip()})
     head_ref = str(head_ref or "").strip()
     head_repo = str(head_repo or "").strip()
@@ -296,6 +307,10 @@ def classify_paths(
         fail("CLASSIFY_REPOSITORY_MISSING", "repository and head_repo are required.")
     if head_repo != repository:
         fail("CLASSIFY_FORK_HEAD_FORBIDDEN", "The head repository must be the repository itself.", head_repo=head_repo, repository=repository)
+    source = validate_sha(source_head_sha, "source_head_sha") if str(source_head_sha or "").strip() else None
+    certified = (
+        validate_sha(certified_main_sha, "certified_main_sha") if str(certified_main_sha or "").strip() else None
+    )
     for path in changed_paths:
         if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path or ".." in path.split("/"):
             fail("CLASSIFY_PATH_INVALID", "Changed paths must be relative POSIX paths.", path=path)
@@ -329,19 +344,30 @@ def classify_paths(
         reasons.add("FULL:EMPTY_DIFF")
     label_full = FULL_CI_LABEL in labels
 
-    # Precedence: the full-ci label always expands to FULL; otherwise a head of `main`
-    # (back-sync of push/main-certified content) runs every development validation
-    # except the full-only REL-000 job, regardless of the paths it carries, because
-    # REL-000 NORMAL would reject already-certified dependency drift against the older
-    # development base; otherwise path-derived FULL wins over SELECTIVE.
+    # A head of `main` is a back-sync of main content. Only push/main-certified content
+    # may skip the full-only REL-000 job (REL-000 NORMAL would reject already-certified
+    # dependency drift against the older development base), so the back-sync path
+    # requires explicit certification evidence equal to the source head. An
+    # uncertified main never bypasses REL-000.
+    backsync_certified = False
+    if head_ref == MAIN_BRANCH:
+        if source is not None and certified is not None and certified == source:
+            backsync_certified = True
+        else:
+            full = True
+            reasons.add("FULL:MAIN_BACKSYNC_UNCERTIFIED")
+
+    # Precedence: the full-ci label always expands to FULL; otherwise a certified
+    # back-sync runs every development validation except the full-only jobs regardless
+    # of the paths it carries; otherwise path-derived FULL wins over SELECTIVE.
     if label_full:
         classification = CLASSIFICATION_FULL
         reasons.add(f"FULL:LABEL_{FULL_CI_LABEL}")
         required = set(config["jobs"])
-    elif head_ref == MAIN_BRANCH:
+    elif backsync_certified:
         classification = CLASSIFICATION_MAIN_BACKSYNC
         reasons = {reason for reason in reasons if not reason.startswith("FULL:")}
-        reasons.add("MAIN_BACKSYNC:HEAD_IS_MAIN")
+        reasons.add("MAIN_BACKSYNC:CERTIFIED_MAIN_HEAD")
         required = set(config["jobs"]) - set(config["full_only_jobs"])
     elif full:
         classification = CLASSIFICATION_FULL
@@ -415,6 +441,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-repo", required=True, help="github.event.pull_request.head.repo.full_name")
     parser.add_argument("--repository", required=True, help="github.repository")
     parser.add_argument("--label", action="append", default=[], help="pull request label (repeatable)")
+    parser.add_argument(
+        "--certified-main-sha",
+        default=None,
+        help="head SHA of a successful push/main Foundation run (13/13); required for MAIN_BACKSYNC",
+    )
     parser.add_argument("--output", default=None, help="write the plan JSON to this file")
     parser.add_argument("--github-output", default=None, help="append plan=<json> to this $GITHUB_OUTPUT file")
     return parser
@@ -433,6 +464,8 @@ def main(argv: list[str] | None = None) -> int:
             head_repo=args.head_repo,
             repository=args.repository,
             labels=args.label,
+            source_head_sha=args.source_head_sha,
+            certified_main_sha=args.certified_main_sha,
         )
         validate_plan(plan, config)
     except ClassifyError as error:
