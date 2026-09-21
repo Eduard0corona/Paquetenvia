@@ -1,0 +1,19 @@
+# AZR-001 v0.8 §29 secret scan configuration (Gitleaks 8.30.1).
+# Extends the default ruleset. Only exact synthetic literals that are part of the
+# frozen normative test vectors or non-secret idempotency keys are allowlisted.
+# Never allowlist by path: the scan must stay fail-closed for real credentials.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic normative vectors and idempotency keys (no credential value)"
+regexTarget = "match"
+regexes = [
+  # AI-24 canonical public tracking token test vector: base64url(0x01..0x20).
+  '''AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA''',
+  # PRC-001 synthetic key version identifier (not a key).
+  '''PRC-001-SYNTHETIC-V1''',
+  # Contract-test idempotency keys.
+  '''orders-pg-(?:same-key|distinct)-\d{4}''',
+  '''prc001-def001-reservation-\d{2}''',
+]

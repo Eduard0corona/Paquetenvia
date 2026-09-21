@@ -18,7 +18,7 @@ var tags = {
 }
 
 var identityNames = [
-  'mi-azr-dev-migrate'
+  'mi-azr-dev-db-migrate'
   'mi-azr-dev-prereq-seed'
   'mi-azr-dev-api'
   'mi-azr-dev-worker'
