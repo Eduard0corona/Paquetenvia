@@ -1,0 +1,293 @@
+{
+  "format": "pv-change-domains-v1",
+  "universal_jobs": [
+    "secret-scan"
+  ],
+  "jobs": [
+    "secret-scan",
+    "normative-contracts",
+    "azr-static",
+    "dotnet",
+    "runtime-contracts",
+    "web",
+    "realtime-e2e",
+    "outbox-signalr-delivery",
+    "driver-stops-pwa",
+    "public-tracking",
+    "operations-dashboard",
+    "delivery-simulation",
+    "infrastructure",
+    "backup-restore",
+    "rel000"
+  ],
+  "full_only_jobs": [
+    "rel000"
+  ],
+  "job_sets": {
+    "BACKEND": [
+      "dotnet",
+      "runtime-contracts",
+      "realtime-e2e",
+      "outbox-signalr-delivery",
+      "driver-stops-pwa",
+      "public-tracking",
+      "operations-dashboard",
+      "delivery-simulation",
+      "infrastructure",
+      "backup-restore"
+    ],
+    "WEB_ALL": [
+      "web",
+      "realtime-e2e",
+      "driver-stops-pwa",
+      "public-tracking",
+      "operations-dashboard"
+    ]
+  },
+  "domains": [
+    {
+      "name": "DOCS",
+      "patterns": [
+        "docs/**",
+        "**/*.md",
+        ".gitignore",
+        ".local/**"
+      ],
+      "jobs": []
+    },
+    {
+      "name": "NORMATIVE",
+      "patterns": [
+        "docs/normative/**"
+      ],
+      "jobs": [
+        "normative-contracts",
+        "dotnet"
+      ]
+    },
+    {
+      "name": "WEB_DRIVER",
+      "patterns": [
+        "apps/web/src/driver/**",
+        "apps/web/src/app/driver/**"
+      ],
+      "jobs": [
+        "web",
+        "driver-stops-pwa",
+        "azr-static"
+      ]
+    },
+    {
+      "name": "WEB_TRACKING",
+      "patterns": [
+        "apps/web/src/tracking/**",
+        "apps/web/src/app/track/**"
+      ],
+      "jobs": [
+        "web",
+        "public-tracking",
+        "azr-static"
+      ]
+    },
+    {
+      "name": "WEB_OPS",
+      "patterns": [
+        "apps/web/src/operations/**",
+        "apps/web/src/app/ops/**"
+      ],
+      "jobs": [
+        "web",
+        "operations-dashboard",
+        "azr-static"
+      ]
+    },
+    {
+      "name": "WEB_REALTIME",
+      "patterns": [
+        "apps/web/src/realtime/**"
+      ],
+      "job_sets": [
+        "WEB_ALL"
+      ],
+      "jobs": [
+        "azr-static"
+      ]
+    },
+    {
+      "name": "WEB_DEV",
+      "patterns": [
+        "apps/web/src/dev/**",
+        "apps/web/src/app/dev/**"
+      ],
+      "jobs": [
+        "web",
+        "dotnet",
+        "azr-static"
+      ]
+    },
+    {
+      "name": "WEB_SHARED",
+      "patterns": [
+        "apps/web/src/app/*",
+        "apps/web/src/app/health/**",
+        "apps/web/src/components/**",
+        "apps/web/src/lib/**",
+        "apps/web/src/proxy.ts",
+        "apps/web/public/**",
+        "apps/web/tsconfig.json",
+        "apps/web/eslint.config.mjs",
+        "apps/web/vitest.config.ts",
+        "apps/web/vitest.e2e.config.ts",
+        "apps/web/next-env.d.ts"
+      ],
+      "job_sets": [
+        "WEB_ALL"
+      ],
+      "jobs": [
+        "azr-static"
+      ]
+    },
+    {
+      "name": "WEB_NEXT_CONFIG",
+      "patterns": [
+        "apps/web/next.config.ts"
+      ],
+      "job_sets": [
+        "WEB_ALL"
+      ],
+      "jobs": [
+        "azr-static",
+        "dotnet"
+      ]
+    },
+    {
+      "name": "AZURE",
+      "patterns": [
+        "deploy/azure/**"
+      ],
+      "jobs": [
+        "azr-static"
+      ]
+    },
+    {
+      "name": "DEPLOY_WORKFLOW",
+      "patterns": [
+        ".github/workflows/deploy-azure-dev.yml"
+      ],
+      "jobs": [
+        "azr-static"
+      ]
+    },
+    {
+      "name": "GITHUB_AUTOMATION",
+      "patterns": [
+        ".github/workflows/claude.yml",
+        ".github/workflows/claude-code-review.yml"
+      ],
+      "jobs": []
+    },
+    {
+      "name": "REL000_INPUT",
+      "patterns": [
+        "docs/releases/**",
+        "docs/normative/v0.6/**",
+        "tools/test-rel-000-internal-release.ps1",
+        "tools/backup-restore.common.ps1"
+      ],
+      "full": true
+    },
+    {
+      "name": "SECURITY_CONTROL",
+      "patterns": [
+        ".gitleaks.toml"
+      ],
+      "full": true
+    },
+    {
+      "name": "CI_SELF",
+      "patterns": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "tools/ci/**",
+        "tools/rel-000/**",
+        "tools/azr-001/**",
+        "tools/security/**",
+        "tests/fixtures/rel-000/**"
+      ],
+      "full": true
+    },
+    {
+      "name": "DEPS",
+      "patterns": [
+        "**/package.json",
+        "**/package-lock.json",
+        "**/packages.lock.json",
+        "**/pnpm-lock.yaml",
+        "**/pnpm-workspace.yaml",
+        "**/yarn.lock",
+        "**/Directory.Packages.props",
+        "global.json",
+        ".nvmrc",
+        ".config/dotnet-tools.json"
+      ],
+      "full": true
+    },
+    {
+      "name": "BACKEND",
+      "patterns": [
+        "src/**",
+        "database/**",
+        "Paqueteria.sln",
+        "Directory.Build.props",
+        "deploy/docker-compose.yml",
+        "deploy/.env.example",
+        "deploy/postgres/**",
+        "deploy/minio/**",
+        "deploy/mail/**",
+        "tools/*.ps1",
+        "tools/Paqueteria.DatabaseMigrator/**",
+        "tools/Paqueteria.DevSeed/**",
+        "tools/Paqueteria.SyntheticVerification/**",
+        "templates/**",
+        ".dockerignore",
+        "tests/Paqueteria.IntegrationTests/**",
+        "tests/Paqueteria.EndToEndTests/**",
+        "tests/fixtures/ops-002/**"
+      ],
+      "job_sets": [
+        "BACKEND"
+      ]
+    },
+    {
+      "name": "TESTS_DOTNET_ONLY",
+      "patterns": [
+        "tests/Paqueteria.UnitTests/**",
+        "tests/Paqueteria.ArchitectureTests/**",
+        "tests/Paqueteria.ArchitectureFixtures/**"
+      ],
+      "jobs": [
+        "dotnet"
+      ]
+    },
+    {
+      "name": "TESTS_CONTRACT",
+      "patterns": [
+        "tests/Paqueteria.ContractTests/**"
+      ],
+      "jobs": [
+        "dotnet",
+        "runtime-contracts"
+      ]
+    },
+    {
+      "name": "TESTS_REALTIME_HOST",
+      "patterns": [
+        "tests/Paqueteria.RealtimeTestHost/**"
+      ],
+      "jobs": [
+        "dotnet",
+        "realtime-e2e"
+      ]
+    }
+  ]
+}

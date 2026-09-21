@@ -71,6 +71,11 @@ jobs:
       - name: Test AZR-001 static guard tooling
         run: python -m unittest discover -s ./tools/azr-001 -p "test_*.py" -v
 
+      # CI-OPT slice 1: change classifier, PR Gate and main source guard tooling
+      # (tools/ci). Tooling only; nothing here is wired into validation yet.
+      - name: Test CI tooling
+        run: python -m unittest discover -s ./tools/ci -p "test_*.py" -v
+
       - name: Run AZR-001 §28 static guards
         run: python ./tools/azr-001/azr001_static_guards.py check --arm-dir "${RUNNER_TEMP}/azr001-arm"
 
