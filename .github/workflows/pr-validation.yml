@@ -1,24 +1,67 @@
-name: Foundation CI
+name: PR Validation
+
+# CI-OPT slice 2: change-aware, non-authoritative validation for pull requests into
+# `development`. Foundation CI (ci.yml, exactly 13 jobs) stays the only authoritative
+# validation: it runs for pull_request → main and certifies push → main.
+#
+# Trust model (self-hosted runner):
+#   * a fork pull request is rejected before any checkout or execution of PR code;
+#   * the classifier, the certification gate and the PR Gate execute from the tested
+#     first parent (github.sha^1, the tested base), never from the PR-provided tree,
+#     so a PR cannot rewrite the authority that decides which validations it may skip;
+#   * the tested merge ref (github.sha) is the subject of classification; the event
+#     payload base SHA is never authoritative.
+#
+# Job selection is owned by the classifier plan (pv-plan-v1). Every validation job
+# runs only when its id is in plan.required_jobs and is otherwise skipped whole;
+# no job body is weakened. The PR Gate is the single terminal check.
 
 on:
   pull_request:
     branches:
-      - main
-  push:
-    branches:
-      - main
+      - development
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
 
 permissions:
+  actions: read
   contents: read
   issues: read
 
-# Temporary: self-hosted Foundation runner through 2026-10-01 due to GitHub-hosted Actions minute limits.
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Temporary: self-hosted runner through 2026-10-01 due to GitHub-hosted Actions minute limits.
 jobs:
-  normative:
-    name: Validate normative baseline
+  classify:
+    name: Classify PR impact
     runs-on: self-hosted
+    timeout-minutes: 10
+    outputs:
+      plan: ${{ steps.classify.outputs.plan }}
+      trusted-base-sha: ${{ steps.trusted.outputs.trusted-base-sha }}
+      certified-main-sha: ${{ steps.certify.outputs.certified-main-sha }}
     steps:
-      - name: Check out repository
+      # Fork precheck: no checkout and no repository code runs before this passes.
+      - name: Reject pull requests from forks before any checkout
+        shell: bash
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HEAD_REPO}" ] || [ "${HEAD_REPO}" != "${REPOSITORY}" ]; then
+            echo "::error::PR_VALIDATION_FORK_REJECTED: head repository '${HEAD_REPO}' is not '${REPOSITORY}'"
+            exit 1
+          fi
+          echo "same-repository pull request from ${HEAD_REPO}"
+
+      - name: Check out tested merge ref
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -28,58 +71,127 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install validator dependencies
+      - name: Install existing normative parser dependency
         run: python -m pip install PyYAML==6.0.3
 
-      - name: Validate canonical contracts
-        run: python ./docs/normative/v0.6/tools/validate_contracts.py
-
-      - name: Verify AI-06 checksum
-        shell: bash
-        run: |
-          actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163"
-
-      - name: Verify AI-18 remains unchanged
-        shell: bash
-        run: |
-          actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
-          test "$actual" = "38f0bf14fdb3ad723232d83121cda705f91363b14ed722c0c2f2f3d7189046dd"
-
-      # AZR-001 v0.8 §28 static CI guards and §29 secret scan. Foundation keeps exactly 13 jobs;
-      # these guards run as steps of the normative job and never contact Azure.
-      - name: Install pinned Bicep CLI
+      # The tooling that decides what may be skipped comes from the tested first parent
+      # (the tested base), not from the PR tree under test.
+      - name: Extract trusted CI tooling from the tested first parent
+        id: trusted
         shell: bash
         env:
-          BICEP_VERSION: v0.47.16
-          BICEP_SHA256: 64c345a58e0c3e48b1bc98a4e62d6b3adb1d238281297de3400aeafb2697aa5a
+          TESTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          curl -fsSL -o "${RUNNER_TEMP}/bicep" "https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64"
-          echo "${BICEP_SHA256}  ${RUNNER_TEMP}/bicep" | sha256sum --check --strict
-          chmod +x "${RUNNER_TEMP}/bicep"
-
-      - name: Build and lint Bicep templates (AZR-001 §28.1, offline)
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf "${RUNNER_TEMP}/azr001-arm"
-          mkdir -p "${RUNNER_TEMP}/azr001-arm"
-          for template in deploy/azure/*.bicep; do
-            "${RUNNER_TEMP}/bicep" build "${template}" --outdir "${RUNNER_TEMP}/azr001-arm"
-            "${RUNNER_TEMP}/bicep" lint "${template}"
+          test "$(git rev-parse HEAD)" = "${TESTED_SHA}"
+          trusted_base="$(git rev-parse --verify "${TESTED_SHA}^1")"
+          trusted="${RUNNER_TEMP}/pr-validation-trusted"
+          rm -rf "${trusted}"
+          mkdir -p "${trusted}/tools/ci" "${trusted}/tools/azr-001"
+          for path in \
+            tools/ci/classify_changes.py \
+            tools/ci/change-domains.json \
+            tools/azr-001/azr001_static_guards.py; do
+            git show "${trusted_base}:${path}" > "${trusted}/${path}"
           done
+          echo "PV_TRUSTED_DIR=${trusted}" >> "$GITHUB_ENV"
+          echo "trusted-base-sha=${trusted_base}" >> "$GITHUB_OUTPUT"
+          echo "trusted CI tooling extracted from tested base ${trusted_base}"
 
-      - name: Test AZR-001 static guard tooling
-        run: python -m unittest discover -s ./tools/azr-001 -p "test_*.py" -v
+      # MAIN_BACKSYNC (head main) needs proof that the exact source SHA is already
+      # Foundation-certified: name Foundation CI, event push, head_branch main,
+      # head_sha == source, completed/success, exactly 13 successful jobs. The proof is
+      # evaluated by the trusted AZR-001 deploy-gate contract; nothing weaker. No proof
+      # → certified-main-sha stays empty and the classifier falls back to FULL.
+      - name: Resolve exact Foundation certification of the main head
+        id: certify
+        if: github.head_ref == 'main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/pr-validation-certification"
+          rm -rf "${evidence}" && mkdir -p "${evidence}"
+          certified=""
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=${SOURCE_HEAD_SHA}&status=completed&per_page=50" \
+            > "${evidence}/runs.json"
+          run_ids="$(python -c 'import json, sys
+          runs = json.load(open(sys.argv[1], encoding="utf-8")).get("workflow_runs", [])
+          for run in runs:
+              if (run.get("head_sha") == sys.argv[2] and run.get("event") == "push"
+                      and run.get("head_branch") == "main" and run.get("name") == "Foundation CI"
+                      and run.get("status") == "completed" and run.get("conclusion") == "success"):
+                  print(run["id"])' "${evidence}/runs.json" "${SOURCE_HEAD_SHA}")"
+          for run_id in ${run_ids}; do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "${evidence}/run-${run_id}.json"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "${evidence}/jobs-${run_id}.json"
+            if python "${PV_TRUSTED_DIR}/tools/azr-001/azr001_static_guards.py" deploy-gate \
+                 --repo-root . \
+                 --tested-git-sha "${SOURCE_HEAD_SHA}" \
+                 --dispatch-ref refs/heads/main \
+                 --dispatch-sha "${SOURCE_HEAD_SHA}" \
+                 --foundation-run-id "${run_id}" \
+                 --foundation-run-json "${evidence}/run-${run_id}.json" \
+                 --foundation-jobs-json "${evidence}/jobs-${run_id}.json"; then
+              certified="${SOURCE_HEAD_SHA}"
+              echo "MAIN_BACKSYNC certification: Foundation CI push/main run ${run_id} proves ${SOURCE_HEAD_SHA} (13/13)"
+              break
+            fi
+            echo "run ${run_id} does not certify ${SOURCE_HEAD_SHA}"
+          done
+          if [ -z "${certified}" ]; then
+            echo "::warning::no exact Foundation CI push/main 13/13 run proves ${SOURCE_HEAD_SHA}; the classifier will fall back to FULL:MAIN_BACKSYNC_UNCERTIFIED"
+          fi
+          echo "certified-main-sha=${certified}" >> "$GITHUB_OUTPUT"
 
-      # CI-OPT slice 1: change classifier, PR Gate and main source guard tooling
-      # (tools/ci). Tooling only; nothing here is wired into validation yet.
-      - name: Test CI tooling
-        run: python -m unittest discover -s ./tools/ci -p "test_*.py" -v
+      - name: Classify tested changes with trusted tooling
+        id: classify
+        shell: bash
+        env:
+          TESTED_SHA: ${{ github.sha }}
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          CERTIFIED_MAIN_SHA: ${{ steps.certify.outputs.certified-main-sha }}
+        run: |
+          set -euo pipefail
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "${label}" ] && label_args+=(--label "${label}")
+          done < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["LABELS_JSON"])))')
+          python "${PV_TRUSTED_DIR}/tools/ci/classify_changes.py" \
+            --repo-root . \
+            --config "${PV_TRUSTED_DIR}/tools/ci/change-domains.json" \
+            --tested-git-sha "${TESTED_SHA}" \
+            --source-head-sha "${SOURCE_HEAD_SHA}" \
+            --head-ref "${HEAD_REF}" \
+            --head-repo "${HEAD_REPO}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --certified-main-sha "${CERTIFIED_MAIN_SHA}" \
+            ${label_args[@]+"${label_args[@]}"} \
+            --output "${RUNNER_TEMP}/pr-validation-plan.json" \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo "## PR Validation plan"
+            echo '```json'
+            cat "${RUNNER_TEMP}/pr-validation-plan.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run AZR-001 §28 static guards
-        run: python ./tools/azr-001/azr001_static_guards.py check --arm-dir "${RUNNER_TEMP}/azr001-arm"
+  secret-scan:
+    name: Secret scan
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'secret-scan')
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Secret scan (AZR-001 §29, Gitleaks 8.30.1 pinned by digest)
         shell: bash
@@ -123,8 +235,96 @@ jobs:
             "${GITLEAKS_IMAGE}" git /scan --config /scan/.gitleaks.toml --no-banner --redact --log-opts="${range}"
           echo "::endgroup::"
 
+  normative-contracts:
+    name: Validate normative contracts
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'normative-contracts')
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install validator dependencies
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Validate canonical contracts
+        run: python ./docs/normative/v0.6/tools/validate_contracts.py
+
+      - name: Verify AI-06 checksum
+        shell: bash
+        run: |
+          actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
+          test "$actual" = "7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163"
+
+      - name: Verify AI-18 remains unchanged
+        shell: bash
+        run: |
+          actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
+          test "$actual" = "38f0bf14fdb3ad723232d83121cda705f91363b14ed722c0c2f2f3d7189046dd"
+
+      - name: Test CI tooling
+        run: python -m unittest discover -s ./tools/ci -p "test_*.py" -v
+
+  azr-static:
+    name: Validate AZR-001 static guards
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'azr-static')
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install validator dependencies
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Install pinned Bicep CLI
+        shell: bash
+        env:
+          BICEP_VERSION: v0.47.16
+          BICEP_SHA256: 64c345a58e0c3e48b1bc98a4e62d6b3adb1d238281297de3400aeafb2697aa5a
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${RUNNER_TEMP}/bicep" "https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64"
+          echo "${BICEP_SHA256}  ${RUNNER_TEMP}/bicep" | sha256sum --check --strict
+          chmod +x "${RUNNER_TEMP}/bicep"
+
+      - name: Build and lint Bicep templates (AZR-001 §28.1, offline)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/azr001-arm"
+          mkdir -p "${RUNNER_TEMP}/azr001-arm"
+          for template in deploy/azure/*.bicep; do
+            "${RUNNER_TEMP}/bicep" build "${template}" --outdir "${RUNNER_TEMP}/azr001-arm"
+            "${RUNNER_TEMP}/bicep" lint "${template}"
+          done
+
+      - name: Test AZR-001 static guard tooling
+        run: python -m unittest discover -s ./tools/azr-001 -p "test_*.py" -v
+
+      - name: Run AZR-001 §28 static guards
+        run: python ./tools/azr-001/azr001_static_guards.py check --arm-dir "${RUNNER_TEMP}/azr001-arm"
+
   dotnet:
     name: Build and test .NET
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'dotnet')
     runs-on: self-hosted
     outputs:
       execution-artifact-id: ${{ steps.upload-dotnet-execution.outputs.artifact-id }}
@@ -195,6 +395,8 @@ jobs:
 
   runtime-contracts:
     name: Validate runtime contracts
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'runtime-contracts')
     runs-on: self-hosted
     timeout-minutes: 20
     outputs:
@@ -316,6 +518,8 @@ jobs:
 
   web:
     name: Validate web workspace
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'web')
     runs-on: self-hosted
     steps:
       - name: Check out repository
@@ -354,6 +558,8 @@ jobs:
 
   realtime-e2e:
     name: Validate real SignalR reconnect
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'realtime-e2e')
     runs-on: self-hosted
     outputs:
       execution-artifact-id: ${{ steps.upload-realtime-execution.outputs.artifact-id }}
@@ -446,6 +652,8 @@ jobs:
 
   outbox-signalr-delivery:
     name: Validate outbox SignalR delivery
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'outbox-signalr-delivery')
     runs-on: self-hosted
     timeout-minutes: 25
     outputs:
@@ -581,6 +789,8 @@ jobs:
 
   driver-stops-pwa:
     name: Validate driver PWA
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'driver-stops-pwa')
     runs-on: self-hosted
     timeout-minutes: 25
     outputs:
@@ -729,6 +939,8 @@ jobs:
 
   public-tracking:
     name: Validate public tracking
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'public-tracking')
     runs-on: self-hosted
     timeout-minutes: 25
     outputs:
@@ -903,6 +1115,8 @@ jobs:
 
   operations-dashboard:
     name: Validate operations dashboard
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'operations-dashboard')
     runs-on: self-hosted
     timeout-minutes: 25
     outputs:
@@ -1048,6 +1262,8 @@ jobs:
 
   delivery-simulation:
     name: Validate 20-delivery simulation
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'delivery-simulation')
     runs-on: self-hosted
     timeout-minutes: 30
     outputs:
@@ -1162,6 +1378,8 @@ jobs:
 
   infrastructure:
     name: Validate local infrastructure
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'infrastructure')
     runs-on: self-hosted
     timeout-minutes: 20
     env:
@@ -1293,6 +1511,8 @@ jobs:
 
   backup-restore:
     name: Validate backup and restore
+    needs: classify
+    if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'backup-restore')
     runs-on: self-hosted
     timeout-minutes: 60
     outputs:
@@ -1543,11 +1763,17 @@ jobs:
             throw ($cleanupFailures -join " ")
           }
 
+  # Non-authoritative here (PR Validation). Runs only for FULL plans. The logical
+  # `normative` upstream result is success only when all three decomposed normative
+  # controls succeeded; otherwise the existing upstream check fails closed.
   rel000:
     name: Validate MVP-0 internal release evidence
-    if: always()
+    if: always() && needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'rel000')
     needs:
-      - normative
+      - classify
+      - secret-scan
+      - normative-contracts
+      - azr-static
       - dotnet
       - runtime-contracts
       - web
@@ -1573,7 +1799,7 @@ jobs:
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
       REL000_JOB_RESULTS_JSON: >-
-        {"normative":"${{ needs.normative.result }}","dotnet":"${{ needs.dotnet.result }}","runtime-contracts":"${{ needs.runtime-contracts.result }}","web":"${{ needs.web.result }}","realtime-e2e":"${{ needs.realtime-e2e.result }}","outbox-signalr-delivery":"${{ needs.outbox-signalr-delivery.result }}","driver-stops-pwa":"${{ needs.driver-stops-pwa.result }}","public-tracking":"${{ needs.public-tracking.result }}","operations-dashboard":"${{ needs.operations-dashboard.result }}","delivery-simulation":"${{ needs.delivery-simulation.result }}","infrastructure":"${{ needs.infrastructure.result }}","backup-restore":"${{ needs.backup-restore.result }}"}
+        {"normative":"${{ needs.secret-scan.result == 'success' && needs.normative-contracts.result == 'success' && needs.azr-static.result == 'success' && 'success' || format('decomposed[secret-scan={0},normative-contracts={1},azr-static={2}]', needs.secret-scan.result, needs.normative-contracts.result, needs.azr-static.result) }}","dotnet":"${{ needs.dotnet.result }}","runtime-contracts":"${{ needs.runtime-contracts.result }}","web":"${{ needs.web.result }}","realtime-e2e":"${{ needs.realtime-e2e.result }}","outbox-signalr-delivery":"${{ needs.outbox-signalr-delivery.result }}","driver-stops-pwa":"${{ needs.driver-stops-pwa.result }}","public-tracking":"${{ needs.public-tracking.result }}","operations-dashboard":"${{ needs.operations-dashboard.result }}","delivery-simulation":"${{ needs.delivery-simulation.result }}","infrastructure":"${{ needs.infrastructure.result }}","backup-restore":"${{ needs.backup-restore.result }}"}
       REL000_EXECUTION_ARTIFACT_OUTPUTS_JSON: >-
         [{"artifact_name":"rel000-execution-dotnet","artifact_id":"${{ needs.dotnet.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.dotnet.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-runtime-contracts","artifact_id":"${{ needs.runtime-contracts.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.runtime-contracts.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-realtime-e2e","artifact_id":"${{ needs.realtime-e2e.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.realtime-e2e.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-outbox-signalr-delivery","artifact_id":"${{ needs.outbox-signalr-delivery.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.outbox-signalr-delivery.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-driver-stops-pwa","artifact_id":"${{ needs.driver-stops-pwa.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.driver-stops-pwa.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-public-tracking","artifact_id":"${{ needs.public-tracking.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.public-tracking.outputs.execution-artifact-digest }}"},{"artifact_name":"rel000-execution-operations-dashboard","artifact_id":"${{ needs.operations-dashboard.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.operations-dashboard.outputs.execution-artifact-digest }}"},{"artifact_name":"delivery-simulation-results","artifact_id":"${{ needs.delivery-simulation.outputs.artifact-id }}","artifact_digest":"${{ needs.delivery-simulation.outputs.artifact-digest }}"},{"artifact_name":"rel000-execution-infrastructure","artifact_id":"${{ needs.infrastructure.outputs.execution-artifact-id }}","artifact_digest":"${{ needs.infrastructure.outputs.execution-artifact-digest }}"},{"artifact_name":"ops002-backup-restore-results","artifact_id":"${{ needs.backup-restore.outputs.artifact-id }}","artifact_digest":"${{ needs.backup-restore.outputs.artifact-digest }}"}]
       REL000_OPS001_ARTIFACT_NAME: delivery-simulation-results
@@ -1872,3 +2098,84 @@ jobs:
               [System.IO.File]::Delete($path)
             }
           }
+
+  pr-gate:
+    name: PR Gate
+    if: always()
+    needs:
+      - classify
+      - secret-scan
+      - normative-contracts
+      - azr-static
+      - dotnet
+      - runtime-contracts
+      - web
+      - realtime-e2e
+      - outbox-signalr-delivery
+      - driver-stops-pwa
+      - public-tracking
+      - operations-dashboard
+      - delivery-simulation
+      - infrastructure
+      - backup-restore
+      - rel000
+    runs-on: self-hosted
+    timeout-minutes: 10
+    env:
+      PV_CLASSIFY_RESULT: ${{ needs.classify.result }}
+      PV_PLAN_JSON: ${{ needs.classify.outputs.plan }}
+      PV_NEEDS_JSON: ${{ toJSON(needs) }}
+    steps:
+      # Workflow-owned, runs before any checkout: an untrusted or failed classification
+      # (fork rejected, provenance unproven, classifier error) never reaches PR code.
+      - name: Fail closed when the classifier did not succeed (before any checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${PV_CLASSIFY_RESULT}" != "success" ]; then
+            echo "::error::PR_GATE_CLASSIFICATION_UNTRUSTED: classify result is '${PV_CLASSIFY_RESULT}'"
+            echo "PR Gate: FAIL (PR_GATE_CLASSIFICATION_UNTRUSTED classify=${PV_CLASSIFY_RESULT})" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Check out tested merge ref
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      # The gate that judges the PR comes from the tested first parent, not from the PR.
+      - name: Extract trusted PR Gate from the tested first parent
+        shell: bash
+        env:
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${TESTED_SHA}"
+          trusted_base="$(git rev-parse --verify "${TESTED_SHA}^1")"
+          trusted="${RUNNER_TEMP}/pr-validation-trusted-gate"
+          rm -rf "${trusted}"
+          mkdir -p "${trusted}/tools/ci"
+          for path in \
+            tools/ci/pr_gate.py \
+            tools/ci/classify_changes.py \
+            tools/ci/change-domains.json; do
+            git show "${trusted_base}:${path}" > "${trusted}/${path}"
+          done
+          echo "PV_TRUSTED_GATE_DIR=${trusted}" >> "$GITHUB_ENV"
+          echo "trusted PR Gate extracted from tested base ${trusted_base}"
+
+      - name: Evaluate PR Gate with trusted tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "## PR Gate" >> "$GITHUB_STEP_SUMMARY"
+          python "${PV_TRUSTED_GATE_DIR}/tools/ci/pr_gate.py" \
+            --config "${PV_TRUSTED_GATE_DIR}/tools/ci/change-domains.json" \
+            --plan-json "${PV_PLAN_JSON}" \
+            --needs-json "${PV_NEEDS_JSON}" \
+            --summary "$GITHUB_STEP_SUMMARY"
