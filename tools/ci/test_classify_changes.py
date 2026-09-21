@@ -145,6 +145,57 @@ class ImpactModelTests(unittest.TestCase):
     def test_deploy_workflow(self):
         plan = classify([".github/workflows/deploy-azure-dev.yml"])
         self.assertEqual({"secret-scan", "azr-static"}, jobs(plan))
+        self.assertEqual(["DEPLOY_WORKFLOW"], plan["domains"])
+        self.assertEqual("SELECTIVE", plan["classification"])
+
+    def test_claude_automation_workflows_need_only_universal_controls(self):
+        for path in (".github/workflows/claude.yml", ".github/workflows/claude-code-review.yml"):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assertEqual("SELECTIVE", plan["classification"])
+                self.assertEqual(["GITHUB_AUTOMATION"], plan["domains"])
+                self.assertEqual({"secret-scan"}, jobs(plan))
+                self.assertEqual([], plan["unmatched_paths"])
+
+    def test_both_claude_automation_workflows_together_stay_selective(self):
+        plan = classify([".github/workflows/claude.yml", ".github/workflows/claude-code-review.yml"])
+        self.assertEqual("SELECTIVE", plan["classification"])
+        self.assertEqual(["GITHUB_AUTOMATION"], plan["domains"])
+        self.assertEqual({"secret-scan"}, jobs(plan))
+
+    def test_unknown_workflow_file_remains_full(self):
+        for path in (
+            ".github/workflows/unknown.yml",
+            ".github/workflows/new-unclassified-workflow.yml",
+            ".github/workflows/claude-extra.yml",
+            ".github/dependabot.yml",
+        ):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assertEqual("FULL", plan["classification"])
+                self.assertEqual([path], plan["unmatched_paths"])
+                self.assertIn("FULL:UNMATCHED_PATHS", plan["reasons"])
+
+    def test_claude_automation_does_not_alter_control_workflow_semantics(self):
+        for path in (".github/workflows/ci.yml", ".github/workflows/pr-validation.yml"):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assertEqual("FULL", plan["classification"])
+                self.assertEqual(["CI_SELF"], plan["domains"])
+                self.assertEqual(set(ALL_JOBS), jobs(plan))
+        plan = classify([".github/workflows/deploy-azure-dev.yml", ".github/workflows/claude.yml"])
+        self.assertEqual("SELECTIVE", plan["classification"])
+        self.assertEqual(["DEPLOY_WORKFLOW", "GITHUB_AUTOMATION"], plan["domains"])
+        self.assertEqual({"secret-scan", "azr-static"}, jobs(plan))
+        plan = classify([".github/workflows/ci.yml", ".github/workflows/claude.yml"])
+        self.assertEqual("FULL", plan["classification"])
+
+    def test_no_domain_matches_every_workflow_file(self):
+        for domain in CONFIG["domains"]:
+            self.assertFalse(
+                any(pattern.match(".github/workflows/unknown.yml") for pattern in domain["compiled"]),
+                f"{domain['name']} matches arbitrary workflow files",
+            )
 
     def test_backend_shared(self):
         plan = classify(["src/BuildingBlocks/Outbox/Publisher.cs"])

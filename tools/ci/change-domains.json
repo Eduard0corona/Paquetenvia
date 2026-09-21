@@ -180,6 +180,14 @@
       ]
     },
     {
+      "name": "GITHUB_AUTOMATION",
+      "patterns": [
+        ".github/workflows/claude.yml",
+        ".github/workflows/claude-code-review.yml"
+      ],
+      "jobs": []
+    },
+    {
       "name": "CI_SELF",
       "patterns": [
         ".github/workflows/ci.yml",
