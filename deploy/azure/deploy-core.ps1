@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$SubscriptionId,
+    [Parameter(Mandatory = $true)]
+    [string]$TestedGitSha,
     [string]$Location = 'mexicocentral',
     [string]$ResourceGroup = 'rg-pv-azr001-devsynthetic'
 )
@@ -19,11 +21,17 @@ function Invoke-AzureCli {
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $templatePath = Join-Path $PSScriptRoot 'core.bicep'
 $vaultTemplatePath = Join-Path $PSScriptRoot 'vault.bicep'
-$expectedMain = '524a5c5735f83707cbdf3d675add31622f409a4f'
-$actualMain = (& git -C $repositoryRoot rev-parse origin/main).Trim()
-if ($LASTEXITCODE -ne 0 -or $actualMain -cne $expectedMain) {
-    throw 'STOP_FOR_CONTRACT_REVIEW: origin/main differs from the AZR-001 frozen baseline.'
+# AZR-001 v0.8 §27 / AC-039: deployed_git_sha = tested_git_sha. The tested SHA is supplied from
+# outside the checked-out tree (workflow input, already certified by the §27 deploy gate); the only
+# local fact verified here is that this checkout IS that commit. No Azure call happens before it.
+if ($TestedGitSha -cnotmatch '^[0-9a-f]{40}$') {
+    throw 'STOP_FOR_CONTRACT_REVIEW: TestedGitSha must be a full lowercase 40-hex commit SHA.'
 }
+$checkedOut = (& git -C $repositoryRoot rev-parse --verify 'HEAD^{commit}').Trim()
+if ($LASTEXITCODE -ne 0 -or $checkedOut -cne $TestedGitSha) {
+    throw 'STOP_FOR_CONTRACT_REVIEW: checked-out deployment source does not equal tested_git_sha.'
+}
+Write-Output "deployed_git_sha=$checkedOut"
 
 $account = (& az account show --output json | ConvertFrom-Json)
 if ($LASTEXITCODE -ne 0 -or $account.id -cne $SubscriptionId -or $account.state -cne 'Enabled') {

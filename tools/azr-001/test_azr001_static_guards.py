@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -14,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import azr001_static_guards as guards  # noqa: E402
 
-BASELINE_SHA = "524a5c5735f83707cbdf3d675add31622f409a4f"
+TESTED_SHA = "a" * 40
+CONTROL_PLANE_SHA = "b" * 40
 OTHER_SHA = "0" * 40
 DIGEST = "sha256:" + "a" * 64
 
@@ -52,7 +56,7 @@ DEPLOY_WORKFLOW = textwrap.dedent(
         steps:
           - uses: azure/login@v2
           - shell: pwsh
-            run: ./deploy/azure/deploy-core.ps1 -SubscriptionId x
+            run: ./deploy/azure/deploy-core.ps1 -SubscriptionId x -TestedGitSha y
     """
 )
 
@@ -60,7 +64,7 @@ FOUNDATION_WORKFLOW = "name: Foundation CI\non:\n  push:\njobs:\n" + "".join(f" 
 
 DOCKERFILE_WEB = "ARG NEXT_PUBLIC_API_BASE_URL\nARG NEXT_PUBLIC_TRACKING_BRAND_NAME\nARG NEXT_PUBLIC_TRACKING_SUPPORT_URL\nENV NODE_ENV=production\n"
 DOCKERFILE_DOTNET = "FROM base\nENTRYPOINT [\"dotnet\", \"Paqueteria.Api.dll\"]\n"
-DEPLOY_CORE = f"param()\n$expectedMain = '{BASELINE_SHA}'\n"
+DEPLOY_CORE = "param([string]$TestedGitSha)\nif ((git rev-parse HEAD) -cne $TestedGitSha) { throw 'STOP_FOR_CONTRACT_REVIEW' }\n"
 DEPLOY_MIGRATION = "if ($DbOpsDigest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'digest' }\n$c = \"Host=h;Database=paqueteria;Username=u;Password=p;SSL Mode=Require;Maximum Pool Size=4;Minimum Pool Size=0\"\n"
 
 
@@ -334,52 +338,185 @@ class StaticGuardTests(unittest.TestCase):
             self.assertEqual(results[number].status, "PASS (vacuous)", number)
 
 
+def git(root: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def make_history(root: Path) -> tuple[str, str, str]:
+    """Create M → N on main plus an orphan commit unrelated to both."""
+    git(root, "init", "-q", "-b", "main")
+    git(root, "commit", "-q", "--allow-empty", "-m", "M")
+    m = git(root, "rev-parse", "HEAD")
+    git(root, "commit", "-q", "--allow-empty", "-m", "N")
+    n = git(root, "rev-parse", "HEAD")
+    orphan = git(root, "commit-tree", git(root, "write-tree"), "-m", "unrelated")
+    return m, n, orphan
+
+
+def foundation_jobs(run_id: int = 35528193093, head_sha: str = TESTED_SHA, count: int = 13, first_job: dict | None = None) -> dict:
+    jobs = [{"id": 100 + i, "run_id": run_id, "name": f"job{i}", "head_sha": head_sha, "status": "completed", "conclusion": "success"} for i in range(count)]
+    if first_job:
+        jobs[0].update(first_job)
+    return {"total_count": len(jobs), "jobs": jobs}
+
+
 class DeployGateTests(unittest.TestCase):
+    """§27 provenance gate under the canonical mapping (no in-tree SHA pin, no control-plane equality)."""
+
     def run_json(self, **overrides) -> dict:
-        run = {"id": 35528319093, "name": "Foundation CI", "head_sha": BASELINE_SHA, "event": "push", "head_branch": "main", "status": "completed", "conclusion": "success"}
+        run = {"id": 35528193093, "run_attempt": 1, "name": "Foundation CI", "head_sha": TESTED_SHA, "event": "push", "head_branch": "main", "status": "completed", "conclusion": "success"}
         run.update(overrides)
         return run
 
-    def gate(self, run: dict, *, tested: str = BASELINE_SHA, dispatch: str = BASELINE_SHA, run_id: str | None = "35528319093") -> list[str]:
-        return guards.evaluate_deploy_gate(tested_git_sha=tested, dispatch_sha=dispatch, frozen_baseline=BASELINE_SHA, foundation_run=run, expected_run_id=run_id)
+    def gate(self, run: dict | None = None, *, tested: str = TESTED_SHA, ref: str = "refs/heads/main", dispatch: str = CONTROL_PLANE_SHA, ancestor: bool | None = True, jobs: dict | None = None, run_id: str | None = "35528193093") -> list[str]:
+        run = run or self.run_json()
+        return guards.evaluate_deploy_gate(tested_git_sha=tested, dispatch_ref=ref, dispatch_sha=dispatch, tested_is_ancestor=ancestor, foundation_run=run, foundation_jobs=jobs if jobs is not None else foundation_jobs(run["id"]), expected_run_id=run_id)
 
-    def test_exact_baseline_passes(self) -> None:
-        self.assertEqual(self.gate(self.run_json()), [])
+    def test_same_commit_passes(self) -> None:
+        self.assertEqual(self.gate(dispatch=TESTED_SHA), [])
 
-    def test_any_other_sha_stops(self) -> None:
-        self.assertTrue(any("frozen AZR-001 baseline" in f for f in self.gate(self.run_json(head_sha=OTHER_SHA), tested=OTHER_SHA, dispatch=OTHER_SHA)))
+    def test_tested_ancestor_of_control_plane_passes(self) -> None:
+        self.assertEqual(self.gate(dispatch=CONTROL_PLANE_SHA, ancestor=True), [])
 
-    def test_dispatch_ref_must_match(self) -> None:
-        self.assertTrue(any("dispatched ref" in f for f in self.gate(self.run_json(), dispatch=OTHER_SHA)))
+    def test_dispatch_ref_must_be_main(self) -> None:
+        for ref in ("refs/heads/feature/x", "refs/tags/v1", "main", ""):
+            self.assertTrue(any("refs/heads/main" in f for f in self.gate(ref=ref)), ref)
 
-    def test_foundation_run_must_certify_sha(self) -> None:
-        self.assertTrue(self.gate(self.run_json(head_sha=OTHER_SHA)))
-        self.assertTrue(self.gate(self.run_json(conclusion="failure")))
-        self.assertTrue(self.gate(self.run_json(event="pull_request")))
-        self.assertTrue(self.gate(self.run_json(head_branch="feature/x")))
-        self.assertTrue(self.gate(self.run_json(name="Driver PWA cold probe")))
-        self.assertTrue(self.gate(self.run_json(id=1)))
+    def test_tested_not_ancestor_fails(self) -> None:
+        self.assertTrue(any("not an ancestor" in f for f in self.gate(ancestor=False)))
 
-    def test_frozen_baseline_is_read_from_deploy_core(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            script = Path(tmp) / "deploy-core.ps1"
-            script.write_text(DEPLOY_CORE, encoding="utf-8")
-            self.assertEqual(guards.read_frozen_baseline(script), BASELINE_SHA)
-            script.write_text("$expectedMain = (git rev-parse origin/main)\n", encoding="utf-8")
-            with self.assertRaises(guards.GuardError):
-                guards.read_frozen_baseline(script)
+    def test_unresolvable_ancestry_fails_closed(self) -> None:
+        self.assertTrue(any("could not be resolved" in f for f in self.gate(ancestor=None)))
 
-    def test_cli_rejects_non_digest_images(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "deploy" / "azure").mkdir(parents=True)
-            (root / "deploy" / "azure" / "deploy-core.ps1").write_text(DEPLOY_CORE, encoding="utf-8")
-            run_file = root / "run.json"
-            run_file.write_text(json.dumps(self.run_json()), encoding="utf-8")
-            base = ["deploy-gate", "--repo-root", str(root), "--tested-git-sha", BASELINE_SHA, "--dispatch-sha", BASELINE_SHA, "--foundation-run-id", "35528319093", "--foundation-run-json", str(run_file)]
-            self.assertEqual(guards.main(base + ["--image-digest", DIGEST]), 0)
-            self.assertEqual(guards.main(base + ["--image-digest", "x.azurecr.io/db-ops:latest"]), 1)
-            self.assertEqual(guards.main(base[:-1] + [str(root / "missing.json")]), 2)
+    def test_malformed_shas_fail(self) -> None:
+        self.assertTrue(self.gate(tested="abc"))
+        self.assertTrue(self.gate(dispatch="abc"))
+
+    def test_foundation_run_must_certify_tested_sha(self) -> None:
+        self.assertTrue(any("head_sha" in f for f in self.gate(self.run_json(head_sha=OTHER_SHA))))
+        self.assertTrue(any("push run on main" in f for f in self.gate(self.run_json(event="pull_request"))))
+        self.assertTrue(any("push run on main" in f for f in self.gate(self.run_json(head_branch="feature/x"))))
+        self.assertTrue(any("conclusion" in f for f in self.gate(self.run_json(conclusion="failure"))))
+        self.assertTrue(any("conclusion" in f for f in self.gate(self.run_json(status="in_progress", conclusion=None))))
+        self.assertTrue(any("Foundation CI" in f for f in self.gate(self.run_json(name="Driver PWA cold probe"))))
+        self.assertTrue(any("run id mismatch" in f for f in self.gate(self.run_json(id=1))))
+
+    def test_foundation_job_set_must_be_13_of_13(self) -> None:
+        run = self.run_json()
+        self.assertTrue(any("exactly 13 jobs" in f for f in self.gate(run, jobs=foundation_jobs(run["id"], count=12))))
+        self.assertTrue(any("exactly 13 jobs" in f for f in self.gate(run, jobs=foundation_jobs(run["id"], count=14))))
+        self.assertTrue(any("concluded failure" in f for f in self.gate(run, jobs=foundation_jobs(run["id"], first_job={"conclusion": "failure"}))))
+        self.assertTrue(any("concluded" in f for f in self.gate(run, jobs=foundation_jobs(run["id"], first_job={"status": "in_progress", "conclusion": None}))))
+        self.assertTrue(any("belongs to run" in f for f in self.gate(run, jobs=foundation_jobs(run["id"], first_job={"run_id": 1}))))
+        self.assertTrue(any("head_sha" in f for f in self.gate(run, jobs=foundation_jobs(run["id"], first_job={"head_sha": OTHER_SHA}))))
+        self.assertTrue(any("not a job list" in f for f in self.gate(run, jobs={"jobs": None})))
+        self.assertEqual(self.gate(run, jobs=foundation_jobs(run["id"])["jobs"]), [])
+
+    def test_no_frozen_baseline_concept_remains(self) -> None:
+        self.assertFalse(hasattr(guards, "read_frozen_baseline"))
+        self.assertFalse(hasattr(guards, "FROZEN_BASELINE_PATTERN"))
+        script = (Path(__file__).resolve().parents[2] / "deploy" / "azure" / "deploy-core.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("expectedMain", script)
+        self.assertNotIn("origin/main", script)
+
+
+class GitAncestryTests(unittest.TestCase):
+    """FIX 4: ancestry comes from `git merge-base --is-ancestor`, never from timestamps."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.m, self.n, self.orphan = make_history(self.root)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_equal_and_ancestor_pass(self) -> None:
+        self.assertIs(guards.git_is_ancestor(self.root, self.m, self.m), True)
+        self.assertIs(guards.git_is_ancestor(self.root, self.m, self.n), True)
+
+    def test_descendant_and_unrelated_fail(self) -> None:
+        self.assertIs(guards.git_is_ancestor(self.root, self.n, self.m), False)
+        self.assertIs(guards.git_is_ancestor(self.root, self.orphan, self.n), False)
+
+    def test_missing_commit_is_unresolvable(self) -> None:
+        self.assertIsNone(guards.git_is_ancestor(self.root, OTHER_SHA, self.n))
+        self.assertIsNone(guards.git_is_ancestor(self.root, self.m, OTHER_SHA))
+
+    def test_cli_end_to_end(self) -> None:
+        run = {"id": 7, "run_attempt": 1, "name": "Foundation CI", "head_sha": self.m, "event": "push", "head_branch": "main", "status": "completed", "conclusion": "success"}
+        run_file = self.root / "run.json"
+        jobs_file = self.root / "jobs.json"
+        run_file.write_text(json.dumps(run), encoding="utf-8")
+        jobs_file.write_text(json.dumps(foundation_jobs(7, head_sha=self.m)), encoding="utf-8")
+
+        def cli(tested: str, dispatch: str, ref: str = "refs/heads/main", *extra: str) -> int:
+            return guards.main(["deploy-gate", "--repo-root", str(self.root), "--tested-git-sha", tested, "--dispatch-ref", ref, "--dispatch-sha", dispatch, "--foundation-run-id", "7", "--foundation-run-json", str(run_file), "--foundation-jobs-json", str(jobs_file), *extra])
+
+        self.assertEqual(cli(self.m, self.m), 0, "post-merge: main = M, tested = M")
+        self.assertEqual(cli(self.m, self.n), 0, "later control plane N deploying certified M")
+        self.assertEqual(cli(self.m, self.n, "refs/heads/feature/x"), 1)
+        self.assertEqual(cli(self.n, self.m), 1, "tested descendant of control plane")
+        self.assertEqual(cli(self.orphan, self.n), 1, "unrelated tested commit (Foundation head mismatch too)")
+        self.assertEqual(cli(OTHER_SHA, self.n), 1, "missing tested commit fails closed")
+        self.assertEqual(cli(self.m, self.m, "refs/heads/main", "--image-digest", DIGEST), 0)
+        self.assertEqual(cli(self.m, self.m, "refs/heads/main", "--image-digest", "x.azurecr.io/db-ops:latest"), 1)
+        self.assertEqual(guards.main(["deploy-gate", "--repo-root", str(self.root), "--tested-git-sha", self.m, "--dispatch-ref", "refs/heads/main", "--dispatch-sha", self.m, "--foundation-run-json", str(run_file), "--foundation-jobs-json", str(self.root / "missing.json")]), 2)
+
+
+class DeployCoreProvenanceTests(unittest.TestCase):
+    """FIX 2: deploy-core.ps1 stops before any `az` call unless HEAD == TestedGitSha."""
+
+    SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "azure" / "deploy-core.ps1"
+
+    def setUp(self) -> None:
+        self.shell = shutil.which("pwsh") or shutil.which("powershell")
+        if self.shell is None:
+            self.skipTest("no PowerShell host available")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "deploy" / "azure").mkdir(parents=True)
+        shutil.copy(self.SCRIPT, self.root / "deploy" / "azure" / "deploy-core.ps1")
+        git(self.root, "init", "-q", "-b", "main")
+        git(self.root, "add", ".")
+        git(self.root, "commit", "-q", "-m", "M")
+        self.head = git(self.root, "rev-parse", "HEAD")
+        # Stub `az`: records that it was reached, then fails so nothing beyond the first call runs.
+        self.stub_dir = self.root / "stub"
+        self.stub_dir.mkdir()
+        self.marker = self.root / "az-was-called"
+        if os.name == "nt":
+            (self.stub_dir / "az.cmd").write_text("@echo off\r\necho called> \"%AZ_MARKER%\"\r\nexit /b 1\r\n", encoding="ascii")
+        else:
+            stub = self.stub_dir / "az"
+            stub.write_text("#!/bin/sh\necho called > \"$AZ_MARKER\"\nexit 1\n", encoding="ascii")
+            stub.chmod(0o755)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def run_script(self, tested: str) -> subprocess.CompletedProcess:
+        env = dict(os.environ, PATH=str(self.stub_dir) + os.pathsep + os.environ.get("PATH", ""), AZ_MARKER=str(self.marker))
+        return subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(self.root / "deploy" / "azure" / "deploy-core.ps1"), "-SubscriptionId", "00000000-0000-0000-0000-000000000000", "-TestedGitSha", tested], capture_output=True, text=True, env=env, cwd=str(self.root))
+
+    def test_head_equals_tested_sha_reaches_next_stage(self) -> None:
+        result = self.run_script(self.head)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"deployed_git_sha={self.head}", result.stdout)
+        self.assertNotIn("STOP_FOR_CONTRACT_REVIEW", result.stdout + result.stderr)
+        self.assertTrue(self.marker.exists(), "provenance passed, so the next stage (stub az) must have been reached")
+
+    def test_head_differs_from_tested_sha_stops_before_azure(self) -> None:
+        result = self.run_script(OTHER_SHA)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checked-out deployment source does not equal tested_git_sha", result.stdout + result.stderr)
+        self.assertFalse(self.marker.exists(), "az must never be reached when provenance fails")
+
+    def test_malformed_tested_sha_stops_before_azure(self) -> None:
+        result = self.run_script("HEAD")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("STOP_FOR_CONTRACT_REVIEW", result.stdout + result.stderr)
+        self.assertFalse(self.marker.exists())
 
 
 if __name__ == "__main__":

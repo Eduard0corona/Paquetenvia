@@ -10,9 +10,20 @@ than a false static failure.
 
 `deploy-gate` is the fail-closed provenance check executed by
 `.github/workflows/deploy-azure-dev.yml` before any Azure control-plane
-action: the dispatched ref must equal the frozen AZR-001 baseline recorded in
-`deploy/azure/deploy-core.ps1` and must be the exact head of a successful
-Foundation CI run on `main`.
+action. Canonical mapping (§27, AC-039, AC-052; concepts stay distinct per
+§2.2 / AC-051):
+
+    control_plane_ref  = refs/heads/main            (the dispatched ref)
+    control_plane_sha  = github.sha of the dispatch (head of main)
+    tested_git_sha     = explicit workflow input
+    Foundation run     = name "Foundation CI", event push, head_branch main,
+                         head_sha == tested_git_sha, completed/success,
+                         exactly FOUNDATION_JOB_COUNT successful jobs
+    tested_git_sha     is an ancestor of (or equal to) control_plane_sha
+    deployed_git_sha   = tested_git_sha  (enforced again by deploy-core.ps1)
+
+No equality is required between control_plane_sha and tested_git_sha, and no
+SHA is pinned inside the repository tree.
 """
 
 from __future__ import annotations
@@ -20,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,9 +41,9 @@ import yaml
 
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
-FROZEN_BASELINE_PATTERN = re.compile(r"^\$expectedMain = '([0-9a-f]{40})'$", re.MULTILINE)
 DIGEST_REGEX_LITERAL = r"^sha256:[0-9a-f]{64}$"
 FOUNDATION_WORKFLOW_NAME = "Foundation CI"
+CONTROL_PLANE_REF = "refs/heads/main"
 FOUNDATION_JOB_COUNT = 13
 
 DEPLOY_WORKFLOW = ".github/workflows/deploy-azure-dev.yml"
@@ -262,13 +274,6 @@ def load_context(repo_root: Path, arm_dir: Path) -> Context:
     context.deploy_workflow = load_workflow_yaml(deploy_path)
     context.foundation_workflow = load_workflow_yaml(repo_root / FOUNDATION_WORKFLOW)
     return context
-
-
-def read_frozen_baseline(deploy_core: Path) -> str:
-    matches = FROZEN_BASELINE_PATTERN.findall(deploy_core.read_text(encoding="utf-8"))
-    if len(matches) != 1:
-        raise GuardError(f"{deploy_core} must declare exactly one frozen $expectedMain SHA (found {len(matches)})")
-    return matches[0]
 
 
 def _vacuous(number: int, title: str, subject: str) -> GuardResult:
@@ -773,14 +778,38 @@ def command_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def evaluate_deploy_gate(*, tested_git_sha: str, dispatch_sha: str, frozen_baseline: str, foundation_run: dict[str, Any], expected_run_id: str | None) -> list[str]:
+def git_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool | None:
+    """`git merge-base --is-ancestor` with fail-closed resolution.
+
+    Returns True when `ancestor` is reachable from `descendant` (including equality),
+    False when both commits exist but `ancestor` is not reachable, and None when either
+    commit cannot be resolved in the checkout (missing/shallow history), which the gate
+    treats as a failure. Commit-date comparisons are never used.
+    """
+    for sha in (ancestor, descendant):
+        exists = subprocess.run(["git", "-C", str(repo_root), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True)
+        if exists.returncode != 0:
+            return None
+    result = subprocess.run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor", ancestor, descendant], capture_output=True)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def evaluate_deploy_gate(*, tested_git_sha: str, dispatch_ref: str, dispatch_sha: str, tested_is_ancestor: bool | None, foundation_run: dict[str, Any], foundation_jobs: Any, expected_run_id: str | None) -> list[str]:
     failures = []
     if not SHA_PATTERN.match(tested_git_sha):
         failures.append("tested_git_sha must be a full 40-hex commit SHA")
-    if tested_git_sha != frozen_baseline:
-        failures.append(f"tested_git_sha {tested_git_sha} is not the frozen AZR-001 baseline {frozen_baseline}")
-    if dispatch_sha != tested_git_sha:
-        failures.append(f"dispatched ref {dispatch_sha} differs from tested_git_sha {tested_git_sha}")
+    if not SHA_PATTERN.match(dispatch_sha):
+        failures.append("control-plane SHA must be a full 40-hex commit SHA")
+    if dispatch_ref != CONTROL_PLANE_REF:
+        failures.append(f"control plane must be dispatched from {CONTROL_PLANE_REF}, got {dispatch_ref!r}")
+    if tested_is_ancestor is None:
+        failures.append(f"ancestry of tested_git_sha {tested_git_sha} under control-plane SHA {dispatch_sha} could not be resolved (missing commit)")
+    elif not tested_is_ancestor:
+        failures.append(f"tested_git_sha {tested_git_sha} is not an ancestor of control-plane SHA {dispatch_sha}")
     if expected_run_id is not None and str(foundation_run.get("id")) != str(expected_run_id):
         failures.append(f"Foundation run id mismatch: {foundation_run.get('id')} != {expected_run_id}")
     if foundation_run.get("name") != FOUNDATION_WORKFLOW_NAME:
@@ -791,22 +820,52 @@ def evaluate_deploy_gate(*, tested_git_sha: str, dispatch_sha: str, frozen_basel
         failures.append("Foundation run must be a push run on main")
     if foundation_run.get("status") != "completed" or foundation_run.get("conclusion") != "success":
         failures.append(f"Foundation run conclusion is {foundation_run.get('conclusion')} ({foundation_run.get('status')})")
+    failures.extend(_foundation_job_failures(foundation_run, foundation_jobs))
+    return failures
+
+
+def _foundation_job_failures(foundation_run: dict[str, Any], foundation_jobs: Any) -> list[str]:
+    """§27 `13 / 13 SUCCESS`: a green run conclusion alone does not prove the authoritative job set."""
+    jobs = foundation_jobs.get("jobs") if isinstance(foundation_jobs, dict) else foundation_jobs
+    if not isinstance(jobs, list):
+        return ["Foundation jobs record is not a job list"]
+    failures = []
+    if len(jobs) != FOUNDATION_JOB_COUNT:
+        failures.append(f"Foundation run must contain exactly {FOUNDATION_JOB_COUNT} jobs, found {len(jobs)}")
+    names = [job.get("name") for job in jobs if isinstance(job, dict)]
+    if len(set(names)) != len(names):
+        failures.append("Foundation job names are not unique")
+    for job in jobs:
+        if not isinstance(job, dict):
+            failures.append("Foundation job record is malformed")
+            continue
+        if str(job.get("run_id")) != str(foundation_run.get("id")):
+            failures.append(f"Foundation job {job.get('name')!r} belongs to run {job.get('run_id')}, not {foundation_run.get('id')}")
+        if job.get("head_sha") not in (None, foundation_run.get("head_sha")):
+            failures.append(f"Foundation job {job.get('name')!r} head_sha {job.get('head_sha')} != run head_sha")
+        if job.get("status") != "completed" or job.get("conclusion") != "success":
+            failures.append(f"Foundation job {job.get('name')!r} concluded {job.get('conclusion')} ({job.get('status')})")
     return failures
 
 
 def command_deploy_gate(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root).resolve()
     try:
-        frozen = read_frozen_baseline(repo_root / "deploy" / "azure" / "deploy-core.ps1")
         run = json.loads(Path(args.foundation_run_json).read_text(encoding="utf-8"))
-    except (GuardError, OSError, ValueError) as error:
+        jobs = json.loads(Path(args.foundation_jobs_json).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
         print(f"AZR001_DEPLOY_GATE=BLOCKED {error}")
         return 2
+    tested = args.tested_git_sha.strip()
+    dispatch = args.dispatch_sha.strip()
+    ancestry = git_is_ancestor(repo_root, tested, dispatch) if SHA_PATTERN.match(tested) and SHA_PATTERN.match(dispatch) else None
     failures = evaluate_deploy_gate(
-        tested_git_sha=args.tested_git_sha,
-        dispatch_sha=args.dispatch_sha,
-        frozen_baseline=frozen,
+        tested_git_sha=tested,
+        dispatch_ref=args.dispatch_ref,
+        dispatch_sha=dispatch,
+        tested_is_ancestor=ancestry,
         foundation_run=run,
+        foundation_jobs=jobs,
         expected_run_id=args.foundation_run_id,
     )
     for digest in args.image_digest or []:
@@ -817,9 +876,20 @@ def command_deploy_gate(args: argparse.Namespace) -> int:
             print(f"STOP_FOR_CONTRACT_REVIEW: {failure}")
         print("AZR001_DEPLOY_GATE=FAIL")
         return 1
-    print(f"frozen_baseline={frozen}")
-    print(f"tested_git_sha={args.tested_git_sha}")
+    # REL-000 push semantics: a push run tests exactly the pushed commit, so
+    # source_head_sha = base_main_sha = main_merge_commit = tested_git_sha.
+    print(f"control_plane_ref={args.dispatch_ref}")
+    print(f"control_plane_sha={dispatch}")
+    print(f"tested_git_sha={tested}")
+    print(f"git_relationship={'same_commit' if tested == dispatch else 'tested_is_ancestor_of_control_plane'}")
     print(f"foundation_run_id={run.get('id')}")
+    print(f"foundation_run_attempt={run.get('run_attempt')}")
+    print(f"foundation_jobs_successful={FOUNDATION_JOB_COUNT}")
+    print(f"foundation_jobs_expected={FOUNDATION_JOB_COUNT}")
+    print(f"source_head_sha={tested}")
+    print(f"base_main_sha={tested}")
+    print(f"main_merge_commit={tested}")
+    print(f"deployed_git_sha={tested}")
     print("AZR001_DEPLOY_GATE=PASS")
     return 0
 
@@ -833,10 +903,12 @@ def build_parser() -> argparse.ArgumentParser:
     check.set_defaults(func=command_check)
     gate = sub.add_parser("deploy-gate", help="fail-closed §27 provenance gate")
     gate.add_argument("--repo-root", default=".")
-    gate.add_argument("--tested-git-sha", required=True)
-    gate.add_argument("--dispatch-sha", required=True)
+    gate.add_argument("--tested-git-sha", required=True, help="Foundation-certified commit to deploy (workflow input)")
+    gate.add_argument("--dispatch-ref", required=True, help="github.ref of the dispatch; must be refs/heads/main")
+    gate.add_argument("--dispatch-sha", required=True, help="github.sha of the dispatch (control-plane SHA)")
     gate.add_argument("--foundation-run-id", default=None)
     gate.add_argument("--foundation-run-json", required=True, help="path to the GitHub API JSON of the Foundation run")
+    gate.add_argument("--foundation-jobs-json", required=True, help="path to the GitHub API JSON of that run's jobs (13/13 proof)")
     gate.add_argument("--image-digest", action="append", help="image digest input to validate (repeatable)")
     gate.set_defaults(func=command_deploy_gate)
     return parser
