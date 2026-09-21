@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -495,27 +496,31 @@ class DeployCoreProvenanceTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def run_script(self, tested: str) -> subprocess.CompletedProcess:
-        env = dict(os.environ, PATH=str(self.stub_dir) + os.pathsep + os.environ.get("PATH", ""), AZ_MARKER=str(self.marker))
-        return subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(self.root / "deploy" / "azure" / "deploy-core.ps1"), "-SubscriptionId", "00000000-0000-0000-0000-000000000000", "-TestedGitSha", tested], capture_output=True, text=True, env=env, cwd=str(self.root))
+    def run_script(self, tested: str) -> tuple[int, str]:
+        env = dict(os.environ, PATH=str(self.stub_dir) + os.pathsep + os.environ.get("PATH", ""), AZ_MARKER=str(self.marker), NO_COLOR="1")
+        result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(self.root / "deploy" / "azure" / "deploy-core.ps1"), "-SubscriptionId", "00000000-0000-0000-0000-000000000000", "-TestedGitSha", tested], capture_output=True, text=True, env=env, cwd=str(self.root))
+        # pwsh 7 renders thrown errors with ANSI colour, a "Line |" gutter and word wrapping; fold it to plain text.
+        text = re.sub("\x1b\\[[0-9;]*m", "", result.stdout + result.stderr)
+        text = re.sub(r"^\s*\|\s*", "", text, flags=re.MULTILINE)
+        return result.returncode, " ".join(text.split())
 
     def test_head_equals_tested_sha_reaches_next_stage(self) -> None:
-        result = self.run_script(self.head)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"deployed_git_sha={self.head}", result.stdout)
-        self.assertNotIn("STOP_FOR_CONTRACT_REVIEW", result.stdout + result.stderr)
+        code, text = self.run_script(self.head)
+        self.assertNotEqual(code, 0)
+        self.assertIn(f"deployed_git_sha={self.head}", text)
+        self.assertNotIn("STOP_FOR_CONTRACT_REVIEW", text)
         self.assertTrue(self.marker.exists(), "provenance passed, so the next stage (stub az) must have been reached")
 
     def test_head_differs_from_tested_sha_stops_before_azure(self) -> None:
-        result = self.run_script(OTHER_SHA)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("checked-out deployment source does not equal tested_git_sha", result.stdout + result.stderr)
+        code, text = self.run_script(OTHER_SHA)
+        self.assertNotEqual(code, 0)
+        self.assertIn("STOP_FOR_CONTRACT_REVIEW: checked-out deployment source does not equal tested_git_sha", text)
         self.assertFalse(self.marker.exists(), "az must never be reached when provenance fails")
 
     def test_malformed_tested_sha_stops_before_azure(self) -> None:
-        result = self.run_script("HEAD")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("STOP_FOR_CONTRACT_REVIEW", result.stdout + result.stderr)
+        code, text = self.run_script("HEAD")
+        self.assertNotEqual(code, 0)
+        self.assertIn("STOP_FOR_CONTRACT_REVIEW", text)
         self.assertFalse(self.marker.exists())
 
 
