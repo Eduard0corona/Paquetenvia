@@ -137,6 +137,24 @@ function Get-ComposeConfig {
     return $result.Output | ConvertFrom-Json
 }
 
+function Test-PostgresTcpReadinessProbe {
+    param([AllowNull()] $HealthcheckTest)
+
+    $tokens = @(@($HealthcheckTest) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+    if ($tokens.Count -eq 0) {
+        return $false
+    }
+
+    # Compose serializes the probe as a token list; collapse it so the policy stays
+    # insensitive to quoting, shell form and whitespace differences.
+    $command = [regex]::Replace(($tokens -join " "), '\s+', " ").Trim()
+    if ($command -notmatch '\bpg_isready\b') {
+        return $false
+    }
+
+    return $command -match '(?:^|\s)(?:-h\s*|--host[=\s]\s*)127\.0\.0\.1(?![\w.])'
+}
+
 function Assert-ComposeStaticPolicy {
     param([Parameter(Mandatory)] $Context)
 
@@ -178,6 +196,20 @@ function Assert-ComposeStaticPolicy {
 
         if ($name -in $permanentServices -and -not ($propertyNames -contains "healthcheck")) {
             $violations.Add("$name has no healthcheck.")
+        }
+
+        if ($name -eq "postgres") {
+            $healthcheckTest = $null
+            if ($propertyNames -contains "healthcheck") {
+                $healthcheckProperties = @($service.healthcheck.psobject.Properties.Name)
+                if ($healthcheckProperties -contains "test") {
+                    $healthcheckTest = $service.healthcheck.test
+                }
+            }
+
+            if (-not (Test-PostgresTcpReadinessProbe -HealthcheckTest $healthcheckTest)) {
+                $violations.Add("postgres healthcheck must probe PostgreSQL over 127.0.0.1 TCP (pg_isready -h 127.0.0.1); a socket-only probe can report healthy while the initdb temporary server is still running.")
+            }
         }
 
         $ports = if ($propertyNames -contains "ports") { @($service.ports) } else { @() }
