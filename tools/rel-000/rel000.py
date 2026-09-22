@@ -149,6 +149,102 @@ EXECUTION_ARTIFACT_NAMES = {
     "infrastructure": "rel000-execution-infrastructure",
     "backup-restore": "ops002-backup-restore-results",
 }
+# PR Validation (pull_request → development) is the only other workflow in which the
+# REL-000 aggregator executes. Its raw topology is exactly 17 jobs: the Foundation
+# `normative` job is decomposed into three real controls, `classify` precedes every
+# validation and `PR Gate` is downstream of the aggregator (topology-only: it cannot
+# have executed while REL-000 sanitizes provenance and is never producer evidence).
+PR_VALIDATION_JOB_NAMES = {
+    "classify": "Classify PR impact",
+    "secret-scan": "Secret scan",
+    "normative-contracts": "Validate normative contracts",
+    "azr-static": "Validate AZR-001 static guards",
+    "dotnet": "Build and test .NET",
+    "runtime-contracts": "Validate runtime contracts",
+    "web": "Validate web workspace",
+    "realtime-e2e": "Validate real SignalR reconnect",
+    "outbox-signalr-delivery": "Validate outbox SignalR delivery",
+    "driver-stops-pwa": "Validate driver PWA",
+    "public-tracking": "Validate public tracking",
+    "operations-dashboard": "Validate operations dashboard",
+    "delivery-simulation": "Validate 20-delivery simulation",
+    "infrastructure": "Validate local infrastructure",
+    "backup-restore": "Validate backup and restore",
+    "rel000": "Validate MVP-0 internal release evidence",
+    "pr-gate": "PR Gate",
+}
+PR_VALIDATION_PRODUCER_JOBS = frozenset(PR_VALIDATION_JOB_NAMES) - {"rel000", "pr-gate"}
+# GitHub job states a downstream job may legitimately report before it has started.
+PENDING_JOB_STATUSES = frozenset({"queued", "waiting", "pending", "requested", "in_progress"})
+
+
+@dataclass(frozen=True)
+class WorkflowProvenanceProfile:
+    """Exact workflow topology REL-000 accepts as provenance for one workflow."""
+
+    name: str
+    workflow_name: str
+    events: frozenset[str]
+    require_run_identity: bool
+    job_names: dict[str, str]
+    producer_jobs: frozenset[str]
+    aggregator_job: str
+    downstream_jobs: frozenset[str]
+    artifact_names: dict[str, str]
+
+
+WORKFLOW_PROVENANCE_PROFILE_FOUNDATION = "foundation"
+WORKFLOW_PROVENANCE_PROFILE_PR_VALIDATION = "pr-validation"
+DEFAULT_WORKFLOW_PROVENANCE_PROFILE = WORKFLOW_PROVENANCE_PROFILE_FOUNDATION
+WORKFLOW_PROVENANCE_PROFILES: dict[str, WorkflowProvenanceProfile] = {
+    WORKFLOW_PROVENANCE_PROFILE_FOUNDATION: WorkflowProvenanceProfile(
+        name=WORKFLOW_PROVENANCE_PROFILE_FOUNDATION,
+        workflow_name="Foundation CI",
+        events=frozenset({"push", "pull_request"}),
+        require_run_identity=False,
+        job_names=AUTHORITATIVE_JOB_NAMES,
+        producer_jobs=frozenset(REQUIRED_JOBS),
+        aggregator_job="rel000",
+        downstream_jobs=frozenset(),
+        artifact_names=EXECUTION_ARTIFACT_NAMES,
+    ),
+    WORKFLOW_PROVENANCE_PROFILE_PR_VALIDATION: WorkflowProvenanceProfile(
+        name=WORKFLOW_PROVENANCE_PROFILE_PR_VALIDATION,
+        workflow_name="PR Validation",
+        events=frozenset({"pull_request"}),
+        require_run_identity=True,
+        job_names=PR_VALIDATION_JOB_NAMES,
+        producer_jobs=PR_VALIDATION_PRODUCER_JOBS,
+        aggregator_job="rel000",
+        downstream_jobs=frozenset({"pr-gate"}),
+        artifact_names=EXECUTION_ARTIFACT_NAMES,
+    ),
+}
+
+
+def resolve_workflow_provenance_profile(value: Any) -> WorkflowProvenanceProfile:
+    name = value if isinstance(value, str) else ""
+    profile = WORKFLOW_PROVENANCE_PROFILES.get(name)
+    if profile is None:
+        fail(
+            "WORKFLOW_PROVENANCE_PROFILE_INVALID",
+            "The workflow provenance profile is unknown.",
+            profile=str(value),
+            known=sorted(WORKFLOW_PROVENANCE_PROFILES),
+        )
+    return profile
+
+
+def validate_workflow_run_identity(profile: WorkflowProvenanceProfile, run_payload: dict[str, Any], attempt: int) -> None:
+    """Prove the run belongs to the profiled workflow when GitHub supplies that identity."""
+    name = run_payload.get("name")
+    event = run_payload.get("event")
+    if profile.require_run_identity and (not isinstance(name, str) or not isinstance(event, str)):
+        fail("WORKFLOW_PROVENANCE_RUN_IDENTITY_MISSING", "Workflow run identity is absent.", attempt=attempt)
+    if name is not None and name != profile.workflow_name:
+        fail("WORKFLOW_PROVENANCE_WORKFLOW_MISMATCH", "The run belongs to another workflow.", workflow=str(name), attempt=attempt)
+    if event is not None and event not in profile.events:
+        fail("WORKFLOW_PROVENANCE_EVENT_INVALID", "The run event is not valid for this workflow.", event=str(event), attempt=attempt)
 REQUIRED_CROSS_TENANT_CATEGORIES = {
     "identity_resolution",
     "active_organization",
@@ -2546,7 +2642,9 @@ def sanitize_workflow_provenance(
     workflow_run_id: str,
     current_attempt_value: Any,
     head_sha_value: str,
+    workflow_profile: str = DEFAULT_WORKFLOW_PROVENANCE_PROFILE,
 ) -> dict[str, Any]:
+    profile = resolve_workflow_provenance_profile(workflow_profile)
     current_attempt = parse_positive_attempt(
         current_attempt_value,
         missing_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_MISSING",
@@ -2559,10 +2657,10 @@ def sanitize_workflow_provenance(
     if not attempts_directory.is_dir() or attempts_directory.is_symlink():
         fail("WORKFLOW_PROVENANCE_MANIFEST_MISSING", "Workflow attempt metadata is absent.")
 
-    names_to_keys = {name: key for key, name in AUTHORITATIVE_JOB_NAMES.items()}
+    names_to_keys = {name: key for key, name in profile.job_names.items()}
     actual_jobs: list[dict[str, Any]] = []
     actual_by_key: dict[str, list[dict[str, Any]]] = {
-        key: [] for key in AUTHORITATIVE_JOB_NAMES
+        key: [] for key in profile.job_names
     }
     observed_job_ids: set[int] = set()
     for attempt in range(1, current_attempt + 1):
@@ -2585,6 +2683,7 @@ def sanitize_workflow_provenance(
             fail("WORKFLOW_PROVENANCE_ATTEMPT_METADATA_INVALID", "Workflow attempt metadata is out of sequence.")
         if str(run_payload.get("head_sha") or "") != head_sha:
             fail("WORKFLOW_PROVENANCE_HEAD_SHA_MISMATCH", "Workflow attempt metadata belongs to another SHA.")
+        validate_workflow_run_identity(profile, run_payload, attempt)
         attempt_started_at = parse_github_timestamp(
             run_payload.get("run_started_at"), "run_started_at"
         )
@@ -2597,11 +2696,11 @@ def sanitize_workflow_provenance(
         jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else None
         if not isinstance(jobs, list):
             fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "Workflow jobs metadata must contain a jobs array.")
-        if len(jobs) != len(AUTHORITATIVE_JOB_NAMES):
+        if len(jobs) != len(profile.job_names):
             fail(
                 "WORKFLOW_PROVENANCE_JOB_SET_INVALID",
-                "Foundation CI must contain exactly the authoritative job set.",
-                expected=len(AUTHORITATIVE_JOB_NAMES),
+                f"{profile.workflow_name} must contain exactly the authoritative job set.",
+                expected=len(profile.job_names),
                 observed=len(jobs),
                 attempt=attempt,
             )
@@ -2631,8 +2730,19 @@ def sanitize_workflow_provenance(
             observed_job_ids.add(job_id)
             started_at_text = str(raw_job.get("started_at") or "")
             completed_at_text = str(raw_job.get("completed_at") or "")
-            started_at = parse_github_timestamp(started_at_text, "started_at")
             key = names_to_keys[job_name]
+            if key in profile.downstream_jobs and not started_at_text:
+                # A downstream job (after the aggregator) has not started while the
+                # aggregator runs; it can only be pending in the current attempt.
+                if attempt != current_attempt:
+                    fail("WORKFLOW_PROVENANCE_METADATA_INCOMPLETE", "GitHub job metadata is incomplete.", field="started_at")
+                if completed_at_text or str(raw_job.get("conclusion") or ""):
+                    fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "A pending downstream job reports completion.", job_name=job_name)
+                if str(raw_job.get("status") or "") not in PENDING_JOB_STATUSES:
+                    fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "A downstream job without a start time is not pending.", job_name=job_name)
+                started_at = None
+            else:
+                started_at = parse_github_timestamp(started_at_text, "started_at")
             record = {
                 "job_key": key,
                 "job_name": job_name,
@@ -2643,7 +2753,7 @@ def sanitize_workflow_provenance(
                 "_started_at": started_at_text,
                 "_completed_at": completed_at_text,
             }
-            if started_at >= attempt_started_at:
+            if started_at is None or started_at >= attempt_started_at:
                 actual_jobs.append(record)
                 actual_by_key[key].append(record)
                 continue
@@ -2662,7 +2772,7 @@ def sanitize_workflow_provenance(
                     job=key,
                     attempt=attempt,
                 )
-        if seen_names != set(AUTHORITATIVE_JOB_NAMES.values()):
+        if seen_names != set(profile.job_names.values()):
             fail("WORKFLOW_PROVENANCE_JOB_SET_INVALID", "The authoritative job set is incomplete.")
 
     latest_jobs: dict[str, dict[str, Any]] = {}
@@ -2670,9 +2780,9 @@ def sanitize_workflow_provenance(
         if not records:
             fail("WORKFLOW_PROVENANCE_JOB_MISSING", "An authoritative job has no executed attempt.", job=key)
         latest_jobs[key] = max(records, key=lambda item: item["run_attempt"])
-    if latest_jobs["rel000"]["run_attempt"] != current_attempt:
+    if latest_jobs[profile.aggregator_job]["run_attempt"] != current_attempt:
         fail("WORKFLOW_PROVENANCE_AGGREGATOR_ATTEMPT_MISMATCH", "The aggregator did not execute in the current attempt.")
-    for key in REQUIRED_JOBS:
+    for key in sorted(profile.producer_jobs):
         latest = latest_jobs[key]
         if latest["status"] != "completed" or latest["conclusion"] != "success":
             fail(
@@ -2706,12 +2816,12 @@ def sanitize_workflow_provenance(
         if name in output_by_name:
             fail("WORKFLOW_PROVENANCE_ARTIFACT_AMBIGUOUS", "Artifact outputs contain duplicate names.", artifact=name)
         output_by_name[name] = output
-    if set(output_by_name) != set(EXECUTION_ARTIFACT_NAMES.values()):
+    if set(output_by_name) != set(profile.artifact_names.values()):
         fail("WORKFLOW_PROVENANCE_ARTIFACT_SET_INVALID", "Artifact outputs do not match the authoritative set.")
 
     sanitized_artifacts: list[dict[str, Any]] = []
     selected_ids: set[int] = set()
-    for job_key, expected_name in EXECUTION_ARTIFACT_NAMES.items():
+    for job_key, expected_name in profile.artifact_names.items():
         output = output_by_name[expected_name]
         output_id = str(output.get("artifact_id") or "")
         if not output_id.isdigit() or int(output_id) <= 0:
@@ -2767,6 +2877,7 @@ def sanitize_workflow_provenance(
     ]
     manifest = {
         "format_version": WORKFLOW_PROVENANCE_VERSION,
+        "workflow_profile": profile.name,
         "workflow_run_id": str(workflow_run_id),
         "head_sha": head_sha,
         "current_attempt": current_attempt,
@@ -2790,6 +2901,10 @@ def validate_workflow_provenance(
     )
     if not isinstance(payload, dict) or payload.get("format_version") != WORKFLOW_PROVENANCE_VERSION:
         fail("WORKFLOW_PROVENANCE_MANIFEST_INVALID", "The workflow provenance format is invalid.")
+    # Manifests written before profiles existed are Foundation manifests.
+    profile = resolve_workflow_provenance_profile(
+        payload.get("workflow_profile", DEFAULT_WORKFLOW_PROVENANCE_PROFILE)
+    )
     current_attempt = parse_positive_attempt(
         current_attempt_value,
         missing_reason="WORKFLOW_PROVENANCE_CURRENT_ATTEMPT_MISSING",
@@ -2812,16 +2927,16 @@ def validate_workflow_provenance(
     jobs = payload.get("jobs")
     if not isinstance(jobs, list):
         fail("WORKFLOW_PROVENANCE_MANIFEST_INCOMPLETE", "The provenance manifest has no jobs array.")
-    by_key: dict[str, list[dict[str, Any]]] = {key: [] for key in AUTHORITATIVE_JOB_NAMES}
+    by_key: dict[str, list[dict[str, Any]]] = {key: [] for key in profile.job_names}
     seen_job_attempts: set[tuple[str, int]] = set()
     seen_job_ids: set[int] = set()
     for job in jobs:
         if not isinstance(job, dict):
             fail("WORKFLOW_PROVENANCE_JOB_INVALID", "A provenance job is malformed.")
         key = str(job.get("job_key") or "")
-        if key not in AUTHORITATIVE_JOB_NAMES:
+        if key not in profile.job_names:
             fail("WORKFLOW_PROVENANCE_JOB_UNKNOWN", "The provenance manifest contains an unknown job.", job=key)
-        if str(job.get("job_name") or "") != AUTHORITATIVE_JOB_NAMES[key]:
+        if str(job.get("job_name") or "") != profile.job_names[key]:
             fail("WORKFLOW_PROVENANCE_JOB_NAME_MISMATCH", "A job key is associated with the wrong name.", job=key)
         attempt = parse_positive_attempt(
             job.get("run_attempt"),
@@ -2848,9 +2963,9 @@ def validate_workflow_provenance(
         if not records:
             fail("WORKFLOW_PROVENANCE_JOB_MISSING", "An authoritative job is absent.", job=key)
         latest_jobs[key] = max(records, key=lambda item: item["run_attempt"])
-    if latest_jobs["rel000"]["run_attempt"] != current_attempt:
+    if latest_jobs[profile.aggregator_job]["run_attempt"] != current_attempt:
         fail("WORKFLOW_PROVENANCE_AGGREGATOR_ATTEMPT_MISMATCH", "The current aggregator execution is absent.")
-    for key in REQUIRED_JOBS:
+    for key in sorted(profile.producer_jobs):
         latest = latest_jobs[key]
         if latest.get("status") != "completed" or latest.get("conclusion") != "success":
             fail(
@@ -2869,11 +2984,11 @@ def validate_workflow_provenance(
         if not isinstance(artifact, dict):
             fail("WORKFLOW_PROVENANCE_ARTIFACT_INVALID", "A provenance artifact is malformed.")
         job_key = str(artifact.get("job_key") or "")
-        if job_key not in EXECUTION_ARTIFACT_NAMES:
+        if job_key not in profile.artifact_names:
             fail("WORKFLOW_PROVENANCE_ARTIFACT_JOB_UNKNOWN", "An artifact references an unknown producer.", job=job_key)
         if job_key in artifacts_by_job:
             fail("WORKFLOW_PROVENANCE_ARTIFACT_AMBIGUOUS", "A producer has multiple eligible artifacts.", job=job_key)
-        expected_name = EXECUTION_ARTIFACT_NAMES[job_key]
+        expected_name = profile.artifact_names[job_key]
         if str(artifact.get("artifact_name") or "") != expected_name:
             fail("WORKFLOW_PROVENANCE_ARTIFACT_NAME_MISMATCH", "An artifact name does not match its producer.", job=job_key)
         artifact_id = artifact.get("artifact_id")
@@ -2920,12 +3035,13 @@ def validate_workflow_provenance(
             "artifact_digest": digest,
             "producer_attempt": producer_attempt,
         }
-    missing_artifacts = sorted(set(EXECUTION_ARTIFACT_NAMES) - set(artifacts_by_job))
+    missing_artifacts = sorted(set(profile.artifact_names) - set(artifacts_by_job))
     if missing_artifacts:
         fail("WORKFLOW_PROVENANCE_ARTIFACT_MISSING", "Authoritative artifacts are missing.", jobs=missing_artifacts)
 
     attempts = {artifact["producer_attempt"] for artifact in artifacts_by_job.values()}
     report = {
+        "workflow_profile": profile.name,
         "workflow_run_id": str(workflow_run_id),
         "aggregator_attempt": current_attempt,
         "mixed_attempt_evidence": len(attempts) > 1,
@@ -2940,6 +3056,7 @@ def validate_workflow_provenance(
         ],
     }
     return {
+        "workflow_profile": profile.name,
         "latest_jobs": latest_jobs,
         "artifacts_by_job": artifacts_by_job,
         "report": report,
@@ -6476,6 +6593,7 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_provenance.add_argument("--workflow-run-id", required=True)
     workflow_provenance.add_argument("--current-attempt", required=True)
     workflow_provenance.add_argument("--head-sha", required=True)
+    workflow_provenance.add_argument("--workflow-profile", default=DEFAULT_WORKFLOW_PROVENANCE_PROFILE)
 
     replay = subparsers.add_parser("replay-execution-provenance")
     replay.add_argument("--execution-results-directory", type=Path, required=True)
@@ -6614,6 +6732,7 @@ def main() -> int:
                 args.workflow_run_id,
                 args.current_attempt,
                 args.head_sha,
+                args.workflow_profile,
             )
             return 0
         if args.command == "replay-execution-provenance":

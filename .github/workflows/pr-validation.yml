@@ -1894,7 +1894,8 @@ jobs:
             --output "$RUNNER_TEMP/rel000-workflow-provenance.json" \
             --workflow-run-id "$GITHUB_RUN_ID" \
             --current-attempt "$GITHUB_RUN_ATTEMPT" \
-            --head-sha "$REL000_SOURCE_HEAD_SHA"
+            --head-sha "$REL000_SOURCE_HEAD_SHA" \
+            --workflow-profile pr-validation
 
       - name: Download current OPS-001 artifact
         uses: actions/download-artifact@v5

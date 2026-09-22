@@ -5,8 +5,9 @@ does run validates exactly what Foundation validates; change-awareness only skip
 whole jobs. These tests prove that duplication stayed equivalent:
 
 * shared jobs: identical except the orchestration keys ``needs`` and ``if``;
-* rel000: identical except ``needs``/``if`` and the logical ``normative`` projection
-  synthesised from the three decomposed normative controls;
+* rel000: identical except ``needs``/``if``, the logical ``normative`` projection
+  synthesised from the three decomposed normative controls, and the REL-000
+  workflow-provenance profile (``--workflow-profile pr-validation``);
 * normative decomposition: every semantic step of the Foundation ``normative`` job
   appears in exactly one of ``secret-scan`` / ``normative-contracts`` / ``azr-static``
   with an identical step body.
@@ -54,6 +55,10 @@ SEMANTIC_STEP_OWNER = {
     "Secret scan (AZR-001 §29, Gitleaks 8.30.1 pinned by digest)": "secret-scan",
 }
 FOUNDATION_NORMATIVE_PROJECTION = '"normative":"${{ needs.normative.result }}"'
+PROVENANCE_STEP_NAME = "Capture and sanitize workflow provenance"
+# The only intended step-body difference in rel000: the REL-000 provenance profile.
+FOUNDATION_PROVENANCE_TAIL = '--head-sha "$REL000_SOURCE_HEAD_SHA"\n'
+PR_VALIDATION_PROVENANCE_TAIL = '--head-sha "$REL000_SOURCE_HEAD_SHA" \\\n  --workflow-profile pr-validation\n'
 PR_VALIDATION_NORMATIVE_PROJECTION = (
     '"normative":"${{ needs.secret-scan.result == \'success\' && needs.normative-contracts.result == \'success\' '
     "&& needs.azr-static.result == 'success' && 'success' || "
@@ -72,6 +77,15 @@ def without_orchestration(job: dict) -> dict:
 
 def step_names(job: dict) -> list[str]:
     return [step["name"] for step in job["steps"]]
+
+
+def with_foundation_provenance_profile(rel000_job: dict) -> dict:
+    """PR Validation rel000 with its only intended step difference normalised away."""
+    job = copy.deepcopy(rel000_job)
+    step = next(step for step in job["steps"] if step["name"] == PROVENANCE_STEP_NAME)
+    assert step["run"].count(PR_VALIDATION_PROVENANCE_TAIL) == 1
+    step["run"] = step["run"].replace(PR_VALIDATION_PROVENANCE_TAIL, FOUNDATION_PROVENANCE_TAIL)
+    return job
 
 
 class SharedJobParityTests(unittest.TestCase):
@@ -130,7 +144,7 @@ class Rel000ParityTests(unittest.TestCase):
 
     def test_rel000_is_identical_except_orchestration_and_normative_projection(self):
         foundation = without_orchestration(self.foundation)
-        pr = copy.deepcopy(without_orchestration(self.pr))
+        pr = with_foundation_provenance_profile(without_orchestration(self.pr))
         results = pr["env"]["REL000_JOB_RESULTS_JSON"]
         self.assertIn(PR_VALIDATION_NORMATIVE_PROJECTION, results)
         pr["env"]["REL000_JOB_RESULTS_JSON"] = results.replace(
@@ -140,7 +154,7 @@ class Rel000ParityTests(unittest.TestCase):
 
     def test_rel000_substantive_steps_and_artifact_references_are_equivalent(self):
         self.assertEqual(step_names(self.foundation), step_names(self.pr))
-        self.assertEqual(self.foundation["steps"], self.pr["steps"])
+        self.assertEqual(self.foundation["steps"], with_foundation_provenance_profile(self.pr)["steps"])
         for key in (
             "REL000_EXECUTION_ARTIFACT_OUTPUTS_JSON",
             "REL000_OPS001_ARTIFACT_NAME",
@@ -175,6 +189,21 @@ class Rel000ParityTests(unittest.TestCase):
             fragment = f'"{job_id}":"${{{{ needs.{job_id}.result }}}}"'
             self.assertIn(fragment, self.foundation["env"]["REL000_JOB_RESULTS_JSON"], job_id)
             self.assertIn(fragment, results, job_id)
+
+    def test_rel000_provenance_profile_is_the_only_step_difference(self):
+        foundation = next(step for step in self.foundation["steps"] if step["name"] == PROVENANCE_STEP_NAME)
+        pr = next(step for step in self.pr["steps"] if step["name"] == PROVENANCE_STEP_NAME)
+        self.assertNotIn("--workflow-profile", foundation["run"])
+        self.assertNotIn("--workflow-profile", CI_WORKFLOW.read_text(encoding="utf-8"))
+        self.assertEqual(1, pr["run"].count("--workflow-profile pr-validation"))
+        self.assertEqual(1, pr["run"].count("sanitize-workflow-provenance"))
+        self.assertEqual(foundation["run"], with_foundation_provenance_profile(self.pr)["steps"][self.pr["steps"].index(pr)]["run"])
+        differing = [
+            step["name"]
+            for step, other in zip(self.foundation["steps"], self.pr["steps"], strict=True)
+            if step != other
+        ]
+        self.assertEqual([PROVENANCE_STEP_NAME], differing)
 
     def test_rel000_verifies_upstream_from_the_projected_results(self):
         verify = next(step for step in self.pr["steps"] if step["name"] == "Verify every authoritative upstream job succeeded")

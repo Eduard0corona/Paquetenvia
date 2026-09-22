@@ -2911,6 +2911,411 @@ class WorkflowProvenanceTests(unittest.TestCase):
         )
 
 
+class WorkflowProvenanceProfileTests(unittest.TestCase):
+    """Workflow-provenance profiles: Foundation (exact 13) and PR Validation (exact 17).
+
+    Raw GitHub-shaped attempt payloads are built deterministically here; no GitHub
+    access is involved. Attempt 1 starts 08:24:51 and its jobs run 08:25–08:30;
+    attempt 2 starts 08:59:34 and its re-executed jobs run from 09:00.
+    """
+
+    RUN_ID = "36000000001"
+    SHA = "e" * 40
+    ATTEMPT_STARTED = {1: "2026-09-21T08:24:51Z", 2: "2026-09-21T08:59:34Z"}
+    JOB_HOUR = {1: "08:25", 2: "09:00"}
+    FOUNDATION = rel000.WORKFLOW_PROVENANCE_PROFILE_FOUNDATION
+    PR_VALIDATION = rel000.WORKFLOW_PROVENANCE_PROFILE_PR_VALIDATION
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-profile-tests-")
+        self.root = Path(self.temp.name)
+        self.trace = {"source_head_sha": self.SHA, "tested_git_sha": self.SHA, "base_main_sha": self.SHA}
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    # ----------------------------------------------------------------- fixtures
+
+    def raw_job(self, profile, key, attempt, *, status="completed", conclusion="success", timestamps=True, job_id=None, name=None):
+        names = rel000.WORKFLOW_PROVENANCE_PROFILES[profile].job_names
+        index = list(names).index(key)
+        job = {
+            "id": job_id if job_id is not None else 90000000000 + attempt * 1000 + index,
+            "name": name if name is not None else names[key],
+            "run_attempt": attempt,
+            "status": status,
+            "conclusion": conclusion,
+        }
+        if timestamps:
+            hour = self.JOB_HOUR[attempt]
+            job["started_at"] = f"2026-09-21T{hour}:{index:02d}Z"
+            job["completed_at"] = f"2026-09-21T{hour}:{index + 30:02d}Z" if status == "completed" else None
+        else:
+            job["started_at"] = None
+            job["completed_at"] = None
+        return job
+
+    def attempt_jobs(self, profile, attempt, overrides=None):
+        """Every job of the profile executed in `attempt` (aggregator in progress, downstream pending)."""
+        spec = rel000.WORKFLOW_PROVENANCE_PROFILES[profile]
+        jobs = []
+        for key in spec.job_names:
+            if key == spec.aggregator_job:
+                kwargs = {"status": "in_progress", "conclusion": None}
+            elif key in spec.downstream_jobs:
+                kwargs = {"status": "queued", "conclusion": None, "timestamps": False}
+            else:
+                kwargs = {}
+            kwargs.update((overrides or {}).get(key, {}))
+            jobs.append(self.raw_job(profile, key, attempt, **kwargs))
+        return jobs
+
+    def artifacts(self):
+        raw = []
+        outputs = []
+        for index, (key, name) in enumerate(rel000.EXECUTION_ARTIFACT_NAMES.items(), start=1):
+            digest = f"{index:x}" * 64
+            raw.append({"id": 8000 + index, "name": name, "digest": f"sha256:{digest}", "expired": False, "workflow_run": {"id": int(self.RUN_ID), "head_sha": self.SHA}})
+            outputs.append({"artifact_name": name, "artifact_id": str(8000 + index), "artifact_digest": f"sha256:{digest}"})
+        return raw, outputs
+
+    def write_raw(self, profile, attempts, *, run_extra=None):
+        """attempts: {attempt: jobs list}. Returns (raw_dir, artifacts_path, outputs_json)."""
+        raw = self.root / f"raw-{len(list(self.root.iterdir()))}"
+        raw.mkdir()
+        spec = rel000.WORKFLOW_PROVENANCE_PROFILES[profile]
+        for attempt, jobs in attempts.items():
+            run = {"id": int(self.RUN_ID), "run_attempt": attempt, "head_sha": self.SHA, "run_started_at": self.ATTEMPT_STARTED[attempt], "name": spec.workflow_name, "event": "pull_request"}
+            run.update(run_extra or {})
+            (raw / f"attempt-{attempt}-run.json").write_text(json.dumps(run), encoding="utf-8")
+            (raw / f"attempt-{attempt}-jobs.json").write_text(json.dumps({"total_count": len(jobs), "jobs": jobs}), encoding="utf-8")
+        artifacts, outputs = self.artifacts()
+        artifacts_path = raw / "artifacts.json"
+        artifacts_path.write_text(json.dumps({"artifacts": artifacts}), encoding="utf-8")
+        return raw, artifacts_path, json.dumps(outputs)
+
+    def sanitize(self, profile, attempts, *, current_attempt=None, run_extra=None, workflow_profile=None):
+        raw, artifacts_path, outputs = self.write_raw(profile, attempts, run_extra=run_extra)
+        output = raw / "sanitized.json"
+        manifest = rel000.sanitize_workflow_provenance(
+            raw,
+            artifacts_path,
+            outputs,
+            output,
+            self.RUN_ID,
+            current_attempt if current_attempt is not None else max(attempts),
+            self.SHA,
+            workflow_profile if workflow_profile is not None else profile,
+        )
+        return manifest, output
+
+    def validate(self, path, current_attempt):
+        return rel000.validate_workflow_provenance(path, self.trace, self.RUN_ID, current_attempt)
+
+    def assert_reason(self, expected, action):
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def partial_rerun_attempts(self, profile, *, second_attempt_overrides=None):
+        """Attempt 1: producers succeed, aggregator (and downstream) fail. Attempt 2: producers
+        retained with their original timestamps, aggregator re-executes, downstream pending."""
+        spec = rel000.WORKFLOW_PROVENANCE_PROFILES[profile]
+        first_overrides = {spec.aggregator_job: {"status": "completed", "conclusion": "failure"}}
+        for key in spec.downstream_jobs:
+            first_overrides[key] = {"status": "completed", "conclusion": "failure", "timestamps": True}
+        first = self.attempt_jobs(profile, 1, first_overrides)
+        second = []
+        for job in first:
+            key = next(k for k, name in spec.job_names.items() if name == job["name"])
+            if key == spec.aggregator_job:
+                second.append(self.raw_job(profile, key, 2, status="in_progress", conclusion=None))
+            elif key in spec.downstream_jobs:
+                second.append(self.raw_job(profile, key, 2, status="queued", conclusion=None, timestamps=False))
+            elif key in (second_attempt_overrides or {}):
+                second.append(self.raw_job(profile, key, 2, **second_attempt_overrides[key]))
+            else:
+                retained = copy.deepcopy(job)
+                retained["id"] += 100000000
+                retained["run_attempt"] = 2
+                second.append(retained)
+        return {1: first, 2: second}
+
+    # ------------------------------------------------------- Foundation regression
+
+    def test_170_foundation_exact_thirteen_jobs_pass_by_default(self):
+        manifest, output = self.sanitize(self.FOUNDATION, {1: self.attempt_jobs(self.FOUNDATION, 1)}, workflow_profile=rel000.DEFAULT_WORKFLOW_PROVENANCE_PROFILE)
+        self.assertEqual("foundation", manifest["workflow_profile"])
+        self.assertEqual(13, len(manifest["jobs"]))
+        self.assertEqual(13, len(rel000.AUTHORITATIVE_JOB_NAMES))
+        result = self.validate(output, 1)
+        self.assertEqual("foundation", result["workflow_profile"])
+        self.assertEqual(10, len(result["artifacts_by_job"]))
+
+    def test_171_foundation_rejects_twelve_fourteen_unknown_and_duplicate_jobs(self):
+        base = self.attempt_jobs(self.FOUNDATION, 1)
+        twelve = [job for job in base if job["name"] != "Validate web workspace"]
+        fourteen = base + [self.raw_job(self.FOUNDATION, "web", 1, job_id=1, name="PR Gate")]
+        unknown = copy.deepcopy(base)
+        unknown[3]["name"] = "Secret scan"
+        duplicate = copy.deepcopy(base)
+        duplicate[3]["name"] = duplicate[4]["name"]
+        for reason, jobs in (
+            ("WORKFLOW_PROVENANCE_JOB_SET_INVALID", twelve),
+            ("WORKFLOW_PROVENANCE_JOB_SET_INVALID", fourteen),
+            ("WORKFLOW_PROVENANCE_JOB_UNKNOWN", unknown),
+            ("WORKFLOW_PROVENANCE_JOB_AMBIGUOUS", duplicate),
+        ):
+            with self.subTest(reason=reason):
+                self.assert_reason(reason, lambda jobs=jobs: self.sanitize(self.FOUNDATION, {1: jobs}))
+
+    def test_172_foundation_producer_failure_and_aggregator_attempt_fail(self):
+        for key, conclusion in (("normative", "failure"), ("dotnet", "skipped"), ("backup-restore", "cancelled")):
+            with self.subTest(job=key):
+                jobs = self.attempt_jobs(self.FOUNDATION, 1, {key: {"conclusion": conclusion}})
+                self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda jobs=jobs: self.sanitize(self.FOUNDATION, {1: jobs}))
+        attempts = self.partial_rerun_attempts(self.FOUNDATION)
+        stale = copy.deepcopy(attempts)
+        stale[2] = [job if job["name"] != "Validate MVP-0 internal release evidence" else {**next(j for j in stale[1] if j["name"] == job["name"]), "id": job["id"], "run_attempt": 2} for job in stale[2]]
+        self.assert_reason("WORKFLOW_PROVENANCE_AGGREGATOR_ATTEMPT_MISMATCH", lambda: self.sanitize(self.FOUNDATION, stale))
+
+    def test_173_foundation_partial_rerun_semantics_unchanged(self):
+        manifest, output = self.sanitize(self.FOUNDATION, self.partial_rerun_attempts(self.FOUNDATION))
+        self.assertEqual(14, len(manifest["jobs"]))
+        self.assertEqual({1: 13, 2: 1}, {a: sum(1 for j in manifest["jobs"] if j["run_attempt"] == a) for a in (1, 2)})
+        result = self.validate(output, 2)
+        self.assertFalse(result["report"]["mixed_attempt_evidence"])
+        self.assertTrue(all(item["producer_attempt"] == 1 for item in result["report"]["jobs"]))
+        rerun = self.partial_rerun_attempts(self.FOUNDATION, second_attempt_overrides={"dotnet": {"conclusion": "failure"}})
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda: self.sanitize(self.FOUNDATION, rerun))
+
+    def test_174_foundation_run_identity_is_checked_only_when_present(self):
+        jobs = {1: self.attempt_jobs(self.FOUNDATION, 1)}
+        manifest, _ = self.sanitize(self.FOUNDATION, jobs, run_extra={"name": None, "event": None})
+        self.assertEqual("foundation", manifest["workflow_profile"])
+        for run_extra in ({"event": "push"}, {"event": "pull_request"}):
+            self.sanitize(self.FOUNDATION, jobs, run_extra=run_extra)
+        self.assert_reason("WORKFLOW_PROVENANCE_WORKFLOW_MISMATCH", lambda: self.sanitize(self.FOUNDATION, jobs, run_extra={"name": "PR Validation"}))
+        self.assert_reason("WORKFLOW_PROVENANCE_EVENT_INVALID", lambda: self.sanitize(self.FOUNDATION, jobs, run_extra={"event": "schedule"}))
+
+    def test_175_foundation_pending_job_without_start_time_still_fails(self):
+        jobs = self.attempt_jobs(self.FOUNDATION, 1, {"rel000": {"status": "queued", "conclusion": None, "timestamps": False}})
+        self.assert_reason("WORKFLOW_PROVENANCE_METADATA_INCOMPLETE", lambda: self.sanitize(self.FOUNDATION, {1: jobs}))
+
+    # ------------------------------------------------------- PR Validation profile
+
+    def test_176_pr_validation_exact_seventeen_jobs_with_queued_pr_gate_pass(self):
+        manifest, output = self.sanitize(self.PR_VALIDATION, {1: self.attempt_jobs(self.PR_VALIDATION, 1)})
+        self.assertEqual("pr-validation", manifest["workflow_profile"])
+        self.assertEqual(rel000.WORKFLOW_PROVENANCE_VERSION, manifest["format_version"])
+        self.assertEqual(17, len(manifest["jobs"]))
+        self.assertEqual(sorted(rel000.PR_VALIDATION_JOB_NAMES), sorted(job["job_key"] for job in manifest["jobs"]))
+        gate = next(job for job in manifest["jobs"] if job["job_key"] == "pr-gate")
+        self.assertEqual({"status": "queued", "conclusion": "", "run_attempt": 1}, {k: gate[k] for k in ("status", "conclusion", "run_attempt")})
+        self.assertNotIn("normative", {job["job_key"] for job in manifest["jobs"]})
+        self.assertEqual(10, len(manifest["artifacts"]))
+        result = self.validate(output, 1)
+        self.assertEqual("pr-validation", result["workflow_profile"])
+        self.assertEqual("pr-validation", result["report"]["workflow_profile"])
+        self.assertEqual(sorted(rel000.EXECUTION_ARTIFACT_NAMES), sorted(result["artifacts_by_job"]))
+
+    def test_177_pr_validation_rejects_sixteen_and_eighteen_jobs(self):
+        base = self.attempt_jobs(self.PR_VALIDATION, 1)
+        sixteen = [job for job in base if job["name"] != "Validate web workspace"]
+        missing_classify = [job for job in base if job["name"] != "Classify PR impact"]
+        eighteen = base + [self.raw_job(self.PR_VALIDATION, "web", 1, job_id=1, name="Validate normative baseline")]
+        for jobs in (sixteen, missing_classify, eighteen):
+            with self.subTest(count=len(jobs)):
+                self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda jobs=jobs: self.sanitize(self.PR_VALIDATION, {1: jobs}))
+
+    def test_178_pr_validation_rejects_unknown_renamed_and_duplicate_jobs(self):
+        base = self.attempt_jobs(self.PR_VALIDATION, 1)
+        unknown = copy.deepcopy(base)
+        unknown[1]["name"] = "Validate normative baseline"
+        renamed = copy.deepcopy(base)
+        renamed[16]["name"] = "PR gate"
+        duplicate = copy.deepcopy(base)
+        duplicate[1]["name"] = "PR Gate"
+        for reason, jobs in (
+            ("WORKFLOW_PROVENANCE_JOB_UNKNOWN", unknown),
+            ("WORKFLOW_PROVENANCE_JOB_UNKNOWN", renamed),
+            ("WORKFLOW_PROVENANCE_JOB_AMBIGUOUS", duplicate),
+        ):
+            with self.subTest(reason=reason):
+                self.assert_reason(reason, lambda jobs=jobs: self.sanitize(self.PR_VALIDATION, {1: jobs}))
+
+    def test_179_pr_validation_every_upstream_control_must_succeed(self):
+        for key in sorted(rel000.PR_VALIDATION_PRODUCER_JOBS):
+            for conclusion in ("failure", "cancelled", "skipped"):
+                with self.subTest(job=key, conclusion=conclusion):
+                    jobs = self.attempt_jobs(self.PR_VALIDATION, 1, {key: {"conclusion": conclusion}})
+                    exc = self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda jobs=jobs: self.sanitize(self.PR_VALIDATION, {1: jobs}))
+                    self.assertEqual(key, exc.details["job"])
+        self.assertEqual(
+            {"classify", "secret-scan", "normative-contracts", "azr-static"} | rel000.REQUIRED_JOBS - {"normative"},
+            set(rel000.PR_VALIDATION_PRODUCER_JOBS),
+        )
+
+    def test_180_pr_validation_aggregator_must_be_current_attempt(self):
+        attempts = self.partial_rerun_attempts(self.PR_VALIDATION)
+        old_rel000 = next(j for j in attempts[1] if j["name"] == "Validate MVP-0 internal release evidence")
+        attempts[2] = [job if job["name"] != old_rel000["name"] else {**old_rel000, "id": job["id"], "run_attempt": 2} for job in attempts[2]]
+        self.assert_reason("WORKFLOW_PROVENANCE_AGGREGATOR_ATTEMPT_MISMATCH", lambda: self.sanitize(self.PR_VALIDATION, attempts))
+
+    # -------------------------------------------------------- downstream PR Gate
+
+    def test_181_pr_gate_is_topology_only_and_never_required_to_succeed(self):
+        for overrides in (
+            {"status": "queued", "conclusion": None, "timestamps": False},
+            {"status": "waiting", "conclusion": None, "timestamps": False},
+            {"status": "in_progress", "conclusion": None, "timestamps": False},
+            {"status": "in_progress", "conclusion": None, "timestamps": True},
+            {"status": "completed", "conclusion": "failure", "timestamps": True},
+        ):
+            with self.subTest(overrides=overrides):
+                jobs = self.attempt_jobs(self.PR_VALIDATION, 1, {"pr-gate": overrides})
+                manifest, output = self.sanitize(self.PR_VALIDATION, {1: jobs})
+                self.assertEqual(17, len(manifest["jobs"]))
+                self.validate(output, 1)
+
+    def test_182_missing_pr_gate_fails_topology(self):
+        without = [job for job in self.attempt_jobs(self.PR_VALIDATION, 1) if job["name"] != "PR Gate"]
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda: self.sanitize(self.PR_VALIDATION, {1: without}))
+        replaced = without + [self.raw_job(self.PR_VALIDATION, "pr-gate", 1, name="Validate normative baseline")]
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.sanitize(self.PR_VALIDATION, {1: replaced}))
+
+    def test_183_malformed_pending_pr_gate_metadata_fails(self):
+        cases = (
+            ("WORKFLOW_PROVENANCE_METADATA_INVALID", {"status": "queued", "conclusion": "success", "timestamps": False}),
+            ("WORKFLOW_PROVENANCE_METADATA_INVALID", {"status": "completed", "conclusion": None, "timestamps": False}),
+            ("WORKFLOW_PROVENANCE_METADATA_INVALID", {"status": "", "conclusion": None, "timestamps": False}),
+        )
+        for reason, overrides in cases:
+            with self.subTest(overrides=overrides):
+                jobs = self.attempt_jobs(self.PR_VALIDATION, 1, {"pr-gate": overrides})
+                self.assert_reason(reason, lambda jobs=jobs: self.sanitize(self.PR_VALIDATION, {1: jobs}))
+        # completed_at without started_at is contradictory
+        jobs = self.attempt_jobs(self.PR_VALIDATION, 1)
+        gate = next(j for j in jobs if j["name"] == "PR Gate")
+        gate["completed_at"] = "2026-09-21T08:40:00Z"
+        self.assert_reason("WORKFLOW_PROVENANCE_METADATA_INVALID", lambda: self.sanitize(self.PR_VALIDATION, {1: jobs}))
+        # a pending downstream job is only legitimate in the current attempt
+        attempts = self.partial_rerun_attempts(self.PR_VALIDATION)
+        attempts[1] = self.attempt_jobs(self.PR_VALIDATION, 1, {"rel000": {"status": "completed", "conclusion": "failure"}})
+        self.assert_reason("WORKFLOW_PROVENANCE_METADATA_INCOMPLETE", lambda: self.sanitize(self.PR_VALIDATION, attempts))
+        # an invalid or reused job id on the downstream job still fails
+        for job_id, reason in ((0, "WORKFLOW_PROVENANCE_JOB_ID_INVALID"), (90000001000, "WORKFLOW_PROVENANCE_JOB_ID_REUSED")):
+            jobs = self.attempt_jobs(self.PR_VALIDATION, 1, {"pr-gate": {"job_id": job_id}})
+            self.assert_reason(reason, lambda jobs=jobs: self.sanitize(self.PR_VALIDATION, {1: jobs}))
+
+    # ------------------------------------------------------------ run identity
+
+    def test_184_pr_validation_run_identity_is_mandatory(self):
+        jobs = {1: self.attempt_jobs(self.PR_VALIDATION, 1)}
+        self.assert_reason("WORKFLOW_PROVENANCE_RUN_IDENTITY_MISSING", lambda: self.sanitize(self.PR_VALIDATION, jobs, run_extra={"name": None}))
+        self.assert_reason("WORKFLOW_PROVENANCE_RUN_IDENTITY_MISSING", lambda: self.sanitize(self.PR_VALIDATION, jobs, run_extra={"event": None}))
+        self.assert_reason("WORKFLOW_PROVENANCE_WORKFLOW_MISMATCH", lambda: self.sanitize(self.PR_VALIDATION, jobs, run_extra={"name": "Foundation CI"}))
+        self.assert_reason("WORKFLOW_PROVENANCE_EVENT_INVALID", lambda: self.sanitize(self.PR_VALIDATION, jobs, run_extra={"event": "push"}))
+
+    # ------------------------------------------------------------- partial rerun
+
+    def test_185_pr_validation_partial_rerun_passes(self):
+        manifest, output = self.sanitize(self.PR_VALIDATION, self.partial_rerun_attempts(self.PR_VALIDATION))
+        self.assertEqual("pr-validation", manifest["workflow_profile"])
+        self.assertEqual(19, len(manifest["jobs"]))
+        second = {job["job_key"]: job for job in manifest["jobs"] if job["run_attempt"] == 2}
+        self.assertEqual({"rel000", "pr-gate"}, set(second))
+        self.assertEqual("in_progress", second["rel000"]["status"])
+        self.assertEqual("queued", second["pr-gate"]["status"])
+        first_gate = next(job for job in manifest["jobs"] if job["job_key"] == "pr-gate" and job["run_attempt"] == 1)
+        self.assertEqual("failure", first_gate["conclusion"])
+        self.assertTrue(all(artifact["producer_attempt"] == 1 for artifact in manifest["artifacts"]))
+        result = self.validate(output, 2)
+        self.assertFalse(result["report"]["mixed_attempt_evidence"])
+        self.assertEqual(2, result["latest_jobs"]["rel000"]["run_attempt"])
+
+    def test_186_pr_validation_partial_rerun_negative_cases(self):
+        rerun_failed = self.partial_rerun_attempts(self.PR_VALIDATION, second_attempt_overrides={"secret-scan": {"conclusion": "failure"}})
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda: self.sanitize(self.PR_VALIDATION, rerun_failed))
+        reused = self.partial_rerun_attempts(self.PR_VALIDATION)
+        reused[2][4]["id"] = reused[1][4]["id"]
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_ID_REUSED", lambda: self.sanitize(self.PR_VALIDATION, reused))
+        mismatch = self.partial_rerun_attempts(self.PR_VALIDATION)
+        mismatch[2][4]["run_attempt"] = 1
+        self.assert_reason("WORKFLOW_PROVENANCE_ATTEMPT_METADATA_INVALID", lambda: self.sanitize(self.PR_VALIDATION, mismatch))
+        ambiguous = self.partial_rerun_attempts(self.PR_VALIDATION)
+        ambiguous[2][4]["conclusion"] = "cancelled"  # retained record no longer matches its attempt-1 execution
+        self.assert_reason("WORKFLOW_PROVENANCE_RETAINED_JOB_AMBIGUOUS", lambda: self.sanitize(self.PR_VALIDATION, ambiguous))
+        # a producer re-executed in attempt 2 whose artifact still points at attempt 1 is stale
+        _, output = self.sanitize(self.PR_VALIDATION, self.partial_rerun_attempts(self.PR_VALIDATION, second_attempt_overrides={"dotnet": {}}))
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        artifact = next(item for item in payload["artifacts"] if item["job_key"] == "dotnet")
+        self.assertEqual(2, artifact["producer_attempt"])
+        artifact["producer_attempt"] = 1
+        artifact["producer_job_id"] = next(j["job_id"] for j in payload["jobs"] if j["job_key"] == "dotnet" and j["run_attempt"] == 1)
+        output.write_text(json.dumps(payload), encoding="utf-8")
+        self.assert_reason("WORKFLOW_PROVENANCE_ARTIFACT_STALE_AFTER_RERUN", lambda: self.validate(output, 2))
+
+    # ------------------------------------------------------------ manifest profile
+
+    def test_187_manifest_profile_semantics(self):
+        _, foundation = self.sanitize(self.FOUNDATION, {1: self.attempt_jobs(self.FOUNDATION, 1)})
+        _, pr = self.sanitize(self.PR_VALIDATION, {1: self.attempt_jobs(self.PR_VALIDATION, 1)})
+        foundation_payload = json.loads(foundation.read_text(encoding="utf-8"))
+        pr_payload = json.loads(pr.read_text(encoding="utf-8"))
+
+        def write(payload):
+            path = self.root / f"manifest-{len(list(self.root.iterdir()))}.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            return path
+
+        legacy = {k: v for k, v in foundation_payload.items() if k != "workflow_profile"}
+        self.assertEqual("foundation", self.validate(write(legacy), 1)["workflow_profile"])
+        self.assertEqual("pr-validation", self.validate(write(pr_payload), 1)["workflow_profile"])
+        self.assert_reason("WORKFLOW_PROVENANCE_PROFILE_INVALID", lambda: self.validate(write({**pr_payload, "workflow_profile": "nightly"}), 1))
+        self.assert_reason("WORKFLOW_PROVENANCE_PROFILE_INVALID", lambda: self.validate(write({**pr_payload, "workflow_profile": None}), 1))
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.validate(write({**pr_payload, "workflow_profile": "foundation"}), 1))
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.validate(write({**foundation_payload, "workflow_profile": "pr-validation"}), 1))
+        legacy_pr = {k: v for k, v in pr_payload.items() if k != "workflow_profile"}
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.validate(write(legacy_pr), 1))
+        # a pr-validation manifest without its downstream job is incomplete
+        truncated = {**pr_payload, "jobs": [job for job in pr_payload["jobs"] if job["job_key"] != "pr-gate"]}
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_MISSING", lambda: self.validate(write(truncated), 1))
+
+    def test_188_unknown_profile_argument_fails_closed(self):
+        jobs = {1: self.attempt_jobs(self.PR_VALIDATION, 1)}
+        self.assert_reason("WORKFLOW_PROVENANCE_PROFILE_INVALID", lambda: self.sanitize(self.PR_VALIDATION, jobs, workflow_profile="nightly"))
+        self.assert_reason("WORKFLOW_PROVENANCE_PROFILE_INVALID", lambda: self.sanitize(self.PR_VALIDATION, jobs, workflow_profile=""))
+        # profile/topology mismatch at sanitize time
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda: self.sanitize(self.PR_VALIDATION, jobs, workflow_profile=self.FOUNDATION, run_extra={"name": "Foundation CI"}))
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda: self.sanitize(self.FOUNDATION, {1: self.attempt_jobs(self.FOUNDATION, 1)}, workflow_profile=self.PR_VALIDATION, run_extra={"name": "PR Validation"}))
+
+    def test_189_cli_accepts_profile_and_rejects_unknown(self):
+        raw, artifacts_path, outputs = self.write_raw(self.PR_VALIDATION, {1: self.attempt_jobs(self.PR_VALIDATION, 1)})
+        output = raw / "cli.json"
+        argv = [
+            "sanitize-workflow-provenance",
+            "--attempts-directory", str(raw),
+            "--artifacts", str(artifacts_path),
+            "--artifact-outputs-json", outputs,
+            "--output", str(output),
+            "--workflow-run-id", self.RUN_ID,
+            "--current-attempt", "1",
+            "--head-sha", self.SHA,
+        ]
+        with patch.object(sys, "argv", ["rel000.py", *argv, "--workflow-profile", "pr-validation"]):
+            self.assertEqual(0, rel000.main())
+        self.assertEqual("pr-validation", json.loads(output.read_text(encoding="utf-8"))["workflow_profile"])
+        with patch.object(sys, "argv", ["rel000.py", *argv, "--workflow-profile", "nightly"]), patch("sys.stderr", new=io.StringIO()) as stderr:
+            self.assertEqual(1, rel000.main())
+        self.assertIn("WORKFLOW_PROVENANCE_PROFILE_INVALID", stderr.getvalue())
+        # Omitting the argument keeps the Foundation default, which rejects a PR Validation run.
+        with patch.object(sys, "argv", ["rel000.py", *argv]), patch("sys.stderr", new=io.StringIO()) as stderr:
+            self.assertEqual(1, rel000.main())
+        self.assertIn("WORKFLOW_PROVENANCE_WORKFLOW_MISMATCH", stderr.getvalue())
+
+
 class WorkflowPhysicalGuardsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
