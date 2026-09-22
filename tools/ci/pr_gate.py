@@ -13,7 +13,12 @@ Contract (``needs`` JSON as produced by ``toJSON(needs)``):
 * every job listed in the configuration must be present, no other job may be present;
 * ``secret-scan`` must be ``success``;
 * every required job must be ``success``;
-* every non-required job must be ``skipped``.
+* every non-required job must be ``skipped``;
+* a plan touching the ``DEPS`` domain is rejected unless the classification is a
+  certified ``MAIN_BACKSYNC`` (Owner dependency policy: ordinary and security
+  dependency remediations take the exceptional ``→ main`` route, never
+  ``development``; only content already certified on ``main`` may carry
+  dependency drift into ``development``).
 """
 
 from __future__ import annotations
@@ -39,6 +44,8 @@ REASON_SECRET_SCAN_FAILED = "PR_GATE_SECRET_SCAN_FAILED"
 REASON_REQUIRED_JOB_SKIPPED = "PR_GATE_REQUIRED_JOB_SKIPPED"
 REASON_REQUIRED_JOB_FAILED = "PR_GATE_REQUIRED_JOB_FAILED"
 REASON_UNEXPECTED_JOB_RESULT = "PR_GATE_UNEXPECTED_JOB_RESULT"
+REASON_DEPENDENCY_CHANGE_NOT_ALLOWED = "PR_GATE_DEPENDENCY_CHANGE_NOT_ALLOWED"
+DEPENDENCY_DOMAIN = "DEPS"
 
 
 def _result_of(needs: dict[str, Any], job: str) -> str | None:
@@ -78,6 +85,16 @@ def evaluate(plan_json: str | None, needs: Any, config: dict[str, Any]) -> dict[
     except (ValueError, classifier.ClassifyError) as error:
         failure(REASON_CLASSIFICATION_UNTRUSTED, "The plan cannot be trusted.", cause=str(error))
         return {"verdict": "FAIL", "failures": failures, "matrix": matrix, "plan": None}
+
+    # Dependency policy: dependency drift never enters `development` through a feature
+    # or security-remediation PR, whatever its classification or branch name. Only a
+    # certified MAIN_BACKSYNC (source already 13/13 on push/main) may carry it.
+    if DEPENDENCY_DOMAIN in plan["domains"] and plan["classification"] != classifier.CLASSIFICATION_MAIN_BACKSYNC:
+        failure(
+            REASON_DEPENDENCY_CHANGE_NOT_ALLOWED,
+            "Dependency changes are not accepted into development; use the authorized dependency route to main.",
+            classification=plan["classification"],
+        )
 
     expected_jobs = list(config["jobs"])
     present = set(needs)
