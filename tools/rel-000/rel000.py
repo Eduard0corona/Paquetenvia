@@ -154,6 +154,10 @@ EXECUTION_ARTIFACT_NAMES = {
 # `normative` job is decomposed into three real controls, `classify` precedes every
 # validation and `PR Gate` is downstream of the aggregator (topology-only: it cannot
 # have executed while REL-000 sanitizes provenance and is never producer evidence).
+# GitHub does not create a downstream job record until its dependencies conclude, so
+# while REL-000 sanitizes provenance `PR Gate` is normally absent from the jobs API
+# rather than pending. Exactly the 16 non-downstream jobs are therefore required to be
+# observable; `PR Gate` is accepted when absent and validated when present.
 PR_VALIDATION_JOB_NAMES = {
     "classify": "Classify PR impact",
     "secret-scan": "Secret scan",
@@ -191,6 +195,21 @@ class WorkflowProvenanceProfile:
     aggregator_job: str
     downstream_jobs: frozenset[str]
     artifact_names: dict[str, str]
+
+    @property
+    def observable_jobs(self) -> frozenset[str]:
+        """Jobs that must be observable while the aggregator sanitizes provenance.
+
+        Downstream jobs are excluded: GitHub only creates their job records once the
+        aggregator they depend on has concluded, so requiring them would make the
+        aggregator's own provenance step unsatisfiable.
+        """
+        return frozenset(self.job_names) - self.downstream_jobs
+
+    @property
+    def observable_job_names(self) -> frozenset[str]:
+        """Raw GitHub names of the jobs that must be observable."""
+        return frozenset(self.job_names[key] for key in self.observable_jobs)
 
 
 WORKFLOW_PROVENANCE_PROFILE_FOUNDATION = "foundation"
@@ -2696,11 +2715,12 @@ def sanitize_workflow_provenance(
         jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else None
         if not isinstance(jobs, list):
             fail("WORKFLOW_PROVENANCE_METADATA_INVALID", "Workflow jobs metadata must contain a jobs array.")
-        if len(jobs) != len(profile.job_names):
+        if not len(profile.observable_jobs) <= len(jobs) <= len(profile.job_names):
             fail(
                 "WORKFLOW_PROVENANCE_JOB_SET_INVALID",
                 f"{profile.workflow_name} must contain exactly the authoritative job set.",
-                expected=len(profile.job_names),
+                expected=len(profile.observable_jobs),
+                expected_maximum=len(profile.job_names),
                 observed=len(jobs),
                 attempt=attempt,
             )
@@ -2772,12 +2792,21 @@ def sanitize_workflow_provenance(
                     job=key,
                     attempt=attempt,
                 )
-        if seen_names != set(profile.job_names.values()):
-            fail("WORKFLOW_PROVENANCE_JOB_SET_INVALID", "The authoritative job set is incomplete.")
+        missing_names = profile.observable_job_names - seen_names
+        if missing_names:
+            fail(
+                "WORKFLOW_PROVENANCE_JOB_SET_INVALID",
+                "The authoritative job set is incomplete.",
+                jobs=sorted(missing_names),
+                attempt=attempt,
+            )
 
     latest_jobs: dict[str, dict[str, Any]] = {}
     for key, records in actual_by_key.items():
         if not records:
+            if key in profile.downstream_jobs:
+                # Not yet created by GitHub because the aggregator is still running.
+                continue
             fail("WORKFLOW_PROVENANCE_JOB_MISSING", "An authoritative job has no executed attempt.", job=key)
         latest_jobs[key] = max(records, key=lambda item: item["run_attempt"])
     if latest_jobs[profile.aggregator_job]["run_attempt"] != current_attempt:
@@ -2961,6 +2990,10 @@ def validate_workflow_provenance(
     latest_jobs: dict[str, dict[str, Any]] = {}
     for key, records in by_key.items():
         if not records:
+            if key in profile.downstream_jobs:
+                # The aggregator sanitized provenance before GitHub created this
+                # downstream job record; its absence is the expected topology.
+                continue
             fail("WORKFLOW_PROVENANCE_JOB_MISSING", "An authoritative job is absent.", job=key)
         latest_jobs[key] = max(records, key=lambda item: item["run_attempt"])
     if latest_jobs[profile.aggregator_job]["run_attempt"] != current_attempt:
