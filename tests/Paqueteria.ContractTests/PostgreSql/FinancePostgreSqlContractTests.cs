@@ -486,13 +486,20 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
                 DELETE FROM drivers.driver_profiles WHERE id=@driver;
                 DELETE FROM organizations.organization_memberships
                   WHERE user_id IN (@driver_user,@other_driver_user);
-                DELETE FROM identity.users WHERE id IN (@driver_user,@other_driver_user);
                 """,
                 P("org", OrganizationId),
                 P("driver", DriverId),
                 P("driver_user", DriverUserId),
                 P("other_driver_user", UnassignedDriverUserId));
+
+            // platform.audit_logs.actor_id references identity.users, and a driver-recorded collection
+            // leaves an audit row owned by the driver, so the driver users can only go once the base
+            // scenario has removed this organization's append-only audit rows with the migrator role.
             await scenario.DisposeAsync();
+            await ExecuteAsync(
+                "DELETE FROM identity.users WHERE id IN (@driver_user,@other_driver_user);",
+                P("driver_user", DriverUserId),
+                P("other_driver_user", UnassignedDriverUserId));
         }
 
         private static NpgsqlParameter P(string name, object value) => new(name, value);
