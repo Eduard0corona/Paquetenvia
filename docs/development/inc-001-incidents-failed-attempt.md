@@ -76,18 +76,33 @@ La respuesta 201 devuelve `id`, `order_id`, `status`, `severity`, `reason_code`,
 Códigos de conflicto publicados: `INVALID_REQUEST`, `IDEMPOTENCY_CONFLICT`,
 `ORDER_STATE_NOT_ALLOWED`, `EVIDENCE_NOT_AVAILABLE` y `CONFLICT`.
 
-### Desviación pendiente de aprobación
+### Alineación normativa de AI-05
 
-`contracts/AI-05_OPENAPI.yaml` declara `OpenIncidentRequest` con solo `type`, `severity` y
-`description` obligatorios, y `Incident` sin `reason_code`, `next_action`, `occurred_at`,
-`sla_due_at` ni `evidence_proof_ids`. Los criterios de aceptación de AI-08 para INC-001 exigen
-esos campos, de modo que la implementación es **más estricta** que el esquema publicado.
+La desviación entre AI-05 y AI-08 quedó cerrada con autorización del propietario, limitada a
+`POST /api/v1/orders/{orderId}/incidents`.
 
-AI-05 no se modificó: `MANIFEST.json` y `CHECKSUMS_SHA256.txt` están congelados byte a byte por
-SEC-003 y esa congelación está verificada por
+`OpenIncidentRequest` publica ahora los siete campos que AI-08 exige —`type`, `severity`,
+`description`, `reason_code`, `next_action`, `occurred_at` y `evidence_proof_ids`— todos
+obligatorios y con `additionalProperties: false`, que es el esquema cerrado que el endpoint ya
+aplicaba al rechazar miembros no declarados. `Incident` publica los diez campos que
+`IncidentResponse` devuelve, incluidos `custody_acquired` y `sla_due_at`. La matriz de respuestas
+declara 201/401/403/404/409/503 y el 409 se documenta con `IncidentConflictProblem`, cuyo conjunto
+cerrado de códigos es el que ya publicaba el endpoint. El `Idempotency-Key` obligatorio se
+documenta por referencia al parámetro canónico.
+
+No se amplió ninguna funcionalidad: AI-05 se limitó a describir lo ya implementado.
+
+Al cambiar AI-05 se repinnearon los hashes derivados que la gobernanza exige:
+`CHECKSUMS_SHA256.txt` y `MANIFEST.json` (regenerados con
+`tools/validate_contracts.py --write-integrity`), el pin de `OpenApiBaselineTests` y los dos
+hashes congelados de
 `SyntheticEnvironmentArchitectureTests.Frozen_governance_files_are_byte_identical_to_SEC003_base`.
-Alinear AI-05 con AI-08 es una remediación normativa controlada que requiere decisión del
-propietario y el repinneo de los hashes congelados. Queda registrada aquí como brecha abierta.
+`specs/AI-08_BACKLOG.yaml` no se tocó.
+
+`IncidentsOpenApiImplementationTests` impide que la deriva vuelva a abrirse: deriva cada
+expectativa del vocabulario de dominio, de los records de transporte y del propio fuente del
+endpoint, en vez de repetirla como literal, de modo que ampliar cualquiera de los dos lados sin
+republicar el contrato falla.
 
 ## SLA
 
