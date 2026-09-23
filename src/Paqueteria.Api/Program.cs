@@ -24,6 +24,8 @@ using Realtime.Endpoints;
 using Realtime.Infrastructure;
 using Custody.Endpoints;
 using Custody.Infrastructure;
+using Incidents.Endpoints;
+using Incidents.Infrastructure;
 using Reporting.Endpoints;
 using Reporting.Infrastructure;
 using Routing.Endpoints;
@@ -53,6 +55,7 @@ builder.Services.AddRealtimeInfrastructure(builder.Configuration, builder.Enviro
 builder.Services.AddRealtimeOutboxDispatchers(builder.Configuration);
 builder.Services.AddRealtimeEndpoints(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(builder.Configuration, builder.Environment);
+builder.Services.AddIncidentsInfrastructure(builder.Configuration);
 builder.Services.AddReportingInfrastructure(builder.Configuration);
 builder.Services.AddReportingEndpoints();
 builder.Services.AddRoutingInfrastructure(builder.Configuration);
@@ -129,6 +132,7 @@ app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapRealtimeHubs();
 app.MapProofEndpoints();
+app.MapIncidentEndpoints();
 app.MapOperationsDashboardEndpoints();
 app.MapRouteEndpoints();
 

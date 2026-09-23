@@ -961,21 +961,50 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             SyntheticOrderScenario.P("object_key", $"proofs/{uploadId:N}"));
     }
 
+    /// <summary>
+    /// INC-001 makes reason, explicit next action, SLA timestamp and evidence mandatory, so a
+    /// synthetic incident is inserted together with a proof of the same order. The incident and
+    /// its evidence share one statement because the evidence requirement is deferred to commit.
+    /// </summary>
     private static async Task<Guid> InsertIncidentAsync(
         SyntheticOrderScenario scenario,
         bool custodyAcquired)
     {
         var incidentId = Guid.NewGuid();
+        var uploadId = Guid.NewGuid();
+        var proofId = Guid.NewGuid();
         await scenario.ExecuteAdminAsync(
             """
+            INSERT INTO custody.proof_upload_sessions(
+              id,order_id,owner_org_id,requested_by,object_key_quarantine,
+              expected_content_type,maximum_bytes,status,expires_at)
+            VALUES (
+              @upload,@order,@org,@user,@quarantine,'image/jpeg',1024,'READY',clock_timestamp()+interval '1 day');
+            INSERT INTO custody.proofs(
+              id,order_id,owner_org_id,upload_session_id,proof_type,object_key,sha256,
+              content_type,size_bytes,captured_at,created_by)
+            VALUES (
+              @proof,@order,@org,@upload,'DELIVERY_PHOTO',@object_key,
+              decode(repeat('03',32),'hex'),'image/jpeg',100,clock_timestamp(),@user);
             INSERT INTO incidents.incidents(
-              id,order_id,owner_org_id,incident_type,severity,status,custody_acquired,created_by)
-            VALUES (@incident,@order,@org,'SYNTHETIC','LOW','OPEN',@custody,@user);
+              id,order_id,owner_org_id,incident_type,severity,status,custody_acquired,
+              reason_code,next_action,occurred_at,sla_due_at,created_by)
+            VALUES (
+              @incident,@order,@org,'SYNTHETIC','LOW','OPEN',@custody,
+              'RECIPIENT_ABSENT',@next_action,clock_timestamp(),clock_timestamp()+interval '72 hours',@user);
+            INSERT INTO incidents.incident_evidence(
+              id,incident_id,order_id,owner_org_id,proof_id,created_by)
+            VALUES (gen_random_uuid(),@incident,@order,@org,@proof,@user);
             """,
             SyntheticOrderScenario.P("incident", incidentId),
+            SyntheticOrderScenario.P("upload", uploadId),
+            SyntheticOrderScenario.P("proof", proofId),
+            SyntheticOrderScenario.P("quarantine", $"quarantine/{uploadId:N}"),
+            SyntheticOrderScenario.P("object_key", $"proofs/{uploadId:N}"),
             SyntheticOrderScenario.P("order", scenario.OrderId),
             SyntheticOrderScenario.P("org", scenario.OrganizationId),
             SyntheticOrderScenario.P("custody", custodyAcquired),
+            SyntheticOrderScenario.P("next_action", custodyAcquired ? "RETURNING" : "RESCHEDULED"),
             SyntheticOrderScenario.P("user", scenario.UserId));
         return incidentId;
     }

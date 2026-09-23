@@ -19,6 +19,8 @@
     <ProjectReference Include="..\Modules\Dispatch\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Custody\Custody.Endpoints\Custody.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Incidents\Incidents.Endpoints\Incidents.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Incidents\Incidents.Infrastructure\Incidents.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Endpoints\Orders.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Organizations\Organizations.Endpoints\Organizations.Endpoints.csproj" />

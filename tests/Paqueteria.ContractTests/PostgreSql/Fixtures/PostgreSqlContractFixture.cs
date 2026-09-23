@@ -14,6 +14,7 @@ using Orders.Infrastructure.Persistence;
 using Drivers.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence;
 using Custody.Infrastructure.Persistence;
+using Incidents.Infrastructure.Persistence;
 using Notifications.Infrastructure.Persistence;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
@@ -349,6 +350,25 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             custodyOptions,
             new TenantDatabaseExecutionState());
         await custody.Database.MigrateAsync().ConfigureAwait(false);
+
+        // INC-001 depends on POD-001 proofs, so the Incidents migration follows Custody.
+        await using var incidentsConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await incidentsConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", incidentsConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var incidentsOptions = new DbContextOptionsBuilder<IncidentsDbContext>()
+            .UseNpgsql(incidentsConnection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(IncidentsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_incidents", "platform");
+            }).Options;
+        await using var incidents = new IncidentsDbContext(
+            incidentsOptions,
+            new TenantDatabaseExecutionState());
+        await incidents.Database.MigrateAsync().ConfigureAwait(false);
 
         await using var notificationsConnection = new NpgsqlConnection(DeploymentConnectionString);
         await notificationsConnection.OpenAsync().ConfigureAwait(false);

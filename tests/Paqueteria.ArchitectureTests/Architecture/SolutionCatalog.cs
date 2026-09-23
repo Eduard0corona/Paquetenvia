@@ -138,6 +138,21 @@ internal static class SolutionCatalog
         ],
         allowedCrossModuleDependencies: ["Organizations"]);
 
+    internal static readonly ModuleDefinition Incidents = Module(
+        "Incidents",
+        typeof(Incidents.Domain.AssemblyReference).Assembly,
+        typeof(Incidents.Application.AssemblyReference).Assembly,
+        typeof(Incidents.Infrastructure.AssemblyReference).Assembly,
+        typeof(Incidents.Endpoints.AssemblyReference).Assembly,
+        additionalInfrastructureReferences: ["Paqueteria.Application"],
+        additionalEndpointReferences:
+        [
+            "Organizations.Application",
+            "Organizations.Endpoints",
+            "Paqueteria.Application",
+        ],
+        allowedCrossModuleDependencies: ["Organizations"]);
+
     internal static readonly ModuleDefinition Reporting = Module(
         "Reporting",
         typeof(Reporting.Domain.AssemblyReference).Assembly,
@@ -196,7 +211,10 @@ internal static class SolutionCatalog
         ]);
 
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
-        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody, Reporting, Routing];
+    [
+        Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody,
+        Incidents, Reporting, Routing,
+    ];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -227,6 +245,8 @@ internal static class SolutionCatalog
             "Realtime.Infrastructure",
             "Custody.Endpoints",
             "Custody.Infrastructure",
+            "Incidents.Endpoints",
+            "Incidents.Infrastructure",
             "Reporting.Endpoints",
             "Reporting.Infrastructure",
             "Routing.Endpoints",
@@ -264,6 +284,7 @@ internal static class SolutionCatalog
         .. Dispatch.Components,
         .. Realtime.Components,
         .. Custody.Components,
+        .. Incidents.Components,
         .. Reporting.Components,
         .. Routing.Components,
         NotificationsDomain,
