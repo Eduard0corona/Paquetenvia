@@ -47,7 +47,7 @@ public sealed class CsvOrderImportBatchIdempotencyPostgreSqlContractTests(Postgr
 
         await using var reader = fixture.AdminDataSource.CreateCommand(
             """
-            SELECT count(*),min(scope),min(response_status),min(resource_id)
+            SELECT scope,response_status,resource_id
             FROM platform.idempotency_keys
             WHERE owner_org_id=@owner AND idempotency_key=@key
             """);
@@ -55,10 +55,12 @@ public sealed class CsvOrderImportBatchIdempotencyPostgreSqlContractTests(Postgr
         reader.Parameters.AddWithValue("key", BatchKey);
         await using var row = await reader.ExecuteReaderAsync();
         Assert.True(await row.ReadAsync());
-        Assert.Equal(1L, row.GetInt64(0));
-        Assert.Equal(CsvOrderImportIdempotency.BatchScope, row.GetString(1));
-        Assert.Equal(CsvOrderImportIdempotency.BatchResponseStatus, row.GetInt32(2));
-        Assert.Equal(CsvOrderImportIdempotency.DeriveBatchId(identity), row.GetGuid(3));
+        Assert.Equal(CsvOrderImportIdempotency.BatchScope, row.GetString(0));
+        Assert.Equal(CsvOrderImportIdempotency.BatchResponseStatus, row.GetInt32(1));
+        Assert.Equal(CsvOrderImportIdempotency.DeriveBatchId(identity), row.GetGuid(2));
+
+        // The refused reuse of the key must not have left a second record behind.
+        Assert.False(await row.ReadAsync());
     }
 
     [PostgreSqlContractFact]
