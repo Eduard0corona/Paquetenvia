@@ -758,6 +758,9 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
         await scenario.InitializeAsync(orderStatus: "DELIVERING");
         await other.InitializeAsync(orderStatus: "DELIVERING");
         var proofId = await InsertProofAsync(scenario);
+        // A proof this incident does not already cite, so the owner rule is what decides the
+        // rejection rather than the UNIQUE (incident_id, proof_id) of an existing pair.
+        var secondProofId = await InsertProofAsync(scenario);
         await using var scope = CreateIncidentScope();
         var result = await scope.Service.OpenAsync(
             OpenCommand(scenario, [proofId]),
@@ -765,7 +768,7 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
 
         var failure = await Assert.ThrowsAsync<PostgresException>(() =>
             InsertEvidenceAsync(
-                scenario, result.Id, scenario.OrderId, proofId, ownerOrgId: other.OrganizationId));
+                scenario, result.Id, scenario.OrderId, secondProofId, ownerOrgId: other.OrganizationId));
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, failure.SqlState);
         await AssertIncidentCountsAsync(scenario, incidents: 1, evidence: 1, audits: 1);
     }
