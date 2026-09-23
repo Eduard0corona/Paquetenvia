@@ -17,6 +17,20 @@ public static class CsvOrderImportPrevalidator
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
 
+    /// <summary>
+    /// The ISO-8601 forms AI-05 contracts for <c>accepted_at</c> (<c>format: date-time</c>): a
+    /// calendar date, a 24-hour time, an optional fraction of up to seven digits, and either the
+    /// UTC designator or a numeric offset. These are exactly the shapes ORD-001 already accepts on
+    /// <c>POST /orders</c>, so a row that imports is a row the create endpoint would have taken.
+    /// </summary>
+    private static readonly string[] AcceptedAtFormats =
+    [
+        "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'",
+        "yyyy'-'MM'-'dd'T'HH':'mm':'ss.FFFFFFF'Z'",
+        "yyyy'-'MM'-'dd'T'HH':'mm':'sszzz",
+        "yyyy'-'MM'-'dd'T'HH':'mm':'ss.FFFFFFFzzz",
+    ];
+
     public static CsvOrderImportPrevalidation Prevalidate(ReadOnlySpan<byte> content)
     {
         var digest = ComputeContentDigest(content);
@@ -187,40 +201,39 @@ public static class CsvOrderImportPrevalidator
         value.Length <= CsvOrderImportContract.MaximumVersionLength;
 
     /// <summary>
-    /// Accepts ISO-8601 with an explicit offset only. An offset-less timestamp would be resolved
-    /// against the server clock zone, which would make the legal acceptance instant ambiguous.
+    /// Parses <c>accepted_at</c> against the explicit ISO-8601 shapes AI-05 contracts and nothing
+    /// else. Only an explicit offset is accepted, because an offset-less timestamp would be
+    /// resolved against the server clock zone and the legal acceptance instant would be ambiguous.
+    /// Matching the format list exactly, rather than probing with a permissive parser, is what
+    /// rejects near-misses such as <c>2026/07/22T12:00:00Z</c> instead of reinterpreting them.
     /// </summary>
     private static bool TryParseAcceptedAt(string value, out DateTimeOffset acceptedAt)
     {
         acceptedAt = default;
-        return HasExplicitOffset(value) &&
-            DateTimeOffset.TryParse(
+        return HasContractedOffset(value) &&
+            DateTimeOffset.TryParseExact(
                 value,
+                AcceptedAtFormats,
                 CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind,
+                DateTimeStyles.AssumeUniversal,
                 out acceptedAt) &&
             acceptedAt != default;
     }
 
-    private static bool HasExplicitOffset(string value)
-    {
-        if (value.Length < 6 || !value.Contains('T', StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (value[^1] is 'Z' or 'z')
-        {
-            return true;
-        }
-
-        return value[^6] is '+' or '-' &&
+    /// <summary>
+    /// The <c>zzz</c> specifier also matches the colon-less basic offset (<c>-0700</c>), which the
+    /// extended ISO-8601 profile ORD-001 reads on <c>POST /orders</c> rejects. Requiring the UTC
+    /// designator or a full <c>±hh:mm</c> keeps the CSV row and the JSON body on one grammar.
+    /// </summary>
+    private static bool HasContractedOffset(string value) =>
+        value.EndsWith('Z') ||
+        (value.Length >= 6 &&
+            value[^6] is '+' or '-' &&
             value[^3] == ':' &&
             char.IsAsciiDigit(value[^5]) &&
             char.IsAsciiDigit(value[^4]) &&
             char.IsAsciiDigit(value[^2]) &&
-            char.IsAsciiDigit(value[^1]);
-    }
+            char.IsAsciiDigit(value[^1]));
 
     private static CsvOrderImportPrevalidation FileFailure(string digest, string code) =>
         new(digest, [code], [], []);

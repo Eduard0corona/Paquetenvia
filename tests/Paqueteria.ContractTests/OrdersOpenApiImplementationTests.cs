@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
+using Orders.Application.Csv;
 using Orders.Application.Orders;
 using Orders.Domain;
 using Orders.Endpoints;
@@ -118,6 +119,112 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Equal(expectedTransitionCodes, sqlCodes);
     }
 
+    /// <summary>
+    /// CSV-001 lives in its own endpoint file so that ORD-002 keeps exactly four operations, which
+    /// is also how it could have escaped AI-05 entirely. Its surface is pinned here, and the
+    /// integration suite's HTTP surface coverage test proves no endpoint file can opt out at all.
+    /// </summary>
+    [Fact]
+    public void The_CSV001_endpoints_are_two_posts_declared_in_AI05()
+    {
+        var source = ReadRepositoryFile(
+            "src", "Modules", "Orders", "Orders.Endpoints", "CsvOrderImportEndpoints.cs");
+        Assert.Equal(2, Count(source, "endpoints.MapPost("));
+        Assert.Contains("\"/api/v1/orders/csv/preview\"", source, StringComparison.Ordinal);
+        Assert.Contains("\"/api/v1/orders/csv/commit\"", source, StringComparison.Ordinal);
+        Assert.Equal(2, Count(source, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
+        Assert.Contains("request.Headers[\"Idempotency-Key\"]", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("MapGet(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("MapPut(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("MapPatch(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("MapDelete(", source, StringComparison.Ordinal);
+
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var paths = root.Mapping("paths");
+        Assert.Equal("previewOrderCsv", paths.Mapping("/orders/csv/preview").Mapping("post").Scalar("operationId"));
+        Assert.Equal("commitOrderCsv", paths.Mapping("/orders/csv/commit").Mapping("post").Scalar("operationId"));
+    }
+
+    [Fact]
+    public void The_CSV001_multipart_bodies_and_responses_match_AI05()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var paths = root.Mapping("paths");
+        var preview = paths.Mapping("/orders/csv/preview").Mapping("post");
+        var commit = paths.Mapping("/orders/csv/commit").Mapping("post");
+
+        // Both operations are multipart uploads; only commit echoes the previewed digest.
+        Assert.Equal(
+            ["file"],
+            RequiredPropertyNames(schemas.Mapping("CsvImportPreviewRequest")));
+        Assert.Equal(
+            ["content_digest", "file"],
+            RequiredPropertyNames(schemas.Mapping("CsvImportCommitRequest")));
+        Assert.Equal(
+            "#/components/schemas/CsvImportPreviewRequest",
+            MultipartSchemaRef(preview));
+        Assert.Equal(
+            "#/components/schemas/CsvImportCommitRequest",
+            MultipartSchemaRef(commit));
+        Assert.Equal(CsvOrderImportContract.ColumnFile, "file");
+
+        // Only commit is idempotent, and its key is the required shared header parameter.
+        Assert.DoesNotContain(
+            "#/components/parameters/IdempotencyKey",
+            ParameterRefs(preview));
+        Assert.Contains(
+            "#/components/parameters/IdempotencyKey",
+            ParameterRefs(commit));
+        Assert.True(root.Mapping("components").Mapping("parameters")
+            .Mapping("IdempotencyKey").Scalar("required") == "true");
+
+        // Exactly the statuses the two handlers can return, and no others.
+        Assert.Equal(["200", "401", "403", "409"], ResponseCodes(preview));
+        Assert.Equal(["200", "401", "403", "409", "422", "503"], ResponseCodes(commit));
+
+        AssertJsonProperties<CsvImportRowErrorResponse>("code", "column");
+        AssertJsonProperties<CsvImportRowPreviewResponse>(
+            "errors", "payer_type", "quote_id", "row_number", "valid");
+        AssertJsonProperties<CsvImportPreviewResponse>(
+            "content_digest", "file_errors", "invalid_rows", "rows", "total_rows", "valid_rows");
+        AssertJsonProperties<CsvImportRowOutcomeResponse>(
+            "error_code", "order_id", "public_id", "quote_id", "row_number", "status");
+        AssertJsonProperties<CsvImportCommitResponse>(
+            "content_digest", "created_rows", "failed_rows", "rows", "total_rows");
+
+        Assert.Equal(
+            JsonPropertyNames<CsvImportRowErrorResponse>(),
+            RequiredPropertyNames(schemas.Mapping("CsvImportRowError")));
+        Assert.Equal(
+            JsonPropertyNames<CsvImportRowPreviewResponse>(),
+            RequiredPropertyNames(schemas.Mapping("CsvImportRowPreview")));
+        Assert.Equal(
+            JsonPropertyNames<CsvImportPreviewResponse>(),
+            RequiredPropertyNames(schemas.Mapping("CsvImportPreview")));
+        Assert.Equal(
+            JsonPropertyNames<CsvImportRowOutcomeResponse>(),
+            RequiredPropertyNames(schemas.Mapping("CsvImportRowOutcome")));
+        Assert.Equal(
+            JsonPropertyNames<CsvImportCommitResponse>(),
+            RequiredPropertyNames(schemas.Mapping("CsvImportCommit")));
+
+        // The declared vocabularies are the implementation's, not a parallel list.
+        Assert.Equal(
+            FileErrorCodes(),
+            EnumValues(schemas.Mapping("CsvImportPreview").Mapping("properties")
+                .Mapping("file_errors").Mapping("items")));
+        Assert.Equal(
+            RowErrorCodes(),
+            EnumValues(schemas.Mapping("CsvImportRowError").Mapping("properties").Mapping("code")));
+        Assert.Equal(
+            ["CREATED", "FAILED"],
+            EnumValues(schemas.Mapping("CsvImportRowOutcome").Mapping("properties").Mapping("status")));
+        Assert.Equal(
+            ["CONFLICT", CsvOrderImportRowFailureCodes.IdempotencyConflict],
+            EnumValues(schemas.Mapping("CsvImportConflictProblem").Mapping("properties").Mapping("code")));
+    }
+
     [Fact]
     public void Shared_idempotency_policy_matches_normative_limits()
     {
@@ -167,6 +274,39 @@ public sealed class OrdersOpenApiImplementationTests
             .OfType<string>()
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    private static string MultipartSchemaRef(YamlMappingNode operation) =>
+        operation.Mapping("requestBody").Mapping("content")
+            .Mapping("multipart/form-data").Mapping("schema").Scalar("$ref");
+
+    private static string[] ParameterRefs(YamlMappingNode operation) =>
+        operation.Sequence("parameters").Children
+            .Cast<YamlMappingNode>()
+            .Select(parameter => parameter.Scalar("$ref"))
+            .ToArray();
+
+    private static string[] ResponseCodes(YamlMappingNode operation) =>
+        operation.Mapping("responses").Children.Keys
+            .Select(key => Assert.IsType<YamlScalarNode>(key).Value!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] EnumValues(YamlMappingNode schema) =>
+        schema.Sequence("enum").Children
+            .Select(node => Assert.IsType<YamlScalarNode>(node).Value!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] FileErrorCodes() => PublicConstants(typeof(CsvOrderImportFileErrorCodes));
+
+    private static string[] RowErrorCodes() => PublicConstants(typeof(CsvOrderImportRowErrorCodes));
+
+    private static string[] PublicConstants(Type type) => type
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.IsLiteral)
+        .Select(field => (string)field.GetRawConstantValue()!)
+        .Order(StringComparer.Ordinal)
+        .ToArray();
 
     private static string[] RequiredPropertyNames(YamlMappingNode schema) =>
         schema.Sequence("required").Children

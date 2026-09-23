@@ -7,13 +7,33 @@ namespace Orders.Application.Csv;
 /// create path. No order rule is re-implemented here: quote ownership, single use, expiry, pricing
 /// and legal acceptance are all decided by <see cref="IOrderService"/> inside its own transaction.
 /// </summary>
-public sealed class CsvOrderImportCommitService(IOrderService orders) : ICsvOrderImportCommitService
+/// <remarks>
+/// Idempotency is two-layered. The batch reservation binds the caller's <c>Idempotency-Key</c> to
+/// one canonical batch, so replaying that key returns the first response and reusing it for another
+/// file is a conflict rather than a second batch. Underneath, every row still carries its own
+/// ORD-001 key, which is what makes running the batch a second time — after a crash, or in a race
+/// the reservation did not win — produce the same orders instead of new ones.
+/// </remarks>
+public sealed class CsvOrderImportCommitService(
+    IOrderService orders,
+    ICsvOrderImportBatchIdempotencyStore batches) : ICsvOrderImportCommitService
 {
     public async Task<CsvOrderImportCommitResult> CommitAsync(
         CsvOrderImportCommitCommand command,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
+        var identity = new CsvOrderImportBatchIdentity(
+            command.ActorId,
+            command.OrganizationId,
+            command.IdempotencyKey,
+            command.ContentDigest,
+            command.Rows.Count);
+        if (await batches.ReserveOrReplayAsync(identity, cancellationToken) is { } replay)
+        {
+            return replay;
+        }
+
         var outcomes = new List<CsvOrderImportRowOutcome>(command.Rows.Count);
         foreach (var row in command.Rows)
         {
@@ -21,7 +41,10 @@ public sealed class CsvOrderImportCommitService(IOrderService orders) : ICsvOrde
             outcomes.Add(await CommitRowAsync(command, row, cancellationToken));
         }
 
-        return new CsvOrderImportCommitResult(command.ContentDigest, outcomes);
+        return await batches.CompleteAsync(
+            identity,
+            new CsvOrderImportCommitResult(command.ContentDigest, outcomes),
+            cancellationToken);
     }
 
     private async Task<CsvOrderImportRowOutcome> CommitRowAsync(

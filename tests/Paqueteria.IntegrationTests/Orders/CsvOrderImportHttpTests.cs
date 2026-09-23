@@ -222,11 +222,15 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
         var orderIds = rows.Select(row => row.GetProperty("order_id").GetGuid()).ToArray();
         Assert.Equal(2, orderIds.Distinct().Count());
 
+        var createCallsAfterCommit = factory.CreateCallCount;
         using var replay = await SendAsync(
             CommitRoute, csv, idempotencyKey: batchKey, contentDigest: digest);
 
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         Assert.Equal(commitBody, await replay.Content.ReadAsStringAsync());
+
+        // The batch reservation answers the replay on its own: ORD-001 is not reached at all.
+        Assert.Equal(createCallsAfterCommit, factory.CreateCallCount);
         foreach (var orderId in orderIds)
         {
             using var detail = await SendAsync(HttpMethod.Get, $"/api/v1/orders/{orderId:D}");
@@ -299,6 +303,96 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
             "QUOTE_UNAVAILABLE",
             other.RootElement.GetProperty("rows").EnumerateArray().Single()
                 .GetProperty("error_code").GetString());
+    }
+
+    [Fact]
+    public async Task Reusing_a_batch_key_for_another_file_is_an_idempotency_conflict_and_creates_nothing()
+    {
+        factory.ResetCreateObservations();
+        var committed = ValidCsv(Guid.NewGuid());
+        var other = ValidCsv(Guid.NewGuid());
+        var batchKey = BatchKey();
+
+        using var first = await SendAsync(
+            CommitRoute, committed, idempotencyKey: batchKey, contentDigest: Digest(committed));
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var createCallsAfterCommit = factory.CreateCallCount;
+
+        using var reused = await SendAsync(
+            CommitRoute, other, idempotencyKey: batchKey, contentDigest: Digest(other));
+
+        Assert.Equal(HttpStatusCode.Conflict, reused.StatusCode);
+        using var body = JsonDocument.Parse(await reused.Content.ReadAsStringAsync());
+        Assert.Equal("IDEMPOTENCY_CONFLICT", body.RootElement.GetProperty("code").GetString());
+        Assert.Equal(createCallsAfterCommit, factory.CreateCallCount);
+    }
+
+    [Fact]
+    public async Task Concurrent_commits_of_one_batch_key_produce_one_batch_and_one_order_per_row()
+    {
+        factory.ResetCreateObservations();
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var csv =
+            $"{Header}\n" +
+            $"{first:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAt},WEB\n" +
+            $"{second:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAt},API\n";
+        var digest = Digest(csv);
+        var batchKey = BatchKey();
+
+        var responses = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ =>
+            SendAsync(CommitRoute, csv, idempotencyKey: batchKey, contentDigest: digest)));
+        var bodies = new List<string>(responses.Length);
+        foreach (var response in responses)
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            bodies.Add(await response.Content.ReadAsStringAsync());
+            response.Dispose();
+        }
+
+        // Every caller is answered with the same batch, and the batch created each quote once.
+        Assert.Single(bodies.Distinct(StringComparer.Ordinal));
+        using var body = JsonDocument.Parse(bodies[0]);
+        Assert.Equal(2, body.RootElement.GetProperty("created_rows").GetInt32());
+        Assert.Equal(0, body.RootElement.GetProperty("failed_rows").GetInt32());
+        Assert.Equal(2, await CountOrdersForQuotesAsync(first, second));
+    }
+
+    [Fact]
+    public async Task One_batch_key_reserved_in_two_tenants_keeps_the_batches_apart()
+    {
+        factory.ResetCreateObservations();
+        var ownerQuote = Guid.NewGuid();
+        var otherQuote = Guid.NewGuid();
+        var ownerCsv = ValidCsv(ownerQuote);
+        var otherCsv = ValidCsv(otherQuote);
+        var batchKey = BatchKey();
+
+        using var owner = await SendAsync(
+            CommitRoute,
+            ownerCsv,
+            organizationId: MockIdentityProfiles.ViewerOrganizationId,
+            idempotencyKey: batchKey,
+            contentDigest: Digest(ownerCsv));
+        Assert.Equal(HttpStatusCode.OK, owner.StatusCode);
+
+        // A different file under the same key is a conflict inside one tenant, so if the
+        // reservation leaked across tenants this second commit could not succeed.
+        using var otherTenant = await SendAsync(
+            CommitRoute,
+            otherCsv,
+            organizationId: MockIdentityProfiles.OperationsOrganizationId,
+            bearer: MockIdentityProfiles.ActiveMultiOrganization,
+            idempotencyKey: batchKey,
+            contentDigest: Digest(otherCsv));
+
+        Assert.Equal(HttpStatusCode.OK, otherTenant.StatusCode);
+        using var body = JsonDocument.Parse(await otherTenant.Content.ReadAsStringAsync());
+        Assert.Equal(1, body.RootElement.GetProperty("created_rows").GetInt32());
+        Assert.Equal(
+            otherQuote.ToString("D"),
+            body.RootElement.GetProperty("rows").EnumerateArray().Single()
+                .GetProperty("quote_id").GetString());
     }
 
     private async Task<int> CountOrdersForQuotesAsync(params Guid[] quoteIds)

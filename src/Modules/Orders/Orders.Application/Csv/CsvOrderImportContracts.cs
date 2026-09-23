@@ -157,3 +157,52 @@ public interface ICsvOrderImportCommitService
         CsvOrderImportCommitCommand command,
         CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Identifies one CSV-001 commit: the tenant, the batch key its caller supplied and the exact file
+/// that key is bound to. The actor is carried for the tenant database context only; it is not part
+/// of the identity, so two members of the same organization replaying one batch see one result.
+/// </summary>
+public sealed record CsvOrderImportBatchIdentity(
+    Guid ActorId,
+    Guid OrganizationId,
+    string IdempotencyKey,
+    string ContentDigest,
+    int RowCount);
+
+/// <summary>
+/// Raised when a CSV commit <c>Idempotency-Key</c> is replayed for a different batch. The key is a
+/// promise about which file is being confirmed; honouring it for other content would let one key
+/// create two batches.
+/// </summary>
+public sealed class CsvOrderImportBatchConflictException()
+    : Exception("The CSV batch idempotency key is already bound to different content.");
+
+/// <summary>
+/// Batch-level idempotency for CSV-001 commits: one record per tenant and <c>Idempotency-Key</c>,
+/// bound to the canonical batch digest, kept under the shared <c>platform.idempotency_keys</c>
+/// conventions. It sits above the per-row ORD-001 keys, which stay the last line of defence.
+/// </summary>
+public interface ICsvOrderImportBatchIdempotencyStore
+{
+    /// <summary>
+    /// Reserves <paramref name="identity"/>, or returns the response already committed under its
+    /// key. Returns null when this call owns the batch and must run it.
+    /// </summary>
+    /// <exception cref="CsvOrderImportBatchConflictException">
+    /// The key is already bound to a different batch.
+    /// </exception>
+    Task<CsvOrderImportCommitResult?> ReserveOrReplayAsync(
+        CsvOrderImportBatchIdentity identity,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Stores <paramref name="result"/> under the reservation and returns the response that is
+    /// stored afterwards, which is the one a concurrent commit of the same batch wrote first when
+    /// it won the race. Both callers therefore answer with the same batch.
+    /// </summary>
+    Task<CsvOrderImportCommitResult> CompleteAsync(
+        CsvOrderImportBatchIdentity identity,
+        CsvOrderImportCommitResult result,
+        CancellationToken cancellationToken);
+}

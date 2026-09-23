@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7459,
-      "sha256": "2cc7af9a7642ea6a9df40703a61af9f341cc4fb89b1b5e015f57fd3b80a16011"
+      "sha256": "3f615e8e13e65522112cbcbcd9abe4551a1212c7c5db0e4056a0ffd830673a14"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -49,8 +49,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 69062,
-      "sha256": "39288da72164397a17d812f8da0406d044e7c5dc70049bae087a83315a72dc66"
+      "bytes": 76491,
+      "sha256": "f280106c779f3f7df721a228dc43951054dc9164a11926730804148eb3c5c447"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",

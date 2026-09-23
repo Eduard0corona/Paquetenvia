@@ -126,6 +126,10 @@ public static class CsvOrderImportEndpoints
         {
             throw;
         }
+        catch (CsvOrderImportBatchConflictException)
+        {
+            return Conflict(CsvOrderImportRowFailureCodes.IdempotencyConflict);
+        }
         catch (OrderServiceUnavailableException)
         {
             return Unavailable();
@@ -234,8 +238,16 @@ public static class CsvOrderImportEndpoints
                 row.ErrorCode))
             .ToArray());
 
-    private static IResult Conflict() =>
-        Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Conflict.");
+    /// <summary>
+    /// The module's uniform conflict. Every transport-level rejection reports the same opaque
+    /// <c>CONFLICT</c>, so a caller cannot probe the upload rules; only a batch key that is already
+    /// bound to other content is named, because the caller has to know to pick a new key.
+    /// </summary>
+    private static IResult Conflict(string code = "CONFLICT") =>
+        Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Conflict.",
+            extensions: new Dictionary<string, object?> { ["code"] = code });
 
     private static IResult Forbidden() =>
         Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");

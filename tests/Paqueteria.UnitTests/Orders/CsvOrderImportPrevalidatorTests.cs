@@ -98,6 +98,55 @@ public sealed class CsvOrderImportPrevalidatorTests
         Assert.Equal("ACCEPTED_AT_INVALID", Assert.Single(Assert.Single(result.Rows).Errors).Code);
     }
 
+    /// <summary>
+    /// The contracted <c>accepted_at</c> shapes, matched exactly rather than probed for. A parser
+    /// that merely looked plausible would accept the slashed and comma-separated forms below and
+    /// reinterpret them as an acceptance instant the operator never recorded.
+    /// </summary>
+    [Theory]
+    [InlineData("2026-07-22T12:00:00Z")]
+    [InlineData("2026-07-22T12:00:00.1Z")]
+    [InlineData("2026-07-22T12:00:00.1234567Z")]
+    [InlineData("2026-07-22T12:00:00+00:00")]
+    [InlineData("2026-07-22T05:00:00-07:00")]
+    [InlineData("2026-07-22T05:00:00.1234567-07:00")]
+    public void The_contracted_iso8601_timestamps_are_accepted(string acceptedAt)
+    {
+        var result = Prevalidate($"""
+            {Header}
+            {FirstQuote:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{acceptedAt},WEB
+            """);
+
+        Assert.Empty(result.FileErrors);
+        Assert.True(result.IsCommittable);
+        Assert.Equal(
+            DateTimeOffset.Parse(acceptedAt, System.Globalization.CultureInfo.InvariantCulture).UtcDateTime,
+            Assert.Single(result.ValidRows).AcceptedAt.UtcDateTime);
+    }
+
+    [Theory]
+    [InlineData("2026/07/22T12:00:00Z")]
+    [InlineData("2026-07-22 12:00:00Z")]
+    [InlineData("2026-07-22T12:00:00z")]
+    [InlineData("2026-07-22T12:00Z")]
+    [InlineData("22/07/2026 12:00:00 +00:00")]
+    [InlineData("2026-07-22T12:00:00.12345678Z")]
+    [InlineData("2026-07-22T12:00:00-0700")]
+    [InlineData("2026-07-22T12:00:00+07")]
+    [InlineData("2026-07-22")]
+    [InlineData("0001-01-01T00:00:00Z")]
+    public void A_timestamp_outside_the_contracted_iso8601_forms_is_rejected(string acceptedAt)
+    {
+        var result = Prevalidate($"""
+            {Header}
+            {FirstQuote:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{acceptedAt},WEB
+            """);
+
+        Assert.Equal(
+            "ACCEPTED_AT_INVALID",
+            Assert.Single(Assert.Single(result.Rows).Errors).Code);
+    }
+
     [Fact]
     public void An_explicit_offset_is_preserved_as_the_same_instant()
     {
@@ -247,6 +296,64 @@ public sealed class CsvOrderImportPrevalidatorTests
         Assert.Equal(["MALFORMED_QUOTING"], result.FileErrors);
     }
 
+    /// <summary>
+    /// RFC 4180 admits a quote only as the first character of a field and only as an escaped pair
+    /// inside a quoted one. Each shape below is malformed, and normalizing it instead of rejecting
+    /// it would confirm a legal acceptance version the operator never wrote.
+    /// </summary>
+    [Theory]
+    [InlineData("terms-v\"1\"")]
+    [InlineData("\"terms-v1\"x")]
+    [InlineData("\"terms-v1\" ")]
+    [InlineData("te\"rms")]
+    [InlineData("terms\"")]
+    [InlineData(" \"terms-v1\"")]
+    [InlineData("\"terms-v1\"\"")]
+    public void Malformed_quoting_fails_the_whole_file_instead_of_being_normalized(string termsVersion)
+    {
+        var result = Prevalidate(
+            $"{Header}\n{FirstQuote:D},SENDER,{termsVersion},privacy-synthetic-v1,{AcceptedAt},WEB\n");
+
+        Assert.Equal(["MALFORMED_QUOTING"], result.FileErrors);
+        Assert.Empty(result.Rows);
+        Assert.False(result.IsCommittable);
+    }
+
+    [Fact]
+    public void Malformed_quoting_in_the_header_fails_before_any_row_is_read()
+    {
+        var result = Prevalidate(
+            $"quote_id,payer\"type,terms_version,privacy_version,accepted_at,acceptance_channel\n" +
+            $"{FirstQuote:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAt},WEB\n");
+
+        Assert.Equal(["MALFORMED_QUOTING"], result.FileErrors);
+    }
+
+    [Theory]
+    [InlineData("\"terms-v1\"", "terms-v1")]
+    [InlineData("\"terms \"\"v1\"\"\"", "terms \"v1\"")]
+    [InlineData("\"\"\"\"", "\"")]
+    [InlineData("\"terms,v1\"", "terms,v1")]
+    public void A_well_formed_quoted_field_keeps_its_escaped_content(string termsVersion, string expected)
+    {
+        var result = Prevalidate(
+            $"{Header}\n{FirstQuote:D},SENDER,{termsVersion},privacy-synthetic-v1,{AcceptedAt},WEB\n");
+
+        Assert.Empty(result.FileErrors);
+        Assert.True(result.IsCommittable);
+        Assert.Equal(expected, Assert.Single(result.ValidRows).TermsVersion);
+    }
+
+    [Fact]
+    public void A_quoted_field_may_close_at_the_end_of_the_file_without_a_line_break()
+    {
+        var result = Prevalidate(
+            $"{Header}\n{FirstQuote:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAt},\"WEB\"");
+
+        Assert.Empty(result.FileErrors);
+        Assert.True(result.IsCommittable);
+    }
+
     [Fact]
     public void Crlf_line_endings_and_a_byte_order_mark_are_accepted()
     {
@@ -298,6 +405,56 @@ public sealed class CsvOrderImportPrevalidatorTests
         Assert.NotEqual(key, CsvOrderImportIdempotency.DeriveRowKey(tenant, "batch-key-0123456789", "digest-b", 2));
         Assert.NotEqual(key, CsvOrderImportIdempotency.DeriveRowKey(tenant, "batch-key-0123456789", "digest-a", 3));
     }
+
+    [Fact]
+    public void The_batch_request_hash_binds_the_reservation_to_the_tenant_and_the_canonical_batch()
+    {
+        var identity = Identity();
+        var hash = CsvOrderImportIdempotency.ComputeBatchRequestHash(identity);
+
+        Assert.Equal(hash, CsvOrderImportIdempotency.ComputeBatchRequestHash(Identity()));
+        Assert.Equal(
+            hash,
+            CsvOrderImportIdempotency.ComputeBatchRequestHash(
+                identity with { ActorId = Guid.Parse("33333333-3333-3333-3333-333333333333") }));
+        Assert.NotEqual(
+            hash,
+            CsvOrderImportIdempotency.ComputeBatchRequestHash(identity with { ContentDigest = "digest-b" }));
+        Assert.NotEqual(
+            hash,
+            CsvOrderImportIdempotency.ComputeBatchRequestHash(identity with { RowCount = 3 }));
+        Assert.NotEqual(
+            hash,
+            CsvOrderImportIdempotency.ComputeBatchRequestHash(
+                identity with { OrganizationId = Guid.Parse("22222222-2222-2222-2222-222222222222") }));
+    }
+
+    [Fact]
+    public void The_batch_resource_identifier_names_one_batch_per_tenant_key_and_digest()
+    {
+        var identity = Identity();
+        var batchId = CsvOrderImportIdempotency.DeriveBatchId(identity);
+
+        Assert.NotEqual(Guid.Empty, batchId);
+        Assert.Equal(batchId, CsvOrderImportIdempotency.DeriveBatchId(Identity()));
+        Assert.NotEqual(
+            batchId,
+            CsvOrderImportIdempotency.DeriveBatchId(identity with { IdempotencyKey = "batch-key-9876543210" }));
+        Assert.NotEqual(
+            batchId,
+            CsvOrderImportIdempotency.DeriveBatchId(identity with { ContentDigest = "digest-b" }));
+        Assert.NotEqual(
+            batchId,
+            CsvOrderImportIdempotency.DeriveBatchId(
+                identity with { OrganizationId = Guid.Parse("22222222-2222-2222-2222-222222222222") }));
+    }
+
+    private static CsvOrderImportBatchIdentity Identity() => new(
+        Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        Guid.Parse("11111111-1111-1111-1111-111111111111"),
+        "batch-key-0123456789",
+        "digest-a",
+        2);
 
     private static CsvOrderImportPrevalidation Prevalidate(string content) =>
         CsvOrderImportPrevalidator.Prevalidate(Encoding.UTF8.GetBytes(content));
