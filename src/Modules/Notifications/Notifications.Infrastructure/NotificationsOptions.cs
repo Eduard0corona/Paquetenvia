@@ -1,3 +1,5 @@
+using Paqueteria.Application.Scaling;
+
 namespace Notifications.Infrastructure;
 
 public enum NotificationsDispatcherProviderKind
@@ -20,6 +22,13 @@ public sealed class NotificationsOptions
 
     public NotificationsDispatcherProviderKind Provider { get; set; }
     public string WorkerId { get; set; } = "ntf001-local";
+
+    /// <summary>
+    /// The identity this replica reports on <c>locked_by</c>. Claims stay safe across replicas
+    /// through <c>FOR UPDATE SKIP LOCKED</c> and the lease token; qualifying the configured id
+    /// keeps every claim attributable to the replica that made it.
+    /// </summary>
+    public string EffectiveWorkerId => InstanceIdentity.QualifyWorkerId(WorkerId);
     public int BatchSize { get; set; } = 10;
     public int MaximumConcurrency { get; set; } = 4;
     public int PollIntervalMilliseconds { get; set; } = 250;

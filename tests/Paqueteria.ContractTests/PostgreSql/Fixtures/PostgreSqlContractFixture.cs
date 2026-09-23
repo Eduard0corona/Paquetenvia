@@ -15,6 +15,7 @@ using Drivers.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence;
 using Custody.Infrastructure.Persistence;
 using Notifications.Infrastructure.Persistence;
+using Paqueteria.Infrastructure.DataProtection;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -36,6 +37,15 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
     public NpgsqlDataSource AppDataSource { get; private set; } = null!;
     public NpgsqlDataSource WorkerDataSource { get; private set; } = null!;
     public string DeploymentConnectionString { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// The raw least-privilege runtime connection strings. <see cref="NpgsqlDataSource"/> redacts
+    /// the password on its own <c>ConnectionString</c>, so callers that build their own data
+    /// source have to read them here.
+    /// </summary>
+    public string AppConnectionString { get; private set; } = string.Empty;
+
+    public string WorkerConnectionString { get; private set; } = string.Empty;
     public TimeSpan BootstrapDuration { get; private set; }
     public TimeSpan SchemaDuration { get; private set; }
     public TimeSpan RolesDuration { get; private set; }
@@ -100,8 +110,10 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             stopwatch.Stop();
             BootstrapDuration = stopwatch.Elapsed;
 
-            AppDataSource = NpgsqlDataSource.Create(WithPooling(_container.GetConnectionString(), AppLogin, _appPassword));
-            WorkerDataSource = NpgsqlDataSource.Create(WithPooling(_container.GetConnectionString(), WorkerLogin, _workerPassword));
+            AppConnectionString = WithPooling(_container.GetConnectionString(), AppLogin, _appPassword);
+            WorkerConnectionString = WithPooling(_container.GetConnectionString(), WorkerLogin, _workerPassword);
+            AppDataSource = NpgsqlDataSource.Create(AppConnectionString);
+            WorkerDataSource = NpgsqlDataSource.Create(WorkerConnectionString);
 
             await using var command = AdminDataSource.CreateCommand(
                 "SELECT current_setting('server_version'), public.PostGIS_Version()");
@@ -365,6 +377,24 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             }).Options;
         await using var notifications = new NotificationsDbContext(notificationsOptions);
         await notifications.Database.MigrateAsync().ConfigureAwait(false);
+
+        await using var dataProtectionConnection = new NpgsqlConnection(DeploymentConnectionString);
+        await dataProtectionConnection.OpenAsync().ConfigureAwait(false);
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", dataProtectionConnection))
+        {
+            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var dataProtectionOptions = new DbContextOptionsBuilder<PlatformDataProtectionDbContext>()
+            .UseNpgsql(dataProtectionConnection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(PlatformDataProtectionDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable(
+                    PlatformDataProtectionSchema.MigrationsHistoryTable,
+                    PlatformDataProtectionSchema.Schema);
+            }).Options;
+        await using var dataProtection = new PlatformDataProtectionDbContext(dataProtectionOptions);
+        await dataProtection.Database.MigrateAsync().ConfigureAwait(false);
     }
 
     private async Task ExecuteAdminScriptAsync(string sql)
