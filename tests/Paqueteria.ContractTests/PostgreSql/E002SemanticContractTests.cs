@@ -390,7 +390,7 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             Console.SetOut(output);
 
             Assert.Equal(0, exitCode);
-            Assert.Contains("E002_APPLIED_PATH_NO_OP modules=9/9 APPLIED bridge_activation=0", capture.ToString(), StringComparison.Ordinal);
+            Assert.Contains("E002_APPLIED_PATH_NO_OP modules=10/10 APPLIED bridge_activation=0", capture.ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain("E002_APPLIED_PATH_MODULE_STATE_UNEXPECTED", capture.ToString(), StringComparison.Ordinal);
             Assert.Contains("Result: AlreadyApplied", capture.ToString(), StringComparison.Ordinal);
             Assert.Equal(membershipsBefore, await CountMembershipsAsync(connectionString));
