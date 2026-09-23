@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Orders.Application.Csv;
 using Orders.Application.Orders;
 using Orders.Application.Tracking;
 using Orders.Infrastructure.Orders;
@@ -128,6 +129,8 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<QuoteSnapshotToOrderCoordinator>(),
                 _ => serviceProvider.GetRequiredService<DisabledOrderService>(),
             });
+        services.AddScoped<ICsvOrderImportCommitService>(serviceProvider =>
+            new CsvOrderImportCommitService(serviceProvider.GetRequiredService<IOrderService>()));
         services.AddScoped<IOrderTransitionService>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<OrdersOptions>>().Value.Provider switch
             {
