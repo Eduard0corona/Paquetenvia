@@ -233,6 +233,19 @@
       "full": true
     },
     {
+      "name": "NUGET_PROJECT_GRAPH",
+      "patterns": [
+        "**/packages.lock.json"
+      ],
+      "content_proof": "nuget-project-graph-only",
+      "supersedes": [
+        "DEPS"
+      ],
+      "job_sets": [
+        "BACKEND"
+      ]
+    },
+    {
       "name": "BACKEND",
       "patterns": [
         "src/**",
