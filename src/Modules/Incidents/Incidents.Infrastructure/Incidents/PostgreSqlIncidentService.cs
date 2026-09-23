@@ -4,6 +4,7 @@ using System.Text.Json;
 using Incidents.Application.Incidents;
 using Incidents.Domain;
 using Incidents.Infrastructure.Persistence;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application;
@@ -23,6 +24,8 @@ public sealed class PostgreSqlIncidentService(
     TenantTransactionContext<IncidentsDbContext> transactionContext,
     IAppendOnlyAuditWriter auditWriter,
     IAuditPayloadRedactor redactor,
+    IIncidentPiiProtector piiProtector,
+    IOptions<IncidentsOptions> options,
     IClock clock) : IIncidentService
 {
     internal const string IdempotencyScope = "INC-001:OPEN_INCIDENT";
@@ -43,18 +46,31 @@ public sealed class PostgreSqlIncidentService(
     {
         ArgumentNullException.ThrowIfNull(command);
         var now = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
+        var policy = options.Value.OperationalPolicy;
+        if (!policy.IsValid)
+        {
+            // A deployment configured outside the bounded operational surface serves nothing.
+            throw new IncidentInfrastructureException("The incident operational policy is invalid.");
+        }
+
         if (!IncidentRequestPolicy.IsValidCommandShape(command) ||
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
-            !IncidentRequestPolicy.IsValidOccurrence(command.OccurredAt, now))
+            !policy.IsValidOccurrence(command.OccurredAt, now) ||
+            !policy.IsAllowedEvidenceCount(command.EvidenceProofIds.Count))
         {
             throw new IncidentConflictException("INVALID_REQUEST");
         }
 
         _ = IncidentContract.TryParseSeverity(command.Severity, out var severity);
+        _ = IncidentContract.TryParseNextAction(command.NextAction, out var nextAction);
         var occurredAt = UtcMicrosecondPrecision.Normalize(command.OccurredAt);
-        var slaDueAt = UtcMicrosecondPrecision.Normalize(
-            IncidentSlaPolicy.DueAt(occurredAt, severity));
+        var slaDueAt = UtcMicrosecondPrecision.Normalize(policy.DueAt(occurredAt, severity));
         var requestHash = ComputeRequestHash(command, occurredAt);
+
+        // The description is protected before the transaction opens. If protection is
+        // unavailable the request ends as 503 having written no incident, no evidence, no
+        // idempotency reservation and no audit entry.
+        var protectedDescription = ProtectDescription(command.Description);
 
         try
         {
@@ -83,7 +99,11 @@ public sealed class PostgreSqlIncidentService(
                         return replay;
                     }
 
-                    if (!IncidentOrderStatePolicy.IsAllowedOpeningState(order.Status))
+                    // AT_PICKUP may still be rescheduled, but nothing can be returned before
+                    // custody was acquired: ORD-002 and ADR-014 own that precondition, so INC-001
+                    // refuses an opening whose next action the state machine could never honour
+                    // instead of persisting it and deriving custody_acquired=false beside it.
+                    if (!IncidentOrderStatePolicy.IsAllowedNextAction(order.Status, nextAction))
                     {
                         throw new IncidentConflictException("ORDER_STATE_NOT_ALLOWED");
                     }
@@ -114,7 +134,8 @@ public sealed class PostgreSqlIncidentService(
                         command.EvidenceProofIds);
 
                     await InsertReservationAsync(dbContext, command, requestHash, now, token);
-                    await InsertIncidentAsync(dbContext, command, order, result, now, token);
+                    await InsertIncidentAsync(
+                        dbContext, command, order, result, protectedDescription, now, token);
                     await InsertEvidenceAsync(dbContext, command, order, result, now, token);
                     await WriteAuditAsync(dbContext, command, result, now, token);
                     await CompleteReservationAsync(dbContext, command, requestHash, result, now, token);
@@ -141,6 +162,37 @@ public sealed class PostgreSqlIncidentService(
         catch (Exception exception) when (exception is PostgresException or NpgsqlException)
         {
             throw new IncidentInfrastructureException("The incident store is unavailable.", exception);
+        }
+    }
+
+    /// <summary>
+    /// Turns the accepted description into the ciphertext AI-06 persists. Failure is never
+    /// silent and never degrades to storing the plaintext: the caller gets an infrastructure
+    /// failure, which the endpoint publishes as 503, before anything is written.
+    /// </summary>
+    private ProtectedDescription ProtectDescription(string description)
+    {
+        var keyVersion = options.Value.PiiKeyVersion;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(keyVersion))
+            {
+                throw new IncidentPiiProtectionUnavailableException();
+            }
+
+            var ciphertext = piiProtector.Protect(description, keyVersion);
+            if (ciphertext is not { Length: > 0 })
+            {
+                throw new IncidentPiiProtectionUnavailableException();
+            }
+
+            return new ProtectedDescription(ciphertext, keyVersion);
+        }
+        catch (Exception exception)
+        {
+            throw new IncidentInfrastructureException(
+                "Incident description protection is unavailable.",
+                exception);
         }
     }
 
@@ -298,6 +350,7 @@ public sealed class PostgreSqlIncidentService(
         OpenIncidentCommand command,
         AuthorizedOrder order,
         IncidentResult result,
+        ProtectedDescription description,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
@@ -306,10 +359,12 @@ public sealed class PostgreSqlIncidentService(
             """
             INSERT INTO incidents.incidents(
               id,order_id,owner_org_id,operator_org_id,incident_type,severity,status,
-              custody_acquired,reason_code,next_action,occurred_at,sla_due_at,created_by,created_at)
+              custody_acquired,description_ciphertext,pii_key_version,
+              reason_code,next_action,occurred_at,sla_due_at,created_by,created_at)
             VALUES (
               @id,@order,@owner,@operator,@incident_type,@severity,'OPEN',
-              @custody,@reason_code,@next_action,@occurred,@sla_due,@actor,@now)
+              @custody,@description,@pii_key_version,
+              @reason_code,@next_action,@occurred,@sla_due,@actor,@now)
             """,
             connection,
             transaction);
@@ -320,6 +375,9 @@ public sealed class PostgreSqlIncidentService(
         insert.Parameters.Add(IncidentsSql.P("incident_type", NpgsqlDbType.Text, command.IncidentType));
         insert.Parameters.Add(IncidentsSql.P("severity", NpgsqlDbType.Text, result.Severity));
         insert.Parameters.Add(IncidentsSql.P("custody", NpgsqlDbType.Boolean, result.CustodyAcquired));
+        // The description reaches the store only as AI-06 ciphertext; the plaintext is never bound.
+        insert.Parameters.Add(IncidentsSql.P("description", NpgsqlDbType.Bytea, description.Ciphertext));
+        insert.Parameters.Add(IncidentsSql.P("pii_key_version", NpgsqlDbType.Text, description.KeyVersion));
         insert.Parameters.Add(IncidentsSql.P("reason_code", NpgsqlDbType.Text, command.ReasonCode));
         insert.Parameters.Add(IncidentsSql.P("next_action", NpgsqlDbType.Text, command.NextAction));
         insert.Parameters.Add(IncidentsSql.P("occurred", NpgsqlDbType.TimestampTz, result.OccurredAt));
@@ -442,6 +500,9 @@ public sealed class PostgreSqlIncidentService(
         }
     }
 }
+
+/// <summary>The protected description and the key version stored beside it.</summary>
+internal readonly record struct ProtectedDescription(byte[] Ciphertext, string KeyVersion);
 
 public sealed class DisabledIncidentService : IIncidentService
 {

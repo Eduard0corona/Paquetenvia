@@ -196,8 +196,16 @@ public sealed class IncidentPolicyTests
         Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now, Now));
         Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(-30), Now));
         Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(1), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-25), Now));
         Assert.False(IncidentRequestPolicy.IsValidOccurrence(default, Now));
+    }
+
+    [Fact]
+    public void The_retrospective_window_is_the_approved_seventy_two_hours()
+    {
+        Assert.Equal(TimeSpan.FromHours(72), IncidentRequestPolicy.MaximumOccurrenceAge);
+        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-71), Now));
+        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-72), Now));
+        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-73), Now));
     }
 
     [Fact]
@@ -229,6 +237,145 @@ public sealed class IncidentPolicyTests
     {
         Assert.False(IncidentRequestPolicy.IsValidCommandShape(ValidCommand(severity: "URGENT")));
         Assert.False(IncidentRequestPolicy.IsValidCommandShape(ValidCommand() with { Severity = null! }));
+    }
+
+
+    // ------------------------------------------------------- RETURNING requires custody
+
+    [Theory]
+    [InlineData("AT_PICKUP", true)]
+    [InlineData("IN_TRANSIT", true)]
+    [InlineData("DELIVERING", true)]
+    [InlineData("PICKED_UP", false)]
+    [InlineData("DRAFT", false)]
+    [InlineData(null, false)]
+    public void Rescheduling_is_available_from_every_state_an_incident_may_open_from(
+        string? orderStatus,
+        bool allowed)
+    {
+        Assert.Equal(
+            allowed,
+            IncidentOrderStatePolicy.IsAllowedNextAction(orderStatus, IncidentNextAction.Rescheduled));
+    }
+
+    [Theory]
+    [InlineData("AT_PICKUP", false)]
+    [InlineData("IN_TRANSIT", true)]
+    [InlineData("DELIVERING", true)]
+    [InlineData("PICKED_UP", false)]
+    [InlineData("DRAFT", false)]
+    [InlineData(null, false)]
+    public void Returning_requires_a_state_that_had_already_acquired_custody(
+        string? orderStatus,
+        bool allowed)
+    {
+        Assert.Equal(
+            allowed,
+            IncidentOrderStatePolicy.IsAllowedNextAction(orderStatus, IncidentNextAction.Returning));
+    }
+
+    [Fact]
+    public void An_attempt_that_failed_at_pickup_can_be_rescheduled_but_never_returned()
+    {
+        // ORD-002 and ADR-014 only return what the operator already holds.
+        Assert.False(IncidentOrderStatePolicy.DerivesCustodyAcquired(IncidentOrderStatePolicy.AtPickup));
+        Assert.True(IncidentOrderStatePolicy.IsAllowedNextAction(
+            IncidentOrderStatePolicy.AtPickup, IncidentNextAction.Rescheduled));
+        Assert.False(IncidentOrderStatePolicy.IsAllowedNextAction(
+            IncidentOrderStatePolicy.AtPickup, IncidentNextAction.Returning));
+    }
+
+    [Fact]
+    public void Every_state_that_allows_returning_also_derives_custody_acquired()
+    {
+        foreach (var orderStatus in new[]
+                 {
+                     IncidentOrderStatePolicy.AtPickup,
+                     IncidentOrderStatePolicy.InTransit,
+                     IncidentOrderStatePolicy.Delivering,
+                 })
+        {
+            Assert.Equal(
+                IncidentOrderStatePolicy.DerivesCustodyAcquired(orderStatus),
+                IncidentOrderStatePolicy.IsAllowedNextAction(orderStatus, IncidentNextAction.Returning));
+        }
+    }
+
+    // ---------------------------------------------------- Operational MVP-1 parameters
+
+    [Fact]
+    public void The_approved_operational_defaults_are_the_MVP1_parameters()
+    {
+        var policy = IncidentOperationalPolicy.Mvp1;
+
+        Assert.True(policy.IsValid);
+        Assert.Equal(TimeSpan.FromHours(2), policy.CriticalResolutionWindow);
+        Assert.Equal(TimeSpan.FromHours(8), policy.HighResolutionWindow);
+        Assert.Equal(TimeSpan.FromHours(24), policy.MediumResolutionWindow);
+        Assert.Equal(TimeSpan.FromHours(72), policy.LowResolutionWindow);
+        Assert.Equal(TimeSpan.FromHours(72), policy.MaximumOccurrenceAge);
+        Assert.Equal(TimeSpan.FromMinutes(5), policy.MaximumOccurrenceSkew);
+        Assert.Equal(1, IncidentEvidencePolicy.MinimumEvidenceCount);
+        Assert.Equal(10, policy.MaximumEvidenceCount);
+    }
+
+    [Fact]
+    public void The_published_static_policies_read_the_same_operational_parameters()
+    {
+        foreach (var severity in Enum.GetValues<IncidentSeverity>())
+        {
+            Assert.Equal(
+                IncidentOperationalPolicy.Mvp1.ResolutionWindow(severity),
+                IncidentSlaPolicy.ResolutionWindow(severity));
+        }
+
+        Assert.True(IncidentEvidencePolicy.IsAllowedCount(IncidentEvidencePolicy.MinimumEvidenceCount));
+        Assert.True(IncidentEvidencePolicy.IsAllowedCount(IncidentEvidencePolicy.MaximumEvidenceCount));
+        Assert.False(IncidentEvidencePolicy.IsAllowedCount(0));
+        Assert.False(IncidentEvidencePolicy.IsAllowedCount(IncidentEvidencePolicy.MaximumEvidenceCount + 1));
+    }
+
+    [Fact]
+    public void An_operational_policy_may_tighten_the_bounds_it_owns()
+    {
+        var tightened = IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceAge = TimeSpan.FromHours(24),
+            MaximumEvidenceCount = 3,
+        };
+
+        Assert.True(tightened.IsValid);
+        Assert.False(tightened.IsValidOccurrence(Now.AddHours(-25), Now));
+        Assert.True(tightened.IsAllowedEvidenceCount(3));
+        Assert.False(tightened.IsAllowedEvidenceCount(4));
+        // The semantic floor stays where AI-08 put it.
+        Assert.False(tightened.IsAllowedEvidenceCount(0));
+    }
+
+    public static TheoryData<IncidentOperationalPolicy> InvalidOperationalPolicies() =>
+    [
+        // A zero or negative window is not a deadline.
+        IncidentOperationalPolicy.Mvp1 with { CriticalResolutionWindow = TimeSpan.Zero },
+        IncidentOperationalPolicy.Mvp1 with { MediumResolutionWindow = TimeSpan.FromHours(-1) },
+        // A severer incident may never be given a laxer deadline.
+        IncidentOperationalPolicy.Mvp1 with { CriticalResolutionWindow = TimeSpan.FromHours(9) },
+        IncidentOperationalPolicy.Mvp1 with { LowResolutionWindow = TimeSpan.FromHours(1) },
+        // The retrospective window and the skew are bounded.
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.Zero },
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromDays(400) },
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceSkew = TimeSpan.FromMinutes(-1) },
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceSkew = TimeSpan.FromHours(2) },
+        // Evidence may be tightened, never removed and never widened past the published bound.
+        IncidentOperationalPolicy.Mvp1 with { MaximumEvidenceCount = 0 },
+        IncidentOperationalPolicy.Mvp1 with { MaximumEvidenceCount = 11 },
+    ];
+
+    [Theory]
+    [MemberData(nameof(InvalidOperationalPolicies))]
+    public void An_operational_policy_outside_the_bounded_surface_is_rejected(
+        IncidentOperationalPolicy policy)
+    {
+        Assert.False(policy.IsValid);
     }
 
     [Fact]

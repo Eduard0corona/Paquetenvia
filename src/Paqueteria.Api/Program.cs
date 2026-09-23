@@ -55,7 +55,7 @@ builder.Services.AddRealtimeInfrastructure(builder.Configuration, builder.Enviro
 builder.Services.AddRealtimeOutboxDispatchers(builder.Configuration);
 builder.Services.AddRealtimeEndpoints(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(builder.Configuration, builder.Environment);
-builder.Services.AddIncidentsInfrastructure(builder.Configuration);
+builder.Services.AddIncidentsInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddReportingInfrastructure(builder.Configuration);
 builder.Services.AddReportingEndpoints();
 builder.Services.AddRoutingInfrastructure(builder.Configuration);

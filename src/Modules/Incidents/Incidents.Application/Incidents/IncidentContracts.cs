@@ -48,10 +48,11 @@ public static class IncidentRequestPolicy
 
     /// <summary>
     /// An attempt cannot be reported as having happened in the future, and reports older than
-    /// this are treated as malformed rather than silently backdating the SLA clock.
+    /// this are treated as malformed rather than silently backdating the SLA clock. Both bounds
+    /// are operational MVP-1 parameters owned by <see cref="IncidentOperationalPolicy"/>.
     /// </summary>
-    public static readonly TimeSpan MaximumOccurrenceAge = TimeSpan.FromHours(24);
-    public static readonly TimeSpan MaximumOccurrenceSkew = TimeSpan.FromMinutes(5);
+    public static TimeSpan MaximumOccurrenceAge => IncidentOperationalPolicy.Mvp1.MaximumOccurrenceAge;
+    public static TimeSpan MaximumOccurrenceSkew => IncidentOperationalPolicy.Mvp1.MaximumOccurrenceSkew;
 
     public static bool IsValidIncidentType(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
@@ -68,9 +69,7 @@ public static class IncidentRequestPolicy
         evidenceProofIds.Distinct().Count() == evidenceProofIds.Count;
 
     public static bool IsValidOccurrence(DateTimeOffset occurredAt, DateTimeOffset now) =>
-        occurredAt != default &&
-        occurredAt <= now + MaximumOccurrenceSkew &&
-        occurredAt >= now - MaximumOccurrenceAge;
+        IncidentOperationalPolicy.Mvp1.IsValidOccurrence(occurredAt, now);
 
     public static bool IsValidCommandShape(OpenIncidentCommand command) =>
         command.ActorId != Guid.Empty &&
@@ -97,3 +96,21 @@ public sealed class IncidentConflictException(string code) : IncidentException(c
 
 public sealed class IncidentInfrastructureException(string message, Exception? innerException = null)
     : Exception(message, innerException);
+
+/// <summary>
+/// Protects the mandatory incident description before it reaches the store. INC-001 owns this
+/// abstraction rather than borrowing another module's concrete protector, so the Incidents module
+/// keeps no dependency on Locations; the shape follows the established GEO-001 precedent.
+/// </summary>
+public interface IIncidentPiiProtector
+{
+    /// <summary>
+    /// Returns the ciphertext AI-06 persists in <c>description_ciphertext</c> under
+    /// <paramref name="keyVersion"/>. An implementation that cannot protect the value throws
+    /// <see cref="IncidentPiiProtectionUnavailableException"/> instead of returning plaintext.
+    /// </summary>
+    byte[] Protect(string plaintext, string keyVersion);
+}
+
+public sealed class IncidentPiiProtectionUnavailableException()
+    : Exception("Incident PII protection is unavailable.");
