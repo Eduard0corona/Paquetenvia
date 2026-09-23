@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Paqueteria.Application.Scaling;
 
 /// <summary>
@@ -10,6 +13,20 @@ public static class InstanceIdentity
     public const string EnvironmentVariableName = "PAQUETERIA_INSTANCE_ID";
 
     public const int MaximumWorkerIdLength = 100;
+
+    /// <summary>
+    /// Length of the stable instance digest used when the configured worker id leaves no room
+    /// for the readable instance identity.
+    /// </summary>
+    public const int InstanceDigestLength = 16;
+
+    private const char Separator = ':';
+
+    /// <summary>
+    /// The longest configured worker id that can still be carried verbatim next to an instance
+    /// digest: the remainder of the bounded value is the separator plus the digest.
+    /// </summary>
+    private const int MaximumBaseLength = MaximumWorkerIdLength - 1 - InstanceDigestLength;
 
     private static readonly Lazy<string> CurrentValue = new(() => Sanitize(
         Environment.GetEnvironmentVariable(EnvironmentVariableName) is { } configured &&
@@ -27,18 +44,38 @@ public static class InstanceIdentity
     /// Combines the configured deployment-wide worker id with this replica's identity, staying
     /// inside the bounded length the outbox claim contract accepts.
     /// </summary>
-    public static string QualifyWorkerId(string workerId)
+    public static string QualifyWorkerId(string workerId) => QualifyWorkerId(workerId, Current);
+
+    /// <summary>
+    /// Deterministic qualification against an explicit instance identity. The instance identity
+    /// always survives: when the configured worker id is too long to carry it verbatim, the base
+    /// is truncated and the replica is represented by a stable digest of its identity, so two
+    /// replicas sharing one lane never collapse onto the same qualified id.
+    /// </summary>
+    public static string QualifyWorkerId(string workerId, string instanceId)
     {
+        var instance = string.IsNullOrWhiteSpace(instanceId) ? "instance" : Sanitize(instanceId);
         if (string.IsNullOrWhiteSpace(workerId))
         {
-            return Current;
+            return instance;
         }
 
-        var qualified = $"{workerId}:{Current}";
-        return qualified.Length <= MaximumWorkerIdLength
-            ? qualified
-            : qualified[..MaximumWorkerIdLength];
+        var sanitized = Sanitize(workerId);
+        if (sanitized.Length <= MaximumBaseLength &&
+            sanitized.Length + 1 + instance.Length <= MaximumWorkerIdLength)
+        {
+            return $"{sanitized}{Separator}{instance}";
+        }
+
+        var baseSegment = sanitized.Length <= MaximumBaseLength
+            ? sanitized
+            : sanitized[..MaximumBaseLength];
+        return $"{baseSegment}{Separator}{Digest(instance)}";
     }
+
+    private static string Digest(string instance) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(instance)))
+            .ToLowerInvariant()[..InstanceDigestLength];
 
     private static string Sanitize(string value)
     {

@@ -6,6 +6,21 @@ public enum DataProtectionProviderKind
     PostgreSql,
 }
 
+/// <summary>
+/// SCL-001 names one reproducible profile that actually turns the shared PostgreSQL key ring on.
+/// It is a hosting environment name, so it is only selected when the deployment explicitly asks
+/// for it; Production keeps the <c>Disabled</c> default from <c>appsettings.json</c> and never
+/// enables distributed Data Protection implicitly.
+/// </summary>
+/// <remarks>
+/// The profile is a validation profile, not production authorization: an external
+/// key-encryption protector is required before productive distributed Data Protection activation.
+/// </remarks>
+public static class DataProtectionProfiles
+{
+    public const string ScaleReadyEnvironmentName = "ScaleReady";
+}
+
 public sealed class DataProtectionOptions
 {
     public const string SectionName = "DataProtection";
