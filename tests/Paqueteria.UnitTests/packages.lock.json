@@ -202,6 +202,29 @@
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
+      "finance.application": {
+        "type": "Project",
+        "dependencies": {
+          "Finance.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "finance.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "finance.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Finance.Application": "[1.0.0, )",
+          "Finance.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "identity.application": {
         "type": "Project",
         "dependencies": {
