@@ -3,19 +3,7 @@ using System.Security.Cryptography;
 using Npgsql;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Testcontainers.PostgreSql;
-using Identity.Infrastructure.Persistence;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Organizations.Infrastructure.Persistence;
-using Paqueteria.Infrastructure.Tenancy;
-using Locations.Infrastructure.Persistence;
-using Pricing.Infrastructure.Persistence;
-using Orders.Infrastructure.Persistence;
-using Drivers.Infrastructure.Persistence;
-using Dispatch.Infrastructure.Persistence;
-using Custody.Infrastructure.Persistence;
-using Incidents.Infrastructure.Persistence;
-using Notifications.Infrastructure.Persistence;
 
 namespace Paqueteria.ContractTests.PostgreSql.Fixtures;
 
@@ -37,6 +25,15 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
     public NpgsqlDataSource AppDataSource { get; private set; } = null!;
     public NpgsqlDataSource WorkerDataSource { get; private set; } = null!;
     public string DeploymentConnectionString { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// The raw least-privilege runtime connection strings. <see cref="NpgsqlDataSource"/> redacts
+    /// the password on its own <c>ConnectionString</c>, so callers that build their own data
+    /// source have to read them here.
+    /// </summary>
+    public string AppConnectionString { get; private set; } = string.Empty;
+
+    public string WorkerConnectionString { get; private set; } = string.Empty;
     public TimeSpan BootstrapDuration { get; private set; }
     public TimeSpan SchemaDuration { get; private set; }
     public TimeSpan RolesDuration { get; private set; }
@@ -101,8 +98,10 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             stopwatch.Stop();
             BootstrapDuration = stopwatch.Elapsed;
 
-            AppDataSource = NpgsqlDataSource.Create(WithPooling(_container.GetConnectionString(), AppLogin, _appPassword));
-            WorkerDataSource = NpgsqlDataSource.Create(WithPooling(_container.GetConnectionString(), WorkerLogin, _workerPassword));
+            AppConnectionString = WithPooling(_container.GetConnectionString(), AppLogin, _appPassword);
+            WorkerConnectionString = WithPooling(_container.GetConnectionString(), WorkerLogin, _workerPassword);
+            AppDataSource = NpgsqlDataSource.Create(AppConnectionString);
+            WorkerDataSource = NpgsqlDataSource.Create(WorkerConnectionString);
 
             await using var command = AdminDataSource.CreateCommand(
                 "SELECT current_setting('server_version'), public.PostGIS_Version()");
@@ -206,186 +205,14 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
         await ExecuteAdminScriptAsync(sql).ConfigureAwait(false);
     }
 
-    private async Task ApplyAdoptionMigrationsAsync()
-    {
-        await using (var identityConnection = new NpgsqlConnection(DeploymentConnectionString))
-        {
-            await identityConnection.OpenAsync().ConfigureAwait(false);
-            await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", identityConnection))
-            {
-                await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-            }
-
-            var identityOptions = new DbContextOptionsBuilder<IdentityDbContext>()
-                .UseNpgsql(identityConnection, postgres =>
-                {
-                    postgres.MigrationsAssembly(typeof(IdentityDbContext).Assembly.FullName);
-                    postgres.MigrationsHistoryTable("__ef_migrations_history_identity", "platform");
-                }).Options;
-            await using var identity = new IdentityDbContext(identityOptions, new TenantDatabaseExecutionState());
-            await identity.Database.MigrateAsync().ConfigureAwait(false);
-        }
-
-        await using var organizationsConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await organizationsConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", organizationsConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var organizationsOptions = new DbContextOptionsBuilder<OrganizationsDbContext>()
-            .UseNpgsql(organizationsConnection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(OrganizationsDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_organizations", "platform");
-            }).Options;
-        await using var organizations = new OrganizationsDbContext(
-            organizationsOptions,
-            new TenantDatabaseExecutionState());
-        await organizations.Database.MigrateAsync().ConfigureAwait(false);
-
-        await using var locationsConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await locationsConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", locationsConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var locationsOptions = new DbContextOptionsBuilder<LocationsDbContext>()
-            .UseNpgsql(locationsConnection, postgres =>
-            {
-                postgres.UseNetTopologySuite();
-                postgres.MigrationsAssembly(typeof(LocationsDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_locations", "platform");
-            }).Options;
-        await using var locations = new LocationsDbContext(
-            locationsOptions,
-            new TenantDatabaseExecutionState());
-        await locations.Database.MigrateAsync().ConfigureAwait(false);
-
-        await using var driversConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await driversConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", driversConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var driversOptions = new DbContextOptionsBuilder<DriversDbContext>()
-            .UseNpgsql(driversConnection, postgres =>
-            {
-                postgres.UseNetTopologySuite();
-                postgres.MigrationsAssembly(typeof(DriversDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_drivers", "platform");
-            }).Options;
-        await using var drivers = new DriversDbContext(
-            driversOptions,
-            new TenantDatabaseExecutionState());
-        await drivers.Database.MigrateAsync().ConfigureAwait(false);
-
-        await using var pricingConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await pricingConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", pricingConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var pricingOptions = new DbContextOptionsBuilder<PricingDbContext>()
-            .UseNpgsql(pricingConnection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(PricingDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_pricing", "platform");
-            }).Options;
-        await using var pricing = new PricingDbContext(pricingOptions, new TenantDatabaseExecutionState());
-        await pricing.Database.MigrateAsync().ConfigureAwait(false);
-
-        await using var ordersConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await ordersConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", ordersConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var ordersOptions = new DbContextOptionsBuilder<OrdersDbContext>()
-            .UseNpgsql(ordersConnection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(OrdersDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_orders", "platform");
-            }).Options;
-        await using var orders = new OrdersDbContext(ordersOptions, new TenantDatabaseExecutionState());
-        await orders.Database.MigrateAsync().ConfigureAwait(false);
-
-        await using var dispatchConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await dispatchConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", dispatchConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var dispatchOptions = new DbContextOptionsBuilder<DispatchDbContext>()
-            .UseNpgsql(dispatchConnection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(DispatchDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_dispatch", "platform");
-            }).Options;
-        await using var dispatch = new DispatchDbContext(
-            dispatchOptions,
-            new TenantDatabaseExecutionState());
-        await dispatch.Database.MigrateAsync().ConfigureAwait(false);
-
-        await using var custodyConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await custodyConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", custodyConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var custodyOptions = new DbContextOptionsBuilder<CustodyDbContext>()
-            .UseNpgsql(custodyConnection, postgres =>
-            {
-                postgres.UseNetTopologySuite();
-                postgres.MigrationsAssembly(typeof(CustodyDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_custody", "platform");
-            }).Options;
-        await using var custody = new CustodyDbContext(
-            custodyOptions,
-            new TenantDatabaseExecutionState());
-        await custody.Database.MigrateAsync().ConfigureAwait(false);
-
-        // INC-001 depends on POD-001 proofs, so the Incidents migration follows Custody.
-        await using var incidentsConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await incidentsConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", incidentsConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var incidentsOptions = new DbContextOptionsBuilder<IncidentsDbContext>()
-            .UseNpgsql(incidentsConnection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(IncidentsDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_incidents", "platform");
-            }).Options;
-        await using var incidents = new IncidentsDbContext(
-            incidentsOptions,
-            new TenantDatabaseExecutionState());
-        await incidents.Database.MigrateAsync().ConfigureAwait(false);
-
-        await using var notificationsConnection = new NpgsqlConnection(DeploymentConnectionString);
-        await notificationsConnection.OpenAsync().ConfigureAwait(false);
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", notificationsConnection))
-        {
-            await role.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
-        var notificationsOptions = new DbContextOptionsBuilder<NotificationsDbContext>()
-            .UseNpgsql(notificationsConnection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(NotificationsDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_notifications", "platform");
-            }).Options;
-        await using var notifications = new NotificationsDbContext(notificationsOptions);
-        await notifications.Database.MigrateAsync().ConfigureAwait(false);
-    }
+    /// <summary>
+    /// Every module lane, including the SCL-001 Data Protection lane, is applied by the canonical
+    /// deployment migrator so the fixture can never diverge from what a real deployment produces.
+    /// </summary>
+    private async Task ApplyAdoptionMigrationsAsync() =>
+        await new ModuleMigrationCoordinator()
+            .ApplyAsync(DeploymentConnectionString, CancellationToken.None)
+            .ConfigureAwait(false);
 
     private async Task ExecuteAdminScriptAsync(string sql)
     {

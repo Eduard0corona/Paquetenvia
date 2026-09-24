@@ -62,7 +62,7 @@ internal sealed class BusinessOutboxDispatcher(
 
                     var messages = await RealtimeOutboxClaiming.ClaimBusinessAsync(
                         store,
-                        options.Value.WorkerId,
+                        options.Value.EffectiveWorkerId,
                         lane,
                         stoppingToken);
                     telemetry.Claimed(
@@ -165,7 +165,7 @@ internal sealed class LocationOutboxDispatcher(
 
                     var messages = await RealtimeOutboxClaiming.ClaimLocationAsync(
                         store,
-                        options.Value.WorkerId,
+                        options.Value.EffectiveWorkerId,
                         lane,
                         stoppingToken);
                     telemetry.Claimed(

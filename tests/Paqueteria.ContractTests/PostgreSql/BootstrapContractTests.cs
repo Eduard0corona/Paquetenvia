@@ -42,21 +42,23 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             new NpgsqlParameter<string[]>("schemas", ExpectedSchemas));
         Assert.Equal(ExpectedSchemas.Order(StringComparer.Ordinal), schemas);
 
-        Assert.Equal(49, await ScalarAsync<int>("""
+        // 47 canonical AI-06 tables plus the INC-001 incident evidence table, the SCL-001 key ring
+        // and their migration history lanes.
+        Assert.Equal(51, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas.Where(name => name != "extensions").ToArray())));
 
-        Assert.Equal(38, await ScalarAsync<int>("""
+        Assert.Equal(39, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
               AND c.relrowsecurity AND c.relforcerowsecurity
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas)));
-        Assert.Equal(38, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
+        Assert.Equal(39, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
 
         var lifecycle = await QueryStringsAsync(
             "SELECT proname FROM pg_proc JOIN pg_namespace n ON n.oid=pronamespace WHERE n.nspname='security' AND proname=ANY(@names) ORDER BY proname",
@@ -71,8 +73,9 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             [
                 "order_events_append_only", "order_acceptances_append_only", "proofs_append_only", "audit_logs_append_only",
                 "outbox_content_immutable", "location_outbox_content_immutable",
+                "data_protection_keys_append_only",
             ]));
-        Assert.Equal(6, appendOnlyTriggers.Count);
+        Assert.Equal(7, appendOnlyTriggers.Count);
     }
 
     [PostgreSqlContractFact]

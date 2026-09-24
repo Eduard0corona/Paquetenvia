@@ -16,6 +16,7 @@ using Organizations.Endpoints.Tenancy;
 using Organizations.Infrastructure;
 using Organizations.Endpoints.Testing;
 using Paqueteria.Api.Tenancy;
+using Paqueteria.Infrastructure.DataProtection;
 using Locations.Endpoints;
 using Locations.Infrastructure;
 using Pricing.Endpoints;
@@ -23,6 +24,8 @@ using Pricing.Infrastructure;
 using Realtime.Endpoints;
 using Realtime.Infrastructure;
 using Custody.Endpoints;
+using Finance.Endpoints;
+using Finance.Infrastructure;
 using Custody.Infrastructure;
 using Incidents.Endpoints;
 using Incidents.Infrastructure;
@@ -36,6 +39,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
+builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddIdentityInfrastructure(builder.Configuration, builder.Environment);
@@ -58,6 +62,8 @@ builder.Services.AddCustodyInfrastructure(builder.Configuration, builder.Environ
 builder.Services.AddIncidentsInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddReportingInfrastructure(builder.Configuration);
 builder.Services.AddReportingEndpoints();
+builder.Services.AddFinanceInfrastructure(builder.Configuration);
+builder.Services.AddFinanceEndpoints();
 builder.Services.AddRoutingInfrastructure(builder.Configuration);
 builder.Services.AddRoutingEndpoints();
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
@@ -135,6 +141,8 @@ app.MapProofEndpoints();
 app.MapIncidentEndpoints();
 app.MapOperationsDashboardEndpoints();
 app.MapRouteEndpoints();
+app.MapCodEndpoints();
+app.MapFinancialsEndpoints();
 
 app.Run();
 
