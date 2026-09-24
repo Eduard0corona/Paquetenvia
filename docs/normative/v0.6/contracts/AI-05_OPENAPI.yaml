@@ -118,6 +118,75 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /orders/csv/preview:
+    post:
+      tags:
+      - Orders
+      operationId: previewOrderCsv
+      description: >-
+        CSV-001 prevalidation. Reads the uploaded file, reports it row by row and
+        creates nothing; the returned content_digest is what commit must echo.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CsvImportPreviewRequest'
+      responses:
+        '200':
+          description: Prevalidation report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsvImportPreview'
+        '409':
+          $ref: '#/components/responses/CsvImportConflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /orders/csv/commit:
+    post:
+      tags:
+      - Orders
+      operationId: commitOrderCsv
+      description: >-
+        CSV-001 confirmation. Accepts only the file whose content_digest matches the
+        previewed one and whose every row prevalidates, then creates each row through
+        the ORD-001 create path. Idempotency-Key names the batch: replaying it returns
+        the first response, and reusing it for other content is IDEMPOTENCY_CONFLICT.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CsvImportCommitRequest'
+      responses:
+        '200':
+          description: Batch committed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsvImportCommit'
+        '422':
+          description: The batch was not committed because at least one row failed prevalidation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsvImportPreview'
+        '409':
+          $ref: '#/components/responses/CsvImportConflict'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}:
     get:
       tags:
@@ -1156,6 +1225,15 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/DispatchAssignmentConflictProblem'
+    CsvImportConflict:
+      description: >-
+        CSV-001 upload rejected, or the batch Idempotency-Key is already bound to
+        different content. Transport-level rejections report the uniform CONFLICT;
+        only a reused batch key is named, as IDEMPOTENCY_CONFLICT.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/CsvImportConflictProblem'
     IncidentConflict:
       description: >-
         INC-001 request, idempotency, order-state or evidence conflict. Internal
@@ -1996,6 +2074,195 @@ components:
           - CONFLICT
           - DRIVER_INELIGIBLE
           - DRIVER_DOCUMENT_EXPIRED
+    CsvImportPreviewRequest:
+      type: object
+      required:
+      - file
+      properties:
+        file:
+          type: string
+          format: binary
+          description: UTF-8 CSV-001 document, at most 1 MiB and 500 data rows.
+    CsvImportCommitRequest:
+      type: object
+      required:
+      - file
+      - content_digest
+      properties:
+        file:
+          type: string
+          format: binary
+          description: The same bytes that were previewed; anything else is a conflict.
+        content_digest:
+          type: string
+          description: Base64url SHA-256 of the file, as returned by the preview.
+    CsvImportRowError:
+      type: object
+      required:
+      - column
+      - code
+      properties:
+        column:
+          type: string
+        code:
+          type: string
+          enum:
+          - COLUMN_COUNT_INVALID
+          - QUOTE_ID_INVALID
+          - QUOTE_ID_DUPLICATED
+          - PAYER_TYPE_INVALID
+          - TERMS_VERSION_INVALID
+          - PRIVACY_VERSION_INVALID
+          - ACCEPTED_AT_INVALID
+          - ACCEPTANCE_CHANNEL_INVALID
+    CsvImportRowPreview:
+      type: object
+      required:
+      - row_number
+      - quote_id
+      - payer_type
+      - valid
+      - errors
+      properties:
+        row_number:
+          type: integer
+          minimum: 1
+          description: Physical CSV line, so the header is line one.
+        quote_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        payer_type:
+          type:
+          - string
+          - 'null'
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/CsvImportRowError'
+    CsvImportPreview:
+      type: object
+      required:
+      - content_digest
+      - total_rows
+      - valid_rows
+      - invalid_rows
+      - file_errors
+      - rows
+      properties:
+        content_digest:
+          type: string
+        total_rows:
+          type: integer
+          minimum: 0
+        valid_rows:
+          type: integer
+          minimum: 0
+        invalid_rows:
+          type: integer
+          minimum: 0
+        file_errors:
+          type: array
+          description: File-level rejections; when present the file has no reportable rows.
+          items:
+            type: string
+            enum:
+            - ENCODING_INVALID
+            - MALFORMED_QUOTING
+            - HEADER_INVALID
+            - FILE_EMPTY
+            - ROW_LIMIT_EXCEEDED
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/CsvImportRowPreview'
+    CsvImportRowOutcome:
+      type: object
+      required:
+      - row_number
+      - quote_id
+      - status
+      - order_id
+      - public_id
+      - error_code
+      properties:
+        row_number:
+          type: integer
+          minimum: 1
+        quote_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - CREATED
+          - FAILED
+        order_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        public_id:
+          type:
+          - string
+          - 'null'
+        error_code:
+          type:
+          - string
+          - 'null'
+          description: QUOTE_UNAVAILABLE, IDEMPOTENCY_CONFLICT or INVALID_REQUEST when the row failed.
+    CsvImportCommit:
+      type: object
+      required:
+      - content_digest
+      - total_rows
+      - created_rows
+      - failed_rows
+      - rows
+      properties:
+        content_digest:
+          type: string
+        total_rows:
+          type: integer
+          minimum: 0
+        created_rows:
+          type: integer
+          minimum: 0
+        failed_rows:
+          type: integer
+          minimum: 0
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/CsvImportRowOutcome'
+    CsvImportConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - CONFLICT
+          - IDEMPOTENCY_CONFLICT
     IncidentConflictProblem:
       type: object
       required:

@@ -133,6 +133,7 @@ app.MapOrganizationTestProbes(app.Environment);
 app.MapLocationEndpoints();
 app.MapQuoteEndpoints();
 app.MapOrderEndpoints();
+app.MapCsvOrderImportEndpoints();
 app.MapPublicTrackingEndpoints();
 app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();

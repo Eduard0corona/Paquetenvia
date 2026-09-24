@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Orders.Application.Csv;
 using Orders.Application.Orders;
 using Orders.Domain;
 
@@ -18,6 +19,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal static readonly Guid UsedQuoteId = Guid.Parse("81000000-0000-0000-0000-000000000004");
     internal static readonly Guid ForeignOrderId = Guid.Parse("82000000-0000-0000-0000-000000000001");
     private readonly StubOrderService orderService = new();
+    private readonly InMemoryCsvOrderImportBatchIdempotencyStore csvBatches = new();
 
     internal int CreateCallCount => orderService.CreateCallCount;
     internal int TransitionCallCount => orderService.TransitionCallCount;
@@ -42,9 +44,72 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         {
             services.RemoveAll<IOrderService>();
             services.RemoveAll<IOrderTransitionService>();
+            services.RemoveAll<ICsvOrderImportBatchIdempotencyStore>();
             services.AddSingleton<IOrderService>(orderService);
             services.AddSingleton<IOrderTransitionService>(orderService);
+            services.AddSingleton<ICsvOrderImportBatchIdempotencyStore>(csvBatches);
         });
+    }
+
+    /// <summary>
+    /// The batch reservation CSV-001 takes out on <c>platform.idempotency_keys</c>, kept in memory
+    /// because this host has no database. The semantics are the persistent store's: a reservation
+    /// bound to the canonical request hash, a conflict when the key is reused for other content, a
+    /// replay of the stored response once the batch has completed, and a re-run when a reservation
+    /// exists but never completed.
+    /// </summary>
+    private sealed class InMemoryCsvOrderImportBatchIdempotencyStore : ICsvOrderImportBatchIdempotencyStore
+    {
+        private readonly object gate = new();
+        private readonly Dictionary<(Guid Tenant, string Key), Reservation> reservations = [];
+
+        public Task<CsvOrderImportCommitResult?> ReserveOrReplayAsync(
+            CsvOrderImportBatchIdentity identity,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var requestHash = CsvOrderImportIdempotency.ComputeBatchRequestHash(identity);
+            lock (gate)
+            {
+                var address = (identity.OrganizationId, identity.IdempotencyKey);
+                if (reservations.TryGetValue(address, out var existing))
+                {
+                    if (!existing.RequestHash.SequenceEqual(requestHash))
+                    {
+                        throw new CsvOrderImportBatchConflictException();
+                    }
+
+                    return Task.FromResult(existing.Result);
+                }
+
+                reservations[address] = new Reservation(requestHash, null);
+                return Task.FromResult<CsvOrderImportCommitResult?>(null);
+            }
+        }
+
+        public Task<CsvOrderImportCommitResult> CompleteAsync(
+            CsvOrderImportBatchIdentity identity,
+            CsvOrderImportCommitResult result,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var requestHash = CsvOrderImportIdempotency.ComputeBatchRequestHash(identity);
+            lock (gate)
+            {
+                var address = (identity.OrganizationId, identity.IdempotencyKey);
+                if (reservations.TryGetValue(address, out var existing) &&
+                    existing.RequestHash.SequenceEqual(requestHash) &&
+                    existing.Result is { } stored)
+                {
+                    return Task.FromResult(stored);
+                }
+
+                reservations[address] = new Reservation(requestHash, result);
+                return Task.FromResult(result);
+            }
+        }
+
+        private sealed record Reservation(byte[] RequestHash, CsvOrderImportCommitResult? Result);
     }
 
     private sealed class StubOrderService : IOrderService, IOrderTransitionService

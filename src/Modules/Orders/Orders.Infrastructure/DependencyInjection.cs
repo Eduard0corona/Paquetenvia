@@ -4,8 +4,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Orders.Application.Csv;
 using Orders.Application.Orders;
 using Orders.Application.Tracking;
+using Orders.Infrastructure.Csv;
 using Orders.Infrastructure.Orders;
 using Orders.Infrastructure.Persistence;
 using Orders.Infrastructure.Tracking;
@@ -128,6 +130,19 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<QuoteSnapshotToOrderCoordinator>(),
                 _ => serviceProvider.GetRequiredService<DisabledOrderService>(),
             });
+        services.AddSingleton<DisabledCsvOrderImportBatchIdempotencyStore>();
+        services.AddScoped<PostgreSqlCsvOrderImportBatchIdempotencyStore>();
+        services.AddScoped<ICsvOrderImportBatchIdempotencyStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<OrdersOptions>>().Value.Provider switch
+            {
+                OrdersProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlCsvOrderImportBatchIdempotencyStore>(),
+                _ => serviceProvider.GetRequiredService<DisabledCsvOrderImportBatchIdempotencyStore>(),
+            });
+        services.AddScoped<ICsvOrderImportCommitService>(serviceProvider =>
+            new CsvOrderImportCommitService(
+                serviceProvider.GetRequiredService<IOrderService>(),
+                serviceProvider.GetRequiredService<ICsvOrderImportBatchIdempotencyStore>()));
         services.AddScoped<IOrderTransitionService>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<OrdersOptions>>().Value.Provider switch
             {
