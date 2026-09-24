@@ -1,3 +1,5 @@
+using Paqueteria.Application.Scaling;
+
 namespace Realtime.Application.Configuration;
 
 public enum OutboxDispatcherProviderKind
@@ -12,6 +14,13 @@ public sealed class OutboxDispatcherOptions
 
     public OutboxDispatcherProviderKind Provider { get; set; } = OutboxDispatcherProviderKind.Disabled;
     public string WorkerId { get; set; } = "rtm002-local";
+
+    /// <summary>
+    /// The identity this replica reports on <c>locked_by</c>. Claims stay safe across replicas
+    /// through <c>FOR UPDATE SKIP LOCKED</c> and the lease token; qualifying the configured id
+    /// keeps every claim attributable to the replica that made it.
+    /// </summary>
+    public string EffectiveWorkerId => InstanceIdentity.QualifyWorkerId(WorkerId);
     public int PublishTimeoutSeconds { get; set; } = 5;
     public int RetryBaseSeconds { get; set; } = 2;
     public int RetryMaximumSeconds { get; set; } = 60;

@@ -18,7 +18,9 @@ Contract (``needs`` JSON as produced by ``toJSON(needs)``):
   certified ``MAIN_BACKSYNC`` (Owner dependency policy: ordinary and security
   dependency remediations take the exceptional ``→ main`` route, never
   ``development``; only content already certified on ``main`` may carry
-  dependency drift into ``development``).
+  dependency drift into ``development``). A NuGet lockfile whose content the
+  classifier proved to change only the internal ``type: Project`` graph is carried by
+  ``NUGET_PROJECT_GRAPH`` instead of ``DEPS``; an unproven lockfile stays ``DEPS``.
 """
 
 from __future__ import annotations

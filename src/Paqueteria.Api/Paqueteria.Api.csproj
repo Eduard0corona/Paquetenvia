@@ -19,6 +19,8 @@
     <ProjectReference Include="..\Modules\Dispatch\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Custody\Custody.Endpoints\Custody.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Incidents\Incidents.Endpoints\Incidents.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Incidents\Incidents.Infrastructure\Incidents.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Endpoints\Orders.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Organizations\Organizations.Endpoints\Organizations.Endpoints.csproj" />
@@ -32,6 +34,8 @@
     <ProjectReference Include="..\Modules\Realtime\Realtime.Infrastructure\Realtime.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Finance\Finance.Endpoints\Finance.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Finance\Finance.Infrastructure\Finance.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Routing\Routing.Endpoints\Routing.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Routing\Routing.Infrastructure\Routing.Infrastructure.csproj" />
   </ItemGroup>

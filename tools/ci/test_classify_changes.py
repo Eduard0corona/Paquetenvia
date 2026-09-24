@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import classify_changes as classifier  # noqa: E402
+import pr_gate as gate  # noqa: E402
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "Eduard0corona/Paquetenvia"
@@ -498,6 +499,46 @@ class ConfigValidationTests(unittest.TestCase):
     def test_committed_config_is_valid(self):
         classifier.validate_config(self.raw())
 
+    def proven_domain(self, raw):
+        return next(item for item in raw["domains"] if item["name"] == "NUGET_PROJECT_GRAPH")
+
+    def test_unknown_content_proof_rejected(self):
+        raw = self.raw()
+        self.proven_domain(raw)["content_proof"] = "trust-me"
+        self.assert_rejected(raw, "CONFIG_DOMAINS_INVALID")
+
+    def test_content_proven_domain_must_be_selective(self):
+        raw = self.raw()
+        domain = self.proven_domain(raw)
+        domain.pop("job_sets")
+        domain["full"] = True
+        self.assert_rejected(raw, "CONFIG_DOMAINS_INVALID")
+
+    def test_supersedes_requires_content_proof(self):
+        raw = self.raw()
+        backend = next(item for item in raw["domains"] if item["name"] == "BACKEND")
+        backend["supersedes"] = ["DEPS"]
+        self.assert_rejected(raw, "CONFIG_DOMAINS_INVALID")
+
+    def test_supersedes_must_name_other_existing_domains(self):
+        for supersedes in (["NOPE"], ["NUGET_PROJECT_GRAPH"], [], "DEPS"):
+            with self.subTest(supersedes=supersedes):
+                raw = self.raw()
+                self.proven_domain(raw)["supersedes"] = supersedes
+                self.assert_rejected(raw, "CONFIG_DOMAINS_INVALID")
+
+    def test_content_proof_requires_supersedes(self):
+        raw = self.raw()
+        self.proven_domain(raw).pop("supersedes")
+        self.assert_rejected(raw, "CONFIG_DOMAINS_INVALID")
+
+    def test_only_nuget_lockfiles_can_leave_deps_by_proof(self):
+        config = classifier.validate_config(self.raw())
+        proven = [domain for domain in config["domains"] if domain["content_proof"] is not None]
+        self.assertEqual(["NUGET_PROJECT_GRAPH"], [domain["name"] for domain in proven])
+        self.assertEqual(["**/packages.lock.json"], proven[0]["patterns"])
+        self.assertEqual(["DEPS"], proven[0]["supersedes"])
+
     def test_format_required(self):
         raw = self.raw()
         raw["format"] = "other"
@@ -685,6 +726,410 @@ class GitProvenanceTests(unittest.TestCase):
             )
         self.assertEqual(1, code)
         self.assertIn("CLASSIFY_SOURCE_HEAD_MISMATCH", captured.getvalue())
+
+
+# --------------------------------------------------------------------------- NuGet Project-graph proof
+
+NET = "net10.0"
+API_LOCK = "src/Paqueteria.Api/packages.lock.json"
+ORDERS_LOCK = "src/Modules/Orders/Orders.Infrastructure/packages.lock.json"
+NEW_MODULE_LOCK = "src/Modules/Incidents/Incidents.Infrastructure/packages.lock.json"
+NEW_MODULE_CSPROJ = "src/Modules/Incidents/Incidents.Infrastructure/Incidents.Infrastructure.csproj"
+API_CSPROJ = "src/Paqueteria.Api/Paqueteria.Api.csproj"
+NPGSQL = {
+    "type": "Direct",
+    "requested": "[10.0.3, )",
+    "resolved": "10.0.3",
+    "contentHash": "IPGrrZnRkuW7OlHDhUESZz4G5DLkW7Nej==",
+    "dependencies": {"Npgsql": "10.0.3"},
+}
+NPGSQL_CORE = {"type": "Transitive", "resolved": "10.0.3", "contentHash": "c29tZS1ucGdzcWwtaGFzaA=="}
+OPENAPI = {"type": "Direct", "requested": "[10.0.10, )", "resolved": "10.0.10", "contentHash": "b3BlbmFwaQ=="}
+SERILOG = {"type": "Transitive", "resolved": "4.1.0", "contentHash": "c2VyaWxvZw=="}
+
+
+def lock(nodes, version=2, framework=NET):
+    return json.dumps({"version": version, "dependencies": {framework: nodes}}, indent=2) + "\n"
+
+
+def project(*deps):
+    return {"type": "Project", "dependencies": {dep: "[1.0.0, )" for dep in deps}} if deps else {"type": "Project"}
+
+
+def api_nodes(extra=None, **overrides):
+    """A host lockfile shaped like src/Paqueteria.Api/packages.lock.json."""
+    nodes = {
+        "Microsoft.AspNetCore.OpenApi": copy.deepcopy(OPENAPI),
+        "Npgsql": copy.deepcopy(NPGSQL_CORE),
+        "Npgsql.EntityFrameworkCore.PostgreSQL": copy.deepcopy(NPGSQL),
+        "orders.infrastructure": {
+            "type": "Project",
+            "dependencies": {
+                "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+                "Paqueteria.Domain": "[1.0.0, )",
+            },
+        },
+        "paqueteria.domain": project(),
+    }
+    nodes.update(copy.deepcopy(extra or {}))
+    for name, node in overrides.items():
+        if node is None:
+            nodes.pop(name, None)
+        else:
+            nodes[name] = node
+    return nodes
+
+
+def orders_nodes():
+    return {
+        "Npgsql": copy.deepcopy(NPGSQL_CORE),
+        "Npgsql.EntityFrameworkCore.PostgreSQL": copy.deepcopy(NPGSQL),
+        "paqueteria.domain": project(),
+    }
+
+
+# The Project entries INC-001/FIN-001 add to every existing host/test lockfile.
+INCIDENTS_PROJECTS = {
+    "incidents.domain": project("Paqueteria.Domain"),
+    "incidents.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+            "Incidents.Domain": "[1.0.0, )",
+            "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+            "Paqueteria.Domain": "[1.0.0, )",
+        },
+    },
+}
+BASE_FILES = {
+    API_CSPROJ: "<Project />\n",
+    API_LOCK: lock(api_nodes()),
+    ORDERS_LOCK: lock(orders_nodes()),
+}
+
+
+def new_module_files(api_lock_nodes=None, module_lock_nodes=None):
+    """The INC-001/FIN-001 shape: a new module lockfile plus Project entries in the host lock."""
+    module = {
+        "Npgsql": copy.deepcopy(NPGSQL_CORE),
+        "Npgsql.EntityFrameworkCore.PostgreSQL": copy.deepcopy(NPGSQL),
+        "incidents.domain": project("Paqueteria.Domain"),
+        "paqueteria.domain": project(),
+    }
+    return {
+        API_CSPROJ: '<Project><ProjectReference Include="Incidents.Infrastructure.csproj" /></Project>\n',
+        API_LOCK: lock(api_lock_nodes if api_lock_nodes is not None else api_nodes(INCIDENTS_PROJECTS)),
+        NEW_MODULE_CSPROJ: "<Project />\n",
+        NEW_MODULE_LOCK: lock(module_lock_nodes if module_lock_nodes is not None else module),
+    }
+
+
+def classify_tested(root, tested, source, head_ref="feature/x", certified=False, labels=None):
+    base, tested, changed = classifier.resolve_tested_diff(root, tested, source)
+    proofs = classifier.resolve_content_proofs(root, base, tested, changed)
+    plan = classifier.classify_paths(
+        CONFIG,
+        changed,
+        head_ref=head_ref,
+        head_repo=REPOSITORY,
+        repository=REPOSITORY,
+        labels=labels,
+        source_head_sha=source,
+        certified_main_sha=source if certified else None,
+        content_proofs=proofs,
+    )
+    classifier.validate_plan(plan, CONFIG)
+    return plan, proofs[classifier.CONTENT_PROOF_NUGET_PROJECT_GRAPH]
+
+
+def classify_repo(source_files, base_files=None, **kwargs):
+    repo = make_merge_repo(dict(BASE_FILES if base_files is None else base_files), source_files)
+    return classify_tested(Path(repo["root"]), repo["tested"], repo["source"], **kwargs)
+
+
+def gate_verdict(plan):
+    required = set(plan["required_jobs"])
+    needs = {"classify": {"result": "success", "outputs": {"plan": classifier.serialize_plan(plan)}}}
+    for job in ALL_JOBS:
+        needs[job] = {"result": "success" if job in required else "skipped", "outputs": {}}
+    evaluation = gate.evaluate(None, needs, CONFIG)
+    return evaluation["verdict"], [item["reason"] for item in evaluation["failures"]]
+
+
+class NuGetProjectGraphProofTests(unittest.TestCase):
+    """Internal ProjectReference graph evolution may enter development; external drift may not."""
+
+    def assert_allowed(self, plan, proven, expected_proven):
+        self.assertEqual(sorted(expected_proven), proven)
+        self.assertNotIn("DEPS", plan["domains"])
+        self.assertIn("NUGET_PROJECT_GRAPH", plan["domains"])
+        self.assertNotIn("FULL:DEPS", plan["reasons"])
+        self.assertTrue(set(BACKEND) <= jobs(plan), "proven lockfiles still require backend validation")
+        self.assertEqual(("PASS", []), gate_verdict(plan))
+
+    def assert_rejected(self, plan):
+        self.assertEqual("FULL", plan["classification"])
+        self.assertIn("DEPS", plan["domains"])
+        self.assertIn("FULL:DEPS", plan["reasons"])
+        self.assertEqual(("FAIL", [gate.REASON_DEPENDENCY_CHANGE_NOT_ALLOWED]), gate_verdict(plan))
+
+    def assert_unproven_and_rejected(self, source_files, **kwargs):
+        plan, proven = classify_repo(source_files, **kwargs)
+        self.assertEqual([], proven)
+        self.assert_rejected(plan)
+
+    # ---- allowed toward development
+
+    def test_new_internal_project_reference_only_is_allowed_toward_development(self):
+        plan, proven = classify_repo(new_module_files())
+        self.assert_allowed(plan, proven, [API_LOCK, NEW_MODULE_LOCK])
+        self.assertEqual("SELECTIVE", plan["classification"])
+        self.assertNotIn("rel000", jobs(plan))
+
+    def test_project_reference_added_to_existing_project_node_is_allowed(self):
+        orders = api_nodes()["orders.infrastructure"]
+        orders["dependencies"]["Incidents.Domain"] = "[1.0.0, )"
+        plan, proven = classify_repo({API_LOCK: lock(api_nodes(INCIDENTS_PROJECTS, **{"orders.infrastructure": orders}))})
+        self.assert_allowed(plan, proven, [API_LOCK])
+
+    def test_project_reference_removal_only_is_allowed(self):
+        plan, proven = classify_repo({API_LOCK: lock(api_nodes(**{"orders.infrastructure": None}))})
+        self.assert_allowed(plan, proven, [API_LOCK])
+
+    def test_project_node_internal_dependency_change_only_is_allowed(self):
+        orders = api_nodes()["orders.infrastructure"]
+        del orders["dependencies"]["Paqueteria.Domain"]
+        plan, proven = classify_repo({API_LOCK: lock(api_nodes(**{"orders.infrastructure": orders}))})
+        self.assert_allowed(plan, proven, [API_LOCK])
+
+    def test_formatting_only_lockfile_change_is_allowed(self):
+        plan, proven = classify_repo({ORDERS_LOCK: json.dumps(json.loads(BASE_FILES[ORDERS_LOCK])) + "\n"})
+        self.assert_allowed(plan, proven, [ORDERS_LOCK])
+
+    # ---- external drift stays DEPS
+
+    def test_external_nuget_package_added_is_rejected(self):
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(Serilog=copy.deepcopy(SERILOG)))})
+
+    def test_external_nuget_package_removed_is_rejected(self):
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{"Microsoft.AspNetCore.OpenApi": None}))})
+
+    def test_external_package_version_changed_is_rejected(self):
+        bumped = dict(NPGSQL, resolved="10.0.4")
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{"Npgsql.EntityFrameworkCore.PostgreSQL": bumped}))})
+
+    def test_external_content_hash_changed_is_rejected(self):
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(Npgsql=dict(NPGSQL_CORE, contentHash="b3RoZXI=")))})
+
+    def test_nuget_requested_range_changed_is_rejected(self):
+        reranged = dict(NPGSQL, requested="[10.0.4, )")
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{"Npgsql.EntityFrameworkCore.PostgreSQL": reranged}))})
+
+    def test_external_package_transitive_edge_changed_is_rejected(self):
+        changed = copy.deepcopy(NPGSQL)
+        changed["dependencies"]["Npgsql"] = "10.0.4"
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{"Npgsql.EntityFrameworkCore.PostgreSQL": changed}))})
+
+    def test_external_package_type_changed_is_rejected(self):
+        promoted = dict(NPGSQL_CORE, type="Direct", requested="[10.0.3, )")
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(Npgsql=promoted))})
+
+    def test_project_node_reaching_a_new_package_range_is_rejected(self):
+        orders = api_nodes()["orders.infrastructure"]
+        orders["dependencies"]["Npgsql.EntityFrameworkCore.PostgreSQL"] = "[10.0.4, )"
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{"orders.infrastructure": orders}))})
+
+    def test_project_node_reaching_a_package_absent_from_the_graph_is_rejected(self):
+        orders = api_nodes()["orders.infrastructure"]
+        orders["dependencies"]["Serilog"] = "[4.1.0, )"
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{"orders.infrastructure": orders}))})
+
+    def test_project_turned_into_package_is_rejected(self):
+        as_package = {"type": "Direct", "requested": "[1.0.0, )", "resolved": "1.0.0", "contentHash": "eA=="}
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{"paqueteria.domain": as_package}))})
+
+    def test_mixed_project_reference_and_external_package_change_is_rejected(self):
+        plan, proven = classify_repo(
+            new_module_files(api_lock_nodes=api_nodes(INCIDENTS_PROJECTS, Serilog=copy.deepcopy(SERILOG)))
+        )
+        self.assertEqual([NEW_MODULE_LOCK], proven)
+        self.assert_rejected(plan)
+
+    def test_new_lockfile_with_package_absent_from_base_is_rejected(self):
+        module = {
+            "Serilog": dict(SERILOG, type="Direct", requested="[4.1.0, )"),
+            "incidents.domain": project(),
+        }
+        plan, proven = classify_repo(new_module_files(module_lock_nodes=module))
+        self.assertEqual([API_LOCK], proven)
+        self.assert_rejected(plan)
+
+    def test_new_lockfile_with_other_version_of_a_base_package_is_rejected(self):
+        module = {"Npgsql": dict(NPGSQL_CORE, resolved="10.0.4"), "incidents.domain": project()}
+        plan, proven = classify_repo(new_module_files(module_lock_nodes=module))
+        self.assertEqual([API_LOCK], proven)
+        self.assert_rejected(plan)
+
+    def test_new_lockfile_with_new_target_framework_is_rejected(self):
+        files = new_module_files()
+        files[NEW_MODULE_LOCK] = lock({"incidents.domain": project()}, framework="net11.0")
+        plan, proven = classify_repo(files)
+        self.assertEqual([API_LOCK], proven)
+        self.assert_rejected(plan)
+
+    def test_lockfile_deletion_is_rejected(self):
+        repo = make_merge_repo(dict(BASE_FILES), {})
+        root = Path(repo["root"])
+        git(root, "checkout", "-q", "feature/x")
+        git(root, "rm", "-q", ORDERS_LOCK)
+        git(root, "commit", "-q", "-m", "drop lock")
+        source = git(root, "rev-parse", "HEAD")
+        git(root, "checkout", "-q", "main")
+        git(root, "merge", "-q", "--no-ff", "-m", "tested", "feature/x")
+        plan, proven = classify_tested(root, git(root, "rev-parse", "HEAD"), source)
+        self.assertEqual([], proven)
+        self.assert_rejected(plan)
+
+    def test_other_dependency_files_keep_deps_beside_proven_lockfiles(self):
+        for path in ("Directory.Packages.props", "global.json", ".config/dotnet-tools.json", "apps/web/pnpm-lock.yaml"):
+            with self.subTest(path=path):
+                files = new_module_files()
+                files[path] = "changed\n"
+                plan, proven = classify_repo(files)
+                self.assertEqual(sorted([API_LOCK, NEW_MODULE_LOCK]), proven)
+                self.assert_rejected(plan)
+
+    # ---- fail closed on anything unparseable or ambiguous
+
+    def test_malformed_lockfile_fails_closed(self):
+        for text in (
+            BASE_FILES[API_LOCK][:-40],
+            "",
+            "[]\n",
+            json.dumps({"version": 2}) + "\n",
+            json.dumps({"version": 2, "dependencies": {}}) + "\n",
+            json.dumps({"version": 2, "dependencies": {NET: []}}) + "\n",
+            json.dumps({"version": "2", "dependencies": {NET: {}}}) + "\n",
+            json.dumps({"version": 2, "dependencies": {NET: {}}, "extra": 1}) + "\n",
+        ):
+            with self.subTest(text=text[:40]):
+                self.assert_unproven_and_rejected({API_LOCK: text})
+
+    def test_lock_version_change_fails_closed(self):
+        self.assert_unproven_and_rejected({ORDERS_LOCK: lock(orders_nodes(), version=1)})
+
+    def test_unknown_lock_version_fails_closed(self):
+        v3 = dict(BASE_FILES, **{ORDERS_LOCK: lock(orders_nodes(), version=3)})
+        self.assert_unproven_and_rejected({ORDERS_LOCK: lock(orders_nodes(), version=3) + "\n"}, base_files=v3)
+
+    def test_unknown_node_type_or_key_fails_closed(self):
+        for name, node in (
+            ("incidents.domain", {"type": "Package"}),
+            ("incidents.domain", {"type": "Project", "path": "../x"}),
+            ("incidents.domain", {"type": "Project", "dependencies": {"Paqueteria.Domain": 1}}),
+            ("Serilog", {"type": "Transitive", "resolved": "4.1.0"}),
+            ("Npgsql", dict(NPGSQL_CORE, sha512="x")),
+        ):
+            with self.subTest(name=name, node=node):
+                self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(**{name: node}))})
+
+    def test_duplicate_json_keys_fail_closed(self):
+        text = BASE_FILES[API_LOCK].replace(
+            '"paqueteria.domain": {', '"paqueteria.domain": {"type": "Project"},\n      "paqueteria.domain": {', 1
+        )
+        self.assertNotEqual(BASE_FILES[API_LOCK], text)
+        self.assert_unproven_and_rejected({API_LOCK: text})
+
+    def test_case_colliding_project_and_package_names_fail_closed(self):
+        self.assert_unproven_and_rejected({API_LOCK: lock(api_nodes(npgsql=project()))})
+
+    def test_malformed_base_catalog_fails_closed_for_new_lockfiles(self):
+        base = dict(BASE_FILES, **{"tools/Broken/packages.lock.json": "{"})
+        plan, proven = classify_repo(new_module_files(), base_files=base)
+        self.assertEqual([], proven)
+        self.assert_rejected(plan)
+
+    # ---- the proof cannot be forged or widened
+
+    def test_lockfiles_without_proof_remain_deps(self):
+        for path in (API_LOCK, NEW_MODULE_LOCK, "tests/Paqueteria.UnitTests/packages.lock.json"):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assertIn("DEPS", plan["domains"])
+                self.assertNotIn("NUGET_PROJECT_GRAPH", plan["domains"])
+                self.assertEqual(("FAIL", [gate.REASON_DEPENDENCY_CHANGE_NOT_ALLOWED]), gate_verdict(plan))
+
+    def test_proof_for_a_non_lockfile_path_is_ignored(self):
+        paths = ["apps/web/package.json", "global.json"]
+        plan = classifier.classify_paths(
+            CONFIG,
+            paths,
+            head_ref="feature/x",
+            head_repo=REPOSITORY,
+            repository=REPOSITORY,
+            content_proofs={classifier.CONTENT_PROOF_NUGET_PROJECT_GRAPH: paths},
+        )
+        self.assertEqual(["DEPS"], plan["domains"])
+        self.assertEqual(("FAIL", [gate.REASON_DEPENDENCY_CHANGE_NOT_ALLOWED]), gate_verdict(plan))
+
+    def test_full_ci_label_on_proven_lockfiles_is_full_without_dependency_rejection(self):
+        plan, _ = classify_repo(new_module_files(), labels=["full-ci"])
+        self.assertEqual("FULL", plan["classification"])
+        self.assertNotIn("DEPS", plan["domains"])
+        self.assertEqual(("PASS", []), gate_verdict(plan))
+
+    # ---- MAIN_BACKSYNC is unchanged
+
+    def test_certified_main_backsync_is_unchanged_with_proven_lockfiles(self):
+        plan, _ = classify_repo(new_module_files(), head_ref="main", certified=True)
+        self.assertEqual("MAIN_BACKSYNC", plan["classification"])
+        self.assertEqual(set(ALL_JOBS) - {"rel000"}, jobs(plan))
+        self.assertEqual(("PASS", []), gate_verdict(plan))
+
+    def test_certified_main_backsync_still_carries_external_drift(self):
+        bumped = dict(NPGSQL, resolved="10.0.4")
+        plan, _ = classify_repo(
+            {API_LOCK: lock(api_nodes(**{"Npgsql.EntityFrameworkCore.PostgreSQL": bumped}))}, head_ref="main", certified=True
+        )
+        self.assertEqual("MAIN_BACKSYNC", plan["classification"])
+        self.assertIn("DEPS", plan["domains"])
+        self.assertEqual(set(ALL_JOBS) - {"rel000"}, jobs(plan))
+        self.assertEqual(("PASS", []), gate_verdict(plan))
+
+    def test_uncertified_main_with_external_drift_is_still_rejected(self):
+        bumped = dict(NPGSQL, resolved="10.0.4")
+        plan, _ = classify_repo({API_LOCK: lock(api_nodes(**{"Npgsql.EntityFrameworkCore.PostgreSQL": bumped}))}, head_ref="main")
+        self.assertIn("FULL:MAIN_BACKSYNC_UNCERTIFIED", plan["reasons"])
+        self.assert_rejected(plan)
+
+    # ---- CLI and the committed repository
+
+    def test_cli_applies_the_proof_end_to_end(self):
+        repo = make_merge_repo(dict(BASE_FILES), new_module_files())
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "plan.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = classifier.main(
+                    [
+                        "--repo-root", repo["root"],
+                        "--tested-git-sha", repo["tested"],
+                        "--source-head-sha", repo["source"],
+                        "--head-ref", "feature/x",
+                        "--head-repo", REPOSITORY,
+                        "--repository", REPOSITORY,
+                        "--output", str(output),
+                    ]
+                )
+            self.assertEqual(0, code)
+            plan = json.loads(output.read_text(encoding="utf-8"))
+        self.assertNotIn("DEPS", plan["domains"])
+        self.assertEqual(("PASS", []), gate_verdict(plan))
+
+    def test_every_committed_lockfile_is_understood_by_the_strict_parser(self):
+        """Real Project-only evolution of any committed lockfile must be provable."""
+        head = git(REPOSITORY_ROOT, "rev-parse", "HEAD")
+        tracked = sorted(git(REPOSITORY_ROOT, "ls-files", "*packages.lock.json").splitlines())
+        self.assertGreater(len(tracked), 10)
+        self.assertEqual(tracked, classifier.prove_nuget_project_graph_only(REPOSITORY_ROOT, head, head, tracked))
 
 
 # --------------------------------------------------------------------------- repository coverage

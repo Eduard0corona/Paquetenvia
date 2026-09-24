@@ -3120,7 +3120,7 @@ class WorkflowProvenanceProfileTests(unittest.TestCase):
         self.assertEqual("pr-validation", result["report"]["workflow_profile"])
         self.assertEqual(sorted(rel000.EXECUTION_ARTIFACT_NAMES), sorted(result["artifacts_by_job"]))
 
-    def test_177_pr_validation_rejects_sixteen_and_eighteen_jobs(self):
+    def test_177_pr_validation_rejects_missing_observable_and_extra_jobs(self):
         base = self.attempt_jobs(self.PR_VALIDATION, 1)
         sixteen = [job for job in base if job["name"] != "Validate web workspace"]
         missing_classify = [job for job in base if job["name"] != "Classify PR impact"]
@@ -3179,11 +3179,56 @@ class WorkflowProvenanceProfileTests(unittest.TestCase):
                 self.assertEqual(17, len(manifest["jobs"]))
                 self.validate(output, 1)
 
-    def test_182_missing_pr_gate_fails_topology(self):
+    def test_182_absent_pr_gate_is_the_expected_runtime_topology(self):
+        # GitHub does not create the downstream job record until the aggregator
+        # concludes, so while REL-000 sanitizes provenance only 16 jobs exist.
         without = [job for job in self.attempt_jobs(self.PR_VALIDATION, 1) if job["name"] != "PR Gate"]
-        self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda: self.sanitize(self.PR_VALIDATION, {1: without}))
+        self.assertEqual(16, len(without))
+        manifest, output = self.sanitize(self.PR_VALIDATION, {1: without})
+        self.assertEqual(16, len(manifest["jobs"]))
+        self.assertNotIn("pr-gate", {job["job_key"] for job in manifest["jobs"]})
+        self.assertEqual(10, len(manifest["artifacts"]))
+        self.assertEqual("pr-validation", self.validate(output, 1)["workflow_profile"])
+        # the downstream job is optional, never a licence for a foreign job
         replaced = without + [self.raw_job(self.PR_VALIDATION, "pr-gate", 1, name="Validate normative baseline")]
         self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.sanitize(self.PR_VALIDATION, {1: replaced}))
+
+    def test_182b_absent_pr_gate_still_enforces_the_observable_job_set(self):
+        without = [job for job in self.attempt_jobs(self.PR_VALIDATION, 1) if job["name"] != "PR Gate"]
+        # a missing observable control is still fail-closed at 15 jobs
+        missing = [job for job in without if job["name"] != "Validate backup and restore"]
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda: self.sanitize(self.PR_VALIDATION, {1: missing}))
+        missing_classify = [job for job in without if job["name"] != "Classify PR impact"]
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda: self.sanitize(self.PR_VALIDATION, {1: missing_classify}))
+        # an unknown extra job is rejected even though the count reaches 17
+        unknown = without + [self.raw_job(self.PR_VALIDATION, "web", 1, job_id=1, name="Validate normative baseline")]
+        self.assertEqual(17, len(unknown))
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.sanitize(self.PR_VALIDATION, {1: unknown}))
+        # producers are still required to have succeeded
+        failed = [job for job in without if job["name"] != "Validate web workspace"]
+        failed = failed + [self.raw_job(self.PR_VALIDATION, "web", 1, status="completed", conclusion="failure")]
+        self.assert_reason("WORKFLOW_PROVENANCE_PRODUCER_NOT_SUCCESSFUL", lambda: self.sanitize(self.PR_VALIDATION, {1: failed}))
+
+    def test_182c_foundation_profile_topology_is_unchanged(self):
+        # Foundation has no downstream job: all 13 jobs stay mandatory.
+        profile = rel000.WORKFLOW_PROVENANCE_PROFILES[rel000.WORKFLOW_PROVENANCE_PROFILE_FOUNDATION]
+        self.assertEqual(frozenset(), profile.downstream_jobs)
+        self.assertEqual(frozenset(rel000.AUTHORITATIVE_JOB_NAMES), profile.observable_jobs)
+        self.assertEqual(13, len(profile.observable_jobs))
+        base = self.attempt_jobs(self.FOUNDATION, 1)
+        self.assertEqual(13, len(self.sanitize(self.FOUNDATION, {1: base})[0]["jobs"]))
+        for name in ("Validate backup and restore", "Validate MVP-0 internal release evidence"):
+            twelve = [job for job in base if job["name"] != name]
+            self.assert_reason("WORKFLOW_PROVENANCE_JOB_SET_INVALID", lambda jobs=twelve: self.sanitize(self.FOUNDATION, {1: jobs}))
+
+    def test_182d_pr_validation_observable_set_is_exactly_sixteen(self):
+        profile = rel000.WORKFLOW_PROVENANCE_PROFILES[rel000.WORKFLOW_PROVENANCE_PROFILE_PR_VALIDATION]
+        # the real workflow topology stays at 17 jobs
+        self.assertEqual(17, len(profile.job_names))
+        self.assertEqual(frozenset({"pr-gate"}), profile.downstream_jobs)
+        self.assertEqual(16, len(profile.observable_jobs))
+        self.assertNotIn("pr-gate", profile.observable_jobs)
+        self.assertNotIn("PR Gate", profile.observable_job_names)
 
     def test_183_malformed_pending_pr_gate_metadata_fails(self):
         cases = (
@@ -3279,9 +3324,13 @@ class WorkflowProvenanceProfileTests(unittest.TestCase):
         self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.validate(write({**foundation_payload, "workflow_profile": "pr-validation"}), 1))
         legacy_pr = {k: v for k, v in pr_payload.items() if k != "workflow_profile"}
         self.assert_reason("WORKFLOW_PROVENANCE_JOB_UNKNOWN", lambda: self.validate(write(legacy_pr), 1))
-        # a pr-validation manifest without its downstream job is incomplete
+        # a pr-validation manifest sanitized before GitHub created the downstream job
+        # is the expected topology and must validate
         truncated = {**pr_payload, "jobs": [job for job in pr_payload["jobs"] if job["job_key"] != "pr-gate"]}
-        self.assert_reason("WORKFLOW_PROVENANCE_JOB_MISSING", lambda: self.validate(write(truncated), 1))
+        self.assertEqual("pr-validation", self.validate(write(truncated), 1)["workflow_profile"])
+        # an observable job is still mandatory in the manifest
+        no_producer = {**pr_payload, "jobs": [job for job in pr_payload["jobs"] if job["job_key"] != "web"]}
+        self.assert_reason("WORKFLOW_PROVENANCE_JOB_MISSING", lambda: self.validate(write(no_producer), 1))
 
     def test_188_unknown_profile_argument_fails_closed(self):
         jobs = {1: self.attempt_jobs(self.PR_VALIDATION, 1)}

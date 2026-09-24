@@ -724,6 +724,38 @@
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
+      "finance.application": {
+        "type": "Project",
+        "dependencies": {
+          "Finance.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "finance.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "finance.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Finance.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "finance.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Finance.Application": "[1.0.0, )",
+          "Finance.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "identity.application": {
         "type": "Project",
         "dependencies": {
@@ -754,6 +786,38 @@
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
           "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Domain": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
+      "incidents.application": {
+        "type": "Project",
+        "dependencies": {
+          "Incidents.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "incidents.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "incidents.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Incidents.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "incidents.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Incidents.Application": "[1.0.0, )",
+          "Incidents.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
@@ -897,9 +961,13 @@
           "Dispatch.Infrastructure": "[1.0.0, )",
           "Drivers.Endpoints": "[1.0.0, )",
           "Drivers.Infrastructure": "[1.0.0, )",
+          "Finance.Endpoints": "[1.0.0, )",
+          "Finance.Infrastructure": "[1.0.0, )",
           "Identity.Application": "[1.0.0, )",
           "Identity.Endpoints": "[1.0.0, )",
           "Identity.Infrastructure": "[1.0.0, )",
+          "Incidents.Endpoints": "[1.0.0, )",
+          "Incidents.Infrastructure": "[1.0.0, )",
           "Locations.Endpoints": "[1.0.0, )",
           "Locations.Infrastructure": "[1.0.0, )",
           "Microsoft.AspNetCore.OpenApi": "[10.0.10, )",
