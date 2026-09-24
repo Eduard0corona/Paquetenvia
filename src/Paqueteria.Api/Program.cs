@@ -16,6 +16,7 @@ using Organizations.Endpoints.Tenancy;
 using Organizations.Infrastructure;
 using Organizations.Endpoints.Testing;
 using Paqueteria.Api.Tenancy;
+using Paqueteria.Infrastructure.DataProtection;
 using Locations.Endpoints;
 using Locations.Infrastructure;
 using Pricing.Endpoints;
@@ -36,6 +37,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
+builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddIdentityInfrastructure(builder.Configuration, builder.Environment);

@@ -22,6 +22,8 @@ using Custody.Infrastructure.Persistence;
 using Custody.Infrastructure.Persistence.Migrations;
 using Notifications.Infrastructure.Persistence;
 using Notifications.Infrastructure.Persistence.Migrations;
+using Paqueteria.Infrastructure.DataProtection;
+using Paqueteria.Infrastructure.DataProtection.Migrations;
 
 internal sealed record ModuleMigrationState(
     string Module,
@@ -51,6 +53,9 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260725_AdoptCanonicalCustodyProofsBaseline.cs"),
         ("Notifications", "__ef_migrations_history_notifications", RouteManualRouteRealtime.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260829000100_RouteManualRouteRealtime.cs"),
+        ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
+            AddDistributedDataProtectionKeyRing.MigrationId,
+            "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
     ];
 
     public static IReadOnlyList<ModuleMigrationState> VerifySources()
@@ -66,12 +71,21 @@ internal sealed class ModuleMigrationCoordinator
             }
 
             var source = File.ReadAllText(path);
-            var validEvolution = contract.Module == "Notifications"
-                ? source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
-                  !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase)
-                : !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
-                  !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
-                  !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+            var validEvolution = contract.Module switch
+            {
+                "Notifications" =>
+                    source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
+                // SCL-001: dropping the shared key ring invalidates every payload protected by any
+                // replica, so the lane is additive and its rollback fails closed.
+                "DataProtection" =>
+                    source.Contains("SCL001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
+                _ =>
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+            };
             if (!source.Contains(contract.MigrationId, StringComparison.Ordinal) || !validEvolution)
             {
                 throw new BaselineVerificationException(
@@ -161,6 +175,10 @@ internal sealed class ModuleMigrationCoordinator
         {
             await MigrateNotificationsAsync(connectionString, cancellationToken, azureOwnershipBridge);
         }
+        if (before.Single(state => state.Module == "DataProtection").Status == "PENDING")
+        {
+            await MigrateDataProtectionAsync(connectionString, cancellationToken);
+        }
         await AssertAsync(connectionString, cancellationToken);
     }
 
@@ -198,7 +216,54 @@ internal sealed class ModuleMigrationCoordinator
             }
         }
 
+        await AssertDataProtectionKeyRingAsync(connection, cancellationToken);
         return states;
+    }
+
+    /// <summary>
+    /// SCL-001: the applied Data Protection lane has to leave a shared key ring that the migrator
+    /// owns and that both runtime roles can read and append to, otherwise API and Worker replicas
+    /// silently fall back to per-node key material.
+    /// </summary>
+    private static async Task AssertDataProtectionKeyRingAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT pg_get_userbyid(c.relowner),
+                   c.relrowsecurity AND c.relforcerowsecurity,
+                   (SELECT count(*)::integer
+                    FROM aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) acl
+                    JOIN pg_roles grantee ON grantee.oid = acl.grantee
+                    WHERE grantee.rolname IN ('paqueteria_app','paqueteria_worker')
+                      AND acl.privilege_type IN ('SELECT','INSERT'))
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname='{PlatformDataProtectionSchema.Schema}'
+              AND c.relname='{PlatformDataProtectionSchema.Table}';
+            """,
+            connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            throw new InvalidOperationException(
+                $"{PlatformDataProtectionSchema.QualifiedTable} is missing after the Data Protection migration lane.");
+        }
+
+        var owner = reader.GetString(0);
+        var forcedRowLevelSecurity = reader.GetBoolean(1);
+        var runtimeGrants = reader.GetInt32(2);
+
+        // SELECT and INSERT for paqueteria_app and paqueteria_worker: the ring is append-only at
+        // runtime, so no replica may rewrite or revoke another replica's key material.
+        if (owner != "paqueteria_migrator" || !forcedRowLevelSecurity || runtimeGrants != 4)
+        {
+            throw new InvalidOperationException(
+                $"{PlatformDataProtectionSchema.QualifiedTable} must be owned by paqueteria_migrator, force row " +
+                $"level security and grant SELECT and INSERT to both runtime roles; detected owner={owner}, " +
+                $"forced_rls={forcedRowLevelSecurity}, runtime_grants={runtimeGrants}.");
+        }
     }
 
     private static async Task<ModuleMigrationState> ReadStateAsync(
@@ -238,6 +303,8 @@ internal sealed class ModuleMigrationCoordinator
                     RouteExternalOfferRealtime.MigrationId,
                     RouteManualRouteRealtime.MigrationId,
                 ],
+            "DataProtection" =>
+                [AddDistributedDataProtectionKeyRing.MigrationId],
             _ => [contract.MigrationId],
         };
         var status = ids.SequenceEqual(expectedIds, StringComparer.Ordinal)
@@ -496,6 +563,24 @@ internal sealed class ModuleMigrationCoordinator
 
             throw;
         }
+    }
+
+    private static async Task MigrateDataProtectionAsync(
+        string connectionString,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<PlatformDataProtectionDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(PlatformDataProtectionDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable(
+                    PlatformDataProtectionSchema.MigrationsHistoryTable,
+                    PlatformDataProtectionSchema.Schema);
+            })
+            .Options;
+        await using var context = new PlatformDataProtectionDbContext(options);
+        await context.Database.MigrateAsync(cancellationToken);
     }
 
     private static DbContextOptions<NotificationsDbContext> NotificationsOptions(NpgsqlConnection connection)

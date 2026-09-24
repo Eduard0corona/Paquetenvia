@@ -25,7 +25,7 @@ internal sealed class NotificationsOutboxDispatcher(
                 if (DateTimeOffset.UtcNow >= nextRecovery)
                 {
                     var recovered = await store.RecoverStaleAsync(
-                        options.Value.WorkerId,
+                        options.Value.EffectiveWorkerId,
                         options.Value.BatchSize,
                         options.Value.MaximumAttempts,
                         TimeSpan.FromSeconds(options.Value.LeaseSeconds),
@@ -39,12 +39,12 @@ internal sealed class NotificationsOutboxDispatcher(
                 }
 
                 var owned = await store.ClaimNotificationsAsync(
-                    options.Value.WorkerId,
+                    options.Value.EffectiveWorkerId,
                     options.Value.BatchSize,
                     TimeSpan.FromSeconds(options.Value.LeaseSeconds),
                     stoppingToken);
                 var unowned = await store.ClaimUnownedAsync(
-                    options.Value.WorkerId,
+                    options.Value.EffectiveWorkerId,
                     options.Value.BatchSize,
                     TimeSpan.FromSeconds(options.Value.LeaseSeconds),
                     stoppingToken);
