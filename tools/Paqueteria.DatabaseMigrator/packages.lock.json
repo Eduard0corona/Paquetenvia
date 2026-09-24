@@ -209,6 +209,29 @@
           "Paqueteria.Infrastructure": "[1.0.0, )"
         }
       },
+      "incidents.application": {
+        "type": "Project",
+        "dependencies": {
+          "Incidents.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
+      "incidents.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "incidents.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Incidents.Application": "[1.0.0, )",
+          "Incidents.Domain": "[1.0.0, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Infrastructure": "[1.0.0, )"
+        }
+      },
       "locations.application": {
         "type": "Project",
         "dependencies": {

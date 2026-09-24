@@ -20,6 +20,8 @@ using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
 using Custody.Infrastructure.Persistence;
 using Custody.Infrastructure.Persistence.Migrations;
+using Incidents.Infrastructure.Persistence;
+using Incidents.Infrastructure.Persistence.Migrations;
 using Notifications.Infrastructure.Persistence;
 using Notifications.Infrastructure.Persistence.Migrations;
 using Paqueteria.Infrastructure.DataProtection;
@@ -51,6 +53,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AdoptCanonicalCustodyProofsBaseline.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260725_AdoptCanonicalCustodyProofsBaseline.cs"),
+        ("Incidents", "__ef_migrations_history_incidents", AdoptCanonicalIncidentsBaseline.MigrationId,
+            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs"),
         ("Notifications", "__ef_migrations_history_notifications", RouteManualRouteRealtime.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260829000100_RouteManualRouteRealtime.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
@@ -170,6 +174,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "Custody").Status == "PENDING")
         {
             await MigrateCustodyAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "Incidents").Status == "PENDING")
+        {
+            await MigrateIncidentsAsync(connectionString, cancellationToken);
         }
         if (before.Single(state => state.Module == "Notifications").Status == "PENDING")
         {
@@ -451,6 +459,20 @@ internal sealed class ModuleMigrationCoordinator
             })
             .Options;
         await using var context = new CustodyDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    private static async Task MigrateIncidentsAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<IncidentsDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(IncidentsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_incidents", "platform");
+            })
+            .Options;
+        await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync(cancellationToken);
     }
 

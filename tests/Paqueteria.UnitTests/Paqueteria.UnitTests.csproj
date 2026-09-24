@@ -29,6 +29,9 @@
     <ProjectReference Include="..\..\src\Modules\Custody\Custody.Application\Custody.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Custody\Custody.Domain\Custody.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Incidents\Incidents.Application\Incidents.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Incidents\Incidents.Domain\Incidents.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Incidents\Incidents.Infrastructure\Incidents.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Application\Orders.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Organizations\Organizations.Application\Organizations.Application.csproj" />

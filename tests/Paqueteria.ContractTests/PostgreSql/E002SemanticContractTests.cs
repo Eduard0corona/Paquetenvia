@@ -382,7 +382,7 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             var membershipsBefore = await CountMembershipsAsync(connectionString);
             var fingerprintBefore = await CatalogFingerprintAsync(connectionString);
 
-            // E-002 v0.8 §35: the same apply command on a 10/10 APPLIED database is a successful read-only no-op.
+            // E-002 v0.8 §35: the same apply command on an 11/11 APPLIED database is a successful read-only no-op.
             await using var capture = new StringWriter();
             Console.SetOut(capture);
             var exitCode = await DatabaseMigratorProgram.RunAsync(
@@ -390,7 +390,7 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             Console.SetOut(output);
 
             Assert.Equal(0, exitCode);
-            Assert.Contains("E002_APPLIED_PATH_NO_OP modules=10/10 APPLIED bridge_activation=0", capture.ToString(), StringComparison.Ordinal);
+            Assert.Contains("E002_APPLIED_PATH_NO_OP modules=11/11 APPLIED bridge_activation=0", capture.ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain("E002_APPLIED_PATH_MODULE_STATE_UNEXPECTED", capture.ToString(), StringComparison.Ordinal);
             Assert.Contains("Result: AlreadyApplied", capture.ToString(), StringComparison.Ordinal);
             Assert.Equal(membershipsBefore, await CountMembershipsAsync(connectionString));
