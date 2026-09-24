@@ -150,7 +150,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Restore
@@ -221,7 +221,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Restore locked contract dependencies
@@ -331,7 +331,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Install dependencies
@@ -390,7 +390,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Restore controlled host
@@ -472,7 +472,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Set up pnpm
@@ -485,7 +485,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Restore locked integration dependencies
@@ -607,7 +607,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Set up pnpm
@@ -620,7 +620,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Restore locked integration dependencies
@@ -755,7 +755,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Set up pnpm
@@ -768,7 +768,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Restore locked integration dependencies
@@ -929,7 +929,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Set up pnpm
@@ -942,7 +942,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Restore locked operations dependencies
@@ -1074,7 +1074,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Restore locked simulation dependencies
@@ -1188,7 +1188,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Set up pnpm
@@ -1201,7 +1201,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Restore integrated development hosts
@@ -1323,7 +1323,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Verify PowerShell 7
@@ -1639,7 +1639,7 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Capture and sanitize workflow provenance
