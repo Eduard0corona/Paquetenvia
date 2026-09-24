@@ -54,6 +54,10 @@
     <ProjectReference Include="..\..\src\Modules\Locations\Locations.Domain\Locations.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Locations\Locations.Endpoints\Locations.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Locations\Locations.Infrastructure\Locations.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Finance\Finance.Application\Finance.Application.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Finance\Finance.Domain\Finance.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Finance\Finance.Endpoints\Finance.Endpoints.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Finance\Finance.Infrastructure\Finance.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Routing\Routing.Application\Routing.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Routing\Routing.Domain\Routing.Domain.csproj" />
     <ProjectReference Include="..\..\src\Modules\Routing\Routing.Endpoints\Routing.Endpoints.csproj" />

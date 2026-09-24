@@ -168,6 +168,21 @@ internal static class SolutionCatalog
         ],
         allowedCrossModuleDependencies: ["Drivers", "Organizations"]);
 
+    internal static readonly ModuleDefinition Finance = Module(
+        "Finance",
+        typeof(Finance.Domain.AssemblyReference).Assembly,
+        typeof(Finance.Application.AssemblyReference).Assembly,
+        typeof(Finance.Infrastructure.AssemblyReference).Assembly,
+        typeof(Finance.Endpoints.AssemblyReference).Assembly,
+        additionalInfrastructureReferences: ["Paqueteria.Application"],
+        additionalEndpointReferences:
+        [
+            "Organizations.Application",
+            "Organizations.Endpoints",
+            "Paqueteria.Application",
+        ],
+        allowedCrossModuleDependencies: ["Organizations"]);
+
     internal static readonly ProjectComponent NotificationsDomain = Component(
         "Notifications.Domain",
         ProjectRole.ModuleDomain,
@@ -196,7 +211,10 @@ internal static class SolutionCatalog
         ]);
 
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
-        [Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody, Reporting, Routing];
+    [
+        Identity, Orders, Pricing, Organizations, Locations, Drivers, Dispatch, Realtime, Custody,
+        Reporting, Routing, Finance,
+    ];
 
     internal static readonly ProjectComponent Api = Component(
         "Paqueteria.Api",
@@ -231,6 +249,8 @@ internal static class SolutionCatalog
             "Reporting.Infrastructure",
             "Routing.Endpoints",
             "Routing.Infrastructure",
+            "Finance.Endpoints",
+            "Finance.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -266,6 +286,7 @@ internal static class SolutionCatalog
         .. Custody.Components,
         .. Reporting.Components,
         .. Routing.Components,
+        .. Finance.Components,
         NotificationsDomain,
         NotificationsApplication,
         NotificationsInfrastructure,

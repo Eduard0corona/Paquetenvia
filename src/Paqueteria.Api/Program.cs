@@ -24,6 +24,8 @@ using Pricing.Infrastructure;
 using Realtime.Endpoints;
 using Realtime.Infrastructure;
 using Custody.Endpoints;
+using Finance.Endpoints;
+using Finance.Infrastructure;
 using Custody.Infrastructure;
 using Reporting.Endpoints;
 using Reporting.Infrastructure;
@@ -57,6 +59,8 @@ builder.Services.AddRealtimeEndpoints(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddReportingInfrastructure(builder.Configuration);
 builder.Services.AddReportingEndpoints();
+builder.Services.AddFinanceInfrastructure(builder.Configuration);
+builder.Services.AddFinanceEndpoints();
 builder.Services.AddRoutingInfrastructure(builder.Configuration);
 builder.Services.AddRoutingEndpoints();
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
@@ -133,6 +137,8 @@ app.MapRealtimeHubs();
 app.MapProofEndpoints();
 app.MapOperationsDashboardEndpoints();
 app.MapRouteEndpoints();
+app.MapCodEndpoints();
+app.MapFinancialsEndpoints();
 
 app.Run();
 
