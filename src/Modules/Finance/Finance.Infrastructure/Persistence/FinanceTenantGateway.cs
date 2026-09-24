@@ -20,13 +20,7 @@ public sealed class FinanceTenantGateway(
 {
     private const string AuthorizationSql =
         """
-        SELECT u.status,m.role,m.status,
-               CASE WHEN @order::uuid IS NULL THEN false ELSE EXISTS (
-                 SELECT 1
-                 FROM dispatch.assignments a
-                 JOIN drivers.driver_profiles p ON p.id=a.driver_id
-                 WHERE a.order_id=@order AND a.status IN ('ACCEPTED','ACTIVE')
-                   AND p.user_id=u.id AND p.org_id=@organization) END
+        SELECT u.status,m.role,m.status
         FROM identity.users u
         LEFT JOIN organizations.organization_memberships m
           ON m.user_id=u.id AND m.organization_id=@organization
@@ -67,28 +61,36 @@ public sealed class FinanceTenantGateway(
             throw;
         }
         catch (Exception exception) when (
-            exception is FinanceConflictException or FinanceForbiddenException or FinanceNotFoundException)
+            exception is FinanceConflictException or FinanceForbiddenException or FinanceNotFoundException
+                or FinanceUnavailableException)
         {
             throw;
         }
-        catch (PostgresException exception) when (
-            exception.SqlState is PostgresErrorCodes.UniqueViolation or
-                PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.DeadlockDetected)
+        catch (Exception exception) when (StoreFailure(exception) is PostgresException
+            {
+                SqlState: PostgresErrorCodes.UniqueViolation or PostgresErrorCodes.SerializationFailure
+                    or PostgresErrorCodes.DeadlockDetected,
+            })
         {
             throw FinanceSql.Conflict(FinanceConflictCode.ConcurrencyConflict, exception);
         }
-        catch (NpgsqlException exception)
+        catch (Exception exception) when (
+            exception is RetryLimitExceededException ||
+            StoreFailure(exception) is NpgsqlException or TimeoutException)
         {
             throw new FinanceUnavailableException("The finance data store is unavailable.", exception);
         }
     }
 
+    /// <summary>
+    /// Identity, membership, role and MFA only. None of these is decided by dispatch, so none can go stale
+    /// while a request waits for an order lock; a DRIVER's assignment is observed separately under that lock.
+    /// </summary>
     internal async Task<FinanceAuthorizationContext> ReadAuthorizationAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid actorId,
         Guid organizationId,
-        Guid? orderId,
         bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
@@ -99,7 +101,6 @@ public sealed class FinanceTenantGateway(
             CommandTimeoutSeconds);
         command.Parameters.Add(FinanceSql.P("actor", NpgsqlDbType.Uuid, actorId));
         command.Parameters.Add(FinanceSql.P("organization", NpgsqlDbType.Uuid, organizationId));
-        command.Parameters.Add(FinanceSql.P("order", NpgsqlDbType.Uuid, orderId));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
             ? new(
@@ -107,7 +108,7 @@ public sealed class FinanceTenantGateway(
                 reader.GetString(0) == "ACTIVE",
                 !reader.IsDBNull(2) && reader.GetString(2) == "ACTIVE",
                 mfaSatisfied,
-                !reader.IsDBNull(3) && reader.GetBoolean(3))
+                false)
             : new(null, false, false, mfaSatisfied, false);
     }
 
@@ -124,4 +125,15 @@ public sealed class FinanceTenantGateway(
         command.Parameters.Add(FinanceSql.P("key", NpgsqlDbType.Text, $"finance-order:{orderId:D}"));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// The store failure behind <paramref name="exception"/>. The EF execution strategy reports a transient
+    /// failure it gave up retrying as <see cref="RetryLimitExceededException"/>, and without retries as an
+    /// <see cref="InvalidOperationException"/>; both wrap the Npgsql exception that actually occurred.
+    /// </summary>
+    private static Exception StoreFailure(Exception exception) =>
+        exception is RetryLimitExceededException or InvalidOperationException &&
+        exception.InnerException is { } inner
+            ? inner
+            : exception;
 }

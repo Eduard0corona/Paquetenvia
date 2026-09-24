@@ -17,9 +17,15 @@ public sealed record CodPosition(MoneyCents Expected, CodStatus? Status, MoneyCe
 
     public bool IsReconciled => Status == CodStatus.Reconciled;
 
-    /// <summary>Cash still owed to the platform because it was collected but not yet reconciled.</summary>
+    /// <summary>
+    /// Whether collected cash is awaiting reconciliation. Only a RECORDED collection is: an expectation with
+    /// no collection yet is uncollected cash, reported through <see cref="Expected"/> and never here.
+    /// </summary>
+    public bool IsPendingReconciliation => Status == CodStatus.Recorded;
+
+    /// <summary>Cash collected but not yet reconciled: the amount actually recorded, never the expectation.</summary>
     public MoneyCents PendingReconciliation =>
-        IsExpected && !IsReconciled ? Expected : MoneyCents.Zero;
+        IsPendingReconciliation && Amount is { } recorded ? recorded : MoneyCents.Zero;
 
     public bool SatisfiesDeliveryRequirement =>
         CodLifecyclePolicy.SatisfiesDeliveryRequirement(Expected, Status, Amount);
@@ -121,7 +127,7 @@ public sealed record RouteUnitEconomics(
             codExpected,
             codPending,
             orders.Count,
-            orders.Count(order => order.Cod.PendingReconciliation.AmountCents > 0),
+            orders.Count(order => order.Cod.IsPendingReconciliation),
             orders);
     }
 }

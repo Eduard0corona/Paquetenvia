@@ -145,7 +145,15 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         await using var scenario = await FinanceScenario.CreateAsync(fixture);
         var cod = CreateCodService(fixture.AppDataSource);
         var financials = CreateFinancialsService(fixture.AppDataSource);
-        await cod.RecordAsync(scenario.Record(scenario.CodOrderId, 5_000, "route-record"), default);
+
+        // Cash that is expected but not yet collected is an expectation, never cash awaiting reconciliation.
+        var uncollected = await financials.GetRouteFinancialsAsync(scenario.RouteQuery(scenario.RouteId), default);
+        Assert.Equal(5_000, uncollected.CodExpectedCentsTotal);
+        Assert.Equal(0, uncollected.CodPendingReconciliationCentsTotal);
+        Assert.Equal(0, uncollected.CodPendingReconciliationCount);
+        Assert.Null(uncollected.Orders.Single(order => order.OrderId == scenario.CodOrderId).Cod.Status);
+
+        var recorded = await cod.RecordAsync(scenario.Record(scenario.CodOrderId, 5_000, "route-record"), default);
 
         var route = await financials.GetRouteFinancialsAsync(scenario.RouteQuery(scenario.RouteId), default);
         Assert.Equal("MXN", route.Currency);
@@ -169,16 +177,84 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         Assert.Equal(
             route.CostCentsTotal,
             route.Orders.Sum(order => order.CostCents));
+        Assert.Equal(route.MarginCentsTotal, route.Orders.Sum(order => order.MarginCents));
+        Assert.Equal(route.CodExpectedCentsTotal, route.Orders.Sum(order => order.Cod.ExpectedCents));
+        Assert.Equal(
+            route.CodPendingReconciliationCentsTotal,
+            route.Orders.Where(order => order.Cod.Status == "RECORDED").Sum(order => order.Cod.AmountCents!.Value));
         foreach (var order in route.Orders)
         {
             var single = await financials.GetOrderFinancialsAsync(scenario.OrderQuery(order.OrderId), default);
             Assert.Equal(single.RevenueCents, order.RevenueCents);
             Assert.Equal(single.CostCents, order.CostCents);
             Assert.Equal(single.MarginCents, order.MarginCents);
+            Assert.Equal(single.Cod, order.Cod);
         }
+
+        // Reconciled cash is no longer pending, while the expectation total is unchanged.
+        await scenario.SetOrderStatusAsync(scenario.CodOrderId, "DELIVERED");
+        await cod.ReconcileAsync(scenario.Reconcile(recorded.Id, "route-reconcile"), default);
+        var reconciled = await financials.GetRouteFinancialsAsync(scenario.RouteQuery(scenario.RouteId), default);
+        Assert.Equal(5_000, reconciled.CodExpectedCentsTotal);
+        Assert.Equal(0, reconciled.CodPendingReconciliationCentsTotal);
+        Assert.Equal(0, reconciled.CodPendingReconciliationCount);
 
         await Assert.ThrowsAsync<FinanceNotFoundException>(() =>
             financials.GetRouteFinancialsAsync(scenario.RouteQuery(Guid.NewGuid()), default));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Fin001_a_driver_whose_assignment_changes_while_waiting_for_the_order_lock_cannot_record()
+    {
+        await using var scenario = await FinanceScenario.CreateAsync(fixture);
+        await scenario.CreateReplacementDriverAsync();
+        var cod = CreateCodService(fixture.AppDataSource);
+
+        // Dispatch replaces an assignment while holding the order row lock. Hold that lock with the
+        // replacement staged, let the assigned driver's request — authorized on everything the wait cannot
+        // change — block behind it, and only then commit the replacement.
+        await using var dispatch = await fixture.AdminDataSource.OpenConnectionAsync();
+        await using var replacement = await dispatch.BeginTransactionAsync();
+        var dispatchPid = await scenario.ReplaceAssignmentUnderOrderLockAsync(
+            dispatch, replacement, scenario.CodOrderId);
+
+        var stale = Task.Run(() => cod.RecordAsync(
+            scenario.DriverRecord(scenario.CodOrderId, 5_000, "stale-driver"), default));
+        await WaitUntilBlockedByAsync(dispatchPid, stale);
+        await replacement.CommitAsync();
+
+        // The claim is decided from the assignment observed under the lock, so the stale driver fails closed
+        // and leaves no collection, audit or idempotency evidence behind.
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() => stale);
+        Assert.Equal(0, await scenario.CodRowCountAsync(scenario.CodOrderId));
+        Assert.Equal(0, (await scenario.CodEvidenceAsync()).Audits);
+        Assert.Equal((0L, (int?)null), await scenario.IdempotencyRecordAsync("stale-driver"));
+
+        // The driver now holding the assignment records it and is the one credited with the collection.
+        var current = await cod.RecordAsync(
+            scenario.ReplacementDriverRecord(scenario.CodOrderId, 5_000, "current-driver"), default);
+        Assert.Equal("RECORDED", current.Status);
+        Assert.Equal(scenario.ReplacementDriverId, await scenario.CollectingDriverAsync(scenario.CodOrderId));
+        Assert.Equal(1, (await scenario.CodEvidenceAsync()).Audits);
+        Assert.Equal((1L, (int?)201), await scenario.IdempotencyRecordAsync("current-driver"));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Fin001_a_store_failure_inside_the_transaction_is_unavailable_and_leaves_no_evidence()
+    {
+        await using var scenario = await FinanceScenario.CreateAsync(fixture);
+        var cod = CreateCodService(
+            fixture.AppDataSource,
+            new ThrowingFailureInjector(
+                FinanceTransactionStage.AuditInserted,
+                new NpgsqlException("Simulated store failure after the audit row was written.")));
+
+        var failure = await Assert.ThrowsAsync<FinanceUnavailableException>(() =>
+            cod.RecordAsync(scenario.Record(scenario.CodOrderId, 5_000, "store-failure"), default));
+        Assert.IsType<NpgsqlException>(failure.InnerException);
+        Assert.Equal(0, await scenario.CodRowCountAsync(scenario.CodOrderId));
+        Assert.Equal(0, (await scenario.CodEvidenceAsync()).Audits);
+        Assert.Equal((0L, (int?)null), await scenario.IdempotencyRecordAsync("store-failure"));
     }
 
     [PostgreSqlContractFact]
@@ -232,15 +308,45 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         Assert.Equal("RECONCILED", withMfa.Status);
     }
 
-    private PostgreSqlCodTransactionService CreateCodService(NpgsqlDataSource dataSource)
+    private PostgreSqlCodTransactionService CreateCodService(
+        NpgsqlDataSource dataSource,
+        IFinanceFailureInjector? failureInjector = null)
     {
         var (gateway, state) = CreateGateway(dataSource);
         return new(
             gateway,
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
-            new NoOpFinanceFailureInjector(),
+            failureInjector ?? new NoOpFinanceFailureInjector(),
             new FixedClock(Now));
+    }
+
+    /// <summary>
+    /// Waits, without a fixed sleep, until a backend is blocked by <paramref name="blockerPid"/>. PostgreSQL
+    /// contract tests run one at a time, so the only session that can be is the request under test.
+    /// </summary>
+    private async Task WaitUntilBlockedByAsync(int blockerPid, Task pending)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            if (pending.IsCompleted)
+            {
+                await pending;
+                Assert.Fail("The request completed without waiting for the order lock.");
+            }
+
+            await using var probe = fixture.AdminDataSource.CreateCommand(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE @blocker = ANY(pg_blocking_pids(pid)));");
+            probe.Parameters.AddWithValue("blocker", blockerPid);
+            if ((bool)(await probe.ExecuteScalarAsync())!)
+            {
+                return;
+            }
+
+            Assert.True(DateTimeOffset.UtcNow < deadline, "The request never waited for the order lock.");
+            await Task.Delay(TimeSpan.FromMilliseconds(10));
+        }
     }
 
     private PostgreSqlOrderFinancialsService CreateFinancialsService(NpgsqlDataSource dataSource) =>
@@ -272,6 +378,13 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
 
     private sealed class FixedClock(DateTimeOffset now) : IClock { public DateTimeOffset UtcNow { get; } = now; }
 
+    private sealed class ThrowingFailureInjector(FinanceTransactionStage stage, Exception failure)
+        : IFinanceFailureInjector
+    {
+        public Task OnStageAsync(FinanceTransactionStage current, CancellationToken cancellationToken) =>
+            current == stage ? Task.FromException(failure) : Task.CompletedTask;
+    }
+
     /// <summary>
     /// Synthetic FIN-001 fixture: one route with an OWN order, an EXTERNAL order and a COD order, so a
     /// single scenario covers cost by modality, route totals and the COD lifecycle.
@@ -293,6 +406,11 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         public Guid DriverId { get; } = Guid.NewGuid();
         public Guid DriverUserId { get; } = Guid.NewGuid();
         public Guid UnassignedDriverUserId { get; } = Guid.NewGuid();
+
+        /// <summary>
+        /// Profile of the unassigned DRIVER member, created only by tests that reassign an order to them.
+        /// </summary>
+        public Guid ReplacementDriverId { get; } = Guid.NewGuid();
         public Guid RouteId { get; } = Guid.NewGuid();
         public Guid OwnOrderId => orderIds[0];
         public Guid ExternalOrderId => orderIds[1];
@@ -411,6 +529,73 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         public GetOrderFinancialsQuery DriverOrderQuery(Guid orderId) =>
             OrderQuery(orderId) with { ActorId = DriverUserId };
 
+        public RecordCodCollectionCommand ReplacementDriverRecord(Guid orderId, long amountCents, string key) =>
+            Record(orderId, amountCents, key) with { ActorId = UnassignedDriverUserId };
+
+        public Task CreateReplacementDriverAsync() => ExecuteAsync(
+            """
+            INSERT INTO drivers.driver_profiles(
+              id,user_id,org_id,home_city_id,driver_type,vehicle_type,status,created_at)
+            VALUES (@driver,@user,@org,@city,'OWN','MOTORCYCLE','ACTIVE',@created);
+            """,
+            P("driver", ReplacementDriverId),
+            P("user", UnassignedDriverUserId),
+            P("org", OrganizationId),
+            P("city", scenario.CityId),
+            P("created", Now.AddDays(-1)));
+
+        /// <summary>
+        /// What dispatch does to replace an assignment — lock the order row, cancel the active assignment,
+        /// create the replacement driver's — inside a transaction the caller keeps open. Returns the backend
+        /// that holds the order row lock.
+        /// </summary>
+        public async Task<int> ReplaceAssignmentUnderOrderLockAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            Guid orderId)
+        {
+            int backend;
+            await using (var pid = new NpgsqlCommand("SELECT pg_backend_pid();", connection, transaction))
+            {
+                backend = (int)(await pid.ExecuteScalarAsync())!;
+            }
+
+            await using var replace = new NpgsqlCommand(
+                """
+                SELECT id FROM orders.orders WHERE id=@order FOR UPDATE;
+                UPDATE dispatch.assignments SET status='CANCELLED',route_id=NULL
+                WHERE order_id=@order AND status IN ('ACCEPTED','ACTIVE');
+                INSERT INTO dispatch.assignments(
+                  id,order_id,owner_org_id,driver_id,route_id,assignment_type,status,cost_cents,
+                  accepted_at,created_at)
+                VALUES (gen_random_uuid(),@order,@org,@driver,NULL,'OWN','ACTIVE',3000,@now,@now);
+                """,
+                connection,
+                transaction);
+            replace.Parameters.Add(P("order", orderId));
+            replace.Parameters.Add(P("org", OrganizationId));
+            replace.Parameters.Add(P("driver", ReplacementDriverId));
+            replace.Parameters.Add(P("now", Now));
+            await replace.ExecuteNonQueryAsync();
+            return backend;
+        }
+
+        /// <summary>How many idempotency records exist for the key, and the response status completed on it.</summary>
+        public async Task<(long Count, int? Status)> IdempotencyRecordAsync(string logicalKey)
+        {
+            await using var command = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT count(*),max(response_status)
+                FROM platform.idempotency_keys
+                WHERE owner_org_id=@org AND idempotency_key=@key;
+                """);
+            command.Parameters.AddWithValue("org", OrganizationId);
+            command.Parameters.AddWithValue("key", Key(logicalKey));
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return (reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetInt32(1));
+        }
+
         private static string Key(string logicalKey) => $"fin001-contract-{logicalKey}";
 
         public Task SetOrderStatusAsync(Guid orderId, string status) => ExecuteAsync(
@@ -483,12 +668,13 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
                 DELETE FROM routes.route_stops WHERE operator_org_id=@org;
                 DELETE FROM dispatch.assignments WHERE owner_org_id=@org;
                 DELETE FROM routes.routes WHERE operator_org_id=@org;
-                DELETE FROM drivers.driver_profiles WHERE id=@driver;
+                DELETE FROM drivers.driver_profiles WHERE id IN (@driver,@replacement_driver);
                 DELETE FROM organizations.organization_memberships
                   WHERE user_id IN (@driver_user,@other_driver_user);
                 """,
                 P("org", OrganizationId),
                 P("driver", DriverId),
+                P("replacement_driver", ReplacementDriverId),
                 P("driver_user", DriverUserId),
                 P("other_driver_user", UnassignedDriverUserId));
 

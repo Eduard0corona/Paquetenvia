@@ -8,6 +8,7 @@ public sealed class UnitEconomicsTests
     private static readonly Guid OrderA = new("11111111-1111-1111-1111-111111111111");
     private static readonly Guid OrderB = new("22222222-2222-2222-2222-222222222222");
     private static readonly Guid OrderC = new("33333333-3333-3333-3333-333333333333");
+    private static readonly Guid OrderD = new("44444444-4444-4444-4444-444444444444");
 
     [Fact]
     public void Fin001_own_modality_margin_is_revenue_minus_assignment_cost()
@@ -148,6 +149,72 @@ public sealed class UnitEconomicsTests
         Assert.Equal(7_500, route.CodExpected.AmountCents);
         Assert.Equal(5_000, route.CodPendingReconciliation.AmountCents);
         Assert.Equal(1, route.CodPendingReconciliationCount);
+    }
+
+    [Fact]
+    public void Fin001_expected_but_unrecorded_cod_is_not_cash_pending_reconciliation()
+    {
+        var expectedOnly = new CodPosition(new(5_000), null, null);
+
+        Assert.True(expectedOnly.IsExpected);
+        Assert.Equal(5_000, expectedOnly.Expected.AmountCents);
+        Assert.False(expectedOnly.IsPendingReconciliation);
+        Assert.Equal(0, expectedOnly.PendingReconciliation.AmountCents);
+        Assert.False(CodPosition.NotExpected.IsPendingReconciliation);
+        Assert.Equal(0, CodPosition.NotExpected.PendingReconciliation.AmountCents);
+    }
+
+    [Fact]
+    public void Fin001_recorded_cod_is_pending_at_its_recorded_amount_and_reconciled_cod_is_not()
+    {
+        // The lifecycle policy keeps the recorded amount equal to the expectation; they differ here only to
+        // prove the pending figure reads the amount actually recorded.
+        var recorded = new CodPosition(new(5_000), CodStatus.Recorded, new(4_999));
+        Assert.True(recorded.IsPendingReconciliation);
+        Assert.Equal(4_999, recorded.PendingReconciliation.AmountCents);
+
+        var reconciled = new CodPosition(new(5_000), CodStatus.Reconciled, new(5_000));
+        Assert.False(reconciled.IsPendingReconciliation);
+        Assert.Equal(0, reconciled.PendingReconciliation.AmountCents);
+    }
+
+    [Fact]
+    public void Fin001_mixed_route_totals_are_the_exact_integer_sum_of_their_orders()
+    {
+        OrderUnitEconomics[] orders =
+        [
+            OrderUnitEconomics.Calculate(
+                OrderA, new(12_000), [new(DeliveryModality.Own, new(4_500), 1)], CodPosition.NotExpected),
+            OrderUnitEconomics.Calculate(
+                OrderB, new(9_000), [new(DeliveryModality.Own, new(3_000), 1)], new(new(3_000), null, null)),
+            OrderUnitEconomics.Calculate(
+                OrderC, new(20_000), [new(DeliveryModality.External, new(8_000), 1)],
+                new(new(5_000), CodStatus.Recorded, new(5_000))),
+            OrderUnitEconomics.Calculate(
+                OrderD, new(7_000), [new(DeliveryModality.AllyCapacity, new(2_000), 1)],
+                new(new(2_500), CodStatus.Reconciled, new(2_500))),
+        ];
+
+        var route = RouteUnitEconomics.Aggregate(orders);
+
+        // Expected-only cash is in the expectation total but never pending; only the RECORDED order is.
+        Assert.Equal(10_500, route.CodExpected.AmountCents);
+        Assert.Equal(5_000, route.CodPendingReconciliation.AmountCents);
+        Assert.Equal(1, route.CodPendingReconciliationCount);
+        Assert.Equal(orders.Sum(order => order.Cod.Expected.AmountCents), route.CodExpected.AmountCents);
+        Assert.Equal(
+            orders.Sum(order => order.Cod.PendingReconciliation.AmountCents),
+            route.CodPendingReconciliation.AmountCents);
+        Assert.Equal(orders.Count(order => order.Cod.IsPendingReconciliation), route.CodPendingReconciliationCount);
+        Assert.Equal(orders.Sum(order => order.Revenue.AmountCents), route.Revenue.AmountCents);
+        Assert.Equal(orders.Sum(order => order.Cost.AmountCents), route.Cost.AmountCents);
+        Assert.Equal(orders.Sum(order => order.Margin.AmountCents), route.Margin.AmountCents);
+        foreach (var modality in FinanceContractValues.AllModalities)
+        {
+            Assert.Equal(
+                orders.Sum(order => order.CostByModality.Single(bucket => bucket.Modality == modality).Cost.AmountCents),
+                BucketOf(route, modality).Cost.AmountCents);
+        }
     }
 
     [Fact]

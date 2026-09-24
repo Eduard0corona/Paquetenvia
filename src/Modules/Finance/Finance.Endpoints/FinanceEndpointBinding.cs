@@ -62,4 +62,11 @@ internal static class FinanceEndpointBinding
 
     internal static IResult NotFound() =>
         Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found.");
+
+    /// <summary>
+    /// A disabled Finance provider or an unavailable data store. The exception is deliberately not echoed:
+    /// its message and inner store failure are internal evidence.
+    /// </summary>
+    internal static IResult Unavailable() =>
+        Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
 }

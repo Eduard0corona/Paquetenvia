@@ -23,6 +23,11 @@ public sealed class FinanceForbiddenException : Exception;
 
 public sealed class FinanceNotFoundException : Exception;
 
+/// <summary>
+/// Finance cannot serve the request at all: the provider is disabled or its data store is unavailable.
+/// This is missing capability of the system, never a statement about the actor or the resource, so it is
+/// always reported as 503 and never as 403 or 409.
+/// </summary>
 public sealed class FinanceUnavailableException(string message, Exception? inner = null)
     : Exception(message, inner);
 
@@ -52,6 +57,14 @@ public static class FinanceAuthorizationPolicy
             "DRIVER" => context.HasMatchingDriverAssignment,
             _ => false,
         };
+
+    /// <summary>
+    /// The part of <see cref="CanRecordCod"/> that cannot go stale while a request waits for the order lock:
+    /// user and membership status, role and MFA. A DRIVER's assignment can change during that wait, so it is
+    /// never decided here; <see cref="CanRecordCod"/> decides it from the assignment observed under the lock.
+    /// </summary>
+    public static bool MayAttemptRecordCod(FinanceAuthorizationContext context) =>
+        CanRecordCod(context with { HasMatchingDriverAssignment = true });
 
     public static bool CanReconcileCod(FinanceAuthorizationContext context) =>
         Active(context) && context.ActiveRole is "PLATFORM_ADMIN" or "DISPATCHER" && Mfa(context);

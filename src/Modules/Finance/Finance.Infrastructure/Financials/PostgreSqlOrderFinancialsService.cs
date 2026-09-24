@@ -166,7 +166,7 @@ public sealed class PostgreSqlOrderFinancialsService(FinanceTenantGateway gatewa
         CancellationToken cancellationToken)
     {
         var authorization = await gateway.ReadAuthorizationAsync(
-            connection, transaction, actorId, organizationId, null, mfaSatisfied, cancellationToken);
+            connection, transaction, actorId, organizationId, mfaSatisfied, cancellationToken);
         if (!FinanceAuthorizationPolicy.CanReadFinancials(authorization))
         {
             throw new FinanceForbiddenException();

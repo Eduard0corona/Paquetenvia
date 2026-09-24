@@ -1,14 +1,141 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using Finance.Application;
+using Finance.Application.Cod;
+using Finance.Application.Financials;
+using Finance.Domain;
 using Finance.Endpoints;
 using Finance.Infrastructure.Cod;
 using Finance.Infrastructure.Financials;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Organizations.Application.Session;
+using Paqueteria.Application.Tenancy;
 using Paqueteria.ContractTests.Support;
+using YamlDotNet.RepresentationModel;
 
 namespace Paqueteria.ContractTests;
 
 public sealed class FinanceImplementationContractTests
 {
+    private const string ApiPrefix = "/api/v1";
+
+    private static readonly IReadOnlyDictionary<string, string> ProblemResponses = new Dictionary<string, string>
+    {
+        ["401"] = "Unauthorized",
+        ["403"] = "Forbidden",
+        ["404"] = "UniformNotFound",
+        ["409"] = "FinanceConflict",
+        ["503"] = "ServiceUnavailable",
+    };
+
+    /// <summary>
+    /// The four FIN-001 operations as the real endpoint code maps them, against AI-05: path, method,
+    /// operationId, tag, parameters, request body, the complete response status matrix, the shared response
+    /// each problem status resolves to, and the success schema property by property. A change on either
+    /// side fails here instead of drifting silently.
+    /// </summary>
+    [Fact]
+    public void Finance_endpoints_and_their_AI05_operations_describe_the_same_surface()
+    {
+        var root = OpenApi();
+        var endpoints = MappedFinanceEndpoints();
+        Assert.Equal(
+            ["getOrderFinancials", "getRouteFinancials", "reconcileCod", "recordCodCollection"],
+            endpoints.Select(EndpointName).Order(StringComparer.Ordinal));
+
+        foreach (var endpoint in endpoints)
+        {
+            var route = endpoint.RoutePattern.RawText!;
+            Assert.StartsWith(ApiPrefix + "/", route, StringComparison.Ordinal);
+            var method = Assert.Single(endpoint.Metadata.GetRequiredMetadata<IHttpMethodMetadata>().HttpMethods);
+            var operation = root.Mapping("paths").Mapping(route[ApiPrefix.Length..]).Mapping(method.ToLowerInvariant());
+            Assert.Equal(EndpointName(endpoint), operation.Scalar("operationId"));
+            Assert.Equal(["Finance"], Scalars(operation.Sequence("tags")));
+
+            var parameters = operation.Sequence("parameters").Children
+                .Cast<YamlMappingNode>()
+                .Select(parameter => Resolve(root, parameter))
+                .ToArray();
+            Assert.All(parameters, parameter => Assert.Equal("true", parameter.Scalar("required")));
+            Assert.Equal(
+                endpoint.RoutePattern.Parameters.Select(parameter => $"path:{parameter.Name}")
+                    .Append("header:X-Organization-Id")
+                    .Concat(method == "POST" ? ["header:Idempotency-Key"] : Array.Empty<string>())
+                    .Order(StringComparer.Ordinal),
+                parameters.Select(parameter => $"{parameter.Scalar("in")}:{parameter.Scalar("name")}")
+                    .Order(StringComparer.Ordinal));
+            Assert.All(
+                parameters.Where(parameter => parameter.Scalar("in") == "path"),
+                parameter => Assert.Equal("uuid", parameter.Mapping("schema").Scalar("format")));
+
+            var accepts = endpoint.Metadata.GetMetadata<IAcceptsMetadata>();
+            if (accepts is null)
+            {
+                Assert.False(operation.Children.ContainsKey(new YamlScalarNode("requestBody")));
+            }
+            else
+            {
+                var body = operation.Mapping("requestBody");
+                Assert.Equal("true", body.Scalar("required"));
+                Assert.Equal(accepts.ContentTypes, Keys(body.Mapping("content")));
+                Assert.Equal(typeof(RecordCodRequest), accepts.RequestType);
+                AssertRecordCodRequestSchema(
+                    Resolve(root, body.Mapping("content").Mapping("application/json").Mapping("schema")));
+            }
+
+            var produced = endpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>();
+            var responses = operation.Mapping("responses");
+            Assert.Equal(
+                produced.Select(response => Status(response.StatusCode)).Order(StringComparer.Ordinal),
+                Keys(responses).Order(StringComparer.Ordinal));
+            foreach (var (status, component) in ProblemResponses)
+            {
+                Assert.Equal($"#/components/responses/{component}", responses.Mapping(status).Scalar("$ref"));
+            }
+
+            var success = Assert.Single(produced, response => response.StatusCode < 300);
+            var schema = responses.Mapping(Status(success.StatusCode))
+                .Mapping("content").Mapping("application/json").Mapping("schema");
+            AssertSchemaDescribes(root, schema.Scalar("$ref"), success.Type!);
+        }
+    }
+
+    /// <summary>Every vocabulary AI-05 publishes for Finance is exactly the one the implementation emits.</summary>
+    [Fact]
+    public void Finance_AI05_vocabularies_are_exactly_what_the_implementation_emits()
+    {
+        var schemas = OpenApi().Mapping("components").Mapping("schemas");
+        string[] codStatuses = [.. Enum.GetValues<CodStatus>().Select(status => status.ToContractValue())];
+
+        Assert.Equal(
+            FinanceContractValues.AllModalities.Select(modality => modality.ToContractValue()),
+            Scalars(schemas.Mapping("ModalityCost").Mapping("properties").Mapping("modality").Sequence("enum")));
+        Assert.Equal(
+            codStatuses,
+            Scalars(schemas.Mapping("CodTransaction").Mapping("properties").Mapping("status").Sequence("enum")));
+
+        // A COD position has no status until a collection exists, so its enum admits the null value itself.
+        var positionStatuses = schemas.Mapping("CodPosition").Mapping("properties").Mapping("status").Sequence("enum")
+            .Children.Cast<YamlScalarNode>().ToArray();
+        Assert.Equal([.. codStatuses, "null"], positionStatuses.Select(node => node.Value));
+        Assert.Equal(YamlDotNet.Core.ScalarStyle.Plain, positionStatuses[^1].Style);
+
+        var conflict = schemas.Mapping("FinanceConflictProblem").Mapping("properties");
+        Assert.Equal("409", conflict.Mapping("status").Scalar("const"));
+        Assert.Equal(
+            Enum.GetValues<FinanceConflictCode>()
+                .Select(FinanceEndpointBinding.PublicCode)
+                .Append("INVALID_REQUEST")
+                .Distinct()
+                .Order(StringComparer.Ordinal),
+            Scalars(conflict.Mapping("code").Sequence("enum")).Order(StringComparer.Ordinal));
+    }
+
     [Fact]
     public void Two_normative_finance_operations_are_mapped_with_mandatory_idempotency()
     {
@@ -33,7 +160,7 @@ public sealed class FinanceImplementationContractTests
     }
 
     [Fact]
-    public void Additive_financials_surface_is_read_only_and_tenant_scoped()
+    public void Financials_surface_is_read_only_and_tenant_scoped()
     {
         var source = Read("src", "Modules", "Finance", "Finance.Endpoints", "OrderFinancialsEndpoints.cs");
 
@@ -45,6 +172,7 @@ public sealed class FinanceImplementationContractTests
             2,
             Count(source, ".RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)"));
         Assert.Equal(2, Count(source, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
+        Assert.DoesNotContain("TryReadIdempotencyKey", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPost(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPut(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPatch(", source, StringComparison.Ordinal);
@@ -167,6 +295,186 @@ public sealed class FinanceImplementationContractTests
 
         Assert.Empty(offenders);
     }
+
+    /// <summary>
+    /// The Finance endpoints exactly as production maps them. Only the services their handlers bind are
+    /// registered, so parameter inference matches the real host; none is ever resolved.
+    /// </summary>
+    private static RouteEndpoint[] MappedFinanceEndpoints()
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddScoped<IOrganizationRequestSession>(_ => throw new NotSupportedException());
+        builder.Services.AddScoped<ITenantContext>(_ => throw new NotSupportedException());
+        builder.Services.AddScoped<ICodTransactionService>(_ => throw new NotSupportedException());
+        builder.Services.AddScoped<IOrderFinancialsService>(_ => throw new NotSupportedException());
+        using var app = builder.Build();
+        app.MapCodEndpoints();
+        app.MapFinancialsEndpoints();
+        return
+        [
+            .. ((IEndpointRouteBuilder)app).DataSources
+                .SelectMany(source => source.Endpoints)
+                .OfType<RouteEndpoint>(),
+        ];
+    }
+
+    private static void AssertRecordCodRequestSchema(YamlMappingNode schema)
+    {
+        // The request DTO binds nullable members only to detect absent ones; both are required and non-null,
+        // and any unknown member is rejected as INVALID_REQUEST.
+        Assert.Equal("false", schema.Scalar("additionalProperties"));
+        Assert.Equal(
+            JsonProperties(typeof(RecordCodRequest)).Keys.Order(StringComparer.Ordinal),
+            Keys(schema.Mapping("properties")).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            JsonProperties(typeof(RecordCodRequest)).Keys.Order(StringComparer.Ordinal),
+            Scalars(schema.Sequence("required")).Order(StringComparer.Ordinal));
+        var amount = schema.Mapping("properties").Mapping("amount_cents");
+        Assert.Equal("integer", amount.Scalar("type"));
+        Assert.Equal("int64", amount.Scalar("format"));
+        Assert.Equal("1", amount.Scalar("minimum"));
+        var reference = schema.Mapping("properties").Mapping("reference");
+        Assert.Equal("string", reference.Scalar("type"));
+        Assert.Equal("1", reference.Scalar("minLength"));
+        Assert.Equal(
+            CodInputPolicy.MaximumReferenceLength.ToString(CultureInfo.InvariantCulture),
+            reference.Scalar("maxLength"));
+    }
+
+    /// <summary>
+    /// A response DTO and its AI-05 schema agree property by property: names, required-ness (a member is
+    /// required exactly when it is always written), nullability, JSON type and format, recursively through
+    /// arrays and nested objects.
+    /// </summary>
+    private static void AssertSchemaDescribes(YamlMappingNode root, string reference, Type dto)
+    {
+        var schema = Resolve(root, reference);
+        Assert.Equal("object", schema.Scalar("type"));
+        Assert.Equal("false", schema.Scalar("additionalProperties"));
+        var properties = JsonProperties(dto);
+        var declared = schema.Mapping("properties");
+        Assert.Equal(properties.Keys.Order(StringComparer.Ordinal), Keys(declared).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            properties.Where(pair => !pair.Value.OmittedWhenNull).Select(pair => pair.Key).Order(StringComparer.Ordinal),
+            Scalars(schema.Sequence("required")).Order(StringComparer.Ordinal));
+        foreach (var (name, property) in properties)
+        {
+            AssertPropertyDescribes(root, declared.Mapping(name), property, $"{dto.Name}.{name}");
+        }
+    }
+
+    private static void AssertPropertyDescribes(
+        YamlMappingNode root,
+        YamlMappingNode schema,
+        DtoProperty property,
+        string context)
+    {
+        var type = Nullable.GetUnderlyingType(property.Type) ?? property.Type;
+        if (schema.Children.ContainsKey(new YamlScalarNode("$ref")))
+        {
+            Assert.False(property.Nullable, context);
+            if (type == typeof(string))
+            {
+                // A string drawn from a shared vocabulary such as OrderStatus or RouteStatus.
+                var vocabulary = Resolve(root, schema);
+                Assert.Equal("string", vocabulary.Scalar("type"));
+                Assert.NotEmpty(vocabulary.Sequence("enum").Children);
+                return;
+            }
+
+            AssertSchemaDescribes(root, schema.Scalar("$ref"), type);
+            return;
+        }
+
+        var typeNode = schema.Required("type");
+        string[] types = typeNode is YamlSequenceNode sequence
+            ? [.. sequence.Children.Cast<YamlScalarNode>().Select(node => node.Value!)]
+            : [Assert.IsType<YamlScalarNode>(typeNode).Value!];
+        Assert.True(
+            (property.Nullable && !property.OmittedWhenNull) == types.Contains("null"),
+            $"{context}: nullability differs from AI-05.");
+        var jsonType = Assert.Single(types, value => value != "null");
+        if (type == typeof(Guid))
+        {
+            Assert.Equal(("string", "uuid"), (jsonType, schema.Scalar("format")));
+        }
+        else if (type == typeof(string))
+        {
+            Assert.Equal("string", jsonType);
+        }
+        else if (type == typeof(long))
+        {
+            Assert.Equal(("integer", "int64"), (jsonType, schema.Scalar("format")));
+        }
+        else if (type == typeof(int))
+        {
+            Assert.Equal(("integer", "int32"), (jsonType, schema.Scalar("format")));
+        }
+        else if (type == typeof(bool))
+        {
+            Assert.Equal("boolean", jsonType);
+        }
+        else if (type == typeof(DateTimeOffset))
+        {
+            Assert.Equal(("string", "date-time"), (jsonType, schema.Scalar("format")));
+        }
+        else if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IReadOnlyList<>))
+        {
+            Assert.Equal("array", jsonType);
+            AssertSchemaDescribes(root, schema.Mapping("items").Scalar("$ref"), type.GetGenericArguments()[0]);
+        }
+        else
+        {
+            Assert.Fail($"{context}: no AI-05 mapping for {type}.");
+        }
+    }
+
+    private static Dictionary<string, DtoProperty> JsonProperties(Type dto)
+    {
+        var nullability = new NullabilityInfoContext();
+        return dto.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property.GetCustomAttribute<JsonExtensionDataAttribute>() is null)
+            .ToDictionary(
+                property => property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? property.Name,
+                property => new DtoProperty(
+                    property.PropertyType,
+                    Nullable.GetUnderlyingType(property.PropertyType) is not null ||
+                    nullability.Create(property).ReadState == NullabilityState.Nullable,
+                    property.GetCustomAttribute<JsonIgnoreAttribute>()?.Condition ==
+                    JsonIgnoreCondition.WhenWritingNull),
+                StringComparer.Ordinal);
+    }
+
+    private static YamlMappingNode Resolve(YamlMappingNode root, YamlMappingNode node) =>
+        node.Children.ContainsKey(new YamlScalarNode("$ref")) ? Resolve(root, node.Scalar("$ref")) : node;
+
+    private static YamlMappingNode Resolve(YamlMappingNode root, string reference)
+    {
+        Assert.StartsWith("#/", reference, StringComparison.Ordinal);
+        var current = root;
+        foreach (var segment in reference[2..].Split('/'))
+        {
+            current = current.Mapping(segment);
+        }
+
+        return current;
+    }
+
+    private static YamlMappingNode OpenApi() =>
+        YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+
+    private static string EndpointName(Endpoint endpoint) =>
+        endpoint.Metadata.GetRequiredMetadata<IEndpointNameMetadata>().EndpointName;
+
+    private static string Status(int statusCode) => statusCode.ToString(CultureInfo.InvariantCulture);
+
+    private static string[] Keys(YamlMappingNode mapping) =>
+        [.. mapping.Children.Keys.Cast<YamlScalarNode>().Select(key => key.Value!)];
+
+    private static string[] Scalars(YamlSequenceNode sequence) =>
+        [.. sequence.Children.Cast<YamlScalarNode>().Select(node => node.Value!)];
+
+    private sealed record DtoProperty(Type Type, bool Nullable, bool OmittedWhenNull);
 
     private static string ReadAuditWriter() => Read(
         "src", "BuildingBlocks", "Paqueteria.Infrastructure", "Auditing",

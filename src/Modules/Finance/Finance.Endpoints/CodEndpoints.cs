@@ -33,7 +33,8 @@ public static class CodEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/cod-records/{codId}/reconcile", ReconcileAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -44,7 +45,8 @@ public static class CodEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -88,7 +90,7 @@ public static class CodEndpoints
         {
             return FinanceEndpointBinding.Conflict(FinanceEndpointBinding.PublicCode(exception.Code));
         }
-        catch (FinanceUnavailableException) { return FinanceEndpointBinding.Conflict("CONFLICT"); }
+        catch (FinanceUnavailableException) { return FinanceEndpointBinding.Unavailable(); }
     }
 
     private static async Task<IResult> ReconcileAsync(
@@ -126,7 +128,7 @@ public static class CodEndpoints
         {
             return FinanceEndpointBinding.Conflict(FinanceEndpointBinding.PublicCode(exception.Code));
         }
-        catch (FinanceUnavailableException) { return FinanceEndpointBinding.Conflict("CONFLICT"); }
+        catch (FinanceUnavailableException) { return FinanceEndpointBinding.Unavailable(); }
     }
 
     private static async Task<T?> ReadAsync<T>(HttpContext httpContext, CancellationToken cancellationToken)

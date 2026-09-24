@@ -12,9 +12,10 @@ using Paqueteria.Application.Tenancy;
 namespace Finance.Endpoints;
 
 /// <summary>
-/// Additive read-only FIN-001 surface exposing the unit economics calculator. AI-05 defines no path for
-/// it, so these operations follow the same additive pattern as the operations dashboard: read-only, tenant
-/// scoped, and without changing any normative request or response schema.
+/// The read-only FIN-001 financial surface published in AI-05 as getOrderFinancials and
+/// getRouteFinancials: cost by modality, margin by order and by route, and the COD position, tenant scoped
+/// and derived on read. A malformed identifier cannot name a visible resource, so it is the same uniform
+/// 404 as a missing or foreign one.
 /// </summary>
 public static class OrderFinancialsEndpoints
 {
@@ -28,7 +29,9 @@ public static class OrderFinancialsEndpoints
             .Produces<OrderFinancialsResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/routes/{routeId}/financials", GetRouteAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -38,7 +41,9 @@ public static class OrderFinancialsEndpoints
             .Produces<RouteFinancialsResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -50,10 +55,14 @@ public static class OrderFinancialsEndpoints
         IOrderFinancialsService service,
         CancellationToken cancellationToken)
     {
-        if (!FinanceEndpointBinding.TryGuid(orderId, out var order) ||
-            !FinanceEndpointBinding.TrySession(session, tenantContext, out var actorId))
+        if (!FinanceEndpointBinding.TrySession(session, tenantContext, out var actorId))
         {
             return FinanceEndpointBinding.Forbidden();
+        }
+
+        if (!FinanceEndpointBinding.TryGuid(orderId, out var order))
+        {
+            return FinanceEndpointBinding.NotFound();
         }
 
         try
@@ -64,12 +73,13 @@ public static class OrderFinancialsEndpoints
             return Results.Ok(ToResponse(result));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (FinanceForbiddenException) { return FinanceEndpointBinding.Forbidden(); }
         catch (FinanceNotFoundException) { return FinanceEndpointBinding.NotFound(); }
-        catch (Exception exception) when (
-            exception is FinanceForbiddenException or FinanceConflictException or FinanceUnavailableException)
+        catch (FinanceConflictException exception)
         {
-            return FinanceEndpointBinding.Forbidden();
+            return FinanceEndpointBinding.Conflict(FinanceEndpointBinding.PublicCode(exception.Code));
         }
+        catch (FinanceUnavailableException) { return FinanceEndpointBinding.Unavailable(); }
     }
 
     private static async Task<IResult> GetRouteAsync(
@@ -79,10 +89,14 @@ public static class OrderFinancialsEndpoints
         IOrderFinancialsService service,
         CancellationToken cancellationToken)
     {
-        if (!FinanceEndpointBinding.TryGuid(routeId, out var route) ||
-            !FinanceEndpointBinding.TrySession(session, tenantContext, out var actorId))
+        if (!FinanceEndpointBinding.TrySession(session, tenantContext, out var actorId))
         {
             return FinanceEndpointBinding.Forbidden();
+        }
+
+        if (!FinanceEndpointBinding.TryGuid(routeId, out var route))
+        {
+            return FinanceEndpointBinding.NotFound();
         }
 
         try
@@ -93,12 +107,13 @@ public static class OrderFinancialsEndpoints
             return Results.Ok(ToResponse(result));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (FinanceForbiddenException) { return FinanceEndpointBinding.Forbidden(); }
         catch (FinanceNotFoundException) { return FinanceEndpointBinding.NotFound(); }
-        catch (Exception exception) when (
-            exception is FinanceForbiddenException or FinanceConflictException or FinanceUnavailableException)
+        catch (FinanceConflictException exception)
         {
-            return FinanceEndpointBinding.Forbidden();
+            return FinanceEndpointBinding.Conflict(FinanceEndpointBinding.PublicCode(exception.Code));
         }
+        catch (FinanceUnavailableException) { return FinanceEndpointBinding.Unavailable(); }
     }
 
     private static OrderFinancialsResponse ToResponse(OrderFinancialsResult result) => new(
@@ -156,10 +171,15 @@ public sealed record ModalityCostResponse(
     [property: JsonPropertyName("cost_cents")] long CostCents,
     [property: JsonPropertyName("assignment_count")] int AssignmentCount);
 
+/// <remarks>
+/// AI-05 money is never a null integer, so <c>amount_cents</c> is omitted, not null, until a collection
+/// is recorded.
+/// </remarks>
 public sealed record CodPositionResponse(
     [property: JsonPropertyName("expected_cents")] long ExpectedCents,
     [property: JsonPropertyName("status")] string? Status,
-    [property: JsonPropertyName("amount_cents")] long? AmountCents,
+    [property: JsonPropertyName("amount_cents"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? AmountCents,
     [property: JsonPropertyName("recorded")] bool Recorded,
     [property: JsonPropertyName("reconciled")] bool Reconciled,
     [property: JsonPropertyName("satisfies_delivery_requirement")] bool SatisfiesDeliveryRequirement,

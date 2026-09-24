@@ -153,6 +153,35 @@ public sealed class CodLifecyclePolicyTests
     }
 
     [Fact]
+    public void Fin001_the_pre_lock_record_gate_ignores_the_assignment_and_never_outvotes_the_locked_decision()
+    {
+        // A DRIVER is let through to the order lock whatever an earlier assignment read said; only
+        // CanRecordCod, evaluated against the assignment observed under that lock, decides.
+        Assert.True(FinanceAuthorizationPolicy.MayAttemptRecordCod(new("DRIVER", true, true, false, false)));
+        Assert.False(FinanceAuthorizationPolicy.CanRecordCod(new("DRIVER", true, true, false, false)));
+        Assert.False(FinanceAuthorizationPolicy.MayAttemptRecordCod(new("VIEWER", true, true, true, true)));
+        Assert.False(FinanceAuthorizationPolicy.MayAttemptRecordCod(new("PLATFORM_ADMIN", true, true, false, true)));
+        Assert.False(FinanceAuthorizationPolicy.MayAttemptRecordCod(new("DRIVER", true, false, false, true)));
+        Assert.False(FinanceAuthorizationPolicy.MayAttemptRecordCod(new(null, true, false, true, true)));
+
+        foreach (var role in new string?[] { "PLATFORM_ADMIN", "DISPATCHER", "DRIVER", "VIEWER", null })
+        foreach (var userActive in new[] { true, false })
+        foreach (var membershipActive in new[] { true, false })
+        foreach (var mfa in new[] { true, false })
+        foreach (var assigned in new[] { true, false })
+        {
+            var context = new FinanceAuthorizationContext(role, userActive, membershipActive, mfa, assigned);
+            Assert.Equal(
+                FinanceAuthorizationPolicy.MayAttemptRecordCod(context with { HasMatchingDriverAssignment = true }),
+                FinanceAuthorizationPolicy.MayAttemptRecordCod(context with { HasMatchingDriverAssignment = false }));
+            if (FinanceAuthorizationPolicy.CanRecordCod(context))
+            {
+                Assert.True(FinanceAuthorizationPolicy.MayAttemptRecordCod(context));
+            }
+        }
+    }
+
+    [Fact]
     public void Fin001_record_and_reconcile_hashes_are_tenant_and_payload_bound()
     {
         var actor = Guid.NewGuid();

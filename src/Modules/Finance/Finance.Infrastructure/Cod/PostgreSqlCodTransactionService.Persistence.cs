@@ -210,10 +210,13 @@ public sealed partial class PostgreSqlCodTransactionService
     }
 
     /// <summary>
-    /// The driver credited with the collection is the one holding the order's active assignment, so the
-    /// collector is derived from dispatch rather than supplied by the caller.
+    /// The order's active assignment, read while this transaction holds the order row lock. Dispatch only
+    /// changes assignments under that same lock and <c>one_active_assignment_per_order</c> admits at most one
+    /// ACCEPTED or ACTIVE row, so this single observation is authoritative both for whether a DRIVER may
+    /// record the collection and for which driver is credited with it; the collector is therefore derived
+    /// from dispatch rather than supplied by the caller.
     /// </summary>
-    private async Task<Guid?> ReadCollectingDriverAsync(
+    private async Task<ActiveAssignment?> ReadActiveAssignmentAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid organizationId,
@@ -224,17 +227,24 @@ public sealed partial class PostgreSqlCodTransactionService
             connection,
             transaction,
             """
-            SELECT driver_id
-            FROM dispatch.assignments
-            WHERE order_id=@order AND status IN ('ACCEPTED','ACTIVE')
-              AND (owner_org_id=@organization OR operator_org_id=@organization)
-            ORDER BY created_at DESC,id DESC
+            SELECT a.driver_id,p.user_id,p.org_id
+            FROM dispatch.assignments a
+            LEFT JOIN drivers.driver_profiles p ON p.id=a.driver_id
+            WHERE a.order_id=@order AND a.status IN ('ACCEPTED','ACTIVE')
+              AND (a.owner_org_id=@organization OR a.operator_org_id=@organization)
+            ORDER BY a.created_at DESC,a.id DESC
             LIMIT 1
             """,
             gateway.CommandTimeoutSeconds);
         command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
         command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
-        return await command.ExecuteScalarAsync(cancellationToken) is Guid driverId ? driverId : null;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? new(
+                reader.GetGuid(0),
+                reader.IsDBNull(1) ? null : reader.GetGuid(1),
+                reader.IsDBNull(2) ? null : reader.GetGuid(2))
+            : null;
     }
 
     private async Task InsertCodAsync(

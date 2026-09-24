@@ -51,10 +51,30 @@ public sealed partial class PostgreSqlCodTransactionService(
             command.OrganizationId,
             async (connection, transaction, token) =>
             {
-                var authorization = await gateway.ReadAuthorizationAsync(
-                    connection, transaction, command.ActorId, command.OrganizationId,
-                    command.OrderId, command.MfaSatisfied, token);
-                if (!FinanceAuthorizationPolicy.CanRecordCod(authorization))
+                // Only what the wait for the order lock cannot make stale is decided before it. A DRIVER's
+                // claim rests on the order's active assignment, which dispatch changes under the order row
+                // lock, so it is decided below — together with the driver credited as collector — from one
+                // observation taken while this transaction holds that lock.
+                var identity = await gateway.ReadAuthorizationAsync(
+                    connection, transaction, command.ActorId, command.OrganizationId, command.MfaSatisfied, token);
+                if (!FinanceAuthorizationPolicy.MayAttemptRecordCod(identity))
+                {
+                    throw new FinanceForbiddenException();
+                }
+
+                await FinanceTenantGateway.AcquireOrderLockAsync(connection, transaction, command.OrderId, token);
+                var visibleOrder = await ReadOrderForUpdateAsync(
+                    connection, transaction, command.OrganizationId, command.OrderId, token);
+                var assignment = await ReadActiveAssignmentAsync(
+                    connection, transaction, command.OrganizationId, command.OrderId, token);
+
+                // Capability is settled before the order's existence is revealed or any idempotency record is
+                // touched, so an unassigned DRIVER learns nothing about the order or about replay evidence.
+                if (!FinanceAuthorizationPolicy.CanRecordCod(identity with
+                    {
+                        HasMatchingDriverAssignment =
+                            assignment?.IsHeldBy(command.ActorId, command.OrganizationId) == true,
+                    }))
                 {
                     throw new FinanceForbiddenException();
                 }
@@ -67,11 +87,7 @@ public sealed partial class PostgreSqlCodTransactionService(
                     return replay;
                 }
 
-                await FinanceTenantGateway.AcquireOrderLockAsync(connection, transaction, command.OrderId, token);
-                var order = await ReadOrderForUpdateAsync(
-                    connection, transaction, command.OrganizationId, command.OrderId, token)
-                    ?? throw new FinanceNotFoundException();
-
+                var order = visibleOrder ?? throw new FinanceNotFoundException();
                 var expected = new MoneyCents(order.CodExpectedCents);
                 var amount = new MoneyCents(command.AmountCents);
                 if (!CodLifecyclePolicy.IsExpected(expected))
@@ -95,8 +111,7 @@ public sealed partial class PostgreSqlCodTransactionService(
                     throw Conflict(FinanceConflictCode.OrderStateConflict);
                 }
 
-                var collectingDriverId = await ReadCollectingDriverAsync(
-                    connection, transaction, command.OrganizationId, command.OrderId, token);
+                var collectingDriverId = assignment?.DriverId;
                 var codId = Guid.NewGuid();
                 await InsertCodAsync(
                     connection, transaction, codId, order, command.AmountCents, command.Reference!,
@@ -150,8 +165,7 @@ public sealed partial class PostgreSqlCodTransactionService(
             async (connection, transaction, token) =>
             {
                 var authorization = await gateway.ReadAuthorizationAsync(
-                    connection, transaction, command.ActorId, command.OrganizationId,
-                    null, command.MfaSatisfied, token);
+                    connection, transaction, command.ActorId, command.OrganizationId, command.MfaSatisfied, token);
                 if (!FinanceAuthorizationPolicy.CanReconcileCod(authorization))
                 {
                     throw new FinanceForbiddenException();
@@ -253,6 +267,16 @@ public sealed partial class PostgreSqlCodTransactionService(
         Guid? OperatorOrganizationId,
         string Status,
         long CodExpectedCents);
+
+    /// <summary>
+    /// The order's ACCEPTED or ACTIVE assignment. The driver profile columns are null when that profile is
+    /// not visible to the acting organization, which can never satisfy a DRIVER's claim.
+    /// </summary>
+    internal sealed record ActiveAssignment(Guid DriverId, Guid? DriverUserId, Guid? DriverOrganizationId)
+    {
+        public bool IsHeldBy(Guid actorId, Guid organizationId) =>
+            DriverUserId == actorId && DriverOrganizationId == organizationId;
+    }
 
     internal sealed record CodRow(
         Guid Id,
