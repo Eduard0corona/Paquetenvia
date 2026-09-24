@@ -314,5 +314,34 @@ class PrValidationInvariantTests(unittest.TestCase):
             self.assertIn("FULL:CI_SELF", plan["reasons"], path)
 
 
+GITHUB_HOSTED_ONLY_CACHE = {
+    "actions/setup-dotnet": "${{ runner.environment == 'github-hosted' }}",
+    "actions/setup-node": "${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}",
+}
+
+
+class DependencyCacheInvariantTests(unittest.TestCase):
+    """setup-dotnet/setup-node caches restore and save only on GitHub-hosted runners.
+
+    The persistent self-hosted runner already holds the SDK and packages locally, so the
+    Actions cache there only re-downloads and re-uploads them; hosted runners keep caching.
+    """
+
+    def test_dependency_caches_are_enabled_only_on_github_hosted_runners(self):
+        for path in (CI_WORKFLOW, PR_VALIDATION_WORKFLOW):
+            gated_actions = set()
+            for job_id, job in load_workflow(path)["jobs"].items():
+                for step in job.get("steps", []):
+                    action = step.get("uses", "").split("@")[0]
+                    inputs = step.get("with", {})
+                    if action not in GITHUB_HOSTED_ONLY_CACHE:
+                        continue
+                    if "cache" in inputs or "cache-dependency-path" in inputs:
+                        context = f"{path.name}:{job_id}:{step.get('name')}"
+                        self.assertEqual(GITHUB_HOSTED_ONLY_CACHE[action], inputs.get("cache"), context)
+                        gated_actions.add(action)
+            self.assertEqual(set(GITHUB_HOSTED_ONLY_CACHE), gated_actions, path.name)
+
+
 if __name__ == "__main__":
     unittest.main()
