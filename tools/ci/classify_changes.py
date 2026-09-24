@@ -16,6 +16,10 @@ Fail-closed rules:
 * an input, topology, git or configuration problem exits non-zero (no plan);
 * an unmatched path, an empty diff, a dependency/CI self change or the ``full-ci``
   label yields ``FULL``;
+* a NuGet ``packages.lock.json`` leaves the ``DEPS`` domain only when its content is
+  proven to change nothing but the internal ``type: Project`` graph (see
+  ``prove_nuget_project_graph_only``); anything unproven, unparseable or ambiguous
+  stays ``DEPS``;
 * ``FULL`` is never reduced by any later rule or label;
 * a head repository different from the repository is rejected;
 * ``MAIN_BACKSYNC`` (head ``main``, every job except REL-000) requires explicit
@@ -45,6 +49,14 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "change-domains.json"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 JOB_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 DOMAIN_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+CONTENT_PROOF_NUGET_PROJECT_GRAPH = "nuget-project-graph-only"
+CONTENT_PROOFS = (CONTENT_PROOF_NUGET_PROJECT_GRAPH,)
+NUGET_LOCK_NAME = "packages.lock.json"
+NUGET_LOCK_VERSIONS = (1, 2)
+NUGET_PROJECT_NODE_TYPE = "Project"
+NUGET_PACKAGE_NODE_TYPES = ("Direct", "Transitive", "CentralTransitive")
+NUGET_PROJECT_NODE_KEYS = frozenset({"type", "dependencies"})
+NUGET_PACKAGE_NODE_KEYS = frozenset({"type", "requested", "resolved", "contentHash", "dependencies"})
 
 
 class ClassifyError(Exception):
@@ -174,7 +186,7 @@ def validate_config(raw: Any) -> dict[str, Any]:
         full = entry.get("full", False)
         if not isinstance(full, bool):
             fail("CONFIG_DOMAINS_INVALID", "domain.full must be a boolean.", name=name)
-        allowed_keys = {"name", "patterns", "full", "jobs", "job_sets"}
+        allowed_keys = {"name", "patterns", "full", "jobs", "job_sets", "content_proof", "supersedes"}
         extra = sorted(set(entry) - allowed_keys)
         if extra:
             fail("CONFIG_DOMAINS_INVALID", "Domain carries unknown keys.", name=name, keys=extra)
@@ -198,7 +210,36 @@ def validate_config(raw: Any) -> dict[str, Any]:
             if set(listed) & set(full_only):
                 fail("CONFIG_DOMAINS_INVALID", "Selective domains cannot require full-only jobs.", name=name)
             domain_jobs = sorted(set(listed), key=job_index.__getitem__)
-        domains.append({"name": name, "patterns": patterns, "compiled": compiled, "full": full, "jobs": domain_jobs})
+        content_proof = entry.get("content_proof")
+        supersedes: list[str] = []
+        if content_proof is not None:
+            if content_proof not in CONTENT_PROOFS:
+                fail("CONFIG_DOMAINS_INVALID", "domain.content_proof names an unknown proof.", name=name, proof=content_proof)
+            if full:
+                fail("CONFIG_DOMAINS_INVALID", "A content-proven domain must be selective.", name=name)
+            supersedes = _require_string_list(entry.get("supersedes"), "CONFIG_DOMAINS_INVALID", f"domains.{name}.supersedes")
+        elif "supersedes" in entry:
+            fail("CONFIG_DOMAINS_INVALID", "Only a content-proven domain may supersede other domains.", name=name)
+        domains.append(
+            {
+                "name": name,
+                "patterns": patterns,
+                "compiled": compiled,
+                "full": full,
+                "jobs": domain_jobs,
+                "content_proof": content_proof,
+                "supersedes": supersedes,
+            }
+        )
+    for domain in domains:
+        unknown = sorted(set(domain["supersedes"]) - seen_names)
+        if unknown or domain["name"] in domain["supersedes"]:
+            fail(
+                "CONFIG_DOMAINS_INVALID",
+                "domain.supersedes must name other existing domains.",
+                name=domain["name"],
+                supersedes=domain["supersedes"],
+            )
 
     return {
         "jobs": jobs,
@@ -241,6 +282,11 @@ def run_git(repo_root: Path, *args: str) -> str:
 
 def resolve_changed_paths(repo_root: Path, tested_git_sha: str, source_head_sha: str) -> list[str]:
     """Prove the tested merge topology and return the paths it changed versus its base."""
+    return resolve_tested_diff(repo_root, tested_git_sha, source_head_sha)[2]
+
+
+def resolve_tested_diff(repo_root: Path, tested_git_sha: str, source_head_sha: str) -> tuple[str, str, list[str]]:
+    """Prove the tested merge topology and return ``(base, tested, changed_paths)``."""
     tested = validate_sha(tested_git_sha, "tested_git_sha")
     source = validate_sha(source_head_sha, "source_head_sha")
     if tested == source:
@@ -265,18 +311,234 @@ def resolve_changed_paths(repo_root: Path, tested_git_sha: str, source_head_sha:
         )
     output = run_git(repo_root, "diff", "--name-only", "--no-renames", "-z", base, tested)
     paths = sorted({item.replace("\\", "/") for item in output.split("\0") if item})
-    return paths
+    return base, tested, paths
+
+
+# --------------------------------------------------------------------------- content proofs
+
+
+class _NotProven(Exception):
+    """Internal: the content could not be proven safe; the path keeps its path-based domains."""
+
+
+def _git_blob(repo_root: Path, sha: str, path: str) -> str | None:
+    """Return the blob at ``sha:path``, or ``None`` when the path does not exist there."""
+    listing = run_git(repo_root, "ls-tree", "-z", sha, "--", path)
+    entries = [entry for entry in listing.split("\0") if entry]
+    if not entries:
+        return None
+    if len(entries) != 1 or not entries[0].endswith("\t" + path) or " blob " not in entries[0].split("\t", 1)[0]:
+        raise _NotProven()
+    return run_git(repo_root, "cat-file", "blob", f"{sha}:{path}")
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise _NotProven()
+    return dict(pairs)
+
+
+def _string_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or any(
+        not isinstance(key, str) or not key or not isinstance(item, str) or not item for key, item in value.items()
+    ):
+        raise _NotProven()
+    return value
+
+
+def _parse_nuget_lock(text: str) -> tuple[int, dict[str, dict[str, dict[str, Any]]]]:
+    """Strictly parse a NuGet lockfile into ``(version, {framework: {"packages", "projects"}})``.
+
+    Any shape this parser does not fully understand is not proven.
+    """
+    try:
+        data = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except ValueError as error:
+        raise _NotProven() from error
+    if not isinstance(data, dict) or set(data) != {"version", "dependencies"}:
+        raise _NotProven()
+    version = data["version"]
+    if isinstance(version, bool) or version not in NUGET_LOCK_VERSIONS:
+        raise _NotProven()
+    frameworks = data["dependencies"]
+    if not isinstance(frameworks, dict) or not frameworks:
+        raise _NotProven()
+    graphs: dict[str, dict[str, dict[str, Any]]] = {}
+    for framework, nodes in frameworks.items():
+        if not isinstance(framework, str) or not framework or not isinstance(nodes, dict):
+            raise _NotProven()
+        packages: dict[str, dict[str, Any]] = {}
+        projects: dict[str, dict[str, Any]] = {}
+        for name, node in nodes.items():
+            if not isinstance(name, str) or not name or not isinstance(node, dict):
+                raise _NotProven()
+            node_type = node.get("type")
+            if node_type == NUGET_PROJECT_NODE_TYPE:
+                if not set(node) <= NUGET_PROJECT_NODE_KEYS:
+                    raise _NotProven()
+                _string_map(node.get("dependencies", {}))
+                projects[name] = node
+            elif node_type in NUGET_PACKAGE_NODE_TYPES:
+                if not set(node) <= NUGET_PACKAGE_NODE_KEYS:
+                    raise _NotProven()
+                for field in ("resolved", "contentHash"):
+                    if not isinstance(node.get(field), str) or not node[field]:
+                        raise _NotProven()
+                if "requested" in node and (not isinstance(node["requested"], str) or not node["requested"]):
+                    raise _NotProven()
+                _string_map(node.get("dependencies", {}))
+                packages[name] = node
+            else:
+                raise _NotProven()
+        folded_packages = {name.casefold() for name in packages}
+        folded_projects = {name.casefold() for name in projects}
+        if (
+            len(folded_packages) != len(packages)
+            or len(folded_projects) != len(projects)
+            or folded_packages & folded_projects
+        ):
+            raise _NotProven()
+        graphs[framework] = {"packages": packages, "projects": projects}
+    return version, graphs
+
+
+class _BaseNuGetCatalog:
+    """Every external package node and package range already present in the base tree."""
+
+    def __init__(self, repo_root: Path, base: str) -> None:
+        self.versions: set[int] = set()
+        self.frameworks: set[str] = set()
+        self.nodes: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self.ranges: set[tuple[str, str, str]] = set()
+        listing = run_git(repo_root, "ls-tree", "-r", "-z", "--name-only", base)
+        for path in sorted(item for item in listing.split("\0") if item):
+            if path.rsplit("/", 1)[-1] != NUGET_LOCK_NAME:
+                continue
+            text = _git_blob(repo_root, base, path)
+            if text is None:
+                raise _NotProven()
+            version, graphs = _parse_nuget_lock(text)
+            self.versions.add(version)
+            for framework, graph in graphs.items():
+                self.frameworks.add(framework)
+                for name, node in graph["packages"].items():
+                    self.nodes.setdefault((framework, name), []).append(node)
+                    if "requested" in node:
+                        self.ranges.add((framework, name.casefold(), node["requested"]))
+                package_names = {name.casefold() for name in graph["packages"]}
+                for node in graph["projects"].values():
+                    for dependency, requested in node.get("dependencies", {}).items():
+                        if dependency.casefold() in package_names:
+                            self.ranges.add((framework, dependency.casefold(), requested))
+
+
+def _check_project_nodes(framework: str, graph: dict[str, dict[str, Any]], catalog: _BaseNuGetCatalog) -> None:
+    """Project nodes may reference internal projects freely, and external packages only
+    through a (package, range) pair that already exists in the base."""
+    project_names = {name.casefold() for name in graph["projects"]}
+    package_names = {name.casefold() for name in graph["packages"]}
+    for node in graph["projects"].values():
+        for dependency, requested in node.get("dependencies", {}).items():
+            folded = dependency.casefold()
+            if folded in project_names:
+                continue
+            if folded not in package_names or (framework, folded, requested) not in catalog.ranges:
+                raise _NotProven()
+
+
+def _prove_lockfile(repo_root: Path, base: str, tested: str, path: str, catalog_factory: Any) -> None:
+    head_text = _git_blob(repo_root, tested, path)
+    if head_text is None:
+        # A removed lockfile removes external packages from the repository graph.
+        raise _NotProven()
+    head_version, head_graphs = _parse_nuget_lock(head_text)
+    base_text = _git_blob(repo_root, base, path)
+    catalog = catalog_factory()
+    if base_text is not None:
+        base_version, base_graphs = _parse_nuget_lock(base_text)
+        if head_version != base_version or set(head_graphs) != set(base_graphs):
+            raise _NotProven()
+        for framework, graph in head_graphs.items():
+            if graph["packages"] != base_graphs[framework]["packages"]:
+                raise _NotProven()
+    else:
+        if head_version not in catalog.versions:
+            raise _NotProven()
+        for framework, graph in head_graphs.items():
+            if framework not in catalog.frameworks:
+                raise _NotProven()
+            for name, node in graph["packages"].items():
+                if node not in catalog.nodes.get((framework, name), []):
+                    raise _NotProven()
+    for framework, graph in head_graphs.items():
+        _check_project_nodes(framework, graph, catalog)
+
+
+def prove_nuget_project_graph_only(repo_root: Path, base: str, tested: str, changed_paths: list[str]) -> list[str]:
+    """Return the changed NuGet lockfiles whose only change is the internal Project graph.
+
+    A changed ``packages.lock.json`` is proven only when, between ``base`` and ``tested``:
+
+    * it still exists and parses strictly (known lock version, known node types and keys,
+      no duplicate or case-colliding names);
+    * an existing lockfile keeps its lock version, its target frameworks and every
+      external (non-``Project``) node exactly: no package added, removed, re-versioned,
+      re-hashed, re-ranged or re-typed;
+    * a new lockfile (a new project) contains only external nodes that already exist,
+      identically, for the same framework in some base lockfile;
+    * every ``Project`` node reaches external packages only through a (package, range)
+      pair already present in the base.
+
+    Everything else — including any git or parse problem — is simply not proven, so the
+    path keeps its ``DEPS`` classification (fail closed).
+    """
+    lockfiles = sorted(path for path in set(changed_paths) if path.rsplit("/", 1)[-1] == NUGET_LOCK_NAME)
+    if not lockfiles:
+        return []
+    cache: dict[str, _BaseNuGetCatalog] = {}
+
+    def catalog_factory() -> _BaseNuGetCatalog:
+        if "base" not in cache:
+            cache["base"] = _BaseNuGetCatalog(repo_root, base)
+        return cache["base"]
+
+    proven: list[str] = []
+    for path in lockfiles:
+        try:
+            _prove_lockfile(repo_root, base, tested, path, catalog_factory)
+        except (_NotProven, ClassifyError):
+            continue
+        proven.append(path)
+    return proven
+
+
+def resolve_content_proofs(repo_root: Path, base: str, tested: str, changed_paths: list[str]) -> dict[str, list[str]]:
+    return {CONTENT_PROOF_NUGET_PROJECT_GRAPH: prove_nuget_project_graph_only(repo_root, base, tested, changed_paths)}
 
 
 # --------------------------------------------------------------------------- classification
 
 
-def match_domains(config: dict[str, Any], path: str) -> list[str]:
-    return [
-        domain["name"]
-        for domain in config["domains"]
-        if any(pattern.match(path) for pattern in domain["compiled"])
-    ]
+def match_domains(config: dict[str, Any], path: str, content_proofs: dict[str, Any] | None = None) -> list[str]:
+    """Return the domains of ``path``.
+
+    A content-proven domain applies only to paths its proof accepted, and then removes
+    the domains it supersedes for that path; without a proof the path-based domains
+    stand unchanged.
+    """
+    proofs = content_proofs or {}
+    matched: list[str] = []
+    superseded: set[str] = set()
+    for domain in config["domains"]:
+        if not any(pattern.match(path) for pattern in domain["compiled"]):
+            continue
+        if domain["content_proof"] is not None:
+            if path not in set(proofs.get(domain["content_proof"], ())):
+                continue
+            superseded.update(domain["supersedes"])
+        matched.append(domain["name"])
+    return [name for name in matched if name not in superseded]
 
 
 def classify_paths(
@@ -289,6 +551,7 @@ def classify_paths(
     labels: list[str] | None = None,
     source_head_sha: str | None = None,
     certified_main_sha: str | None = None,
+    content_proofs: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Pure classification of an already-proven changed-path list.
 
@@ -296,6 +559,10 @@ def classify_paths(
     run (13/13), obtained by the calling workflow and passed in as trusted evidence.
     ``MAIN_BACKSYNC`` is emitted only when the head is ``main`` and that evidence equals
     ``source_head_sha`` exactly; branch identity alone never certifies anything.
+
+    ``content_proofs`` maps a proof kind to the changed paths whose content that proof
+    accepted (see ``resolve_content_proofs``); it can only remove a superseded domain
+    from a proven path, never add jobs beyond the proven domain's own.
     """
     labels = sorted({str(label).strip() for label in (labels or []) if str(label).strip()})
     head_ref = str(head_ref or "").strip()
@@ -323,7 +590,7 @@ def classify_paths(
     full = False
 
     for path in sorted(set(changed_paths)):
-        matched = match_domains(config, path)
+        matched = match_domains(config, path, content_proofs)
         if not matched:
             unmatched.append(path)
             continue
@@ -456,7 +723,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(Path(args.config))
         repo_root = Path(args.repo_root).resolve()
-        changed = resolve_changed_paths(repo_root, args.tested_git_sha, args.source_head_sha)
+        base, tested, changed = resolve_tested_diff(repo_root, args.tested_git_sha, args.source_head_sha)
+        proofs = resolve_content_proofs(repo_root, base, tested, changed)
         plan = classify_paths(
             config,
             changed,
@@ -466,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
             labels=args.label,
             source_head_sha=args.source_head_sha,
             certified_main_sha=args.certified_main_sha,
+            content_proofs=proofs,
         )
         validate_plan(plan, config)
     except ClassifyError as error:

@@ -658,6 +658,7 @@ paths:
       tags:
       - Incidents
       operationId: openIncident
+      x-shape-validation: invalid-request-without-productive-transaction
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -679,6 +680,12 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/IncidentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /tracking/{token}:
     get:
       tags:
@@ -1008,6 +1015,16 @@ paths:
       tags:
       - Finance
       operationId: recordCodCollection
+      description: >-
+        FIN-001 records the cash collected for one order as RECORDED, which the
+        order state machine requires before DELIVERED. The amount must equal the
+        order's COD expectation exactly. DISPATCHER members may record;
+        PLATFORM_ADMIN members need a satisfied MFA challenge; a DRIVER member
+        may record only while holding the order's ACCEPTED or ACTIVE assignment,
+        decided inside the order lock from the same observation that credits
+        the collecting driver. Capability is decided before order existence or
+        idempotency evidence is revealed. Replaying the same Idempotency-Key and
+        payload returns the stored response.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -1031,11 +1048,21 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/FinanceConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /cod-records/{codId}/reconcile:
     post:
       tags:
       - Finance
       operationId: reconcileCod
+      description: >-
+        FIN-001 reconciles a RECORDED collection to RECONCILED, which the order
+        state machine requires before CLOSED. Only DISPATCHER members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge may reconcile, so
+        a collecting driver can never reconcile their own collection. Replaying
+        the same Idempotency-Key returns the stored response.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - name: codId
@@ -1058,6 +1085,71 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/FinanceConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/financials:
+    get:
+      tags:
+      - Finance
+      operationId: getOrderFinancials
+      description: >-
+        FIN-001 cost by modality, margin and COD position of one order, derived
+        on read in integer MXN cents. Readable only by DISPATCHER members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge; the order must be
+        owned or operated by the selected organization.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Order unit economics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderFinancials'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/FinanceConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /routes/{routeId}/financials:
+    get:
+      tags:
+      - Finance
+      operationId: getRouteFinancials
+      description: >-
+        FIN-001 cost by modality, margin and COD position of one route,
+        aggregated from the orders on its stops so every total equals the sum
+        of its per-order values. Readable only by DISPATCHER members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge; the route must be
+        operated by the selected organization.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/RouteId'
+      responses:
+        '200':
+          description: Route unit economics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteFinancials'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/FinanceConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 components:
   securitySchemes:
     oidc:
@@ -1142,6 +1234,23 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/CsvImportConflictProblem'
+    IncidentConflict:
+      description: >-
+        INC-001 request, idempotency, order-state or evidence conflict. Internal
+        rejection evidence and cross-tenant existence are never exposed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/IncidentConflictProblem'
+    FinanceConflict:
+      description: >-
+        FIN-001 request-shape, idempotency, replay-evidence, concurrency, COD
+        lifecycle or order-state conflict, identified by a stable code.
+        Internal evidence is never exposed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/FinanceConflictProblem'
     NotFound:
       description: Not found or inaccessible
       content:
@@ -1736,13 +1845,21 @@ components:
           format: date-time
     OpenIncidentRequest:
       type: object
+      additionalProperties: false
       required:
       - type
       - severity
       - description
+      - reason_code
+      - next_action
+      - occurred_at
+      - evidence_proof_ids
       properties:
         type:
           type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Z_]+$
         severity:
           type: string
           enum:
@@ -1752,7 +1869,34 @@ components:
           - CRITICAL
         description:
           type: string
+          minLength: 1
           maxLength: 2000
+        reason_code:
+          type: string
+          enum:
+          - RECIPIENT_ABSENT
+          - ADDRESS_NOT_FOUND
+          - RECIPIENT_REFUSED
+          - ACCESS_RESTRICTED
+          - PAYMENT_UNAVAILABLE
+          - PACKAGE_DAMAGED
+          - SECURITY_RISK
+        next_action:
+          type: string
+          enum:
+          - RESCHEDULED
+          - RETURNING
+        occurred_at:
+          type: string
+          format: date-time
+        evidence_proof_ids:
+          type: array
+          minItems: 1
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
     Incident:
       type: object
       required:
@@ -1760,6 +1904,12 @@ components:
       - order_id
       - status
       - severity
+      - reason_code
+      - next_action
+      - custody_acquired
+      - occurred_at
+      - sla_due_at
+      - evidence_proof_ids
       properties:
         id:
           type: string
@@ -1776,6 +1926,42 @@ components:
           - REJECTED
         severity:
           type: string
+          enum:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - CRITICAL
+        reason_code:
+          type: string
+          enum:
+          - RECIPIENT_ABSENT
+          - ADDRESS_NOT_FOUND
+          - RECIPIENT_REFUSED
+          - ACCESS_RESTRICTED
+          - PAYMENT_UNAVAILABLE
+          - PACKAGE_DAMAGED
+          - SECURITY_RISK
+        next_action:
+          type: string
+          enum:
+          - RESCHEDULED
+          - RETURNING
+        custody_acquired:
+          type: boolean
+        occurred_at:
+          type: string
+          format: date-time
+        sla_due_at:
+          type: string
+          format: date-time
+        evidence_proof_ids:
+          type: array
+          minItems: 1
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
     PublicTracking:
       type: object
       required:
@@ -2077,6 +2263,67 @@ components:
           enum:
           - CONFLICT
           - IDEMPOTENCY_CONFLICT
+    IncidentConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - INVALID_REQUEST
+          - IDEMPOTENCY_CONFLICT
+          - ORDER_STATE_NOT_ALLOWED
+          - EVIDENCE_NOT_AVAILABLE
+          - CONFLICT
+    FinanceConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: >-
+            CONFLICT covers Idempotency-Key reuse with a different payload,
+            inconsistent replay evidence and concurrency conflicts.
+          enum:
+          - INVALID_REQUEST
+          - CONFLICT
+          - COD_NOT_EXPECTED
+          - COD_AMOUNT_MISMATCH
+          - COD_ALREADY_RECORDED
+          - COD_STATE_CONFLICT
+          - ORDER_STATE_CONFLICT
     AuditLog:
       type: object
       required:
@@ -2527,6 +2774,7 @@ components:
           format: date-time
     RecordCodRequest:
       type: object
+      additionalProperties: false
       required:
       - amount_cents
       - reference
@@ -2537,14 +2785,19 @@ components:
           format: int64
         reference:
           type: string
+          minLength: 1
           maxLength: 200
+          description: Must not be blank or start or end with whitespace.
     CodTransaction:
       type: object
+      additionalProperties: false
       required:
       - id
       - order_id
       - amount_cents
       - status
+      - recorded_at
+      - reconciled_at
       properties:
         id:
           type: string
@@ -2573,6 +2826,236 @@ components:
           - string
           - 'null'
           format: date-time
+    ModalityCost:
+      type: object
+      additionalProperties: false
+      required:
+      - modality
+      - cost_cents
+      - assignment_count
+      properties:
+        modality:
+          type: string
+          enum:
+          - OWN
+          - EXTERNAL
+          - ALLY_CAPACITY
+        cost_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        assignment_count:
+          type: integer
+          minimum: 0
+          format: int32
+    CodPosition:
+      type: object
+      additionalProperties: false
+      description: >-
+        Cash-on-delivery position of one order. expected_cents is the order's
+        expectation; status and amount_cents describe its collection, so status
+        is null and amount_cents is omitted until one is recorded.
+      required:
+      - expected_cents
+      - status
+      - recorded
+      - reconciled
+      - satisfies_delivery_requirement
+      - satisfies_close_requirement
+      properties:
+        expected_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        status:
+          type:
+          - string
+          - 'null'
+          enum:
+          - EXPECTED
+          - RECORDED
+          - RECONCILED
+          - DISPUTED
+          - REVERSED
+          - null
+        amount_cents:
+          type: integer
+          format: int64
+        recorded:
+          type: boolean
+        reconciled:
+          type: boolean
+        satisfies_delivery_requirement:
+          type: boolean
+          description: Whether the DELIVERING to DELIVERED COD guard is satisfied.
+        satisfies_close_requirement:
+          type: boolean
+          description: Whether the DELIVERED to CLOSED COD guard is satisfied.
+    OrderFinancials:
+      type: object
+      additionalProperties: false
+      description: >-
+        Revenue is the priced order total, cost is the sum of its ACCEPTED,
+        ACTIVE and COMPLETED assignments grouped by modality, and margin is
+        revenue minus cost. margin_basis_points is null when revenue is zero.
+      required:
+      - order_id
+      - order_status
+      - currency
+      - revenue_cents
+      - cost_cents
+      - margin_cents
+      - margin_basis_points
+      - cost_by_modality
+      - cod
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        order_status:
+          $ref: '#/components/schemas/OrderStatus'
+        currency:
+          type: string
+          const: MXN
+        revenue_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        cost_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        margin_cents:
+          type: integer
+          format: int64
+        margin_basis_points:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        cost_by_modality:
+          type: array
+          description: One bucket per modality, in the order OWN, EXTERNAL, ALLY_CAPACITY.
+          minItems: 3
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/ModalityCost'
+        cod:
+          $ref: '#/components/schemas/CodPosition'
+    RouteOrderFinancials:
+      type: object
+      additionalProperties: false
+      required:
+      - order_id
+      - revenue_cents
+      - cost_cents
+      - margin_cents
+      - margin_basis_points
+      - cost_by_modality
+      - cod
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        revenue_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        cost_cents:
+          type: integer
+          minimum: 0
+          format: int64
+        margin_cents:
+          type: integer
+          format: int64
+        margin_basis_points:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        cost_by_modality:
+          type: array
+          description: One bucket per modality, in the order OWN, EXTERNAL, ALLY_CAPACITY.
+          minItems: 3
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/ModalityCost'
+        cod:
+          $ref: '#/components/schemas/CodPosition'
+    RouteFinancials:
+      type: object
+      additionalProperties: false
+      description: >-
+        Totals of the orders on the route's stops; each equals the sum of the
+        per-order values in orders. Only RECORDED collections are pending
+        reconciliation, at their recorded amount; expected but uncollected cash
+        appears only in cod_expected_cents_total.
+      required:
+      - route_id
+      - route_status
+      - currency
+      - order_count
+      - revenue_cents_total
+      - cost_cents_total
+      - margin_cents_total
+      - margin_basis_points
+      - cost_by_modality
+      - cod_expected_cents_total
+      - cod_pending_reconciliation_cents_total
+      - cod_pending_reconciliation_count
+      - orders
+      properties:
+        route_id:
+          type: string
+          format: uuid
+        route_status:
+          $ref: '#/components/schemas/RouteStatus'
+        currency:
+          type: string
+          const: MXN
+        order_count:
+          type: integer
+          minimum: 0
+          format: int32
+        revenue_cents_total:
+          type: integer
+          minimum: 0
+          format: int64
+        cost_cents_total:
+          type: integer
+          minimum: 0
+          format: int64
+        margin_cents_total:
+          type: integer
+          format: int64
+        margin_basis_points:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        cost_by_modality:
+          type: array
+          description: One bucket per modality, in the order OWN, EXTERNAL, ALLY_CAPACITY.
+          minItems: 3
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/ModalityCost'
+        cod_expected_cents_total:
+          type: integer
+          minimum: 0
+          format: int64
+        cod_pending_reconciliation_cents_total:
+          type: integer
+          minimum: 0
+          format: int64
+        cod_pending_reconciliation_count:
+          type: integer
+          minimum: 0
+          format: int32
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteOrderFinancials'
     RouteStatus:
       type: string
       enum:
