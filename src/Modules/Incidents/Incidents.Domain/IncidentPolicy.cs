@@ -17,6 +17,16 @@ public enum IncidentSeverity
 }
 
 /// <summary>
+/// The two terminal outcomes a resolution may record. They are the terminal members of
+/// <see cref="IncidentStatus"/>, never a second status vocabulary.
+/// </summary>
+public enum IncidentResolutionOutcome
+{
+    Resolved,
+    Rejected,
+}
+
+/// <summary>
 /// The explicit next action AI-09 requires from a failed attempt. Both values are order
 /// statuses ORD-002 already accepts as successors of <c>FAILED_ATTEMPT</c>.
 /// </summary>
@@ -59,6 +69,47 @@ public static class IncidentContract
     public const string PaymentUnavailable = "PAYMENT_UNAVAILABLE";
     public const string PackageDamaged = "PACKAGE_DAMAGED";
     public const string SecurityRisk = "SECURITY_RISK";
+
+    public static bool TryParseStatus(string? value, out IncidentStatus status)
+    {
+        status = value switch
+        {
+            Open => IncidentStatus.Open,
+            Investigating => IncidentStatus.Investigating,
+            Resolved => IncidentStatus.Resolved,
+            Rejected => IncidentStatus.Rejected,
+            _ => default,
+        };
+        return value is Open or Investigating or Resolved or Rejected;
+    }
+
+    public static string ToContractValue(this IncidentStatus status) => status switch
+    {
+        IncidentStatus.Open => Open,
+        IncidentStatus.Investigating => Investigating,
+        IncidentStatus.Resolved => Resolved,
+        IncidentStatus.Rejected => Rejected,
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown incident status."),
+    };
+
+    /// <summary>Only the terminal statuses parse as an outcome; OPEN and INVESTIGATING never do.</summary>
+    public static bool TryParseResolutionOutcome(string? value, out IncidentResolutionOutcome outcome)
+    {
+        outcome = value switch
+        {
+            Resolved => IncidentResolutionOutcome.Resolved,
+            Rejected => IncidentResolutionOutcome.Rejected,
+            _ => default,
+        };
+        return value is Resolved or Rejected;
+    }
+
+    public static string ToContractValue(this IncidentResolutionOutcome outcome) => outcome switch
+    {
+        IncidentResolutionOutcome.Resolved => Resolved,
+        IncidentResolutionOutcome.Rejected => Rejected,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown resolution outcome."),
+    };
 
     public static bool TryParseSeverity(string? value, out IncidentSeverity severity)
     {
@@ -162,6 +213,45 @@ public static class IncidentOrderStatePolicy
     public static bool IsAllowedNextAction(string? orderStatus, IncidentNextAction nextAction) =>
         IsAllowedOpeningState(orderStatus) &&
         (nextAction is not IncidentNextAction.Returning || DerivesCustodyAcquired(orderStatus!));
+}
+
+/// <summary>
+/// The INC-001 resolution state machine. OPEN and INVESTIGATING are the pending states — the same
+/// pair ORD-002 reads as an unresolved incident — and each may close into exactly one terminal
+/// outcome. RESOLVED and REJECTED are final: a retry is answered by the idempotency record, never
+/// by mutating a terminal incident again. Closing an incident never moves its order.
+/// </summary>
+public static class IncidentResolutionPolicy
+{
+    public static bool IsPending(IncidentStatus status) =>
+        status is IncidentStatus.Open or IncidentStatus.Investigating;
+
+    public static bool IsTerminal(IncidentStatus status) =>
+        status is IncidentStatus.Resolved or IncidentStatus.Rejected;
+
+    public static bool CanResolve(IncidentStatus current, IncidentResolutionOutcome outcome) =>
+        IsPending(current) && Enum.IsDefined(outcome);
+
+    public static IncidentStatus TerminalStatus(IncidentResolutionOutcome outcome) => outcome switch
+    {
+        IncidentResolutionOutcome.Resolved => IncidentStatus.Resolved,
+        IncidentResolutionOutcome.Rejected => IncidentStatus.Rejected,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown resolution outcome."),
+    };
+}
+
+/// <summary>
+/// Closing an incident is a supervisory decision. Only an active DISPATCHER of the active
+/// organization, or an active PLATFORM_ADMIN of it with a satisfied MFA challenge, may resolve or
+/// reject. A driver never may, not even the one whose active assignment allowed them to open it.
+/// </summary>
+public static class IncidentResolutionAuthorizationPolicy
+{
+    public static bool MayResolve(
+        bool isActiveDispatcher,
+        bool isActivePlatformAdmin,
+        bool mfaSatisfied) =>
+        isActiveDispatcher || (isActivePlatformAdmin && mfaSatisfied);
 }
 
 /// <summary>

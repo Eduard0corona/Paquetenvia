@@ -17,6 +17,20 @@ public sealed record OpenIncidentCommand(
     IReadOnlyList<Guid> EvidenceProofIds,
     string? RequestId);
 
+/// <summary>
+/// Closes a pending incident into one terminal outcome. The reason is the operator's rationale
+/// and is kept only as append-only audit evidence.
+/// </summary>
+public sealed record ResolveIncidentCommand(
+    Guid ActorId,
+    Guid OrganizationId,
+    bool MfaSatisfied,
+    string IdempotencyKey,
+    Guid IncidentId,
+    string Outcome,
+    string Reason,
+    string? RequestId);
+
 public sealed record IncidentResult(
     Guid Id,
     Guid OrderId,
@@ -35,11 +49,15 @@ public interface IIncidentService
     Task<IncidentResult> OpenAsync(
         OpenIncidentCommand command,
         CancellationToken cancellationToken);
+
+    Task<IncidentResult> ResolveAsync(
+        ResolveIncidentCommand command,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// Shape validation for the INC-001 opening contract. Every acceptance criterion that the
-/// backlog calls mandatory is rejected here before any tenant transaction is opened.
+/// Shape validation for the INC-001 opening and resolution contracts. Every acceptance criterion
+/// that the backlog calls mandatory is rejected here before any tenant transaction is opened.
 /// </summary>
 public static class IncidentRequestPolicy
 {
@@ -81,6 +99,26 @@ public static class IncidentRequestPolicy
         IncidentContract.TryParseReasonCode(command.ReasonCode, out _) &&
         IncidentContract.TryParseNextAction(command.NextAction, out _) &&
         IsValidEvidence(command.EvidenceProofIds);
+
+    public const int MaximumResolutionReasonLength = 500;
+
+    /// <summary>
+    /// The resolution reason is bounded plain text. Surrounding whitespace is rejected rather than
+    /// trimmed, so the audit records exactly what the operator sent, and control characters are
+    /// rejected because the rationale is a single human-readable statement, not formatted content.
+    /// </summary>
+    public static bool IsValidResolutionReason(string? value) =>
+        value is { Length: > 0 and <= MaximumResolutionReasonLength } &&
+        !char.IsWhiteSpace(value[0]) &&
+        !char.IsWhiteSpace(value[^1]) &&
+        !value.Any(char.IsControl);
+
+    public static bool IsValidResolveCommandShape(ResolveIncidentCommand command) =>
+        command.ActorId != Guid.Empty &&
+        command.OrganizationId != Guid.Empty &&
+        command.IncidentId != Guid.Empty &&
+        IncidentContract.TryParseResolutionOutcome(command.Outcome, out _) &&
+        IsValidResolutionReason(command.Reason);
 }
 
 public abstract class IncidentException(string code) : Exception(code)

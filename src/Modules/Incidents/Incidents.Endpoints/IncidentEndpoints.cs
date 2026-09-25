@@ -33,6 +33,18 @@ public static class IncidentEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+        endpoints.MapPost("/api/v1/incidents/{incidentId}/resolution", ResolveIncidentAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("resolveIncident")
+            .WithTags("Incidents")
+            .Accepts<ResolveIncidentRequest>("application/json")
+            .Produces<IncidentResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }
 
@@ -93,17 +105,7 @@ public static class IncidentEndpoints
                 cancellationToken);
             return Results.Created(
                 $"/api/v1/orders/{parsedOrderId:D}/incidents/{result.Id:D}",
-                new IncidentResponse(
-                    result.Id,
-                    result.OrderId,
-                    result.Status,
-                    result.Severity,
-                    result.ReasonCode,
-                    result.NextAction,
-                    result.CustodyAcquired,
-                    result.OccurredAt,
-                    result.SlaDueAt,
-                    result.EvidenceProofIds));
+                ToResponse(result));
         }
         catch (Exception exception)
         {
@@ -111,23 +113,92 @@ public static class IncidentEndpoints
         }
     }
 
+    private static async Task<IResult> ResolveIncidentAsync(
+        string incidentId,
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        IIncidentService service,
+        CancellationToken cancellationToken)
+    {
+        ResolveIncidentRequest? request;
+        try
+        {
+            request = await httpContext.Request.ReadFromJsonAsync<ResolveIncidentRequest>(
+                RequestJsonOptions,
+                cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return Conflict("INVALID_REQUEST");
+        }
+
+        if (!TryReadContext(
+                incidentId,
+                httpContext,
+                session,
+                tenantContext,
+                out var parsedIncidentId,
+                out var actorId,
+                out var organizationId,
+                out var idempotencyKey) ||
+            request is null ||
+            request.ExtensionData is { Count: > 0 })
+        {
+            return Conflict("INVALID_REQUEST");
+        }
+
+        try
+        {
+            var result = await service.ResolveAsync(
+                new ResolveIncidentCommand(
+                    actorId,
+                    organizationId,
+                    session.MfaSatisfied,
+                    idempotencyKey,
+                    parsedIncidentId,
+                    request.Outcome ?? string.Empty,
+                    request.Reason ?? string.Empty,
+                    httpContext.TraceIdentifier),
+                cancellationToken);
+            return Results.Ok(ToResponse(result));
+        }
+        catch (Exception exception)
+        {
+            return ToProblem(exception, cancellationToken);
+        }
+    }
+
+    private static IncidentResponse ToResponse(IncidentResult result) =>
+        new(
+            result.Id,
+            result.OrderId,
+            result.Status,
+            result.Severity,
+            result.ReasonCode,
+            result.NextAction,
+            result.CustodyAcquired,
+            result.OccurredAt,
+            result.SlaDueAt,
+            result.EvidenceProofIds);
+
     private static bool TryReadContext(
-        string orderId,
+        string resourceId,
         HttpContext context,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
-        out Guid parsedOrderId,
+        out Guid parsedResourceId,
         out Guid actorId,
         out Guid organizationId,
         out string idempotencyKey)
     {
-        parsedOrderId = default;
+        parsedResourceId = default;
         actorId = default;
         organizationId = default;
         idempotencyKey = string.Empty;
         var values = context.Request.Headers["Idempotency-Key"];
-        return Guid.TryParseExact(orderId, "D", out parsedOrderId) &&
-            parsedOrderId != Guid.Empty &&
+        return Guid.TryParseExact(resourceId, "D", out parsedResourceId) &&
+            parsedResourceId != Guid.Empty &&
             session.IsActive &&
             session.UserId is { } userId &&
             (actorId = userId) != Guid.Empty &&
@@ -154,6 +225,7 @@ public static class IncidentEndpoints
         "IDEMPOTENCY_CONFLICT" => code,
         "ORDER_STATE_NOT_ALLOWED" => code,
         "EVIDENCE_NOT_AVAILABLE" => code,
+        "INCIDENT_STATE_CONFLICT" => code,
         _ => "CONFLICT",
     };
 
@@ -181,6 +253,14 @@ public sealed record OpenIncidentRequest(
     [property: JsonPropertyName("next_action")] string? NextAction,
     [property: JsonPropertyName("occurred_at")] DateTimeOffset? OccurredAt,
     [property: JsonPropertyName("evidence_proof_ids")] IReadOnlyList<Guid>? EvidenceProofIds)
+{
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; init; }
+}
+
+public sealed record ResolveIncidentRequest(
+    [property: JsonPropertyName("outcome")] string? Outcome,
+    [property: JsonPropertyName("reason")] string? Reason)
 {
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; init; }

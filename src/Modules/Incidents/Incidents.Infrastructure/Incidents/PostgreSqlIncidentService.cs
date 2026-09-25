@@ -20,7 +20,7 @@ namespace Incidents.Infrastructure.Incidents;
 /// <c>FAILED_ATTEMPT</c> transition, never a substitute for it: this service never writes
 /// <c>orders.orders</c>, so the authoritative state machine stays the only writer of order state.
 /// </summary>
-public sealed class PostgreSqlIncidentService(
+public sealed partial class PostgreSqlIncidentService(
     TenantTransactionContext<IncidentsDbContext> transactionContext,
     IAppendOnlyAuditWriter auditWriter,
     IAuditPayloadRedactor redactor,
@@ -31,6 +31,9 @@ public sealed class PostgreSqlIncidentService(
     internal const string IdempotencyScope = "INC-001:OPEN_INCIDENT";
     internal const string AuditAction = "incidents.incident.opened";
     internal const string AuditEntityType = "incident";
+
+    /// <summary>The HTTP status each operation stores beside its replayable response.</summary>
+    private const int OpenedResponseStatus = 201;
 
     /// <summary>
     /// The idempotency reservation outlives the request so a retry after a network failure
@@ -133,12 +136,16 @@ public sealed class PostgreSqlIncidentService(
                         slaDueAt,
                         command.EvidenceProofIds);
 
-                    await InsertReservationAsync(dbContext, command, requestHash, now, token);
+                    await InsertReservationAsync(
+                        dbContext, command.OrganizationId, IdempotencyScope, command.IdempotencyKey,
+                        requestHash, now, token);
                     await InsertIncidentAsync(
                         dbContext, command, order, result, protectedDescription, now, token);
                     await InsertEvidenceAsync(dbContext, command, order, result, now, token);
                     await WriteAuditAsync(dbContext, command, result, now, token);
-                    await CompleteReservationAsync(dbContext, command, requestHash, result, now, token);
+                    await CompleteReservationAsync(
+                        dbContext, command.OrganizationId, IdempotencyScope, command.IdempotencyKey,
+                        requestHash, OpenedResponseStatus, result, now, token);
                     return result;
                 },
                 cancellationToken);
@@ -234,6 +241,74 @@ public sealed class PostgreSqlIncidentService(
         byte[] requestHash,
         CancellationToken cancellationToken)
     {
+        var result = await ReadStoredResultAsync(
+            context,
+            command.OrganizationId,
+            IdempotencyScope,
+            command.IdempotencyKey,
+            requestHash,
+            OpenedResponseStatus,
+            cancellationToken);
+        if (result is null)
+        {
+            return null;
+        }
+
+        if (result.OrderId != command.OrderId ||
+            result.Status != IncidentContract.Open)
+        {
+            throw new IncidentConflictException("IDEMPOTENCY_CORRUPT");
+        }
+
+        var (connection, transaction) = IncidentsSql.Database(context);
+        // The stored response is only trusted once the incident it names is still present in this
+        // tenant with the attributes the replay is about to hand back. Status is the one attribute
+        // a later resolution legitimately moves, so the replay still returns the original OPEN
+        // response once the incident has been closed.
+        await using var stored = new NpgsqlCommand(
+            """
+            SELECT i.order_id,i.status,i.severity,i.incident_type,i.reason_code,i.next_action,
+                   i.custody_acquired,i.occurred_at,i.sla_due_at,
+                   (SELECT count(*) FROM incidents.incident_evidence e WHERE e.incident_id=i.id)
+            FROM incidents.incidents i
+            WHERE i.id=@incident
+            """,
+            connection,
+            transaction);
+        stored.Parameters.Add(IncidentsSql.P("incident", NpgsqlDbType.Uuid, result.Id));
+        await using var storedReader = await stored.ExecuteReaderAsync(cancellationToken);
+        if (!await storedReader.ReadAsync(cancellationToken) ||
+            storedReader.GetGuid(0) != command.OrderId ||
+            !IncidentContract.TryParseStatus(storedReader.GetString(1), out _) ||
+            storedReader.GetString(2) != result.Severity ||
+            storedReader.GetString(3) != result.IncidentType ||
+            storedReader.GetString(4) != result.ReasonCode ||
+            storedReader.GetString(5) != result.NextAction ||
+            storedReader.GetBoolean(6) != result.CustodyAcquired ||
+            storedReader.GetFieldValue<DateTimeOffset>(7) != result.OccurredAt ||
+            storedReader.GetFieldValue<DateTimeOffset>(8) != result.SlaDueAt ||
+            storedReader.GetInt64(9) != result.EvidenceProofIds.Count)
+        {
+            throw new IncidentConflictException("IDEMPOTENCY_CORRUPT");
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Reads the response an idempotency record stored for this tenant, scope and key. A different
+    /// request under the same key is an idempotency conflict; an incomplete or unreadable record,
+    /// or one whose response does not name the resource it was recorded for, fails closed.
+    /// </summary>
+    private static async Task<IncidentResult?> ReadStoredResultAsync(
+        IncidentsDbContext context,
+        Guid organizationId,
+        string scope,
+        string idempotencyKey,
+        byte[] requestHash,
+        int responseStatus,
+        CancellationToken cancellationToken)
+    {
         var (connection, transaction) = IncidentsSql.Database(context);
         await using var reservation = new NpgsqlCommand(
             """
@@ -243,9 +318,9 @@ public sealed class PostgreSqlIncidentService(
             """,
             connection,
             transaction);
-        reservation.Parameters.Add(IncidentsSql.P("owner", NpgsqlDbType.Uuid, command.OrganizationId));
-        reservation.Parameters.Add(IncidentsSql.P("scope", NpgsqlDbType.Text, IdempotencyScope));
-        reservation.Parameters.Add(IncidentsSql.P("key", NpgsqlDbType.Text, command.IdempotencyKey));
+        reservation.Parameters.Add(IncidentsSql.P("owner", NpgsqlDbType.Uuid, organizationId));
+        reservation.Parameters.Add(IncidentsSql.P("scope", NpgsqlDbType.Text, scope));
+        reservation.Parameters.Add(IncidentsSql.P("key", NpgsqlDbType.Text, idempotencyKey));
         Guid resourceId;
         string responseBody;
         await using (var reader = await reservation.ExecuteReaderAsync(cancellationToken))
@@ -260,7 +335,10 @@ public sealed class PostgreSqlIncidentService(
                 throw new IncidentConflictException("IDEMPOTENCY_CONFLICT");
             }
 
-            if (reader.IsDBNull(1) || reader.GetInt32(1) != 201 || reader.IsDBNull(2) || reader.IsDBNull(3))
+            if (reader.IsDBNull(1) ||
+                reader.GetInt32(1) != responseStatus ||
+                reader.IsDBNull(2) ||
+                reader.IsDBNull(3))
             {
                 throw new IncidentConflictException("IDEMPOTENCY_CORRUPT");
             }
@@ -280,38 +358,7 @@ public sealed class PostgreSqlIncidentService(
             throw new IncidentConflictException("IDEMPOTENCY_CORRUPT");
         }
 
-        if (result.Id != resourceId ||
-            result.OrderId != command.OrderId ||
-            result.Status != IncidentContract.Open)
-        {
-            throw new IncidentConflictException("IDEMPOTENCY_CORRUPT");
-        }
-
-        // The stored response is only trusted once the incident it names is still present in this
-        // tenant with the attributes the replay is about to hand back.
-        await using var stored = new NpgsqlCommand(
-            """
-            SELECT i.order_id,i.status,i.severity,i.incident_type,i.reason_code,i.next_action,
-                   i.custody_acquired,i.occurred_at,i.sla_due_at,
-                   (SELECT count(*) FROM incidents.incident_evidence e WHERE e.incident_id=i.id)
-            FROM incidents.incidents i
-            WHERE i.id=@incident
-            """,
-            connection,
-            transaction);
-        stored.Parameters.Add(IncidentsSql.P("incident", NpgsqlDbType.Uuid, result.Id));
-        await using var storedReader = await stored.ExecuteReaderAsync(cancellationToken);
-        if (!await storedReader.ReadAsync(cancellationToken) ||
-            storedReader.GetGuid(0) != command.OrderId ||
-            storedReader.GetString(1) != result.Status ||
-            storedReader.GetString(2) != result.Severity ||
-            storedReader.GetString(3) != result.IncidentType ||
-            storedReader.GetString(4) != result.ReasonCode ||
-            storedReader.GetString(5) != result.NextAction ||
-            storedReader.GetBoolean(6) != result.CustodyAcquired ||
-            storedReader.GetFieldValue<DateTimeOffset>(7) != result.OccurredAt ||
-            storedReader.GetFieldValue<DateTimeOffset>(8) != result.SlaDueAt ||
-            storedReader.GetInt64(9) != result.EvidenceProofIds.Count)
+        if (result.Id != resourceId)
         {
             throw new IncidentConflictException("IDEMPOTENCY_CORRUPT");
         }
@@ -321,7 +368,9 @@ public sealed class PostgreSqlIncidentService(
 
     private static async Task InsertReservationAsync(
         IncidentsDbContext context,
-        OpenIncidentCommand command,
+        Guid organizationId,
+        string scope,
+        string idempotencyKey,
         byte[] requestHash,
         DateTimeOffset now,
         CancellationToken cancellationToken)
@@ -336,9 +385,9 @@ public sealed class PostgreSqlIncidentService(
             """,
             connection,
             transaction);
-        reservation.Parameters.Add(IncidentsSql.P("owner", NpgsqlDbType.Uuid, command.OrganizationId));
-        reservation.Parameters.Add(IncidentsSql.P("scope", NpgsqlDbType.Text, IdempotencyScope));
-        reservation.Parameters.Add(IncidentsSql.P("key", NpgsqlDbType.Text, command.IdempotencyKey));
+        reservation.Parameters.Add(IncidentsSql.P("owner", NpgsqlDbType.Uuid, organizationId));
+        reservation.Parameters.Add(IncidentsSql.P("scope", NpgsqlDbType.Text, scope));
+        reservation.Parameters.Add(IncidentsSql.P("key", NpgsqlDbType.Text, idempotencyKey));
         reservation.Parameters.Add(IncidentsSql.P("hash", NpgsqlDbType.Bytea, requestHash));
         reservation.Parameters.Add(IncidentsSql.P("now", NpgsqlDbType.TimestampTz, now));
         reservation.Parameters.Add(IncidentsSql.P("expires", NpgsqlDbType.TimestampTz, now + ReservationLifetime));
@@ -460,8 +509,11 @@ public sealed class PostgreSqlIncidentService(
 
     private static async Task CompleteReservationAsync(
         IncidentsDbContext context,
-        OpenIncidentCommand command,
+        Guid organizationId,
+        string scope,
+        string idempotencyKey,
         byte[] requestHash,
+        int responseStatus,
         IncidentResult result,
         DateTimeOffset now,
         CancellationToken cancellationToken)
@@ -470,21 +522,22 @@ public sealed class PostgreSqlIncidentService(
         await using var complete = new NpgsqlCommand(
             """
             UPDATE platform.idempotency_keys
-            SET response_status=201,response_body=@response,resource_id=@resource,expires_at=@expires
+            SET response_status=@status,response_body=@response,resource_id=@resource,expires_at=@expires
             WHERE owner_org_id=@owner AND scope=@scope AND idempotency_key=@key
               AND request_hash=@hash AND response_status IS NULL
             """,
             connection,
             transaction);
+        complete.Parameters.Add(IncidentsSql.P("status", NpgsqlDbType.Integer, responseStatus));
         complete.Parameters.Add(IncidentsSql.P(
             "response",
             NpgsqlDbType.Jsonb,
             JsonSerializer.Serialize(result, JsonOptions)));
         complete.Parameters.Add(IncidentsSql.P("resource", NpgsqlDbType.Uuid, result.Id));
         complete.Parameters.Add(IncidentsSql.P("expires", NpgsqlDbType.TimestampTz, now + ReservationLifetime));
-        complete.Parameters.Add(IncidentsSql.P("owner", NpgsqlDbType.Uuid, command.OrganizationId));
-        complete.Parameters.Add(IncidentsSql.P("scope", NpgsqlDbType.Text, IdempotencyScope));
-        complete.Parameters.Add(IncidentsSql.P("key", NpgsqlDbType.Text, command.IdempotencyKey));
+        complete.Parameters.Add(IncidentsSql.P("owner", NpgsqlDbType.Uuid, organizationId));
+        complete.Parameters.Add(IncidentsSql.P("scope", NpgsqlDbType.Text, scope));
+        complete.Parameters.Add(IncidentsSql.P("key", NpgsqlDbType.Text, idempotencyKey));
         complete.Parameters.Add(IncidentsSql.P("hash", NpgsqlDbType.Bytea, requestHash));
         if (await complete.ExecuteNonQueryAsync(cancellationToken) != 1)
         {
@@ -508,6 +561,14 @@ public sealed class DisabledIncidentService : IIncidentService
 {
     public Task<IncidentResult> OpenAsync(
         OpenIncidentCommand command,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new IncidentInfrastructureException("The incident module is disabled.");
+    }
+
+    public Task<IncidentResult> ResolveAsync(
+        ResolveIncidentCommand command,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
