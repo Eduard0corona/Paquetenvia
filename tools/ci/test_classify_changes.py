@@ -319,7 +319,6 @@ class FullTriggerTests(unittest.TestCase):
             "docs/releases/mvp-0-internal-release-report.md",
             "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml",
             "docs/normative/v0.6/specs/AI-10_DECISIONS_AND_GATES.yaml",
-            "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
             "tools/test-rel-000-internal-release.ps1",
             "tools/backup-restore.common.ps1",
         ):
@@ -373,6 +372,178 @@ class FullTriggerTests(unittest.TestCase):
         single = jobs(classify(["src/Paqueteria.Api/Program.cs"]))
         combined = jobs(classify(["src/Paqueteria.Api/Program.cs", "docs/adr/x.md", "tests/Paqueteria.UnitTests/a.cs"]))
         self.assertTrue(single <= combined)
+
+
+AI05_OPENAPI = "docs/normative/v0.6/contracts/AI-05_OPENAPI.yaml"
+NORMATIVE_MANIFEST = "docs/normative/v0.6/MANIFEST.json"
+NORMATIVE_CHECKSUMS = "docs/normative/v0.6/CHECKSUMS_SHA256.txt"
+AI05_TRIPLET = (AI05_OPENAPI, NORMATIVE_MANIFEST, NORMATIVE_CHECKSUMS)
+AI05_CONSUMERS = {"normative-contracts", "dotnet", "web"}
+AI08_BACKLOG = "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml"
+AI10_GATES = "docs/normative/v0.6/specs/AI-10_DECISIONS_AND_GATES.yaml"
+
+
+class Rel000InputNarrowingTests(unittest.TestCase):
+    """Only the AI-05 triplet leaves REL000_INPUT; every other REL-000 input stays FULL."""
+
+    def assert_selective_openapi(self, plan):
+        self.assertEqual("SELECTIVE", plan["classification"])
+        self.assertNotIn("REL000_INPUT", plan["domains"])
+        self.assertNotIn("FULL:REL000_INPUT", plan["reasons"])
+        self.assertFalse([reason for reason in plan["reasons"] if reason.startswith("FULL:")])
+        self.assertIn("NORMATIVE_OPENAPI", plan["domains"])
+        self.assertIn("DOMAIN:NORMATIVE_OPENAPI", plan["reasons"])
+        self.assertTrue(AI05_CONSUMERS <= jobs(plan))
+        self.assertNotIn("rel000", jobs(plan))
+        classifier.validate_plan(plan, CONFIG)
+        self.assertEqual(("PASS", []), gate_verdict(plan))
+
+    def assert_full_rel000(self, plan):
+        self.assertEqual("FULL", plan["classification"])
+        self.assertIn("REL000_INPUT", plan["domains"])
+        self.assertIn("FULL:REL000_INPUT", plan["reasons"])
+        self.assertEqual(set(ALL_JOBS), jobs(plan))
+
+    # ---- the AI-05 triplet is selective and requires its real consumers
+
+    def test_each_ai05_path_no_longer_forces_full(self):
+        for path in AI05_TRIPLET:
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assert_selective_openapi(plan)
+                self.assertEqual(["DOCS", "NORMATIVE", "NORMATIVE_OPENAPI"], plan["domains"])
+                self.assertEqual({"secret-scan", *AI05_CONSUMERS}, jobs(plan))
+                self.assertNotIn("azr-static", jobs(plan))
+
+    def test_ai05_triplet_together_requires_normative_dotnet_and_web(self):
+        plan = classify(AI05_TRIPLET)
+        self.assert_selective_openapi(plan)
+        self.assertEqual(["DOCS", "NORMATIVE", "NORMATIVE_OPENAPI"], plan["domains"])
+        self.assertEqual(["secret-scan", "normative-contracts", "dotnet", "web"], plan["required_jobs"])
+
+    def test_product_change_with_ai05_triplet_is_selective(self):
+        """FIN-001/INC-001/CSV-001 shape: AI-05 triplet plus backend code and tests."""
+        plan = classify(
+            [
+                *AI05_TRIPLET,
+                "src/Modules/Incidents/Incidents.Api/IncidentEndpoints.cs",
+                "tests/Paqueteria.IntegrationTests/Incidents/IncidentTests.cs",
+                "tests/Paqueteria.ContractTests/IncidentContractTests.cs",
+            ]
+        )
+        self.assert_selective_openapi(plan)
+        self.assertEqual({"secret-scan", "normative-contracts", "web", *BACKEND}, jobs(plan))
+        self.assertEqual({"azr-static", "rel000"}, set(ALL_JOBS) - jobs(plan))
+
+    def test_openapi_domain_covers_exactly_the_excluded_triplet(self):
+        domains = {domain["name"]: domain for domain in CONFIG["domains"]}
+        self.assertEqual(list(AI05_TRIPLET), domains["NORMATIVE_OPENAPI"]["patterns"])
+        self.assertEqual(["normative-contracts", "dotnet", "web"], domains["NORMATIVE_OPENAPI"]["jobs"])
+        self.assertFalse(domains["NORMATIVE_OPENAPI"]["full"])
+        self.assertEqual(list(AI05_TRIPLET), domains["REL000_INPUT"]["exclude"])
+        others = [name for name, domain in domains.items() if domain["exclude"] and name != "REL000_INPUT"]
+        self.assertEqual([], others)
+
+    # ---- the exclusion is domain-local, never a global suppression
+
+    def test_excluded_path_is_still_matched_by_every_other_applicable_domain(self):
+        rel000_input = next(domain for domain in CONFIG["domains"] if domain["name"] == "REL000_INPUT")
+        for path in AI05_TRIPLET:
+            with self.subTest(path=path):
+                self.assertTrue(any(pattern.match(path) for pattern in rel000_input["compiled"]))
+                self.assertEqual(["DOCS", "NORMATIVE", "NORMATIVE_OPENAPI"], classifier.match_domains(CONFIG, path))
+                self.assertEqual([], classify([path])["unmatched_paths"])
+
+    def test_excluded_path_still_forces_full_through_another_full_domain(self):
+        raw = json.loads(classifier.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+        raw["domains"].append({"name": "SYNTHETIC_FULL", "patterns": [NORMATIVE_MANIFEST], "full": True})
+        config = classifier.validate_config(raw)
+        plan = classifier.classify_paths(
+            config, [NORMATIVE_MANIFEST], head_ref="feature/x", head_repo=REPOSITORY, repository=REPOSITORY
+        )
+        self.assertEqual("FULL", plan["classification"])
+        self.assertIn("FULL:SYNTHETIC_FULL", plan["reasons"])
+        self.assertNotIn("FULL:REL000_INPUT", plan["reasons"])
+
+    def test_without_the_exclusion_the_triplet_would_be_rel000_input(self):
+        raw = json.loads(classifier.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+        next(domain for domain in raw["domains"] if domain["name"] == "REL000_INPUT").pop("exclude")
+        config = classifier.validate_config(raw)
+        for path in AI05_TRIPLET:
+            with self.subTest(path=path):
+                self.assertIn("REL000_INPUT", classifier.match_domains(config, path))
+
+    # ---- every other REL-000 input stays FULL
+
+    def test_ai08_and_ai10_remain_full(self):
+        for path in (AI08_BACKLOG, AI10_GATES):
+            with self.subTest(path=path):
+                self.assert_full_rel000(classify([path]))
+                self.assertNotIn("NORMATIVE_OPENAPI", classify([path])["domains"])
+
+    def test_ai05_together_with_ai08_or_ai10_is_full(self):
+        for paths in (
+            [AI05_OPENAPI, AI08_BACKLOG],
+            [*AI05_TRIPLET, AI08_BACKLOG],
+            [*AI05_TRIPLET, AI10_GATES],
+            [NORMATIVE_CHECKSUMS, AI10_GATES],
+        ):
+            with self.subTest(paths=paths):
+                plan = classify(paths)
+                self.assert_full_rel000(plan)
+                self.assertIn("NORMATIVE_OPENAPI", plan["domains"])
+
+    def test_normative_tooling_remains_full(self):
+        for path in (
+            "docs/normative/v0.6/tools/validate_contracts.py",
+            "docs/normative/v0.6/tools/new_checker.py",
+            "docs/normative/v0.6/tools/CHECKSUMS_SHA256.txt",
+        ):
+            with self.subTest(path=path):
+                self.assert_full_rel000(classify([path]))
+
+    def test_every_other_tracked_v06_normative_file_remains_full(self):
+        tracked = git(REPOSITORY_ROOT, "ls-files", "docs/normative/v0.6").splitlines()
+        others = sorted(set(tracked) - set(AI05_TRIPLET))
+        self.assertEqual(sorted(AI05_TRIPLET), sorted(set(tracked) & set(AI05_TRIPLET)))
+        self.assertGreater(len(others), 50)
+        self.assertIn("docs/normative/v0.6/contracts/AI-12_SIGNALR_CONTRACT.yaml", others)
+        for path in others:
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assert_full_rel000(plan)
+                self.assertNotIn("NORMATIVE_OPENAPI", plan["domains"])
+
+    def test_future_and_near_miss_v06_files_remain_full(self):
+        for path in (
+            "docs/normative/v0.6/contracts/AI-30_FUTURE_CONTRACT.yaml",
+            "docs/normative/v0.6/NEW_INDEX.json",
+            "docs/normative/v0.6/future/area/file.md",
+            "docs/normative/v0.6/contracts/AI-05_OPENAPI.yml",
+            "docs/normative/v0.6/contracts/AI-05_OPENAPI.yaml.orig",
+            "docs/normative/v0.6/contracts/AI-05_OPENAPI_V2.yaml",
+            "docs/normative/v0.6/contracts/ai-05_openapi.yaml",
+            "docs/normative/v0.6/contracts/nested/AI-05_OPENAPI.yaml",
+            "docs/normative/v0.6/specs/MANIFEST.json",
+            "docs/normative/v0.6/MANIFEST.json.bak",
+            "docs/normative/v0.6/CHECKSUMS_SHA256.txt.new",
+        ):
+            with self.subTest(path=path):
+                plan = classify([path])
+                self.assert_full_rel000(plan)
+                self.assertNotIn("NORMATIVE_OPENAPI", plan["domains"])
+
+    def test_release_docs_and_rel000_scripts_remain_full_beside_the_triplet(self):
+        for path in (
+            "docs/releases/mvp-0-owner-decision.json",
+            "docs/releases/evidence/rel-000-owner-001/approved-evidence-manifest.json",
+            "docs/releases/future-release-note.md",
+            "tools/test-rel-000-internal-release.ps1",
+            "tools/backup-restore.common.ps1",
+        ):
+            with self.subTest(path=path):
+                self.assert_full_rel000(classify([path]))
+                self.assert_full_rel000(classify([*AI05_TRIPLET, path]))
 
 
 class MainBacksyncTests(unittest.TestCase):
@@ -538,6 +709,78 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(["NUGET_PROJECT_GRAPH"], [domain["name"] for domain in proven])
         self.assertEqual(["**/packages.lock.json"], proven[0]["patterns"])
         self.assertEqual(["DEPS"], proven[0]["supersedes"])
+
+    def domain(self, raw, name):
+        return next(item for item in raw["domains"] if item["name"] == name)
+
+    def test_exclude_rejects_wildcards(self):
+        for entry in (
+            "docs/normative/v0.6/**",
+            "docs/normative/v0.6/*.json",
+            "docs/normative/v0.6/contracts/AI-05_*.yaml",
+            "docs/normative/v0.6/**/MANIFEST.json",
+            "docs/normative/v0.6/MANIFEST.jso?",
+            "docs/normative/v0.6/[M]ANIFEST.json",
+            "docs/normative/v0.6/{MANIFEST,CHECKSUMS_SHA256}.json",
+        ):
+            with self.subTest(entry=entry):
+                raw = self.raw()
+                self.domain(raw, "REL000_INPUT")["exclude"] = [entry]
+                self.assert_rejected(raw, "CONFIG_EXCLUDE_INVALID")
+
+    def test_exclude_rejects_non_literal_or_malformed_entries(self):
+        for exclude in (
+            [],
+            [""],
+            "docs/normative/v0.6/MANIFEST.json",
+            [NORMATIVE_MANIFEST, NORMATIVE_MANIFEST],
+            ["/docs/normative/v0.6/MANIFEST.json"],
+            ["docs\\normative\\v0.6\\MANIFEST.json"],
+            ["docs/normative/v0.6/../v0.6/MANIFEST.json"],
+            ["docs/normative/v0.6/./MANIFEST.json"],
+            ["docs/normative/v0.6//MANIFEST.json"],
+            ["docs/normative/v0.6/contracts/"],
+            [" docs/normative/v0.6/MANIFEST.json"],
+        ):
+            with self.subTest(exclude=exclude):
+                raw = self.raw()
+                self.domain(raw, "REL000_INPUT")["exclude"] = exclude
+                self.assert_rejected(raw, "CONFIG_EXCLUDE_INVALID")
+
+    def test_exclude_must_be_covered_by_the_domains_own_patterns(self):
+        for entry in (
+            "docs/adr/x.md",
+            "docs/normative/v0.5/MANIFEST.json",
+            "docs/normativex/v0.6/MANIFEST.json",
+            "tools/ci/classify_changes.py",
+            "apps/web/package.json",
+            "src/Paqueteria.Api/Program.cs",
+        ):
+            with self.subTest(entry=entry):
+                raw = self.raw()
+                self.domain(raw, "REL000_INPUT")["exclude"] = [entry]
+                self.assert_rejected(raw, "CONFIG_EXCLUDE_INVALID")
+
+    def test_exclude_is_forbidden_for_control_domains(self):
+        for name, covered in (
+            ("SECURITY_CONTROL", ".gitleaks.toml"),
+            ("CI_SELF", "tools/ci/classify_changes.py"),
+            ("DEPS", "global.json"),
+        ):
+            with self.subTest(name=name):
+                raw = self.raw()
+                self.domain(raw, name)["exclude"] = [covered]
+                self.assert_rejected(raw, "CONFIG_EXCLUDE_FORBIDDEN")
+
+    def test_exclude_is_forbidden_for_every_domain_but_rel000_input(self):
+        for name in [item["name"] for item in self.raw()["domains"] if item["name"] != "REL000_INPUT"]:
+            with self.subTest(name=name):
+                raw = self.raw()
+                self.domain(raw, name)["exclude"] = [NORMATIVE_MANIFEST]
+                self.assert_rejected(raw, "CONFIG_EXCLUDE_FORBIDDEN")
+        raw = self.raw()
+        raw["domains"].append({"name": "REL000_INPUT_EXTRA", "patterns": ["docs/x/**"], "exclude": ["docs/x/a.md"], "full": True})
+        self.assert_rejected(raw, "CONFIG_EXCLUDE_FORBIDDEN")
 
     def test_format_required(self):
         raw = self.raw()
