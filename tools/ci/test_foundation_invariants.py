@@ -42,6 +42,7 @@ FOUNDATION_JOB_IDS = [
 NORMATIVE_DECOMPOSITION = ["secret-scan", "normative-contracts", "azr-static"]
 PR_VALIDATION_JOB_IDS = ["classify", *NORMATIVE_DECOMPOSITION, *FOUNDATION_JOB_IDS[1:], "pr-gate"]
 STRUCTURAL_JOB_IDS = {"classify", "pr-gate"}
+GITHUB_HOSTED_LINUX_RUNNER = "ubuntu-latest"
 JOB_LINE = re.compile(r"^  ([a-z0-9_-]+):$")
 
 
@@ -86,6 +87,11 @@ class FoundationInvariantTests(unittest.TestCase):
         self.assertEqual(FOUNDATION_JOB_IDS, list(self.workflow["jobs"]))
         self.assertEqual(FOUNDATION_JOB_IDS, job_ids_from_text(CI_WORKFLOW))
         self.assertEqual(13, len(self.workflow["jobs"]))
+
+    def test_every_job_runs_on_github_hosted_linux(self):
+        self.assertEqual(FOUNDATION_JOB_IDS, list(self.workflow["jobs"]))
+        for job_id, job in self.workflow["jobs"].items():
+            self.assertEqual(GITHUB_HOSTED_LINUX_RUNNER, job.get("runs-on"), job_id)
 
     def test_pr_validation_structural_and_decomposed_jobs_are_absent(self):
         self.assertFalse((STRUCTURAL_JOB_IDS | set(NORMATIVE_DECOMPOSITION)) & set(self.workflow["jobs"]))
@@ -175,9 +181,10 @@ class PrValidationInvariantTests(unittest.TestCase):
             self.workflow["concurrency"],
         )
 
-    def test_every_job_runs_self_hosted(self):
+    def test_every_job_runs_on_github_hosted_linux(self):
+        self.assertEqual(PR_VALIDATION_JOB_IDS, list(self.jobs))
         for job_id, job in self.jobs.items():
-            self.assertEqual("self-hosted", job["runs-on"], job_id)
+            self.assertEqual(GITHUB_HOSTED_LINUX_RUNNER, job.get("runs-on"), job_id)
 
     def test_classify_job_contract(self):
         classify = self.jobs["classify"]
