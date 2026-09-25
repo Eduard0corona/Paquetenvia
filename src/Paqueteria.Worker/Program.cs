@@ -4,6 +4,7 @@ using Custody.Infrastructure;
 using Identity.Infrastructure.Notifications;
 using Notifications.Infrastructure;
 using Organizations.Infrastructure.Notifications;
+using Paqueteria.Infrastructure.Database.Outbox.Retention;
 using Paqueteria.Infrastructure.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
+builder.Services.AddOutboxRetention(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(
     builder.Configuration,
     builder.Environment,
