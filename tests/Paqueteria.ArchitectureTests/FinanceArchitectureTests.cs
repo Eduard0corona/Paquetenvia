@@ -1,4 +1,11 @@
+using System.Reflection;
+using System.Text.RegularExpressions;
+using Finance.Infrastructure.Persistence;
+using Finance.Infrastructure.Persistence.Migrations;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Paqueteria.ArchitectureTests.Architecture;
+using Paqueteria.Infrastructure.Database;
 
 namespace Paqueteria.ArchitectureTests;
 
@@ -48,11 +55,57 @@ public sealed class FinanceArchitectureTests
     }
 
     [Fact]
-    public void Finance_owns_no_schema_migration_because_the_canonical_baseline_already_defines_it()
+    public void Finance_owns_only_the_SET001_settlement_ledger_migration()
     {
-        // finance.cod_transactions ships in AI-06, so FIN-001 adds no migration of its own.
-        Assert.False(Directory.Exists(TestRepository.GetPath(
-            "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations")));
+        // finance.cod_transactions ships in AI-06, so FIN-001 adds no migration of its own. The one
+        // Finance lane is SET-001's (OA-2): it guards the canonical settlement tables and nothing else.
+        const string directory = "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations";
+        var root = TestRepository.GetPath(directory);
+        Assert.Equal(
+            ["20260925000100_EnforceSettlementLedgerIntegrity.cs"],
+            Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
+                .Order(StringComparer.Ordinal));
+
+        var migration = Assert.Single(
+            SolutionCatalog.Finance.Infrastructure.Assembly.GetTypes(),
+            type => typeof(Migration).IsAssignableFrom(type) && !type.IsAbstract);
+        Assert.Equal(typeof(EnforceSettlementLedgerIntegrity), migration);
+        Assert.Equal("20260925000100_EnforceSettlementLedgerIntegrity", EnforceSettlementLedgerIntegrity.MigrationId);
+        Assert.Equal(EnforceSettlementLedgerIntegrity.MigrationId, migration.GetCustomAttribute<MigrationAttribute>()?.Id);
+        Assert.Equal(typeof(FinanceDbContext), migration.GetCustomAttribute<DbContextAttribute>()?.ContextType);
+
+        // Every application-schema object the lane names is a settlement table, one of its own guard
+        // functions or indexes, or the shared append-only guard it reuses: never a FIN-001 table.
+        var schemas = string.Join('|', DatabaseSchemaCatalog.ApplicationSchemas);
+        var referenced = Regex.Matches(
+                EnforceSettlementLedgerIntegrity.LedgerSql,
+                $@"\b(?:{schemas})\.[a-z_]+\b")
+            .Select(match => match.Value)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(
+            [
+                "finance.guard_settlement_line_insert",
+                "finance.guard_settlement_mutation",
+                "finance.require_settlement_reconciliation",
+                "finance.settlement_lines",
+                "finance.settlement_lines_owner_source_idx",
+                "finance.settlements",
+                "finance.settlements_owner_payee_period_idx",
+                "platform.reject_runtime_mutation",
+            ],
+            referenced);
+
+        // Additive only: no table is created, altered, dropped or emptied and no row is written.
+        foreach (var forbidden in new[]
+        {
+            "CREATE TABLE", "ALTER TABLE", "DROP TABLE", "TRUNCATE", "INSERT INTO", "DELETE FROM",
+            "UPDATE finance", "DROP TRIGGER", "DROP FUNCTION", "DROP INDEX", "DISABLE",
+        })
+        {
+            Assert.DoesNotContain(forbidden, EnforceSettlementLedgerIntegrity.LedgerSql, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]

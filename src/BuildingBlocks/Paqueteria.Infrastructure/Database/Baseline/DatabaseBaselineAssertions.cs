@@ -275,6 +275,7 @@ public sealed class DatabaseBaselineAssertions
                     '__ef_migrations_history_dispatch',
                     '__ef_migrations_history_custody',
                     '__ef_migrations_history_incidents',
+                    '__ef_migrations_history_finance',
                     '__ef_migrations_history_notifications',
                     '__ef_migrations_history_platform'
                   )

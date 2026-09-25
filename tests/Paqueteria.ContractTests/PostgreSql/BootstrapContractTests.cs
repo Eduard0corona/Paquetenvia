@@ -43,8 +43,8 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         Assert.Equal(ExpectedSchemas.Order(StringComparer.Ordinal), schemas);
 
         // 47 canonical AI-06 tables plus the INC-001 incident evidence table, the SCL-001 key ring
-        // and their migration history lanes.
-        Assert.Equal(51, await ScalarAsync<int>("""
+        // and their migration history lanes, and the SET-001 Finance history lane.
+        Assert.Equal(52, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
