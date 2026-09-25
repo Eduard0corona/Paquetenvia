@@ -686,6 +686,56 @@ paths:
           $ref: '#/components/responses/IncidentConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /incidents/{incidentId}/resolution:
+    post:
+      tags:
+      - Incidents
+      operationId: resolveIncident
+      description: >-
+        INC-001 closes an OPEN or INVESTIGATING incident into exactly one terminal
+        outcome, RESOLVED or REJECTED, and records resolved_at. Only DISPATCHER
+        members and PLATFORM_ADMIN members with a satisfied MFA challenge may
+        resolve; a DRIVER never may, including the driver who opened the incident.
+        Capability is evaluated before incident visibility, the idempotency lock or
+        replay evidence. A missing incident and another tenant's incident are the
+        same uniform 404. A terminal incident is never changed again. Resolution
+        never changes the order: ORD-002 remains the only writer of order state.
+        The reason is kept only as append-only audit evidence. Replaying the same
+        Idempotency-Key with the same request returns the stored response.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - incident
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IncidentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveIncidentRequest'
+      responses:
+        '200':
+          description: Incident resolved or rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/IncidentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /tracking/{token}:
     get:
       tags:
@@ -1185,6 +1235,13 @@ components:
       schema:
         type: string
         format: uuid
+    IncidentId:
+      name: incidentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     OrganizationContext:
       name: X-Organization-Id
       in: header
@@ -1236,8 +1293,9 @@ components:
             $ref: '#/components/schemas/CsvImportConflictProblem'
     IncidentConflict:
       description: >-
-        INC-001 request, idempotency, order-state or evidence conflict. Internal
-        rejection evidence and cross-tenant existence are never exposed.
+        INC-001 request, idempotency, order-state, incident-state or evidence
+        conflict. Internal rejection evidence, the current incident status and
+        cross-tenant existence are never exposed.
       content:
         application/problem+json:
           schema:
@@ -1897,6 +1955,26 @@ components:
           items:
             type: string
             format: uuid
+    ResolveIncidentRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - outcome
+      - reason
+      properties:
+        outcome:
+          type: string
+          enum:
+          - RESOLVED
+          - REJECTED
+        reason:
+          type: string
+          description: >-
+            Operator rationale kept as append-only audit evidence. Surrounding
+            whitespace and control characters are rejected, never trimmed.
+          minLength: 1
+          maxLength: 500
+          pattern: '^[^\s\x00-\x1F\x7F-\x9F](?:[^\x00-\x1F\x7F-\x9F]*[^\s\x00-\x1F\x7F-\x9F])?$'
     Incident:
       type: object
       required:
@@ -2290,6 +2368,7 @@ components:
           - IDEMPOTENCY_CONFLICT
           - ORDER_STATE_NOT_ALLOWED
           - EVIDENCE_NOT_AVAILABLE
+          - INCIDENT_STATE_CONFLICT
           - CONFLICT
     FinanceConflictProblem:
       type: object

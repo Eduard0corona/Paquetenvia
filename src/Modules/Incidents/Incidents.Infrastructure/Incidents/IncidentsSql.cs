@@ -12,6 +12,22 @@ internal sealed record AuthorizedOrder(
     Guid? OperatorOrganizationId,
     string Status);
 
+internal sealed record ResolutionCapability(bool IsActiveDispatcher, bool IsActivePlatformAdmin);
+
+/// <summary>An incident as the resolution reads it, locked for the rest of the transaction.</summary>
+internal sealed record LockedIncident(
+    Guid Id,
+    Guid OrderId,
+    string Status,
+    string Severity,
+    string IncidentType,
+    string ReasonCode,
+    string NextAction,
+    bool CustodyAcquired,
+    DateTimeOffset OccurredAt,
+    DateTimeOffset SlaDueAt,
+    IReadOnlyList<Guid> EvidenceProofIds);
+
 internal static class IncidentsSql
 {
     internal static (NpgsqlConnection Connection, NpgsqlTransaction Transaction) Database(
@@ -124,6 +140,105 @@ internal static class IncidentsSql
         command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
         command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// Reads the actor's resolution capability in the active organization without touching any
+    /// incident, so a caller who may not resolve learns nothing about incidents or replay evidence.
+    /// </summary>
+    internal static async Task<ResolutionCapability> ReadResolutionCapabilityAsync(
+        DbContext context,
+        Guid actorId,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        var (connection, transaction) = Database(context);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+              COALESCE(bool_or(m.role='DISPATCHER'),false),
+              COALESCE(bool_or(m.role='PLATFORM_ADMIN'),false)
+            FROM identity.users u
+            JOIN organizations.organization_memberships m ON m.user_id=u.id
+            WHERE u.id=@actor AND u.status='ACTIVE'
+              AND m.organization_id=@organization AND m.status='ACTIVE'
+            """,
+            connection,
+            transaction);
+        command.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
+        command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? new ResolutionCapability(reader.GetBoolean(0), reader.GetBoolean(1))
+            : new ResolutionCapability(false, false);
+    }
+
+    /// <summary>
+    /// Locks the incident for the rest of the transaction. FORCE RLS already hides every other
+    /// tenant's incident; the explicit tenant predicate keeps a missing and a foreign incident on
+    /// the same plan, so both are the same uniform not-found.
+    /// </summary>
+    internal static async Task<LockedIncident?> ReadIncidentForUpdateAsync(
+        DbContext context,
+        Guid incidentId,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        var (connection, transaction) = Database(context);
+        LockedIncident incident;
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT i.order_id,i.status,i.severity,i.incident_type,i.reason_code,i.next_action,
+                   i.custody_acquired,i.occurred_at,i.sla_due_at
+            FROM incidents.incidents i
+            WHERE i.id=@incident AND (i.owner_org_id=@organization OR i.operator_org_id=@organization)
+            FOR UPDATE
+            """,
+            connection,
+            transaction))
+        {
+            command.Parameters.Add(P("incident", NpgsqlDbType.Uuid, incidentId));
+            command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return null;
+            }
+
+            incident = new LockedIncident(
+                incidentId,
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetBoolean(6),
+                reader.GetFieldValue<DateTimeOffset>(7),
+                reader.GetFieldValue<DateTimeOffset>(8),
+                []);
+        }
+
+        await using var evidence = new NpgsqlCommand(
+            """
+            SELECT e.proof_id
+            FROM incidents.incident_evidence e
+            WHERE e.incident_id=@incident
+            ORDER BY e.proof_id
+            """,
+            connection,
+            transaction);
+        evidence.Parameters.Add(P("incident", NpgsqlDbType.Uuid, incidentId));
+        var proofIds = new List<Guid>();
+        await using (var reader = await evidence.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                proofIds.Add(reader.GetGuid(0));
+            }
+        }
+
+        return incident with { EvidenceProofIds = proofIds };
     }
 
     internal static async Task AcquireIdempotencyLockAsync(
