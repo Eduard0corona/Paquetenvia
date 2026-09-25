@@ -1,8 +1,10 @@
 using Finance.Application.Cod;
 using Finance.Application.Financials;
+using Finance.Application.Settlements;
 using Finance.Infrastructure.Cod;
 using Finance.Infrastructure.Financials;
 using Finance.Infrastructure.Persistence;
+using Finance.Infrastructure.Settlements;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,6 +32,8 @@ public static class DependencyInjection
                 "Finance:CommandTimeoutSeconds must be between 1 and 60.")
             .Validate(options => options.IdempotencyLifetimeMinutes is >= 1 and <= 10_080,
                 "Finance:IdempotencyLifetimeMinutes must be between 1 and 10080.")
+            .Validate(options => FinanceOperationalTimeZone.TryResolve(options.OperationalTimeZone, out _),
+                "Finance:OperationalTimeZone must be an IANA time zone known to this host.")
             .Validate(options => options.Provider != FinanceProviderKind.PostgreSql ||
                 !string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria")),
                 "Finance:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
@@ -82,6 +86,16 @@ public static class DependencyInjection
                 FinanceProviderKind.PostgreSql =>
                     serviceProvider.GetRequiredService<PostgreSqlOrderFinancialsService>(),
                 _ => serviceProvider.GetRequiredService<DisabledOrderFinancialsService>(),
+            });
+
+        services.AddSingleton<DisabledSettlementService>();
+        services.AddScoped<PostgreSqlSettlementService>();
+        services.AddScoped<ISettlementService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<FinanceOptions>>().Value.Provider switch
+            {
+                FinanceProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlSettlementService>(),
+                _ => serviceProvider.GetRequiredService<DisabledSettlementService>(),
             });
         return services;
     }
