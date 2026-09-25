@@ -666,6 +666,7 @@
           "Custody.Infrastructure": "[1.0.0, )",
           "Dispatch.Infrastructure": "[1.0.0, )",
           "Drivers.Infrastructure": "[1.0.0, )",
+          "Finance.Infrastructure": "[1.0.0, )",
           "Identity.Infrastructure": "[1.0.0, )",
           "Incidents.Infrastructure": "[1.0.0, )",
           "Locations.Infrastructure": "[1.0.0, )",

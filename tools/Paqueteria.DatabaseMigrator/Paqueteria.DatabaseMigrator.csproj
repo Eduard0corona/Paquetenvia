@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Incidents\Incidents.Infrastructure\Incidents.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Finance\Finance.Infrastructure\Finance.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Notifications\Notifications.Infrastructure\Notifications.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

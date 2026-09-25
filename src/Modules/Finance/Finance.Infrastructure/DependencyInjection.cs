@@ -49,6 +49,8 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<NpgsqlDataSource>(),
                     postgres =>
                     {
+                        postgres.MigrationsAssembly(typeof(FinanceDbContext).Assembly.FullName);
+                        postgres.MigrationsHistoryTable("__ef_migrations_history_finance", "platform");
                         postgres.CommandTimeout(financeOptions.CommandTimeoutSeconds);
                         postgres.EnableRetryOnFailure();
                     })

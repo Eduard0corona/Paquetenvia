@@ -16,6 +16,8 @@ using Orders.Infrastructure.Persistence;
 using Orders.Infrastructure.Persistence.Migrations;
 using Drivers.Infrastructure.Persistence;
 using Drivers.Infrastructure.Persistence.Migrations;
+using Finance.Infrastructure.Persistence;
+using Finance.Infrastructure.Persistence.Migrations;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
 using Custody.Infrastructure.Persistence;
@@ -55,6 +57,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260725_AdoptCanonicalCustodyProofsBaseline.cs"),
         ("Incidents", "__ef_migrations_history_incidents", AdoptCanonicalIncidentsBaseline.MigrationId,
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs"),
+        ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
+            "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
         ("Notifications", "__ef_migrations_history_notifications", RouteManualRouteRealtime.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260829000100_RouteManualRouteRealtime.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
@@ -80,6 +84,15 @@ internal sealed class ModuleMigrationCoordinator
                 "Notifications" =>
                     source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
+                // SET-001: the settlement ledger is append-only, so the lane only ever adds guards to
+                // the canonical tables and its rollback fails closed.
+                "Finance" =>
+                    source.Contains("SET-001 rollback blocked", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -178,6 +191,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "Incidents").Status == "PENDING")
         {
             await MigrateIncidentsAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "Finance").Status == "PENDING")
+        {
+            await MigrateFinanceAsync(connectionString, cancellationToken);
         }
         if (before.Single(state => state.Module == "Notifications").Status == "PENDING")
         {
@@ -473,6 +490,20 @@ internal sealed class ModuleMigrationCoordinator
             })
             .Options;
         await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    private static async Task MigrateFinanceAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<FinanceDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(FinanceDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_finance", "platform");
+            })
+            .Options;
+        await using var context = new FinanceDbContext(options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync(cancellationToken);
     }
 
