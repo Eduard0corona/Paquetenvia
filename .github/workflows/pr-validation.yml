@@ -4,7 +4,7 @@ name: PR Validation
 # `development`. Foundation CI (ci.yml, exactly 13 jobs) stays the only authoritative
 # validation: it runs for pull_request → main and certifies push → main.
 #
-# Trust model (self-hosted runner):
+# Trust model:
 #   * a fork pull request is rejected before any checkout or execution of PR code;
 #   * the classifier, the certification gate and the PR Gate execute from the tested
 #     first parent (github.sha^1, the tested base), never from the PR-provided tree,
@@ -36,11 +36,11 @@ concurrency:
   group: pr-validation-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# Temporary: self-hosted runner through 2026-10-01 due to GitHub-hosted Actions minute limits.
+# Every job runs on GitHub-hosted Linux (ubuntu-latest); dependency caches are gated on runner.environment.
 jobs:
   classify:
     name: Classify PR impact
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       plan: ${{ steps.classify.outputs.plan }}
@@ -185,7 +185,7 @@ jobs:
     name: Secret scan
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'secret-scan')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -239,7 +239,7 @@ jobs:
     name: Validate normative contracts
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'normative-contracts')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -277,7 +277,7 @@ jobs:
     name: Validate AZR-001 static guards
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'azr-static')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -325,7 +325,7 @@ jobs:
     name: Build and test .NET
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'dotnet')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       execution-artifact-id: ${{ steps.upload-dotnet-execution.outputs.artifact-id }}
       execution-artifact-digest: ${{ steps.upload-dotnet-execution.outputs.artifact-digest }}
@@ -397,7 +397,7 @@ jobs:
     name: Validate runtime contracts
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'runtime-contracts')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
       execution-artifact-id: ${{ steps.upload-runtime-execution.outputs.artifact-id }}
@@ -520,7 +520,7 @@ jobs:
     name: Validate web workspace
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'web')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -560,7 +560,7 @@ jobs:
     name: Validate real SignalR reconnect
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'realtime-e2e')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       execution-artifact-id: ${{ steps.upload-realtime-execution.outputs.artifact-id }}
       execution-artifact-digest: ${{ steps.upload-realtime-execution.outputs.artifact-digest }}
@@ -654,7 +654,7 @@ jobs:
     name: Validate outbox SignalR delivery
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'outbox-signalr-delivery')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-outbox-execution.outputs.artifact-id }}
@@ -791,7 +791,7 @@ jobs:
     name: Validate driver PWA
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'driver-stops-pwa')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-driver-execution.outputs.artifact-id }}
@@ -941,7 +941,7 @@ jobs:
     name: Validate public tracking
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'public-tracking')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-tracking-execution.outputs.artifact-id }}
@@ -1117,7 +1117,7 @@ jobs:
     name: Validate operations dashboard
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'operations-dashboard')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
       execution-artifact-id: ${{ steps.upload-operations-execution.outputs.artifact-id }}
@@ -1264,7 +1264,7 @@ jobs:
     name: Validate 20-delivery simulation
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'delivery-simulation')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
       artifact-id: ${{ steps.upload-delivery-simulation.outputs.artifact-id }}
@@ -1380,7 +1380,7 @@ jobs:
     name: Validate local infrastructure
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'infrastructure')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       CI: "true"
@@ -1513,7 +1513,7 @@ jobs:
     name: Validate backup and restore
     needs: classify
     if: needs.classify.result == 'success' && contains(fromJSON(needs.classify.outputs.plan).required_jobs, 'backup-restore')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
       artifact-id: ${{ steps.upload-backup-restore.outputs.artifact-id }}
@@ -1785,7 +1785,7 @@ jobs:
       - delivery-simulation
       - infrastructure
       - backup-restore
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       actions: read
@@ -2120,7 +2120,7 @@ jobs:
       - infrastructure
       - backup-restore
       - rel000
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       PV_CLASSIFY_RESULT: ${{ needs.classify.result }}

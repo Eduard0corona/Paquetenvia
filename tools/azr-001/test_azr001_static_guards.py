@@ -61,7 +61,7 @@ DEPLOY_WORKFLOW = textwrap.dedent(
     """
 )
 
-FOUNDATION_WORKFLOW = "name: Foundation CI\non:\n  push:\njobs:\n" + "".join(f"  job{i}:\n    runs-on: self-hosted\n" for i in range(13))
+FOUNDATION_WORKFLOW = "name: Foundation CI\non:\n  push:\njobs:\n" + "".join(f"  job{i}:\n    runs-on: ubuntu-latest\n" for i in range(13))
 
 DOCKERFILE_WEB = "ARG NEXT_PUBLIC_API_BASE_URL\nARG NEXT_PUBLIC_TRACKING_BRAND_NAME\nARG NEXT_PUBLIC_TRACKING_SUPPORT_URL\nENV NODE_ENV=production\n"
 DOCKERFILE_DOTNET = "FROM base\nENTRYPOINT [\"dotnet\", \"Paqueteria.Api.dll\"]\n"
@@ -173,7 +173,7 @@ class StaticGuardTests(unittest.TestCase):
         self.assertEqual(numbers, list(range(0, 31)))
 
     def test_foundation_job_count_is_enforced(self) -> None:
-        self.fixture.write_text(guards.FOUNDATION_WORKFLOW, FOUNDATION_WORKFLOW + "  extra:\n    runs-on: self-hosted\n")
+        self.fixture.write_text(guards.FOUNDATION_WORKFLOW, FOUNDATION_WORKFLOW + "  extra:\n    runs-on: ubuntu-latest\n")
         self.assertEqual(results_by_number(self.fixture.context())[0].status, "FAIL")
 
     def test_missing_compiled_output_blocks(self) -> None:
