@@ -6,7 +6,7 @@ namespace Paqueteria.ContractTests.PostgreSql;
 
 /// <summary>
 /// E-002 v0.9 Amendment 1/2/8: structural classification comes from canonical database objects only.
-/// The six canonical roles are cluster-wide and already exist in the fixture, so every isolated database here
+/// The seven canonical roles are cluster-wide and already exist in the fixture, so every isolated database here
 /// is the "roles-only" prestate, which must remain Clean-compatible.
 /// </summary>
 [Collection(PostgreSqlContractCollection.Name)]

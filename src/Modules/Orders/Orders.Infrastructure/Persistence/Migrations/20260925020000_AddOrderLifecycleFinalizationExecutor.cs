@@ -158,9 +158,11 @@ public sealed class AddOrderLifecycleFinalizationExecutor : Migration
         END
         $function$;
 
-        ALTER FUNCTION security.finalize_expired_orders(integer) OWNER TO paqueteria_lifecycle_executor;
+        -- ACL first, while the deploying role still owns the function: ALTER ... OWNER rewrites the
+        -- grantor to the new owner, and a managed-service deployer then needs no inherited executor rights.
         REVOKE ALL ON FUNCTION security.finalize_expired_orders(integer) FROM PUBLIC;
         GRANT EXECUTE ON FUNCTION security.finalize_expired_orders(integer) TO paqueteria_worker;
+        ALTER FUNCTION security.finalize_expired_orders(integer) OWNER TO paqueteria_lifecycle_executor;
 
         DO $verify$
         DECLARE
@@ -198,13 +200,20 @@ public sealed class AddOrderLifecycleFinalizationExecutor : Migration
             RAISE EXCEPTION 'paqueteria_lifecycle_executor privileges differ from the ADR-034 contract';
           END IF;
 
+          -- CREATE on security is the one E-002 transaction-scoped grant the ownership transfer needs
+          -- under the managed-service model; the Orders lane asserts it is gone after the bridge cleanup.
           IF EXISTS (
             SELECT 1 FROM pg_namespace n
             WHERE n.nspname IN (
                 'identity','organizations','clients','locations','pricing','dispatch','drivers','routes',
                 'custody','incidents','finance','allies','notifications','reporting','platform','security','extensions')
-              AND (has_schema_privilege('paqueteria_lifecycle_executor', n.oid, 'USAGE')
-                OR has_schema_privilege('paqueteria_lifecycle_executor', n.oid, 'CREATE'))
+              AND has_schema_privilege('paqueteria_lifecycle_executor', n.oid, 'USAGE')
+          ) OR EXISTS (
+            SELECT 1 FROM pg_namespace n
+            WHERE n.nspname IN (
+                'identity','organizations','clients','locations','pricing','dispatch','drivers','routes',
+                'custody','incidents','finance','allies','notifications','reporting','platform','extensions')
+              AND has_schema_privilege('paqueteria_lifecycle_executor', n.oid, 'CREATE')
           ) OR has_schema_privilege('paqueteria_lifecycle_executor', 'orders', 'CREATE')
             OR NOT has_schema_privilege('paqueteria_lifecycle_executor', 'orders', 'USAGE')
           THEN

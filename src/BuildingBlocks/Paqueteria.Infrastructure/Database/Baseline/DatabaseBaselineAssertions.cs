@@ -484,6 +484,39 @@ public sealed class DatabaseBaselineAssertions
     }
 
     /// <summary>
+    /// ADR-034 lane contract: after the Orders LIF-001 migration (and after any E-002 temporary grant
+    /// is revoked) the role and its function must exist and satisfy the exact executor boundary,
+    /// including no CREATE on any application or shared schema.
+    /// </summary>
+    public static async Task AssertLifecycleExecutorInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'lifecycle executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_lifecycle_executor') IS NULL
+            UNION ALL
+            SELECT 'lifecycle finalization function is missing: security.finalize_expired_orders(integer)'
+            WHERE pg_catalog.to_regprocedure('security.finalize_expired_orders(integer)') IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await AssertLifecycleExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
     /// ADR-034: once the lifecycle executor exists it holds exactly USAGE on <c>orders</c> plus
     /// SELECT(id,status,claim_window_ends_at,finalized_at) and UPDATE(finalized_at) on
     /// <c>orders.orders</c>, inherits nothing, and its single function is a pinned SECURITY DEFINER
