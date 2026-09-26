@@ -3415,7 +3415,11 @@ class WorkflowPhysicalGuardsTests(unittest.TestCase):
     def test_172_signalr_execution_has_no_retry_or_timeout_change(self):
         job = self.workflow["jobs"]["realtime-e2e"]
         execute = next(step for step in job["steps"] if step.get("name") == "Execute real reconnect lifecycle")
-        self.assertNotIn("timeout-minutes", job)
+        # A job-level wall-clock cap is allowed (it can only fail the job, never mask a reconnect
+        # failure); it is pinned exactly so it cannot drift. The execution step itself stays free
+        # of retry/sleep/timeout logic.
+        self.assertEqual(20, job.get("timeout-minutes"))
+        self.assertNotIn("timeout-minutes", execute)
         self.assertNotRegex(execute["run"].lower(), r"retry|sleep|timeout")
 
     def test_173_exact_authoritative_artifacts_replace_and_keep_outputs(self):
@@ -3473,11 +3477,11 @@ class WorkflowPhysicalGuardsTests(unittest.TestCase):
 
     def test_174_retry_timeout_and_assertion_policy_is_unchanged(self):
         expected_timeouts = {
-            "normative": None,
-            "dotnet": None,
+            "normative": 15,
+            "dotnet": 30,
             "runtime-contracts": 20,
-            "web": None,
-            "realtime-e2e": None,
+            "web": 15,
+            "realtime-e2e": 20,
             "outbox-signalr-delivery": 25,
             "driver-stops-pwa": 25,
             "public-tracking": 25,
