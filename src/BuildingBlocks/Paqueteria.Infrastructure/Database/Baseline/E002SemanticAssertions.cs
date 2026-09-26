@@ -59,15 +59,17 @@ public sealed class E002SemanticAssertions
         await AssertSchemaAclAsync(connection, transaction, "notifications", NotificationsAcl(state), violations,
             cancellationToken).ConfigureAwait(false);
         var mapState = E002NotificationStateReader.SelectMap(state);
+        var lif001Applied = await E002LifecycleStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
-            connection, transaction, mapState, violations, cancellationToken).ConfigureAwait(false);
+            connection, transaction, mapState, lif001Applied, violations, cancellationToken).ConfigureAwait(false);
         await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
             throw new E002SemanticException(violations.AsReadOnly());
         }
 
-        return new E002SemanticReport(state, E002RoutineMap.Name(mapState), identities, aclRows);
+        return new E002SemanticReport(state, E002RoutineMap.Name(mapState, lif001Applied), identities, aclRows);
     }
 
     public async Task AssertNtf001TargetAsync(
@@ -83,8 +85,10 @@ public sealed class E002SemanticAssertions
         }
 
         var violations = new List<string>();
+        var lif001Applied = await E002LifecycleStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
         await AssertRoutineMapCoreAsync(connection, transaction, E002RoutineMapState.Ntf001TargetApplied,
-            violations, cancellationToken).ConfigureAwait(false);
+            lif001Applied, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
             throw new E002SemanticException(violations.AsReadOnly());
@@ -266,9 +270,9 @@ public sealed class E002SemanticAssertions
 
     private static async Task<(int Identities, int ExecuteRows)> AssertRoutineMapCoreAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, E002RoutineMapState mapState,
-        ICollection<string> violations, CancellationToken cancellationToken)
+        bool lif001Applied, ICollection<string> violations, CancellationToken cancellationToken)
     {
-        var map = E002RoutineMap.Select(mapState);
+        var map = E002RoutineMap.Select(mapState, lif001Applied);
         var expectedOids = new HashSet<uint>();
         var totalRows = 0;
         foreach (var routine in map)

@@ -23,12 +23,12 @@ public sealed class NormativeBaselineTests
     }
 
     [Fact]
-    public void Manifest_declares_and_hashes_exactly_73_canonical_files()
+    public void Manifest_declares_and_hashes_exactly_74_canonical_files()
     {
         var normativeRoot = RepositoryPaths.Normative();
         using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(normativeRoot, "MANIFEST.json")));
         var root = document.RootElement;
-        Assert.Equal(73, root.GetProperty("file_count").GetInt32());
+        Assert.Equal(74, root.GetProperty("file_count").GetInt32());
         Assert.Equal("7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163", root.GetProperty("canonical_sql_sha256").GetString());
 
         var declaredPaths = new HashSet<string>(StringComparer.Ordinal);
@@ -44,7 +44,7 @@ public sealed class NormativeBaselineTests
             Assert.Equal(entry.GetProperty("sha256").GetString(), hash);
         }
 
-        Assert.Equal(73, declaredPaths.Count);
+        Assert.Equal(74, declaredPaths.Count);
         var actualIdentityFiles = Directory.GetFiles(normativeRoot, "*", SearchOption.AllDirectories)
             .Select(path => Path.GetRelativePath(normativeRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
             .Where(path => path is not "MANIFEST.json")

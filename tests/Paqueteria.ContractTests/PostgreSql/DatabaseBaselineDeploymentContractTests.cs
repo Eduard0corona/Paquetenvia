@@ -71,7 +71,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                     CREATE ROLE {{_login}} LOGIN CREATEROLE {{(bypassRls ? "BYPASSRLS" : "NOBYPASSRLS")}} NOSUPERUSER PASSWORD '{{password}}';
                     ALTER DATABASE "{{database}}" OWNER TO {{_login}};
                     GRANT paqueteria_migrator, paqueteria_app, paqueteria_worker,
-                          paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance
+                          paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance,
+                          paqueteria_lifecycle_executor
                     TO {{_login}} WITH ADMIN TRUE, SET TRUE;
                     DO $$ BEGIN CREATE ROLE azure_pg_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                     {{(azureAdmin ? $"GRANT azure_pg_admin TO {_login};" : string.Empty)}}
@@ -94,6 +95,24 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 Pooling = false,
             }.ConnectionString;
             return this;
+        }
+
+        public string Login => _login;
+
+        public async Task<string?> TextAsync(string sql)
+        {
+            await using var connection = new NpgsqlConnection(DeploymentConnectionString);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(sql, connection);
+            return await command.ExecuteScalarAsync() as string;
+        }
+
+        public async Task AdminExecuteAsync(string sql)
+        {
+            await using var connection = new NpgsqlConnection(AdminConnectionString);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(sql, connection);
+            await command.ExecuteNonQueryAsync();
         }
 
         public async Task<bool> ScalarAsync(string sql)
@@ -165,6 +184,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                AND NOT has_schema_privilege('paqueteria_bootstrap', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_outbox_executor', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_maintenance', 'security', 'CREATE')
+               AND NOT has_schema_privilege('paqueteria_lifecycle_executor', 'security', 'CREATE')
+               AND (SELECT NOT rolcanlogin AND rolbypassrls FROM pg_roles WHERE rolname = 'paqueteria_lifecycle_executor')
+               AND has_column_privilege('paqueteria_lifecycle_executor', 'orders.orders', 'finalized_at', 'UPDATE')
+               AND NOT has_column_privilege('paqueteria_lifecycle_executor', 'orders.orders', 'status', 'UPDATE')
                AND NOT has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
                AND (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'security') = 'paqueteria_migrator'
                AND (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'extensions') = 'paqueteria_migrator'
@@ -242,6 +265,189 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             SELECT to_regnamespace('security') IS NULL AND to_regnamespace('extensions') IS NULL
                AND has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
             """));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Preexisting_lifecycle_executor_security_create_fails_closed_before_the_bridge_grant()
+    {
+        // AI-06 creates schema security inside the bridge transaction, so the unintended prestate is seeded
+        // as a default privilege of the deployment principal: the executor holds CREATE the moment it exists.
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgelifecycleprestate");
+        await environment.AdminExecuteAsync(
+            $"ALTER DEFAULT PRIVILEGES FOR ROLE {environment.Login} GRANT CREATE ON SCHEMAS TO paqueteria_lifecycle_executor");
+        var stages = new List<string>();
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+
+        var exception = await Assert.ThrowsAsync<E002GuardException>(() => new DatabaseBaselineDeployer(stageObserver: stages.Add)
+            .ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge));
+
+        Assert.Equal("E002_CREATE_PRESTATE_PRESENT", exception.GuardCode);
+        Assert.Contains("e002-capability-gate", stages);
+        Assert.DoesNotContain("e002-grant-security-create", stages);
+        // Rolled back, and the operator-owned default privilege is left in place rather than silently removed.
+        Assert.True(await environment.ScalarAsync($"""
+            SELECT to_regnamespace('security') IS NULL AND to_regnamespace('extensions') IS NULL
+               AND EXISTS (SELECT 1 FROM pg_default_acl
+                           WHERE defaclrole = '{environment.Login}'::regrole AND defaclobjtype = 'n')
+            """));
+    }
+
+    [Fact]
+    public void E002_models_the_lifecycle_executor_as_a_seventh_canonical_specialized_role()
+    {
+        Assert.Equal(
+            [
+                ("paqueteria_migrator", false), ("paqueteria_app", false), ("paqueteria_worker", false),
+                ("paqueteria_bootstrap", true), ("paqueteria_outbox_executor", true), ("paqueteria_maintenance", true),
+                ("paqueteria_lifecycle_executor", true),
+            ],
+            E002Guards.CanonicalRoles);
+        Assert.Equal(
+            ["paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor"],
+            E002Guards.SpecializedOwners);
+        Assert.Equal(
+            Orders.Infrastructure.Persistence.Migrations.AddOrderLifecycleFinalizationExecutor.MigrationId,
+            E002LifecycleStateReader.Lif001MigrationId);
+
+        var lifecycle = Assert.Single(
+            E002RoutineMap.Select(E002RoutineMapState.Applied, lif001Applied: true)
+                .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, lif001Applied: false)));
+        Assert.Equal(
+            new E002RoutineEntry("security.finalize_expired_orders(integer)", "paqueteria_lifecycle_executor", lifecycle.Grantees),
+            lifecycle);
+        Assert.Equal(["paqueteria_worker"], lifecycle.Grantees);
+        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_V1", E002RoutineMap.Name(E002RoutineMapState.Applied, false));
+        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_V1", E002RoutineMap.Name(E002RoutineMapState.Applied, true));
+        Assert.Equal("ROUTINE_MAP_AI18_PENDING_V1", E002RoutineMap.Name(E002RoutineMapState.Pending, false));
+        Assert.Equal(12, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: true).Count);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_requires_set_authority_over_the_lifecycle_executor()
+    {
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgelifecycleset");
+        await environment.AdminExecuteAsync(
+            $"REVOKE SET OPTION FOR paqueteria_lifecycle_executor FROM {environment.Login}");
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+
+        var exception = await Assert.ThrowsAsync<E002GuardException>(() => new DatabaseBaselineDeployer()
+            .ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge));
+
+        Assert.Equal("E002_EFFECTIVE_ROLE_CAPABILITY_MISSING", exception.GuardCode);
+        Assert.Contains("roles=paqueteria_lifecycle_executor", exception.Message, StringComparison.Ordinal);
+        Assert.True(await environment.ScalarAsync(
+            "SELECT to_regnamespace('security') IS NULL AND to_regnamespace('extensions') IS NULL"));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_applies_the_lif001_orders_lane_as_non_superuser()
+    {
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgelif001");
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+        var coordinator = new ModuleMigrationCoordinator();
+
+        // Every other lane is applied by the privileged fixture principal; this contract is the LIF-001 step.
+        // Rewinding it leaves a populated installation whose lifecycle executor was pre-provisioned per E-002.
+        await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+        await environment.AdminExecuteAsync($"""
+            DROP FUNCTION security.finalize_expired_orders(integer);
+            REVOKE USAGE ON SCHEMA orders FROM paqueteria_lifecycle_executor;
+            REVOKE SELECT (id,status,claim_window_ends_at,finalized_at), UPDATE (finalized_at)
+              ON orders.orders FROM paqueteria_lifecycle_executor;
+            DELETE FROM platform."__ef_migrations_history_orders"
+              WHERE "MigrationId"='{E002LifecycleStateReader.Lif001MigrationId}';
+            """);
+        Assert.Equal("PENDING", await OrdersLaneAsync());
+        const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
+        const string MembershipSql = """
+            SELECT COALESCE(string_agg(pg_get_userbyid(member) || '>' || pg_get_userbyid(roleid) || ':' ||
+                admin_option || inherit_option || set_option, ',' ORDER BY member, roleid), '')
+            FROM pg_auth_members
+            WHERE roleid='paqueteria_lifecycle_executor'::regrole OR member='paqueteria_lifecycle_executor'::regrole
+            """;
+        var securityAclBefore = await environment.TextAsync(SecurityAclSql);
+        var membershipsBefore = await environment.TextAsync(MembershipSql);
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_lifecycle_executor','security','CREATE')"));
+
+        // Without the E-002 bridge the managed-service principal cannot hand the function to the executor.
+        var denied = FindPostgresException(await Assert.ThrowsAnyAsync<Exception>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None)));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+        Assert.Contains("schema security", denied.MessageText, StringComparison.Ordinal);
+        Assert.Equal("PENDING", await OrdersLaneAsync());
+
+        // Fail closed on a pre-existing temporary CREATE, and leave it for the operator.
+        await environment.AdminExecuteAsync("GRANT CREATE ON SCHEMA security TO paqueteria_lifecycle_executor");
+        var prestate = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_CREATE_PRESTATE_PRESENT", prestate.Message, StringComparison.Ordinal);
+        Assert.True(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_lifecycle_executor','security','CREATE')"));
+        await environment.AdminExecuteAsync("REVOKE CREATE ON SCHEMA security FROM paqueteria_lifecycle_executor");
+
+        // Fail closed without effective SET authority over the executor.
+        await environment.AdminExecuteAsync($"REVOKE SET OPTION FOR paqueteria_lifecycle_executor FROM {environment.Login}");
+        var capability = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_lifecycle_executor", capability.Message,
+            StringComparison.Ordinal);
+        await environment.AdminExecuteAsync($"GRANT paqueteria_lifecycle_executor TO {environment.Login} WITH SET TRUE");
+        Assert.Equal("PENDING", await OrdersLaneAsync());
+        Assert.Equal(securityAclBefore, await environment.TextAsync(SecurityAclSql));
+        Assert.Equal(membershipsBefore, await environment.TextAsync(MembershipSql));
+
+        await coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+
+        Assert.All(await coordinator.AssertAsync(environment.DeploymentConnectionString, CancellationToken.None),
+            state => Assert.Equal("APPLIED", state.Status));
+        Assert.Equal(
+            "paqueteria_lifecycle_executor|{paqueteria_lifecycle_executor=X/paqueteria_lifecycle_executor,paqueteria_worker=X/paqueteria_lifecycle_executor}",
+            await environment.TextAsync("""
+                SELECT pg_get_userbyid(proowner) || '|' || proacl::text
+                FROM pg_proc WHERE oid='security.finalize_expired_orders(integer)'::regprocedure
+                """));
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_lifecycle_executor','security','CREATE')"));
+        Assert.Equal(securityAclBefore, await environment.TextAsync(SecurityAclSql));
+        Assert.Equal(membershipsBefore, await environment.TextAsync(MembershipSql));
+
+        await using (var admin = new NpgsqlConnection(environment.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await new DatabaseBaselineAssertions().AssertAsync(admin);
+            await using var transaction = await admin.BeginTransactionAsync();
+            await using var finalize = new NpgsqlCommand(
+                "SET LOCAL ROLE paqueteria_worker; SELECT security.finalize_expired_orders(10);", admin, transaction);
+            Assert.Equal(0, await finalize.ExecuteScalarAsync());
+        }
+
+        await using (var deployment = new NpgsqlConnection(environment.DeploymentConnectionString))
+        {
+            await deployment.OpenAsync();
+            var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
+            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_V1", semantic.RoutineMap);
+            Assert.Equal(27, semantic.ControlledIdentities);
+            Assert.Equal(52, semantic.NormalizedExecuteRows);
+        }
+
+        async Task<string> OrdersLaneAsync() =>
+            (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
+                .Single(state => state.Module == "Orders").Status;
+    }
+
+    private static PostgresException FindPostgresException(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException postgres)
+            {
+                return postgres;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException($"Expected a PostgresException, observed {exception.GetType().Name}: {exception.Message}");
     }
 
     public static TheoryData<string, bool, bool, string?> PlatformPreflightFailures => new()

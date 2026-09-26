@@ -45,6 +45,12 @@ public static class E002RoutineMap
         new("notifications.provision_default_templates()", "paqueteria_outbox_executor", []),
     ];
 
+    /// <summary>ADR-034: installed by the Orders LIF-001 lane, independently of the NTF-001 state.</summary>
+    private static readonly E002RoutineEntry[] Lif001Entries =
+    [
+        new("security.finalize_expired_orders(integer)", "paqueteria_lifecycle_executor", ["paqueteria_worker"]),
+    ];
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -57,24 +63,32 @@ public static class E002RoutineMap
     static E002RoutineMap()
     {
         if (PendingEntries.Length != 11 || Ntf001Entries.Length != 15 || AppliedEntries.Count != 26 ||
-            AppliedEntries.Sum(entry => 1 + entry.Grantees.Count) != 50)
+            AppliedEntries.Sum(entry => 1 + entry.Grantees.Count) != 50 ||
+            Lif001Entries.Length != 1 || Lif001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
     }
 
-    public static IReadOnlyList<E002RoutineEntry> Select(E002RoutineMapState state) => state switch
+    public static IReadOnlyList<E002RoutineEntry> Select(E002RoutineMapState state, bool lif001Applied)
     {
-        E002RoutineMapState.Pending => Array.AsReadOnly(PendingEntries),
-        E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied => AppliedEntries,
-        _ => throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID"),
-    };
+        IReadOnlyList<E002RoutineEntry> entries = state switch
+        {
+            E002RoutineMapState.Pending => Array.AsReadOnly(PendingEntries),
+            E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied => AppliedEntries,
+            _ => throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID"),
+        };
+        return lif001Applied ? Array.AsReadOnly(entries.Concat(Lif001Entries).ToArray()) : entries;
+    }
 
-    public static string Name(E002RoutineMapState state) => state switch
+    public static string Name(E002RoutineMapState state, bool lif001Applied) => (state, lif001Applied) switch
     {
-        E002RoutineMapState.Pending => "ROUTINE_MAP_AI18_PENDING_V1",
-        E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied =>
+        (E002RoutineMapState.Pending, false) => "ROUTINE_MAP_AI18_PENDING_V1",
+        (E002RoutineMapState.Pending, true) => "ROUTINE_MAP_AI18_PENDING_PLUS_LIF001_V1",
+        (E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied, false) =>
             "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_V1",
+        (E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied, true) =>
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_V1",
         _ => throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID"),
     };
 }

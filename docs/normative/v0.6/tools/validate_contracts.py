@@ -375,8 +375,37 @@ def main() -> int:
     for fragment in required_roles:
         if fragment not in role_sql:
             errors.append(f"Missing role-model contract: {fragment}")
-    if "GRANT UPDATE (" in role_sql:
-        errors.append("Legacy direct column UPDATE grant remains")
+    # ADR-034: the only column-level UPDATE grant is the lifecycle executor's finalized_at grant;
+    # any other spelling or grantee is the legacy direct runtime UPDATE grant returning.
+    column_update_grants = [
+        " ".join(statement.split())
+        for statement in re.findall(r"GRANT[^;]*\bUPDATE\s*\([^;]*;", role_sql)
+    ]
+    if column_update_grants != [
+        "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;"
+    ]:
+        errors.append(f"Column UPDATE grants differ from the single ADR-034 grant: {column_update_grants}")
+    lifecycle_grants = [
+        " ".join(statement.split())
+        for statement in re.findall(r"GRANT[^;]*TO paqueteria_lifecycle_executor\s*;", role_sql)
+    ]
+    if lifecycle_grants != [
+        "GRANT USAGE ON SCHEMA orders TO paqueteria_lifecycle_executor;",
+        "GRANT SELECT (id,status,claim_window_ends_at,finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
+        "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
+    ]:
+        errors.append(f"Lifecycle executor grants differ from ADR-034: {lifecycle_grants}")
+    for fragment in [
+        "CREATE ROLE paqueteria_lifecycle_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_lifecycle_executor FROM paqueteria_app, paqueteria_worker;",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing lifecycle executor contract: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_lifecycle_executor\s+TO", role_sql):
+        errors.append("Lifecycle executor membership granted contrary to ADR-034")
+    if not (ROOT / "docs/adr/ADR-034_ORDER_LIFECYCLE_FINALIZATION_EXECUTOR.md").is_file():
+        errors.append("ADR-034 lifecycle executor decision is missing")
+    checks.append("Lifecycle executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
     runtime_grant_block = re.search(r"-- Runtime table grants[\s\S]*?END \$\$;", role_sql)
     if runtime_grant_block and "'platform'" in runtime_grant_block.group(0):
         errors.append("platform remains in broad runtime grants")
