@@ -93,11 +93,18 @@ La autorización se reevalúa contra usuarios y membresías `ACTIVE`:
 
 - `DISPATCHER`;
 - `PLATFORM_ADMIN` únicamente con MFA satisfecho;
-- `DRIVER` propio, perfil `OWN/ACTIVE`, con asignación `OWN` en
-  `ACCEPTED` o `ACTIVE` para esa orden.
+- `DRIVER` con perfil `OWN/ACTIVE` o `EXTERNAL/ACTIVE` y asignación del mismo
+  tipo (`a.assignment_type = d.driver_type`) en `ACCEPTED` o `ACTIVE` para esa
+  orden. Un perfil `EXTERNAL` con asignación `OWN` (o viceversa) recibe `403`.
 
 Una denegación explícita devuelve `403`; un recurso no visible por RLS conserva
 el `404` uniforme. El servicio interno de descarga aplica la misma regla.
+
+La finalización lee la orden con `FOR SHARE OF o` dentro de la transacción que
+inserta la prueba. Una transición ORD-002 concurrente (que toma `FOR UPDATE`)
+espera a que la prueba confirme o, si confirmó primero, la finalización relee el
+estado nuevo y responde `409 ORDER_STATE_NOT_ALLOWED`; una orden `CANCELLED` no
+recibe evidencia de custodia.
 
 ### POD-001-DEF-001: autorización antes del replay
 
@@ -120,8 +127,8 @@ tenant con `SET LOCAL ROLE` y contexto RLS:
 idempotente y de cualquier respuesta almacenada. El actor, MFA, roles y
 assignment no forman parte del hash: otro `DISPATCHER` activo del mismo tenant
 puede reproducir la sesión, pero un `PLATFORM_ADMIN` necesita MFA actual y un
-`DRIVER` necesita perfil `OWN/ACTIVE`, membresía `DRIVER/ACTIVE` y assignment
-tenant-consistente `ACCEPTED` o `ACTIVE` para esa orden. Una assignment
+`DRIVER` necesita perfil `OWN/ACTIVE` o `EXTERNAL/ACTIVE`, membresía
+`DRIVER/ACTIVE` y assignment del mismo tipo, tenant-consistente `ACCEPTED` o `ACTIVE` para esa orden. Una assignment
 `CANCELLED` o `COMPLETED` revoca el replay.
 
 El replay no firma otra URL, no extiende expiraciones, no cambia el lifecycle

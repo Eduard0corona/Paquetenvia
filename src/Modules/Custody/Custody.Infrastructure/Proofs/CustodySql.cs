@@ -24,9 +24,13 @@ internal static class CustodySql
         Guid actorId,
         Guid organizationId,
         bool mfaSatisfied,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool lockOrderForShare = false)
     {
         var (connection, transaction) = Database(context);
+        // POD finalization holds FOR SHARE on the order so a concurrent ORD-002 transition
+        // (which takes FOR UPDATE) either commits first and is re-read here, or waits for
+        // the proof to commit. Read-only callers keep the non-locking snapshot read.
         await using var command = new NpgsqlCommand(
             """
             SELECT o.owner_org_id,o.operator_org_id,o.status,
@@ -58,8 +62,8 @@ internal static class CustodySql
                   WHERE u.id=@actor AND u.status='ACTIVE'
                     AND m.organization_id=@organization AND m.status='ACTIVE'
                     AND m.role='DRIVER'
-                    AND d.driver_type='OWN' AND d.status='ACTIVE'
-                    AND a.assignment_type='OWN'
+                    AND d.driver_type IN ('OWN','EXTERNAL') AND d.status='ACTIVE'
+                    AND a.assignment_type=d.driver_type
                     AND a.owner_org_id=o.owner_org_id
                     AND a.operator_org_id IS NOT DISTINCT FROM o.operator_org_id
                     AND (a.owner_org_id=@organization OR a.operator_org_id=@organization)
@@ -67,7 +71,7 @@ internal static class CustodySql
               ) AS authorized
             FROM orders.orders o
             WHERE o.id=@order
-            """,
+            """ + (lockOrderForShare ? "\nFOR SHARE OF o" : string.Empty),
             connection,
             transaction);
         command.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
