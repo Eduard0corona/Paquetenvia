@@ -34,6 +34,7 @@ Jerarquía: Product > Domain/Runtime Security > Architecture > API/SQL/SignalR >
 - ADR-029 — Evidencia legal canónica.
 - ADR-030 — Retención por maintenance.
 - ADR-031 — Provisioning bajo RLS.
+- ADR-034 — Ejecutor dedicado de finalización del ciclo de vida.
 
 ## Referencias de diseño aceptadas para v0.7 — no implementadas en v0.6
 

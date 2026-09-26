@@ -76,10 +76,11 @@ internal static class E002Guards
         ("paqueteria_bootstrap", true),
         ("paqueteria_outbox_executor", true),
         ("paqueteria_maintenance", true),
+        ("paqueteria_lifecycle_executor", true),
     ];
 
     internal static readonly string[] SpecializedOwners =
-        ["paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance"];
+        ["paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor"];
 
     /// <summary>E-002 v0.8 §11: an ACL entry whose grantee/grantor cannot be resolved is a normalization failure.</summary>
     internal static E002AclEntry ReadAclEntry(NpgsqlDataReader reader, string objectClass, string phase)
@@ -93,7 +94,7 @@ internal static class E002Guards
         return new E002AclEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
     }
 
-    /// <summary>E-002 v0.8 §15: exact six-role attribute map. Returns the names of roles that differ.</summary>
+    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor). Returns the names of roles that differ.</summary>
     internal static async Task<IReadOnlyList<string>> RoleAttributeMismatchesAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
     {
@@ -124,7 +125,7 @@ internal static class E002Guards
     {
         var gaps = new List<string>();
         foreach (var role in new[] { "paqueteria_migrator", "paqueteria_bootstrap",
-                     "paqueteria_outbox_executor", "paqueteria_maintenance" })
+                     "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor" })
         {
             await using var command = new NpgsqlCommand("""
                 SELECT pg_catalog.pg_has_role(session_user,@role,'SET'),

@@ -4,6 +4,7 @@ using Npgsql;
 using Orders.Application.Orders;
 using Orders.Domain;
 using Orders.Infrastructure;
+using Orders.Infrastructure.Lifecycle;
 using Orders.Infrastructure.Orders;
 using Orders.Infrastructure.Persistence;
 using Paqueteria.Application;
@@ -204,6 +205,82 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                     CancellationToken.None));
             await AssertNoTransitionArtifactsAsync(scenario, source);
         }
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Claim_window_boundary_and_lifecycle_finalization_gate_claim_open()
+    {
+        var finalizer = new PostgreSqlExpiredClaimWindowFinalizer(fixture.WorkerDataSource);
+        var boundary = UtcMicrosecondPrecision.Normalize(DateTimeOffset.UtcNow.AddHours(1));
+
+        // LIF-001: exactly at claim_window_ends_at a claim is admissible and nothing finalizes it first.
+        await using (var atBoundary = new SyntheticOrderScenario(fixture))
+        {
+            await atBoundary.InitializeAsync(OrderStatus.Closed.ToContractValue());
+            await SetClaimWindowAsync(atBoundary, boundary);
+            while (await finalizer.FinalizeExpiredBatchAsync(1_000, CancellationToken.None) > 0)
+            {
+            }
+
+            Assert.Null(await FinalizedAtAsync(atBoundary));
+            await using var scope = CreateScope(boundary);
+            var claimed = await scope.Service.TransitionAsync(
+                Command(atBoundary, OrderStatus.ClaimOpen, 1, Key()),
+                CancellationToken.None);
+            Assert.Equal("CLAIM_OPEN", claimed.Status);
+        }
+
+        // One microsecond after the window the claim is rejected without partial rows.
+        await using (var afterBoundary = new SyntheticOrderScenario(fixture))
+        {
+            await afterBoundary.InitializeAsync(OrderStatus.Closed.ToContractValue());
+            await SetClaimWindowAsync(afterBoundary, boundary);
+            await using var scope = CreateScope(boundary.AddTicks(10));
+            var expired = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+                scope.Service.TransitionAsync(
+                    Command(afterBoundary, OrderStatus.ClaimOpen, 1, Key()),
+                    CancellationToken.None));
+            Assert.Equal(OrderTransitionConflictCode.InvalidState, expired.Code);
+            await AssertNoTransitionArtifactsAsync(afterBoundary, OrderStatus.Closed);
+        }
+
+        // Once the job stamped finalized_at, CLAIM_OPEN is rejected even by a clock inside the window.
+        await using (var finalized = new SyntheticOrderScenario(fixture))
+        {
+            await finalized.InitializeAsync(OrderStatus.Closed.ToContractValue());
+            var elapsedWindow = UtcMicrosecondPrecision.Normalize(DateTimeOffset.UtcNow.AddHours(-1));
+            await SetClaimWindowAsync(finalized, elapsedWindow);
+            Assert.True(await finalizer.FinalizeExpiredBatchAsync(1_000, CancellationToken.None) >= 1);
+            Assert.NotNull(await FinalizedAtAsync(finalized));
+            await using var scope = CreateScope(elapsedWindow.AddMinutes(-1));
+            var rejected = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+                scope.Service.TransitionAsync(
+                    Command(finalized, OrderStatus.ClaimOpen, 1, Key()),
+                    CancellationToken.None));
+            Assert.Equal(OrderTransitionConflictCode.InvalidState, rejected.Code);
+            await AssertNoTransitionArtifactsAsync(finalized, OrderStatus.Closed);
+        }
+
+        // CLAIM_RESOLVED is final immediately, whatever the window says.
+        await using (var resolved = new SyntheticOrderScenario(fixture))
+        {
+            await resolved.InitializeAsync(OrderStatus.ClaimResolved.ToContractValue());
+            await SetClaimWindowAsync(resolved, boundary);
+            await using var scope = CreateScope(boundary.AddHours(-2));
+            var terminal = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+                scope.Service.TransitionAsync(
+                    Command(resolved, OrderStatus.ClaimOpen, 1, Key()),
+                    CancellationToken.None));
+            Assert.Equal(OrderTransitionConflictCode.TerminalState, terminal.Code);
+            await AssertNoTransitionArtifactsAsync(resolved, OrderStatus.ClaimResolved);
+        }
+
+        static Task SetClaimWindowAsync(SyntheticOrderScenario scenario, DateTimeOffset window) =>
+            scenario.ExecuteAdminAsync(
+                "UPDATE orders.orders SET claim_window_ends_at=@window WHERE id=@order;",
+                SyntheticOrderScenario.P("window", window),
+                SyntheticOrderScenario.P("order", scenario.OrderId));
     }
 
     [PostgreSqlContractFact]
@@ -1078,6 +1155,16 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Equal(outbox, reader.GetInt64(1));
         Assert.Equal(audit, reader.GetInt64(2));
         Assert.Equal(idempotency, reader.GetInt64(3));
+    }
+
+    private async Task<DateTimeOffset?> FinalizedAtAsync(SyntheticOrderScenario scenario)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            "SELECT finalized_at FROM orders.orders WHERE id=@order");
+        command.Parameters.AddWithValue("order", scenario.OrderId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return reader.IsDBNull(0) ? null : reader.GetFieldValue<DateTimeOffset>(0);
     }
 
     private static async Task<bool> TryTransitionAsync(

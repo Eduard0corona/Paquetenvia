@@ -8,6 +8,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_worker NOLOGIN NOBYPASSRLS; EXCEPTION WHEN du
 DO $$ BEGIN CREATE ROLE paqueteria_bootstrap NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_maintenance NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_lifecycle_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -175,6 +176,15 @@ REVOKE ALL ON FUNCTION security.purge_location_outbox(timestamptz,timestamptz,in
 GRANT EXECUTE ON FUNCTION security.purge_outbox(timestamptz,timestamptz,integer,boolean) TO paqueteria_worker;
 GRANT EXECUTE ON FUNCTION security.purge_location_outbox(timestamptz,timestamptz,integer,boolean) TO paqueteria_worker;
 
+-- Order lifecycle finalization is a separate security capability (ADR-034, LIF-001).
+-- The executor only discovers, locks and finalizes expired CLOSED claim windows inside
+-- security.finalize_expired_orders(integer), installed by the Orders migration lane after this
+-- baseline. It has no outbox, bootstrap or purge rights and no broad business-schema grant.
+REVOKE paqueteria_lifecycle_executor FROM paqueteria_app, paqueteria_worker;
+GRANT USAGE ON SCHEMA orders TO paqueteria_lifecycle_executor;
+GRANT SELECT (id,status,claim_window_ends_at,finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
+GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
@@ -184,3 +194,6 @@ GRANT EXECUTE ON FUNCTION security.purge_location_outbox(timestamptz,timestamptz
 -- 6. only paqueteria_maintenance owns purge functions and it has no rights outside the two outbox tables.
 -- 7. every tenant transaction uses parameterized set_config(..., true) after BEGIN.
 -- 8. bootstrap/tracking functions execute successfully in real PostgreSQL and do not enumerate missing/expired/foreign tokens.
+-- 9. paqueteria_lifecycle_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only security.finalize_expired_orders(integer).
+-- 10. paqueteria_lifecycle_executor holds only USAGE on schema orders plus SELECT(id,status,claim_window_ends_at,finalized_at) and UPDATE(finalized_at) on orders.orders: no INSERT/DELETE, no table-wide grant, no other table, no outbox, bootstrap or purge privilege.
+-- 11. security.finalize_expired_orders(integer) is SECURITY DEFINER with search_path=pg_catalog, orders, pg_temp, accepts only a bounded batch size, and only paqueteria_worker may EXECUTE it; PUBLIC and paqueteria_app may not.
