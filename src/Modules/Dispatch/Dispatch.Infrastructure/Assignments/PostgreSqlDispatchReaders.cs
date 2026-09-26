@@ -227,6 +227,115 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
             eligibility.ServiceAreaId,
             cancellationToken);
 
+    public async Task<IReadOnlyList<DriverEligibilitySnapshot>> ReadExternalCandidatesAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid organizationId,
+        Guid cityId,
+        Guid? serviceAreaId,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        // One statement for the whole EXT-001 audience: candidate selection (active EXTERNAL
+        // profile, active user, active DRIVER membership) plus the same profile, service-area
+        // and latest-document projection that ReadAsync performs per driver.
+        const string sql =
+            """
+            SELECT p.id,p.org_id,p.user_id,p.home_city_id,p.driver_type,p.vehicle_type,p.status,
+                   u.status,
+                   CASE WHEN @service_area_id IS NULL THEN NULL ELSE EXISTS (
+                     SELECT 1
+                     FROM drivers.driver_service_areas dsa
+                     JOIN locations.service_areas sa ON sa.id=dsa.service_area_id
+                     WHERE dsa.driver_id=p.id AND dsa.service_area_id=@service_area_id
+                       AND dsa.org_id=p.org_id AND dsa.status='ACTIVE'
+                       AND sa.owner_org_id=p.org_id AND sa.city_id=@city_id AND sa.status='ACTIVE'
+                   ) END,
+                   COALESCE(docs.types,ARRAY[]::text[]),
+                   COALESCE(docs.statuses,ARRAY[]::text[]),
+                   COALESCE(docs.object_keys,ARRAY[]::text[]),
+                   COALESCE(docs.hashes,ARRAY[]::bytea[]),
+                   COALESCE(docs.expirations,ARRAY[]::timestamptz[])
+            FROM drivers.driver_profiles p
+            JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
+            LEFT JOIN LATERAL (
+              SELECT array_agg(d.document_type ORDER BY d.document_type) AS types,
+                     array_agg(d.status ORDER BY d.document_type) AS statuses,
+                     array_agg(d.object_key ORDER BY d.document_type) AS object_keys,
+                     array_agg(d.sha256 ORDER BY d.document_type) AS hashes,
+                     array_agg(d.expires_at ORDER BY d.document_type) AS expirations
+              FROM (
+                SELECT DISTINCT ON (dd.document_type)
+                       dd.document_type,dd.status,dd.object_key,dd.sha256,dd.expires_at
+                FROM drivers.driver_documents dd
+                WHERE dd.driver_id=p.id AND dd.org_id=p.org_id
+                ORDER BY dd.document_type,dd.created_at DESC,dd.id DESC
+              ) d
+            ) docs ON true
+            WHERE p.org_id=@organization_id AND p.driver_type='EXTERNAL' AND p.status='ACTIVE'
+              AND EXISTS (
+                SELECT 1
+                FROM organizations.organization_memberships m
+                WHERE m.user_id=p.user_id AND m.organization_id=p.org_id
+                  AND m.role='DRIVER' AND m.status='ACTIVE')
+            ORDER BY p.id
+            LIMIT @limit
+            """;
+        await using var command = new NpgsqlCommand(
+            sql,
+            (NpgsqlConnection)connection,
+            (NpgsqlTransaction)transaction);
+        command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, organizationId));
+        command.Parameters.Add(P("service_area_id", NpgsqlDbType.Uuid, serviceAreaId));
+        command.Parameters.Add(P("city_id", NpgsqlDbType.Uuid, cityId));
+        command.Parameters.Add(P("limit", NpgsqlDbType.Integer, limit));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var snapshots = new List<DriverEligibilitySnapshot>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var types = reader.GetFieldValue<string[]>(9);
+            var statuses = reader.GetFieldValue<string[]>(10);
+            var objectKeys = reader.GetFieldValue<string[]>(11);
+            var hashes = reader.GetFieldValue<byte[][]>(12);
+            var expirations = reader.GetFieldValue<DateTime?[]>(13);
+            if (statuses.Length != types.Length || objectKeys.Length != types.Length ||
+                hashes.Length != types.Length || expirations.Length != types.Length)
+            {
+                throw new AssignmentInfrastructureException(
+                    "External driver candidate document projection is inconsistent.");
+            }
+
+            var documents = new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal);
+            for (var index = 0; index < types.Length; index++)
+            {
+                documents[types[index]] = new DriverDocumentSnapshot(
+                    types[index],
+                    statuses[index],
+                    objectKeys[index],
+                    hashes[index],
+                    expirations[index] is { } expiresAt
+                        ? new DateTimeOffset(DateTime.SpecifyKind(expiresAt, DateTimeKind.Utc))
+                        : null);
+            }
+
+            snapshots.Add(new DriverEligibilitySnapshot(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.GetGuid(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                true,
+                reader.IsDBNull(8) ? null : reader.GetBoolean(8),
+                documents));
+        }
+
+        return snapshots;
+    }
+
     private static async Task<DriverEligibilitySnapshot?> ReadAsync(
         DbConnection connection,
         DbTransaction transaction,
