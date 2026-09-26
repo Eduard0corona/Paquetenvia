@@ -38,6 +38,16 @@ public sealed class ProofDriverTypeAndOrderLockTests :
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaae21");
     private static readonly Guid ExternalDriverId =
         Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddde021");
+    private static readonly Guid SecondExternalDriverUserId =
+        Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaae22");
+    private static readonly Guid SecondExternalDriverId =
+        Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddde022");
+    private static readonly Guid OperatorOrganizationId =
+        PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId;
+    private static readonly Guid OperatorExternalDriverUserId =
+        Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaae23");
+    private static readonly Guid OperatorExternalDriverId =
+        Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddde023");
     private static readonly byte[] Png =
         [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -89,6 +99,156 @@ public sealed class ProofDriverTypeAndOrderLockTests :
     }
 
     [Fact]
+    public async Task Authorized_external_driver_downloads_its_own_proof()
+    {
+        await SeedExternalDriverAsync();
+        await ReplaceAssignmentAsync(ExternalDriverId, "EXTERNAL");
+        await SetOrderStatusAsync("AT_PICKUP");
+        var storage = new InMemoryProofObjectStorage();
+        await using var provider = BuildProvider(storage);
+        var proof = await CaptureAsync(provider, storage, ExternalDriverUserId, "PICKUP_PHOTO");
+
+        var download = await DownloadAsync(provider, ExternalDriverUserId, OrganizationId, proof.Id);
+
+        Assert.Equal(proof.Id, download.ProofId);
+        Assert.Equal(InMemoryProofObjectStorage.DownloadUrl(await ReadProofObjectKeyAsync(proof.Id)), download.DownloadUrl);
+
+        // Once the assignment is no longer ACCEPTED/ACTIVE the same driver loses download access.
+        await ExecuteAdminAsync(
+            "UPDATE dispatch.assignments SET status='COMPLETED' WHERE order_id=@order;",
+            ("order", OrderId));
+        await Assert.ThrowsAsync<ProofForbiddenException>(() =>
+            DownloadAsync(provider, ExternalDriverUserId, OrganizationId, proof.Id));
+    }
+
+    [Fact]
+    public async Task External_driver_holding_another_drivers_external_assignment_is_forbidden()
+    {
+        await SeedExternalDriverAsync();
+        await SeedDriverAsync(
+            SecondExternalDriverUserId,
+            SecondExternalDriverId,
+            OrganizationId,
+            "mock-subject-pod-second-external-driver");
+        await ReplaceAssignmentAsync(SecondExternalDriverId, "EXTERNAL");
+        await SetOrderStatusAsync("AT_PICKUP");
+        var storage = new InMemoryProofObjectStorage();
+        await using var provider = BuildProvider(storage);
+
+        await Assert.ThrowsAsync<ProofForbiddenException>(() =>
+            CreateSessionAsync(provider, ExternalDriverUserId, "PICKUP_PHOTO"));
+
+        // The assigned external driver of the same organization is the one who may capture.
+        var upload = await CreateSessionAsync(provider, SecondExternalDriverUserId, "PICKUP_PHOTO");
+        Assert.NotEqual(Guid.Empty, upload.Id);
+    }
+
+    [Fact]
+    public async Task External_driver_of_another_organization_does_not_see_the_order()
+    {
+        await SeedDriverAsync(
+            OperatorExternalDriverUserId,
+            OperatorExternalDriverId,
+            OperatorOrganizationId,
+            "mock-subject-pod-operator-external-driver");
+
+        // Even with an EXTERNAL assignment naming it, a driver of an organization that is neither
+        // the owner nor the operator of the order gets the uniform RLS 404, not a 403.
+        await ReplaceAssignmentAsync(OperatorExternalDriverId, "EXTERNAL");
+        await SetOrderStatusAsync("AT_PICKUP");
+        var storage = new InMemoryProofObjectStorage();
+        await using var provider = BuildProvider(storage);
+
+        await Assert.ThrowsAsync<ProofNotFoundException>(() =>
+            CreateSessionAsync(provider, OperatorExternalDriverUserId, "PICKUP_PHOTO", OperatorOrganizationId));
+    }
+
+    [Fact]
+    public async Task External_driver_of_the_operator_organization_captures_and_downloads_proofs()
+    {
+        await SeedDriverAsync(
+            OperatorExternalDriverUserId,
+            OperatorExternalDriverId,
+            OperatorOrganizationId,
+            "mock-subject-pod-operator-external-driver");
+        await SetOrderOperatorAsync(OperatorOrganizationId);
+        try
+        {
+            await ReplaceAssignmentAsync(OperatorExternalDriverId, "EXTERNAL", OperatorOrganizationId);
+            await SetOrderStatusAsync("AT_PICKUP");
+            var storage = new InMemoryProofObjectStorage();
+            await using var provider = BuildProvider(storage);
+            var before = await CountProofsAsync();
+
+            var proof = await CaptureAsync(
+                provider,
+                storage,
+                OperatorExternalDriverUserId,
+                "PICKUP_PHOTO",
+                OperatorOrganizationId);
+
+            Assert.Equal(before + 1, await CountProofsAsync());
+            var download = await DownloadAsync(
+                provider,
+                OperatorExternalDriverUserId,
+                OperatorOrganizationId,
+                proof.Id);
+            Assert.Equal(proof.Id, download.ProofId);
+
+            // An assignment that does not mirror the order's operator is not tenant-consistent.
+            await ReplaceAssignmentAsync(OperatorExternalDriverId, "EXTERNAL");
+            await Assert.ThrowsAsync<ProofForbiddenException>(() =>
+                CreateSessionAsync(provider, OperatorExternalDriverUserId, "PICKUP_PHOTO", OperatorOrganizationId));
+        }
+        finally
+        {
+            await SetOrderOperatorAsync(null);
+        }
+    }
+
+    [Fact]
+    public async Task Finalization_rereads_authorization_after_waiting_for_the_order_lock()
+    {
+        await SeedExternalDriverAsync();
+        await ReplaceAssignmentAsync(ExternalDriverId, "EXTERNAL");
+        await SetOrderStatusAsync("AT_PICKUP");
+        var storage = new InMemoryProofObjectStorage();
+        await using var provider = BuildProvider(storage);
+        var upload = await CreateSessionAsync(provider, ExternalDriverUserId, "PICKUP_PHOTO");
+        await MarkSessionReadyAsync(upload.Id);
+        storage.PromoteForTest(upload.Id);
+        var before = await CountProofsAsync();
+
+        // The concurrent transition keeps the order status but cancels the assignment while it
+        // holds the order row. The authorization read runs as a new statement after the lock
+        // is granted, so it sees the cancelled assignment instead of the pre-wait snapshot.
+        await using var transition = new NpgsqlConnection(postgres.AdminConnectionString);
+        await transition.OpenAsync();
+        await using var transaction = await transition.BeginTransactionAsync();
+        await using (var cancel = new NpgsqlCommand(
+                         """
+                         SELECT status FROM orders.orders WHERE id=@order FOR UPDATE;
+                         UPDATE dispatch.assignments SET status='CANCELLED' WHERE order_id=@order;
+                         UPDATE orders.orders SET version=version+1 WHERE id=@order;
+                         """,
+                         transition,
+                         transaction))
+        {
+            cancel.Parameters.AddWithValue("order", OrderId);
+            await cancel.ExecuteNonQueryAsync();
+        }
+
+        var finalization = FinalizeAsync(provider, ExternalDriverUserId, upload.Id, "PICKUP_PHOTO");
+        var blocked = await WaitUntilBlockedByAsync(transition.ProcessID, finalization);
+        await transaction.CommitAsync();
+
+        await Assert.ThrowsAsync<ProofForbiddenException>(() => finalization);
+        Assert.Equal(before, await CountProofsAsync());
+        Assert.Equal("READY", await ReadSessionStatusAsync(upload.Id));
+        Assert.True(blocked, "Finalization must wait on the order row lock held by the transition.");
+    }
+
+    [Fact]
     public async Task Finalization_waits_for_concurrent_cancellation_and_rejects_the_cancelled_order()
     {
         await ReplaceAssignmentAsync(OwnDriverId, "OWN");
@@ -116,17 +276,27 @@ public sealed class ProofDriverTypeAndOrderLockTests :
         }
 
         var finalization = FinalizeAsync(provider, OwnDriverUserId, upload.Id, "PICKUP_PHOTO");
-        var blocked = await WaitUntilBlockedOrCompletedAsync(finalization);
+        var blocked = await WaitUntilBlockedByAsync(cancellation.ProcessID, finalization);
         await transaction.CommitAsync();
 
-        Assert.True(blocked, "Finalization must wait on the order row lock held by the cancellation.");
+        // The key assertions: the cancelled order yields 409 ORDER_STATE_NOT_ALLOWED and no proof
+        // row exists. The blocked check only confirms the interleaving under test really happened.
         var conflict = await Assert.ThrowsAsync<ProofConflictException>(() => finalization);
         Assert.Equal("ORDER_STATE_NOT_ALLOWED", conflict.Code);
         Assert.Equal(before, await CountProofsAsync());
         Assert.Equal("READY", await ReadSessionStatusAsync(upload.Id));
+        Assert.True(blocked, "Finalization must wait on the order row lock held by the cancellation.");
     }
 
-    private async Task<bool> WaitUntilBlockedOrCompletedAsync(Task finalization)
+    /// <summary>
+    /// Waits until a backend is blocked by <paramref name="blockerPid"/>, the test's own
+    /// transaction holding FOR UPDATE on the order; while it is open only the finalization's
+    /// FOR SHARE can wait on it. Filtering by <c>pg_blocking_pids</c> keeps unrelated lock waits
+    /// in the same database from satisfying the check (the statement text is not used: it is
+    /// truncated in <c>pg_stat_activity</c>). The outcome assertions (409/403 and the proof count) are what
+    /// prove the contract; this only confirms the interleaving.
+    /// </summary>
+    private async Task<bool> WaitUntilBlockedByAsync(int blockerPid, Task finalization)
     {
         var deadline = DateTime.UtcNow.AddSeconds(20);
         await using var monitor = new NpgsqlConnection(postgres.AdminConnectionString);
@@ -144,9 +314,11 @@ public sealed class ProofDriverTypeAndOrderLockTests :
                   SELECT 1 FROM pg_stat_activity a
                   WHERE a.datname=current_database()
                     AND a.pid<>pg_backend_pid()
-                    AND a.wait_event_type='Lock')
+                    AND a.wait_event_type='Lock'
+                    AND @blocker = ANY(pg_blocking_pids(a.pid)))
                 """,
                 monitor);
+            probe.Parameters.AddWithValue("blocker", blockerPid);
             if ((bool)(await probe.ExecuteScalarAsync())!)
             {
                 return true;
@@ -162,18 +334,34 @@ public sealed class ProofDriverTypeAndOrderLockTests :
         ServiceProvider provider,
         InMemoryProofObjectStorage storage,
         Guid actor,
-        string proofType)
+        string proofType,
+        Guid? organization = null)
     {
-        var upload = await CreateSessionAsync(provider, actor, proofType);
+        var upload = await CreateSessionAsync(provider, actor, proofType, organization);
         await MarkSessionReadyAsync(upload.Id);
         storage.PromoteForTest(upload.Id);
-        return await FinalizeAsync(provider, actor, upload.Id, proofType);
+        return await FinalizeAsync(provider, actor, upload.Id, proofType, organization);
+    }
+
+    private static async Task<ProofDownloadResult> DownloadAsync(
+        ServiceProvider provider,
+        Guid actor,
+        Guid organization,
+        Guid proofId)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IProofDownloadService>()
+            .GetInternalDownloadAsync(
+                new GetProofDownloadCommand(actor, organization, false, proofId, "pod-driver-type"),
+                default);
     }
 
     private static async Task<ProofUploadSessionResult> CreateSessionAsync(
         ServiceProvider provider,
         Guid actor,
-        string proofType)
+        string proofType,
+        Guid? organization = null)
     {
         await using var scope = provider.CreateAsyncScope();
         return await scope.ServiceProvider
@@ -181,7 +369,7 @@ public sealed class ProofDriverTypeAndOrderLockTests :
             .CreateAsync(
                 new CreateProofUploadSessionCommand(
                     actor,
-                    OrganizationId,
+                    organization ?? OrganizationId,
                     false,
                     $"pod-driver-type-{Guid.NewGuid():N}",
                     OrderId,
@@ -197,7 +385,8 @@ public sealed class ProofDriverTypeAndOrderLockTests :
         ServiceProvider provider,
         Guid actor,
         Guid sessionId,
-        string proofType)
+        string proofType,
+        Guid? organization = null)
     {
         await using var scope = provider.CreateAsyncScope();
         return await scope.ServiceProvider
@@ -205,7 +394,7 @@ public sealed class ProofDriverTypeAndOrderLockTests :
             .FinalizeAsync(
                 new FinalizeProofCommand(
                     actor,
-                    OrganizationId,
+                    organization ?? OrganizationId,
                     false,
                     $"pod-driver-type-finalize-{Guid.NewGuid():N}",
                     OrderId,
@@ -255,12 +444,15 @@ public sealed class ProofDriverTypeAndOrderLockTests :
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
 
-    private async Task SeedExternalDriverAsync()
+    private Task SeedExternalDriverAsync() =>
+        SeedDriverAsync(ExternalDriverUserId, ExternalDriverId, OrganizationId, "mock-subject-pod-external-driver");
+
+    private async Task SeedDriverAsync(Guid userId, Guid driverId, Guid organizationId, string subject)
     {
         await ExecuteAdminAsync(
             """
             INSERT INTO identity.users(id,identity_subject,status)
-            VALUES (@user,'mock-subject-pod-external-driver','ACTIVE')
+            VALUES (@user,@subject,'ACTIVE')
             ON CONFLICT (id) DO NOTHING;
             INSERT INTO organizations.organization_memberships(id,user_id,organization_id,role,status,is_default)
             SELECT gen_random_uuid(),@user,@organization,'DRIVER','ACTIVE',true
@@ -272,25 +464,46 @@ public sealed class ProofDriverTypeAndOrderLockTests :
                     '33333333-3333-3333-3333-333333333333')
             ON CONFLICT (id) DO NOTHING;
             """,
-            ("user", ExternalDriverUserId),
-            ("organization", OrganizationId),
-            ("driver", ExternalDriverId));
+            ("user", userId),
+            ("organization", organizationId),
+            ("driver", driverId),
+            ("subject", subject));
     }
 
-    private Task ReplaceAssignmentAsync(Guid driverId, string assignmentType) =>
+    private Task ReplaceAssignmentAsync(Guid driverId, string assignmentType, Guid? operatorOrganizationId = null) =>
         ExecuteAdminAsync(
             """
             DELETE FROM dispatch.assignments WHERE order_id=@order;
             INSERT INTO dispatch.assignments(
               id,order_id,owner_org_id,operator_org_id,driver_id,route_id,
               assignment_type,status,cost_cents,accepted_at,created_at)
-            VALUES (gen_random_uuid(),@order,@organization,NULL,@driver,NULL,
+            VALUES (gen_random_uuid(),@order,@organization,@operator,@driver,NULL,
                     @type,'ACCEPTED',0,clock_timestamp(),clock_timestamp());
             """,
             ("order", OrderId),
             ("organization", OrganizationId),
             ("driver", driverId),
-            ("type", assignmentType));
+            ("type", assignmentType),
+            ("operator", Nullable(operatorOrganizationId)));
+
+    private Task SetOrderOperatorAsync(Guid? operatorOrganizationId) =>
+        ExecuteAdminAsync(
+            "UPDATE orders.orders SET operator_org_id=@operator WHERE id=@order;",
+            ("operator", Nullable(operatorOrganizationId)),
+            ("order", OrderId));
+
+    private static NpgsqlParameter Nullable(Guid? value) => new() { NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Uuid, Value = (object?)value ?? DBNull.Value };
+
+    private async Task<string> ReadProofObjectKeyAsync(Guid proofId)
+    {
+        await using var connection = new NpgsqlConnection(postgres.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT object_key FROM custody.proofs WHERE id=@proof;",
+            connection);
+        command.Parameters.AddWithValue("proof", proofId);
+        return (string)(await command.ExecuteScalarAsync())!;
+    }
 
     private Task SetOrderStatusAsync(string status) =>
         ExecuteAdminAsync(
@@ -332,7 +545,15 @@ public sealed class ProofDriverTypeAndOrderLockTests :
         await using var command = new NpgsqlCommand(sql, connection);
         foreach (var (name, value) in parameters)
         {
-            command.Parameters.AddWithValue(name, value);
+            if (value is NpgsqlParameter typed)
+            {
+                typed.ParameterName = name;
+                command.Parameters.Add(typed);
+            }
+            else
+            {
+                command.Parameters.AddWithValue(name, value);
+            }
         }
 
         await command.ExecuteNonQueryAsync();
@@ -420,7 +641,9 @@ public sealed class ProofDriverTypeAndOrderLockTests :
         public Task DeleteQuarantineAsync(string objectKey, string? versionId, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        public static string DownloadUrl(string objectKey) => $"http://127.0.0.1:9/{objectKey}?signed=test";
+
         public Task<string> CreateInternalDownloadUrlAsync(string objectKey, CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
+            Task.FromResult(DownloadUrl(objectKey));
     }
 }
