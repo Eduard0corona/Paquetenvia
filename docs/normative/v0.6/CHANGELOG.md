@@ -1,5 +1,22 @@
 # Changelog
 
+## Contratos del piloto — 2026-09-26 (propuesta y decisiones)
+
+- AI-05: `x-capability-matrix` (DECIDED D5) y `x-pilot-contract-deltas`, con
+  entradas DECIDED (D6, D7) y PROPOSED (`listSettlements`, `pii_key_version`,
+  límites de aceptación, códigos no declarados, orden del timeline). La
+  superficie HTTP no cambia hasta que la tarea de implementación publique
+  cada delta junto con su código y sus pruebas.
+- AI-08: 63 ítems. Se agregan AUTH-001, ENV-001, ADP-001, UI-001, OBS-002,
+  MDM-001 y TRK-002, marcados `PROPOSED`. Se incorporan criterios DECIDED en
+  OPS-003 (72 h), CSV-001 y FIN-001 (D6) y SET-001 (D7).
+- AI-04 y AI-12: enmiendas `PROPOSED` tomadas de los PRs #91 y #90. Las
+  guards y los eventos vigentes no cambian.
+- AI-13 §7.1 y ADR-004: adenda D8 (dirección DECIDED; mecanismo PROPOSED).
+- AI-10: decisión abierta `PILOT-CONTRACTS-2026-09`.
+- AI-06 y AI-18 no cambian. Sus propuestas SQL se describen en el PR y
+  requieren una migración antes de entrar a los archivos canónicos.
+
 ## Reconciliación de gobernanza — 2026-09-26
 
 - Registro documental posterior de los ítems fusionados desde el 2026-08-04

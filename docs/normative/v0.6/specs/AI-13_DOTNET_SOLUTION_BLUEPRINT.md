@@ -114,6 +114,32 @@ Consumers separados lógicamente:
 
 Cada consumer implementa idempotencia, lease/locking, retries, dead-letter/review state, métricas y graceful shutdown. La concurrencia se configura por consumer para permitir scale-out independiente.
 
+### 7.1 Adenda 2026-09-26: cierre de asignaciones (D8)
+
+**Decidido** (`D8-DISPATCH-OUTBOX-CLOSURE`, project owner, 2026-09-26): Dispatch
+cierra sus asignaciones reaccionando por outbox a los cambios de estado de la
+orden, con consistencia eventual. No se agrega un sexto coordinador
+transaccional ni un flujo atómico nuevo entre módulos.
+
+Correspondencia propuesta por el PR borrador #90 (`AssignmentLifecyclePolicy`),
+pendiente de confirmación del owner:
+`ASSIGNED→READY_FOR_PICKUP` y `RESCHEDULED→READY_FOR_PICKUP` cierran la
+asignación como `CANCELLED`; `*→CANCELLED` la cierra como `CANCELLED`;
+`DELIVERED` o `RETURNED` la cierran como `COMPLETED`. El cierre es idempotente:
+solo afecta a asignaciones `ACCEPTED/ACTIVE` con `created_at <= occurred_at` y,
+si el evento lo trae, a su `assignment_id`.
+
+**Propuesto, pendiente de decisión del owner** (PR #90): el consumer
+`AssignmentLifecycleReactor` (Dispatch) consume el topic interno
+`dispatch.order-status-reaction-requested` (payload
+`order-status-reaction-v1`, sin PII) por un lane `DISPATCH`. Orders escribe ese
+topic en la misma transacción de ORD-002, como un INSERT adicional en el
+outbox, solo cuando la transición cierra una asignación. El lane requiere
+funciones `claim_dispatch_outbox` y `requeue_stale_dispatch_outbox` en AI-06 y
+sus grants en AI-18. Ese cambio SQL se describe en el PR
+`governance/pilot-contracts` y no se aplica a los archivos canónicos hasta que
+exista una migración.
+
 ## 8. Frontend
 
 ```text

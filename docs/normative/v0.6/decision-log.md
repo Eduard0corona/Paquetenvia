@@ -16,6 +16,13 @@ See `specs/AI-10_DECISIONS_AND_GATES.yaml`.
   merge se registra como hecho en la tabla; la autorización formal previa no
   consta en el repositorio y queda pendiente de ratificación explícita del
   project owner. Esta entrada no es una decisión aprobada.
+- `PILOT-CONTRACTS-2026-09` — Propuestas normativas para el piloto pendientes
+  de decisión del project owner (AI-10 `open_decisions`): enmiendas de AI-04 y
+  AI-12 marcadas `PROPOSED`, entradas `PROPOSED` de `x-pilot-contract-deltas`
+  en AI-05, ítems habilitadores nuevos de AI-08 y cambios SQL descritos fuera de
+  AI-06/AI-18 hasta que exista migración. Las entradas `DECIDED` reflejan D5,
+  D6, D7, D8, GATE-002-BFF-001 y OPS-003-OFFLINE-72H. Esta entrada no es una
+  decisión aprobada.
 
 ## Entries
 

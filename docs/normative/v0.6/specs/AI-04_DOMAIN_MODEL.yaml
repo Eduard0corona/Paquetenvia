@@ -322,6 +322,30 @@ order_state_machine:
   - FAILED_ATTEMPT -> DELIVERED
   - RESCHEDULED -> DELIVERING when custody_acquired=false
   - CLAIM_OPEN after claim_window_ends_at
+proposed_amendments:
+  status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  source: draft PR #91 (ORD-002 attempt-scoped proofs, single custody derivation, per-attempt incidents)
+  note: Not normative until the project owner approves them; order_state_machine.guards and prohibited above remain authoritative.
+  order_state_machine_guards_to_add:
+    RESCHEDULED:
+    - if_from_failed_attempt_then_incident_next_action_rescheduled
+    RETURNING:
+    - if_from_failed_attempt_then_incident_next_action_returning
+    DELIVERING:
+    - if_from_failed_attempt_then_incident_next_action_rescheduled
+  implementation_guard_in_pr_91: failed_attempt_next_action_respected (RETURNING -> RETURNING; RESCHEDULED -> RESCHEDULED or
+    DELIVERING)
+  order_state_machine_prohibited_to_add:
+  - custody_acquired derived from anything other than a PICKED_UP ORDER_STATUS_CHANGED event
+  - PICKED_UP or DELIVERED justified by a proof created before the latest entry into AT_PICKUP or DELIVERING, or referenced
+    as incident evidence
+  - FAILED_ATTEMPT justified by an incident already referenced by an earlier FAILED_ATTEMPT
+  decision_to_record:
+  - the current attempt starts at the latest ORDER_STATUS_CHANGED event into the capture state, so no attempt_id column is
+    added to custody.proofs or incidents.incidents
+  open_product_question:
+  - RESCHEDULED -> ASSIGNED without passing through READY_FOR_PICKUP keeps the previous assignment active; D8 does not cover
+    it (reported by PR #90)
 authorization_invariants:
 - 401 when no valid authentication token exists
 - 403 when an authenticated actor can see the tenant resource but lacks a capability

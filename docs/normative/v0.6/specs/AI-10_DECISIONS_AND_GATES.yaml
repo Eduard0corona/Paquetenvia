@@ -109,6 +109,25 @@ open_decisions:
   - add CUSTOMER_SUPPORT as a canonical organization role with explicit capabilities
   - defer/remove customer_support from MVP-0 contracts
   - explicitly assign the actor's responsibilities to an existing role
+- id: PILOT-CONTRACTS-2026-09
+  topic: pilot_contract_proposals
+  severity: MAJOR
+  recorded_on: 2026-09-26
+  decision_needed:
+  - AI-04 proposed_amendments from PR #91 (attempt-scoped proofs, single custody derivation, per-attempt incidents)
+  - AI-12 AssignmentChanged closed statuses from PR #90
+  - D8 mechanism: DISPATCH lane and internal topic, or per-consumer fan-out (PR #90)
+  - PROPOSED entries of AI-05 x-pilot-contract-deltas (listSettlements, pii_key_version, acceptance limits, undeclared
+    status codes, public timeline order)
+  - FINANCE access to COD reconciliation, not stated by D5
+  - whether COD expectation is also carried by the quote, not stated by D6
+  - AI-08 pilot enabler items AUTH-001, ENV-001, ADP-001, UI-001, OBS-002, MDM-001 and TRK-002 and their link to REL-001
+  - SQL proposals kept outside AI-06/AI-18 until a migration exists (purge partial indexes, DISPATCH lane, organization
+    status in resolve_identity_context, public timeline order, operational indexes, dedicated OPS-003 cleanup role)
+  work_allowed:
+  - implementation of DECIDED items D5, D6, D7, D8 direction, GATE-002-BFF-001 and OPS-003-OFFLINE-72H under their own
+    backlog tasks
+  - no PROPOSED item is implemented before an owner decision
 resolved_decisions:
 - id: GATE-002
   topic: identity_provider
