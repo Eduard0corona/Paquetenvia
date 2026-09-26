@@ -540,8 +540,8 @@ public sealed class OutboxRetentionContractTests(PostgreSqlContractFixture fixtu
 
                 // The probe is the approved function in dry-run: nothing changes however often it runs.
                 var now = await DatabaseNowAsync();
-                Assert.Equal(1, await dryRunHarness.Gateway.CountDeadEligibleAsync(OutboxRetentionLane.Business, now - TimeSpan.FromDays(8), CancellationToken.None));
-                Assert.Equal(1, await dryRunHarness.Gateway.CountDeadEligibleAsync(OutboxRetentionLane.Location, now - TimeSpan.FromDays(2), CancellationToken.None));
+                Assert.Equal(1, await dryRunHarness.Gateway.CountDeadEligibleAsync(OutboxRetentionLane.Business, now - TimeSpan.FromDays(8), 100, CancellationToken.None));
+                Assert.Equal(1, await dryRunHarness.Gateway.CountDeadEligibleAsync(OutboxRetentionLane.Location, now - TimeSpan.FromDays(2), 100, CancellationToken.None));
                 Assert.Equal(before, await SnapshotAsync(org));
             }
 
@@ -592,6 +592,104 @@ public sealed class OutboxRetentionContractTests(PostgreSqlContractFixture fixtu
 
             AssertLane(report, OutboxRetentionLane.Business, affected: 1, batches: 1, exhausted: true, dryRun: true);
             AssertLane(report, OutboxRetentionLane.Location, affected: 1, batches: 1, exhausted: true, dryRun: true);
+        }
+        finally
+        {
+            await CleanupAsync(org);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Normative_minimum_without_margin_is_rejected_at_startup_and_by_postgresql_when_the_worker_clock_runs_ahead()
+    {
+        var org = await BeginScenarioAsync();
+        try
+        {
+            await InsertAsync(Lane.Business, org, "PROCESSED", created: "30 days", processed: "20 days");
+            await InsertAsync(Lane.Location, org, "PROCESSED", created: "30 days", processed: "20 days");
+            await InsertAsync(Lane.Business, org, "DEAD", created: "15 days");
+            await InsertAsync(Lane.Location, org, "DEAD", created: "5 days");
+            var before = await SnapshotAsync(org);
+            var options = Options(dryRun: false);
+            foreach (var contract in OutboxRetentionLaneContract.All)
+            {
+                options.For(contract.Lane).ProcessedRetention = contract.MinimumProcessedRetention;
+                options.For(contract.Lane).DeadRetention = contract.MinimumDeadRetention;
+            }
+
+            // Startup validation refuses this configuration because it has no clock-skew margin...
+            var errors = OutboxRetentionOptionsValidator.Errors(options);
+            Assert.Equal(4, errors.Count);
+            Assert.All(errors, error => Assert.Contains("clock-skew margin", error, StringComparison.Ordinal));
+
+            // ...and this is why: with the Worker clock one minute ahead of PostgreSQL the cutoffs
+            // land inside the normative window and AI-06 rejects them with 22023.
+            var skew = await DatabaseNowAsync() - DateTimeOffset.UtcNow + TimeSpan.FromMinutes(1);
+            await using var harness = new Harness(fixture.WorkerConnectionString, options, new SkewedTimeProvider(skew));
+
+            var report = await harness.Service.RunOnceAsync(CancellationToken.None);
+
+            Assert.All(report.Lanes, lane =>
+            {
+                Assert.Equal(OutboxRetentionOutcomes.Failure, lane.Outcome);
+                Assert.Equal(PostgresErrorCodes.InvalidParameterValue, lane.ErrorClass);
+                Assert.Equal(0, lane.AffectedRows);
+                Assert.Null(lane.DeadEligible);
+            });
+
+            // The best-effort DEAD probe hits the same rejection, is logged and does not mask the
+            // lane failure.
+            var probeFailures = harness.Logger.Entries
+                .Where(entry => entry.Message.Contains("could not probe DEAD", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(2, probeFailures.Length);
+            Assert.All(probeFailures, entry => Assert.Contains("error_class=22023", entry.Message, StringComparison.Ordinal));
+            Assert.Equal(before, await SnapshotAsync(org));
+        }
+        finally
+        {
+            await CleanupAsync(org);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Dead_probe_is_bounded_by_batch_size_and_its_failure_does_not_block_the_purge()
+    {
+        var org = await BeginScenarioAsync();
+        try
+        {
+            var businessDead = new[]
+            {
+                await InsertAsync(Lane.Business, org, "DEAD", created: "15 days"),
+                await InsertAsync(Lane.Business, org, "DEAD", created: "14 days"),
+                await InsertAsync(Lane.Business, org, "DEAD", created: "13 days"),
+            };
+            var locationProcessed = await InsertAsync(Lane.Location, org, "PROCESSED", created: "30 days", processed: "20 days");
+            var active = (await InsertActiveStatesAsync(Lane.Business, org))
+                .Concat(await InsertActiveStatesAsync(Lane.Location, org))
+                .ToArray();
+            var before = await SnapshotAsync(org);
+
+            await using var harness = await HarnessAsync(Options(dryRun: false));
+
+            // "At least N": the probe never scans for more than the batch it was given.
+            var now = await DatabaseNowAsync();
+            Assert.Equal(2, await harness.Gateway.CountDeadEligibleAsync(OutboxRetentionLane.Business, now - TimeSpan.FromDays(8), 2, CancellationToken.None));
+            Assert.Equal(before, await SnapshotAsync(org));
+
+            harness.Gateway.FailDeadProbe = true;
+            var report = await harness.Service.RunOnceAsync(CancellationToken.None);
+
+            AssertLane(report, OutboxRetentionLane.Business, affected: 3, batches: 1, exhausted: true);
+            AssertLane(report, OutboxRetentionLane.Location, affected: 1, batches: 1, exhausted: true);
+            Assert.All(report.Lanes, lane => Assert.Null(lane.DeadEligible));
+            Assert.Equal(2, harness.Logger.Entries.Count(entry =>
+                entry.Level == LogLevel.Error && entry.Message.Contains("could not probe DEAD", StringComparison.Ordinal)));
+
+            var after = await SnapshotAsync(org);
+            Assert.All(businessDead, id => Assert.False(after.ContainsKey(id)));
+            Assert.False(after.ContainsKey(locationProcessed));
+            Assert.All(active, id => Assert.Equal(before[id], after[id]));
         }
         finally
         {
@@ -910,8 +1008,13 @@ public sealed class OutboxRetentionContractTests(PostgreSqlContractFixture fixtu
             return inner.PurgeAsync(request, cancellationToken);
         }
 
-        public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, CancellationToken cancellationToken) =>
-            inner.CountDeadEligibleAsync(lane, deadBefore, cancellationToken);
+        /// <summary>When set, every DEAD probe fails as a probe timing out over a large backlog would.</summary>
+        public bool FailDeadProbe { get; set; }
+
+        public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken) =>
+            FailDeadProbe
+                ? Task.FromException<int>(new TimeoutException("synthetic probe timeout"))
+                : inner.CountDeadEligibleAsync(lane, deadBefore, limit, cancellationToken);
     }
 
     private sealed class CapturingLogger<T> : ILogger<T>

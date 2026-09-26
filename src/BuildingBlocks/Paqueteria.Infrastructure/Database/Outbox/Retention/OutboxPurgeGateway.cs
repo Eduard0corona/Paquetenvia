@@ -21,9 +21,11 @@ internal interface IOutboxPurgeGateway
     /// <summary>
     /// Dry-run probe of the DEAD rows alone: the same approved function with
     /// <c>p_processed_before='-infinity'</c>, so no PROCESSED row can qualify. The count is bounded
-    /// by the lane's maximum batch size and never mutates anything.
+    /// by <paramref name="limit"/> (the lane's configured <c>BatchSize</c>, so the probe costs no more
+    /// than one batch and fits the same command timeout); a result equal to the limit means
+    /// "at least". It never mutates anything.
     /// </summary>
-    Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, CancellationToken cancellationToken);
+    Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -67,17 +69,21 @@ internal sealed class PostgreSqlOutboxPurgeGateway(
             cancellationToken);
     }
 
-    public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, CancellationToken cancellationToken) =>
-        ExecuteAsync(
+    public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, OutboxRetentionLaneContract.For(lane).MaximumBatchSize);
+        return ExecuteAsync(
             lane,
             "'-infinity'::timestamptz",
             command =>
             {
                 command.Parameters.Add(new NpgsqlParameter("dead_before", NpgsqlDbType.TimestampTz) { Value = deadBefore });
-                command.Parameters.Add(new NpgsqlParameter("batch_size", NpgsqlDbType.Integer) { Value = OutboxRetentionLaneContract.For(lane).MaximumBatchSize });
+                command.Parameters.Add(new NpgsqlParameter("batch_size", NpgsqlDbType.Integer) { Value = limit });
                 command.Parameters.Add(new NpgsqlParameter("dry_run", NpgsqlDbType.Boolean) { Value = true });
             },
             cancellationToken);
+    }
 
     private async Task<int> ExecuteAsync(
         OutboxRetentionLane lane,

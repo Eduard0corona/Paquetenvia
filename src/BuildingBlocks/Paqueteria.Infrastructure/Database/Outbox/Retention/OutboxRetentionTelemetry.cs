@@ -37,7 +37,7 @@ internal sealed class OutboxRetentionTelemetry : IDisposable
             "outbox.retention.dead_eligible",
             ObserveDeadEligible,
             "{row}",
-            "DEAD rows past the DEAD cutoff at the last lane run, bounded by the lane's maximum batch size.");
+            "DEAD rows past the DEAD cutoff at the last lane run whose probe completed, bounded by the lane's BatchSize.");
     }
 
     internal Meter Meter { get; } = new(MeterName);
@@ -56,7 +56,21 @@ internal sealed class OutboxRetentionTelemetry : IDisposable
         }
     }
 
-    public void DeadEligibleObserved(string lane, int count) => _deadEligible[lane] = count;
+    /// <summary>
+    /// Publishes the DEAD probe of the last lane run, or withdraws the lane's series when the probe
+    /// did not complete, so a stale value is never reported as current.
+    /// </summary>
+    public void DeadEligibleObserved(string lane, int? count)
+    {
+        if (count is { } value)
+        {
+            _deadEligible[lane] = value;
+        }
+        else
+        {
+            _deadEligible.TryRemove(lane, out _);
+        }
+    }
 
     public void RunCompleted(string lane, bool dryRun, string outcome, TimeSpan duration, DateTimeOffset completedAt)
     {

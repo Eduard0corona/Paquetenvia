@@ -23,14 +23,14 @@ internal sealed class RecordingPurgeGateway(
     }
 
     /// <summary>DEAD-only probes, kept apart from purge batches so batch counts stay exact.</summary>
-    public ConcurrentQueue<(OutboxRetentionLane Lane, DateTimeOffset DeadBefore)> DeadProbes { get; } = new();
+    public ConcurrentQueue<(OutboxRetentionLane Lane, DateTimeOffset DeadBefore, int Limit)> DeadProbes { get; } = new();
 
     public Func<OutboxRetentionLane, int> DeadEligible { get; init; } = _ => 0;
 
-    public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, CancellationToken cancellationToken)
+    public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        DeadProbes.Enqueue((lane, deadBefore));
+        DeadProbes.Enqueue((lane, deadBefore, limit));
         return Task.FromResult(DeadEligible(lane));
     }
 

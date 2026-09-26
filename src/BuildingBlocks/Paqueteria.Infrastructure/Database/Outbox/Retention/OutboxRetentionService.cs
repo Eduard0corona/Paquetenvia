@@ -28,8 +28,9 @@ public readonly record struct OutboxRetentionCutoffs(DateTimeOffset ProcessedBef
 /// </summary>
 /// <remarks>
 /// <c>DeadEligible</c> is the DEAD-only probe taken before the lane's first batch: the DEAD rows
-/// already past <c>DeadBefore</c>, bounded by the lane's maximum batch size (a value at the bound
-/// means "at least"). It is <c>null</c> when the lane failed before the probe completed.
+/// already past <c>DeadBefore</c>, bounded by the lane's <c>BatchSize</c> (a value at the bound
+/// means "at least"). It is <c>null</c> when the probe did not complete; the probe is best-effort
+/// and its failure never stops the purge.
 /// </remarks>
 public sealed record OutboxRetentionLaneReport(
     OutboxRetentionLane Lane,
@@ -66,6 +67,7 @@ internal sealed class OutboxRetentionService(
 {
     private static readonly EventId LaneCompleted = new(4004, "OutboxRetentionLaneCompleted");
     private static readonly EventId DeadPurgePending = new(4005, "OutboxRetentionDeadPurgePending");
+    private static readonly EventId DeadProbeFailed = new(4006, "OutboxRetentionDeadProbeFailed");
 
     /// <summary>The scheduled path: deletes only when <c>OutboxRetention:DryRun=false</c>.</summary>
     public Task<OutboxRetentionRunReport> RunOnceAsync(CancellationToken cancellationToken) =>
@@ -109,20 +111,7 @@ internal sealed class OutboxRetentionService(
         int? deadEligible = null;
         try
         {
-            // DEAD rows are dead letters that exhausted their retries. Their purge is made visible
-            // before it happens, in both modes, instead of disappearing inside a mixed count.
-            deadEligible = await gateway.CountDeadEligibleAsync(contract.Lane, cutoffs.DeadBefore, cancellationToken);
-            telemetry.DeadEligibleObserved(contract.Name, deadEligible.Value);
-            if (!dryRun && deadEligible.Value > 0)
-            {
-                logger.LogWarning(
-                    DeadPurgePending,
-                    "Outbox retention lane {Lane} will purge DEAD rows older than dead_before={DeadBefore}. dead_eligible={DeadEligible} dead_eligible_bound={DeadEligibleBound}",
-                    contract.Name,
-                    Timestamp(cutoffs.DeadBefore),
-                    deadEligible.Value,
-                    contract.MaximumBatchSize);
-            }
+            deadEligible = await ProbeDeadAsync(contract, lane, cutoffs, dryRun, cancellationToken);
 
             while (batches < ceiling)
             {
@@ -180,6 +169,52 @@ internal sealed class OutboxRetentionService(
             Log(contract, report);
             return report;
         }
+    }
+
+    /// <summary>
+    /// DEAD rows are dead letters that exhausted their retries. Their purge is made visible before
+    /// it happens, in both modes, instead of disappearing inside a mixed count. The probe is bounded
+    /// by the lane's <c>BatchSize</c> and is best-effort: a failed probe is logged, leaves
+    /// <c>DeadEligible</c> unknown and never prevents the purge, so a slow probe over a large backlog
+    /// cannot block retention indefinitely.
+    /// </summary>
+    private async Task<int?> ProbeDeadAsync(
+        OutboxRetentionLaneContract contract,
+        OutboxRetentionLaneOptions lane,
+        OutboxRetentionCutoffs cutoffs,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        int? deadEligible;
+        try
+        {
+            deadEligible = await gateway.CountDeadEligibleAsync(contract.Lane, cutoffs.DeadBefore, lane.BatchSize, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(
+                DeadProbeFailed,
+                exception,
+                "Outbox retention lane {Lane} could not probe DEAD rows older than dead_before={DeadBefore}; the purge continues without dead_eligible. error_class={ErrorClass}",
+                contract.Name,
+                Timestamp(cutoffs.DeadBefore),
+                ErrorClass(exception));
+            deadEligible = null;
+        }
+
+        telemetry.DeadEligibleObserved(contract.Name, deadEligible);
+        if (!dryRun && deadEligible > 0)
+        {
+            logger.LogWarning(
+                DeadPurgePending,
+                "Outbox retention lane {Lane} will purge DEAD rows older than dead_before={DeadBefore}. dead_eligible={DeadEligible} dead_eligible_bound={DeadEligibleBound}",
+                contract.Name,
+                Timestamp(cutoffs.DeadBefore),
+                deadEligible.Value,
+                lane.BatchSize);
+        }
+
+        return deadEligible;
     }
 
     private void Log(OutboxRetentionLaneContract contract, OutboxRetentionLaneReport report) =>

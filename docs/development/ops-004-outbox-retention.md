@@ -68,11 +68,15 @@ propios cutoffs, lote y techo:
 
 1. calcula `processed_before` y `dead_before`;
 2. sondea las filas `DEAD` que ya pasaron `dead_before` (ver «Visibilidad de
-   `DEAD`»); si el sondeo falla, la lane falla sin ejecutar lotes;
+   `DEAD`»). El sondeo está acotado por `BatchSize` y es best-effort: si falla,
+   se registra (evento 4006), `DeadEligible` queda en `null` y la lane sigue
+   con la purga normal;
 3. en modo destructivo ejecuta lotes hasta `MaxBatchesPerRun` o hasta que un
    lote devuelva menos filas que `BatchSize`. Cada lote es una transacción
    corta, así que los locks se liberan entre lotes;
-4. en dry-run hace exactamente una llamada con `p_dry_run=true` por lane;
+4. en dry-run hace exactamente dos llamadas con `p_dry_run=true` por lane: el
+   sondeo `DEAD` del paso 2 y una sola llamada de conteo con los cutoffs de la
+   corrida;
 5. emite métricas y un registro estructurado de evidencia.
 
 El trabajo pendiente queda para el siguiente ciclo: una corrida nunca vacía la
@@ -143,17 +147,27 @@ job está deshabilitado o con qué modo e intervalo quedó programado.
 conteo. Para que la purga de mensajes muertos no pase inadvertida, cada lane
 hace antes de su primer lote un sondeo de solo `DEAD`: la misma función
 aprobada en dry-run con `p_processed_before='-infinity'` (ninguna fila
-`PROCESSED` puede calificar), `dead_before` de la corrida y el lote máximo de
-la lane (10 000 / 50 000). El resultado:
+`PROCESSED` puede calificar), `dead_before` de la corrida y como tope el
+`BatchSize` configurado de la lane. Así el sondeo no cuesta más que un lote y
+cabe en el mismo `CommandTimeoutSeconds`; usar el lote máximo (10 000 / 50 000)
+podría exceder el timeout con backlog y hacer fallar la lane en cada ciclo. El
+resultado:
 
-- queda en `DeadEligible` del evento 4004 y del reporte (`null` si la lane
-  falló antes del sondeo);
+- queda en `DeadEligible` del evento 4004 y del reporte;
 - alimenta el gauge `outbox.retention.dead_eligible` (último valor por lane);
 - en modo destructivo, si es mayor que cero, emite un `Warning` con `EventId`
   4005 (`OutboxRetentionDeadPurgePending`) con `Lane`, `DeadBefore`,
-  `DeadEligible` y `DeadEligibleBound` antes de borrar.
+  `DeadEligible` y `DeadEligibleBound` (= `BatchSize`) antes de borrar.
 
-Un valor igual al tope significa «al menos». El conteo no incluye los `DEAD`
+El sondeo es best-effort. Si falla (timeout, `22023`, error de conexión), se
+registra un `Error` con `EventId` 4006 (`OutboxRetentionDeadProbeFailed`) y su
+`ErrorClass`, `DeadEligible` queda en `null`, el gauge deja de publicar la serie
+de esa lane (no se reporta un valor viejo como actual) y la purga continúa. Si
+la causa también afecta a los lotes, la lane falla por ellos con su propio
+`ErrorClass`; el sondeo nunca la bloquea por sí solo. La cancelación del ciclo
+sí se propaga.
+
+Un valor igual al tope (`BatchSize`) significa «al menos». El conteo no incluye los `DEAD`
 más recientes que `dead_before`: la función rechaza cutoffs dentro de la
 ventana mínima y el Worker no tiene `SELECT` sobre el outbox. Alertar si el
 gauge es distinto de cero de forma sostenida y, si hace falta investigar,
@@ -238,7 +252,9 @@ claim/settle/requeue, y el job no transforma estados ni introduce semántica
 ## Pruebas
 
 - Unitarias (`Paqueteria.UnitTests/Operations`): validación, cutoffs, techo de
-  lotes, dry-run, margen de reloj, sondeo `DEAD` (evento 4005 y gauge),
+  lotes, dry-run, margen de reloj, sondeo `DEAD` acotado por `BatchSize`
+  (evento 4005, gauge y retiro de la serie), sondeo fallido que no bloquea la
+  purga (evento 4006),
   cancelación, aislamiento de lanes, evidencia, dimensiones de
   métricas, `OutboxRetentionJob` como `IScheduledJob` (un ciclo acotado por
   invocación) y delegación del host al `IJobScheduler` compartido.
@@ -248,7 +264,10 @@ claim/settle/requeue, y el job no transforma estados ni introduce semántica
 - Contratos PostgreSQL (`OutboxRetentionContractTests`, categoría
   `PostgreSqlContract`): propiedad y grants en catálogo, protección de estados
   activos, retención terminal, rechazo de mínimos, dry-run, techo, idempotencia,
-  independencia de lanes, sondeo `DEAD` sin mutación y retención mínima válida
-  con el reloj del Worker adelantado, y job alojado contra PostgreSQL real.
+  independencia de lanes, sondeo `DEAD` sin mutación y acotado por el lote,
+  sondeo fallido que no bloquea la purga, retención mínima válida con el reloj
+  del Worker adelantado, retención igual al mínimo normativo (sin margen)
+  rechazada por la validación y por PostgreSQL con `22023` con el reloj
+  adelantado, y job alojado contra PostgreSQL real.
 - Worker (`Ops004OutboxRetentionWorkerTests`): registro inerte por defecto y
   rechazo de configuración insegura al arrancar.
