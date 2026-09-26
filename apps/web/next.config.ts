@@ -1,4 +1,9 @@
 import type { NextConfig } from "next";
+import {
+  assertSameOriginApiForBff,
+  buildApiProxyRewrites,
+  parseApiProxyOrigin,
+} from "./src/lib/api-proxy";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 if (
@@ -8,6 +13,11 @@ if (
 ) {
   throw new Error("NEXT_PUBLIC_API_BASE_URL must use HTTPS in production.");
 }
+// AUTH-001: in BFF mode the browser reaches the API only through this origin.
+assertSameOriginApiForBff(process.env.NEXT_PUBLIC_AUTH_MODE, apiBaseUrl);
+const apiProxyRewrites = buildApiProxyRewrites(
+  parseApiProxyOrigin(process.env.PAQUETENVIA_API_PROXY_ORIGIN),
+);
 const supportUrl = process.env.NEXT_PUBLIC_TRACKING_SUPPORT_URL;
 if (supportUrl !== undefined) {
   const parsedSupportUrl = new URL(supportUrl);
@@ -70,6 +80,7 @@ const nextConfig: NextConfig = {
         source: "/track/:token",
         destination: "/track",
       },
+      ...apiProxyRewrites,
     ];
   },
   async headers() {

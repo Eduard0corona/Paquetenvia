@@ -15,9 +15,9 @@ exclusivamente:
 SELECT security.resolve_identity_context(@identity_subject);
 ```
 
-AuthCenter fue elegido en GATE-002, pero su issuer, audience, client ID, URLs y
-scopes no estan definidos en el repositorio. SEC-002 no inventa esos valores ni
-agrega conectividad OIDC real. Un adaptador futuro debera producir solo `sub` y
+AuthCenter fue elegido en GATE-002. AUTH-001 agrega la conectividad OIDC real
+(BFF) sin fijar valores en el repositorio: issuer, client ID, secreto y origen
+publico llegan por configuracion/secret store. Un adaptador futuro debera producir solo `sub` y
 `amr=mfa`; claims externos de roles, permisos, aplicaciones u organizaciones
 se ignoran para autorizacion tenant.
 
@@ -51,7 +51,8 @@ cross-organization ni seleccion de tenant activo (TEN-001 sigue pendiente).
 }
 ```
 
-`Authentication` admite `Disabled` y `Mock`. `IdentityBootstrap` admite
+`Authentication` admite `Disabled`, `Mock` y `AuthCenter` (AUTH-001, BFF con cookie
+`__Host-`; ver [auth-001-authcenter-bff.md](auth-001-authcenter-bff.md)). `IdentityBootstrap` admite
 `Disabled`, `Mock` y `PostgreSql`; `PublicTracking` admite `Disabled` y
 `PostgreSql`. Los mocks solo pueden iniciar en Development/Testing. PostgreSQL
 requiere `ConnectionStrings:Paqueteria`; la conexion real se inyecta por
@@ -82,7 +83,8 @@ tecnico fail-closed.
 - PostgreSQL o contrato JSON no disponible: 503.
 
 Las respuestas Problem Details no revelan credenciales, subject, estado interno,
-organizacion, connection string ni JSON. No se establecen cookies. Los probes
+organizacion, connection string ni JSON. Con `Mock` no se establecen cookies; con `AuthCenter` la única credencial del
+navegador es la cookie opaca de sesión BFF. Los probes
 de identidad y SignalR existen solo con environment exacto `Testing`, quedan
 fuera de OpenAPI y no son endpoints productivos.
 

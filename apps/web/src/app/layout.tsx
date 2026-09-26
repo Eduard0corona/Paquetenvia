@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
+import { BffSessionBootstrap } from "@/auth/components/bff-session-bootstrap";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
     <html lang="es-MX">
       <body>
         <ServiceWorkerRegistration />
+        <BffSessionBootstrap />
         {children}
       </body>
     </html>

@@ -27,6 +27,12 @@ public static class IdentityTestEndpoints
             .RequireAuthorization(IdentityPolicies.ActiveIdentity)
             .ExcludeFromDescription();
 
+        endpoints.MapPost(
+                "/__tests/security/write",
+                static () => Results.NoContent())
+            .RequireAuthorization(IdentityPolicies.ActiveIdentity)
+            .ExcludeFromDescription();
+
         endpoints.MapGet(
                 "/__tests/security/privileged",
                 static () => Results.NoContent())
