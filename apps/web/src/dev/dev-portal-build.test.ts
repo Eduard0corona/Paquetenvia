@@ -35,13 +35,4 @@ describe("development portal build exclusion", () => {
     expect(routeFiles).toEqual(["page.dev.tsx"]);
     expect(existsSync(join(directory, "page.tsx"))).toBe(false);
   });
-
-  it("fails the production build if the portal leaks into the bundle", () => {
-    const manifest = JSON.parse(
-      readFileSync(join(process.cwd(), "package.json"), "utf8"),
-    ) as { scripts: Record<string, string> };
-    expect(manifest.scripts.build).toBe(
-      "next build && node scripts/verify-production-bundle.mjs",
-    );
-  });
 });

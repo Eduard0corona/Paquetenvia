@@ -79,6 +79,38 @@ public sealed partial class WebSecurityHeadersTests(DriverStopsNextServerFixture
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    [Trait("Category", "DriverStopsPwa")]
+    public void Production_build_output_contains_no_dev_portal_code_or_credentials()
+    {
+        // The fixture built this .next with `next build` (production, no opt-in).
+        var build = Path.Combine(DriverStopsNextServer.FindRepositoryRoot(), "apps", "web", ".next");
+        Assert.True(Directory.Exists(build));
+        string[] markers = ["local-dispatcher-mfa", "Synthetic dispatcher (MFA)", "local-driver-session"];
+        var leaks = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(build, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(build, file);
+            if (relative.StartsWith("cache", StringComparison.Ordinal) ||
+                relative.StartsWith("dev", StringComparison.Ordinal) ||
+                new FileInfo(file).Length > 16 * 1024 * 1024)
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(file);
+            leaks.AddRange(markers
+                .Where(marker => text.Contains(marker, StringComparison.Ordinal))
+                .Select(marker => $"{relative}: {marker}"));
+        }
+
+        Assert.Empty(leaks);
+        Assert.DoesNotContain(
+            "\"/dev/page\"",
+            File.ReadAllText(Path.Combine(build, "server", "app-paths-manifest.json")),
+            StringComparison.Ordinal);
+    }
+
     [GeneratedRegex("'nonce-(?<nonce>[A-Za-z0-9+/=]+)'")]
     private static partial Regex NoncePattern();
 
