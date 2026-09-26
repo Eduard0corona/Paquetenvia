@@ -304,12 +304,33 @@ public sealed class FinanceImplementationContractTests
     ];
 
     /// <summary>
-    /// SET-001 Slice 1 is database integrity only, so its settlement ledger migration is the one place
-    /// in production code that may name the settlement tables. Later slices extend this list on purpose.
+    /// The only production code that may name the settlement tables: the Slice 1 ledger migration and the
+    /// Slice 2 settlement persistence. Later slices extend this list on purpose.
+    /// </summary>
+    private static readonly string[] Set001SettlementTableSources =
+    [
+        "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.Persistence.cs",
+    ];
+
+    /// <summary>
+    /// Every Finance source that may mention settlements at all: the ledger migration, the SET-001
+    /// domain, application, infrastructure and endpoint files, and the one composition line that
+    /// registers the settlement service. COD, Financials and every other FIN-001 source stay out.
     /// </summary>
     private static readonly string[] Set001SettlementSources =
     [
+        "src/Modules/Finance/Finance.Application/Settlements/SettlementContracts.cs",
+        "src/Modules/Finance/Finance.Application/Settlements/SettlementCsvWriter.cs",
+        "src/Modules/Finance/Finance.Domain/Settlements/SettlementModel.cs",
+        "src/Modules/Finance/Finance.Domain/Settlements/SettlementPeriod.cs",
+        "src/Modules/Finance/Finance.Domain/Settlements/SettlementSourcePolicy.cs",
+        "src/Modules/Finance/Finance.Endpoints/SettlementEndpoints.cs",
+        "src/Modules/Finance/Finance.Infrastructure/DependencyInjection.cs",
         "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/DisabledSettlementService.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.Persistence.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.cs",
     ];
 
     [Fact]
@@ -340,7 +361,7 @@ public sealed class FinanceImplementationContractTests
     }
 
     [Fact]
-    public void Settlement_persistence_is_owned_by_the_SET001_settlement_ledger_slice()
+    public void Settlement_persistence_is_owned_by_the_SET001_settlement_slices()
     {
         var production = Directory
             .GetFiles(Path.Combine(RepositoryPaths.Root, "src"), "*.cs", SearchOption.AllDirectories)
@@ -352,7 +373,7 @@ public sealed class FinanceImplementationContractTests
         // Every production reference to the settlement tables belongs to SET-001, and SET-001 references them.
         var settlementTables = new Regex(@"\bfinance\.settlement(s|_lines)\b", RegexOptions.IgnoreCase);
         Assert.Equal(
-            Set001SettlementSources,
+            Set001SettlementTableSources,
             production
                 .Where(path => settlementTables.IsMatch(File.ReadAllText(path)))
                 .Select(Relative)
