@@ -28,6 +28,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
@@ -55,7 +56,8 @@ jobs:
           TESTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [ -n "${PUSH_BEFORE_SHA}" ] && [ "${PUSH_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
+          if [ -n "${PUSH_BEFORE_SHA}" ] && [ "${PUSH_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${PUSH_BEFORE_SHA}^{commit}" 2>/dev/null; then
             range="${PUSH_BEFORE_SHA}..${TESTED_SHA}"
           else
             range="${TESTED_SHA}^..${TESTED_SHA}"
@@ -74,6 +76,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
