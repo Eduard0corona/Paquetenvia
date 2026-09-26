@@ -179,17 +179,6 @@ public sealed class IncidentPolicyTests
         Assert.Equal(allowed, IncidentOrderStatePolicy.IsAllowedOpeningState(orderStatus));
     }
 
-    [Theory]
-    [InlineData("AT_PICKUP", false)]
-    [InlineData("IN_TRANSIT", true)]
-    [InlineData("DELIVERING", true)]
-    public void Custody_is_derived_from_the_state_the_attempt_failed_in(
-        string orderStatus,
-        bool custodyAcquired)
-    {
-        Assert.Equal(custodyAcquired, IncidentOrderStatePolicy.DerivesCustodyAcquired(orderStatus));
-    }
-
     [Fact]
     public void An_attempt_reported_in_the_future_or_long_past_is_rejected()
     {
@@ -243,62 +232,54 @@ public sealed class IncidentPolicyTests
     // ------------------------------------------------------- RETURNING requires custody
 
     [Theory]
-    [InlineData("AT_PICKUP", true)]
-    [InlineData("IN_TRANSIT", true)]
-    [InlineData("DELIVERING", true)]
-    [InlineData("PICKED_UP", false)]
-    [InlineData("DRAFT", false)]
-    [InlineData(null, false)]
+    [InlineData("AT_PICKUP", false, true)]
+    [InlineData("AT_PICKUP", true, true)]
+    [InlineData("IN_TRANSIT", true, true)]
+    [InlineData("DELIVERING", true, true)]
+    [InlineData("PICKED_UP", true, false)]
+    [InlineData("DRAFT", false, false)]
+    [InlineData(null, false, false)]
     public void Rescheduling_is_available_from_every_state_an_incident_may_open_from(
         string? orderStatus,
+        bool custodyAcquired,
         bool allowed)
     {
         Assert.Equal(
             allowed,
-            IncidentOrderStatePolicy.IsAllowedNextAction(orderStatus, IncidentNextAction.Rescheduled));
+            IncidentOrderStatePolicy.IsAllowedNextAction(
+                orderStatus, custodyAcquired, IncidentNextAction.Rescheduled));
     }
 
     [Theory]
-    [InlineData("AT_PICKUP", false)]
-    [InlineData("IN_TRANSIT", true)]
-    [InlineData("DELIVERING", true)]
-    [InlineData("PICKED_UP", false)]
-    [InlineData("DRAFT", false)]
-    [InlineData(null, false)]
-    public void Returning_requires_a_state_that_had_already_acquired_custody(
+    [InlineData("AT_PICKUP", false, false)]
+    [InlineData("AT_PICKUP", true, true)]
+    [InlineData("IN_TRANSIT", true, true)]
+    [InlineData("IN_TRANSIT", false, false)]
+    [InlineData("DELIVERING", true, true)]
+    [InlineData("DELIVERING", false, false)]
+    [InlineData("PICKED_UP", true, false)]
+    [InlineData("DRAFT", true, false)]
+    [InlineData(null, true, false)]
+    public void Returning_requires_custody_from_the_picked_up_history(
         string? orderStatus,
+        bool custodyAcquired,
         bool allowed)
     {
         Assert.Equal(
             allowed,
-            IncidentOrderStatePolicy.IsAllowedNextAction(orderStatus, IncidentNextAction.Returning));
+            IncidentOrderStatePolicy.IsAllowedNextAction(
+                orderStatus, custodyAcquired, IncidentNextAction.Returning));
     }
 
     [Fact]
-    public void An_attempt_that_failed_at_pickup_can_be_rescheduled_but_never_returned()
+    public void An_attempt_that_failed_at_a_first_pickup_can_be_rescheduled_but_never_returned()
     {
-        // ORD-002 and ADR-014 only return what the operator already holds.
-        Assert.False(IncidentOrderStatePolicy.DerivesCustodyAcquired(IncidentOrderStatePolicy.AtPickup));
+        // ORD-002 and ADR-014 only return what the operator already holds. A pickup photo is not
+        // custody: without a PICKED_UP status change the parcel never left the pickup point.
         Assert.True(IncidentOrderStatePolicy.IsAllowedNextAction(
-            IncidentOrderStatePolicy.AtPickup, IncidentNextAction.Rescheduled));
+            IncidentOrderStatePolicy.AtPickup, false, IncidentNextAction.Rescheduled));
         Assert.False(IncidentOrderStatePolicy.IsAllowedNextAction(
-            IncidentOrderStatePolicy.AtPickup, IncidentNextAction.Returning));
-    }
-
-    [Fact]
-    public void Every_state_that_allows_returning_also_derives_custody_acquired()
-    {
-        foreach (var orderStatus in new[]
-                 {
-                     IncidentOrderStatePolicy.AtPickup,
-                     IncidentOrderStatePolicy.InTransit,
-                     IncidentOrderStatePolicy.Delivering,
-                 })
-        {
-            Assert.Equal(
-                IncidentOrderStatePolicy.DerivesCustodyAcquired(orderStatus),
-                IncidentOrderStatePolicy.IsAllowedNextAction(orderStatus, IncidentNextAction.Returning));
-        }
+            IncidentOrderStatePolicy.AtPickup, false, IncidentNextAction.Returning));
     }
 
     // ---------------------------------------------------- Operational MVP-1 parameters

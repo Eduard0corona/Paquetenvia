@@ -214,21 +214,30 @@ ORD-002 ya define:
 
 1. La incidencia se abre solo desde `AT_PICKUP`, `IN_TRANSIT` o `DELIVERING`, que son los estados
    desde los que ORD-002 permite alcanzar `FAILED_ATTEMPT`.
-2. `custody_acquired` se deriva del estado en que falló el intento: falso en `AT_PICKUP`,
-   verdadero en `IN_TRANSIT` y `DELIVERING`.
-3. La transición se solicita después con
+2. `custody_acquired` es la derivación única que comparten ORD-002 y la vista de paradas: existe
+   un `ORDER_STATUS_CHANGED` con `new_status = PICKED_UP` en el historial de la orden. Es falso en
+   la primera recolección y verdadero en `IN_TRANSIT`, `DELIVERING` y en una nueva recolección
+   posterior a un intento que ya había recogido el paquete.
+3. La orden se lee `FOR SHARE` dentro de la transacción de apertura: una transición ORD-002
+   concurrente (que bloquea la orden `FOR UPDATE`) termina antes o espera a que la incidencia se
+   confirme, y la apertura nunca decide sobre un estado ya reemplazado.
+4. La transición se solicita después con
    `POST /api/v1/orders/{orderId}/transitions`, `target_status = FAILED_ATTEMPT` y
    `metadata = {"incident_id": "..."}`.
-4. Los guards `attempt_stage_recorded` y `custody_acquired_recorded` de ORD-002 leen la incidencia
+5. Los guards `attempt_stage_recorded` y `custody_acquired_recorded` de ORD-002 leen la incidencia
    a través de `IOrderIncidentGuardReader` y rechazan la transición si no existe, no pertenece al
-   tenant o no está `OPEN`/`INVESTIGATING`.
-5. `no_unresolved_incident` sigue bloqueando `CLOSED` mientras la incidencia siga abierta.
+   tenant, no está `OPEN`/`INVESTIGATING`, se abrió antes de entrar al estado actual o ya justificó
+   otro `FAILED_ATTEMPT`: una incidencia justifica un solo intento fallido.
+6. `no_unresolved_incident` sigue bloqueando `CLOSED` mientras la incidencia siga abierta.
+7. Al salir de `FAILED_ATTEMPT`, ORD-002 respeta `next_action`: `RETURNING` solo permite
+   `RETURNING`; `RESCHEDULED` permite `RESCHEDULED` o el reintento `DELIVERING`.
+8. La evidencia de una incidencia nunca completa una recolección ni una entrega en ORD-002.
 
 `next_action` registra de forma explícita si el siguiente paso operativo es `RESCHEDULED` o
 `RETURNING`; ambos son sucesores válidos de `FAILED_ATTEMPT` en la matriz de ORD-002.
 
 `RETURNING` exige custodia adquirida. ORD-002 y ADR-014 solo devuelven lo que el operador ya tiene:
-un paquete que nunca salió del punto de recolección no puede devolverse. `AT_PICKUP` admite
+un paquete que nunca fue recogido no puede devolverse. Una primera recolección en `AT_PICKUP` admite
 `RESCHEDULED` pero nunca `RETURNING`, y la apertura se rechaza con `ORDER_STATE_NOT_ALLOWED` antes
 de persistir nada, en lugar de registrar una siguiente acción que la máquina de estados jamás
 podría honrar junto a un `custody_acquired = false`. La regla no agrega ni modifica ninguna arista

@@ -10,7 +10,8 @@ namespace Incidents.Infrastructure.Incidents;
 internal sealed record AuthorizedOrder(
     Guid OwnerOrganizationId,
     Guid? OperatorOrganizationId,
-    string Status);
+    string Status,
+    bool CustodyAcquired);
 
 internal sealed record ResolutionCapability(bool IsActiveDispatcher, bool IsActivePlatformAdmin);
 
@@ -39,7 +40,10 @@ internal static class IncidentsSql
     /// Resolves the order inside the active tenant transaction and answers whether the actor may
     /// open an incident on it. A dispatcher or an MFA-satisfied platform admin of the tenant may;
     /// a driver may only for an order they currently hold an active assignment for. The read is
-    /// cross-schema and strictly read-only.
+    /// cross-schema and never writes; the order row is held <c>FOR SHARE</c> until commit, so a
+    /// concurrent ORD-002 transition (which locks it <c>FOR UPDATE</c>) either commits first and is
+    /// seen here, or waits until the incident is committed. Custody is the single derivation
+    /// ORD-002 and the driver stops view share: a <c>PICKED_UP</c> status change in the history.
     /// </summary>
     internal static async Task<AuthorizedOrder?> ReadAuthorizedOrderAsync(
         DbContext context,
@@ -53,6 +57,11 @@ internal static class IncidentsSql
         await using var command = new NpgsqlCommand(
             """
             SELECT o.owner_org_id,o.operator_org_id,o.status,
+              EXISTS (
+                SELECT 1 FROM orders.order_events e
+                WHERE e.order_id=o.id AND e.owner_org_id=o.owner_org_id
+                  AND e.event_type='ORDER_STATUS_CHANGED' AND e.payload->>'new_status'='PICKED_UP'
+              ) AS custody_acquired,
               (
                 EXISTS (
                   SELECT 1
@@ -89,6 +98,7 @@ internal static class IncidentsSql
               ) AS authorized
             FROM orders.orders o
             WHERE o.id=@order
+            FOR SHARE OF o
             """,
             connection,
             transaction);
@@ -102,7 +112,7 @@ internal static class IncidentsSql
             return null;
         }
 
-        if (!reader.GetBoolean(3))
+        if (!reader.GetBoolean(4))
         {
             throw new IncidentForbiddenException();
         }
@@ -110,7 +120,8 @@ internal static class IncidentsSql
         return new AuthorizedOrder(
             reader.GetGuid(0),
             reader.IsDBNull(1) ? null : reader.GetGuid(1),
-            reader.GetString(2));
+            reader.GetString(2),
+            reader.GetBoolean(3));
     }
 
     /// <summary>

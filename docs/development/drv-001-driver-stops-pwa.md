@@ -116,7 +116,11 @@ schema es `1`. Cada registro contiene únicamente:
 La key es un SHA-256 base64url del namespace opaco y la organización. No contiene
 el token, el tenant en claro ni PII. Un 200 válido reemplaza atómicamente el
 snapshot completo, conserva el orden REST y elimina paradas que dejaron de
-estar asignadas.
+estar asignadas. El orden REST sigue la ruta del conductor (RTE-001): primero las
+asignaciones ligadas a una ruta, por ruta y `sequence` de la parada; después las
+no ruteadas, por antigüedad de la asignación. El tipo de parada usa la custodia
+única de ORD-002: un `PICKED_UP` en el historial de la orden; una foto de
+recolección usada como evidencia de incidencia no convierte la parada en entrega.
 
 Fallas de red, timeout o 5xx pueden leer sólo el último snapshot válido de la
 partición activa. Lista y detalle muestran el timestamp y el estado “Sin

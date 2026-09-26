@@ -294,7 +294,7 @@ public sealed class OrderTransitionDomainTests
     public void Guard_registry_has_unique_codes_and_deterministic_order()
     {
         var registry = new OrderTransitionGuardRegistry();
-        Assert.Equal(23, registry.Guards.Count);
+        Assert.Equal(24, registry.Guards.Count);
         Assert.Equal(
             registry.Guards.Select(guard => guard.Code).Distinct(StringComparer.Ordinal).Count(),
             registry.Guards.Count);
@@ -332,8 +332,72 @@ public sealed class OrderTransitionDomainTests
             CodExpectedCents = 0,
             MonetaryIntegrityValid = true,
             Metadata = NormalizedTransitionMetadata.Empty,
-            Proofs = new ProofGuardSnapshot(true, false),
+            Custody = new CustodyGuardSnapshot(true),
         };
+    }
+
+    [Fact]
+    public void A_pickup_photo_alone_is_never_custody()
+    {
+        var registry = new OrderTransitionGuardRegistry();
+        OrderTransitionGuardContext Context(bool pickedUp) => new()
+        {
+            Source = OrderStatus.FailedAttempt,
+            Target = OrderStatus.Returning,
+            Reason = "synthetic",
+            OccurredAt = Now,
+            ClaimWindowEndsAt = null,
+            FinalizedAt = null,
+            CodExpectedCents = 0,
+            MonetaryIntegrityValid = true,
+            Metadata = NormalizedTransitionMetadata.Empty,
+            Proofs = new ProofGuardSnapshot(true, true),
+            Incidents = new IncidentGuardSnapshot(true, true, true, true, "RETURNING"),
+            Custody = new CustodyGuardSnapshot(pickedUp),
+        };
+
+        Assert.False(Context(pickedUp: false).CustodyAcquired);
+        Assert.Equal("custody_acquired_true", registry.Evaluate(Context(pickedUp: false)).Code);
+        Assert.True(registry.Evaluate(Context(pickedUp: true)).Satisfied);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Returning, "RETURNING", true)]
+    [InlineData(OrderStatus.Returning, "RESCHEDULED", false)]
+    [InlineData(OrderStatus.Rescheduled, "RESCHEDULED", true)]
+    [InlineData(OrderStatus.Rescheduled, "RETURNING", false)]
+    [InlineData(OrderStatus.Delivering, "RESCHEDULED", true)]
+    [InlineData(OrderStatus.Delivering, "RETURNING", false)]
+    [InlineData(OrderStatus.Rescheduled, null, false)]
+    public void Leaving_a_failed_attempt_honours_the_incident_next_action(
+        OrderStatus target,
+        string? nextAction,
+        bool satisfied)
+    {
+        var registry = new OrderTransitionGuardRegistry();
+        var context = new OrderTransitionGuardContext
+        {
+            Source = OrderStatus.FailedAttempt,
+            Target = target,
+            Reason = "synthetic",
+            OccurredAt = Now,
+            ClaimWindowEndsAt = null,
+            FinalizedAt = null,
+            CodExpectedCents = 0,
+            MonetaryIntegrityValid = true,
+            Metadata = NormalizedTransitionMetadata.Empty,
+            Custody = new CustodyGuardSnapshot(true),
+            Assignment = new AssignmentGuardSnapshot(true, true, true, true),
+            Incidents = new IncidentGuardSnapshot(false, false, false, true, nextAction),
+        };
+
+        var result = registry.Evaluate(context);
+
+        Assert.Equal(satisfied, result.Satisfied);
+        if (!satisfied)
+        {
+            Assert.Equal("failed_attempt_next_action_respected", result.Code);
+        }
     }
 
     [Fact]

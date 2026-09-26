@@ -61,6 +61,7 @@ public sealed class PostgreSqlOrderTransitionService(
     IOrderQuoteAcceptanceGuardReader quoteAcceptanceReader,
     IOrderAssignmentGuardReader assignmentReader,
     IOrderProofGuardReader proofReader,
+    IOrderCustodyGuardReader custodyReader,
     IOrderIncidentGuardReader incidentReader,
     IOrderCodGuardReader codReader,
     IOrderTransitionAuthorizer authorizer,
@@ -287,20 +288,25 @@ public sealed class PostgreSqlOrderTransitionService(
                 command.OrganizationId,
                 command.OrderId,
                 order.CityId,
+                occurredAt,
                 cancellationToken);
         }
 
-        var needsCustody = target is OrderStatus.PickedUp or OrderStatus.Delivered or OrderStatus.Returning ||
-            (target == OrderStatus.Cancelled && source == OrderStatus.AtPickup) ||
-            (target == OrderStatus.Delivering && source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled);
-        var proofs = needsCustody
+        var proofs = target is OrderStatus.PickedUp or OrderStatus.Delivered
             ? await proofReader.ReadAsync(
                 connection, transaction, command.OrganizationId, command.OrderId, cancellationToken)
             : new ProofGuardSnapshot(false, false);
 
-        var needsIncidents = target is OrderStatus.FailedAttempt or OrderStatus.Returning or OrderStatus.Closed ||
+        var needsCustody = target == OrderStatus.Returning ||
             (target == OrderStatus.Cancelled && source == OrderStatus.AtPickup) ||
             (target == OrderStatus.Delivering && source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled);
+        var custody = needsCustody
+            ? await custodyReader.ReadAsync(
+                connection, transaction, command.OrganizationId, command.OrderId, cancellationToken)
+            : new CustodyGuardSnapshot(false);
+
+        var needsIncidents = target is OrderStatus.FailedAttempt or OrderStatus.Closed ||
+            source == OrderStatus.FailedAttempt;
         var incidents = needsIncidents
             ? await incidentReader.ReadAsync(
                 connection,
@@ -330,6 +336,7 @@ public sealed class PostgreSqlOrderTransitionService(
             QuoteAcceptance = quoteAcceptance,
             Assignment = assignment,
             Proofs = proofs,
+            Custody = custody,
             Incidents = incidents,
             Cod = cod,
         };
@@ -855,7 +862,7 @@ public sealed class PostgreSqlOrderTransitionService(
             JOIN drivers.driver_profiles p
               ON p.id=a.driver_id
              AND p.org_id=a.owner_org_id
-             AND p.driver_type='OWN'
+             AND p.driver_type=a.assignment_type
              AND p.status='ACTIVE'
             JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
             JOIN organizations.organization_memberships m
@@ -865,6 +872,7 @@ public sealed class PostgreSqlOrderTransitionService(
              AND m.status='ACTIVE'
             WHERE a.order_id=@order
               AND a.owner_org_id=@owner
+              AND a.assignment_type IN ('OWN','EXTERNAL')
               AND a.status IN ('ACCEPTED','ACTIVE')
             """);
         command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));

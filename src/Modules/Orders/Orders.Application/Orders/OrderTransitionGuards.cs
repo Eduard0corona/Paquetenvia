@@ -18,11 +18,13 @@ public sealed class OrderTransitionGuardContext
     public ProofGuardSnapshot Proofs { get; init; } = new(false, false);
     public IncidentGuardSnapshot Incidents { get; init; } = new(false, false, false, false);
     public CodGuardSnapshot Cod { get; init; } = new(false, null, null);
+    public CustodyGuardSnapshot Custody { get; init; } = new(false);
 
-    public bool CustodyAcquired =>
-        Proofs.PickupProofComplete ||
-        Incidents.AnyCustodyAcquired ||
-        Incidents.RequestedIncidentCustodyAcquired;
+    /// <summary>
+    /// Custody comes only from the <c>PICKED_UP</c> history. A pickup photo is evidence of an
+    /// attempt, not custody: an incident at pickup must carry one while the parcel never left.
+    /// </summary>
+    public bool CustodyAcquired => Custody.PickedUpRecorded;
 }
 
 public sealed record OrderTransitionGuardResult(bool Satisfied, string Code)
@@ -93,6 +95,8 @@ public sealed class OrderTransitionGuardRegistry
         static bool RetryDelivery(OrderTransitionGuardContext c) =>
             c.Target == OrderStatus.Delivering &&
             c.Source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled;
+        static bool LeaveFailedAttempt(OrderTransitionGuardContext c) =>
+            c.Source == OrderStatus.FailedAttempt;
 
         return
         [
@@ -136,6 +140,14 @@ public sealed class OrderTransitionGuardRegistry
             Guard(210, "retry_custody_acquired_true", RetryDelivery, c => c.CustodyAcquired),
             Guard(220, "retry_valid_assignment", RetryDelivery,
                 c => c.Assignment.ExactlyOneActive && c.Assignment.EligibleDriver),
+            Guard(230, "failed_attempt_next_action_respected", LeaveFailedAttempt,
+                c => c.Target switch
+                {
+                    OrderStatus.Returning => c.Incidents.LatestFailedAttemptNextAction == "RETURNING",
+                    OrderStatus.Rescheduled or OrderStatus.Delivering =>
+                        c.Incidents.LatestFailedAttemptNextAction == "RESCHEDULED",
+                    _ => false,
+                }),
         ];
     }
 

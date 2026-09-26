@@ -100,29 +100,31 @@ public sealed class PostgreSqlDriverStopsQuery(
         Guid organizationId,
         CancellationToken cancellationToken)
     {
+        // Custody is the single derivation ORD-002 and INC-001 share: a PICKED_UP status change
+        // in the order history. A pickup photo is not custody: an incident at pickup carries one.
+        // Stops follow the driver's route: routed assignments first, by route and stop sequence;
+        // unrouted assignments keep their assignment order after them.
         const string sql =
             """
             SELECT o.id,o.version,o.public_id,o.status,origin.address_summary,destination.address_summary,
-                   (
-                     EXISTS (
-                       SELECT 1 FROM custody.proofs p
-                       WHERE p.order_id=o.id AND p.proof_type='PICKUP_PHOTO'
-                     )
-                     OR EXISTS (
-                       SELECT 1 FROM incidents.incidents i
-                       WHERE i.order_id=o.id AND i.custody_acquired=true
-                     )
-                     OR EXISTS (
-                       SELECT 1 FROM orders.order_events e
-                       WHERE e.order_id=o.id
-                         AND e.event_type='ORDER_STATUS_CHANGED'
-                         AND e.payload->>'new_status' IN ('PICKED_UP','IN_TRANSIT','DELIVERING')
-                     )
+                   EXISTS (
+                     SELECT 1 FROM orders.order_events e
+                     WHERE e.order_id=o.id AND e.owner_org_id=o.owner_org_id
+                       AND e.event_type='ORDER_STATUS_CHANGED' AND e.payload->>'new_status'='PICKED_UP'
                    ) AS custody_acquired
             FROM dispatch.assignments a
             JOIN orders.orders o ON o.id=a.order_id
             JOIN locations.locations origin ON origin.id=o.origin_location_id
             JOIN locations.locations destination ON destination.id=o.destination_location_id
+            LEFT JOIN routes.routes r
+              ON r.id=a.route_id
+             AND r.driver_id=a.driver_id
+             AND r.status IN ('DRAFT','PLANNED','ACTIVE')
+            LEFT JOIN LATERAL (
+              SELECT min(s.sequence) AS sequence
+              FROM routes.route_stops s
+              WHERE s.route_id=r.id AND s.order_id=o.id
+            ) stop ON true
             WHERE a.driver_id=@driver_id
               AND (a.owner_org_id=@organization_id OR a.operator_org_id=@organization_id)
               AND a.status IN ('ACCEPTED','ACTIVE')
@@ -130,7 +132,10 @@ public sealed class PostgreSqlDriverStopsQuery(
                 'ASSIGNED','AT_PICKUP','PICKED_UP','IN_TRANSIT','DELIVERING',
                 'FAILED_ATTEMPT','RESCHEDULED','RETURNING'
               )
-            ORDER BY a.created_at ASC,a.id ASC
+            ORDER BY (stop.sequence IS NULL) ASC,
+                     r.scheduled_for ASC NULLS LAST,r.created_at ASC,r.id ASC,
+                     stop.sequence ASC,
+                     a.created_at ASC,a.id ASC
             """;
         var stops = new List<DriverStopResult>();
         await using var command = new NpgsqlCommand(sql, connection, transaction);

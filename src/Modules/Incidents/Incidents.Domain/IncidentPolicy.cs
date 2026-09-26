@@ -196,23 +196,20 @@ public static class IncidentOrderStatePolicy
         orderStatus is AtPickup or InTransit or Delivering;
 
     /// <summary>
-    /// Custody is already acquired once the parcel has left the pickup point. An attempt that
-    /// fails at pickup never acquired custody, which is what ORD-002 reads back to decide
-    /// whether <c>RETURNING</c> and re-delivery are reachable.
+    /// ORD-002 and ADR-014 only return what the operator already holds: a parcel that was never
+    /// picked up cannot be returned, so <c>RETURNING</c> is reachable exactly when custody was
+    /// acquired. Custody is not derived from the order status here: it is the single derivation
+    /// ORD-002 and the driver stops view share, a <c>PICKED_UP</c> status change in the order
+    /// history, which the caller reads. <c>RESCHEDULED</c> stays available from every opening
+    /// state. The incident is refused before persistence rather than recorded with a next action
+    /// the state machine could never honour.
     /// </summary>
-    public static bool DerivesCustodyAcquired(string orderStatus) =>
-        orderStatus is InTransit or Delivering;
-
-    /// <summary>
-    /// ORD-002 and ADR-014 only return what the operator already holds: a parcel that never left
-    /// the pickup point cannot be returned, so <c>RETURNING</c> is reachable exactly when the
-    /// attempt failed in a state that had already acquired custody. <c>RESCHEDULED</c> stays
-    /// available from every opening state. The incident is refused before persistence rather
-    /// than recorded with a next action the state machine could never honour.
-    /// </summary>
-    public static bool IsAllowedNextAction(string? orderStatus, IncidentNextAction nextAction) =>
+    public static bool IsAllowedNextAction(
+        string? orderStatus,
+        bool custodyAcquired,
+        IncidentNextAction nextAction) =>
         IsAllowedOpeningState(orderStatus) &&
-        (nextAction is not IncidentNextAction.Returning || DerivesCustodyAcquired(orderStatus!));
+        (nextAction is not IncidentNextAction.Returning || custodyAcquired);
 }
 
 /// <summary>

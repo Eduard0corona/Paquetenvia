@@ -102,11 +102,14 @@ public sealed partial class PostgreSqlIncidentService(
                         return replay;
                     }
 
-                    // AT_PICKUP may still be rescheduled, but nothing can be returned before
-                    // custody was acquired: ORD-002 and ADR-014 own that precondition, so INC-001
-                    // refuses an opening whose next action the state machine could never honour
-                    // instead of persisting it and deriving custody_acquired=false beside it.
-                    if (!IncidentOrderStatePolicy.IsAllowedNextAction(order.Status, nextAction))
+                    // Nothing can be returned before custody was acquired: ORD-002 and ADR-014
+                    // own that precondition, so INC-001 refuses an opening whose next action the
+                    // state machine could never honour instead of persisting it beside
+                    // custody_acquired=false.
+                    if (!IncidentOrderStatePolicy.IsAllowedNextAction(
+                            order.Status,
+                            order.CustodyAcquired,
+                            nextAction))
                     {
                         throw new IncidentConflictException("ORDER_STATE_NOT_ALLOWED");
                     }
@@ -131,7 +134,7 @@ public sealed partial class PostgreSqlIncidentService(
                         command.IncidentType,
                         command.ReasonCode,
                         command.NextAction,
-                        IncidentOrderStatePolicy.DerivesCustodyAcquired(order.Status),
+                        order.CustodyAcquired,
                         occurredAt,
                         slaDueAt,
                         command.EvidenceProofIds);
