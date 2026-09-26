@@ -256,10 +256,12 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
         var service = CreateService();
         var created = await service.CreateAsync(scenario.Create("create"), default);
 
-        // No collection at all, then a recorded but unreconciled one.
+        // No collection at all, then a recorded but unreconciled one, then one reconciled for less than expected.
         await AssertBlockedAsync(service, scenario, created.Id, "no-cod", SettlementConflictCode.CashPending);
         await scenario.SetCodAsync(cod.OrderId, 5_000, "RECORDED");
         await AssertBlockedAsync(service, scenario, created.Id, "recorded", SettlementConflictCode.CashPending);
+        await scenario.SetCodAsync(cod.OrderId, 4_000, "RECONCILED");
+        await AssertBlockedAsync(service, scenario, created.Id, "reconciled-short", SettlementConflictCode.CashPending);
 
         await scenario.SetCodAsync(cod.OrderId, 5_000, "RECONCILED");
         var approved = await service.ApproveAsync(scenario.Transition(created.Id, "reconciled"), default);

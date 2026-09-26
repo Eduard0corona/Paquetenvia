@@ -188,6 +188,7 @@ public sealed class SettlementPolicyTests
     [InlineData(CodStatus.Disputed, 5_000L)]
     [InlineData(CodStatus.Reversed, 5_000L)]
     [InlineData(CodStatus.Reconciled, 4_999L)]
+    [InlineData(CodStatus.Reconciled, 5_001L)]
     public void A_delivery_whose_cash_is_not_reconciled_is_cash_pending(CodStatus? status, long? amount) =>
         Assert.Equal(
             SettlementApprovalBlocker.CashPending,
