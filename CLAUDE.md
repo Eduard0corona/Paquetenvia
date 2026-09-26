@@ -15,7 +15,7 @@ y tracking público seguro. Este archivo resume; la autoridad son los contratos 
   y `MANIFEST.json` (`python3 docs/normative/v0.6/tools/validate_contracts.py` → `VALIDATION_OK`).
 - Notas de implementación por tarea: `docs/development/`; CI y ramas: `docs/development/branching-and-ci.md`.
 
-## Invariantes v0.6 que la revisión debe verificar (AI-01 §4)
+## Invariantes v0.6 que la revisión debe verificar (resumen parcial de AI-01 §4; verificar la lista completa allí)
 
 1. Toda consulta tenant corre dentro de una transacción explícita; `set_config(..., true)` después
    de `BEGIN`; `current_org_ids` es parámetro `uuid[]` (`{}` vacío, nunca `NULL`).
@@ -34,8 +34,14 @@ y tracking público seguro. Este archivo resume; la autoridad son los contratos 
 8. `pgcrypto` como `extensions.*`; PostGIS en `public`, sin `CREATE` en runtime.
 9. Migraciones por módulo con up/down probados en PostgreSQL real; nada de NestJS, BullMQ,
    microservicios ni Kubernetes sin ADR.
+10. Bootstrap jamás escribe; el provisioning genera UUIDs y los preautoriza solo en la transacción.
+11. Hash de tracking = SHA-256 de los bytes UTF-8 exactos del token Base64URL sin padding; C# falla
+    ruidosamente ante un estado público sin mapear y SQL falla cerrado.
+12. Evidencia legal de aceptación = `OrderAcceptanceCanonicalForm v1` (sin JCS).
+13. La API no recibe POD multipart (solo carga prefirmada); GPS en lote de 1 a 20, lane
+    independiente y `UNIQUE(driver_position_id)` sin FK.
 
-Severidad de hallazgos (AI-01 §7): `BLOCKER` seguridad, dinero, legal, privacidad, aislamiento o
+Severidad de hallazgos (clasificación tomada de AI-01 §7, "Ambigüedad"): `BLOCKER` seguridad, dinero, legal, privacidad, aislamiento o
 cobertura; `MAJOR` cambio reversible de experiencia/operación (requiere ADR); `MINOR` convención.
 
 ## Pull requests
