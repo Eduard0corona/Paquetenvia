@@ -145,7 +145,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     internal static Task<DriverStopsNextServer> StartAsync(
         string? apiBaseUrl = null,
         int? requestedPort = null) =>
-        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort);
+        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort, connectSources: null);
 
     /// <summary>
     /// Builds the deployable artifact and serves it with <c>next start</c>.
@@ -153,15 +153,22 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     /// navigation, caching and CSP, which are contracts of the deployable
     /// artifact rather than of the development runtime.
     /// </summary>
+    /// <param name="connectSources">
+    /// Extra exact origins for the runtime CSP <c>connect-src</c>
+    /// (<c>PAQUETERIA_CSP_CONNECT_SOURCES</c>), such as the signed-upload
+    /// storage origin, exactly as a deployment configures them.
+    /// </param>
     internal static Task<DriverStopsNextServer> StartProductionAsync(
         string apiBaseUrl,
-        int? requestedPort = null) =>
-        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort);
+        int? requestedPort = null,
+        string? connectSources = null) =>
+        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort, connectSources);
 
     private static async Task<DriverStopsNextServer> StartCoreAsync(
         NextRuntime runtime,
         string? apiBaseUrl,
-        int? requestedPort)
+        int? requestedPort,
+        string? connectSources)
     {
         await ServerGate.WaitAsync();
         FileStream? crossProcessLease = null;
@@ -172,6 +179,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                 runtime,
                 apiBaseUrl,
                 requestedPort,
+                connectSources,
                 crossProcessLease);
         }
         catch
@@ -186,6 +194,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         NextRuntime runtime,
         string? apiBaseUrl,
         int? requestedPort,
+        string? connectSources,
         FileStream crossProcessLease)
     {
         var root = FindRepositoryRoot();
@@ -219,6 +228,10 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         {
             process.StartInfo.Environment["NEXT_PUBLIC_API_BASE_URL"] =
                 apiBaseUrl.TrimEnd('/');
+        }
+        if (!string.IsNullOrWhiteSpace(connectSources))
+        {
+            process.StartInfo.Environment["PAQUETERIA_CSP_CONNECT_SOURCES"] = connectSources;
         }
         process.OutputDataReceived += (_, args) =>
         {
@@ -388,6 +401,13 @@ public sealed class DriverStopsNextServerFixture : IAsyncLifetime
     /// </summary>
     internal const string TestApiOrigin = "https://driver-api.paquetenvia.test";
 
+    /// <summary>
+    /// Reserved synthetic signed-upload origin that the offline suites fulfil
+    /// in the browser. The driver CSP must list it in <c>connect-src</c>, as a
+    /// deployment lists its object-storage origin.
+    /// </summary>
+    internal const string TestStorageOrigin = "https://storage.synthetic.test";
+
     private DriverStopsNextServer? _server;
 
     internal Uri BaseAddress =>
@@ -395,7 +415,9 @@ public sealed class DriverStopsNextServerFixture : IAsyncLifetime
         ?? throw new InvalidOperationException("Next.js is not running.");
 
     public async Task InitializeAsync() =>
-        _server = await DriverStopsNextServer.StartProductionAsync(TestApiOrigin);
+        _server = await DriverStopsNextServer.StartProductionAsync(
+            TestApiOrigin,
+            connectSources: TestStorageOrigin);
 
     public async Task DisposeAsync()
     {

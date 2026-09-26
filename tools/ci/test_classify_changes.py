@@ -151,7 +151,7 @@ class ImpactModelTests(unittest.TestCase):
         self.assertNotIn("dotnet", jobs(plan))
 
     def test_web_dev_portal(self):
-        plan = classify(["apps/web/src/dev/dev-portal-policy.ts", "apps/web/src/app/dev/page.tsx"])
+        plan = classify(["apps/web/src/dev/dev-portal-policy.ts", "apps/web/src/app/dev/page.dev.tsx"])
         self.assertEqual({"secret-scan", "web", "dotnet", "azr-static"}, jobs(plan))
 
     def test_web_shared(self):
