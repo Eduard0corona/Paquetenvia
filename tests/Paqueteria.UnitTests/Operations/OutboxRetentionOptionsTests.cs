@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
+using Paqueteria.Infrastructure.Scheduling;
 
 namespace Paqueteria.UnitTests.Operations;
 
@@ -119,17 +120,18 @@ public sealed class OutboxRetentionOptionsTests
         var options = new OutboxRetentionOptions
         {
             PollInterval = TimeSpan.FromSeconds(59),
-            InitialDelay = TimeSpan.FromSeconds(-1),
             CommandTimeoutSeconds = 0,
         };
 
         var errors = OutboxRetentionOptionsValidator.Errors(options);
-        Assert.Equal(3, errors.Count);
+        Assert.Equal(2, errors.Count);
         Assert.Contains(errors, error => error.Contains("PollInterval", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("InitialDelay", StringComparison.Ordinal));
         Assert.Contains(errors, error => error.Contains("CommandTimeoutSeconds", StringComparison.Ordinal));
 
-        options.PollInterval = TimeSpan.FromDays(1) + TimeSpan.FromSeconds(1);
+        // The ceiling is the shared scheduler's, so a valid interval can never be rejected by it.
+        options.PollInterval = PeriodicJobScheduler.MaximumInterval;
+        Assert.DoesNotContain(OutboxRetentionOptionsValidator.Errors(options), error => error.Contains("PollInterval", StringComparison.Ordinal));
+        options.PollInterval = PeriodicJobScheduler.MaximumInterval + TimeSpan.FromSeconds(1);
         Assert.Contains(OutboxRetentionOptionsValidator.Errors(options), error => error.Contains("PollInterval", StringComparison.Ordinal));
     }
 

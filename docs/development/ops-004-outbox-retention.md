@@ -10,7 +10,10 @@ forma directa y nunca cambia el estado de un mensaje.
 ## Componentes
 
 - `Paqueteria.Infrastructure/Database/Outbox/Retention`: opciones y validación,
-  gateway PostgreSQL, servicio de ciclo, telemetría y `BackgroundService`.
+  gateway PostgreSQL, servicio de ciclo, telemetría, `OutboxRetentionJob`
+  (`IScheduledJob`) y un `BackgroundService` que solo entrega el job al
+  `IJobScheduler` compartido (ADR-034, `PeriodicJobScheduler`). OPS-004 no tiene
+  un planificador propio.
 - `Paqueteria.Worker`: una línea de registro, `AddOutboxRetention(...)`, y la
   sección `OutboxRetention` de `appsettings.json`.
 
@@ -20,8 +23,7 @@ forma directa y nunca cambia el estado de un mensaje.
 | --- | --- | --- |
 | `OutboxRetention:Enabled` | `false` | — |
 | `OutboxRetention:DryRun` | `true` | — |
-| `OutboxRetention:PollInterval` | `00:15:00` | 1 min – 1 día |
-| `OutboxRetention:InitialDelay` | `00:01:00` | 0 – 1 h |
+| `OutboxRetention:PollInterval` | `00:15:00` | 1 min – 1 h (máximo de `PeriodicJobScheduler`) |
 | `OutboxRetention:CommandTimeoutSeconds` | `30` | 1 – 300 |
 | `Business:ProcessedRetention` | `7.00:00:00` | ≥ 1 día |
 | `Business:DeadRetention` | `30.00:00:00` | ≥ 7 días |
@@ -71,6 +73,13 @@ tabla completa. La cancelación se atiende entre lotes. Un lote interrumpido
 hace rollback completo. Un fallo se registra y se reintenta en el siguiente
 `PollInterval`; nunca detiene el Worker.
 
+El `IJobScheduler` compartido es dueño del tiempo, la repetición y la
+cancelación: ejecuta el primer ciclo al arrancar el Worker y luego uno por
+`PollInterval`. Cada invocación del job es exactamente un ciclo acotado sobre
+ambos lanes. Un ciclo que falla fuera de los lanes queda registrado por el
+scheduler (`Scheduled job outbox.retention ... CYCLE_FAILURE`) y se reintenta en
+el siguiente intervalo.
+
 Cada réplica del Worker ejecuta su propio ciclo. La purga concurrente es segura
 porque cada fila elegible se borra una sola vez (contrato ARC-002 de dos
 conexiones). El trabajo máximo por intervalo es réplicas × `BatchSize` ×
@@ -79,7 +88,7 @@ conexiones). El trabajo máximo por intervalo es réplicas × `BatchSize` ×
 ## Procedimiento dry-run
 
 1. Configurar `OutboxRetention__Enabled=true` y `OutboxRetention__DryRun=true`.
-2. Reiniciar o desplegar el Worker. El primer ciclo corre tras `InitialDelay`.
+2. Reiniciar o desplegar el Worker. El primer ciclo corre al arrancar.
 3. Revisar el evento `OutboxRetentionLaneCompleted` de cada lane:
    `affected_rows` es el conteo elegible, acotado por `BatchSize`, y
    `exhausted=true` indica que no hay más candidatos con esos cutoffs.
@@ -126,8 +135,8 @@ solo los borrados y seguir observando, basta con `OutboxRetention__DryRun=true`.
 
 ## Ejecutar un ciclo acotado
 
-Configurar `Enabled=true`, el `DryRun` deseado y `InitialDelay=00:00:00`, y
-reiniciar una réplica del Worker. El primer ciclo corre de inmediato y respeta
+Configurar `Enabled=true` y el `DryRun` deseado, y reiniciar una réplica del
+Worker. El primer ciclo corre de inmediato y respeta
 `MaxBatchesPerRun`; el siguiente corre tras `PollInterval`. Después se vuelve
 a la configuración previa.
 
@@ -168,7 +177,11 @@ claim/settle/requeue, y el job no transforma estados ni introduce semántica
 
 - Unitarias (`Paqueteria.UnitTests/Operations`): validación, cutoffs, techo de
   lotes, dry-run, cancelación, aislamiento de lanes, evidencia, dimensiones de
-  métricas y ciclo del `BackgroundService`.
+  métricas, `OutboxRetentionJob` como `IScheduledJob` (un ciclo acotado por
+  invocación) y delegación del host al `IJobScheduler` compartido.
+- Integración (`Paqueteria.IntegrationTests/Operations`): composición del Worker,
+  arranque fail-closed y coexistencia con el job de LIF-001 sobre un solo
+  `IJobScheduler`.
 - Contratos PostgreSQL (`OutboxRetentionContractTests`, categoría
   `PostgreSqlContract`): propiedad y grants en catálogo, protección de estados
   activos, retención terminal, rechazo de mínimos, dry-run, techo, idempotencia,

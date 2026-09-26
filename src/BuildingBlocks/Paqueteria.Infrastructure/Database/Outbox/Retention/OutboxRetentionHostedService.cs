@@ -1,58 +1,34 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Paqueteria.Application.Scheduling;
 
 namespace Paqueteria.Infrastructure.Database.Outbox.Retention;
 
 /// <summary>
-/// Schedules one bounded retention cycle every <c>OutboxRetention:PollInterval</c>. A failed
-/// cycle is reported and simply retried on the next schedule; it never stops the Worker.
+/// ADR-034 Worker host for OPS-004: it hands <see cref="OutboxRetentionJob"/> to the shared
+/// <see cref="IJobScheduler"/> and never schedules anything unless enabled. A failed cycle is
+/// retried on the next interval by the scheduler; it never stops the Worker.
 /// </summary>
 internal sealed class OutboxRetentionHostedService(
-    OutboxRetentionService service,
+    IJobScheduler scheduler,
+    OutboxRetentionJob job,
     IOptions<OutboxRetentionOptions> options,
-    TimeProvider timeProvider,
     ILogger<OutboxRetentionHostedService> logger) : BackgroundService
 {
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var settings = options.Value;
         if (!settings.Enabled)
         {
             logger.LogInformation("Outbox retention is disabled; no purge function will be called.");
-            return;
+            return Task.CompletedTask;
         }
 
         logger.LogInformation(
-            "Outbox retention scheduled with dry_run={DryRun} poll_interval={PollInterval} initial_delay={InitialDelay}.",
+            "Outbox retention scheduled with dry_run={DryRun} poll_interval={PollInterval}.",
             settings.DryRun,
-            settings.PollInterval,
-            settings.InitialDelay);
-        try
-        {
-            await Task.Delay(settings.InitialDelay, timeProvider, stoppingToken);
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                try
-                {
-                    await service.RunOnceAsync(stoppingToken);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception)
-                {
-                    // Lane failures are isolated and reported by the service; this only guards
-                    // the schedule so an unexpected fault cannot stop the host.
-                    logger.LogError("Outbox retention cycle failed with outcome {Outcome}.", "CYCLE_FAILURE");
-                }
-
-                await Task.Delay(settings.PollInterval, timeProvider, stoppingToken);
-            }
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-        }
+            settings.PollInterval);
+        return scheduler.RunAsync(job, stoppingToken);
     }
 }

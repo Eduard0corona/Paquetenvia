@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
 
 namespace Paqueteria.UnitTests.Operations;
@@ -23,6 +24,21 @@ internal sealed class RecordingPurgeGateway(
 
     public IReadOnlyList<OutboxPurgeRequest> For(OutboxRetentionLane lane) =>
         Requests.Where(request => request.Lane == lane).ToArray();
+}
+
+/// <summary>Records what the host hands to <see cref="IJobScheduler"/> and returns at once.</summary>
+internal sealed class RecordingJobScheduler : IJobScheduler
+{
+    public ConcurrentQueue<IScheduledJob> Jobs { get; } = new();
+
+    public ConcurrentQueue<CancellationToken> Tokens { get; } = new();
+
+    public Task RunAsync(IScheduledJob job, CancellationToken cancellationToken)
+    {
+        Jobs.Enqueue(job);
+        Tokens.Enqueue(cancellationToken);
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

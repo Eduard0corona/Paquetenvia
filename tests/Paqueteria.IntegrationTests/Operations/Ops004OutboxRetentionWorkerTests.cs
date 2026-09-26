@@ -36,7 +36,7 @@ public sealed class Ops004OutboxRetentionWorkerTests
         Assert.Equal(5_000, options.Location.BatchSize);
         Assert.Equal(10, options.Location.MaxBatchesPerRun);
         Assert.Empty(OutboxRetentionOptionsValidator.Errors(options));
-        Assert.Contains(
+        Assert.Single(
             worker.Services.GetServices<IHostedService>(),
             service => service.GetType().Name == "OutboxRetentionHostedService");
 
@@ -52,6 +52,7 @@ public sealed class Ops004OutboxRetentionWorkerTests
     [InlineData("OutboxRetention:Location:BatchSize", "50001")]
     [InlineData("OutboxRetention:Business:MaxBatchesPerRun", "0")]
     [InlineData("OutboxRetention:PollInterval", "00:00:05")]
+    [InlineData("OutboxRetention:PollInterval", "01:00:01")]
     public async Task Worker_refuses_to_start_with_unsafe_retention_configuration(string key, string value)
     {
         await using var worker = new RetentionWorkerFactory(new() { [key] = value });

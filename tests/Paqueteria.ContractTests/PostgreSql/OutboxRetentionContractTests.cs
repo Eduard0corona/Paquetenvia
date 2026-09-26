@@ -5,6 +5,7 @@ using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
+using Paqueteria.Infrastructure.Scheduling;
 
 namespace Paqueteria.ContractTests.PostgreSql;
 
@@ -632,7 +633,6 @@ public sealed class OutboxRetentionContractTests(PostgreSqlContractFixture fixtu
     {
         Enabled = true,
         DryRun = dryRun,
-        InitialDelay = TimeSpan.Zero,
         PollInterval = TimeSpan.FromMinutes(1),
         Business = new()
         {
@@ -886,9 +886,9 @@ public sealed class OutboxRetentionContractTests(PostgreSqlContractFixture fixtu
         {
             Logger.ResetCycle();
             using var job = new OutboxRetentionHostedService(
-                Service,
+                new PeriodicJobScheduler(_time, new CapturingLogger<PeriodicJobScheduler>()),
+                new OutboxRetentionJob(Service, Microsoft.Extensions.Options.Options.Create(_options)),
                 Microsoft.Extensions.Options.Options.Create(_options),
-                _time,
                 new CapturingLogger<OutboxRetentionHostedService>());
             await job.StartAsync(CancellationToken.None);
             if (expectCycle)

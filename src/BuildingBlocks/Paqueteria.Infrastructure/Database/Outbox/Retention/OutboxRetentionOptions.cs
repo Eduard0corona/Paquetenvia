@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Paqueteria.Infrastructure.Scheduling;
 
 namespace Paqueteria.Infrastructure.Database.Outbox.Retention;
 
@@ -20,9 +21,11 @@ public sealed class OutboxRetentionOptions
 
     public bool DryRun { get; set; } = true;
 
+    /// <summary>
+    /// Interval of the shared <see cref="PeriodicJobScheduler"/>. The first cycle runs when the
+    /// Worker starts; the ceiling is the scheduler's, so an out-of-range value fails at startup.
+    /// </summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromMinutes(15);
-
-    public TimeSpan InitialDelay { get; set; } = TimeSpan.FromMinutes(1);
 
     public int CommandTimeoutSeconds { get; set; } = 30;
 
@@ -68,8 +71,7 @@ public sealed class OutboxRetentionLaneOptions
 public sealed class OutboxRetentionOptionsValidator : IValidateOptions<OutboxRetentionOptions>
 {
     public static readonly TimeSpan MinimumPollInterval = TimeSpan.FromMinutes(1);
-    public static readonly TimeSpan MaximumPollInterval = TimeSpan.FromDays(1);
-    public static readonly TimeSpan MaximumInitialDelay = TimeSpan.FromHours(1);
+    public static readonly TimeSpan MaximumPollInterval = PeriodicJobScheduler.MaximumInterval;
     public static readonly TimeSpan MaximumRetention = TimeSpan.FromDays(3_650);
     public const int MaximumBatchesPerRun = 100;
 
@@ -90,11 +92,6 @@ public sealed class OutboxRetentionOptionsValidator : IValidateOptions<OutboxRet
         if (options.PollInterval < MinimumPollInterval || options.PollInterval > MaximumPollInterval)
         {
             errors.Add($"OutboxRetention:PollInterval must be between {MinimumPollInterval} and {MaximumPollInterval}.");
-        }
-
-        if (options.InitialDelay < TimeSpan.Zero || options.InitialDelay > MaximumInitialDelay)
-        {
-            errors.Add($"OutboxRetention:InitialDelay must be between {TimeSpan.Zero} and {MaximumInitialDelay}.");
         }
 
         if (options.CommandTimeoutSeconds is < 1 or > 300)
