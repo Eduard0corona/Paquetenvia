@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
         ("Pricing", "__ef_migrations_history_pricing", AdoptCanonicalPricingBaseline.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs"),
-        ("Orders", "__ef_migrations_history_orders", AddRealtimeResynchronizationCursor.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260725010000_AddRealtimeResynchronizationCursor.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AdoptCanonicalCustodyProofsBaseline.MigrationId,
@@ -93,6 +93,16 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // LIF-001/ADR-034: the lane only adds the lifecycle executor and its function; every
+                // finalized_at it writes is a lifecycle fact, so its rollback fails closed.
+                "Orders" =>
+                    source.Contains("LIF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -126,6 +136,11 @@ internal sealed class ModuleMigrationCoordinator
             "Orders",
             AdoptCanonicalOrdersBaseline.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrdersBaseline.cs");
+        VerifyAdoptionSource(
+            root,
+            "Orders",
+            AddRealtimeResynchronizationCursor.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260725010000_AddRealtimeResynchronizationCursor.cs");
 
         return result;
     }
@@ -321,7 +336,11 @@ internal sealed class ModuleMigrationCoordinator
             "Drivers" =>
                 [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
             "Orders" =>
-                [AdoptCanonicalOrdersBaseline.MigrationId, AddRealtimeResynchronizationCursor.MigrationId],
+                [
+                    AdoptCanonicalOrdersBaseline.MigrationId,
+                    AddRealtimeResynchronizationCursor.MigrationId,
+                    AddOrderLifecycleFinalizationExecutor.MigrationId,
+                ],
             "Notifications" =>
                 [
                     AddTenantSafeOutboxNotifications.MigrationId,

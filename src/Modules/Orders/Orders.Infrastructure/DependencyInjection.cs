@@ -5,16 +5,20 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Orders.Application.Csv;
+using Orders.Application.Lifecycle;
 using Orders.Application.Orders;
 using Orders.Application.Tracking;
 using Orders.Infrastructure.Csv;
+using Orders.Infrastructure.Lifecycle;
 using Orders.Infrastructure.Orders;
 using Orders.Infrastructure.Persistence;
 using Orders.Infrastructure.Tracking;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Scheduling;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.Contracts.Tracking;
 
@@ -164,6 +168,40 @@ public static class DependencyInjection
                 _ => serviceProvider.GetRequiredService<DisabledPublicTrackingTokenService>(),
             });
 
+        return services;
+    }
+
+    /// <summary>
+    /// LIF-001/ADR-034 Worker composition: the claim-window finalization job behind
+    /// <see cref="IJobScheduler"/>. It stays idle unless <c>Orders:ClaimWindowFinalization:Enabled</c>.
+    /// </summary>
+    public static IServiceCollection AddOrdersClaimWindowFinalization(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddOptions<ClaimWindowFinalizationOptions>()
+            .Bind(configuration.GetSection(ClaimWindowFinalizationOptions.SectionName))
+            .Validate(ClaimWindowFinalizationOptions.IsValid,
+                "Orders:ClaimWindowFinalization contains an invalid bounded option.")
+            .Validate(options => !options.Enabled ||
+                    !string.IsNullOrWhiteSpace(configuration.GetConnectionString(
+                        ClaimWindowFinalizationOptions.WorkerConnectionStringName)),
+                "Orders:ClaimWindowFinalization:Enabled requires ConnectionStrings:PaqueteriaWorker.")
+            .ValidateOnStart();
+        services.AddSingleton(_ => new OrdersWorkerDataSource(
+            configuration.GetConnectionString(ClaimWindowFinalizationOptions.WorkerConnectionStringName) ?? string.Empty));
+        services.AddSingleton<IExpiredClaimWindowFinalizer>(serviceProvider =>
+            new PostgreSqlExpiredClaimWindowFinalizer(
+                serviceProvider.GetRequiredService<OrdersWorkerDataSource>().DataSource));
+        services.AddSingleton<ClaimWindowFinalizationCycle>();
+        services.AddSingleton<ClaimWindowFinalizationTelemetry>();
+        services.AddSingleton<ClaimWindowFinalizationJob>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IJobScheduler, PeriodicJobScheduler>();
+        services.AddHostedService<ClaimWindowFinalizationHostedService>();
+        services.AddHealthChecks().AddCheck<ClaimWindowFinalizationHealthCheck>(
+            "orders_claim_window_finalization",
+            tags: ["ready"]);
         return services;
     }
 

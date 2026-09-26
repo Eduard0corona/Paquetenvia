@@ -3,6 +3,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Custody.Infrastructure;
 using Identity.Infrastructure.Notifications;
 using Notifications.Infrastructure;
+using Orders.Infrastructure;
 using Organizations.Infrastructure.Notifications;
 using Paqueteria.Infrastructure.DataProtection;
 
@@ -18,6 +19,7 @@ builder.Services.AddCustodyInfrastructure(
 builder.Services.AddOrganizationsNotificationAudienceReader(builder.Configuration);
 builder.Services.AddIdentityNotificationAudienceReader(builder.Configuration);
 builder.Services.AddNotificationsInfrastructure(builder.Configuration);
+builder.Services.AddOrdersClaimWindowFinalization(builder.Configuration);
 builder.Services
     .AddHealthChecks()
     .AddCheck("process", () => HealthCheckResult.Healthy(), tags: ["live"]);

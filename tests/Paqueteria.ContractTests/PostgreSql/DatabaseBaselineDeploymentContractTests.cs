@@ -71,7 +71,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                     CREATE ROLE {{_login}} LOGIN CREATEROLE {{(bypassRls ? "BYPASSRLS" : "NOBYPASSRLS")}} NOSUPERUSER PASSWORD '{{password}}';
                     ALTER DATABASE "{{database}}" OWNER TO {{_login}};
                     GRANT paqueteria_migrator, paqueteria_app, paqueteria_worker,
-                          paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance
+                          paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance,
+                          paqueteria_lifecycle_executor
                     TO {{_login}} WITH ADMIN TRUE, SET TRUE;
                     DO $$ BEGIN CREATE ROLE azure_pg_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                     {{(azureAdmin ? $"GRANT azure_pg_admin TO {_login};" : string.Empty)}}
