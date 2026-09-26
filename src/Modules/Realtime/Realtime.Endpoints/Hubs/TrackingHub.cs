@@ -10,8 +10,6 @@ namespace Realtime.Endpoints.Hubs;
 public sealed class TrackingHub(IRealtimeTelemetry telemetry) : Hub<ITrackingClient>
 {
     internal const string AuthorizationItemKey = "Realtime.TrackingAuthorization";
-    private bool _accepted;
-
     public override async Task OnConnectedAsync()
     {
         using var measurement = telemetry.MeasureAuthorization("tracking", "tracking_token");
@@ -27,14 +25,14 @@ public sealed class TrackingHub(IRealtimeTelemetry telemetry) : Hub<ITrackingCli
             Context.ConnectionId,
             RealtimeGroupNames.Tracking(authorization.PublicOrderId),
             Context.ConnectionAborted);
-        _accepted = true;
+        RealtimeConnectionState.MarkAccepted(Context);
         telemetry.ConnectionAccepted("tracking", "tracking_token");
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        if (_accepted)
+        if (RealtimeConnectionState.TryCompleteAccepted(Context))
         {
             telemetry.ConnectionClosed("tracking");
         }
