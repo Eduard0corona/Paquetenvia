@@ -277,10 +277,19 @@ modificados y el validador debe terminar en `VALIDATION_OK`.
   commit ni aceptar grupos/audience del cliente.
 - No alterar AI-06 para implementar esta decisión contractual.
 
-## Estado final
+## Estado al abrir PR #46 (histórico)
 
 `RTE-001 normative_gap = RESOLVED_PENDING_MERGE`
 
 `RTE-001 implementation_started = false`
 
 `RTE-001 merge_authorized = false`
+
+## Estado vigente (registro del 2026-09-26)
+
+- `RTE-001 normative_gap = RESOLVED`: PR #46 se fusionó en `main` el
+  2026-08-29; su cuerpo no incluía autorización de merge (pregunta abierta
+  `GOV-2026-09-MERGE-AUTHORIZATION`).
+- `RTE-001 implementation_started = true` y `implementation_merged = true`:
+  PR #53 se fusionó en `main` el 2026-09-13 con `merge_authorized = true`
+  limitado a `415f57a`.

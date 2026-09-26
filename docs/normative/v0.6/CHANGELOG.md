@@ -1,5 +1,134 @@
 # Changelog
 
+## Reconciliación de gobernanza — 2026-09-26
+
+- Registro documental posterior de los ítems fusionados desde el 2026-08-04
+  (entradas siguientes y `decision-log.md`). Cada entrada cita el PR y la
+  autorización que consta en su cuerpo; no se infieren autorizaciones.
+- Los merges de PRs que declaraban no incluir autorización de merge (#42, #43,
+  #44, #45, #46, #59, #60, #79, #80, #81, #82) o que no la mencionan (#70,
+  #71, #72, #73, #83) se registran como hechos ejecutados por el project owner;
+  la autorización formal queda como pregunta abierta
+  `GOV-2026-09-MERGE-AUTHORIZATION`.
+- Decisiones del project owner del 2026-09-26: integración de agentes por rama
+  y PR en borrador hacia `development` (`GOV-AGENT-INTEGRATION-001`);
+  dependencias nuevas por `main` certificado 13/13 y back-sync
+  `MAIN_BACKSYNC` sin relajar PR Gate (`GOV-DEPENDENCY-ROUTE-001`); login
+  AuthCenter con BFF en la API y cookie HttpOnly del mismo origen
+  (`GATE-002-BFF-001`); cierre de asignaciones por reacción outbox de Dispatch
+  (`D8-DISPATCH-OUTBOX-CLOSURE`); matriz de capacidades (`D5-CAPABILITY-MATRIX`);
+  COD en piloto declarado al crear la orden (`D6-COD-PILOT`); reglas de
+  liquidación (`D7-SETTLEMENT-RULES`); caducidad offline de 72 horas
+  (`OPS-003-OFFLINE-72H`). Su traducción a contratos se propone por separado.
+- AI-10 incorpora `REL-000-OWNER-001` y un registro de integración post-MVP-0
+  sin cambiar gates abiertos.
+- `CANONICAL_SOURCE_OF_TRUTH.md` y `CLAUDE_VALIDATION_HANDOFF.md` citan los
+  hashes vigentes de AI-06 y AI-18.
+- No cambian AI-02, AI-04, AI-05, AI-06, AI-08, AI-12, AI-18, SQL, roles,
+  migraciones ni código de producción.
+
+## OPS-004 retención acotada del outbox — 2026-09-26 (PR #81)
+
+- Job de Worker sobre las funciones de purga aprobadas de AI-06/AI-18
+  (ADR-030), deshabilitado y en dry-run por defecto; sin migración.
+- El cuerpo del PR declara "Draft. Do not merge"; merge ejecutado por el
+  project owner; autorización formal pendiente.
+
+## LIF-001 finalización de ventanas de reclamación — 2026-09-26 (PR #83)
+
+- ADR-034: `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` y
+  `security.finalize_expired_orders(integer)`; AI-18 y AI-03 actualizados con
+  autorización normativa del project owner registrada en el PR.
+- El merge no menciona autorización en el cuerpo del PR. El bridge de Azure
+  no cubre el nuevo rol; no hay despliegue autorizado.
+
+## SET-001 flujo de liquidaciones y exportación CSV — 2026-09-26 (PR #82)
+
+- AI-05 agrega siete operaciones de liquidación (41 paths, 79 schemas, 371
+  refs); no existe `listSettlements`.
+- El cuerpo del PR declara que no se autoriza merge ni despliegue; merge
+  ejecutado por el project owner; autorización formal pendiente.
+
+## INC-001 resolución de incidencias — 2026-09-25 (PR #80)
+
+- AI-05 agrega `resolveIncident` y `INCIDENT_STATE_CONFLICT` de forma aditiva.
+- El cuerpo del PR describe el seguimiento como autorizado por el owner y
+  declara "Draft. Do not merge"; autorización formal de merge pendiente.
+
+## SET-001 integridad del ledger — 2026-09-25 (PR #79)
+
+- Primera migración de Finance (`20260925000100`) sobre las tablas canónicas
+  de AI-06, sin modificar AI-05, AI-06 ni AI-18.
+- El cuerpo del PR declara que merge, auto-merge y despliegue no están
+  autorizados; autorización formal de merge pendiente.
+
+## Promoción development → main — 2026-09-24 (PR #75)
+
+- Promueve FIN-001, SCL-001, INC-001 y CSV-001 a `main`.
+
+## CSV-001 carga CSV de órdenes — 2026-09-24 (PR #70)
+
+- AI-05 agrega `previewOrderCsv` y `commitOrderCsv`. El cuerpo del PR no
+  contiene declaración de autorización.
+
+## INC-001 incidencias e intento fallido — 2026-09-24 (PR #71)
+
+- AI-05 alinea `POST /orders/{orderId}/incidents` con autorización explícita
+  del owner registrada en el PR; el merge no menciona autorización.
+
+## SCL-001 hosts stateless — 2026-09-24 (PR #73)
+
+- Key ring de Data Protection en PostgreSQL y atribución de claims por
+  réplica. Requiere protector externo de claves antes de activación
+  productiva. El cuerpo del PR no contiene declaración de autorización.
+
+## FIN-001 COD y economía por orden — 2026-09-24 (PR #72)
+
+- AI-05 agrega `getOrderFinancials` y `getRouteFinancials` y alinea las dos
+  operaciones COD; cambio autorizado por el owner y limitado a esas cuatro
+  operaciones según el PR. El merge no menciona autorización.
+
+## AZR-001 fase A — 2026-09-21 (PR #61)
+
+- Controles de repositorio para despliegue DEV-SYNTHETIC. Merge controlado
+  autorizado por el owner según el PR, condicionado al head `e1ebce8` y a
+  Foundation 35568160027 13/13.
+
+## AZR-001 bridge DEV-SYNTHETIC y corrección E-002 — 2026-09-20 (PRs #59 y #60)
+
+- #59 registra implementación autorizada y merge no autorizado; #60 declara
+  "Merge is NOT authorized". Ambos fusionados por el project owner;
+  autorización formal pendiente. Azure Clean path sin ejercitar.
+
+## SEC-003 política de entorno sintético — 2026-09-15 (PR #56)
+
+- Merge autorizado por el project owner el 2026-09-15 según el PR; no autoriza
+  producción ni datos reales.
+
+## RTE-001 rutas manuales — 2026-09-13 (PR #53) y contrato — 2026-08-29 (PR #46)
+
+- #46 agrega a AI-05 las seis operaciones de rutas y alinea AI-07, AI-08 y
+  AI-12 (sin autorización de merge en el cuerpo).
+- #53 implementa rutas OWN-only con `merge_authorized = true` limitado a
+  `415f57a`.
+
+## EXT-001 ofertas externas — 2026-08-28 (PRs #44 y #45)
+
+- #44 agrega `GET /driver/me/external-offers` y `ExternalOffer.expires_at` a
+  AI-05 y alinea AI-07/AI-08; #45 implementa las ofertas. Ambos cuerpos
+  declaran "No merge authorization is included"; autorización formal pendiente.
+
+## Entorno local de pruebas manuales — 2026-08-27 (PR #43)
+
+- Sin cambios normativos. El cuerpo declara "No merge authorization is
+  included"; autorización formal pendiente.
+
+## NTF-001 notificaciones outbox — 2026-08-26 (PR #42)
+
+- Vertical sintética `orders.created` → `OWNER_ORG_DISPATCHERS` → `IN_APP`
+  según NTF-001-OWNER-001/002/003; sin cambios normativos. El cuerpo declara
+  "No merge authorization is included"; autorización formal pendiente.
+
 ## Decisiones funcionales NTF-001 — 2026-08-04
 
 - El Project owner aprobó `orders.created` como trigger inicial,
@@ -19,6 +148,15 @@
 - El registro prepara una autorización posterior y separada. No autoriza
   deployment, piloto, producción o go-live, y no inicia EXT-001.
 
+## Aprobación REL-000-OWNER-001 — 2026-08-02 (registro posterior)
+
+- El project owner declaró "Apruebo REL-000" (PR #36), limitado a
+  `MVP-0_INTERNAL` con datos sintéticos.
+- No autoriza piloto, producción, despliegue, go-live, PII real ni el inicio
+  automático de EXT-001.
+- El valor histórico `rel000_approved: false` de REL-000-DEF-001 (2026-07-31)
+  se conserva; AI-10 registra la aprobación posterior como entrada separada.
+
 ## Resolución de alcance REL-000-DEF-001 — 2026-07-31
 
 - El project owner aprobó la opción A: FIN-001 pasa completo de MVP-0 a MVP-1.
@@ -31,6 +169,20 @@
   MVP-0_INTERNAL ni la liberación.
 - Bundle emitido como `v0.6-full-canonical-sync-7-fin001-mvp1`; no cambian
   contratos funcionales, OpenAPI, SQL, roles ni SignalR.
+
+## Cursores de resincronización RTM-002 — 2026-07-24 (registro posterior)
+
+- Commit `4738861`: AI-05 agrega `order_id` y `aggregate_version` (int64,
+  mínimo 1) obligatorios a `DriverStop` y `aggregate_version` obligatorio a la
+  proyección pública de tracking.
+- AI-06: `security.get_public_tracking_projection` agrega `aggregate_version` (`o.version`)
+  al JSON público.
+- AI-18: `paqueteria_bootstrap` recibe `SELECT` sobre la columna `version` de
+  `orders.orders` (grant de columnas `id,public_id,status,version`).
+- Decisiones asociadas en `decision-log.md`:
+  `RTM-002-INPROCESS-DISPATCHER-COLOCATION`, `RTM-002-LOCATION-CURSOR-UTC-MS` y
+  `RTM-002-STABLE-OUTBOX-ID-AS-EVENT-ID`. El cambio no tenía entrada en este
+  changelog; se registra sin alterar los archivos afectados.
 
 ## Capability antes de estado persistido DSP-002 — 2026-07-24
 

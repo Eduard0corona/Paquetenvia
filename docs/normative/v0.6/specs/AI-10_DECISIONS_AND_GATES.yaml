@@ -152,6 +152,54 @@ resolved_decisions:
   ext001_authorized: false
   rel000_approved: false
   mvp0_internal_approved: false
+- id: REL-000-OWNER-001
+  topic: mvp0_internal_release_approval
+  resolved_on: 2026-08-02
+  resolved_by: project_owner
+  recorded_on: 2026-09-26
+  decision: Apruebo REL-000
+  scope: MVP-0_INTERNAL with synthetic data only
+  source: PR #36; docs/releases/mvp-0-owner-decision.json; docs/releases/evidence/rel-000-owner-001/
+  relation_to_rel000_def001: REL-000-DEF-001 keeps its historical 2026-07-31 values (rel000_approved false, mvp0_internal_approved
+    false); this later entry records the approval without rewriting them
+  pilot_authorized: false
+  production_authorized: false
+  deployment_authorized: false
+  real_pii_authorized: false
+  ext001_automatic_start_authorized: false
+post_mvp0_integration_record:
+  recorded_on: 2026-09-26
+  purpose: documentary record of items merged after REL-000-OWNER-001; it opens, closes or relaxes no gate
+  open_question: GOV-2026-09-MERGE-AUTHORIZATION (decision-log.md Pending)
+  items:
+  - {id: NTF-001, prs: ['#42'], merged_on: 2026-08-26, target: main, merge_authorization_in_pr_body: stated_not_included}
+  - {id: EXT-001, prs: ['#44', '#45'], merged_on: 2026-08-28, target: main, merge_authorization_in_pr_body: stated_not_included}
+  - {id: RTE-001, prs: ['#46'], merged_on: 2026-08-29, target: main, merge_authorization_in_pr_body: stated_not_included}
+  - {id: RTE-001, prs: ['#53'], merged_on: 2026-09-13, target: main, merge_authorization_in_pr_body: authorized_for_head_415f57a}
+  - {id: SEC-003, prs: ['#56'], merged_on: 2026-09-15, target: main, merge_authorization_in_pr_body: authorized_2026-09-15}
+  - {id: AZR-001, prs: ['#59', '#60'], merged_on: 2026-09-20, target: main, merge_authorization_in_pr_body: stated_not_authorized}
+  - {id: AZR-001, prs: ['#61'], merged_on: 2026-09-21, target: main, merge_authorization_in_pr_body: authorized_for_head_e1ebce8}
+  - {id: FIN-001, prs: ['#72'], merged_on: 2026-09-24, target: development, merge_authorization_in_pr_body: not_stated}
+  - {id: SCL-001, prs: ['#73'], merged_on: 2026-09-24, target: development, merge_authorization_in_pr_body: not_stated}
+  - {id: INC-001, prs: ['#71'], merged_on: 2026-09-24, target: development, merge_authorization_in_pr_body: not_stated}
+  - {id: CSV-001, prs: ['#70'], merged_on: 2026-09-24, target: development, merge_authorization_in_pr_body: not_stated}
+  - {id: SET-001, prs: ['#79'], merged_on: 2026-09-25, target: development, merge_authorization_in_pr_body: stated_not_authorized}
+  - {id: INC-001, prs: ['#80'], merged_on: 2026-09-25, target: development, merge_authorization_in_pr_body: stated_not_authorized}
+  - {id: SET-001, prs: ['#82'], merged_on: 2026-09-26, target: development, merge_authorization_in_pr_body: stated_not_authorized}
+  - {id: LIF-001, prs: ['#83'], merged_on: 2026-09-26, target: development, merge_authorization_in_pr_body: not_stated}
+  - {id: OPS-004, prs: ['#81'], merged_on: 2026-09-26, target: development, merge_authorization_in_pr_body: stated_not_authorized}
+  owner_decisions_2026_09_26:
+  - GOV-AGENT-INTEGRATION-001
+  - GOV-DEPENDENCY-ROUTE-001
+  - GATE-002-BFF-001
+  - D8-DISPATCH-OUTBOX-CLOSURE
+  - D5-CAPABILITY-MATRIX
+  - D6-COD-PILOT
+  - D7-SETTLEMENT-RULES
+  - OPS-003-OFFLINE-72H
+  gates_changed: none
+  pilot_authorized: false
+  production_authorized: false
 release_gates:
   MVP-0_INTERNAL:
   - mock identity/maps allowed
