@@ -1,7 +1,9 @@
 extern alias WorkerHost;
 
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -57,9 +59,9 @@ public sealed class Ops004OutboxRetentionWorkerTests
     {
         await using var worker = new RetentionWorkerFactory(new() { [key] = value });
 
-        var exception = Assert.ThrowsAny<Exception>(() => worker.CreateClient());
+        Assert.ThrowsAny<Exception>(() => worker.CreateClient());
 
-        Assert.Contains(key, exception.ToString(), StringComparison.Ordinal);
+        Assert.Contains(worker.ValidationFailures, failure => failure.Message.Contains(key, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -71,18 +73,53 @@ public sealed class Ops004OutboxRetentionWorkerTests
             ["ConnectionStrings:PaqueteriaWorker"] = string.Empty,
         });
 
-        var exception = Assert.ThrowsAny<Exception>(() => worker.CreateClient());
+        Assert.ThrowsAny<Exception>(() => worker.CreateClient());
 
-        Assert.Contains("ConnectionStrings:PaqueteriaWorker", exception.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            worker.ValidationFailures,
+            failure => failure.Message.Contains("ConnectionStrings:PaqueteriaWorker", StringComparison.Ordinal));
     }
 
     private sealed class RetentionWorkerFactory(Dictionary<string, string?> settings)
         : WebApplicationFactory<WorkerProgram>
     {
+        /// <summary>
+        /// Retention option failures, recorded where options are validated and before the Worker
+        /// disposes its failed host. <see cref="WebApplicationFactory{TEntryPoint}"/> itself may
+        /// surface an <see cref="ObjectDisposedException"/> instead of the original error when the
+        /// Worker's own <c>Run</c> disposes the host before the factory reads its services.
+        /// </summary>
+        public ConcurrentQueue<OptionsValidationException> ValidationFailures { get; } = new();
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
+            builder.ConfigureTestServices(services =>
+                services.AddTransient<IOptionsFactory<OutboxRetentionOptions>>(provider => new RecordingOptionsFactory(
+                    new OptionsFactory<OutboxRetentionOptions>(
+                        provider.GetServices<IConfigureOptions<OutboxRetentionOptions>>(),
+                        provider.GetServices<IPostConfigureOptions<OutboxRetentionOptions>>(),
+                        provider.GetServices<IValidateOptions<OutboxRetentionOptions>>()),
+                    ValidationFailures)));
+        }
+    }
+
+    private sealed class RecordingOptionsFactory(
+        IOptionsFactory<OutboxRetentionOptions> inner,
+        ConcurrentQueue<OptionsValidationException> failures) : IOptionsFactory<OutboxRetentionOptions>
+    {
+        public OutboxRetentionOptions Create(string name)
+        {
+            try
+            {
+                return inner.Create(name);
+            }
+            catch (OptionsValidationException exception)
+            {
+                failures.Enqueue(exception);
+                throw;
+            }
         }
     }
 }
