@@ -144,6 +144,7 @@ app.MapOperationsDashboardEndpoints();
 app.MapRouteEndpoints();
 app.MapCodEndpoints();
 app.MapFinancialsEndpoints();
+app.MapSettlementEndpoints();
 
 app.Run();
 
