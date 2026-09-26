@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExternalOffersApi } from "../api/external-offers-api";
+import { ExternalOffersApiError, type ExternalOffersApi } from "../api/external-offers-api";
 import type { ExternalOffer } from "../contracts/external-offer";
 import { ExternalOffersController } from "./external-offers-controller";
 
@@ -38,6 +38,38 @@ describe("ExternalOffersController", () => {
     expect(api.accept).toHaveBeenCalledOnce();
     release();
     await Promise.all([first, second]);
+  });
+
+  it("hides the panel for a driver without EXTERNAL capability instead of surfacing an error", async () => {
+    const api = harness();
+    vi.mocked(api.list).mockRejectedValue(new ExternalOffersApiError("forbidden"));
+    const controller = new ExternalOffersController(api);
+    let current: { offers: readonly ExternalOffer[]; loading: boolean; message: string | null } =
+      { offers: [], loading: true, message: null };
+    controller.subscribe((state) => { current = state; });
+    await controller.start();
+    expect(current).toMatchObject({ offers: [], loading: false, message: null, pendingOfferId: null });
+
+    vi.useFakeTimers();
+    try {
+      controller.scheduleRefresh();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+    await controller.refreshForReconnect();
+    expect(api.list).toHaveBeenCalledOnce();
+    expect(current).toMatchObject({ offers: [], loading: false, message: null });
+  });
+
+  it("keeps the recoverable error message for non-authorization failures", async () => {
+    const api = harness();
+    vi.mocked(api.list).mockRejectedValue(new ExternalOffersApiError("recoverable"));
+    const controller = new ExternalOffersController(api);
+    let message: string | null = null;
+    controller.subscribe((state) => { message = state.message; });
+    await controller.start();
+    expect(message).toBe("No pudimos actualizar las ofertas.");
   });
 });
 

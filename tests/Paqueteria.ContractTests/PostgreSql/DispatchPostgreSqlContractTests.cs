@@ -184,6 +184,190 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
     }
 
     [PostgreSqlContractFact]
+    public async Task External_candidate_batch_read_is_equivalent_to_per_driver_reads()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var actors = await scenario.CreateExternalDriversAsync(7);
+        var drivers = new List<Guid>();
+        foreach (var actor in actors)
+        {
+            drivers.Add(await scenario.ReadDriverIdAsync(actor));
+        }
+
+        var serviceAreaId = Guid.NewGuid();
+        var extraDocuments = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+        try
+        {
+            await scenario.ExecuteAdminAsync(
+                """
+                INSERT INTO drivers.driver_documents(
+                  id,driver_id,org_id,document_type,object_key,sha256,expires_at,status,created_at)
+                VALUES
+                  (@doc_rejected,@d1,@org,'IDENTITY','synthetic/ext-batch/rejected',
+                   decode(repeat('ef',32),'hex'),@expires,'REJECTED',@newer),
+                  (@doc_license,@d1,@org,'DRIVER_LICENSE','synthetic/ext-batch/license',
+                   decode(repeat('01',32),'hex'),NULL,'VALID',@newer),
+                  (@doc_expired,@d6,@org,'IDENTITY','synthetic/ext-batch/expired',
+                   decode(repeat('02',32),'hex'),@expired,'VALID',@newer);
+                DELETE FROM drivers.driver_documents WHERE driver_id=@d2;
+                UPDATE identity.users SET status='SUSPENDED' WHERE id=@u3;
+                UPDATE organizations.organization_memberships SET status='REVOKED'
+                  WHERE user_id=@u4 AND organization_id=@org;
+                UPDATE drivers.driver_profiles SET driver_type='OWN' WHERE id=@d5;
+                INSERT INTO locations.service_areas(id,owner_org_id,city_id,name,polygon,status)
+                VALUES (@area,@org,@city,'ext-batch-area',
+                  public.ST_Multi(public.ST_MakeEnvelope(-107.5,24.7,-107.3,24.9,4326)),'ACTIVE');
+                INSERT INTO drivers.driver_service_areas(driver_id,service_area_id,org_id,status)
+                VALUES (@d6,@area,@org,'ACTIVE'),(@d0,@area,@org,'INACTIVE');
+                """,
+                P("doc_rejected", extraDocuments[0]),
+                P("doc_license", extraDocuments[1]),
+                P("doc_expired", extraDocuments[2]),
+                P("d0", drivers[0]),
+                P("d1", drivers[1]),
+                P("d2", drivers[2]),
+                P("u3", actors[3]),
+                P("u4", actors[4]),
+                P("d5", drivers[5]),
+                P("d6", drivers[6]),
+                P("org", scenario.OrganizationId),
+                P("city", scenario.CityId),
+                P("area", serviceAreaId),
+                P("expires", OccurredAt.AddDays(30)),
+                P("expired", OccurredAt.AddDays(-2)),
+                P("newer", OccurredAt));
+
+            var reader = new PostgreSqlDispatchDriverEligibilityReader();
+            var policy = EligibilityOptions().ToPolicy();
+            var expectedCandidates = new[] { drivers[0], drivers[1], drivers[2], drivers[6] }
+                .Order()
+                .ToArray();
+            var eligibleCounts = new List<int>();
+            foreach (var area in new Guid?[] { null, serviceAreaId, Guid.NewGuid() })
+            {
+                await using var tenant = await TenantTransaction.BeginAsync(
+                    fixture.AppDataSource,
+                    "paqueteria_app",
+                    scenario.DispatcherUserId,
+                    [scenario.OrganizationId]);
+                var legacyIds = await ReadLegacyExternalCandidateIdsAsync(
+                    tenant.Connection, tenant.Transaction, scenario.OrganizationId);
+                var batch = await reader.ReadExternalCandidatesAsync(
+                    tenant.Connection,
+                    tenant.Transaction,
+                    scenario.OrganizationId,
+                    scenario.CityId,
+                    area,
+                    501,
+                    default);
+
+                Assert.Equal(expectedCandidates, legacyIds);
+                Assert.Equal(legacyIds, batch.Select(snapshot => snapshot.DriverId).ToArray());
+                var eligible = 0;
+                foreach (var snapshot in batch)
+                {
+                    var command = new Drivers.Application.Eligibility.EvaluateExternalDriverEligibilityCommand(
+                        scenario.DispatcherUserId,
+                        scenario.OrganizationId,
+                        snapshot.DriverId,
+                        scenario.CityId,
+                        area,
+                        new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60),
+                        OccurredAt);
+                    var single = await reader.ReadAsync(
+                        tenant.Connection, tenant.Transaction, command, default);
+                    Assert.NotNull(single);
+                    Assert.Equal(Canonical(single), Canonical(snapshot));
+                    var singleDecision = Drivers.Application.Eligibility.DriverEligibilityPolicy
+                        .EvaluateExternal(command, single, policy).IsEligible;
+                    Assert.Equal(
+                        singleDecision,
+                        Drivers.Application.Eligibility.DriverEligibilityPolicy
+                            .EvaluateExternal(command, snapshot, policy).IsEligible);
+                    eligible += singleDecision ? 1 : 0;
+                }
+
+                eligibleCounts.Add(eligible);
+                Assert.Single(
+                    await reader.ReadExternalCandidatesAsync(
+                        tenant.Connection,
+                        tenant.Transaction,
+                        scenario.OrganizationId,
+                        scenario.CityId,
+                        area,
+                        1,
+                        default));
+            }
+
+            Assert.Contains(eligibleCounts, count => count > 0);
+            Assert.Contains(eligibleCounts, count => count < expectedCandidates.Length);
+        }
+        finally
+        {
+            await scenario.ExecuteAdminAsync(
+                """
+                DELETE FROM drivers.driver_service_areas WHERE service_area_id=@area;
+                DELETE FROM locations.service_areas WHERE id=@area;
+                DELETE FROM drivers.driver_documents WHERE id=ANY(@documents);
+                """,
+                P("area", serviceAreaId),
+                P("documents", extraDocuments));
+        }
+    }
+
+    private static async Task<Guid[]> ReadLegacyExternalCandidateIdsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid organizationId)
+    {
+        // The pre-batch EXT-001 candidate selection, kept verbatim as the equivalence oracle.
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT p.id
+            FROM drivers.driver_profiles p
+            JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
+            JOIN organizations.organization_memberships m
+              ON m.user_id=p.user_id AND m.organization_id=p.org_id
+             AND m.role='DRIVER' AND m.status='ACTIVE'
+            WHERE p.org_id=@organization AND p.driver_type='EXTERNAL' AND p.status='ACTIVE'
+            ORDER BY p.id
+            LIMIT 501
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("organization", organizationId);
+        var ids = new List<Guid>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            ids.Add(reader.GetGuid(0));
+        }
+
+        return ids.ToArray();
+    }
+
+    private static string Canonical(Drivers.Application.Eligibility.DriverEligibilitySnapshot snapshot) =>
+        string.Join(
+            "|",
+            snapshot.DriverId,
+            snapshot.OrganizationId,
+            snapshot.UserId,
+            snapshot.HomeCityId,
+            snapshot.DriverType,
+            snapshot.VehicleType,
+            snapshot.ProfileStatus,
+            snapshot.UserStatus,
+            snapshot.HasActiveDriverMembership,
+            snapshot.ServiceAreaEligible?.ToString() ?? "null",
+            string.Join(
+                ";",
+                snapshot.LatestDocuments
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair =>
+                        $"{pair.Key}={pair.Value.DocumentType},{pair.Value.Status},{pair.Value.ObjectKey}," +
+                        $"{Convert.ToHexString(pair.Value.Sha256)},{pair.Value.ExpiresAt?.UtcDateTime.Ticks}")));
+
+    [PostgreSqlContractFact]
     public async Task Coordinator_creates_one_accepted_assignment_transition_event_outbox_audits_and_replay()
     {
         await using var scenario = await DispatchScenario.CreateAsync(fixture);
@@ -1368,8 +1552,11 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         private readonly List<Guid> driverUserIds = [];
         private readonly List<Guid> driverDocumentIds = [];
 
+        private readonly NpgsqlDataSource fixtureAdmin;
+
         private DispatchScenario(PostgreSqlContractFixture fixture)
         {
+            fixtureAdmin = fixture.AdminDataSource;
             order = new SyntheticOrderScenario(fixture);
             driverUserIds.Add(DriverUserId);
             driverDocumentIds.Add(DriverDocumentId);
@@ -1378,6 +1565,7 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
         public Guid OrganizationId => order.OrganizationId;
         public Guid DispatcherUserId => order.UserId;
         public Guid OrderId => order.OrderId;
+        public Guid CityId => order.CityId;
         public Guid DriverId { get; } = Guid.NewGuid();
         public Guid DriverUserId { get; } = Guid.NewGuid();
         private Guid DriverMembershipId { get; } = Guid.NewGuid();
@@ -1490,6 +1678,16 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
             }
 
             return actors;
+        }
+
+        public async Task<Guid> ReadDriverIdAsync(Guid userId)
+        {
+            await using var connection = await fixtureAdmin.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand(
+                "SELECT id FROM drivers.driver_profiles WHERE user_id=@user;",
+                connection);
+            command.Parameters.AddWithValue("user", userId);
+            return (Guid)(await command.ExecuteScalarAsync())!;
         }
 
         public async ValueTask DisposeAsync()
