@@ -159,7 +159,7 @@ resolved_decisions:
   recorded_on: 2026-09-26
   decision: Apruebo REL-000
   scope: MVP-0_INTERNAL with synthetic data only
-  source: PR #36; docs/releases/mvp-0-owner-decision.json; docs/releases/evidence/rel-000-owner-001/
+  source: PR 36; docs/releases/mvp-0-owner-decision.json; docs/releases/evidence/rel-000-owner-001/
   relation_to_rel000_def001: REL-000-DEF-001 keeps its historical 2026-07-31 values (rel000_approved false, mvp0_internal_approved
     false); this later entry records the approval without rewriting them
   pilot_authorized: false

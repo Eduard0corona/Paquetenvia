@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "0ce10c607c80bc48c747ded09c3248368c92b7681747f5ae31cdae85610c151c"
+      "sha256": "7d8497021dbb9a9b9d25e388e3d4202a33ad77057ff0ab04fcf73d5fa97e850a"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -344,8 +344,8 @@
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
-      "bytes": 14608,
-      "sha256": "ecc595df80f52c1ec68e6f3987abe0a26ad690c3188dd95cd8dd6265eb7860ad"
+      "bytes": 14607,
+      "sha256": "695f368329fed095577e7fc02ebe7947a5c0505f2b96e040f46de57ea1e17010"
     },
     {
       "path": "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",
