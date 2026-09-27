@@ -16,6 +16,10 @@ internal sealed class DisabledSettlementService : ISettlementService
         GetSettlementQuery query,
         CancellationToken cancellationToken) => throw DisabledFinance.Unavailable();
 
+    public Task<SettlementPageResult> ListAsync(
+        ListSettlementsQuery query,
+        CancellationToken cancellationToken) => throw DisabledFinance.Unavailable();
+
     public Task<SettlementResult> AddAdjustmentAsync(
         AddSettlementAdjustmentCommand command,
         CancellationToken cancellationToken) => throw DisabledFinance.Unavailable();

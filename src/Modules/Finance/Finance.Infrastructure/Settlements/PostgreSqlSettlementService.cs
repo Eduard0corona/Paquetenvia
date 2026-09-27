@@ -155,6 +155,36 @@ public sealed partial class PostgreSqlSettlementService(
     }
 
     /// <summary>
+    /// AI05-LIST-SETTLEMENTS: the same capability as <see cref="GetAsync"/>, decided before any settlement is
+    /// read, then one keyset page of the selected organization's persisted settlements, newest first. Every
+    /// item is verified exactly like a single read, so an unreconciled settlement fails the page closed.
+    /// </summary>
+    public async Task<SettlementPageResult> ListAsync(ListSettlementsQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (!SettlementInputPolicy.IsValid(query))
+        {
+            throw Conflict(SettlementConflictCode.InvalidRequest);
+        }
+
+        return await gateway.ExecuteAsync(
+            query.ActorId,
+            query.OrganizationId,
+            async (connection, transaction, token) =>
+            {
+                await AuthorizeAsync(
+                    connection, transaction, query.ActorId, query.OrganizationId, query.MfaSatisfied, token);
+                var page = await ReadPageAsync(connection, transaction, query, SettlementListPolicy.PageSize + 1, token);
+                var items = page.Take(SettlementListPolicy.PageSize).ToArray();
+                var next = page.Count > SettlementListPolicy.PageSize
+                    ? SettlementCursorCodec.Encode(new SettlementCursor(items[^1].CreatedAt, items[^1].Id))
+                    : null;
+                return new SettlementPageResult(items, next);
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
     /// The export is rendered from exactly what <see cref="GetAsync"/> reads — the persisted header and its
     /// persisted lines, reconciled — and never recomputed from assignments or orders.
     /// </summary>

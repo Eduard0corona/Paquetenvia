@@ -16,6 +16,12 @@ public interface IGeocodingProvider
 
 public interface ILocationPiiProtector
 {
+    /// <summary>
+    /// AI05-REMOVE-PII-KEY-VERSION: the key version this protector writes with. The server selects it and
+    /// persists it next to every ciphertext; a client never supplies it.
+    /// </summary>
+    string CurrentKeyVersion { get; }
+
     byte[] Protect(string plaintext, string keyVersion);
 }
 

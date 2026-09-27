@@ -91,3 +91,9 @@ public sealed class QuoteNotFoundException : Exception;
 
 public sealed class QuoteServiceUnavailableException(string message, Exception? innerException = null)
     : Exception(message, innerException);
+
+/// <summary>AI05-INPUT-LIMITS as the endpoint sees it; the domain policy stays authoritative.</summary>
+public static class QuoteInputLimits
+{
+    public const int MaximumPackages = Pricing.Domain.PricingPackagePolicy.MaximumPackages;
+}

@@ -894,7 +894,8 @@ function New-SeedOrder([string] $Alias) {
     }
     return Invoke-ApiPost "/api/v1/orders" "local-dispatcher-mfa" "local-seed-$Alias-order-v1" @{
         quote_id=$quote.id; payer_type="SENDER"
-        acceptance=@{ terms_version="local-synthetic-v1"; privacy_version="local-synthetic-v1"; accepted_at="2026-01-02T12:00:00Z"; acceptance_channel="API" }
+        # AI05-INPUT-LIMITS: the server accepts accepted_at only within [now - 72 h, now + 5 min].
+        acceptance=@{ terms_version="local-synthetic-v1"; privacy_version="local-synthetic-v1"; accepted_at=[DateTimeOffset]::UtcNow.ToString("O"); acceptance_channel="API" }
     }
 }
 

@@ -155,9 +155,11 @@ def main() -> int:
         "403": "#/components/responses/Forbidden",
         "404": "#/components/responses/UniformNotFound",
         "409": "#/components/responses/DispatchAssignmentConflict",
+        # AI05-DECLARE-EMITTED-ERRORS: identity resolution and the tenant middleware emit it.
+        "503": "#/components/responses/ServiceUnavailable",
     }
     actual_responses = {str(status): response for status, response in assign["responses"].items()}
-    if list(actual_responses) != ["201", "401", "403", "404", "409"]:
+    if list(actual_responses) != ["201", "401", "403", "404", "409", "503"]:
         errors.append(f"DSP-002 response status matrix drift: {list(actual_responses)}")
     if (
         actual_responses.get("201", {})
@@ -228,7 +230,7 @@ def main() -> int:
     ]:
         errors.append("DSP-002 safe conflict-code set drift")
     checks.append(
-        "DSP-002: shape validation, capability-before-state, structural visibility and 201/401/403/404/409 contract"
+        "DSP-002: shape validation, capability-before-state, structural visibility and 201/401/403/404/409/503 contract"
     )
 
     product = parsed["specs/AI-02_PRODUCT_CONTRACT.yaml"]

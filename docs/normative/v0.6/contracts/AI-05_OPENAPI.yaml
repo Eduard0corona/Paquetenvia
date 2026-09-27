@@ -52,6 +52,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders:
     post:
       tags:
@@ -79,6 +81,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     get:
       tags:
       - Orders
@@ -118,6 +122,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/preview:
     post:
       tags:
@@ -147,6 +153,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/commit:
     post:
       tags:
@@ -208,6 +216,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/transitions:
     post:
       tags:
@@ -236,6 +246,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/assignments:
     post:
       tags:
@@ -294,6 +306,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/DispatchAssignmentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes:
     post:
       tags:
@@ -334,6 +348,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     get:
       tags:
       - Routing
@@ -373,6 +389,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}:
     get:
       tags:
@@ -399,6 +417,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}/stops:
     post:
       tags:
@@ -445,6 +465,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}/stops/{stopId}:
     delete:
       tags:
@@ -484,6 +506,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}/stops/order:
     put:
       tags:
@@ -524,6 +548,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /external-offers:
     post:
       tags:
@@ -546,6 +572,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/IdempotencyKey'
@@ -576,6 +606,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /driver/me/external-offers:
     get:
       tags:
@@ -605,6 +637,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /driver/me/stops:
     get:
       tags:
@@ -623,6 +657,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
   /orders/{orderId}/proofs:
@@ -655,6 +691,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/ProofConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/incidents:
     post:
       tags:
@@ -760,6 +798,10 @@ paths:
                 $ref: '#/components/schemas/PublicTrackingProjection'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /organizations/{organizationId}/audit:
     get:
       tags:
@@ -843,6 +885,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /me/organization-contexts:
     get:
       tags:
@@ -860,6 +904,8 @@ paths:
                   $ref: '#/components/schemas/OrganizationContext'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /auth/login:
     servers:
     - url: /
@@ -1072,12 +1118,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/City'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
   /service-areas:
@@ -1102,12 +1152,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ServiceArea'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /operating-zones:
     get:
       tags:
@@ -1130,12 +1184,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/OperatingZone'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /locations:
     get:
       tags:
@@ -1150,12 +1208,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
     post:
@@ -1178,12 +1240,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/proof-upload-sessions:
     post:
       tags:
@@ -1214,6 +1280,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/ProofConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /driver/me/documents:
     get:
       tags:
@@ -1311,9 +1379,12 @@ paths:
       operationId: reconcileCod
       description: >-
         FIN-001 reconciles a RECORDED collection to RECONCILED, which the order
-        state machine requires before CLOSED. Only DISPATCHER members and
-        PLATFORM_ADMIN members with a satisfied MFA challenge may reconcile, so
-        a collecting driver can never reconcile their own collection. Replaying
+        state machine requires before CLOSED. Only DISPATCHER members,
+        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
+        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION,
+        FINANCE-COD-MFA-2026-09-27) may reconcile, so a collecting driver can
+        never reconcile their own collection. FINANCE never creates or modifies
+        orders. Replaying
         the same Idempotency-Key returns the stored response.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -1348,9 +1419,10 @@ paths:
       operationId: getOrderFinancials
       description: >-
         FIN-001 cost by modality, margin and COD position of one order, derived
-        on read in integer MXN cents. Readable only by DISPATCHER members and
-        PLATFORM_ADMIN members with a satisfied MFA challenge; the order must be
-        owned or operated by the selected organization.
+        on read in integer MXN cents. Readable only by DISPATCHER members,
+        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
+        members with a satisfied MFA challenge (FINANCE-COD-MFA-2026-09-27);
+        the order must be owned or operated by the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -1379,9 +1451,10 @@ paths:
       description: >-
         FIN-001 cost by modality, margin and COD position of one route,
         aggregated from the orders on its stops so every total equals the sum
-        of its per-order values. Readable only by DISPATCHER members and
-        PLATFORM_ADMIN members with a satisfied MFA challenge; the route must be
-        operated by the selected organization.
+        of its per-order values. Readable only by DISPATCHER members,
+        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
+        members with a satisfied MFA challenge (FINANCE-COD-MFA-2026-09-27);
+        the route must be operated by the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/RouteId'
@@ -1464,6 +1537,84 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      tags:
+      - Finance
+      operationId: listSettlements
+      description: >-
+        AI05-LIST-SETTLEMENTS returns one page of the settlements of the
+        selected organization, newest first by created_at then id, each with
+        its immutable lines exactly as getSettlement returns them. The server
+        owns the bounded page size; clients cannot configure it. payee_id keeps
+        the settlements of that payee; status keeps
+        the settlements in that status; period_from and period_to keep the
+        settlements whose whole period lies inside them, and both bounds may
+        be used alone. Same capability as getSettlement: FINANCE members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge; DISPATCHER,
+        DRIVER, VIEWER and every other role receive the uniform 403 before any
+        settlement is read. Every query parameter appears at most once and
+        parses exactly; an unknown parameter, an unknown status, a malformed
+        date, period_to before period_from or a cursor that was not issued by
+        this operation is INVALID_REQUEST. A payee_id that is not a canonical UUID is
+        INVALID_REQUEST too. Another tenant's settlements are
+        never listed, and a page holding a header whose total does not equal
+        the exact sum of its lines fails closed as 503.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: payee_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - DRAFT
+          - CALCULATED
+          - APPROVED
+          - PAID
+          - VOID
+      - name: period_from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: period_to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+      responses:
+        '200':
+          description: Cursor-paginated tenant settlements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/SettlementConflict'
         '503':
@@ -1715,6 +1866,11 @@ paths:
               description: attachment with filename settlement-{settlementId}.csv
               schema:
                 type: string
+            Cache-Control:
+              description: AI05-EXPORT-NO-STORE; no cache may keep a copy of the export.
+              schema:
+                type: string
+                const: no-store
           content:
             text/csv:
               schema:
@@ -1805,6 +1961,16 @@ components:
         type: string
         format: uuid
   responses:
+    BadRequest:
+      description: >-
+        AI05-DECLARE-400-ERRORS - malformed request. The Locations operations
+        answer 400 for a missing, repeated or malformed X-Organization-Id
+        header and for a request whose parameters or body do not have the
+        contracted shape; no resource is read or written.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     ValidationError:
       description: Validation failed
       content:
@@ -1934,7 +2100,12 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
     ServiceUnavailable:
-      description: Required provider or infrastructure dependency is unavailable
+      description: >-
+        Required provider or infrastructure dependency is unavailable. Every
+        authenticated operation can report it while the identity context
+        cannot be resolved, and every tenant operation while the mandatory
+        PLATFORM_ADMIN tenant-activation audit cannot be written
+        (AI05-DECLARE-EMITTED-ERRORS).
       content:
         application/problem+json:
           schema:
@@ -2025,6 +2196,8 @@ components:
         packages:
           type: array
           minItems: 1
+          maxItems: 20
+          description: AI05-INPUT-LIMITS; more than 20 packages is a validation error (422).
           items:
             $ref: '#/components/schemas/PackageInput'
       description: Owner organization is derived from X-Organization-Id after membership validation.
@@ -2168,12 +2341,24 @@ components:
           properties:
             terms_version:
               type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[A-Za-z0-9._-]+$
+              description: AI05-INPUT-LIMITS; the same bound applies to a CSV-001 row. Any other value is rejected with 409 before any order is created.
             privacy_version:
               type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[A-Za-z0-9._-]+$
+              description: AI05-INPUT-LIMITS; the same bound applies to a CSV-001 row. Any other value is rejected with 409 before any order is created.
             accepted_at:
               type: string
               format: date-time
-              description: Client-observed acceptance timestamp; persisted as accepted_at_client after UTC normalization.
+              description: >-
+                Client-observed acceptance timestamp; persisted as accepted_at_client after UTC normalization.
+                AI05-INPUT-LIMITS - it must lie no later than server time plus 5 minutes and no earlier than
+                server time minus 72 hours, both inclusive; otherwise the request is rejected with 409 before
+                any order is created (a CSV-001 commit row fails the same way).
             acceptance_channel:
               type: string
               enum:
@@ -3317,13 +3502,16 @@ components:
           - INACTIVE
     CreateLocationRequest:
       type: object
+      description: >-
+        AI05-REMOVE-PII-KEY-VERSION - the client never supplies the PII key
+        version; the server PII protector selects it and persists it next to
+        every ciphertext.
       required:
       - city_id
       - address_text
       - address_summary
       - lat
       - lng
-      - pii_key_version
       properties:
         city_id:
           type: string
@@ -3360,8 +3548,6 @@ components:
           type: number
           minimum: -180
           maximum: 180
-        pii_key_version:
-          type: string
     Location:
       type: object
       required:
@@ -4068,6 +4254,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SettlementLine'
+    SettlementPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Settlement'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Opaque cursor of the next page; null on the last page.
     RouteStatus:
       type: string
       enum:
@@ -4438,10 +4640,11 @@ x-capability-matrix:
     exportSettlementCsv: [FINANCE, PLATFORM_ADMIN]
   driver_scope: DRIVER (OWN or EXTERNAL) sees only its own assignments, stops and offers; it has no access to orders,
     quotes, locations, CSV imports or settlements outside them
-  finance_scope: FINANCE is limited to settlements and finance. Implemented today, getOrderFinancials, getRouteFinancials
-    and reconcileCod are permitted only to DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA challenge,
-    and a collecting driver can never reconcile their own collection. Adding FINANCE is a pending delta FINANCE-COD-RECONCILIATION in x-pilot-contract-deltas, shipped by feature/pilot-contract-deltas; until then the implemented rule in the operation descriptions applies
-  finance_operations_status: PENDING_IMPLEMENTATION (pending delta FINANCE-COD-RECONCILIATION in x-pilot-contract-deltas, shipped by feature/pilot-contract-deltas; until then the implemented rule in the operation descriptions applies)
+  finance_scope: FINANCE is limited to settlements and finance. getOrderFinancials, getRouteFinancials and reconcileCod
+    are permitted only to DISPATCHER members, PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE members
+    with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION, FINANCE-COD-MFA-2026-09-27); FINANCE never records a COD
+    collection and never creates or modifies orders; a collecting driver can never reconcile their own collection
+  finance_operations_status: IMPLEMENTED (feature/pilot-contract-deltas, FinanceAuthorizationPolicy and its tests)
   finance_operations:
     getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
@@ -4454,7 +4657,7 @@ x-pilot-contract-deltas:
   - id: FINANCE-COD-RECONCILIATION
     status: DECIDED
     decision: FINANCE-COD-RECONCILIATION and FINANCE-COD-MFA-2026-09-27 (project owner, 2026-09-27)
-    implementation: pending; shipped by feature/pilot-contract-deltas together with FinanceAuthorizationPolicy and its tests
+    implementation: shipped by feature/pilot-contract-deltas together with FinanceAuthorizationPolicy and its tests
     delta: getOrderFinancials, getRouteFinancials and reconcileCod also admit FINANCE members with a satisfied MFA challenge;
       FINANCE never creates or modifies orders; DISPATCHER keeps no MFA requirement and PLATFORM_ADMIN keeps MFA; a
       collecting driver can never reconcile their own collection
@@ -4490,31 +4693,31 @@ x-pilot-contract-deltas:
   - id: SET-EXPORT-NO-STORE
     status: DECIDED
     decision: AI05-EXPORT-NO-STORE (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: the exportSettlementCsv 200 response declares the header Cache-Control no-store
   - id: SET-LIST
     status: DECIDED
     decision: AI05-LIST-SETTLEMENTS (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: add listSettlements (GET /settlements) with cursor pagination, filters payee_id, status, period_from and period_to,
       same capabilities as getSettlement and the uniform error matrix 401/403/409/503
   - id: LOC-PII-KEY-VERSION
     status: DECIDED
     decision: AI05-REMOVE-PII-KEY-VERSION (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: remove pii_key_version from CreateLocationRequest; the server PII protector selects and persists the key version
       (ADP-001)
   - id: ORD-ACCEPTANCE-LIMITS
     status: DECIDED
     decision: AI05-INPUT-LIMITS (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: publish explicit bounds that AI-05 lacks today, with the values approved as written in this entry - terms_version
       and privacy_version minLength 1, maxLength 64, pattern ^[A-Za-z0-9._-]+$; accepted_at not later than server time plus 5
       minutes nor earlier than server time minus 72 hours; CreateQuoteRequest packages keep minItems 1 and gain maxItems 20
   - id: UNDECLARED-STATUS-CODES
     status: DECIDED
     decision: AI05-DECLARE-EMITTED-ERRORS (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: declare the status codes the implementation already emits - 503 on createQuote, getQuote, createOrder, listOrders,
       getOrder, transitionOrder, listLocations, createLocation, createProofUploadSession and finalizeProof; 409 on
       createProofUploadSession and finalizeProof; 429 and 503 on publicTracking; 503 from the tenant-context middleware on
@@ -4525,7 +4728,7 @@ x-pilot-contract-deltas:
   - id: PUBLIC-TIMELINE-ORDER
     status: DECIDED
     decision: AI05-TIMELINE-ORDER (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: the public tracking timeline is ordered by (occurred_at, aggregate_version) so ties are deterministic; the SQL piece
       (ORDER BY in security.get_public_tracking_projection and the paqueteria_bootstrap grant on
       orders.order_events.aggregate_version) is decided too; translation to AI-06/AI-18 ships with its migration in the

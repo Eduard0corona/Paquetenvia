@@ -23,7 +23,8 @@ public static class OrderEndpoints
             .Produces<OrderResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/orders", ListAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -32,7 +33,8 @@ public static class OrderEndpoints
             .WithTags("Orders")
             .Produces<OrderPageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/orders/{orderId:guid}", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -42,7 +44,8 @@ public static class OrderEndpoints
             .Produces<OrderDetailResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/orders/{orderId:guid}/transitions", TransitionAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -53,7 +56,8 @@ public static class OrderEndpoints
             .Produces<OrderResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -64,15 +68,18 @@ public static class OrderEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IOrderService service,
+        Paqueteria.Application.IClock clock,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
-            !IsValid(request))
+            !IsValid(request) ||
+            !OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(request.Acceptance.AcceptedAt, clock.UtcNow))
         {
             return Conflict();
         }
 
-        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
+        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected ||
+            !OrderCreationCapability.Permits(session, tenantContext.OrganizationId))
         {
             return Forbidden();
         }

@@ -28,7 +28,6 @@ public sealed record CreateLocationCommand(
     string? Phone,
     double Lat,
     double Lng,
-    string PiiKeyVersion,
     string? RequestId);
 
 public enum ServiceabilityStatus

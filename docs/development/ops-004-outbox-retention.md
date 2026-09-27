@@ -206,12 +206,21 @@ COMMIT;
 
 ## Drenado inicial (tablas grandes)
 
-AI-06 no define un índice que cubra el filtro de purga
-(`status IN ('PROCESSED','DEAD')` por `processed_at`/`created_at`), así que cada
-llamada —lote, dry-run o sondeo `DEAD`— recorre la tabla secuencialmente
-mientras no encuentre suficientes candidatos. Con 1 M de filas se midió ≈2,2 s
-por lote. Mientras el índice no exista (cambio normativo pendiente en AI-06),
-la primera activación sobre un outbox con backlog acumulado se hace así:
+Desde AI06-PILOT-INDEXES (decisión del owner, 2026-09-27) cada outbox tiene un
+índice parcial por brazo de la purga: `(processed_at) WHERE status='PROCESSED'`
+y `((COALESCE(processed_at,created_at))) WHERE status='DEAD'`
+(`outbox_purge_*_idx` y `location_outbox_purge_*_idx`). El plan genérico del
+candidato de `purge_outbox`/`purge_location_outbox` es un `BitmapOr` de ambos
+índices, sin `Seq Scan`; lo fija
+`PilotContractDeltasPostgreSqlContractTests` leyendo el cuerpo instalado de la
+función. Las instalaciones previas los reciben por la lane `PlatformEvolution`
+(`20260927000100_ApplyPilotContractDeltas`), que crea los índices dentro de su
+transacción: en un outbox muy grande, esa creación bloquea escrituras mientras
+dura, así que conviene aplicar la migración en una ventana de poca carga.
+
+Antes de esos índices, cada llamada —lote, dry-run o sondeo `DEAD`— recorría la
+tabla secuencialmente (≈2,2 s por lote con 1 M de filas). La primera activación
+sobre un outbox con backlog acumulado se sigue haciendo así:
 
 1. Medir con dry-run (`Enabled=true`, `DryRun=true`) en una ventana de poca
    carga y anotar `affected_rows`, `dead_eligible` y la duración

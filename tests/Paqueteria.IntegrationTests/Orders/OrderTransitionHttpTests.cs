@@ -324,7 +324,7 @@ public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplica
                 {
                     terms_version = "terms-synthetic-v1",
                     privacy_version = "privacy-synthetic-v1",
-                    accepted_at = "2026-07-23T12:00:00.0000000Z",
+                    accepted_at = DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O", System.Globalization.CultureInfo.InvariantCulture),
                     acceptance_channel = "WEB",
                 },
             }),

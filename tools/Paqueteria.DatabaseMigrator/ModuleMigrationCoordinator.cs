@@ -28,6 +28,8 @@ using Notifications.Infrastructure.Persistence;
 using Notifications.Infrastructure.Persistence.Migrations;
 using Paqueteria.Infrastructure.DataProtection;
 using Paqueteria.Infrastructure.DataProtection.Migrations;
+using Paqueteria.Infrastructure.Database.Evolution;
+using Paqueteria.Infrastructure.Database.Evolution.Migrations;
 
 internal sealed record ModuleMigrationState(
     string Module,
@@ -64,6 +66,10 @@ internal sealed class ModuleMigrationCoordinator
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
+        // Runs last: it re-establishes the AI-06 bootstrap functions after every module lane.
+        ("PlatformEvolution", PlatformEvolutionSchema.MigrationsHistoryTable,
+            ApplyPilotContractDeltas.MigrationId,
+            "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations/20260927000100_ApplyPilotContractDeltas.cs"),
     ];
 
     public static IReadOnlyList<ModuleMigrationState> VerifySources()
@@ -118,6 +124,18 @@ internal sealed class ModuleMigrationCoordinator
                 "DataProtection" =>
                     source.Contains("SCL001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
+                // Pilot contract deltas: bootstrap function bodies, bootstrap column grants and indexes
+                // only. No table, role or row is created, dropped or rewritten in either direction.
+                "PlatformEvolution" =>
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("UPDATE ", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
                 _ =>
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
@@ -238,6 +256,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "DataProtection").Status == "PENDING")
         {
             await MigrateDataProtectionAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "PlatformEvolution").Status == "PENDING")
+        {
+            await MigratePlatformEvolutionAsync(connectionString, cancellationToken);
         }
         await AssertAsync(connectionString, cancellationToken);
     }
@@ -910,6 +932,26 @@ internal sealed class ModuleMigrationCoordinator
         await using var context = new PlatformDataProtectionDbContext(options);
         await context.Database.MigrateAsync(cancellationToken);
     }
+
+    private static async Task MigratePlatformEvolutionAsync(
+        string connectionString,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        await using var context = new PlatformEvolutionDbContext(PlatformEvolutionOptions(connection));
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    internal static DbContextOptions<PlatformEvolutionDbContext> PlatformEvolutionOptions(NpgsqlConnection connection) =>
+        new DbContextOptionsBuilder<PlatformEvolutionDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(PlatformEvolutionDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable(
+                    PlatformEvolutionSchema.MigrationsHistoryTable,
+                    PlatformEvolutionSchema.Schema);
+            })
+            .Options;
 
     private static DbContextOptions<NotificationsDbContext> NotificationsOptions(NpgsqlConnection connection)
     {
