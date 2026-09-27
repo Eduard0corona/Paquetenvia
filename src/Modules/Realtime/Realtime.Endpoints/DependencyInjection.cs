@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Paqueteria.Application.Security;
 using Realtime.Application.Configuration;
 using Realtime.Endpoints.Connection;
 using Realtime.Endpoints.Hubs;
@@ -106,7 +107,7 @@ public static class DependencyInjection
         var identity = context.User.FindFirst("sub")?.Value;
         var source = !string.IsNullOrEmpty(identity)
             ? $"identity:{identity}"
-            : $"network:{context.Connection.RemoteIpAddress}";
+            : ClientNetworkPartition.Describe(context.Connection.RemoteIpAddress);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)));
     }
 }

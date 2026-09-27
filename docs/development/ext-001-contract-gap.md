@@ -2,6 +2,17 @@
 
 ## Estado
 
+Estado vigente (registro del 2026-09-26):
+
+```text
+EXT-001 normative_gap = RESOLVED (PR #44, fusionado en main el 2026-08-28)
+EXT-001 implementation_started = true
+EXT-001 implementation_merged = true (PR #45, fusionado en main el 2026-08-28)
+EXT-001 merge_authorization = no consta en los cuerpos de #44/#45; pregunta abierta GOV-2026-09-MERGE-AUTHORIZATION
+```
+
+Estado histórico al abrir PR #44, conservado sin cambios:
+
 ```text
 EXT-001 normative_gap = RESOLVED_PENDING_MERGE
 EXT-001 implementation_started = false

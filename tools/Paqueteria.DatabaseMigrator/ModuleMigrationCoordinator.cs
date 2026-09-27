@@ -16,6 +16,8 @@ using Orders.Infrastructure.Persistence;
 using Orders.Infrastructure.Persistence.Migrations;
 using Drivers.Infrastructure.Persistence;
 using Drivers.Infrastructure.Persistence.Migrations;
+using Finance.Infrastructure.Persistence;
+using Finance.Infrastructure.Persistence.Migrations;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
 using Custody.Infrastructure.Persistence;
@@ -47,14 +49,16 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
         ("Pricing", "__ef_migrations_history_pricing", AdoptCanonicalPricingBaseline.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs"),
-        ("Orders", "__ef_migrations_history_orders", AddRealtimeResynchronizationCursor.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260725010000_AddRealtimeResynchronizationCursor.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AdoptCanonicalCustodyProofsBaseline.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260725_AdoptCanonicalCustodyProofsBaseline.cs"),
         ("Incidents", "__ef_migrations_history_incidents", AdoptCanonicalIncidentsBaseline.MigrationId,
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs"),
+        ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
+            "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
         ("Notifications", "__ef_migrations_history_notifications", RouteManualRouteRealtime.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260829000100_RouteManualRouteRealtime.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
@@ -80,6 +84,25 @@ internal sealed class ModuleMigrationCoordinator
                 "Notifications" =>
                     source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
+                // SET-001: the settlement ledger is append-only, so the lane only ever adds guards to
+                // the canonical tables and its rollback fails closed.
+                "Finance" =>
+                    source.Contains("SET-001 rollback blocked", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // LIF-001/ADR-034: the lane only adds the lifecycle executor and its function; every
+                // finalized_at it writes is a lifecycle fact, so its rollback fails closed.
+                "Orders" =>
+                    source.Contains("LIF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -113,6 +136,11 @@ internal sealed class ModuleMigrationCoordinator
             "Orders",
             AdoptCanonicalOrdersBaseline.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrdersBaseline.cs");
+        VerifyAdoptionSource(
+            root,
+            "Orders",
+            AddRealtimeResynchronizationCursor.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260725010000_AddRealtimeResynchronizationCursor.cs");
 
         return result;
     }
@@ -165,7 +193,7 @@ internal sealed class ModuleMigrationCoordinator
         }
         if (before.Single(state => state.Module == "Orders").Status == "PENDING")
         {
-            await MigrateOrdersAsync(connectionString, cancellationToken);
+            await MigrateOrdersAsync(connectionString, cancellationToken, azureOwnershipBridge);
         }
         if (before.Single(state => state.Module == "Dispatch").Status == "PENDING")
         {
@@ -178,6 +206,10 @@ internal sealed class ModuleMigrationCoordinator
         if (before.Single(state => state.Module == "Incidents").Status == "PENDING")
         {
             await MigrateIncidentsAsync(connectionString, cancellationToken);
+        }
+        if (before.Single(state => state.Module == "Finance").Status == "PENDING")
+        {
+            await MigrateFinanceAsync(connectionString, cancellationToken);
         }
         if (before.Single(state => state.Module == "Notifications").Status == "PENDING")
         {
@@ -304,7 +336,11 @@ internal sealed class ModuleMigrationCoordinator
             "Drivers" =>
                 [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
             "Orders" =>
-                [AdoptCanonicalOrdersBaseline.MigrationId, AddRealtimeResynchronizationCursor.MigrationId],
+                [
+                    AdoptCanonicalOrdersBaseline.MigrationId,
+                    AddRealtimeResynchronizationCursor.MigrationId,
+                    AddOrderLifecycleFinalizationExecutor.MigrationId,
+                ],
             "Notifications" =>
                 [
                     AddTenantSafeOutboxNotifications.MigrationId,
@@ -419,7 +455,8 @@ internal sealed class ModuleMigrationCoordinator
         await context.Database.MigrateAsync(cancellationToken);
     }
 
-    private static async Task MigrateOrdersAsync(string connectionString, CancellationToken cancellationToken)
+    private static async Task MigrateOrdersAsync(string connectionString, CancellationToken cancellationToken,
+        bool azureOwnershipBridge)
     {
         await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
         var options = new DbContextOptionsBuilder<OrdersDbContext>()
@@ -429,8 +466,123 @@ internal sealed class ModuleMigrationCoordinator
                 postgres.MigrationsHistoryTable("__ef_migrations_history_orders", "platform");
             })
             .Options;
-        await using var context = new OrdersDbContext(options, new TenantDatabaseExecutionState());
-        await context.Database.MigrateAsync(cancellationToken);
+        if (!azureOwnershipBridge)
+        {
+            await using (var context = new OrdersDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            await using var verification = await connection.BeginTransactionAsync(cancellationToken);
+            await DatabaseBaselineAssertions.AssertLifecycleExecutorInstalledAsync(
+                connection, verification, cancellationToken);
+            await verification.RollbackAsync(cancellationToken);
+            return;
+        }
+
+        // E-002/ADR-034: transferring security.finalize_expired_orders(integer) to the lifecycle executor
+        // as a non-superuser needs SET on the executor and a transaction-scoped CREATE on schema security,
+        // exactly like the Notifications bridge; nothing else is granted and nothing survives the commit.
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var stage = "lock";
+        try
+        {
+            await using (var advisory = new NpgsqlCommand(
+                "SELECT pg_catalog.pg_advisory_xact_lock(@key)", connection, transaction))
+            {
+                advisory.Parameters.AddWithValue("key", CanonicalBaselineContract.AdvisoryLockKey);
+                await advisory.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "capability-gate";
+            await using (var capability = new NpgsqlCommand("""
+                SELECT pg_catalog.to_regrole('paqueteria_lifecycle_executor') IS NOT NULL
+                   AND pg_catalog.pg_has_role(session_user,'paqueteria_lifecycle_executor','SET')
+                """, connection, transaction))
+            {
+                if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_lifecycle_executor; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "create-prestate";
+            await using (var prestate = new NpgsqlCommand(
+                "SELECT pg_catalog.has_schema_privilege('paqueteria_lifecycle_executor','security','CREATE')",
+                connection, transaction))
+            {
+                if (await prestate.ExecuteScalarAsync(cancellationToken) is true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_CREATE_PRESTATE_PRESENT role=paqueteria_lifecycle_executor schema=security; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "grant-temporary-create";
+            await using (var grant = new NpgsqlCommand(
+                "GRANT CREATE ON SCHEMA security TO paqueteria_lifecycle_executor", connection, transaction))
+            {
+                await grant.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "lif001-ef-migration";
+            await using (var context = new OrdersDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await using (var historyExists = new NpgsqlCommand(
+                    "SELECT to_regclass('platform.__ef_migrations_history_orders') IS NOT NULL",
+                    connection, transaction))
+                {
+                    if (await historyExists.ExecuteScalarAsync(cancellationToken) is not true)
+                    {
+                        var createHistory = context.GetService<IHistoryRepository>().GetCreateScript();
+                        await using var create = new NpgsqlCommand(createHistory, connection, transaction);
+                        await create.ExecuteNonQueryAsync(cancellationToken);
+                    }
+                }
+
+                await context.Database.UseTransactionAsync(transaction, cancellationToken);
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            // Revoke as the schema owner that granted it, whatever role the migration left active.
+            stage = "revoke-temporary-create";
+            await using (var revoke = new NpgsqlCommand("""
+                SET LOCAL ROLE paqueteria_migrator;
+                REVOKE CREATE ON SCHEMA security FROM paqueteria_lifecycle_executor;
+                RESET ROLE;
+                """, connection, transaction))
+            {
+                await revoke.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "assert-lifecycle-boundary";
+            await DatabaseBaselineAssertions.AssertLifecycleExecutorInstalledAsync(
+                connection, transaction, cancellationToken);
+            stage = "commit";
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (PostgresException exception)
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw new InvalidOperationException(
+                $"E002_ORDERS_BRIDGE_FAILED stage={stage} SQLSTATE={exception.SqlState} message={exception.MessageText}; " +
+                "STOP_FOR_CONTRACT_REVIEW",
+                exception);
+        }
+        catch
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw;
+        }
     }
 
     private static async Task MigrateDispatchAsync(string connectionString, CancellationToken cancellationToken)
@@ -473,6 +625,20 @@ internal sealed class ModuleMigrationCoordinator
             })
             .Options;
         await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync(cancellationToken);
+    }
+
+    private static async Task MigrateFinanceAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
+        var options = new DbContextOptionsBuilder<FinanceDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(FinanceDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_finance", "platform");
+            })
+            .Options;
+        await using var context = new FinanceDbContext(options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync(cancellationToken);
     }
 

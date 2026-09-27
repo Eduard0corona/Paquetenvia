@@ -66,6 +66,19 @@
       ]
     },
     {
+      "name": "NORMATIVE_OPENAPI",
+      "patterns": [
+        "docs/normative/v0.6/contracts/AI-05_OPENAPI.yaml",
+        "docs/normative/v0.6/MANIFEST.json",
+        "docs/normative/v0.6/CHECKSUMS_SHA256.txt"
+      ],
+      "jobs": [
+        "normative-contracts",
+        "dotnet",
+        "web"
+      ]
+    },
+    {
       "name": "WEB_DRIVER",
       "patterns": [
         "apps/web/src/driver/**",
@@ -133,6 +146,8 @@
         "apps/web/src/components/**",
         "apps/web/src/lib/**",
         "apps/web/src/proxy.ts",
+        "apps/web/src/instrumentation.ts",
+        "apps/web/src/security/**",
         "apps/web/public/**",
         "apps/web/tsconfig.json",
         "apps/web/eslint.config.mjs",
@@ -194,6 +209,11 @@
         "tools/test-rel-000-internal-release.ps1",
         "tools/backup-restore.common.ps1"
       ],
+      "exclude": [
+        "docs/normative/v0.6/contracts/AI-05_OPENAPI.yaml",
+        "docs/normative/v0.6/MANIFEST.json",
+        "docs/normative/v0.6/CHECKSUMS_SHA256.txt"
+      ],
       "full": true
     },
     {
@@ -208,6 +228,7 @@
       "patterns": [
         ".github/workflows/ci.yml",
         ".github/workflows/pr-validation.yml",
+        ".github/workflows/development-push.yml",
         "tools/ci/**",
         "tools/rel-000/**",
         "tools/azr-001/**",

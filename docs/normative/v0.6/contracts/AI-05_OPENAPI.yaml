@@ -686,6 +686,56 @@ paths:
           $ref: '#/components/responses/IncidentConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /incidents/{incidentId}/resolution:
+    post:
+      tags:
+      - Incidents
+      operationId: resolveIncident
+      description: >-
+        INC-001 closes an OPEN or INVESTIGATING incident into exactly one terminal
+        outcome, RESOLVED or REJECTED, and records resolved_at. Only DISPATCHER
+        members and PLATFORM_ADMIN members with a satisfied MFA challenge may
+        resolve; a DRIVER never may, including the driver who opened the incident.
+        Capability is evaluated before incident visibility, the idempotency lock or
+        replay evidence. A missing incident and another tenant's incident are the
+        same uniform 404. A terminal incident is never changed again. Resolution
+        never changes the order: ORD-002 remains the only writer of order state.
+        The reason is kept only as append-only audit evidence. Replaying the same
+        Idempotency-Key with the same request returns the stored response.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - incident
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IncidentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveIncidentRequest'
+      responses:
+        '200':
+          description: Incident resolved or rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/IncidentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /tracking/{token}:
     get:
       tags:
@@ -1150,6 +1200,333 @@ paths:
           $ref: '#/components/responses/FinanceConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /settlements:
+    post:
+      tags:
+      - Finance
+      operationId: createSettlement
+      description: >-
+        SET-001 calculates one DRIVER settlement for a period of whole
+        operational days and persists it CALCULATED in one transaction: an
+        empty DRAFT header, one immutable line per eligible economic source,
+        the exact bigint total, the DRAFT to CALCULATED step, the audit entry
+        and the idempotency record. period_from and period_to are calendar
+        dates of the configured Finance operational time zone (IANA,
+        America/Mazatlan by default); the period starts at the beginning of
+        period_from inclusive and ends at the beginning of the day after
+        period_to exclusive, both converted to UTC. The economic sources are
+        the driver's OWN and EXTERNAL dispatch assignments that bear cost
+        exactly as FIN-001 counts it (ACCEPTED, ACTIVE or COMPLETED, amount
+        cost_cents) whose order's latest ORD-002 DELIVERED or RETURNED status
+        event occurred inside the period while the current order status still
+        proves that outcome: DELIVERY for DELIVERED, CLOSED, CLAIM_OPEN or
+        CLAIM_RESOLVED orders and RETURN for RETURNED orders, ordered by that
+        event time. Every such line names its source as
+        dispatch.assignments/{assignmentId}, the one economic identity DELIVERY
+        and RETURN share. A source already held by a settlement that is not
+        VOID is never included again, so a period without new sources yields
+        an empty settlement with total 0. ALLY_CAPACITY work, ALLY and BUSINESS
+        payees stay reserved. Only FINANCE members and PLATFORM_ADMIN members
+        with a satisfied MFA challenge may operate settlements; DISPATCHER,
+        DRIVER and VIEWER never may. Capability is evaluated before the
+        idempotency lock, replay evidence or driver visibility, and a missing
+        driver and another tenant's driver are the same uniform 404. Replaying
+        the same Idempotency-Key with the same request returns the stored
+        response.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - driver_profile
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSettlementRequest'
+      responses:
+        '201':
+          description: Settlement calculated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /settlements/{settlementId}:
+    get:
+      tags:
+      - Finance
+      operationId: getSettlement
+      description: >-
+        SET-001 persisted settlement header and its immutable lines, ordered by
+        created_at then id. Amounts are returned exactly as stored and never
+        recomputed; a header whose total does not equal the exact sum of its
+        lines is never shown and the read fails closed as 503. Same capability
+        as every settlement operation. A missing settlement and another
+        tenant's settlement are the same uniform 404.
+      x-authorization-precedence: capability-before-persisted-state
+      x-capability-protected-state:
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/SettlementId'
+      responses:
+        '200':
+          description: Settlement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /settlements/{settlementId}/adjustments:
+    post:
+      tags:
+      - Finance
+      operationId: addSettlementAdjustment
+      description: >-
+        SET-001 appends one signed ADJUSTMENT line to a CALCULATED settlement
+        and moves its total by exact checked bigint arithmetic; existing lines
+        are never changed or replaced. The line references no order and names
+        its source as platform.audit_logs/{auditId}, the append-only audit
+        entry written in the same transaction, which keeps the reason. Any
+        other settlement status is SETTLEMENT_STATE_CONFLICT, and an amount
+        whose application would leave the bigint range is INVALID_REQUEST.
+        Replaying the same Idempotency-Key with the same request returns the
+        stored response.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/SettlementId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSettlementAdjustmentRequest'
+      responses:
+        '201':
+          description: Adjustment added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /settlements/{settlementId}/approve:
+    post:
+      tags:
+      - Finance
+      operationId: approveSettlement
+      description: >-
+        SET-001 approves a CALCULATED settlement, which freezes its total and
+        its lines. Inside the approving transaction, after the settlement row
+        lock, the current state of every included order is re-read: a
+        DELIVERY whose order expects cash on delivery requires that cash
+        RECONCILED for the exact expected amount (CASH_PENDING), an OPEN or
+        INVESTIGATING incident on any included order blocks (INCIDENT_PENDING)
+        and an included order in CLAIM_OPEN blocks (CLAIM_PENDING); RESOLVED
+        and REJECTED incidents never block. A RETURN is never blocked by its
+        order's COD expectation, because a returned order collected no cash.
+        When several apply, the first of cash, incident and claim is reported.
+        Any other settlement status is SETTLEMENT_STATE_CONFLICT. Replaying the
+        same Idempotency-Key returns the stored response.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/SettlementId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Settlement approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /settlements/{settlementId}/pay:
+    post:
+      tags:
+      - Finance
+      operationId: markSettlementPaid
+      description: >-
+        SET-001 records that the external payment of an APPROVED settlement has
+        been completed and moves it to PAID, which is terminal. No payment
+        provider, bank transfer, invoice, tax or accounting workflow is
+        involved. Any other settlement status is SETTLEMENT_STATE_CONFLICT.
+        Replaying the same Idempotency-Key returns the stored response.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/SettlementId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Settlement marked paid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /settlements/{settlementId}/void:
+    post:
+      tags:
+      - Finance
+      operationId: voidSettlement
+      description: >-
+        SET-001 voids a DRAFT, CALCULATED or APPROVED settlement. Every line and
+        the total are kept exactly as they are; VOID only releases the
+        settlement's economic sources for a later settlement. PAID and VOID are
+        terminal and answer SETTLEMENT_STATE_CONFLICT. The reason is kept only
+        as append-only audit evidence. Replaying the same Idempotency-Key with
+        the same request returns the stored response.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - replay_evidence
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/SettlementId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoidSettlementRequest'
+      responses:
+        '200':
+          description: Settlement voided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /settlements/{settlementId}/export.csv:
+    get:
+      tags:
+      - Finance
+      operationId: exportSettlementCsv
+      description: >-
+        SET-001 CSV export generated only from the persisted settlement and its
+        persisted lines, never recalculated from assignments or orders, with
+        the same capability as getSettlement. RFC 4180 records ending in CRLF,
+        UTF-8 without a byte order mark, and exactly this header:
+        settlement_id,payee_type,payee_id,period_from,period_to,settlement_status,settlement_total_cents,line_id,line_type,order_id,amount_cents,source_reference,line_created_at.
+        One record per line, ordered by created_at then id, each repeating its
+        settlement columns, so amount_cents sums to settlement_total_cents.
+        Money is integer cents, dates are yyyy-MM-dd, line_created_at is UTC
+        with microsecond precision, and an ADJUSTMENT has an empty order_id. No
+        column carries personal data or free text. A header whose total does not
+        equal the exact sum of its lines is never exported and the export fails
+        closed as 503.
+      x-authorization-precedence: capability-before-persisted-state
+      x-capability-protected-state:
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/SettlementId'
+      responses:
+        '200':
+          description: Settlement CSV, served as attachment settlement-{settlementId}.csv
+          headers:
+            Content-Disposition:
+              description: attachment with filename settlement-{settlementId}.csv
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 components:
   securitySchemes:
     oidc:
@@ -1180,6 +1557,20 @@ components:
         format: uuid
     RouteStopId:
       name: stopId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IncidentId:
+      name: incidentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SettlementId:
+      name: settlementId
       in: path
       required: true
       schema:
@@ -1236,8 +1627,9 @@ components:
             $ref: '#/components/schemas/CsvImportConflictProblem'
     IncidentConflict:
       description: >-
-        INC-001 request, idempotency, order-state or evidence conflict. Internal
-        rejection evidence and cross-tenant existence are never exposed.
+        INC-001 request, idempotency, order-state, incident-state or evidence
+        conflict. Internal rejection evidence, the current incident status and
+        cross-tenant existence are never exposed.
       content:
         application/problem+json:
           schema:
@@ -1251,6 +1643,16 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/FinanceConflictProblem'
+    SettlementConflict:
+      description: >-
+        SET-001 request-shape, idempotency, replay-evidence, concurrency,
+        settlement-state or pending-source conflict, identified by a stable
+        code. The current settlement status, source evidence and cross-tenant
+        existence are never exposed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/SettlementConflictProblem'
     NotFound:
       description: Not found or inaccessible
       content:
@@ -1897,6 +2299,26 @@ components:
           items:
             type: string
             format: uuid
+    ResolveIncidentRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - outcome
+      - reason
+      properties:
+        outcome:
+          type: string
+          enum:
+          - RESOLVED
+          - REJECTED
+        reason:
+          type: string
+          description: >-
+            Operator rationale kept as append-only audit evidence. Surrounding
+            whitespace and control characters are rejected, never trimmed.
+          minLength: 1
+          maxLength: 500
+          pattern: '^[^\s\x00-\x1F\x7F-\x9F](?:[^\x00-\x1F\x7F-\x9F]*[^\s\x00-\x1F\x7F-\x9F])?$'
     Incident:
       type: object
       required:
@@ -2290,6 +2712,7 @@ components:
           - IDEMPOTENCY_CONFLICT
           - ORDER_STATE_NOT_ALLOWED
           - EVIDENCE_NOT_AVAILABLE
+          - INCIDENT_STATE_CONFLICT
           - CONFLICT
     FinanceConflictProblem:
       type: object
@@ -2324,6 +2747,39 @@ components:
           - COD_ALREADY_RECORDED
           - COD_STATE_CONFLICT
           - ORDER_STATE_CONFLICT
+    SettlementConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: >-
+            CONFLICT covers Idempotency-Key reuse with a different payload,
+            inconsistent replay evidence and concurrency conflicts, including a
+            source claimed by a concurrent settlement.
+          enum:
+          - INVALID_REQUEST
+          - CONFLICT
+          - SETTLEMENT_STATE_CONFLICT
+          - CASH_PENDING
+          - INCIDENT_PENDING
+          - CLAIM_PENDING
     AuditLog:
       type: object
       required:
@@ -3056,6 +3512,149 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RouteOrderFinancials'
+    CreateSettlementRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - driver_id
+      - period_from
+      - period_to
+      properties:
+        driver_id:
+          type: string
+          format: uuid
+          description: Driver profile of the DRIVER payee; it must belong to the selected organization.
+        period_from:
+          type: string
+          format: date
+          description: First operational day of the period, inclusive.
+        period_to:
+          type: string
+          format: date
+          description: >-
+            Last operational day of the period, inclusive. It is not before
+            period_from and the period covers at most 366 days.
+    AddSettlementAdjustmentRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - amount_cents
+      - reason
+      properties:
+        amount_cents:
+          type: integer
+          format: int64
+          not:
+            const: 0
+          description: Signed, non-zero MXN cents added to the settlement total.
+        reason:
+          type: string
+          description: >-
+            Rationale kept as append-only audit evidence. Surrounding whitespace and control characters are rejected,
+            never trimmed.
+          minLength: 1
+          maxLength: 500
+          pattern: '^[^\s\x00-\x1F\x7F-\x9F](?:[^\x00-\x1F\x7F-\x9F]*[^\s\x00-\x1F\x7F-\x9F])?$'
+    VoidSettlementRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - reason
+      properties:
+        reason:
+          type: string
+          description: >-
+            Rationale kept as append-only audit evidence. Surrounding whitespace and control characters are rejected,
+            never trimmed.
+          minLength: 1
+          maxLength: 500
+          pattern: '^[^\s\x00-\x1F\x7F-\x9F](?:[^\x00-\x1F\x7F-\x9F]*[^\s\x00-\x1F\x7F-\x9F])?$'
+    SettlementLine:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - line_type
+      - order_id
+      - amount_cents
+      - source_reference
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        line_type:
+          type: string
+          enum:
+          - DELIVERY
+          - RETURN
+          - ADJUSTMENT
+        order_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: The order of a DELIVERY or RETURN line; null for an ADJUSTMENT.
+        amount_cents:
+          type: integer
+          format: int64
+        source_reference:
+          type: string
+          description: >-
+            dispatch.assignments/{assignmentId} for DELIVERY and RETURN,
+            platform.audit_logs/{auditId} for ADJUSTMENT.
+        created_at:
+          type: string
+          format: date-time
+    Settlement:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - payee_type
+      - payee_id
+      - status
+      - total_cents
+      - period_from
+      - period_to
+      - created_at
+      - lines
+      properties:
+        id:
+          type: string
+          format: uuid
+        payee_type:
+          type: string
+          enum:
+          - DRIVER
+        payee_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - CALCULATED
+          - APPROVED
+          - PAID
+          - VOID
+        total_cents:
+          type: integer
+          format: int64
+          description: Always the exact sum of amount_cents over lines.
+        period_from:
+          type: string
+          format: date
+        period_to:
+          type: string
+          format: date
+        created_at:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/SettlementLine'
     RouteStatus:
       type: string
       enum:

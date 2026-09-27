@@ -21,6 +21,9 @@ Fail-closed rules:
   ``prove_nuget_project_graph_only``); anything unproven, unparseable or ambiguous
   stays ``DEPS``;
 * ``FULL`` is never reduced by any later rule or label;
+* a domain ``exclude`` removes exact literal paths from that one domain only (every
+  other domain still evaluates them); only ``REL000_INPUT`` may exclude, and every
+  excluded path must be covered by its own patterns (see ``validate_exclude``);
 * a head repository different from the repository is rejected;
 * ``MAIN_BACKSYNC`` (head ``main``, every job except REL-000) requires explicit
   certification evidence (``--certified-main-sha`` equal to the source head); an
@@ -51,6 +54,10 @@ JOB_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 DOMAIN_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 CONTENT_PROOF_NUGET_PROJECT_GRAPH = "nuget-project-graph-only"
 CONTENT_PROOFS = (CONTENT_PROOF_NUGET_PROJECT_GRAPH,)
+# Only REL-000's input domain may narrow itself by exact path; no control domain
+# (SECURITY_CONTROL, CI_SELF, DEPS, ...) can ever exclude anything.
+EXCLUDE_ALLOWED_DOMAINS = frozenset({"REL000_INPUT"})
+EXCLUDE_FORBIDDEN_CHARACTERS = frozenset("*?[]{}")
 NUGET_LOCK_NAME = "packages.lock.json"
 NUGET_LOCK_VERSIONS = (1, 2)
 NUGET_PROJECT_NODE_TYPE = "Project"
@@ -117,6 +124,29 @@ def _require_string_list(value: Any, code: str, what: str) -> list[str]:
     if len(set(value)) != len(value):
         fail(code, f"{what} must not repeat entries.", entries=value)
     return list(value)
+
+
+def validate_exclude(name: str, value: Any, compiled: list[re.Pattern[str]]) -> list[str]:
+    """Validate a domain ``exclude`` list: exact literal paths the domain already covers.
+
+    Only ``EXCLUDE_ALLOWED_DOMAINS`` may exclude; wildcards, non-normalized paths and
+    paths outside the domain's own patterns are configuration errors, never ignored.
+    """
+    if name not in EXCLUDE_ALLOWED_DOMAINS:
+        fail("CONFIG_EXCLUDE_FORBIDDEN", "This domain may not exclude paths.", name=name)
+    exclude = _require_string_list(value, "CONFIG_EXCLUDE_INVALID", f"domains.{name}.exclude")
+    for path in exclude:
+        if (
+            path != path.strip()
+            or path.startswith("/")
+            or "\\" in path
+            or set(path) & EXCLUDE_FORBIDDEN_CHARACTERS
+            or any(segment in ("", ".", "..") for segment in path.split("/"))
+        ):
+            fail("CONFIG_EXCLUDE_INVALID", "Excluded paths must be literal normalized POSIX paths.", name=name, path=path)
+        if not any(pattern.match(path) for pattern in compiled):
+            fail("CONFIG_EXCLUDE_INVALID", "Excluded paths must be covered by the domain's own patterns.", name=name, path=path)
+    return exclude
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -186,10 +216,11 @@ def validate_config(raw: Any) -> dict[str, Any]:
         full = entry.get("full", False)
         if not isinstance(full, bool):
             fail("CONFIG_DOMAINS_INVALID", "domain.full must be a boolean.", name=name)
-        allowed_keys = {"name", "patterns", "full", "jobs", "job_sets", "content_proof", "supersedes"}
+        allowed_keys = {"name", "patterns", "exclude", "full", "jobs", "job_sets", "content_proof", "supersedes"}
         extra = sorted(set(entry) - allowed_keys)
         if extra:
             fail("CONFIG_DOMAINS_INVALID", "Domain carries unknown keys.", name=name, keys=extra)
+        exclude = validate_exclude(name, entry["exclude"], compiled) if "exclude" in entry else []
         domain_jobs: list[str] = []
         if full:
             if "jobs" in entry or "job_sets" in entry:
@@ -225,6 +256,7 @@ def validate_config(raw: Any) -> dict[str, Any]:
                 "name": name,
                 "patterns": patterns,
                 "compiled": compiled,
+                "exclude": exclude,
                 "full": full,
                 "jobs": domain_jobs,
                 "content_proof": content_proof,
@@ -523,15 +555,16 @@ def resolve_content_proofs(repo_root: Path, base: str, tested: str, changed_path
 def match_domains(config: dict[str, Any], path: str, content_proofs: dict[str, Any] | None = None) -> list[str]:
     """Return the domains of ``path``.
 
-    A content-proven domain applies only to paths its proof accepted, and then removes
-    the domains it supersedes for that path; without a proof the path-based domains
-    stand unchanged.
+    A path a domain explicitly excludes does not match that domain; every other domain
+    still evaluates it. A content-proven domain applies only to paths its proof
+    accepted, and then removes the domains it supersedes for that path; without a proof
+    the path-based domains stand unchanged.
     """
     proofs = content_proofs or {}
     matched: list[str] = []
     superseded: set[str] = set()
     for domain in config["domains"]:
-        if not any(pattern.match(path) for pattern in domain["compiled"]):
+        if path in domain["exclude"] or not any(pattern.match(path) for pattern in domain["compiled"]):
             continue
         if domain["content_proof"] is not None:
             if path not in set(proofs.get(domain["content_proof"], ())):

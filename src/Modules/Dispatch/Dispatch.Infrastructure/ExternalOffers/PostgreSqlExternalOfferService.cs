@@ -43,6 +43,7 @@ public sealed class PostgreSqlExternalOfferService(
     private const string AssignmentOutboxTopic = "dispatch.assignment-changed";
     private const int PageSize = 50;
     private const int MaximumScanSize = 200;
+    private const int MaximumAudienceSize = 500;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -1037,50 +1038,35 @@ public sealed class PostgreSqlExternalOfferService(
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        await using var command = new NpgsqlCommand(
-            """
-            SELECT p.id
-            FROM drivers.driver_profiles p
-            JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
-            JOIN organizations.organization_memberships m
-              ON m.user_id=p.user_id AND m.organization_id=p.org_id
-             AND m.role='DRIVER' AND m.status='ACTIVE'
-            WHERE p.org_id=@organization AND p.driver_type='EXTERNAL' AND p.status='ACTIVE'
-            ORDER BY p.id
-            LIMIT 501
-            """,
+        var candidates = await eligibilityReader.ReadExternalCandidatesAsync(
             connection,
-            transaction);
-        command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
-        var driverIds = new List<Guid>();
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken)) driverIds.Add(reader.GetGuid(0));
-        }
-        if (driverIds.Count > 500)
+            transaction,
+            organizationId,
+            order.CityId,
+            order.ServiceAreaId,
+            MaximumAudienceSize + 1,
+            cancellationToken);
+        if (candidates.Count > MaximumAudienceSize)
         {
             throw new ExternalOfferInfrastructureException("External offer audience exceeds the bounded fanout.");
         }
 
         var eligible = new List<Guid>();
-        foreach (var driverId in driverIds)
+        foreach (var snapshot in candidates)
         {
             var eligibilityCommand = new EvaluateExternalDriverEligibilityCommand(
                 actorId,
                 organizationId,
-                driverId,
+                snapshot.DriverId,
                 order.CityId,
                 order.ServiceAreaId,
                 capacity,
                 now);
-            var snapshot = await eligibilityReader.ReadAsync(
-                connection, transaction, eligibilityCommand, cancellationToken);
-            if (snapshot is not null &&
-                constraints.Allows(snapshot.VehicleType, order.ServiceAreaId, order.CodExpectedCents) &&
+            if (constraints.Allows(snapshot.VehicleType, order.ServiceAreaId, order.CodExpectedCents) &&
                 DriverEligibilityPolicy.EvaluateExternal(
                     eligibilityCommand, snapshot, eligibilityOptions.Value.ToPolicy()).IsEligible)
             {
-                eligible.Add(driverId);
+                eligible.Add(snapshot.DriverId);
             }
         }
         return eligible;

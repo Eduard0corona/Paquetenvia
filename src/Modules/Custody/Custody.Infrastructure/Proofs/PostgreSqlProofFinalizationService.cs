@@ -86,7 +86,8 @@ public sealed class PostgreSqlProofFinalizationService(
                     command.ActorId,
                     command.OrganizationId,
                     command.MfaSatisfied,
-                    token) ?? throw new ProofNotFoundException();
+                    token,
+                    lockOrderForShare: true) ?? throw new ProofNotFoundException();
                 if (!ProofContract.IsAllowedOrderState(proofType, order.Status))
                 {
                     throw new ProofConflictException("ORDER_STATE_NOT_ALLOWED");

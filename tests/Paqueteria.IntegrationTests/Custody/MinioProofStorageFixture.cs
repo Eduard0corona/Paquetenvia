@@ -17,7 +17,7 @@ public sealed class SecureProofUploadCollection : ICollectionFixture<MinioProofS
 public sealed class MinioProofStorageFixture : IAsyncLifetime
 {
     public const string Image =
-        "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e";
+        "ghcr.io/eduard0corona/paquetenvia-minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2";
     public const string AccessKey = "pod001-test-access";
     public const string SecretKey = "pod001-test-secret-change-me";
     public const string Bucket = "pod001-secure-proofs";

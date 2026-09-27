@@ -19,6 +19,7 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_bootstrap",
         "paqueteria_outbox_executor",
         "paqueteria_maintenance",
+        "paqueteria_lifecycle_executor",
     ];
 
     private static readonly string[] SensitiveFunctions =
@@ -49,6 +50,7 @@ public sealed class DatabaseBaselineAssertions
         "outbox direct grants and lifecycle function grants",
         "forced RLS and sensitive-function PUBLIC revocation",
         "bootstrap function security and column-level grants",
+        "lifecycle executor boundary (ADR-034)",
         "real default-privilege inheritance probes",
     });
 
@@ -142,9 +144,16 @@ public sealed class DatabaseBaselineAssertions
                   ('paqueteria_worker',false),
                   ('paqueteria_bootstrap',true),
                   ('paqueteria_outbox_executor',true),
-                  ('paqueteria_maintenance',true))
+                  ('paqueteria_maintenance',true)),
+                -- ADR-034: installations that predate LIF-001 have no lifecycle executor yet; once the
+                -- role or its function exists it is held to the same NOLOGIN contract.
+                lifecycle(name,bypass_rls) AS (
+                  SELECT 'paqueteria_lifecycle_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_lifecycle_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.finalize_expired_orders(integer)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
-                FROM expected LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
+                FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle) expected
+                LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
                 """,
@@ -187,6 +196,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertBootstrapContractsAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertLifecycleExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -275,6 +287,7 @@ public sealed class DatabaseBaselineAssertions
                     '__ef_migrations_history_dispatch',
                     '__ef_migrations_history_custody',
                     '__ef_migrations_history_incidents',
+                    '__ef_migrations_history_finance',
                     '__ef_migrations_history_notifications',
                     '__ef_migrations_history_platform'
                   )
@@ -355,6 +368,10 @@ public sealed class DatabaseBaselineAssertions
             expected(signature,owner) AS (
               SELECT signature,owner FROM expected_all
               WHERE NOT ntf OR to_regprocedure('security.resolve_outbox_consumer(text)') IS NOT NULL
+              UNION ALL
+              -- ADR-034: installed by the Orders LIF-001 lane after the baseline.
+              SELECT 'security.finalize_expired_orders(integer)','paqueteria_lifecycle_executor'
+              WHERE to_regprocedure('security.finalize_expired_orders(integer)') IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
@@ -366,7 +383,8 @@ public sealed class DatabaseBaselineAssertions
             FROM pg_catalog.pg_proc p
             JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
             JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
-            WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance')
+            WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
+                'paqueteria_lifecycle_executor')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -463,6 +481,117 @@ public sealed class DatabaseBaselineAssertions
             WHERE grantee='paqueteria_bootstrap' AND privilege_type<>'SELECT'
             """,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// ADR-034 lane contract: after the Orders LIF-001 migration (and after any E-002 temporary grant
+    /// is revoked) the role and its function must exist and satisfy the exact executor boundary,
+    /// including no CREATE on any application or shared schema.
+    /// </summary>
+    public static async Task AssertLifecycleExecutorInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'lifecycle executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_lifecycle_executor') IS NULL
+            UNION ALL
+            SELECT 'lifecycle finalization function is missing: security.finalize_expired_orders(integer)'
+            WHERE pg_catalog.to_regprocedure('security.finalize_expired_orders(integer)') IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await AssertLifecycleExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
+    /// ADR-034: once the lifecycle executor exists it holds exactly USAGE on <c>orders</c> plus
+    /// SELECT(id,status,claim_window_ends_at,finalized_at) and UPDATE(finalized_at) on
+    /// <c>orders.orders</c>, inherits nothing, and its single function is a pinned SECURITY DEFINER
+    /// executable by <c>paqueteria_worker</c> only.
+    /// </summary>
+    private static async Task AssertLifecycleExecutorBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_lifecycle_executor'
+            ),
+            expected(table_schema,table_name,column_name,privilege_type) AS (VALUES
+              ('orders','orders','id','SELECT'),
+              ('orders','orders','status','SELECT'),
+              ('orders','orders','claim_window_ends_at','SELECT'),
+              ('orders','orders','finalized_at','SELECT'),
+              ('orders','orders','finalized_at','UPDATE')),
+            actual AS (
+              SELECT table_schema,table_name,column_name,privilege_type
+              FROM information_schema.column_privileges
+              WHERE grantee='paqueteria_lifecycle_executor'),
+            fn AS (
+              SELECT p.oid,p.prosecdef,p.proconfig,p.prosrc
+              FROM pg_catalog.pg_proc p
+              WHERE p.oid=pg_catalog.to_regprocedure('security.finalize_expired_orders(integer)'))
+            SELECT 'missing lifecycle executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected lifecycle executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected lifecycle executor table grant: ' || table_schema || '.' || table_name || ':' || privilege_type
+            FROM information_schema.table_privileges
+            WHERE grantee='paqueteria_lifecycle_executor'
+            UNION ALL
+            SELECT 'lifecycle executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM (n.nspname='orders'))
+            UNION ALL
+            SELECT 'lifecycle executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m JOIN executor ON m.member=executor.oid
+            UNION ALL
+            SELECT 'lifecycle executor owns a relation, schema or type'
+            FROM executor
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
+            UNION ALL
+            SELECT 'lifecycle finalization function is unsafe: security.finalize_expired_orders(integer)'
+            FROM fn
+            WHERE NOT fn.prosecdef
+               OR NOT ('search_path=pg_catalog, orders, pg_temp'=ANY(COALESCE(fn.proconfig,ARRAY[]::text[])))
+               OR fn.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR has_function_privilege('public',fn.oid,'EXECUTE')
+               OR has_function_privilege('paqueteria_app',fn.oid,'EXECUTE')
+               OR NOT has_function_privilege('paqueteria_worker',fn.oid,'EXECUTE')
+            UNION ALL
+            SELECT 'lifecycle finalization function exists without the lifecycle executor role'
+            FROM fn WHERE NOT EXISTS (SELECT 1 FROM executor)
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }
 
     private static async Task AssertDefaultAclCatalogAsync(

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Finance.Application;
 using Finance.Application.Cod;
 using Finance.Application.Financials;
@@ -281,19 +282,113 @@ public sealed class FinanceImplementationContractTests
         Assert.DoesNotContain("finance.settlement", source, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The FIN-001 implementation areas, listed one by one so that none of them can disappear from the
+    /// scan unnoticed. SET-001 lives in the same module, but none of these sources may acquire settlement
+    /// behavior.
+    /// </summary>
+    private static readonly string[] Fin001Sources =
+    [
+        "src/Modules/Finance/Finance.Application/Cod",
+        "src/Modules/Finance/Finance.Application/Financials",
+        "src/Modules/Finance/Finance.Application/FinanceContracts.cs",
+        "src/Modules/Finance/Finance.Domain/CodLifecyclePolicy.cs",
+        "src/Modules/Finance/Finance.Domain/FinanceEnums.cs",
+        "src/Modules/Finance/Finance.Domain/MoneyCents.cs",
+        "src/Modules/Finance/Finance.Domain/UnitEconomics.cs",
+        "src/Modules/Finance/Finance.Endpoints/CodEndpoints.cs",
+        "src/Modules/Finance/Finance.Endpoints/FinanceEndpointBinding.cs",
+        "src/Modules/Finance/Finance.Endpoints/OrderFinancialsEndpoints.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Cod",
+        "src/Modules/Finance/Finance.Infrastructure/Financials",
+    ];
+
+    /// <summary>
+    /// The only production code that may name the settlement tables: the Slice 1 ledger migration and the
+    /// Slice 2 settlement persistence. Later slices extend this list on purpose.
+    /// </summary>
+    private static readonly string[] Set001SettlementTableSources =
+    [
+        "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.Persistence.cs",
+    ];
+
+    /// <summary>
+    /// Every Finance source that may mention settlements at all: the ledger migration, the SET-001
+    /// domain, application, infrastructure and endpoint files, and the one composition line that
+    /// registers the settlement service. COD, Financials and every other FIN-001 source stay out.
+    /// </summary>
+    private static readonly string[] Set001SettlementSources =
+    [
+        "src/Modules/Finance/Finance.Application/Settlements/SettlementContracts.cs",
+        "src/Modules/Finance/Finance.Application/Settlements/SettlementCsvWriter.cs",
+        "src/Modules/Finance/Finance.Domain/Settlements/SettlementModel.cs",
+        "src/Modules/Finance/Finance.Domain/Settlements/SettlementPeriod.cs",
+        "src/Modules/Finance/Finance.Domain/Settlements/SettlementSourcePolicy.cs",
+        "src/Modules/Finance/Finance.Endpoints/SettlementEndpoints.cs",
+        "src/Modules/Finance/Finance.Infrastructure/DependencyInjection.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/DisabledSettlementService.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.Persistence.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.cs",
+    ];
+
     [Fact]
-    public void Finance_does_not_reach_into_SET001_settlement_tables_anywhere()
+    public void Fin001_sources_remain_settlement_free()
     {
-        var offenders = Directory
-            .GetFiles(
-                Path.Combine(RepositoryPaths.Root, "src", "Modules", "Finance"),
-                "*.cs",
-                SearchOption.AllDirectories)
+        var sources = Fin001Sources
+            .SelectMany(relative =>
+            {
+                var path = Path.Combine([RepositoryPaths.Root, .. relative.Split('/')]);
+                if (Directory.Exists(path))
+                {
+                    var files = Directory.GetFiles(path, "*.cs", SearchOption.AllDirectories);
+                    Assert.NotEmpty(files);
+                    return files;
+                }
+
+                Assert.True(File.Exists(path), $"FIN-001 source {relative} is missing.");
+                return [path];
+            })
+            .ToArray();
+
+        var offenders = sources
             .Where(path => File.ReadAllText(path).Contains("settlement", StringComparison.OrdinalIgnoreCase))
-            .Select(path => Path.GetFileName(path))
+            .Select(path => Path.GetRelativePath(RepositoryPaths.Root, path).Replace('\\', '/'))
             .ToArray();
 
         Assert.Empty(offenders);
+    }
+
+    [Fact]
+    public void Settlement_persistence_is_owned_by_the_SET001_settlement_slices()
+    {
+        var production = Directory
+            .GetFiles(Path.Combine(RepositoryPaths.Root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Any(segment => segment is "bin" or "obj"))
+            .ToArray();
+        string Relative(string path) => Path.GetRelativePath(RepositoryPaths.Root, path).Replace('\\', '/');
+
+        // Every production reference to the settlement tables belongs to SET-001, and SET-001 references them.
+        var settlementTables = new Regex(@"\bfinance\.settlement(s|_lines)\b", RegexOptions.IgnoreCase);
+        Assert.Equal(
+            Set001SettlementTableSources,
+            production
+                .Where(path => settlementTables.IsMatch(File.ReadAllText(path)))
+                .Select(Relative)
+                .Order(StringComparer.Ordinal));
+
+        // Inside Finance, no other source even mentions settlements, so SET-001 cannot leak into FIN-001
+        // through a shared helper, a contract or an endpoint.
+        var financeRoot = Path.Combine(RepositoryPaths.Root, "src", "Modules", "Finance") + Path.DirectorySeparatorChar;
+        Assert.Equal(
+            Set001SettlementSources,
+            production
+                .Where(path => path.StartsWith(financeRoot, StringComparison.Ordinal))
+                .Where(path => File.ReadAllText(path).Contains("settlement", StringComparison.OrdinalIgnoreCase))
+                .Select(Relative)
+                .Order(StringComparer.Ordinal));
     }
 
     /// <summary>
