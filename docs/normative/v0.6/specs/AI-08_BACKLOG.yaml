@@ -1197,6 +1197,8 @@ items:
     - OPS-003-OFFLINE-72H
     - OPS-003-CLEANUP-ROLE
     - OPS-003-SERVER-72H-REJECTION
+    - OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27
+    - OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27
     role: paqueteria_cleanup_executor NOLOGIN BYPASSRLS (AI-18 assertions 13-16)
     functions:
     - security.purge_expired_idempotency_keys(timestamptz,integer,boolean) - batch 1..5000, fixed 72-hour floor on
@@ -1210,6 +1212,10 @@ items:
       finalizeProof uses captured_at; a timestamp older than 72 hours is rejected with 409 OFFLINE_OPERATION_EXPIRED,
       one beyond the configurable clock tolerance (0-300 s, default 300 s) is an invalid request (AI-05
       x-offline-operation-age)
+    incident_rejection: openIncident applies the same rule to occurred_at with its own configurable limits
+      (Incidents:MaximumOccurrenceAgeHours, default 72 h, 1-72 h, only downward; Incidents:MaximumOccurrenceSkewMinutes, default 5
+      min, 0-60 min); an older report is 409 OFFLINE_OPERATION_EXPIRED before the incident service, one beyond the
+      tolerance stays 409 INVALID_REQUEST
     extension_point: the BFF session purge joins the cleanup executor with its own migration once identity.bff_sessions
       exists
   acceptance_criteria:

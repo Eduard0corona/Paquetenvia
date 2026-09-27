@@ -86,6 +86,9 @@ public sealed class IncidentsConfigurationTests
     [InlineData("Incidents:HighSlaHours", "-8")]
     [InlineData("Incidents:MaximumOccurrenceAgeHours", "0")]
     [InlineData("Incidents:MaximumOccurrenceAgeHours", "9000")]
+    // The retrospective window is capped at the 72-hour idempotency-key floor.
+    [InlineData("Incidents:MaximumOccurrenceAgeHours", "73")]
+    [InlineData("Incidents:MaximumOccurrenceAgeHours", "96")]
     [InlineData("Incidents:MaximumOccurrenceSkewMinutes", "-1")]
     [InlineData("Incidents:MaximumOccurrenceSkewMinutes", "120")]
     // Evidence may be tightened, never removed and never widened past the published bound.
@@ -112,6 +115,57 @@ public sealed class IncidentsConfigurationTests
         Assert.True(options.OperationalPolicy.IsValid);
         Assert.Equal(TimeSpan.FromHours(24), options.OperationalPolicy.MaximumOccurrenceAge);
         Assert.False(options.OperationalPolicy.IsAllowedEvidenceCount(4));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(24)]
+    [InlineData(72)]
+    public void An_occurrence_age_from_one_to_72_hours_is_accepted(int hours)
+    {
+        var options = Resolve(new Dictionary<string, string?>
+        {
+            ["Incidents:MaximumOccurrenceAgeHours"] = hours.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        });
+
+        Assert.True(options.OperationalPolicy.IsValid);
+        Assert.Equal(TimeSpan.FromHours(hours), options.OperationalPolicy.MaximumOccurrenceAge);
+    }
+
+    [Fact]
+    public void An_occurrence_age_above_72_hours_fails_the_start()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Incidents:MaximumOccurrenceAgeHours"] = "73" })
+            .Build();
+        using var provider = new ServiceCollection()
+            .AddIncidentsInfrastructure(configuration, new TestHostEnvironment("Testing"))
+            .BuildServiceProvider();
+
+        // ValidateOnStart: the startup validator refuses the value before any request is served.
+        var validator = provider.GetRequiredService<IStartupValidator>();
+        var failure = Assert.Throws<OptionsValidationException>(() => validator.Validate());
+        Assert.Contains("1 to 72 hours", string.Join(' ', failure.Failures), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_registered_occurrence_rule_reads_the_configured_age_and_skew()
+    {
+        using (var defaults = Build([]))
+        {
+            var policy = defaults.GetRequiredService<IncidentOccurrenceAgePolicy>();
+            Assert.Equal(TimeSpan.FromHours(72), policy.MaximumAge);
+            Assert.Equal(TimeSpan.FromMinutes(5), policy.ClockTolerance);
+        }
+
+        using var configured = Build(new Dictionary<string, string?>
+        {
+            ["Incidents:MaximumOccurrenceAgeHours"] = "24",
+            ["Incidents:MaximumOccurrenceSkewMinutes"] = "0",
+        });
+        var tightened = configured.GetRequiredService<IncidentOccurrenceAgePolicy>();
+        Assert.Equal(TimeSpan.FromHours(24), tightened.MaximumAge);
+        Assert.Equal(TimeSpan.Zero, tightened.ClockTolerance);
     }
 
     private static IncidentsOptions Resolve(

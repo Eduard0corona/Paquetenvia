@@ -1,9 +1,11 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
+using System.Xml;
 using Incidents.Application.Incidents;
 using Incidents.Domain;
 using Incidents.Endpoints;
+using Incidents.Infrastructure;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.ContractTests.Support;
 using YamlDotNet.RepresentationModel;
@@ -194,17 +196,102 @@ public sealed partial class IncidentsOpenApiImplementationTests
         var implemented = ConflictCodePattern()
             .Matches(source[switchStart..switchEnd])
             .Select(match => match.Groups[1].Value)
+            // openIncident's offline age refusal is answered by the endpoint itself, outside PublicCode.
+            .Append(OfflineOperationAgePolicy.ExpiredCode)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
         Assert.Equal(implemented, published);
+        Assert.Contains(
+            "return Conflict(OfflineOperationAgePolicy.ExpiredCode);",
+            HandlerSource("OpenIncidentAsync"),
+            StringComparison.Ordinal);
+        // Resolution has no client timestamp and never answers the offline code.
+        Assert.DoesNotContain("OfflineOperationAge", HandlerSource("ResolveIncidentAsync"), StringComparison.Ordinal);
 
         // Internal rejection evidence must never reach the published problem document.
         Assert.Equal(
             "#/components/schemas/IncidentConflictProblem",
             Contract().Mapping("components").Mapping("responses").Mapping("IncidentConflict")
                 .Mapping("content").Mapping("application/problem+json").Mapping("schema").Scalar("$ref"));
+    }
+
+    /// <summary>
+    /// OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27: AI-05 lists openIncident in
+    /// x-offline-operation-age with its own configurable limits, and every published value is the one
+    /// the options, the domain bounds and the endpoint implement.
+    /// </summary>
+    [Fact]
+    public void AI05_offline_operation_age_entry_for_openIncident_is_the_implemented_configurable_rule()
+    {
+        var age = Contract().Mapping("x-offline-operation-age");
+        var decisions = age.Sequence("decisions").Children.Cast<YamlScalarNode>().Select(node => node.Value!).ToArray();
+        Assert.Contains("OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27", decisions);
+        Assert.Contains("OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27", decisions);
+        // The shared rule for the other operations stays fixed.
+        Assert.Equal("false", age.Scalar("maximum_age_configurable"));
+
+        var entry = age.Mapping("operations").Mapping("openIncident");
+        Assert.Equal(
+            [
+                "clock_ahead", "clock_tolerance_default", "clock_tolerance_range", "clock_tolerance_setting",
+                "maximum_age_configurable", "maximum_age_default", "maximum_age_range", "maximum_age_setting",
+                "missing_timestamp", "timestamp",
+            ],
+            entry.Children.Keys.Cast<YamlScalarNode>().Select(node => node.Value!).Order(StringComparer.Ordinal));
+        Assert.Equal("occurred_at (required)", entry.Scalar("timestamp"));
+        Assert.Contains("occurred_at", Required(Schema("OpenIncidentRequest")), StringComparer.Ordinal);
+        Assert.Equal("true", entry.Scalar("maximum_age_configurable"));
+
+        // Settings are the bound option names of the Incidents section.
+        Assert.Equal(
+            $"{IncidentsOptions.SectionName}:{nameof(IncidentsOptions.MaximumOccurrenceAgeHours)}",
+            entry.Scalar("maximum_age_setting"));
+        Assert.Equal(
+            $"{IncidentsOptions.SectionName}:{nameof(IncidentsOptions.MaximumOccurrenceSkewMinutes)}",
+            entry.Scalar("clock_tolerance_setting"));
+
+        // Defaults are the MVP-1 policy and the unconfigured options.
+        var defaults = new IncidentsOptions();
+        Assert.Equal(IncidentOperationalPolicy.Mvp1, defaults.OperationalPolicy);
+        Assert.Equal(IncidentOccurrenceAgePolicy.Mvp1.MaximumAge, XmlConvert.ToTimeSpan(entry.Scalar("maximum_age_default")));
+        Assert.Equal(TimeSpan.FromHours(defaults.MaximumOccurrenceAgeHours), IncidentOccurrenceAgePolicy.Mvp1.MaximumAge);
+        Assert.Equal(IncidentOccurrenceAgePolicy.Mvp1.ClockTolerance, XmlConvert.ToTimeSpan(entry.Scalar("clock_tolerance_default")));
+        Assert.Equal(TimeSpan.FromMinutes(defaults.MaximumOccurrenceSkewMinutes), IncidentOccurrenceAgePolicy.Mvp1.ClockTolerance);
+
+        // Ranges are exactly what the validated options accept, in their own units.
+        var (minimumAge, maximumAge) = Range(entry.Scalar("maximum_age_range"));
+        Assert.Equal(TimeSpan.FromHours(1), minimumAge);
+        Assert.Equal(IncidentOperationalPolicy.LongestConfigurableOccurrenceAge, maximumAge);
+        Assert.Equal(TimeSpan.FromHours(72), maximumAge);
+        Assert.True(WithAge((int)minimumAge.TotalHours).OperationalPolicy.IsValid);
+        Assert.False(WithAge((int)minimumAge.TotalHours - 1).OperationalPolicy.IsValid);
+        Assert.True(WithAge((int)maximumAge.TotalHours).OperationalPolicy.IsValid);
+        Assert.False(WithAge((int)maximumAge.TotalHours + 1).OperationalPolicy.IsValid);
+
+        var (minimumSkew, maximumSkew) = Range(entry.Scalar("clock_tolerance_range"));
+        Assert.Equal(TimeSpan.Zero, minimumSkew);
+        Assert.Equal(IncidentOperationalPolicy.LongestConfigurableSkew, maximumSkew);
+        Assert.True(WithSkew((int)minimumSkew.TotalMinutes).OperationalPolicy.IsValid);
+        Assert.False(WithSkew((int)minimumSkew.TotalMinutes - 1).OperationalPolicy.IsValid);
+        Assert.True(WithSkew((int)maximumSkew.TotalMinutes).OperationalPolicy.IsValid);
+        Assert.False(WithSkew((int)maximumSkew.TotalMinutes + 1).OperationalPolicy.IsValid);
+
+        // A clock ahead of the tolerance and a missing timestamp stay the invalid request they were.
+        Assert.Equal("409 INVALID_REQUEST", entry.Scalar("clock_ahead"));
+        Assert.Equal("409 INVALID_REQUEST", entry.Scalar("missing_timestamp"));
+        var handler = HandlerSource("OpenIncidentAsync");
+        Assert.Contains("request.OccurredAt is not { } occurredAt", handler, StringComparison.Ordinal);
+        Assert.Contains(
+            "case OfflineOperationAge.AheadOfServerClock:\n                return Conflict(\"INVALID_REQUEST\");",
+            handler.ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+
+        // The rule runs in the endpoint before the incident service, which owns the idempotency replay.
+        var evaluation = handler.IndexOf("occurrencePolicy.Evaluate(occurredAt, clock.UtcNow)", StringComparison.Ordinal);
+        var service = handler.IndexOf("service.OpenAsync(", StringComparison.Ordinal);
+        Assert.True(evaluation >= 0 && service >= 0 && evaluation < service);
     }
 
     [Fact]
@@ -462,6 +549,17 @@ public sealed partial class IncidentsOpenApiImplementationTests
             .Select(node => node.Value!)
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    private static (TimeSpan Minimum, TimeSpan Maximum) Range(string value)
+    {
+        var bounds = value.Split("..", StringSplitOptions.None);
+        Assert.Equal(2, bounds.Length);
+        return (XmlConvert.ToTimeSpan(bounds[0]), XmlConvert.ToTimeSpan(bounds[1]));
+    }
+
+    private static IncidentsOptions WithAge(int hours) => new() { MaximumOccurrenceAgeHours = hours };
+
+    private static IncidentsOptions WithSkew(int minutes) => new() { MaximumOccurrenceSkewMinutes = minutes };
 
     private static void AssertEnum(YamlMappingNode property, string[] expected)
     {

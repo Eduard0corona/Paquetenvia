@@ -296,15 +296,28 @@ public sealed record IncidentOperationalPolicy
     /// <summary>The owner-approved MVP-1 defaults: 2h/8h/24h/72h, 72h retrospective, 5m skew, 10 proofs.</summary>
     public static readonly IncidentOperationalPolicy Mvp1 = new();
 
-    private static readonly TimeSpan LongestConfigurableWindow = TimeSpan.FromDays(30);
-    private static readonly TimeSpan LongestConfigurableSkew = TimeSpan.FromHours(1);
+    /// <summary>The longest SLA window a deployment may configure.</summary>
+    public static readonly TimeSpan LongestConfigurableWindow = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// The longest retrospective window a deployment may configure (AI-05 publishes it). Capped at
+    /// the 72-hour idempotency-key floor (OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27), so a report old
+    /// enough for its key to have been purged is always refused and can never open a second incident.
+    /// </summary>
+    public static readonly TimeSpan LongestConfigurableOccurrenceAge = TimeSpan.FromHours(72);
+
+    /// <summary>The widest device clock skew a deployment may tolerate (AI-05 publishes it).</summary>
+    public static readonly TimeSpan LongestConfigurableSkew = TimeSpan.FromHours(1);
 
     public TimeSpan CriticalResolutionWindow { get; init; } = TimeSpan.FromHours(2);
     public TimeSpan HighResolutionWindow { get; init; } = TimeSpan.FromHours(8);
     public TimeSpan MediumResolutionWindow { get; init; } = TimeSpan.FromHours(24);
     public TimeSpan LowResolutionWindow { get; init; } = TimeSpan.FromHours(72);
 
-    /// <summary>How far back an attempt may be reported. Older reports are malformed, not backdated.</summary>
+    /// <summary>
+    /// How far back an attempt may be reported. An older report is refused as an expired offline
+    /// operation (OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27), never backdated.
+    /// </summary>
     public TimeSpan MaximumOccurrenceAge { get; init; } = TimeSpan.FromHours(72);
 
     /// <summary>The device-to-server clock skew tolerated on <c>occurred_at</c>.</summary>
@@ -325,7 +338,8 @@ public sealed record IncidentOperationalPolicy
         CriticalResolutionWindow <= HighResolutionWindow &&
         HighResolutionWindow <= MediumResolutionWindow &&
         MediumResolutionWindow <= LowResolutionWindow &&
-        IsWindow(MaximumOccurrenceAge) &&
+        MaximumOccurrenceAge > TimeSpan.Zero &&
+        MaximumOccurrenceAge <= LongestConfigurableOccurrenceAge &&
         MaximumOccurrenceSkew >= TimeSpan.Zero &&
         MaximumOccurrenceSkew <= LongestConfigurableSkew &&
         MaximumEvidenceCount >= IncidentEvidencePolicy.MinimumEvidenceCount &&
@@ -345,11 +359,6 @@ public sealed record IncidentOperationalPolicy
 
     public bool IsAllowedEvidenceCount(int count) =>
         count >= IncidentEvidencePolicy.MinimumEvidenceCount && count <= MaximumEvidenceCount;
-
-    public bool IsValidOccurrence(DateTimeOffset occurredAt, DateTimeOffset now) =>
-        occurredAt != default &&
-        occurredAt <= now + MaximumOccurrenceSkew &&
-        occurredAt >= now - MaximumOccurrenceAge;
 
     private static bool IsWindow(TimeSpan value) =>
         value > TimeSpan.Zero && value <= LongestConfigurableWindow;
