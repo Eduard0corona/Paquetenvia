@@ -17,7 +17,9 @@ GET /api/v1/operations/dashboard
 operationId: getOperationsDashboard
 ```
 
-No se amplió `listOrders`: AI-05 está congelado y su DTO no contiene la
+No se amplió `listOrders`: AI-05 no se modificó en OBS-001 (sus cambios exigen
+autorización normativa explícita; no está congelado y se ha ampliado después
+por EXT-001, RTE-001, CSV-001, INC-001, FIN-001 y SET-001) y su DTO no contiene la
 proyección operativa requerida por AI-07. El nuevo endpoint mantiene su propio
 DTO exacto y no cambia contratos existentes.
 
@@ -154,7 +156,9 @@ lista semánticas, `time datetime`, aria-live/aria-busy, foco visible, targets d
 
 ## Riesgos y límites
 
-- El endpoint aditivo todavía no integra AI-05 congelado.
+- El endpoint aditivo `GET /api/v1/operations/dashboard` todavía no está
+  declarado en AI-05; `HttpSurfaceOpenApiCoverageTests` lo nombra como única
+  excepción. Declararlo requiere una decisión normativa propia.
 - Ventanas no están persistidas; cliente puede quedar `null`.
 - La referencia de conductor no es nombre personal.
 - Posiciones no es un mapa; GATE-003 continúa abierto.
