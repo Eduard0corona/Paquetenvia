@@ -1,0 +1,445 @@
+name: Deploy Azure PILOT
+
+# ENV-001 pilot environment (PILOT-REAL-PEOPLE), separate from AZR-001 DEV-SYNTHETIC.
+# - Single trigger: workflow_dispatch, run by the owner from main (AZURE-DEPLOY-VIA-WORKFLOW).
+# - GitHub Environment `azure-pilot` guards every Azure job; OIDC only (no stored credential).
+# - Provenance (AZR-001 §27 reused): tested_git_sha must be the head of a 13/13 successful
+#   Foundation CI push run on main and an ancestor of the dispatched main head; the deploy job
+#   checks out and builds exactly tested_git_sha.
+# - The database is private: every database action runs as a Container Apps Job inside the VNet.
+# Runbook: docs/operations/env-001-pilot/README.md. One-time bootstrap: docs/operations/env-001-pilot/bootstrap.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tested_git_sha:
+        description: Foundation-certified commit SHA to deploy (head of foundation_run_id, ancestor of or equal to the dispatched main head).
+        required: true
+        type: string
+      foundation_run_id:
+        description: Foundation CI run id (push on main) whose head is tested_git_sha and whose 13 jobs all succeeded.
+        required: true
+        type: string
+      custom_domain_phase:
+        description: "none = route on the environment FQDN only; bind = also bind paquetenvia.com with a managed certificate (DNS records must exist)."
+        required: true
+        type: choice
+        default: none
+        options:
+          - none
+          - bind
+
+permissions: {}
+
+concurrency:
+  group: azure-pilot
+  cancel-in-progress: false
+
+env:
+  BICEP_VERSION: v0.47.16
+  BICEP_SHA256: 64c345a58e0c3e48b1bc98a4e62d6b3adb1d238281297de3400aeafb2697aa5a
+  PILOT_REGION: mexicocentral
+  PILOT_HOST: paquetenvia.com
+  BLOB_TAG_READER_ROLE: Paquetenvia Pilot Blob Tag Reader
+
+jobs:
+  provenance:
+    name: Verify provenance and pilot guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out control plane (github.sha)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install guard dependencies
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Validate dispatch inputs
+        shell: bash
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+          CUSTOM_DOMAIN_PHASE: ${{ inputs.custom_domain_phase }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TESTED_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tested_git_sha must match ^[0-9a-f]{40}$ (STOP_FOR_CONTRACT_REVIEW)"; exit 1
+          fi
+          if [[ ! "${FOUNDATION_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::foundation_run_id must match ^[0-9]+$ (STOP_FOR_CONTRACT_REVIEW)"; exit 1
+          fi
+          if [[ "${CUSTOM_DOMAIN_PHASE}" != "none" && "${CUSTOM_DOMAIN_PHASE}" != "bind" ]]; then
+            echo "::error::custom_domain_phase must be none or bind"; exit 1
+          fi
+
+      - name: Fetch Foundation run and job records
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOUNDATION_RUN_ID}" > "${RUNNER_TEMP}/foundation-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOUNDATION_RUN_ID}/jobs?per_page=100" > "${RUNNER_TEMP}/foundation-jobs.json"
+
+      - name: Enforce the 13/13 provenance gate (STOP_FOR_CONTRACT_REVIEW on any failure)
+        shell: bash
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+        run: >-
+          python ./tools/azr-001/azr001_static_guards.py deploy-gate
+          --tested-git-sha "${TESTED_GIT_SHA}"
+          --dispatch-ref "${GITHUB_REF}"
+          --dispatch-sha "${GITHUB_SHA}"
+          --foundation-run-id "${FOUNDATION_RUN_ID}"
+          --foundation-run-json "${RUNNER_TEMP}/foundation-run.json"
+          --foundation-jobs-json "${RUNNER_TEMP}/foundation-jobs.json"
+
+      - name: Check out tested_git_sha (deployment source)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tested_git_sha }}
+          path: tested
+          fetch-depth: 1
+
+      - name: Install pinned Bicep CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${RUNNER_TEMP}/bicep" "https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64"
+          echo "${BICEP_SHA256}  ${RUNNER_TEMP}/bicep" | sha256sum --check --strict
+          chmod +x "${RUNNER_TEMP}/bicep"
+
+      - name: Build and lint pilot templates of tested_git_sha (offline)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/env001-arm"
+          for template in tested/deploy/azure/pilot/*.bicep; do
+            "${RUNNER_TEMP}/bicep" build "${template}" --outdir "${RUNNER_TEMP}/env001-arm"
+            "${RUNNER_TEMP}/bicep" lint "${template}"
+          done
+
+      - name: Run ENV-001 pilot guards against tested_git_sha
+        shell: bash
+        run: python ./tools/azr-001/env001_pilot_guards.py check --repo-root tested --arm-dir "${RUNNER_TEMP}/env001-arm"
+
+      - name: Require every owner business setting (STOP_FOR_OWNER_DECISION)
+        shell: bash
+        run: python ./tools/azr-001/env001_pilot_guards.py settings-check --file tested/deploy/azure/pilot/apps.settings.json
+
+  deploy:
+    name: Deploy pilot (deployed_git_sha = tested_git_sha)
+    needs: provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: azure-pilot
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+      CUSTOM_DOMAIN_PHASE: ${{ inputs.custom_domain_phase }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      PILOT_RESOURCE_GROUP: ${{ vars.PILOT_RESOURCE_GROUP }}
+      PILOT_BUDGET_START_DATE: ${{ vars.PILOT_BUDGET_START_DATE }}
+      PILOT_BUDGET_EMAILS: ${{ vars.PILOT_BUDGET_EMAILS }}
+      PILOT_TRACKING_SUPPORT_URL: ${{ vars.PILOT_TRACKING_SUPPORT_URL }}
+    steps:
+      - name: Validate inputs and environment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${TESTED_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::tested_git_sha must match ^[0-9a-f]{40}$"; exit 1; }
+          [[ "${CUSTOM_DOMAIN_PHASE}" == "none" || "${CUSTOM_DOMAIN_PHASE}" == "bind" ]] || { echo "::error::invalid custom_domain_phase"; exit 1; }
+          [[ "${AZURE_SUBSCRIPTION_ID}" =~ ^[0-9a-f-]{36}$ ]] || { echo "::error::AZURE_SUBSCRIPTION_ID variable is missing"; exit 1; }
+          [[ "${PILOT_RESOURCE_GROUP}" =~ ^[A-Za-z0-9._-]{1,90}$ ]] || { echo "::error::PILOT_RESOURCE_GROUP variable is missing or invalid"; exit 1; }
+          [[ "${PILOT_BUDGET_START_DATE}" =~ ^20[0-9]{2}-(0[1-9]|1[0-2])-01$ ]] || { echo "::error::PILOT_BUDGET_START_DATE must be YYYY-MM-01"; exit 1; }
+          [[ -z "${PILOT_BUDGET_EMAILS}" || "${PILOT_BUDGET_EMAILS}" =~ ^[A-Za-z0-9._%+@,-]+$ ]] || { echo "::error::PILOT_BUDGET_EMAILS must be a comma-separated list"; exit 1; }
+          [[ -z "${PILOT_TRACKING_SUPPORT_URL}" || "${PILOT_TRACKING_SUPPORT_URL}" =~ ^https://[A-Za-z0-9./_-]+$ ]] || { echo "::error::PILOT_TRACKING_SUPPORT_URL must be an https URL"; exit 1; }
+
+      - name: Check out tested_git_sha
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tested_git_sha }}
+          fetch-depth: 1
+
+      - name: Install pinned Bicep CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${RUNNER_TEMP}/bicep" "https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64"
+          echo "${BICEP_SHA256}  ${RUNNER_TEMP}/bicep" | sha256sum --check --strict
+          chmod +x "${RUNNER_TEMP}/bicep"
+          mkdir -p "${RUNNER_TEMP}/arm"
+          for template in deploy/azure/pilot/*.bicep; do
+            "${RUNNER_TEMP}/bicep" build "${template}" --outdir "${RUNNER_TEMP}/arm"
+          done
+
+      - name: Azure login (OIDC, no stored credential)
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2 (v2.3.1)
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify subscription, resource group and region
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account set --subscription "${AZURE_SUBSCRIPTION_ID}"
+          state="$(az account show --query state -o tsv)"
+          [[ "${state}" == "Enabled" ]] || { echo "::error::subscription is not Enabled (STOP_FOR_OWNER_DECISION)"; exit 1; }
+          location="$(az group show --name "${PILOT_RESOURCE_GROUP}" --query location -o tsv)"
+          [[ "${location}" == "${PILOT_REGION}" ]] || { echo "::error::resource group must exist in ${PILOT_REGION} (bootstrap.md step 2)"; exit 1; }
+          az extension add --name containerapp --upgrade --yes --only-show-errors
+
+      - name: Stage 1 - identities, Key Vault and keys (security.bicep)
+        id: security
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-security \
+            --template-file "${RUNNER_TEMP}/arm/security.json" --only-show-errors --output none
+          outputs="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-security --query properties.outputs -o json)"
+          for key in vaultName piiKeyUri dataProtectionKeyUri; do
+            echo "${key}=$(jq -r ".${key}.value" <<<"${outputs}")" >> "${GITHUB_OUTPUT}"
+          done
+
+      - name: Ensure generated secrets (admin password, EmailLookup key); never printed
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Wait for the Key Vault Secrets Officer assignment of the deployer to propagate.
+          for attempt in $(seq 1 20); do
+            if az keyvault secret list --vault-name "${VAULT}" --query "length(@)" -o tsv >/dev/null 2>&1; then break; fi
+            [[ "${attempt}" == 20 ]] && { echo "::error::Key Vault data plane not reachable with the deployer role"; exit 1; }
+            sleep 30
+          done
+          has_secret() { [[ "$(az keyvault secret list --vault-name "${VAULT}" --query "length([?name=='$1'])" -o tsv)" == "1" ]]; }
+          put_secret() { az keyvault secret set --vault-name "${VAULT}" --name "$1" --file "$2" --encoding utf-8 --only-show-errors --output none; shred -u "$2"; }
+          if ! has_secret pg-admin-password; then
+            python3 -c "import secrets; print('Pv1-' + secrets.token_urlsafe(40), end='')" > "${RUNNER_TEMP}/s"
+            put_secret pg-admin-password "${RUNNER_TEMP}/s"
+            echo "Generated pg-admin-password."
+          fi
+          if ! has_secret paquetenvia-email-lookup-key-1; then
+            openssl rand -base64 32 | tr -d '\n' > "${RUNNER_TEMP}/s"
+            put_secret paquetenvia-email-lookup-key-1 "${RUNNER_TEMP}/s"
+            echo "Generated paquetenvia-email-lookup-key-1."
+          fi
+
+      - name: Stage 2 - network, logs, registry, storage, PostgreSQL, environment, budget (platform.bicep)
+        id: platform
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: |
+          set -euo pipefail
+          umask 077
+          scope="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${PILOT_RESOURCE_GROUP}"
+          tag_reader="$(az role definition list --custom-role-only true --name "${BLOB_TAG_READER_ROLE}" --scope "${scope}" --query "[0].id" -o tsv)"
+          [[ -n "${tag_reader}" ]] || { echo "::error::custom role '${BLOB_TAG_READER_ROLE}' is missing (bootstrap.md step 4)"; exit 1; }
+          emails="$(python3 -c "import json,os; print(json.dumps([e for e in os.environ.get('PILOT_BUDGET_EMAILS','').split(',') if e]))")"
+          admin="$(az keyvault secret show --vault-name "${VAULT}" --name pg-admin-password --query value -o tsv)"
+          echo "::add-mask::${admin}"
+          ADMIN="${admin}" TAG_READER="${tag_reader}" EMAILS="${emails}" python3 - > "${RUNNER_TEMP}/platform.parameters.json" <<'PY'
+          import json, os
+          print(json.dumps({"$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                            "contentVersion": "1.0.0.0",
+                            "parameters": {"postgresAdministratorPassword": {"value": os.environ["ADMIN"]},
+                                           "budgetStartDate": {"value": os.environ["PILOT_BUDGET_START_DATE"]},
+                                           "budgetContactEmails": {"value": json.loads(os.environ["EMAILS"])},
+                                           "blobTagReaderRoleDefinitionId": {"value": os.environ["TAG_READER"]},
+                                           "publicOrigin": {"value": "https://" + os.environ["PILOT_HOST"]}}}))
+          PY
+          unset admin
+          az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-platform \
+            --template-file "${RUNNER_TEMP}/arm/platform.json" --parameters "@${RUNNER_TEMP}/platform.parameters.json" \
+            --only-show-errors --output none
+          shred -u "${RUNNER_TEMP}/platform.parameters.json"
+          outputs="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-platform --query properties.outputs -o json)"
+          for key in registryName registryServer blobServiceUri postgresHost postgresAdministratorLogin containerEnvironmentName containerEnvironmentStaticIp customDomainVerificationId containerAppsSubnetPrefix; do
+            echo "${key}=$(jq -r ".${key}.value" <<<"${outputs}")" >> "${GITHUB_OUTPUT}"
+          done
+
+      - name: Ensure database connection secrets and runtime login verifiers; never printed
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+          PGHOST_FQDN: ${{ steps.platform.outputs.postgresHost }}
+          PGADMIN_LOGIN: ${{ steps.platform.outputs.postgresAdministratorLogin }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${PGHOST_FQDN}" =~ ^[a-z0-9-]+\.postgres\.database\.azure\.com$ ]] || { echo "::error::unexpected PostgreSQL host"; exit 1; }
+          has_secret() { [[ "$(az keyvault secret list --vault-name "${VAULT}" --query "length([?name=='$1'])" -o tsv)" == "1" ]]; }
+          put_secret() { az keyvault secret set --vault-name "${VAULT}" --name "$1" --file "$2" --encoding utf-8 --only-show-errors --output none; shred -u "$2"; }
+          common="SSL Mode=VerifyFull;Timeout=15;Command Timeout=60"
+          # The migration credential follows the administrator password (re-derived on every run).
+          admin="$(az keyvault secret show --vault-name "${VAULT}" --name pg-admin-password --query value -o tsv)"
+          echo "::add-mask::${admin}"
+          printf 'Host=%s;Database=paqueteria;Username=%s;Password=%s;Maximum Pool Size=4;Minimum Pool Size=0;%s' \
+            "${PGHOST_FQDN}" "${PGADMIN_LOGIN}" "${admin}" "${common}" > "${RUNNER_TEMP}/s"
+          unset admin
+          put_secret pg-migrate-connection "${RUNNER_TEMP}/s"
+          # Runtime LOGIN passwords are generated once; the job receives only their SCRAM verifiers.
+          for role in api worker; do
+            if has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then continue; fi
+            password="$(openssl rand -hex 32)"
+            echo "::add-mask::${password}"
+            printf 'Host=%s;Database=paqueteria;Username=pv_pilot_%s;Password=%s;Maximum Pool Size=5;Minimum Pool Size=0;%s' \
+              "${PGHOST_FQDN}" "${role}" "${password}" "${common}" > "${RUNNER_TEMP}/s"
+            put_secret "pg-${role}-runtime-connection" "${RUNNER_TEMP}/s"
+            printf '%s' "${password}" | python3 ./tools/azr-001/env001_pilot_guards.py scram-verifier | tr -d '\n' > "${RUNNER_TEMP}/s"
+            put_secret "pg-${role}-login-verifier" "${RUNNER_TEMP}/s"
+            unset password
+            echo "Generated runtime login credential for ${role}."
+          done
+          if ! has_secret authcenter-paquetenvia-client-secret; then
+            echo "::error::Key Vault ${VAULT} lacks authcenter-paquetenvia-client-secret. Store the AuthCenter client secret (README 'Secrets the owner writes') and re-run."
+            exit 1
+          fi
+
+      - name: Build and push images by digest (deployed_git_sha = tested_git_sha)
+        id: images
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.platform.outputs.registryName }}
+          REGISTRY_SERVER: ${{ steps.platform.outputs.registryServer }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "${TESTED_GIT_SHA}" ]] || { echo "::error::checkout is not tested_git_sha"; exit 1; }
+          az acr login --name "${REGISTRY}" --only-show-errors
+          support_url="${PILOT_TRACKING_SUPPORT_URL:-https://${PILOT_HOST}}"
+          build() {
+            local name="$1" dockerfile="$2"; shift 2
+            local ref="${REGISTRY_SERVER}/paquetenvia-${name}:${TESTED_GIT_SHA}"
+            docker build --pull --file "${dockerfile}" --build-arg "SOURCE_SHA=${TESTED_GIT_SHA}" "$@" --tag "${ref}" . >&2
+            docker push "${ref}" >&2
+            local digest
+            digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${ref}")"
+            digest="${digest##*@}"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::image ${name} has no immutable digest"; exit 1; }
+            echo "${REGISTRY_SERVER}/paquetenvia-${name}@${digest}"
+          }
+          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"
+          echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"
+          echo "dbops=$(build db-ops deploy/azure/pilot/Dockerfile.db-ops)" >> "${GITHUB_OUTPUT}"
+          echo "web=$(build web deploy/azure/Dockerfile.web \
+            --build-arg NEXT_PUBLIC_API_BASE_URL= \
+            --build-arg NEXT_PUBLIC_AUTH_MODE=bff \
+            --build-arg NEXT_PUBLIC_TRACKING_BRAND_NAME=Paquetenvia \
+            --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL=${support_url}")" >> "${GITHUB_OUTPUT}"
+
+      - name: Stage 3 - migration and runtime-login jobs (jobs.bicep), then run them
+        shell: bash
+        env:
+          DBOPS_IMAGE: ${{ steps.images.outputs.dbops }}
+        run: |
+          set -euo pipefail
+          [[ "${DBOPS_IMAGE##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::db-ops image is not digest-pinned"; exit 1; }
+          az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-jobs \
+            --template-file "${RUNNER_TEMP}/arm/jobs.json" --parameters "dbOpsImage=${DBOPS_IMAGE}" \
+            --only-show-errors --output none
+          run_job() {
+            local job="$1" execution status
+            execution="$(az containerapp job start --name "${job}" --resource-group "${PILOT_RESOURCE_GROUP}" --query name -o tsv)"
+            echo "Started ${job} execution ${execution}"
+            for attempt in $(seq 1 120); do
+              status="$(az containerapp job execution show --name "${job}" --resource-group "${PILOT_RESOURCE_GROUP}" \
+                --job-execution-name "${execution}" --query properties.status -o tsv)"
+              case "${status}" in
+                Succeeded) echo "${job}: Succeeded"; return 0 ;;
+                Failed|Stopped|Degraded) echo "::error::${job} execution ${execution} ${status}; read its console log in Log Analytics (README 'Troubleshooting')"; return 1 ;;
+              esac
+              sleep 15
+            done
+            echo "::error::${job} did not finish within 30 minutes"; return 1
+          }
+          run_job job-pv-pilot-migrate
+          run_job job-pv-pilot-logins
+
+      - name: Stage 4 - Web, API, Worker and same-origin route (apps.bicep)
+        id: apps
+        shell: bash
+        env:
+          API_IMAGE: ${{ steps.images.outputs.api }}
+          WORKER_IMAGE: ${{ steps.images.outputs.worker }}
+          WEB_IMAGE: ${{ steps.images.outputs.web }}
+          PII_KEY_URI: ${{ steps.security.outputs.piiKeyUri }}
+          DP_KEY_URI: ${{ steps.security.outputs.dataProtectionKeyUri }}
+          BLOB_URI: ${{ steps.platform.outputs.blobServiceUri }}
+          PROXY_NETWORK: ${{ steps.platform.outputs.containerAppsSubnetPrefix }}
+        run: |
+          set -euo pipefail
+          for image in "${API_IMAGE}" "${WORKER_IMAGE}" "${WEB_IMAGE}"; do
+            [[ "${image##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::image is not digest-pinned"; exit 1; }
+          done
+          python3 ./tools/azr-001/env001_pilot_guards.py settings-check --file deploy/azure/pilot/apps.settings.json
+          az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-apps \
+            --template-file "${RUNNER_TEMP}/arm/apps.json" \
+            --parameters "apiImage=${API_IMAGE}" "workerImage=${WORKER_IMAGE}" "webImage=${WEB_IMAGE}" \
+              "publicHost=${PILOT_HOST}" "customDomainPhase=${CUSTOM_DOMAIN_PHASE}" \
+              "piiKeyUri=${PII_KEY_URI}" "dataProtectionKeyUri=${DP_KEY_URI}" "blobServiceUri=${BLOB_URI}" \
+              "trustedProxyNetwork=${PROXY_NETWORK}" "businessSettings=@deploy/azure/pilot/apps.settings.json" \
+            --only-show-errors --output none
+          fqdn="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-apps --query properties.outputs.routeFqdn.value -o tsv)"
+          echo "routeFqdn=${fqdn}" >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke test same-origin routing
+        shell: bash
+        env:
+          ROUTE_FQDN: ${{ steps.apps.outputs.routeFqdn }}
+        run: |
+          set -euo pipefail
+          base="https://${ROUTE_FQDN}"
+          for attempt in $(seq 1 20); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/")" || code=000
+            [[ "${code}" == "200" ]] && break
+            [[ "${attempt}" == 20 ]] && { echo "::error::Web did not answer 200 on /"; exit 1; }
+            sleep 15
+          done
+          # /auth goes to the API: the anonymous session probe answers (problem+)JSON 401, never the Web HTML.
+          session_type="$(curl -s -o /dev/null -w '%{content_type}' "${base}/auth/session")"
+          [[ "${session_type}" == application/*json* ]] || { echo "::error::/auth/session is not served by the API (${session_type})"; exit 1; }
+          # AuthCenter back-channel logout: server-to-server POST without Origin reaches the API and is rejected as invalid, not blocked.
+          body="$(curl -s -X POST -H 'Content-Type: application/x-www-form-urlencoded' --data 'logout_token=invalid' "${base}/auth/backchannel-logout")"
+          [[ "${body}" == *invalid_request* ]] || { echo "::error::/auth/backchannel-logout did not reach the API"; exit 1; }
+          echo "Same-origin routing smoke test passed on ${base}"
+
+      - name: Summary and DNS records for the owner
+        if: always()
+        shell: bash
+        env:
+          STATIC_IP: ${{ steps.platform.outputs.containerEnvironmentStaticIp }}
+          VERIFICATION_ID: ${{ steps.platform.outputs.customDomainVerificationId }}
+          ROUTE_FQDN: ${{ steps.apps.outputs.routeFqdn }}
+        run: |
+          {
+            echo "## ENV-001 pilot deployment"
+            echo "- deployed_git_sha: \`${TESTED_GIT_SHA}\`"
+            echo "- route FQDN: \`${ROUTE_FQDN:-not deployed}\`"
+            echo "- custom domain phase: \`${CUSTOM_DOMAIN_PHASE}\`"
+            echo ""
+            echo "### DNS records for ${PILOT_HOST} (create at the DNS host, then re-run with custom_domain_phase=bind)"
+            echo "| Type | Host | Value |"
+            echo "|---|---|---|"
+            echo "| A | @ | ${STATIC_IP:-unknown} |"
+            echo "| TXT | asuid | ${VERIFICATION_ID:-unknown} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
