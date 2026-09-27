@@ -76,6 +76,13 @@ p {
   background: var(--accent-dark);
 }
 
+.errorRetry {
+  border: 0;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .devShell { min-height: 100svh; padding: 2rem; background: #ecfeff; }
 .devCard { width: min(100%, 48rem); margin: 0 auto; padding: 2rem; border: 1px solid #99f6e4; border-radius: 1rem; background: white; box-shadow: 0 1rem 3rem rgb(15 118 110 / 12%); }
 .devCard h1 { font-size: clamp(2rem, 7vw, 3.5rem); }

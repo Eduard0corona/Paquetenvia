@@ -1,11 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
-  CONNECT_SOURCES_VARIABLE,
   buildContentSecurityPolicy,
   createNonce,
   isPrivateNoStorePath,
-  resolveConnectSources,
+  resolveConfiguredConnectSources,
 } from "./security/security-headers";
+
+// Validated once per server process (also at startup by
+// src/instrumentation.ts): an invalid PAQUETERIA_CSP_CONNECT_SOURCES stops the
+// proxy from loading, so no page is served with a weaker policy.
+const connectSources = resolveConfiguredConnectSources();
 
 /**
  * Emits a fresh nonce-based Content-Security-Policy for every page request.
@@ -19,11 +23,7 @@ export function proxy(request: NextRequest) {
     nonce,
     pathname: request.nextUrl.pathname,
     development: process.env.NODE_ENV === "development",
-    connectSources: resolveConnectSources(
-      process.env.NEXT_PUBLIC_API_BASE_URL,
-      process.env[CONNECT_SOURCES_VARIABLE],
-      process.env.NODE_ENV === "production",
-    ),
+    connectSources,
   });
 
   const requestHeaders = new Headers(request.headers);
@@ -44,8 +44,10 @@ export const config = {
   matcher: [
     // Every page, including /driver, /ops, /track and /dev. Static build
     // output, the Service Worker and the manifest carry no inline code and keep
-    // the static headers from next.config.ts. Same-origin /api and /hubs are
-    // forwarded to the API untouched (no nonce or CSP request headers).
-    "/((?!api/|hubs/|_next/static|_next/image|favicon.ico|sw.js|manifest.webmanifest).*)",
+    // the static headers from next.config.ts, as do the PWA icons. Same-origin
+    // /api, /hubs, /auth and /signin-authcenter are routed to the API and are
+    // forwarded untouched (no nonce or CSP request headers): the API owns
+    // their responses and headers.
+    "/((?!api/|hubs/|auth/|signin-authcenter|icons/|_next/static|_next/image|favicon.ico|sw.js|manifest.webmanifest).*)",
   ],
 };

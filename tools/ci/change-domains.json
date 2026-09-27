@@ -146,6 +146,7 @@
         "apps/web/src/components/**",
         "apps/web/src/lib/**",
         "apps/web/src/proxy.ts",
+        "apps/web/src/instrumentation.ts",
         "apps/web/src/security/**",
         "apps/web/public/**",
         "apps/web/tsconfig.json",

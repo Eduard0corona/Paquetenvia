@@ -110,6 +110,34 @@ export function resolveConnectSources(
   return [...new Set(sources)];
 }
 
+/**
+ * Resolves the connect-src origins from the server environment once, when the
+ * server starts (`src/instrumentation.ts`) and when the proxy module loads, so
+ * a misconfigured PAQUETERIA_CSP_CONNECT_SOURCES is reported at startup with a
+ * clear message instead of being re-parsed and thrown on every request. It still fails closed: the
+ * proxy never falls back to a looser policy. `NEXT_PUBLIC_API_BASE_URL` is
+ * read with a literal `process.env.` access so Next.js inlines its build-time
+ * value.
+ */
+export function resolveConfiguredConnectSources(): string[] {
+  try {
+    return resolveConnectSources(
+      process.env.NEXT_PUBLIC_API_BASE_URL,
+      process.env[CONNECT_SOURCES_VARIABLE],
+      process.env.NODE_ENV === "production",
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Invalid Content-Security-Policy configuration: ${reason} ` +
+        `Set ${CONNECT_SOURCES_VARIABLE} to a space-separated list of exact ` +
+        "origins such as https://storage.example.test, and " +
+        "NEXT_PUBLIC_API_BASE_URL to an absolute URL.",
+      { cause: error },
+    );
+  }
+}
+
 export function isTrackingPath(pathname: string): boolean {
   return pathname === "/track" || pathname.startsWith("/track/");
 }

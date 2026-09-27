@@ -1,16 +1,23 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildContentSecurityPolicy,
   createNonce,
   isPrivateNoStorePath,
+  resolveConfiguredConnectSources,
   resolveConnectSources,
 } from "./security-headers";
 
 const config = readFileSync(resolve(process.cwd(), "next.config.ts"), "utf8");
 const proxy = readFileSync(resolve(process.cwd(), "src/proxy.ts"), "utf8");
 const layout = readFileSync(resolve(process.cwd(), "src/app/layout.tsx"), "utf8");
+const instrumentation = readFileSync(
+  resolve(process.cwd(), "src/instrumentation.ts"),
+  "utf8",
+);
+const readApp = (file: string) =>
+  readFileSync(resolve(process.cwd(), "src/app", file), "utf8");
 
 function directives(policy: string): Map<string, string> {
   return new Map(
@@ -114,6 +121,30 @@ describe("connect sources", () => {
     expect(() => resolveConnectSources(undefined, entry, true)).toThrow();
   });
 
+  it("validates the runtime configuration once, failing closed with a clear message", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "https://api.synthetic.test");
+    vi.stubEnv("PAQUETERIA_CSP_CONNECT_SOURCES", "https://storage.synthetic.test");
+    try {
+      expect(resolveConfiguredConnectSources()).toEqual([
+        "'self'",
+        "https://api.synthetic.test",
+        "wss://api.synthetic.test",
+        "https://storage.synthetic.test",
+      ]);
+      vi.stubEnv("PAQUETERIA_CSP_CONNECT_SOURCES", "https://*.synthetic.test");
+      expect(() => resolveConfiguredConnectSources()).toThrow(
+        /Invalid Content-Security-Policy configuration.*PAQUETERIA_CSP_CONNECT_SOURCES/,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(instrumentation).toContain("resolveConfiguredConnectSources()");
+    expect(proxy).toMatch(
+      /^const connectSources = resolveConfiguredConnectSources\(\);$/m,
+    );
+  });
+
   it("accepts plain http origins only outside production", () => {
     expect(
       resolveConnectSources(undefined, "http://127.0.0.1:9000", false),
@@ -126,6 +157,37 @@ describe("header wiring", () => {
     expect(proxy).toContain('response.headers.set("Content-Security-Policy"');
     expect(proxy).toContain('requestHeaders.set("Content-Security-Policy"');
     expect(proxy).toContain("matcher");
+  });
+
+  it("forwards same-origin API routes and static assets without a page CSP", () => {
+    const matcher = /"\/\(\(\?!([^)]*)\)\.\*\)"/.exec(proxy)?.[1] ?? "";
+    const excluded = matcher.split("|");
+    for (const prefix of [
+      "api/",
+      "hubs/",
+      "auth/",
+      "signin-authcenter",
+      "icons/",
+      "_next/static",
+      "sw.js",
+      "manifest.webmanifest",
+    ]) {
+      expect(excluded).toContain(prefix);
+    }
+    const pattern = new RegExp(`^/((?!${matcher}).*)$`);
+    expect(pattern.test("/auth/callback")).toBe(false);
+    expect(pattern.test("/signin-authcenter")).toBe(false);
+    expect(pattern.test("/driver/stops")).toBe(true);
+    expect(pattern.test("/track/abc")).toBe(true);
+  });
+
+  it("replaces the framework 404 and global error pages, which inline styles", () => {
+    for (const file of ["not-found.tsx", "global-error.tsx"]) {
+      const source = readApp(file).replace(/\/\*[\s\S]*?\*\//g, "");
+      expect(source).toContain("className=");
+      expect(source).not.toMatch(/style=|<style/);
+    }
+    expect(readApp("global-error.tsx")).toContain('import "./globals.css"');
   });
 
   it("never emits a second CSP from next.config.ts", () => {
