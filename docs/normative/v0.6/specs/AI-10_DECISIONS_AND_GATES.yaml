@@ -171,8 +171,10 @@ post_mvp0_integration_record:
   recorded_on: 2026-09-26
   purpose: documentary record of items merged after REL-000-OWNER-001; it opens, closes or relaxes no gate
   open_question: GOV-2026-09-MERGE-AUTHORIZATION (decision-log.md Pending)
+  merged_on_timezone: UTC
   items:
   - {id: NTF-001, prs: ['#42'], merged_on: 2026-08-26, target: main, merge_authorization_in_pr_body: stated_not_included}
+  - {id: DEV-LOCAL-ENV, prs: ['#43'], merged_on: 2026-08-27, target: main, merge_authorization_in_pr_body: stated_not_included}
   - {id: EXT-001, prs: ['#44', '#45'], merged_on: 2026-08-28, target: main, merge_authorization_in_pr_body: stated_not_included}
   - {id: RTE-001, prs: ['#46'], merged_on: 2026-08-29, target: main, merge_authorization_in_pr_body: stated_not_included}
   - {id: RTE-001, prs: ['#53'], merged_on: 2026-09-13, target: main, merge_authorization_in_pr_body: authorized_for_head_415f57a}
@@ -183,13 +185,16 @@ post_mvp0_integration_record:
   - {id: SCL-001, prs: ['#73'], merged_on: 2026-09-24, target: development, merge_authorization_in_pr_body: not_stated}
   - {id: INC-001, prs: ['#71'], merged_on: 2026-09-24, target: development, merge_authorization_in_pr_body: not_stated}
   - {id: CSV-001, prs: ['#70'], merged_on: 2026-09-24, target: development, merge_authorization_in_pr_body: not_stated}
+  - {id: DEV-TO-MAIN, prs: ['#75'], merged_on: 2026-09-24, target: main, merge_authorization_in_pr_body: not_stated}
   - {id: SET-001, prs: ['#79'], merged_on: 2026-09-25, target: development, merge_authorization_in_pr_body: stated_not_authorized}
   - {id: INC-001, prs: ['#80'], merged_on: 2026-09-25, target: development, merge_authorization_in_pr_body: stated_not_authorized}
   - {id: SET-001, prs: ['#82'], merged_on: 2026-09-26, target: development, merge_authorization_in_pr_body: stated_not_authorized}
   - {id: LIF-001, prs: ['#83'], merged_on: 2026-09-26, target: development, merge_authorization_in_pr_body: not_stated}
   - {id: OPS-004, prs: ['#81'], merged_on: 2026-09-26, target: development, merge_authorization_in_pr_body: stated_not_authorized}
+  owner_decisions_source: 2026-09-26/27 working session with the project owner via Claude Code
   owner_decisions_2026_09_26:
   - GOV-AGENT-INTEGRATION-001
+  - GOV-AGENT-MERGE-DELEGATION-001
   - GOV-DEPENDENCY-ROUTE-001
   - GATE-002-BFF-001
   - D8-DISPATCH-OUTBOX-CLOSURE
@@ -197,6 +202,15 @@ post_mvp0_integration_record:
   - D6-COD-PILOT
   - D7-SETTLEMENT-RULES
   - OPS-003-OFFLINE-72H
+  owner_decisions_2026_09_26_27:
+  - D8-REASSIGNMENT-NEW-ASSIGNMENT
+  - AUTH-FIRST-LOGIN-INVITATION
+  - BFF-SESSION-STORE-POSTGRESQL
+  - PILOT-SAME-ORIGIN-ROUTING
+  - AUTHCENTER-AMR-MFA
+  - AUTHCENTER-DOMAIN
+  owner_decisions_translation: AI-05, AI-04, AI-06, AI-18 and the implementation are unchanged; translation pending in
+    governance/pilot-contracts
   gates_changed: none
   pilot_authorized: false
   production_authorized: false
