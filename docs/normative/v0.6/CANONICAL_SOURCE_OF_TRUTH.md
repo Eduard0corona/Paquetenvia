@@ -17,7 +17,7 @@ Este ZIP completo es la única entrega que debe validarse. No mezclar archivos s
 ## Archivos críticos
 
 - `database/AI-06_SCHEMA.sql` SHA-256: `7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163`
-- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `b836ebc6978a01682d6bbc40f59117a673fc942233892d5003cbf4d0ce89b18d`
+- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `4997c6be521f039c5f25d36bb191cc1e03f2a83fd074eff7e81511fc5e879f63`
 
 El SQL canónico contiene:
 
@@ -50,7 +50,8 @@ Los hashes de "Archivos críticos" son los vigentes en `MANIFEST.json` y
 `CHECKSUMS_SHA256.txt`. Las revisiones anteriores (AI-06 `c7681336…`, AI-18
 `7b4d2638…`) cambiaron por los cursores de resincronización RTM-002
 (2026-07-24, commit `4738861`: AI-05, AI-06 y AI-18) y por LIF-001/ADR-034
-(AI-18, PR #83). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
+(AI-18, PR #83), y por OPS-003 (`OPS-003-CLEANUP-ROLE`: AI-18; AI-05
+`x-offline-operation-age`). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
 CSV-001, INC-001, FIN-001 y SET-001; ver `CHANGELOG.md` y `decision-log.md`.
 El identificador de bundle no se reemitió.
 

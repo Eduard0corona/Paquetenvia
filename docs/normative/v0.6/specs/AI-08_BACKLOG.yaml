@@ -1182,6 +1182,26 @@ items:
   outputs:
   - scheduled cleanup job
   - metrics and dry-run command
+  implementation:
+    decisions:
+    - OPS-003-OFFLINE-72H
+    - OPS-003-CLEANUP-ROLE
+    - OPS-003-SERVER-72H-REJECTION
+    role: paqueteria_cleanup_executor NOLOGIN BYPASSRLS (AI-18 assertions 12-15)
+    functions:
+    - security.purge_expired_idempotency_keys(timestamptz,integer,boolean) - batch 1..5000, fixed 72-hour floor on
+      created_at, expired keys only, dry-run counts without mutation, returns a count only
+    - security.expire_proof_upload_sessions(integer) - batch 1..1000, CREATED/UPLOADED/VALIDATING/READY sessions whose
+      expires_at is not after now become EXPIRED, SKIP LOCKED, returns a count only
+    migration: Custody lane 20260927000100_AddOperationalCleanupExecutor
+    worker_jobs: OperationalCleanup IdempotencyKeys and ProofUploadSessions on the shared IJobScheduler, disabled by
+      default, idempotency purge in dry-run by default
+    server_rejection: transitionOrder and createProofUploadSession accept an optional client_occurred_at and
+      finalizeProof uses captured_at; a timestamp older than 72 hours is rejected with 409 OFFLINE_OPERATION_EXPIRED,
+      one beyond the configurable clock tolerance (0-300 s, default 300 s) is an invalid request (AI-05
+      x-offline-operation-age)
+    extension_point: the BFF session purge joins the cleanup executor with its own migration once identity.bff_sessions
+      exists
   acceptance_criteria:
   - expired idempotency keys are deleted in bounded batches
   - expired upload sessions are marked EXPIRED and quarantined objects follow retention policy

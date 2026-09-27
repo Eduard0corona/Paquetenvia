@@ -9,6 +9,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_bootstrap NOLOGIN BYPASSRLS; EXCEPTION WHEN d
 DO $$ BEGIN CREATE ROLE paqueteria_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_maintenance NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_lifecycle_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_cleanup_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -185,6 +186,23 @@ GRANT USAGE ON SCHEMA orders TO paqueteria_lifecycle_executor;
 GRANT SELECT (id,status,claim_window_ends_at,finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 
+-- Operational cleanup is a separate security capability (OPS-003-CLEANUP-ROLE, ADR-034 pattern).
+-- The executor only discovers and removes expired idempotency keys older than the fixed 72-hour
+-- floor (OPS-003-OFFLINE-72H) and marks expired proof upload sessions EXPIRED, inside
+-- security.purge_expired_idempotency_keys(timestamptz,integer,boolean) and
+-- security.expire_proof_upload_sessions(integer), installed by the Custody migration lane after this
+-- baseline. Both return only a row count. It has no outbox, bootstrap, lifecycle or purge-outbox
+-- rights and no broad business-schema grant; DELETE has no column form in PostgreSQL, so the
+-- idempotency table is its only table-level grant.
+-- Extension point: the BFF session purge (BFF-SESSION-STORE-POSTGRESQL) joins this role only when
+-- identity.bff_sessions exists, through its own migration that adds one function and exact column grants.
+REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker;
+GRANT USAGE ON SCHEMA platform,custody TO paqueteria_cleanup_executor;
+GRANT SELECT (owner_org_id,scope,idempotency_key,created_at,expires_at) ON platform.idempotency_keys TO paqueteria_cleanup_executor;
+GRANT DELETE ON platform.idempotency_keys TO paqueteria_cleanup_executor;
+GRANT SELECT (id,status,expires_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;
+GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
@@ -197,3 +215,7 @@ GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 -- 9. paqueteria_lifecycle_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only security.finalize_expired_orders(integer).
 -- 10. paqueteria_lifecycle_executor holds only USAGE on schema orders plus SELECT(id,status,claim_window_ends_at,finalized_at) and UPDATE(finalized_at) on orders.orders: no INSERT/DELETE, no table-wide grant, no other table, no outbox, bootstrap or purge privilege.
 -- 11. security.finalize_expired_orders(integer) is SECURITY DEFINER with search_path=pg_catalog, orders, pg_temp, accepts only a bounded batch size, and only paqueteria_worker may EXECUTE it; PUBLIC and paqueteria_app may not.
+-- 12. paqueteria_cleanup_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only security.purge_expired_idempotency_keys(timestamptz,integer,boolean) and security.expire_proof_upload_sessions(integer).
+-- 13. paqueteria_cleanup_executor holds only USAGE on schemas platform and custody, SELECT(owner_org_id,scope,idempotency_key,created_at,expires_at) plus DELETE on platform.idempotency_keys, and SELECT(id,status,expires_at) plus UPDATE(status,updated_at) on custody.proof_upload_sessions: no INSERT, no other table, no outbox, bootstrap, lifecycle or purge-outbox privilege.
+-- 14. both cleanup functions are SECURITY DEFINER with search_path=pg_catalog, platform, pg_temp (idempotency) and pg_catalog, custody, pg_temp (sessions), accept only bounded batch sizes, return only a count, and only paqueteria_worker may EXECUTE them; PUBLIC and paqueteria_app may not.
+-- 15. security.purge_expired_idempotency_keys never deletes a key created less than 72 hours before its own clock_timestamp() nor one that has not expired, whatever cutoff, batch size or mode it receives; dry-run mutates nothing.

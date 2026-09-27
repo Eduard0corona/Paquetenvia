@@ -22,6 +22,7 @@ builder.Services.AddOrganizationsNotificationAudienceReader(builder.Configuratio
 builder.Services.AddIdentityNotificationAudienceReader(builder.Configuration);
 builder.Services.AddNotificationsInfrastructure(builder.Configuration);
 builder.Services.AddOrdersClaimWindowFinalization(builder.Configuration);
+builder.Services.AddCustodyOperationalCleanup(builder.Configuration);
 builder.Services
     .AddHealthChecks()
     .AddCheck("process", () => HealthCheckResult.Healthy(), tags: ["live"]);

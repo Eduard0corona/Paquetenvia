@@ -375,16 +375,18 @@ def main() -> int:
     for fragment in required_roles:
         if fragment not in role_sql:
             errors.append(f"Missing role-model contract: {fragment}")
-    # ADR-034: the only column-level UPDATE grant is the lifecycle executor's finalized_at grant;
-    # any other spelling or grantee is the legacy direct runtime UPDATE grant returning.
+    # ADR-034 and OPS-003-CLEANUP-ROLE: the only column-level UPDATE grants are the lifecycle
+    # executor's finalized_at grant and the cleanup executor's upload-session status grant; any other
+    # spelling or grantee is the legacy direct runtime UPDATE grant returning.
     column_update_grants = [
         " ".join(statement.split())
         for statement in re.findall(r"GRANT[^;]*\bUPDATE\s*\([^;]*;", role_sql)
     ]
     if column_update_grants != [
-        "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;"
+        "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
+        "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
     ]:
-        errors.append(f"Column UPDATE grants differ from the single ADR-034 grant: {column_update_grants}")
+        errors.append(f"Column UPDATE grants differ from the ADR-034 and OPS-003 grants: {column_update_grants}")
     lifecycle_grants = [
         " ".join(statement.split())
         for statement in re.findall(r"GRANT[^;]*TO paqueteria_lifecycle_executor\s*;", role_sql)
@@ -406,6 +408,28 @@ def main() -> int:
     if not (ROOT / "docs/adr/ADR-034_ORDER_LIFECYCLE_FINALIZATION_EXECUTOR.md").is_file():
         errors.append("ADR-034 lifecycle executor decision is missing")
     checks.append("Lifecycle executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
+    cleanup_grants = [
+        " ".join(statement.split())
+        for statement in re.findall(r"GRANT[^;]*TO paqueteria_cleanup_executor\s*;", role_sql)
+    ]
+    if cleanup_grants != [
+        "GRANT USAGE ON SCHEMA platform,custody TO paqueteria_cleanup_executor;",
+        "GRANT SELECT (owner_org_id,scope,idempotency_key,created_at,expires_at) ON platform.idempotency_keys TO paqueteria_cleanup_executor;",
+        "GRANT DELETE ON platform.idempotency_keys TO paqueteria_cleanup_executor;",
+        "GRANT SELECT (id,status,expires_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
+        "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
+    ]:
+        errors.append(f"Cleanup executor grants differ from OPS-003-CLEANUP-ROLE: {cleanup_grants}")
+    for fragment in [
+        "CREATE ROLE paqueteria_cleanup_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker;",
+        "OPS-003-CLEANUP-ROLE",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing cleanup executor contract: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_cleanup_executor\s+TO", role_sql):
+        errors.append("Cleanup executor membership granted contrary to OPS-003-CLEANUP-ROLE")
+    checks.append("Cleanup executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
     runtime_grant_block = re.search(r"-- Runtime table grants[\s\S]*?END \$\$;", role_sql)
     if runtime_grant_block and "'platform'" in runtime_grant_block.group(0):
         errors.append("platform remains in broad runtime grants")

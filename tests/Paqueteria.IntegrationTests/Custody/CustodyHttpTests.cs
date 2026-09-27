@@ -9,6 +9,12 @@ namespace Paqueteria.IntegrationTests.Custody;
 public sealed class CustodyHttpTests : IClassFixture<CustodyHttpWebApplicationFactory>
 {
     private const string Sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    // OPS-003-SERVER-72H-REJECTION: a capture older than 72 hours is refused, so the fixtures capture
+    // "just now" instead of on a fixed calendar date that would age out of the window.
+    private static string RecentCapture =>
+        DateTimeOffset.UtcNow.AddMinutes(-1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
+
     private readonly HttpClient client;
 
     public CustodyHttpTests(CustodyHttpWebApplicationFactory factory) =>
@@ -129,7 +135,7 @@ public sealed class CustodyHttpTests : IClassFixture<CustodyHttpWebApplicationFa
             {
               "upload_session_id":"{{Guid.NewGuid():D}}",
               "proof_type":"DELIVERY_PHOTO",
-              "captured_at":"2026-07-25T12:00:00Z",
+              "captured_at":"{{RecentCapture}}",
               "sha256":"{{Sha256}}",
               "recipient_name":"Synthetic Recipient"
             }
@@ -202,7 +208,7 @@ public sealed class CustodyHttpTests : IClassFixture<CustodyHttpWebApplicationFa
             {
               "upload_session_id":"{{sessionId:D}}",
               "proof_type":"DELIVERY_PHOTO",
-              "captured_at":"2026-07-25T12:00:00Z",
+              "captured_at":"{{RecentCapture}}",
               "sha256":"{{Sha256}}"
             }
             """;
