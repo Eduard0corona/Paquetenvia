@@ -18,6 +18,7 @@ internal sealed class OutboxRetentionTelemetry : IDisposable
     private readonly Counter<long> _failures;
     private readonly Histogram<double> _runDuration;
     private readonly ConcurrentDictionary<(string Lane, string Mode), long> _lastSuccess = new();
+    private readonly ConcurrentDictionary<string, long> _deadEligible = new(StringComparer.Ordinal);
 
     public OutboxRetentionTelemetry()
     {
@@ -32,6 +33,11 @@ internal sealed class OutboxRetentionTelemetry : IDisposable
             ObserveLastSuccess,
             "s",
             "Unix time of the last successful retention run per lane and mode.");
+        Meter.CreateObservableGauge(
+            "outbox.retention.dead_eligible",
+            ObserveDeadEligible,
+            "{row}",
+            "DEAD rows past the DEAD cutoff at the last lane run whose probe completed, bounded by the lane's BatchSize.");
     }
 
     internal Meter Meter { get; } = new(MeterName);
@@ -47,6 +53,22 @@ internal sealed class OutboxRetentionTelemetry : IDisposable
         else
         {
             _deleted.Add(affected, Lane(lane));
+        }
+    }
+
+    /// <summary>
+    /// Publishes the DEAD probe of the last lane run, or withdraws the lane's series when the probe
+    /// did not complete, so a stale value is never reported as current.
+    /// </summary>
+    public void DeadEligibleObserved(string lane, int? count)
+    {
+        if (count is { } value)
+        {
+            _deadEligible[lane] = value;
+        }
+        else
+        {
+            _deadEligible.TryRemove(lane, out _);
         }
     }
 
@@ -77,6 +99,14 @@ internal sealed class OutboxRetentionTelemetry : IDisposable
                 value,
                 Lane(key.Lane),
                 new KeyValuePair<string, object?>("mode", key.Mode));
+        }
+    }
+
+    private IEnumerable<Measurement<long>> ObserveDeadEligible()
+    {
+        foreach (var (lane, value) in _deadEligible)
+        {
+            yield return new Measurement<long>(value, Lane(lane));
         }
     }
 

@@ -6,7 +6,9 @@
 
 ## Contexto
 
-`listOrders` pertenece al contrato congelado AI-05 y no contiene owner/operator
+`listOrders` pertenece al contrato normativo AI-05 (modificable solo con
+autorización normativa explícita; en la fecha de este ADR no se autorizó
+cambiarlo) y no contiene owner/operator
 canónicos, cliente, zona de destino, assignment activo, última posición
 persistida ni las alertas operativas requeridas por AI-07. Ampliarlo cambiaría
 un contrato existente y mezclaría una consulta transaccional con un read model

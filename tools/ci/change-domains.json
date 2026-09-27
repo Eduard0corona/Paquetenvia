@@ -146,6 +146,8 @@
         "apps/web/src/components/**",
         "apps/web/src/lib/**",
         "apps/web/src/proxy.ts",
+        "apps/web/src/instrumentation.ts",
+        "apps/web/src/security/**",
         "apps/web/public/**",
         "apps/web/tsconfig.json",
         "apps/web/eslint.config.mjs",
@@ -226,6 +228,7 @@
       "patterns": [
         ".github/workflows/ci.yml",
         ".github/workflows/pr-validation.yml",
+        ".github/workflows/development-push.yml",
         "tools/ci/**",
         "tools/rel-000/**",
         "tools/azr-001/**",

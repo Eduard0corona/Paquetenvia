@@ -186,6 +186,21 @@ public interface IDispatchDriverEligibilityReader
         DbTransaction transaction,
         EvaluateExternalDriverEligibilityCommand command,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads, in a single statement, every active EXTERNAL driver of the organization with an
+    /// active user and active DRIVER membership (ordered by driver id, at most
+    /// <paramref name="limit"/> rows) together with the same eligibility snapshot that the
+    /// per-driver read returns.
+    /// </summary>
+    Task<IReadOnlyList<DriverEligibilitySnapshot>> ReadExternalCandidatesAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid organizationId,
+        Guid cityId,
+        Guid? serviceAreaId,
+        int limit,
+        CancellationToken cancellationToken);
 }
 
 public sealed record AssignmentVisibilityOrder(
