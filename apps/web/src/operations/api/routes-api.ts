@@ -1,4 +1,5 @@
 import type { OperationsSession } from "../session/operations-session";
+import { resolveRequestAuthorization, type RequestAuthorization } from "../../auth/request-credentials";
 import type { ManualRoute, ManualRouteDetail, ManualRoutePage, RouteStatus } from "../contracts/manual-route";
 import { parseManualRoute, parseManualRouteDetail, parseManualRoutePage } from "../contracts/manual-route";
 
@@ -31,11 +32,10 @@ export function createRoutesApi(baseUrl: string, session: OperationsSession): Ro
 
   async function request(path: string, method: string, parser: (value: unknown) => unknown,
     body?: unknown, idempotencyKey?: string, signal?: AbortSignal): Promise<unknown> {
-    let token: string;
-    try { token = await session.getAccessToken(); } catch { throw new RoutesApiError("unauthorized"); }
-    if (!token || token.length > 8192) throw new RoutesApiError("unauthorized");
+    let authorization: RequestAuthorization;
+    try { authorization = await resolveRequestAuthorization(session, method); } catch { throw new RoutesApiError("unauthorized"); }
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
+      ...authorization.headers,
       "X-Organization-Id": session.organizationId,
       Accept: "application/json",
     };
@@ -45,7 +45,7 @@ export function createRoutesApi(baseUrl: string, session: OperationsSession): Ro
     try {
       response = await fetch(new URL(path, base), {
         method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", signal,
+        cache: "no-store", credentials: authorization.credentials, referrerPolicy: "no-referrer", signal,
       });
     } catch { if (signal?.aborted) throw signal.reason; throw new RoutesApiError("network"); }
     if (!response.ok) throw classify(response.status);

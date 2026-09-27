@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { realtimeCredentials } from "@/auth/request-credentials";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import { createOperationsConnection } from "@/realtime/operations-connection";
 import type { Uuid } from "@/realtime/envelope";
@@ -113,7 +114,7 @@ export function useManualRoutes(): ManualRoutesState {
         const connection = createOperationsConnection({
           baseUrl,
           organizationId: session.organizationId as Uuid,
-          tokenFactory: session.getAccessToken,
+          ...realtimeCredentials(session),
           suppressLogging: true,
           onReconnecting: () => setConnected(false),
           onResynchronized: () => setConnected(true),

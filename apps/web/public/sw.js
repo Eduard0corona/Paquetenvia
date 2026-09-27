@@ -65,6 +65,9 @@ function mustUseNetworkOnly(request) {
     url.pathname.startsWith("/track/") ||
     url.pathname.startsWith("/api/v1/") ||
     url.pathname.startsWith("/hubs/") ||
+    url.pathname === "/login" ||
+    url.pathname.startsWith("/auth/") ||
+    url.pathname === "/signin-authcenter" ||
     url.pathname.includes("/proofs/") ||
     hasSignedUrlParameters(url)
   );

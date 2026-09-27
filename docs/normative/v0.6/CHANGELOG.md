@@ -1,5 +1,40 @@
 # Changelog
 
+## AUTH-001 logout, back-channel y step-up — 2026-09-27
+
+- AI-05: `POST /auth/logout` responde 200 con `BffLogoutResult`
+  (`endSessionUrl`, `AUTH-001-RP-INITIATED-LOGOUT`); nuevo
+  `POST /auth/backchannel-logout` (anónimo, `logout_token` form-urlencoded, 200 o
+  400 `BackchannelLogoutError`, `AUTH-001-BACKCHANNEL-LOGOUT`); `GET /auth/login`
+  acepta `mfa=required` (`AUTH-001-MFA-STEP-UP`); el callback documenta
+  `access_denied` → `/login?error=access_denied`
+  (`AUTH-001-ACCESS-DENIED-MESSAGE`); la respuesta `Forbidden` usa
+  `ForbiddenProblem` con el código opcional `MFA_REQUIRED`.
+- AI-03 §17.1 y AI-24 `bff_session`: cierre de sesión RP-initiated (única excepción
+  a tokens en el navegador: `id_token_hint` en `endSessionUrl`), back-channel logout
+  detrás de una interfaz de terminación de sesiones, step-up MFA, reemplazo de sesión
+  en cada inicio y mensaje propio para `access_denied`.
+- AI-07 `/login`: mensaje de `access_denied`, oferta "Verificar identidad" y regreso
+  desde el end-session de AuthCenter.
+- Registro: `AUTH-001-RP-INITIATED-LOGOUT`, `AUTH-001-BACKCHANNEL-LOGOUT`,
+  `AUTH-001-MFA-STEP-UP` y `AUTH-001-ACCESS-DENIED-MESSAGE` en `decision-log.md`.
+
+## AUTH-001 BFF — 2026-09-27
+
+- AI-05 documenta la superficie BFF fuera de `/api/v1` (`servers: /` por ruta):
+  `GET /auth/login`, `GET /signin-authcenter`, `GET /auth/session` y
+  `POST /auth/logout`, con el esquema `bffSession` (cookie
+  `__Host-Paquetenvia.Session`), el parámetro `X-AuthCenter-CSRF` y el esquema
+  `BffSession` (`GATE-002-BFF-001`). La respuesta de autorización exige `iss`
+  (RFC 9207).
+- AI-07: `/login` es anónima (punto de entrada de sesión), sin aprovisionar
+  (`AUTH-FIRST-LOGIN-INVITATION`).
+- AI-03 §17.1 y AI-24 `bff_session` registran el patrón BFF, el almacén de
+  sesiones en PostgreSQL (`BFF-SESSION-STORE-POSTGRESQL`, cambio AI-06/AI-18
+  pendiente; en memoria y una sola réplica hasta entonces) y el enrutamiento del
+  mismo origen del piloto (`PILOT-SAME-ORIGIN-ROUTING`).
+- Registro: `AUTH-001-BFF-CONTRACT-TRANSLATION` en `decision-log.md`.
+
 ## Finance en AI-05: regla vigente y delta pendiente — 2026-09-27
 
 - Las descripciones de `reconcileCod`, `getOrderFinancials` y
