@@ -126,4 +126,29 @@ public sealed class IdentityArchitectureTests
         Assert.DoesNotContain(packages, package =>
             forbidden.Any(name => package.Contains(name, StringComparison.OrdinalIgnoreCase)));
     }
+
+    [Fact]
+    public void Only_Identity_Endpoints_references_the_standard_OpenIdConnect_handler()
+    {
+        var owners = SolutionCatalog.All
+            .Where(component => ProjectMetadataReader.Read(component).PackageReferences.Contains(
+                "Microsoft.AspNetCore.Authentication.OpenIdConnect",
+                StringComparer.OrdinalIgnoreCase))
+            .Select(component => component.Name)
+            .ToArray();
+
+        Assert.Equal(["Identity.Endpoints"], owners);
+    }
+
+    [Fact]
+    public void AuthCenter_is_a_first_class_provider_without_changing_the_external_identity_contract()
+    {
+        Assert.True(Enum.IsDefined(IdentityProviderKind.AuthCenter));
+        Assert.Equal(
+            "Identity.Endpoints",
+            typeof(Identity.Endpoints.AuthCenter.AuthCenterDefaults).Assembly.GetName().Name);
+        Assert.Equal("__Host-Paquetenvia.Session", Identity.Endpoints.AuthCenter.AuthCenterDefaults.SessionCookieName);
+        Assert.Equal("X-AuthCenter-CSRF", Identity.Endpoints.AuthCenter.AuthCenterDefaults.CsrfHeaderName);
+        Assert.Equal("/signin-authcenter", Identity.Endpoints.AuthCenter.AuthCenterDefaults.CallbackPath);
+    }
 }

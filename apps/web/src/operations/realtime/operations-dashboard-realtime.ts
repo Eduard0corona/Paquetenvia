@@ -3,6 +3,7 @@ import type { RestSynchronizationSnapshot } from "@/realtime/connection-options"
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import type { Uuid } from "@/realtime/envelope";
 import type { OperationsSession } from "../session/operations-session";
+import { realtimeCredentials } from "@/auth/request-credentials";
 
 export interface OperationsRealtimeCallbacks {
   refreshOperations(): void;
@@ -22,7 +23,7 @@ export function createOperationsDashboardRealtime(
     {
       baseUrl: apiBaseUrl,
       organizationId: session.organizationId as Uuid,
-      tokenFactory: session.getAccessToken,
+      ...realtimeCredentials(session),
       resynchronizeFromRest: callbacks.resynchronize,
       onReconnecting: callbacks.reconnecting,
       onResynchronized: callbacks.connected,

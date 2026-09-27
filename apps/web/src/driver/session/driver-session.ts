@@ -1,10 +1,13 @@
+import {
+  hasUsableCredentials,
+  type SessionCredentials,
+} from "../../auth/request-credentials";
 import { asUuid } from "../../realtime/envelope";
 
-export interface DriverSession {
+export type DriverSession = SessionCredentials & {
   readonly organizationId: string;
   readonly cacheNamespace: string;
-  getAccessToken(): string | Promise<string>;
-}
+};
 
 declare global {
   interface Window {
@@ -20,7 +23,7 @@ export function readBrowserDriverSession(): DriverSession | null {
   }
 
   const session = window.__paquetenviaDriverSession;
-  if (!session || typeof session.getAccessToken !== "function") {
+  if (!session || !hasUsableCredentials(session)) {
     return null;
   }
 

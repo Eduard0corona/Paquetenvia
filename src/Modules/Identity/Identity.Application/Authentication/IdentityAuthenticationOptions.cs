@@ -4,6 +4,9 @@ public enum IdentityProviderKind
 {
     Disabled,
     Mock,
+
+    /// <summary>Production OIDC provider (GATE-002). Browser sessions use the BFF cookie; AuthCenter only authenticates.</summary>
+    AuthCenter,
 }
 
 public sealed class IdentityAuthenticationOptions

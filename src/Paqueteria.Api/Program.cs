@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Identity.Endpoints;
+using Identity.Endpoints.AuthCenter;
 using Identity.Endpoints.Testing;
 using Identity.Infrastructure;
 using Drivers.Infrastructure;
@@ -135,6 +136,7 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     },
 }).AllowAnonymous();
 
+app.MapAuthCenterBff();
 app.MapIdentityTestProbes(app.Environment);
 app.MapPublicTrackingTestProbe(app.Environment);
 app.MapOrganizationEndpoints();
