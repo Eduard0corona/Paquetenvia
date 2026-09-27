@@ -14,6 +14,10 @@ export class ExternalOffersController {
   private readonly idempotency = new Map<string, string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  // A 403 means this driver has no EXTERNAL offer capability (for example an OWN driver).
+  // The panel is not applicable: stay empty and silent and stop polling instead of
+  // surfacing an error on every realtime signal or reconnect.
+  private notApplicable = false;
   private state: ExternalOffersState = Object.freeze({ offers: [], loading: true, pendingOfferId: null, message: null });
 
   public constructor(private readonly api: ExternalOffersApi) {}
@@ -28,7 +32,7 @@ export class ExternalOffersController {
   public refreshForReconnect(): Promise<void> { return this.refresh(); }
 
   public scheduleRefresh(): void {
-    if (this.disposed || this.timer) return;
+    if (this.disposed || this.notApplicable || this.timer) return;
     this.timer = setTimeout(() => { this.timer = null; void this.refresh(); }, 250);
   }
 
@@ -62,7 +66,7 @@ export class ExternalOffersController {
   }
 
   private async refresh(message: string | null = null): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.notApplicable) return;
     this.setState({ ...this.state, loading: true });
     try {
       const page = await this.api.list();
@@ -74,6 +78,11 @@ export class ExternalOffersController {
       });
     } catch (error) {
       if (error instanceof ExternalOffersApiError && error.category === "cancelled") return;
+      if (error instanceof ExternalOffersApiError && error.category === "forbidden") {
+        this.notApplicable = true;
+        this.setState({ offers: [], loading: false, pendingOfferId: null, message: null });
+        return;
+      }
       this.setState({ ...this.state, loading: false, pendingOfferId: null, message: "No pudimos actualizar las ofertas." });
     }
   }

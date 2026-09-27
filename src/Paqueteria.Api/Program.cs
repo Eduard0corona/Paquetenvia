@@ -16,6 +16,7 @@ using Organizations.Endpoints;
 using Organizations.Endpoints.Tenancy;
 using Organizations.Infrastructure;
 using Organizations.Endpoints.Testing;
+using Paqueteria.Api.Http;
 using Paqueteria.Api.Tenancy;
 using Paqueteria.Infrastructure.DataProtection;
 using Locations.Endpoints;
@@ -40,6 +41,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
+builder.AddHttpHardening();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
@@ -75,10 +77,17 @@ builder.Services
 
 var app = builder.Build();
 
+app.UseTrustedForwardedHeaders();
 app.UseExceptionHandler();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
 app.UseRouting();
 app.UsePublicTrackingResponseHeaders();
 app.UseCors();
+app.UseRequestBodyLimit();
 
 if (app.Environment.IsDevelopment())
 {

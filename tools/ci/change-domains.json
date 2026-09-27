@@ -226,6 +226,7 @@
       "patterns": [
         ".github/workflows/ci.yml",
         ".github/workflows/pr-validation.yml",
+        ".github/workflows/development-push.yml",
         "tools/ci/**",
         "tools/rel-000/**",
         "tools/azr-001/**",
