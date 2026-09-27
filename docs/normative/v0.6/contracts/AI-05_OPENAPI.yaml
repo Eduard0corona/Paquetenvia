@@ -4004,11 +4004,16 @@ x-capability-matrix:
     exportSettlementCsv: [FINANCE, PLATFORM_ADMIN]
   driver_scope: DRIVER (OWN or EXTERNAL) sees only its own assignments, stops and offers; it has no access to orders,
     quotes, locations, CSV imports or settlements outside them
-  finance_scope: FINANCE is limited to settlements and finance; getOrderFinancials and getRouteFinancials fall inside
-    finance, while whether FINANCE may also reconcile COD is not stated by D5 and remains an open owner question
+  finance_scope: FINANCE is limited to settlements and finance; per FINANCE-COD-RECONCILIATION (project owner, 2026-09-27)
+    FINANCE reads and reconciles collected COD only and never creates or modifies orders
+  finance_operations:
+    getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
+    getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
+    reconcileCod: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
-    each delta together with code and tests. DECIDED entries are owner decisions; PROPOSED entries await an owner decision.
+    each delta together with code and tests. Every entry is an owner decision (DECIDED); open points are marked open_point.
+    Owner approval of all six API contract proposals on 2026-09-27, literal answer "Apruebo Contrato de la API (AI-05)"
   entries:
   - id: D6-COD-EXPECTED
     status: DECIDED
@@ -4016,8 +4021,8 @@ x-pilot-contract-deltas:
     literal: el despachador declara el monto COD al crear la orden (y en el CSV)
     delta: CreateOrderRequest and the CSV row accept an optional non-negative integer COD expectation in MXN cents (int64),
       declared by the dispatcher; it is copied to orders.cod_expected_cents and flows to FIN-001 and SET-001
-    open_point: whether the quote also carries the COD expectation is not stated by D6 (PROPOSED - keep it on the order
-      only, since the quote is priced before the COD decision)
+    quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the
+      order and in the CSV
   - id: D7-SETTLEMENT-CLOSED-PERIOD
     status: DECIDED
     decision: D7-SETTLEMENT-RULES
@@ -4040,29 +4045,44 @@ x-pilot-contract-deltas:
     decision: D7-SETTLEMENT-RULES
     delta: exportSettlementCsv writes one append-only audit entry per export
   - id: SET-EXPORT-NO-STORE
-    status: PROPOSED
-    delta: the exportSettlementCsv 200 response declares the header Cache-Control no-store (not part of D7 as decided)
+    status: DECIDED
+    decision: AI05-EXPORT-NO-STORE (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: the exportSettlementCsv 200 response declares the header Cache-Control no-store
   - id: SET-LIST
-    status: PROPOSED
+    status: DECIDED
+    decision: AI05-LIST-SETTLEMENTS (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
     delta: add listSettlements (GET /settlements) with cursor pagination, filters payee_id, status, period_from and period_to,
       same capabilities as getSettlement and the uniform error matrix 401/403/409/503
   - id: LOC-PII-KEY-VERSION
-    status: PROPOSED
+    status: DECIDED
+    decision: AI05-REMOVE-PII-KEY-VERSION (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
     delta: remove pii_key_version from CreateLocationRequest; the server PII protector selects and persists the key version
       (ADP-001)
   - id: ORD-ACCEPTANCE-LIMITS
-    status: PROPOSED
-    delta: publish explicit bounds that AI-05 lacks today - suggested values for the owner to confirm are terms_version and
-      privacy_version minLength 1, maxLength 64, pattern ^[A-Za-z0-9._-]+$; accepted_at not later than server time plus 5
+    status: DECIDED
+    decision: AI05-INPUT-LIMITS (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: publish explicit bounds that AI-05 lacks today, with the values approved as written in this entry - terms_version
+      and privacy_version minLength 1, maxLength 64, pattern ^[A-Za-z0-9._-]+$; accepted_at not later than server time plus 5
       minutes nor earlier than server time minus 72 hours; CreateQuoteRequest packages keep minItems 1 and gain maxItems 20
   - id: UNDECLARED-STATUS-CODES
-    status: PROPOSED
+    status: DECIDED
+    decision: AI05-DECLARE-EMITTED-ERRORS (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
     delta: declare the status codes the implementation already emits - 503 on createQuote, getQuote, createOrder, listOrders,
       getOrder, transitionOrder, listLocations, createLocation, createProofUploadSession and finalizeProof; 409 on
       createProofUploadSession and finalizeProof; 429 and 503 on publicTracking; 503 from the tenant-context middleware on
-      every tenant operation; and decide whether the 400 responses returned by the Locations endpoints and for a missing or
-      malformed tenant context header become part of the contract or are replaced by 409 INVALID_REQUEST or 403
+      every tenant operation
+    open_point: whether the 400 responses returned by the Locations endpoints and for a missing or malformed tenant context
+      header become part of the contract or are replaced by 409 INVALID_REQUEST or 403 is not covered by the decision
   - id: PUBLIC-TIMELINE-ORDER
-    status: PROPOSED
-    delta: the public tracking timeline is ordered by (occurred_at, aggregate_version) so ties are deterministic; this needs the
-      AI-06 change described in the governance/pilot-contracts PR
+    status: DECIDED
+    decision: AI05-TIMELINE-ORDER (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: the public tracking timeline is ordered by (occurred_at, aggregate_version) so ties are deterministic; the SQL piece
+      (ORDER BY in security.get_public_tracking_projection and the paqueteria_bootstrap grant on
+      orders.order_events.aggregate_version) is decided too; translation to AI-06/AI-18 ships with its migration in the
+      implementation PR

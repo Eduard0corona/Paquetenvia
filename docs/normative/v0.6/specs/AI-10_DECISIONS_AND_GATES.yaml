@@ -110,26 +110,41 @@ open_decisions:
   - defer/remove customer_support from MVP-0 contracts
   - explicitly assign the actor's responsibilities to an existing role
 - id: PILOT-CONTRACTS-2026-09
-  topic: pilot_contract_proposals
+  topic: pilot_contract_decisions
   severity: MAJOR
   recorded_on: 2026-09-26
+  decided_on_2026_09_27:
+  - D8-OUTBOX-LANE-DISPATCH
+  - AI12-ASSIGNMENT-TERMINAL-STATES
+  - BFF-SESSION-TABLE-SHAPE
+  - OPS-003-CLEANUP-ROLE
+  - OPS-003-SERVER-72H-REJECTION
+  - AI-04 amendments of PR 91, recorded by PR 91 itself
+  - AI05-LIST-SETTLEMENTS
+  - AI05-REMOVE-PII-KEY-VERSION
+  - AI05-INPUT-LIMITS
+  - AI05-DECLARE-EMITTED-ERRORS
+  - AI05-TIMELINE-ORDER
+  - AI05-EXPORT-NO-STORE
+  - AI06-PILOT-INDEXES
+  - IDENTITY-ORG-ACTIVE-REQUIRED
+  - FINANCE-COD-RECONCILIATION
+  - QUOTE-NO-COD
+  - AI08-PILOT-ITEMS
+  ai05_translation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05
+    against the code)
+  decided_translation: translation to AI-06/AI-18 ships with its migration in the implementation PR
   decision_needed:
-  - AI-04 proposed_amendments from PR 91 (attempt-scoped proofs, single custody derivation, per-attempt incidents)
-  - AI-12 AssignmentChanged closed statuses from PR 90
-  - D8 mechanism: DISPATCH lane and internal topic, or per-consumer fan-out (PR 90)
-  - PROPOSED entries of AI-05 x-pilot-contract-deltas (listSettlements, pii_key_version, acceptance limits, undeclared
-    status codes, public timeline order)
-  - FINANCE access to COD reconciliation, not stated by D5
-  - whether COD expectation is also carried by the quote, not stated by D6
-  - AI-08 pilot enabler items AUTH-001, ENV-001, ADP-001, UI-001, OBS-002, MDM-001 and TRK-002 and their link to REL-001
-  - SQL proposals kept outside AI-06/AI-18 until a migration exists (purge partial indexes, DISPATCH lane, organization
-    status in resolve_identity_context, public timeline order, operational indexes, dedicated OPS-003 cleanup role)
-  - exact AI-06/AI-18 shape of the BFF session table; the table itself is DECIDED (BFF-SESSION-STORE-POSTGRESQL)
+  - whether the 400 responses of Locations and of a missing or malformed tenant context header join AI-05 or are replaced
+    by 409 INVALID_REQUEST or 403; no recommendation was made and it is not covered by AI05-DECLARE-EMITTED-ERRORS
   work_allowed:
   - implementation of DECIDED items D5, D6, D7, D8 direction, D8-REASSIGNMENT-NEW-ASSIGNMENT, GATE-002-BFF-001,
     AUTH-FIRST-LOGIN-INVITATION, BFF-SESSION-STORE-POSTGRESQL, PILOT-SAME-ORIGIN-ROUTING, AUTHCENTER-AMR-MFA,
-    AUTHCENTER-DOMAIN and OPS-003-OFFLINE-72H under their own backlog tasks
-  - no PROPOSED item is implemented before an owner decision
+    AUTHCENTER-DOMAIN, OPS-003-OFFLINE-72H, D8-OUTBOX-LANE-DISPATCH, AI12-ASSIGNMENT-TERMINAL-STATES,
+    BFF-SESSION-TABLE-SHAPE, OPS-003-CLEANUP-ROLE, OPS-003-SERVER-72H-REJECTION, the six AI05-* decisions,
+    AI06-PILOT-INDEXES, IDENTITY-ORG-ACTIVE-REQUIRED, FINANCE-COD-RECONCILIATION, QUOTE-NO-COD and AI08-PILOT-ITEMS under
+    their own backlog tasks
+  - the 400-response question is not implemented before an owner decision
 resolved_decisions:
 - id: GATE-002
   topic: identity_provider

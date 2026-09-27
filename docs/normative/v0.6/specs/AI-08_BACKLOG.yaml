@@ -767,7 +767,7 @@ items:
   - 'DECIDED D7-SETTLEMENT-RULES: a settlement whose total would be negative is rejected'
   - 'DECIDED D7-SETTLEMENT-RULES: approve and pay require MFA'
   - 'DECIDED D7-SETTLEMENT-RULES: every export is audited'
-  - 'PROPOSED (owner decision pending): the export response carries Cache-Control: no-store'
+  - 'DECIDED AI05-EXPORT-NO-STORE: the export response carries Cache-Control: no-store'
   required_tests:
   - reconciliation integration
   approval_gate: null
@@ -784,6 +784,9 @@ items:
   - INC-001
   - FIN-001
   - SET-001
+  - AUTH-001
+  - ENV-001
+  - UI-001
   expected_outputs:
   - pilot readiness report
   acceptance_criteria:
@@ -1195,10 +1198,12 @@ items:
   - job is idempotent and tenant-safe
   - 'DECIDED OPS-003-OFFLINE-72H (literal): Una operación offline de la PWA puede reintentarse hasta 72 horas; después
     se descarta y se avisa al conductor. Las llaves de idempotencia se purgan después de ese plazo.'
-  - 'PROPOSED (owner decision pending): the server rejects an offline operation whose client occurred_at is older than
-    72 hours, so a purged idempotency key can never let a stale replay execute twice'
-  - 'PROPOSED (owner decision pending): cleanup runs through a dedicated NOLOGIN cleanup-executor role that owns only
-    bounded cleanup functions, following the ADR-034 pattern; see governance/pilot-contracts PR'
+  - 'DECIDED OPS-003-SERVER-72H-REJECTION: the server, not only the client, rejects an offline operation whose client
+    occurred_at is older than 72 hours, so a purged idempotency key can never let a stale replay execute twice'
+  - 'DECIDED OPS-003-CLEANUP-ROLE: cleanup runs through paqueteria_cleanup_executor NOLOGIN BYPASSRLS (ADR-034 pattern),
+    which owns only security.purge_expired_idempotency_keys(timestamptz,integer,boolean) with a 72-hour floor,
+    security.expire_proof_upload_sessions(integer) and the BFF session purge, with exact column grants and EXECUTE only
+    for paqueteria_worker; translation to AI-06/AI-18 ships with its migration in the implementation PR'
 - id: TEN-003
   title: Provisioning transaccional de usuario y organización
   priority: P0
@@ -1248,7 +1253,7 @@ items:
   - active-state purge rejection
   - bounded batch purge integration
 - id: AUTH-001
-  proposal_status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Security
   release: MVP-1
   title: Login AuthCenter con BFF en la API
@@ -1276,6 +1281,11 @@ items:
     email and membership, the first login links the AuthCenter sub, and nobody enters without an invitation'
   - 'DECIDED BFF-SESSION-STORE-POSTGRESQL: BFF sessions are stored in a PostgreSQL table (AI-06/AI-18 change pending a
     migration)'
+  - 'DECIDED BFF-SESSION-TABLE-SHAPE: identity.bff_sessions stores only the hash of the cookie and the AuthCenter tokens
+    encrypted with Data Protection; it is pre-tenant without tenant RLS; paqueteria_app has no direct grants and uses only
+    SECURITY DEFINER functions security.create_bff_session, security.resolve_bff_session(bytea) and
+    security.revoke_bff_session, owned by a dedicated NOLOGIN role with EXECUTE only for paqueteria_app; expired sessions
+    are purged by the OPS-003 cleanup role; translation to AI-06/AI-18 ships with its migration in the implementation PR'
   - 'DECIDED AUTHCENTER-AMR-MFA: AuthCenter adds the amr claim when the user completed MFA; Paqueteria reads MFA from it'
   - 'DECIDED AUTHCENTER-DOMAIN: the AuthCenter authority is authcenter.info'
   required_tests:
@@ -1285,7 +1295,7 @@ items:
   - suspended user and missing membership return 403
   approval_gate: owner_product_technology
 - id: ENV-001
-  proposal_status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Operations
   release: MVP-1
   title: Entorno piloto
@@ -1312,7 +1322,7 @@ items:
   - readiness checks green with production adapters enabled
   approval_gate: owner_technology_operations
 - id: ADP-001
-  proposal_status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Security
   release: MVP-1
   title: Adaptadores productivos de PII y antimalware
@@ -1335,7 +1345,7 @@ items:
   - infected upload stays quarantined
   approval_gate: GATE-007
 - id: UI-001
-  proposal_status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Operations UI
   release: MVP-1
   title: UI operativa del piloto
@@ -1358,7 +1368,7 @@ items:
   - tenant switch clears prior state
   approval_gate: null
 - id: OBS-002
-  proposal_status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Observability
   release: MVP-1
   title: Observabilidad del piloto
@@ -1377,7 +1387,7 @@ items:
   - telemetry dimension allowlist test
   approval_gate: null
 - id: MDM-001
-  proposal_status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Master Data
   release: MVP-1
   title: Datos maestros del piloto
@@ -1396,7 +1406,7 @@ items:
   - cross-tenant isolation
   approval_gate: GATE-010
 - id: TRK-002
-  proposal_status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Tracking
   release: MVP-1
   title: Emisión y envío de enlaces de tracking

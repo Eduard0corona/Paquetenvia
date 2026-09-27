@@ -1,5 +1,32 @@
 # Changelog
 
+## Decisiones del owner sobre los contratos del piloto — 2026-09-27
+
+- Respuesta literal del project owner: "Bloquean el MVP 1 — Apruebo 2, 3, 4, 5,
+  6". Quedan decididos `D8-OUTBOX-LANE-DISPATCH`,
+  `AI12-ASSIGNMENT-TERMINAL-STATES`, `BFF-SESSION-TABLE-SHAPE`,
+  `OPS-003-CLEANUP-ROLE` y `OPS-003-SERVER-72H-REJECTION`.
+- AI-12, AI-13 §7.1, la adenda de ADR-004, AI-08 (OPS-003 y AUTH-001) y AI-10
+  pasan de PROPOSED a DECIDED; la traducción a AI-06/AI-18 llega con su migración en el PR de implementación.
+- Se elimina de AI-04 el bloque `proposed_amendments`: sus enmiendas de
+  intento, custodia e incidencia se decidieron el mismo día y el PR #91 las
+  escribe en AI-04 y en el decision-log.
+- Respuesta literal del project owner: "Apruebo Contrato de la API (AI-05)".
+  Quedan decididos `AI05-LIST-SETTLEMENTS`, `AI05-REMOVE-PII-KEY-VERSION`,
+  `AI05-INPUT-LIMITS`, `AI05-DECLARE-EMITTED-ERRORS`, `AI05-TIMELINE-ORDER`
+  (incluido el grant de bootstrap sobre `orders.order_events.aggregate_version`)
+  y `AI05-EXPORT-NO-STORE`. La superficie de AI-05 cambia con su
+  implementación, porque las `*OpenApiImplementationTests` comparan AI-05 con el
+  código; este PR no modifica paths ni schemas.
+- Respuestas literales del project owner: "Acepto todas las sugerencias para
+  Base de datos y pagos contra entrega" y "Aprobado todo". Quedan decididos
+  `AI06-PILOT-INDEXES`, `IDENTITY-ORG-ACTIVE-REQUIRED`,
+  `FINANCE-COD-RECONCILIATION`, `QUOTE-NO-COD` y `AI08-PILOT-ITEMS`. Los siete
+  ítems nuevos de AI-08 quedan aprobados y REL-001 pasa a depender también de
+  AUTH-001, ENV-001 y UI-001. El inventario MVP-0/P0 sigue en 29.
+- Solo queda abierto el destino de las respuestas 400 (Locations y header de
+  contexto tenant), que no tuvo recomendación.
+
 ## Contratos del piloto — 2026-09-26 (propuesta y decisiones)
 
 - AI-05: `x-capability-matrix` (DECIDED D5) y `x-pilot-contract-deltas`, con
