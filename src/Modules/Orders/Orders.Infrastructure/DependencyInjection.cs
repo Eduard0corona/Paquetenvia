@@ -50,6 +50,10 @@ public static class DependencyInjection
                 "Orders:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
             .ValidateOnStart();
 
+        // ORD-002 evaluates ASSIGNED and re-delivery with the same DSP-002 policy section.
+        services.AddOptions<OrderTransitionDriverEligibilityOptions>()
+            .Bind(configuration.GetSection(OrderTransitionDriverEligibilityOptions.SectionName));
+
         var section = configuration.GetSection(PublicTrackingOptions.SectionName);
         services
             .AddOptions<PublicTrackingOptions>()
@@ -121,6 +125,7 @@ public static class DependencyInjection
         services.TryAddScoped<IOrderQuoteAcceptanceGuardReader, PostgreSqlOrderQuoteAcceptanceGuardReader>();
         services.TryAddScoped<IOrderAssignmentGuardReader, PostgreSqlOrderAssignmentGuardReader>();
         services.TryAddScoped<IOrderProofGuardReader, PostgreSqlOrderProofGuardReader>();
+        services.TryAddScoped<IOrderCustodyGuardReader, PostgreSqlOrderCustodyGuardReader>();
         services.TryAddScoped<IOrderIncidentGuardReader, PostgreSqlOrderIncidentGuardReader>();
         services.TryAddScoped<IOrderCodGuardReader, PostgreSqlOrderCodGuardReader>();
         services.AddSingleton<DisabledOrderService>();

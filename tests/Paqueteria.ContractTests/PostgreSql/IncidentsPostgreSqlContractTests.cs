@@ -35,6 +35,8 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
         await scenario.InitializeAsync(orderStatus: "DELIVERING");
+        // Custody comes from the PICKED_UP status change of the ORD-002 history.
+        await OrderStatusHistory.SeedCanonicalAsync(scenario, "DELIVERING");
         var proofId = await InsertProofAsync(scenario);
         var now = DateTimeOffset.Parse("2026-09-22T18:00:00Z", Culture);
         await using var scope = CreateIncidentScope(now);
@@ -438,6 +440,8 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
         await scenario.InitializeAsync(orderStatus: "DELIVERING");
+        // Custody and the current attempt come from the ORD-002 history, not from the status.
+        var version = await OrderStatusHistory.SeedCanonicalAsync(scenario, "DELIVERING");
         var proofId = await InsertProofAsync(scenario);
         await using var incidents = CreateIncidentScope();
         var incident = await incidents.Service.OpenAsync(
@@ -449,11 +453,12 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
             TransitionCommand(
                 scenario,
                 OrderStatus.FailedAttempt,
-                $$"""{"incident_id":"{{incident.Id:D}}"}"""),
+                $$"""{"incident_id":"{{incident.Id:D}}"}""",
+                expectedVersion: version),
             CancellationToken.None);
 
         Assert.Equal(OrderStatus.FailedAttempt.ToContractValue(), transitioned.Status);
-        Assert.Equal(2, transitioned.Version);
+        Assert.Equal(version + 1, transitioned.Version);
 
         await using var verify = fixture.AdminDataSource.CreateCommand(
             """
@@ -462,9 +467,10 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
                    (e.payload->>'custody_acquired')::boolean,
                    e.public_event_code
             FROM orders.order_events e
-            WHERE e.order_id=@order AND e.aggregate_version=2
+            WHERE e.order_id=@order AND e.aggregate_version=@version
             """);
         verify.Parameters.AddWithValue("order", scenario.OrderId);
+        verify.Parameters.AddWithValue("version", version + 1);
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(incident.Id.ToString("D"), reader.GetString(0));
@@ -525,6 +531,8 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
         await scenario.InitializeAsync(orderStatus: "DELIVERING");
+        // Custody and the current attempt come from the ORD-002 history, not from the status.
+        var version = await OrderStatusHistory.SeedCanonicalAsync(scenario, "DELIVERING");
         var proofId = await InsertProofAsync(scenario);
         await using var incidents = CreateIncidentScope();
         var incident = await incidents.Service.OpenAsync(
@@ -536,13 +544,14 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
             TransitionCommand(
                 scenario,
                 OrderStatus.FailedAttempt,
-                $$"""{"incident_id":"{{incident.Id:D}}"}"""),
+                $$"""{"incident_id":"{{incident.Id:D}}"}""",
+                expectedVersion: version),
             CancellationToken.None);
 
         await using var direct = CreateTransitionScope();
         var conflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
             direct.Service.TransitionAsync(
-                TransitionCommand(scenario, OrderStatus.Delivered, metadata: null, expectedVersion: 2),
+                TransitionCommand(scenario, OrderStatus.Delivered, metadata: null, expectedVersion: version + 1),
                 CancellationToken.None));
 
         Assert.Equal(OrderTransitionConflictCode.InvalidState, conflict.Code);
@@ -845,6 +854,8 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
         await scenario.InitializeAsync(orderStatus: "IN_TRANSIT");
+        // Custody comes from the PICKED_UP status change of the ORD-002 history.
+        await OrderStatusHistory.SeedCanonicalAsync(scenario, "IN_TRANSIT");
         var proofId = await InsertProofAsync(scenario);
         await using var scope = CreateIncidentScope();
 
@@ -1009,12 +1020,16 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
               expected_content_type,maximum_bytes,status,expires_at)
             VALUES (
               @upload,@order,@org,@user,@quarantine,'image/jpeg',1024,'READY',clock_timestamp()+interval '1 day');
+            -- POD-001 only captures a pickup photo at pickup and a delivery photo while
+            -- delivering, so the evidence of an attempt is the proof its stage can produce.
             INSERT INTO custody.proofs(
               id,order_id,owner_org_id,upload_session_id,proof_type,object_key,sha256,
               content_type,size_bytes,captured_at,created_by)
-            VALUES (
-              @proof,@order,@org,@upload,'DELIVERY_PHOTO',@object_key,
-              decode(repeat('04',32),'hex'),'image/jpeg',100,clock_timestamp(),@user);
+            SELECT
+              @proof,@order,@org,@upload,
+              CASE WHEN o.status IN ('AT_PICKUP','IN_TRANSIT') THEN 'PICKUP_PHOTO' ELSE 'DELIVERY_PHOTO' END,
+              @object_key,decode(repeat('04',32),'hex'),'image/jpeg',100,clock_timestamp(),@user
+            FROM orders.orders o WHERE o.id=@order;
             """,
             SyntheticOrderScenario.P("upload", uploadId),
             SyntheticOrderScenario.P("proof", proofId),
@@ -1093,8 +1108,10 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
             new PostgreSqlOrderTransitionAuthorizationReader(),
             new PostgreSqlOrderTransitionReplayAuthorizationReader(),
             new PostgreSqlOrderQuoteAcceptanceGuardReader(),
-            new PostgreSqlOrderAssignmentGuardReader(),
+            new PostgreSqlOrderAssignmentGuardReader(
+                Options.Create(OrderAttemptCustodyPostgreSqlContractTests.EligibilityOptions())),
             new PostgreSqlOrderProofGuardReader(),
+            new PostgreSqlOrderCustodyGuardReader(),
             new PostgreSqlOrderIncidentGuardReader(),
             new PostgreSqlOrderCodGuardReader(),
             new OrderTransitionAuthorizer(),

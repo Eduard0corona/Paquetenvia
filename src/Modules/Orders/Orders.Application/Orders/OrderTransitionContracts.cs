@@ -340,6 +340,12 @@ public interface IOrderQuoteAcceptanceGuardReader
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// The current assignment as the ASSIGNED and retry guards read it. <c>EligibleDriver</c> and
+/// <c>CapacityAttested</c> are the DSP-002 <c>DriverEligibilityPolicy</c> verdict for the assigned
+/// driver and the order's packages: eligibility covers profile, membership, city, service area and
+/// documents; capacity covers the vehicle limits.
+/// </summary>
 public sealed record AssignmentGuardSnapshot(
     bool ExactlyOneActive,
     bool EligibleDriver,
@@ -354,9 +360,15 @@ public interface IOrderAssignmentGuardReader
         Guid organizationId,
         Guid orderId,
         Guid orderCityId,
+        DateTimeOffset evaluatedAt,
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Proofs of the current attempt only: a pickup photo created after the latest entry into
+/// <c>AT_PICKUP</c> and a delivery photo or code created after the latest entry into
+/// <c>DELIVERING</c>, never a proof that is already evidence of an incident.
+/// </summary>
 public sealed record ProofGuardSnapshot(
     bool PickupProofComplete,
     bool DeliveryProofComplete);
@@ -371,11 +383,38 @@ public interface IOrderProofGuardReader
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Custody is acquired exactly when the order history holds a <c>PICKED_UP</c> status change.
+/// ORD-002, INC-001 and the driver stops view share this single derivation.
+/// </summary>
+public sealed record CustodyGuardSnapshot(bool PickedUpRecorded);
+
+public interface IOrderCustodyGuardReader
+{
+    Task<CustodyGuardSnapshot> ReadAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        Guid organizationId,
+        Guid orderId,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// <c>RequestedIncidentValid</c> holds only for a pending incident of this order opened during
+/// the current attempt (after the latest entry into the current status) that no earlier
+/// <c>FAILED_ATTEMPT</c> already consumed. <c>LatestFailedAttemptNextAction</c> is the next action
+/// of the incident that justified the latest <c>FAILED_ATTEMPT</c>.
+/// <c>LatestFailedAttemptIncidentAdopted</c> marks that incident as one INC-001 adopted from a
+/// pre-INC-001 installation: its next action was derived by the adoption backfill, never chosen by
+/// anyone, so it does not bind the successor of the failed attempt.
+/// </summary>
 public sealed record IncidentGuardSnapshot(
     bool RequestedIncidentValid,
     bool RequestedIncidentCustodyAcquired,
     bool AnyCustodyAcquired,
-    bool HasUnresolvedIncident);
+    bool HasUnresolvedIncident,
+    string? LatestFailedAttemptNextAction = null,
+    bool LatestFailedAttemptIncidentAdopted = false);
 
 public interface IOrderIncidentGuardReader
 {
