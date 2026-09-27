@@ -4,8 +4,8 @@ using Orders.Application.Orders;
 namespace Paqueteria.UnitTests.Orders;
 
 /// <summary>
-/// AI05-INPUT-LIMITS: the acceptance version identifiers are bounded identically on POST /orders and on a
-/// CSV-001 row, at the 64 characters CSV-001 already enforced.
+/// AI05-INPUT-LIMITS with the approved values: acceptance versions are 1-64 characters of
+/// ^[A-Za-z0-9._-]+$ on POST /orders and on a CSV-001 row, and accepted_at lies within [-72 h, +5 min].
 /// </summary>
 public sealed class OrderAcceptanceLimitsTests
 {
@@ -41,6 +41,35 @@ public sealed class OrderAcceptanceLimitsTests
     {
         Assert.False(OrderAcceptanceInputPolicy.IsValid(version, "privacy-2026-09", AcceptedAt, "WEB"));
         Assert.False(OrderAcceptanceInputPolicy.IsValid("terms-2026-09", version, AcceptedAt, "WEB"));
+    }
+
+    [Theory]
+    [InlineData("terms-2026.09_v1", true)]
+    [InlineData("A.b_c-9", true)]
+    [InlineData("terms 2026", false)]
+    [InlineData("terms/2026", false)]
+    [InlineData("términos", false)]
+    [InlineData("v1\n", false)]
+    public void Versions_match_the_approved_pattern(string version, bool expected)
+    {
+        Assert.Equal("^[A-Za-z0-9._-]+$", OrderAcceptanceInputPolicy.VersionPattern);
+        Assert.Equal(expected, OrderAcceptanceInputPolicy.IsVersion(version));
+        Assert.Equal(expected, System.Text.RegularExpressions.Regex.IsMatch(version, @"\A[A-Za-z0-9._-]+\z"));
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(5 * 60, true)]
+    [InlineData(5 * 60 + 1, false)]
+    [InlineData(-72 * 3600, true)]
+    [InlineData(-72 * 3600 - 1, false)]
+    public void Accepted_at_lies_within_plus_5_minutes_and_minus_72_hours_inclusive(int secondsFromNow, bool expected)
+    {
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.Equal(TimeSpan.FromMinutes(5), OrderAcceptanceInputPolicy.MaximumFutureSkew);
+        Assert.Equal(TimeSpan.FromHours(72), OrderAcceptanceInputPolicy.MaximumAge);
+        Assert.Equal(expected, OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(now.AddSeconds(secondsFromNow), now));
     }
 
     [Fact]

@@ -24,7 +24,8 @@ public sealed record GetSettlementQuery(
 
 /// <summary>
 /// AI05-LIST-SETTLEMENTS: one server-sized page of the selected organization's settlements, newest first.
-/// Every filter is optional; a period filter keeps the settlements whose whole period lies inside it.
+/// Every filter is optional; a period filter keeps the settlements whose whole period lies inside it, and a
+/// payee filter keeps the settlements of that payee.
 /// </summary>
 public sealed record ListSettlementsQuery(
     Guid ActorId,
@@ -33,7 +34,8 @@ public sealed record ListSettlementsQuery(
     DateOnly? PeriodFrom,
     DateOnly? PeriodTo,
     SettlementCursor? Cursor,
-    bool MfaSatisfied);
+    bool MfaSatisfied,
+    Guid? PayeeId = null);
 
 /// <summary>The keyset position after the last settlement of a page: its created_at and id.</summary>
 public sealed record SettlementCursor(DateTimeOffset CreatedAt, Guid Id);
@@ -177,7 +179,8 @@ public static class SettlementInputPolicy
         Actor(value.ActorId, value.OrganizationId) &&
         (value.Status is null || SettlementContractValues.TryParseStatus(value.Status, out _)) &&
         (value.PeriodFrom is not { } from || value.PeriodTo is not { } to || from <= to) &&
-        (value.Cursor is null || value.Cursor.Id != Guid.Empty);
+        (value.Cursor is null || value.Cursor.Id != Guid.Empty) &&
+        value.PayeeId != Guid.Empty;
 
     /// <summary>A non-zero signed amount: an adjustment that does not move the total records nothing.</summary>
     public static bool IsValid(AddSettlementAdjustmentCommand value) =>

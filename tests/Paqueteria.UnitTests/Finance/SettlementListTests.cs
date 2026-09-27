@@ -53,6 +53,15 @@ public sealed class SettlementListTests
     }
 
     [Fact]
+    public void A_payee_filter_must_name_a_real_payee()
+    {
+        Assert.True(SettlementInputPolicy.IsValid(
+            new ListSettlementsQuery(Actor, Tenant, null, null, null, null, false, Guid.NewGuid())));
+        Assert.False(SettlementInputPolicy.IsValid(
+            new ListSettlementsQuery(Actor, Tenant, null, null, null, null, false, Guid.Empty)));
+    }
+
+    [Fact]
     public void The_cursor_round_trips_exactly_at_microsecond_precision()
     {
         var cursor = new SettlementCursor(

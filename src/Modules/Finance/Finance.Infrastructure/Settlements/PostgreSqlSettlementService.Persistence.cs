@@ -114,6 +114,7 @@ public sealed partial class PostgreSqlSettlementService
         SELECT id,payee_type,payee_id,status,total_cents,period_from,period_to,created_at
         FROM finance.settlements
         WHERE owner_org_id=@organization
+          AND (@payee::uuid IS NULL OR payee_id=@payee::uuid)
           AND (@status::text IS NULL OR status=@status::text)
           AND (@period_from::date IS NULL OR period_from >= @period_from::date)
           AND (@period_to::date IS NULL OR period_to <= @period_to::date)
@@ -143,6 +144,7 @@ public sealed partial class PostgreSqlSettlementService
         await using (var command = Create(connection, transaction, PageHeadersSql, gateway.CommandTimeoutSeconds))
         {
             command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, query.OrganizationId));
+            command.Parameters.Add(P("payee", NpgsqlDbType.Uuid, query.PayeeId));
             command.Parameters.Add(P("status", NpgsqlDbType.Text, query.Status));
             command.Parameters.Add(P("period_from", NpgsqlDbType.Date, query.PeriodFrom));
             command.Parameters.Add(P("period_to", NpgsqlDbType.Date, query.PeriodTo));

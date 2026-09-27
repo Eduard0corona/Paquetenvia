@@ -480,6 +480,12 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
             .Items.Select(item => item.Id));
         Assert.Equal([draft], (await service.ListAsync(scenario.List() with { Status = "DRAFT" }, default))
             .Items.Select(item => item.Id));
+        // Both the calculated settlement and the DRAFT header pay the settled driver; the other driver has none.
+        Assert.Equal(
+            new[] { own.Id, draft }.Order(),
+            (await service.ListAsync(scenario.List() with { PayeeId = scenario.DriverId }, default))
+                .Items.Select(item => item.Id).Order());
+        Assert.Empty((await service.ListAsync(scenario.List() with { PayeeId = scenario.OtherDriverId }, default)).Items);
         Assert.Equal(0L, await scenario.CountSettlementsVisibleForAsync(foreign.OrganizationId));
         Assert.Equal(2L, await scenario.CountSettlementsVisibleForAsync(scenario.OrganizationId));
     }

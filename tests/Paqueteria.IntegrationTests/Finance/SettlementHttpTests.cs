@@ -463,6 +463,10 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
         Assert.Contains(drafts[1], draftIds);
         Assert.DoesNotContain(calculated, draftIds);
 
+        // The payee filter keeps exactly that driver's settlements.
+        Assert.Equal([calculated], await ListIdsAsync($"payee_id={driver:D}"));
+        Assert.Empty(await ListIdsAsync($"payee_id={Guid.NewGuid():D}"));
+
         // A period filter keeps only settlements whose whole period lies inside it.
         Assert.DoesNotContain(outside[0], draftIds);
         Assert.Contains(outside[0], await ListIdsAsync("status=DRAFT&period_to=2026-09-20"));
@@ -508,6 +512,9 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
     [InlineData("cursor=not-a-cursor")]
     [InlineData("status=DRAFT&status=PAID")]
     [InlineData("page_size=500")]
+    [InlineData("payee_id=not-a-uuid")]
+    [InlineData("payee_id=00000000-0000-0000-0000-000000000000")]
+    [InlineData("payee_id=6F9619FF-8B86-D011-B42D-00C04FC964FF")]
     public async Task ListSettlements_rejects_a_malformed_query_as_409_invalid_request(string query)
     {
         using var response = await client.SendAsync(Get($"/api/v1/settlements?{query}"));
@@ -535,9 +542,20 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
     [Fact]
     public async Task A_finance_only_member_never_creates_orders()
     {
-        var body = $$"""
-            {"quote_id":"{{Guid.NewGuid():D}}","payer_type":"SENDER","acceptance":{"terms_version":"terms-2026-09","privacy_version":"privacy-2026-09","accepted_at":"2026-09-27T12:00:00Z","acceptance_channel":"WEB"}}
-            """;
+        var acceptedAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+            .ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        var body = JsonSerializer.Serialize(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+            acceptance = new
+            {
+                terms_version = "terms-2026-09",
+                privacy_version = "privacy-2026-09",
+                accepted_at = acceptedAt,
+                acceptance_channel = "WEB",
+            },
+        });
 
         using (var order = await client.SendAsync(Post("/api/v1/orders", body)))
         {

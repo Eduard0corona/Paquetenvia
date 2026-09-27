@@ -17,6 +17,14 @@ namespace Paqueteria.ContractTests.PostgreSql;
 [Collection(PostgreSqlContractCollection.Name)]
 public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
+    /// <summary>
+    /// AI05-INPUT-LIMITS: the acceptance instant must lie within [-72 h, +5 min] of the server clock, so the
+    /// synthetic instant is a whole second one hour ago plus 7 ticks, keeping the sub-microsecond probe.
+    /// </summary>
+    private static readonly DateTimeOffset AcceptedAtClient = new DateTimeOffset(
+        DateTimeOffset.UtcNow.AddHours(-1).UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond,
+        TimeSpan.Zero).AddTicks(7);
+
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
     public async Task Create_replay_queries_and_all_transactional_artifacts_match_the_quote()
@@ -115,7 +123,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         var expectedEvidence = new OrderAcceptanceEvidence(
             created.Id, scenario.QuoteId, scenario.OrganizationId, scenario.UserId,
             "terms-synthetic-v1", "privacy-synthetic-v1",
-            new DateTimeOffset(2026, 7, 22, 12, 34, 56, TimeSpan.Zero).AddTicks(7),
+            AcceptedAtClient,
             "WEB");
         Assert.Equal(OrderAcceptanceCanonicalizer.ComputeSha256(expectedEvidence), reader.GetFieldValue<byte[]>(32));
         foreach (var jsonOrdinal in new[] { 33, 34, 35 })
@@ -355,7 +363,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         new OrderAcceptanceInput(
             "terms-synthetic-v1",
             "privacy-synthetic-v1",
-            new DateTimeOffset(2026, 7, 22, 12, 34, 56, TimeSpan.Zero).AddTicks(7),
+            AcceptedAtClient,
             "WEB"),
         "synthetic-request-id");
 

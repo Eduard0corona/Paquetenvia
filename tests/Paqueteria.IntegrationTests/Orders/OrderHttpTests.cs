@@ -9,6 +9,20 @@ namespace Paqueteria.IntegrationTests.Orders;
 
 public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactory>
 {
+    /// <summary>
+    /// AI05-INPUT-LIMITS: accepted_at must lie within [-72 h, +5 min] of server time, so the client instant is
+    /// one hour ago, keeping its seven fractional digits, written in UTC and as the equal -07:00 local time.
+    /// </summary>
+    private static readonly DateTimeOffset RecentInstant = new DateTimeOffset(
+        DateTimeOffset.UtcNow.AddHours(-1).UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond,
+        TimeSpan.Zero).AddTicks(1_234_567);
+
+    private static readonly string RecentUtc = RecentInstant.ToString(
+        "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static readonly string RecentOffset = RecentInstant.ToOffset(TimeSpan.FromHours(-7)).ToString(
+        "yyyy-MM-dd'T'HH:mm:ss.fffffffzzz", System.Globalization.CultureInfo.InvariantCulture);
+
     private readonly HttpClient client;
     private readonly OrderHttpWebApplicationFactory factory;
 
@@ -133,7 +147,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             {
                 terms_version = field == "terms_version" ? version : "terms-synthetic-v1",
                 privacy_version = field == "privacy_version" ? version : "privacy-synthetic-v1",
-                accepted_at = "2026-07-22T12:00:00Z",
+                accepted_at = RecentUtc,
                 acceptance_channel = "WEB",
             },
         });
@@ -155,11 +169,60 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         }
     }
 
+    /// <summary>
+    /// AI05-INPUT-LIMITS: accepted_at within [server time - 72 h, server time + 5 min] is accepted; beyond
+    /// either bound it is the uniform 409 and never reaches the service.
+    /// </summary>
+    [Theory]
+    [InlineData(-60, HttpStatusCode.Created)]
+    [InlineData(4, HttpStatusCode.Created)]
+    [InlineData(-71 * 60, HttpStatusCode.Created)]
+    [InlineData(10, HttpStatusCode.Conflict)]
+    [InlineData(-73 * 60, HttpStatusCode.Conflict)]
+    public async Task POST_bounds_accepted_at_against_server_time(int minutesFromNow, HttpStatusCode expected)
+    {
+        factory.ResetCreateObservations();
+        var acceptedAt = DateTimeOffset.UtcNow.AddMinutes(minutesFromNow).ToString(
+            "O", System.Globalization.CultureInfo.InvariantCulture);
+        using var response = await CreateAsync(Guid.NewGuid(), Key(), acceptedAt);
+
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(expected == HttpStatusCode.Created ? 1 : 0, factory.CreateCallCount);
+    }
+
+    [Theory]
+    [InlineData("terms 2026")]
+    [InlineData("terms/2026")]
+    [InlineData("términos")]
+    public async Task POST_rejects_acceptance_versions_outside_the_pattern(string version)
+    {
+        factory.ResetCreateObservations();
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
+        request.Headers.Add("Idempotency-Key", Key());
+        request.Content = JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+            acceptance = new
+            {
+                terms_version = version,
+                privacy_version = "privacy-synthetic-v1",
+                accepted_at = RecentUtc,
+                acceptance_channel = "WEB",
+            },
+        });
+
+        using var response = await client.SendAsync(request);
+
+        await AssertUniformConflictAsync(response);
+        Assert.Equal(0, factory.CreateCallCount);
+    }
+
     [Fact]
     public async Task POST_with_valid_UTC_timestamp_preserves_the_client_instant()
     {
         factory.ResetCreateObservations();
-        const string acceptedAt = "2026-07-22T12:00:00.1234567Z";
+        var acceptedAt = RecentUtc;
         using var response = await CreateAsync(Guid.NewGuid(), Key(), acceptedAt);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -174,10 +237,10 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
     {
         factory.ResetCreateObservations();
         using var utcResponse = await CreateAsync(
-            Guid.NewGuid(), Key(), "2026-07-22T12:00:00.1234567Z");
+            Guid.NewGuid(), Key(), RecentUtc);
         var utc = factory.LastCreateCommand!.Acceptance.AcceptedAt;
         using var offsetResponse = await CreateAsync(
-            Guid.NewGuid(), Key(), "2026-07-22T05:00:00.1234567-07:00");
+            Guid.NewGuid(), Key(), RecentOffset);
         var offset = factory.LastCreateCommand!.Acceptance.AcceptedAt;
 
         Assert.Equal(HttpStatusCode.Created, utcResponse.StatusCode);
@@ -346,11 +409,11 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
     private Task<HttpResponseMessage> CreateAsync(
         Guid quoteId,
         string key,
-        string acceptedAt = "2026-07-22T12:00:00.1234567Z")
+        string? acceptedAt = null)
     {
         var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
         request.Headers.Add("Idempotency-Key", key);
-        request.Content = ValidBody(quoteId, acceptedAt: acceptedAt);
+        request.Content = ValidBody(quoteId, acceptedAt: acceptedAt ?? RecentUtc);
         return client.SendAsync(request);
     }
 
@@ -373,7 +436,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         Guid quoteId,
         string payerType = "SENDER",
         string channel = "WEB",
-        string acceptedAt = "2026-07-22T12:00:00.1234567Z") =>
+        string? acceptedAt = null) =>
         JsonContent.Create(new
         {
             quote_id = quoteId,
@@ -382,7 +445,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             {
                 terms_version = "terms-synthetic-v1",
                 privacy_version = "privacy-synthetic-v1",
-                accepted_at = acceptedAt,
+                accepted_at = acceptedAt ?? RecentUtc,
                 acceptance_channel = channel,
             },
         });
@@ -417,7 +480,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             acceptance = new
             {
                 privacy_version = "privacy-synthetic-v1",
-                accepted_at = "2026-07-22T12:00:00.1234567Z",
+                accepted_at = RecentUtc,
                 acceptance_channel = "WEB",
             },
         }),
@@ -428,7 +491,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             acceptance = new
             {
                 terms_version = "terms-synthetic-v1",
-                accepted_at = "2026-07-22T12:00:00.1234567Z",
+                accepted_at = RecentUtc,
                 acceptance_channel = "WEB",
             },
         }),
@@ -440,7 +503,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             {
                 terms_version = "terms-synthetic-v1",
                 privacy_version = "privacy-synthetic-v1",
-                accepted_at = "2026-07-22T12:00:00.1234567Z",
+                accepted_at = RecentUtc,
             },
         }),
         _ => throw new ArgumentOutOfRangeException(nameof(missingField), missingField, null),
@@ -450,7 +513,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
     {
         terms_version = "terms-synthetic-v1",
         privacy_version = "privacy-synthetic-v1",
-        accepted_at = "2026-07-22T12:00:00.1234567Z",
+        accepted_at = RecentUtc,
         acceptance_channel = "WEB",
     };
 

@@ -79,7 +79,7 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.DoesNotContain("client-chosen-v9", body, StringComparison.Ordinal);
         Assert.DoesNotContain(
-            typeof(Locations.Application.Locations.CreateLocationCommand).GetProperties(),
+            typeof(global::Locations.Application.Locations.CreateLocationCommand).GetProperties(),
             property => property.Name.Contains("KeyVersion", StringComparison.Ordinal));
     }
 

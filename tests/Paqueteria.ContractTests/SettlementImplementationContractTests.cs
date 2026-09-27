@@ -373,6 +373,7 @@ public sealed class SettlementImplementationContractTests
         Assert.Equal(
             SettlementContractValues.AllStatuses.Select(status => status.ToContractValue()),
             Scalars(query["status"].Mapping("schema").Sequence("enum")));
+        Assert.Equal("uuid", query["payee_id"].Mapping("schema").Scalar("format"));
         Assert.Equal("date", query["period_from"].Mapping("schema").Scalar("format"));
         Assert.Equal("date", query["period_to"].Mapping("schema").Scalar("format"));
         Assert.Equal("128", query["cursor"].Mapping("schema").Scalar("maxLength"));

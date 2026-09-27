@@ -1352,7 +1352,8 @@ paths:
         AI05-LIST-SETTLEMENTS returns one page of the settlements of the
         selected organization, newest first by created_at then id, each with
         its immutable lines exactly as getSettlement returns them. The server
-        owns the bounded page size; clients cannot configure it. status keeps
+        owns the bounded page size; clients cannot configure it. payee_id keeps
+        the settlements of that payee; status keeps
         the settlements in that status; period_from and period_to keep the
         settlements whose whole period lies inside them, and both bounds may
         be used alone. Same capability as getSettlement: FINANCE members and
@@ -1361,7 +1362,8 @@ paths:
         settlement is read. Every query parameter appears at most once and
         parses exactly; an unknown parameter, an unknown status, a malformed
         date, period_to before period_from or a cursor that was not issued by
-        this operation is INVALID_REQUEST. Another tenant's settlements are
+        this operation is INVALID_REQUEST. A payee_id that is not a canonical UUID is
+        INVALID_REQUEST too. Another tenant's settlements are
         never listed, and a page holding a header whose total does not equal
         the exact sum of its lines fails closed as 503.
       x-authorization-precedence: shape-validation-then-capability-before-persisted-state
@@ -1370,6 +1372,12 @@ paths:
       - settlement
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
+      - name: payee_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
       - name: status
         in: query
         required: false
@@ -2096,16 +2104,22 @@ components:
               type: string
               minLength: 1
               maxLength: 64
-              description: AI05-INPUT-LIMITS; the bound CSV-001 already applies per row. A longer value is rejected with 409 before any order is created.
+              pattern: ^[A-Za-z0-9._-]+$
+              description: AI05-INPUT-LIMITS; the same bound applies to a CSV-001 row. Any other value is rejected with 409 before any order is created.
             privacy_version:
               type: string
               minLength: 1
               maxLength: 64
-              description: AI05-INPUT-LIMITS; the bound CSV-001 already applies per row. A longer value is rejected with 409 before any order is created.
+              pattern: ^[A-Za-z0-9._-]+$
+              description: AI05-INPUT-LIMITS; the same bound applies to a CSV-001 row. Any other value is rejected with 409 before any order is created.
             accepted_at:
               type: string
               format: date-time
-              description: Client-observed acceptance timestamp; persisted as accepted_at_client after UTC normalization.
+              description: >-
+                Client-observed acceptance timestamp; persisted as accepted_at_client after UTC normalization.
+                AI05-INPUT-LIMITS - it must lie no later than server time plus 5 minutes and no earlier than
+                server time minus 72 hours, both inclusive; otherwise the request is rejected with 409 before
+                any order is created (a CSV-001 commit row fails the same way).
             acceptance_channel:
               type: string
               enum:

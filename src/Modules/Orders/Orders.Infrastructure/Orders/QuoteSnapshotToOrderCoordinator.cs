@@ -78,6 +78,13 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     {
         ArgumentNullException.ThrowIfNull(command);
         Validate(command);
+
+        // AI05-INPUT-LIMITS: the acceptance instant must be plausible against the server clock. JSON and CSV
+        // commits both pass here, so neither can record acceptance evidence outside the window.
+        if (!OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(command.Acceptance.AcceptedAt, clock.UtcNow))
+        {
+            throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+        }
         _ = OrderInputPolicy.TryParsePayerType(command.PayerType, out var payerType);
         var requestHash = ComputeRequestHash(command);
         var maximumAttempts = checked(options.Value.PublicIdCollisionRetryCount + 1);

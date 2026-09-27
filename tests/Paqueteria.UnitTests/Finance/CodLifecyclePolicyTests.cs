@@ -129,8 +129,9 @@ public sealed class CodLifecyclePolicyTests
     [InlineData("PLATFORM_ADMIN", false, false, false, false)]
     [InlineData("DRIVER", false, true, false, false)]
     [InlineData("VIEWER", true, false, false, false)]
-    [InlineData("FINANCE", false, false, true, false)]
-    [InlineData("FINANCE", true, false, true, false)]
+    [InlineData("FINANCE", false, false, false, false)]
+    [InlineData("FINANCE", true, false, true, true)]
+    [InlineData("DISPATCHER", true, true, true, true)]
     public void Fin001_capabilities_are_fail_closed_and_segregate_duties(
         string role,
         bool mfa,
@@ -146,21 +147,40 @@ public sealed class CodLifecyclePolicyTests
     }
 
     /// <summary>
-    /// FINANCE-COD-RECONCILIATION: FINANCE reconciles collected COD only while its user and membership are
-    /// active; it never records a collection and never reads margins.
+    /// FINANCE-COD-RECONCILIATION and FINANCE-COD-MFA-2026-09-27: FINANCE reads financials and reconciles
+    /// collected COD only with a satisfied MFA challenge and while its user and membership are active; it
+    /// never records a collection, whatever its MFA state.
     /// </summary>
     [Theory]
-    [InlineData(true, true, true)]
-    [InlineData(false, true, false)]
-    [InlineData(true, false, false)]
-    public void Finance_reconciles_collected_cod_only_while_active(bool userActive, bool membershipActive, bool expected)
+    [InlineData(true, true, true, true)]
+    [InlineData(true, true, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, false, true, false)]
+    public void Finance_reads_and_reconciles_only_active_and_with_mfa(
+        bool userActive,
+        bool membershipActive,
+        bool mfa,
+        bool expected)
     {
-        var context = new FinanceAuthorizationContext("FINANCE", userActive, membershipActive, false, true);
+        var context = new FinanceAuthorizationContext("FINANCE", userActive, membershipActive, mfa, true);
 
         Assert.Equal(expected, FinanceAuthorizationPolicy.CanReconcileCod(context));
+        Assert.Equal(expected, FinanceAuthorizationPolicy.CanReadFinancials(context));
         Assert.False(FinanceAuthorizationPolicy.CanRecordCod(context));
         Assert.False(FinanceAuthorizationPolicy.MayAttemptRecordCod(context));
-        Assert.False(FinanceAuthorizationPolicy.CanReadFinancials(context));
+    }
+
+    /// <summary>FINANCE-COD-MFA-2026-09-27: DISPATCHER keeps reading and reconciling without MFA.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Dispatcher_keeps_financials_and_reconciliation_without_mfa(bool mfa)
+    {
+        var context = new FinanceAuthorizationContext("DISPATCHER", true, true, mfa, false);
+
+        Assert.True(FinanceAuthorizationPolicy.CanReconcileCod(context));
+        Assert.True(FinanceAuthorizationPolicy.CanReadFinancials(context));
+        Assert.True(FinanceAuthorizationPolicy.CanRecordCod(context));
     }
 
     [Fact]

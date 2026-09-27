@@ -487,7 +487,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             {
                 terms_version = "ops001-synthetic-terms-v1",
                 privacy_version = "ops001-synthetic-privacy-v1",
-                accepted_at = "2026-07-27T12:00:00.1234560Z",
+                accepted_at = DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O", System.Globalization.CultureInfo.InvariantCulture),
                 acceptance_channel = "API",
             },
         };

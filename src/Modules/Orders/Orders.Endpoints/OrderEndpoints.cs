@@ -67,10 +67,12 @@ public static class OrderEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IOrderService service,
+        Paqueteria.Application.IClock clock,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
-            !IsValid(request))
+            !IsValid(request) ||
+            !OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(request.Acceptance.AcceptedAt, clock.UtcNow))
         {
             return Conflict();
         }

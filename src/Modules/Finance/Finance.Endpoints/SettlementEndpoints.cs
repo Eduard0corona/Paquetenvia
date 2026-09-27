@@ -181,8 +181,8 @@ public static class SettlementEndpoints
             return FinanceEndpointBinding.Forbidden();
         }
 
-        if (!TryReadListFilters(httpContext.Request.Query, out var status, out var periodFrom, out var periodTo,
-                out var cursor))
+        if (!TryReadListFilters(httpContext.Request.Query, out var payee, out var status, out var periodFrom,
+                out var periodTo, out var cursor))
         {
             return FinanceEndpointBinding.Conflict(InvalidRequest);
         }
@@ -190,7 +190,9 @@ public static class SettlementEndpoints
         try
         {
             var page = await service.ListAsync(
-                new(actorId, tenantContext.OrganizationId, status, periodFrom, periodTo, cursor, session.MfaSatisfied),
+                new(
+                    actorId, tenantContext.OrganizationId, status, periodFrom, periodTo, cursor, session.MfaSatisfied,
+                    payee),
                 cancellationToken);
             return Results.Json(
                 new SettlementPageResponse(page.Items.Select(ToResponse).ToArray(), page.NextCursor),
@@ -200,15 +202,17 @@ public static class SettlementEndpoints
         catch (Exception exception) when (Failure(exception) is { } failure) { return failure; }
     }
 
-    internal static readonly string[] ListQueryParameters = ["status", "period_from", "period_to", "cursor"];
+    internal static readonly string[] ListQueryParameters = ["payee_id", "status", "period_from", "period_to", "cursor"];
 
     internal static bool TryReadListFilters(
         IQueryCollection query,
+        out Guid? payee,
         out string? status,
         out DateOnly? periodFrom,
         out DateOnly? periodTo,
         out SettlementCursor? cursor)
     {
+        payee = null;
         status = null;
         periodFrom = null;
         periodTo = null;
@@ -217,6 +221,16 @@ public static class SettlementEndpoints
             query.Any(pair => pair.Value.Count != 1))
         {
             return false;
+        }
+
+        if (query.TryGetValue("payee_id", out var payeeValue))
+        {
+            if (!FinanceEndpointBinding.TryGuid(payeeValue[0] ?? string.Empty, out var parsedPayee))
+            {
+                return false;
+            }
+
+            payee = parsedPayee;
         }
 
         if (query.TryGetValue("status", out var statusValue))
