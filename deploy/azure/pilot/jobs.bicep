@@ -234,5 +234,76 @@ resource runtimeLoginsJob 'Microsoft.App/jobs@2025-07-01' = {
   ]
 }
 
+// Read-only verification (`assert`): run after every deployment against the pilot database, and by the
+// restore drill (restore-drill.sh) against a point-in-time restored server by re-pointing `pg-verify-conn`.
+resource verifyJob 'Microsoft.App/jobs@2025-07-01' = {
+  name: 'job-pv-pilot-verify'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: containerEnvironment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 900
+      replicaRetryLimit: 0
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'pg-verify-conn'
+          keyVaultUrl: '${vault.properties.vaultUri}secrets/pg-migrate-connection'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'db-verify'
+          image: dbOpsImage
+          command: [
+            'dotnet'
+            '/app/migrator/Paqueteria.DatabaseMigrator.dll'
+          ]
+          args: [
+            'assert'
+            '--connection-env'
+            'PAQUETERIA_MIGRATION_CONNECTION'
+          ]
+          env: concat(classificationEnv, [
+            {
+              name: 'PAQUETERIA_MIGRATION_CONNECTION'
+              secretRef: 'pg-verify-conn'
+            }
+          ])
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    migrateSecretReaders
+  ]
+}
+
 output migrationJobName string = migrationJob.name
 output runtimeLoginsJobName string = runtimeLoginsJob.name
+output verifyJobName string = verifyJob.name

@@ -8,7 +8,7 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P20)
+  check            evaluate every pilot guard (P00..P18)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   scram-verifier   read a password on stdin, print its PostgreSQL SCRAM-SHA-256 verifier
 """
@@ -42,8 +42,9 @@ WORKER_APP = "ca-pv-pilot-worker"
 WEB_APP = "ca-pv-pilot-web"
 MIGRATE_JOB = "job-pv-pilot-migrate"
 LOGINS_JOB = "job-pv-pilot-logins"
-AUTHORIZED_WORKLOADS = {API_APP, WORKER_APP, WEB_APP, MIGRATE_JOB, LOGINS_JOB}
-DOTNET_WORKLOADS = {API_APP, WORKER_APP, MIGRATE_JOB, LOGINS_JOB}
+VERIFY_JOB = "job-pv-pilot-verify"
+AUTHORIZED_WORKLOADS = {API_APP, WORKER_APP, WEB_APP, MIGRATE_JOB, LOGINS_JOB, VERIFY_JOB}
+DOTNET_WORKLOADS = {API_APP, WORKER_APP, MIGRATE_JOB, LOGINS_JOB, VERIFY_JOB}
 API_PREFIXES = ("/api", "/hubs", "/auth")
 API_EXACT_PATHS = ("/signin-authcenter",)
 
@@ -54,6 +55,7 @@ ALLOWED_SECRETS = {
     WEB_APP: set(),
     MIGRATE_JOB: {"pg-migrate-connection"},
     LOGINS_JOB: {"pg-migrate-connection", "pg-api-login-verifier", "pg-worker-login-verifier"},
+    VERIFY_JOB: {"pg-migrate-connection"},
 }
 
 AUTHORIZED_RESOURCE_TYPES = frozenset(
@@ -455,7 +457,10 @@ def guard_09_migrations(ctx: Context) -> GuardResult:
     logins = ctx.workload(LOGINS_JOB)
     if [str(a) for c in logins.containers for a in (c.get("args", []) or [])][:1] != ["runtime-logins"]:
         failures.append(f"{LOGINS_JOB} must run `runtime-logins`")
-    for job in (migrate, logins):
+    verify = ctx.workload(VERIFY_JOB)
+    if [str(a) for c in verify.containers for a in (c.get("args", []) or [])][:1] != ["assert"]:
+        failures.append(f"{VERIFY_JOB} must run the read-only `assert`")
+    for job in (migrate, logins, verify):
         invocation = " ".join(str(p) for c in job.containers for p in c.get("command", []) or [])
         if "Paqueteria.DatabaseMigrator" not in invocation:
             failures.append(f"{job.name} does not invoke the canonical DatabaseMigrator")
@@ -470,7 +475,7 @@ def guard_09_migrations(ctx: Context) -> GuardResult:
     pilot_dbops = (ctx.repo_root / PILOT_DIR / "Dockerfile.db-ops").read_text(encoding="utf-8")
     if "DevSeed" in "\n".join(line for line in pilot_dbops.splitlines() if not line.lstrip().startswith("#")):
         failures.append("pilot db-ops image must not package the synthetic DevSeed tool")
-    return _result(9, "migrations only through the canonical migrator job", failures, "apply + runtime-logins jobs, no startup migration")
+    return _result(9, "migrations only through the canonical migrator job", failures, "apply, runtime-logins and assert jobs, no startup migration")
 
 
 def guard_10_same_origin_routing(ctx: Context) -> GuardResult:
@@ -679,6 +684,31 @@ def guard_17_business_settings(ctx: Context) -> GuardResult:
     return _result(17, "business settings cannot override the platform", failures, "settings file well-formed")
 
 
+def guard_18_bff_web_image(ctx: Context) -> GuardResult:
+    failures = []
+    dockerfile = (ctx.repo_root / PILOT_DIR / "Dockerfile.web").read_text(encoding="utf-8")
+    instructions = [line for line in dockerfile.splitlines() if not line.lstrip().startswith("#")]
+    declared = set(re.findall(r"^(?:ARG|ENV)\s+([A-Z0-9_]+)", "\n".join(instructions), re.MULTILINE))
+    if "NEXT_PUBLIC_API_BASE_URL" in declared:
+        failures.append("BFF web image must never define NEXT_PUBLIC_API_BASE_URL (same origin)")
+    if not re.search(r"^ENV NEXT_PUBLIC_AUTH_MODE=bff$", "\n".join(instructions), re.MULTILINE):
+        failures.append("BFF web image must set NEXT_PUBLIC_AUTH_MODE=bff")
+    used: set[str] = set()
+    for root in ("apps/web/src", "apps/web/next.config.ts"):
+        path = ctx.repo_root / root
+        files = [path] if path.is_file() else [p for p in path.rglob("*") if p.suffix in {".ts", ".tsx", ".js", ".mjs"} and "node_modules" not in p.parts]
+        for file in files:
+            used.update(re.findall(r"NEXT_PUBLIC_[A-Z0-9_]+", file.read_text(encoding="utf-8", errors="replace")))
+    missing = sorted(used - declared - {"NEXT_PUBLIC_API_BASE_URL"})
+    if missing:
+        failures.append(f"BFF web image manifest misses build inputs {missing}")
+    if "deploy/azure/pilot/Dockerfile.web" not in ctx.workflow_text:
+        failures.append("workflow must build the web image from deploy/azure/pilot/Dockerfile.web")
+    if ctx.workload(WEB_APP).env.get("PAQUETERIA_CSP_CONNECT_SOURCES") is None:
+        failures.append("web must allow the proof storage origin in CSP connect-src")
+    return _result(18, "AUTH-001 BFF web image (same origin)", failures, "API base URL unset, auth mode bff, manifest complete")
+
+
 GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_00_templates,
     guard_01_resource_set,
@@ -698,6 +728,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_15_budget_and_logs,
     guard_16_adp_contract,
     guard_17_business_settings,
+    guard_18_bff_web_image,
 )
 
 

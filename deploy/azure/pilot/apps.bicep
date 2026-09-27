@@ -533,6 +533,11 @@ resource web 'Microsoft.App/containerApps@2025-07-01' = {
               name: 'NODE_ENV'
               value: 'production'
             }
+            // CSP connect-src: drivers PUT proof bytes straight to Blob Storage with the signed URL.
+            {
+              name: 'PAQUETERIA_CSP_CONNECT_SOURCES'
+              value: blobServiceUri
+            }
           ]
           resources: {
             cpu: json('0.25')

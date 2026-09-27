@@ -341,13 +341,12 @@ jobs:
           echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"
           echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"
           echo "dbops=$(build db-ops deploy/azure/pilot/Dockerfile.db-ops)" >> "${GITHUB_OUTPUT}"
-          echo "web=$(build web deploy/azure/Dockerfile.web \
-            --build-arg NEXT_PUBLIC_API_BASE_URL= \
-            --build-arg NEXT_PUBLIC_AUTH_MODE=bff \
+          # AUTH-001 BFF web build: same origin, NEXT_PUBLIC_API_BASE_URL never defined (see the Dockerfile header).
+          echo "web=$(build web deploy/azure/pilot/Dockerfile.web \
             --build-arg NEXT_PUBLIC_TRACKING_BRAND_NAME=Paquetenvia \
             --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL=${support_url}")" >> "${GITHUB_OUTPUT}"
 
-      - name: Stage 3 - migration and runtime-login jobs (jobs.bicep), then run them
+      - name: Stage 3 - migration, runtime-login and verify jobs (jobs.bicep), then run them
         shell: bash
         env:
           DBOPS_IMAGE: ${{ steps.images.outputs.dbops }}
@@ -374,6 +373,7 @@ jobs:
           }
           run_job job-pv-pilot-migrate
           run_job job-pv-pilot-logins
+          run_job job-pv-pilot-verify
 
       - name: Stage 4 - Web, API, Worker and same-origin route (apps.bicep)
         id: apps
