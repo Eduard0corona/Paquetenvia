@@ -60,7 +60,7 @@ public sealed class IncidentOpeningOfflineAgeHttpTests(IncidentResolutionHttpFix
 
     [Theory]
     [InlineData(24, 0)]
-    [InlineData(96, 60)]
+    [InlineData(48, 60)]
     public async Task A_configured_age_and_tolerance_move_both_boundaries(int ageHours, int skewMinutes)
     {
         await using var host = Host(out var clock, out var calls, ageHours, skewMinutes);
@@ -104,15 +104,14 @@ public sealed class IncidentOpeningOfflineAgeHttpTests(IncidentResolutionHttpFix
     }
 
     [Fact]
-    public async Task A_widened_age_accepts_a_report_older_than_the_fixed_72_hours()
+    public async Task An_age_above_the_72_hour_cap_never_starts_the_api()
     {
-        await using var host = Host(out var clock, out var calls, maximumAgeHours: 96);
-        var seeded = await fixture.SeedIncidentAsync(IncidentResolutionHttpFixture.TenantId);
+        // OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27: the age may only be tightened, so a deployment
+        // that tries to widen it past the idempotency-key floor fails closed at startup.
+        await using var host = Host(out _, out _, maximumAgeHours: 73);
 
-        using var response = await OpenAsync(host, seeded, clock.UtcNow.AddHours(-80));
-
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        Assert.Equal(1, calls.Count);
+        var failure = Assert.ThrowsAny<Exception>(() => host.CreateClient());
+        Assert.Contains("1 to 72 hours", failure.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

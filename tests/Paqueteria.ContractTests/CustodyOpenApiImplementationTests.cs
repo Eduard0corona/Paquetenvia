@@ -91,6 +91,7 @@ public sealed class CustodyOpenApiImplementationTests
                 "OPS-003-SERVER-72H-REJECTION",
                 "OPS-003-INCIDENT-72H-UNIFICATION",
                 "OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27",
+                "OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27",
             ],
             root.Mapping("x-offline-operation-age").Sequence("decisions").Children
                 .Select(node => Assert.IsType<YamlScalarNode>(node).Value!));

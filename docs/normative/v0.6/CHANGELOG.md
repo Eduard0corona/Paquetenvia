@@ -1,5 +1,16 @@
 # Changelog
 
+## Tope de 72 h para la edad máxima de `openIncident` — 2026-09-27
+
+- Respuesta literal del project owner: "Tope en 72 h (Recomendado)"
+  (`OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27`). `Incidents:MaximumOccurrenceAgeHours`
+  sólo se configura hacia abajo (1–72 h, por defecto 72); un valor mayor impide el
+  arranque. El tope coincide con el piso de 72 h de la purga de llaves de
+  idempotencia, así que un replay cuya llave pudo purgarse siempre se rechaza.
+- AI-05 `x-offline-operation-age`: `openIncident.maximum_age_range` pasa a
+  `PT1H..PT72H`, se agrega la decisión y una regla; la descripción de
+  `openIncident` indica el tope. AI-08 (OPS-003) registra la decisión.
+
 ## `openIncident` unificado con `OFFLINE_OPERATION_EXPIRED`, límites configurables — 2026-09-27
 
 - Respuesta literal del project owner: "Unificar pero configurable"
@@ -10,7 +21,7 @@
   `x-offline-operation-age` agrega las dos decisiones y la entrada
   `openIncident` con `maximum_age_configurable: true`, sus ajustes
   (`Incidents:MaximumOccurrenceAgeHours`, `Incidents:MaximumOccurrenceSkewMinutes`),
-  valores por defecto (PT72H, PT5M) y rangos (PT1H..PT720H, PT0S..PT60M); el reloj
+  valores por defecto (PT72H, PT5M) y rangos (PT1H..PT720H, luego PT1H..PT72H por el tope; PT0S..PT60M); el reloj
   adelantado y la marca ausente siguen siendo 409 `INVALID_REQUEST`. Las otras
   tres operaciones conservan su política fija.
 - AI-08 (OPS-003) registra la decisión y la regla de `openIncident`.

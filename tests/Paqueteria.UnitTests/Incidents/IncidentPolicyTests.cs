@@ -225,8 +225,8 @@ public sealed class IncidentPolicyTests
     [Theory]
     [InlineData(1, 0)]
     [InlineData(24, 1)]
-    [InlineData(96, 60)]
-    [InlineData(720, 5)]
+    [InlineData(48, 60)]
+    [InlineData(72, 5)]
     public void A_configured_occurrence_age_and_skew_move_both_boundaries(int ageHours, int skewMinutes)
     {
         var policy = new IncidentOccurrenceAgePolicy(IncidentOperationalPolicy.Mvp1 with
@@ -257,19 +257,23 @@ public sealed class IncidentPolicyTests
     }
 
     [Fact]
-    public void The_published_occurrence_bounds_are_one_hour_to_thirty_days_and_zero_to_one_hour()
+    public void The_published_occurrence_bounds_cap_the_age_at_72_hours_and_the_skew_at_one_hour()
     {
-        Assert.Equal(TimeSpan.FromDays(30), IncidentOperationalPolicy.LongestConfigurableWindow);
+        // OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27: the age may only be tightened below the 72-hour
+        // idempotency-key floor, never widened past it.
+        Assert.Equal(TimeSpan.FromHours(72), IncidentOperationalPolicy.LongestConfigurableOccurrenceAge);
         Assert.Equal(TimeSpan.FromHours(1), IncidentOperationalPolicy.LongestConfigurableSkew);
         Assert.True((IncidentOperationalPolicy.Mvp1 with
         {
-            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableWindow,
+            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableOccurrenceAge,
             MaximumOccurrenceSkew = IncidentOperationalPolicy.LongestConfigurableSkew,
         }).IsValid);
+        Assert.True((IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(1) }).IsValid);
         Assert.False((IncidentOperationalPolicy.Mvp1 with
         {
-            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableWindow + TimeSpan.FromTicks(1),
+            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableOccurrenceAge + TimeSpan.FromTicks(1),
         }).IsValid);
+        Assert.False((IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(73) }).IsValid);
         Assert.False((IncidentOperationalPolicy.Mvp1 with
         {
             MaximumOccurrenceSkew = IncidentOperationalPolicy.LongestConfigurableSkew + TimeSpan.FromTicks(1),
@@ -416,6 +420,9 @@ public sealed class IncidentPolicyTests
         // The retrospective window and the skew are bounded.
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.Zero },
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromDays(400) },
+        // ...and never past the 72-hour idempotency-key floor (OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27).
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(73) },
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(72).Add(TimeSpan.FromTicks(1)) },
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceSkew = TimeSpan.FromMinutes(-1) },
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceSkew = TimeSpan.FromHours(2) },
         // Evidence may be tightened, never removed and never widened past the published bound.

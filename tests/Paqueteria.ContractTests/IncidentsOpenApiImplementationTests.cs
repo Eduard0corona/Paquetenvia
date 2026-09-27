@@ -226,9 +226,9 @@ public sealed partial class IncidentsOpenApiImplementationTests
     public void AI05_offline_operation_age_entry_for_openIncident_is_the_implemented_configurable_rule()
     {
         var age = Contract().Mapping("x-offline-operation-age");
-        Assert.Contains(
-            "OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27",
-            age.Sequence("decisions").Children.Cast<YamlScalarNode>().Select(node => node.Value!));
+        var decisions = age.Sequence("decisions").Children.Cast<YamlScalarNode>().Select(node => node.Value!).ToArray();
+        Assert.Contains("OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27", decisions);
+        Assert.Contains("OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27", decisions);
         // The shared rule for the other operations stays fixed.
         Assert.Equal("false", age.Scalar("maximum_age_configurable"));
 
@@ -263,7 +263,8 @@ public sealed partial class IncidentsOpenApiImplementationTests
         // Ranges are exactly what the validated options accept, in their own units.
         var (minimumAge, maximumAge) = Range(entry.Scalar("maximum_age_range"));
         Assert.Equal(TimeSpan.FromHours(1), minimumAge);
-        Assert.Equal(IncidentOperationalPolicy.LongestConfigurableWindow, maximumAge);
+        Assert.Equal(IncidentOperationalPolicy.LongestConfigurableOccurrenceAge, maximumAge);
+        Assert.Equal(TimeSpan.FromHours(72), maximumAge);
         Assert.True(WithAge((int)minimumAge.TotalHours).OperationalPolicy.IsValid);
         Assert.False(WithAge((int)minimumAge.TotalHours - 1).OperationalPolicy.IsValid);
         Assert.True(WithAge((int)maximumAge.TotalHours).OperationalPolicy.IsValid);

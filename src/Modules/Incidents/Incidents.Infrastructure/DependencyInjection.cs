@@ -43,7 +43,7 @@ public static class DependencyInjection
             .Validate(options => options.OperationalPolicy.IsValid,
                 "Incidents operational parameters are outside the bounded MVP-1 surface: the SLA " +
                 "windows must be positive, ordered from CRITICAL to LOW, the retrospective window " +
-                "and skew must be bounded, and the evidence ceiling must stay between 1 and the " +
+                "must be 1 to 72 hours, the skew 0 to 60 minutes, and the evidence ceiling must stay between 1 and the " +
                 "maximum AI-05 publishes.")
             .ValidateOnStart();
 

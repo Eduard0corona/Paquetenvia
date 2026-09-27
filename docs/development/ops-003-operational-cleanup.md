@@ -120,7 +120,7 @@ incidentes y de su replay idempotente, pero con sus propios límites:
 
 | Ajuste | Por defecto | Rango |
 | --- | --- | --- |
-| `Incidents:MaximumOccurrenceAgeHours` | 72 | 1–720 |
+| `Incidents:MaximumOccurrenceAgeHours` | 72 | 1–72 (sólo hacia abajo) |
 | `Incidents:MaximumOccurrenceSkewMinutes` | 5 | 0–60 |
 
 | `occurred_at` | Resultado |
@@ -134,10 +134,12 @@ Como en las demás operaciones, un replay vencido se rechaza aunque su
 `Idempotency-Key` siga guardada. `transitionOrder`, `createProofUploadSession` y
 `finalizeProof` conservan su política fija (72 h, tolerancia 0–300 s).
 
-Riesgo operativo: si se configura una edad máxima mayor que 72 h, un replay de
-un incidente cuya llave ya purgó el job de limpieza (piso de 72 h) llegaría al
-servicio y abriría un incidente nuevo. Con el valor por defecto (72 h) esto no
-ocurre; subirlo por encima de 72 h exige aceptar ese riesgo.
+La edad máxima tiene tope en 72 h (OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27,
+respuesta literal del owner: "Tope en 72 h (Recomendado)"): sólo puede
+reducirse, y un valor mayor impide el arranque (`ValidateOnStart`). Como el job
+de limpieza nunca purga una llave de idempotencia con menos de 72 h, un replay
+de incidente cuya llave pudo purgarse siempre se rechaza con
+`OFFLINE_OPERATION_EXPIRED` y nunca abre un segundo incidente.
 
 ## Rollback
 

@@ -702,8 +702,9 @@ paths:
         INC-001 opens an incident for a failed attempt. occurred_at is judged by
         the offline operation age rule before the incident service runs
         (x-offline-operation-age, OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27):
-        exactly the configured maximum occurrence age (default 72 hours) is
-        accepted, an older report is 409 OFFLINE_OPERATION_EXPIRED, and one later
+        exactly the configured maximum occurrence age (default and ceiling 72
+        hours, configurable only downward to 1 hour,
+        OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27) is accepted, an older report is 409 OFFLINE_OPERATION_EXPIRED, and one later
         than server time plus the configured clock tolerance (default 5 minutes)
         is 409 INVALID_REQUEST. The check precedes the idempotency replay, so an
         expired report is refused even when its Idempotency-Key is still stored.
@@ -4620,6 +4621,7 @@ x-offline-operation-age:
   - OPS-003-SERVER-72H-REJECTION
   - OPS-003-INCIDENT-72H-UNIFICATION
   - OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27
+  - OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27
   operations:
     transitionOrder: client_occurred_at (optional)
     createProofUploadSession: client_occurred_at (optional)
@@ -4629,7 +4631,7 @@ x-offline-operation-age:
       maximum_age_default: PT72H
       maximum_age_configurable: true
       maximum_age_setting: Incidents:MaximumOccurrenceAgeHours
-      maximum_age_range: PT1H..PT720H
+      maximum_age_range: PT1H..PT72H
       clock_tolerance_default: PT5M
       clock_tolerance_range: PT0S..PT60M
       clock_tolerance_setting: Incidents:MaximumOccurrenceSkewMinutes
@@ -4651,6 +4653,9 @@ x-offline-operation-age:
   - maximum_age, maximum_age_configurable and the clock_tolerance fields above apply to every operation listed with a
     plain value; an operation listed with its own mapping (openIncident) declares its own limits there and keeps the
     same comparison, the same inclusive bounds and the same 409 OFFLINE_OPERATION_EXPIRED
+  - openIncident's maximum age may only be tightened below PT72H, never widened past the 72-hour idempotency-key floor,
+    so a report whose key may have been purged is always refused and can never open a second incident; a larger setting
+    fails the start
   - openIncident compares occurred_at before the incident service and before its idempotency replay, so a report older
     than its configured maximum age is refused even when its Idempotency-Key is still stored
 x-runtime-contracts:

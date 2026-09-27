@@ -296,8 +296,15 @@ public sealed record IncidentOperationalPolicy
     /// <summary>The owner-approved MVP-1 defaults: 2h/8h/24h/72h, 72h retrospective, 5m skew, 10 proofs.</summary>
     public static readonly IncidentOperationalPolicy Mvp1 = new();
 
-    /// <summary>The longest SLA or retrospective window a deployment may configure (AI-05 publishes it).</summary>
+    /// <summary>The longest SLA window a deployment may configure.</summary>
     public static readonly TimeSpan LongestConfigurableWindow = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// The longest retrospective window a deployment may configure (AI-05 publishes it). Capped at
+    /// the 72-hour idempotency-key floor (OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27), so a report old
+    /// enough for its key to have been purged is always refused and can never open a second incident.
+    /// </summary>
+    public static readonly TimeSpan LongestConfigurableOccurrenceAge = TimeSpan.FromHours(72);
 
     /// <summary>The widest device clock skew a deployment may tolerate (AI-05 publishes it).</summary>
     public static readonly TimeSpan LongestConfigurableSkew = TimeSpan.FromHours(1);
@@ -331,7 +338,8 @@ public sealed record IncidentOperationalPolicy
         CriticalResolutionWindow <= HighResolutionWindow &&
         HighResolutionWindow <= MediumResolutionWindow &&
         MediumResolutionWindow <= LowResolutionWindow &&
-        IsWindow(MaximumOccurrenceAge) &&
+        MaximumOccurrenceAge > TimeSpan.Zero &&
+        MaximumOccurrenceAge <= LongestConfigurableOccurrenceAge &&
         MaximumOccurrenceSkew >= TimeSpan.Zero &&
         MaximumOccurrenceSkew <= LongestConfigurableSkew &&
         MaximumEvidenceCount >= IncidentEvidencePolicy.MinimumEvidenceCount &&

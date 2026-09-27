@@ -33,7 +33,10 @@ public sealed class IncidentsOptions
     public int MediumSlaHours { get; set; } = 24;
     public int LowSlaHours { get; set; } = 72;
 
-    /// <summary>How far back an attempt may be reported. The approved MVP-1 window is 72 hours.</summary>
+    /// <summary>
+    /// How far back an attempt may be reported: 1 to 72 hours, default 72 (OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27).
+    /// It may only be tightened; a larger value fails the start.
+    /// </summary>
     public int MaximumOccurrenceAgeHours { get; set; } = 72;
 
     public int MaximumOccurrenceSkewMinutes { get; set; } = 5;
