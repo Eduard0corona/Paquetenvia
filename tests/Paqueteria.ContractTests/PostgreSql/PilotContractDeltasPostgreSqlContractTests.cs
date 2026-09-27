@@ -127,7 +127,8 @@ public sealed partial class PilotContractDeltasPostgreSqlContractTests(PostgreSq
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
         await scenario.InitializeAsync(orderStatus: "DELIVERING");
-        const string token = "cGlsb3QtdGltZWxpbmUtb3JkZXItYWdncmVnYXRlLXZlcnNpb24";
+        // Unique per run and obviously synthetic, like the ARC-002 tracking fixtures.
+        var token = $"timeline-order-token-{Guid.NewGuid():N}";
 
         // Inserted out of version order and with random ids, all at one instant: only the version orders them.
         await scenario.ExecuteAdminAsync(
