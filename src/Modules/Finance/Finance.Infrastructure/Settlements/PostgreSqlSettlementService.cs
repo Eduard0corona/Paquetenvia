@@ -287,6 +287,7 @@ public sealed partial class PostgreSqlSettlementService(
             "finance.settlement.approved",
             null,
             RequireApprovableSourcesAsync,
+            requiresMfa: true,
             cancellationToken);
     }
 
@@ -310,6 +311,7 @@ public sealed partial class PostgreSqlSettlementService(
             "finance.settlement.paid",
             null,
             null,
+            requiresMfa: true,
             cancellationToken);
     }
 
@@ -335,6 +337,7 @@ public sealed partial class PostgreSqlSettlementService(
             "finance.settlement.voided",
             command.Reason,
             null,
+            requiresMfa: false,
             cancellationToken);
     }
 
@@ -357,6 +360,7 @@ public sealed partial class PostgreSqlSettlementService(
         string auditAction,
         string? reason,
         Func<NpgsqlConnection, NpgsqlTransaction, Guid, Guid, CancellationToken, Task>? precondition,
+        bool requiresMfa,
         CancellationToken cancellationToken)
     {
         if (!validShape)
@@ -370,7 +374,8 @@ public sealed partial class PostgreSqlSettlementService(
             organizationId,
             async (connection, transaction, token) =>
             {
-                await AuthorizeAsync(connection, transaction, actorId, organizationId, mfaSatisfied, token);
+                await AuthorizeAsync(
+                    connection, transaction, actorId, organizationId, mfaSatisfied, token, requiresMfa);
                 var replay = await BeginIdempotencyAsync(
                     connection, transaction, organizationId, scope, idempotencyKey, requestHash,
                     StatusCodes.Status200OK, now, token);
@@ -459,11 +464,14 @@ public sealed partial class PostgreSqlSettlementService(
         Guid actorId,
         Guid organizationId,
         bool mfaSatisfied,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requiresMfa = false)
     {
         var authorization = await ReadAuthorizationAsync(
             connection, transaction, actorId, organizationId, mfaSatisfied, cancellationToken);
-        if (!SettlementAuthorizationPolicy.CanOperate(authorization))
+        if (requiresMfa
+                ? !SettlementAuthorizationPolicy.CanApproveOrPay(authorization)
+                : !SettlementAuthorizationPolicy.CanOperate(authorization))
         {
             throw new FinanceForbiddenException();
         }

@@ -73,7 +73,7 @@ public static class OrderFinancialsEndpoints
             return Results.Ok(ToResponse(result));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (FinanceForbiddenException) { return FinanceEndpointBinding.Forbidden(); }
+        catch (FinanceForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.GetOrderFinancials); }
         catch (FinanceNotFoundException) { return FinanceEndpointBinding.NotFound(); }
         catch (FinanceConflictException exception)
         {
@@ -107,7 +107,7 @@ public static class OrderFinancialsEndpoints
             return Results.Ok(ToResponse(result));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (FinanceForbiddenException) { return FinanceEndpointBinding.Forbidden(); }
+        catch (FinanceForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.GetRouteFinancials); }
         catch (FinanceNotFoundException) { return FinanceEndpointBinding.NotFound(); }
         catch (FinanceConflictException exception)
         {

@@ -436,7 +436,7 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
     {
         var request = new HttpRequestMessage(method, route);
         request.Headers.Authorization = new AuthenticationHeaderValue(
-            "Bearer", bearer ?? MockIdentityProfiles.ActiveViewer);
+            "Bearer", bearer ?? MockIdentityProfiles.ActiveDispatcher);
         request.Headers.Add(
             "X-Organization-Id",
             (organizationId ?? MockIdentityProfiles.ViewerOrganizationId).ToString("D"));

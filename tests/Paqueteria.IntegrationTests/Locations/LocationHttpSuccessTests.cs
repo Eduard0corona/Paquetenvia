@@ -166,7 +166,7 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
     private static HttpRequestMessage Authenticated(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveViewer);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveDispatcher);
         request.Headers.Add("X-Organization-Id", MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
         return request;
     }

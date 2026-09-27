@@ -31,6 +31,22 @@ public sealed class LocationHttpWebApplicationFactory : WebApplicationFactory<Pr
         });
     }
 
+    /// <summary>
+    /// Exact stored coordinates listLocations returns after the first, stub-created location, each with the value
+    /// a VIEWER must receive (D5-VIEWER-LOCATION-PRECISION-2026-09-27: 2 decimals, half away from zero):
+    /// midpoints on both signs, negatives on both axes, a value just under a midpoint, a value that rounds to zero,
+    /// and values that round up to the range bounds.
+    /// </summary>
+    internal static readonly ((double Lat, double Lng) Exact, (double Lat, double Lng) Viewer)[] ListedCoordinates =
+    [
+        ((24.805, -107.395), (24.81, -107.4)),
+        ((-33.4489123, -70.6693456), (-33.45, -70.67)),
+        ((24.8049999, -0.004), (24.8, 0)),
+        ((-0.005, 0.015), (-0.01, 0.02)),
+        ((89.996, 179.996), (90, 180)),
+        ((24.8123456789, -107.3876543), (24.81, -107.39)),
+    ];
+
     private sealed class StubLocationService : ILocationService
     {
         public Task<IReadOnlyList<CityResult>> ListCitiesAsync(Guid actorId, Guid organizationId, CancellationToken cancellationToken) =>
@@ -49,7 +65,15 @@ public sealed class LocationHttpWebApplicationFactory : WebApplicationFactory<Pr
         }
 
         public Task<IReadOnlyList<LocationResult>> ListLocationsAsync(Guid actorId, Guid organizationId, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<LocationResult>>([Location()]);
+            Task.FromResult<IReadOnlyList<LocationResult>>(
+                [Location(), .. ListedCoordinates.Select((pair, index) => new LocationResult(
+                    Guid.Parse($"41000000-0000-0000-0000-{index + 1:D12}"),
+                    CityId,
+                    ServiceAreaId,
+                    ZoneId,
+                    "Synthetic summary",
+                    pair.Exact.Lat,
+                    pair.Exact.Lng))]);
 
         public Task<CreateLocationResult> CreateAsync(CreateLocationCommand command, CancellationToken cancellationToken) =>
             Task.FromResult(command.ServiceAreaId == ForeignResourceId

@@ -84,7 +84,7 @@ public static class CodEndpoints
             return Results.Json(ToResponse(result), statusCode: StatusCodes.Status201Created);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (FinanceForbiddenException) { return FinanceEndpointBinding.Forbidden(); }
+        catch (FinanceForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.RecordCodCollection); }
         catch (FinanceNotFoundException) { return FinanceEndpointBinding.NotFound(); }
         catch (FinanceConflictException exception)
         {
@@ -122,7 +122,7 @@ public static class CodEndpoints
             return Results.Ok(ToResponse(result));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (FinanceForbiddenException) { return FinanceEndpointBinding.Forbidden(); }
+        catch (FinanceForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ReconcileCod); }
         catch (FinanceNotFoundException) { return FinanceEndpointBinding.NotFound(); }
         catch (FinanceConflictException exception)
         {

@@ -84,6 +84,7 @@ public static class LocationEndpoints
         CancellationToken cancellationToken) => await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListCities,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListCitiesAsync(actorId, organizationId, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -103,6 +104,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListServiceAreas,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListServiceAreasAsync(actorId, organizationId, city_id, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -123,6 +125,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListOperatingZones,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListOperatingZonesAsync(actorId, organizationId, service_area_id, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -135,8 +138,15 @@ public static class LocationEndpoints
         CancellationToken cancellationToken) => await ExecuteAsync(
             session,
             tenantContext,
-            async (actorId, organizationId) => Results.Ok(
-                (await service.ListLocationsAsync(actorId, organizationId, cancellationToken)).Select(ToResponse)),
+            TenantCapabilities.ListLocations,
+            async (actorId, organizationId) =>
+            {
+                // D5-VIEWER-LOCATION-PRECISION-2026-09-27: only DISPATCHER and PLATFORM_ADMIN see exact coordinates;
+                // a VIEWER's are rounded here, before serialization, whatever the client asks for.
+                var exact = TenantCapabilities.ReceivesExactCoordinates(session, organizationId);
+                var locations = await service.ListLocationsAsync(actorId, organizationId, cancellationToken);
+                return Results.Ok(locations.Select(location => exact ? ToResponse(location) : ToViewerResponse(location)));
+            },
             cancellationToken);
 
     private static async Task<IResult> CreateLocationAsync(
@@ -155,6 +165,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.CreateLocation,
             async (actorId, organizationId) =>
             {
                 var result = await service.CreateAsync(
@@ -189,6 +200,7 @@ public static class LocationEndpoints
     private static async Task<IResult> ExecuteAsync(
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
+        TenantCapability capability,
         Func<Guid, Guid, Task<IResult>> operation,
         CancellationToken cancellationToken)
     {
@@ -196,6 +208,11 @@ public static class LocationEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, capability) is { } denied)
+        {
+            return denied;
         }
 
         try
@@ -252,6 +269,13 @@ public static class LocationEndpoints
 
     private static LocationResponse ToResponse(LocationResult result) =>
         new(result.Id, result.CityId, result.ServiceAreaId, result.OperatingZoneId, result.AddressSummary, result.Lat, result.Lng);
+
+    private static LocationResponse ToViewerResponse(LocationResult result) =>
+        ToResponse(result) with
+        {
+            Lat = ViewerCoordinatePrecision.Round(result.Lat),
+            Lng = ViewerCoordinatePrecision.Round(result.Lng),
+        };
 
     private static IResult BadRequest() => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid request.");
     private static IResult Forbidden() => Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");

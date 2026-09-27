@@ -57,6 +57,11 @@ public static class QuoteEndpoints
             return Forbidden();
         }
 
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.CreateQuote) is { } denied)
+        {
+            return denied;
+        }
+
         try
         {
             var result = await service.CreateAsync(
@@ -98,6 +103,11 @@ public static class QuoteEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.GetQuote) is { } denied)
+        {
+            return denied;
         }
 
         try

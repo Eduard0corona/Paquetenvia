@@ -128,7 +128,10 @@ public static class IncidentEndpoints
         }
         catch (Exception exception)
         {
-            return ToProblem(exception, cancellationToken);
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.OpenIncident),
+                cancellationToken);
         }
     }
 
@@ -184,7 +187,10 @@ public static class IncidentEndpoints
         }
         catch (Exception exception)
         {
-            return ToProblem(exception, cancellationToken);
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ResolveIncident),
+                cancellationToken);
         }
     }
 
@@ -228,11 +234,14 @@ public static class IncidentEndpoints
             (idempotencyKey = values[0]!).Length > 0;
     }
 
-    private static IResult ToProblem(Exception exception, CancellationToken cancellationToken) =>
+    private static IResult ToProblem(
+        Exception exception,
+        Func<IResult> refused,
+        CancellationToken cancellationToken) =>
         exception switch
         {
             OperationCanceledException when cancellationToken.IsCancellationRequested => throw exception,
-            IncidentForbiddenException => Forbidden(),
+            IncidentForbiddenException => refused(),
             IncidentNotFoundException => NotFound(),
             IncidentConflictException conflict => Conflict(PublicCode(conflict.Code)),
             _ => Unavailable(),
