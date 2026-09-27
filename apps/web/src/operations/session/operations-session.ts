@@ -1,9 +1,13 @@
-export interface OperationsSession {
+import {
+  hasUsableCredentials,
+  type SessionCredentials,
+} from "../../auth/request-credentials";
+
+export type OperationsSession = SessionCredentials & {
   readonly organizationId: string;
   readonly sessionNamespace: string;
-  getAccessToken(): string | Promise<string>;
   requestOrganizationChange?(organizationId: string): void | Promise<void>;
-}
+};
 
 export const operationsSessionChangedEvent =
   "paquetenvia:operations-session-changed";
@@ -25,7 +29,7 @@ export function readOperationsSession(): OperationsSession | null {
     session.organizationId === "00000000-0000-0000-0000-000000000000" ||
     session.sessionNamespace.length < 1 ||
     session.sessionNamespace.length > 128 ||
-    typeof session.getAccessToken !== "function"
+    !hasUsableCredentials(session)
   ) {
     return null;
   }

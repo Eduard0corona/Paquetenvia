@@ -8,8 +8,14 @@ principles:
 routes:
   /login:
     roles:
-    - all authenticated
+    - anonymous
     release: MVP-0
+    # GATE-002-BFF-001: sign-in entry point, reachable without a session; it starts
+    # GET /auth/login (AI-05). First access is by prior invitation
+    # (AUTH-FIRST-LOGIN-INVITATION); it never provisions users or memberships.
+    decisions:
+    - GATE-002-BFF-001
+    - AUTH-FIRST-LOGIN-INVITATION
   /ops/dashboard:
     roles:
     - platform_admin

@@ -4,6 +4,7 @@ import {
   type DriverEvents,
   type DriverStopCursor,
 } from "../../realtime";
+import { realtimeCredentials } from "@/auth/request-credentials";
 import type { DriverSession } from "../session/driver-session";
 
 export interface DriverStopsRealtimeCallbacks {
@@ -42,7 +43,7 @@ export const defaultDriverStopsRealtimeFactory: DriverStopsRealtimeFactory = {
       {
         baseUrl,
         organizationId: session.organizationId as never,
-        tokenFactory: session.getAccessToken,
+        ...realtimeCredentials(session),
         resynchronizeFromRest: async () => {
           const [stops] = await Promise.all([
             callbacks.resynchronizeFromRest(),
