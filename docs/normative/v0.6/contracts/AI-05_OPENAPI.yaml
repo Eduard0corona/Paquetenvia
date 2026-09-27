@@ -1199,6 +1199,22 @@ paths:
       tags:
       - Locations
       operationId: listLocations
+      description: >-
+        Locations of the selected organization. DISPATCHER and PLATFORM_ADMIN receive exact lat and lng. A VIEWER
+        never receives exact coordinates (D5-CAPABILITY-MATRIX): for an actor whose only admitting role is VIEWER
+        the server rounds lat and lng to 2 decimal places (about 1.1 km), half away from zero on the decimal value,
+        before serialization (D5-VIEWER-LOCATION-PRECISION-2026-09-27). address_summary is returned as stored.
+      x-viewer-coordinate-precision:
+        decision: D5-VIEWER-LOCATION-PRECISION-2026-09-27
+        applies_to: VIEWER
+        fields:
+        - lat
+        - lng
+        decimal_places: 2
+        rounding: half-away-from-zero on the decimal value
+        exact_for:
+        - DISPATCHER
+        - PLATFORM_ADMIN
       responses:
         '200':
           description: OK
@@ -4610,12 +4626,14 @@ x-runtime-contracts:
 x-capability-matrix:
   status: DECIDED
   decision: D5-CAPABILITY-MATRIX (project owner, 2026-09-26)
-  implementation: pending; each operation keeps its current enforced rules until the implementing task aligns them and its
-    tests
+  implementation: IMPLEMENTED (PR 108, feature/d5-capability-matrix, TenantCapabilities and its tests); operations outside
+    the matrix keep their current enforced rules
   rules:
   - PLATFORM_ADMIN keeps the existing MFA requirement wherever an operation already demands it
   - unlisted roles receive the uniform 403 before any resource access
   - VIEWER reads never return exact coordinates (lat/lng); a coarse or summary location is the only permitted form
+  viewer_location_precision: D5-VIEWER-LOCATION-PRECISION-2026-09-27 - listLocations returns lat and lng to a VIEWER
+    rounded to 2 decimal places (about 1.1 km), half away from zero, decided server-side before serialization
   operations:
     createQuote: [DISPATCHER, PLATFORM_ADMIN]
     getQuote: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
@@ -4682,6 +4700,8 @@ x-pilot-contract-deltas:
   - id: D7-SETTLEMENT-MFA
     status: DECIDED
     decision: D7-SETTLEMENT-RULES
+    implementation: shipped by PR 108 (feature/d5-capability-matrix) together with SettlementAuthorizationPolicy.CanApproveOrPay,
+      TenantCapabilities and their tests
     delta: approveSettlement and markSettlementPaid require a satisfied MFA challenge for every permitted role, including
       FINANCE
     literal: Solo se liquidan periodos ya cerrados; un total negativo se rechaza; aprobar y pagar requieren MFA; la

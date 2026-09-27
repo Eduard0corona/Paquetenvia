@@ -422,13 +422,24 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
                     service.AddAdjustmentAsync(scenario.Adjust(settlement, 1, "Bono", "adjust") with { ActorId = actor }, default));
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
-                    service.ApproveAsync(scenario.Transition(settlement, "approve") with { ActorId = actor }, default));
+                    service.ApproveAsync(scenario.Transition(settlement, "approve") with { ActorId = actor, MfaSatisfied = false }, default));
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
-                    service.MarkPaidAsync(scenario.Transition(settlement, "pay") with { ActorId = actor }, default));
+                    service.MarkPaidAsync(scenario.Transition(settlement, "pay") with { ActorId = actor, MfaSatisfied = false }, default));
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
                     service.VoidAsync(scenario.Void(settlement, "void") with { ActorId = actor }, default));
             }
         }
+
+        // D7-SETTLEMENT-MFA: FINANCE without MFA may not approve or pay, and the refusal changes nothing.
+        foreach (var settlement in new[] { created.Id, Guid.NewGuid() })
+        {
+            await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+                service.ApproveAsync(scenario.Transition(settlement, "approve-no-mfa") with { MfaSatisfied = false }, default));
+            await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+                service.MarkPaidAsync(scenario.Transition(settlement, "pay-no-mfa") with { MfaSatisfied = false }, default));
+        }
+
+        Assert.Equal("CALCULATED", (await service.GetAsync(scenario.Get(created.Id), default)).Status);
 
         // PLATFORM_ADMIN operates only with MFA, even when it also holds FINANCE.
         var withMfa = await service.GetAsync(scenario.Get(created.Id) with { ActorId = scenario.AdminUserId, MfaSatisfied = true }, default);
@@ -819,8 +830,12 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
         public AddSettlementAdjustmentCommand Adjust(Guid settlementId, long amount, string reason, string key) => new(
             FinanceUserId, OrganizationId, Key(key), settlementId, amount, reason, false, key);
 
+        /// <summary>
+        /// An approve or pay step by FINANCE with a satisfied MFA challenge, which D7-SETTLEMENT-MFA requires of
+        /// every permitted role.
+        /// </summary>
         public SettlementTransitionCommand Transition(Guid settlementId, string key) => new(
-            FinanceUserId, OrganizationId, Key(key), settlementId, false, key);
+            FinanceUserId, OrganizationId, Key(key), settlementId, true, key);
 
         public VoidSettlementCommand Void(Guid settlementId, string key) => new(
             FinanceUserId, OrganizationId, Key(key), settlementId, "Liquidación calculada con periodo incorrecto", false, key);

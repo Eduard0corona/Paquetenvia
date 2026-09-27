@@ -137,6 +137,7 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status201Created,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateSettlement),
             cancellationToken);
     }
 
@@ -162,6 +163,7 @@ public static class SettlementEndpoints
                 new(actorId, tenantContext.OrganizationId, settlement, session.MfaSatisfied),
                 cancellationToken),
             StatusCodes.Status200OK,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.GetSettlement),
             cancellationToken);
     }
 
@@ -199,7 +201,8 @@ public static class SettlementEndpoints
                 statusCode: StatusCodes.Status200OK);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) when (Failure(exception) is { } failure) { return failure; }
+        catch (Exception exception) when (
+            Failure(exception, () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListSettlements)) is { } failure) { return failure; }
     }
 
     internal static readonly string[] ListQueryParameters = ["payee_id", "status", "period_from", "period_to", "cursor"];
@@ -309,6 +312,7 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status201Created,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AddSettlementAdjustment),
             cancellationToken);
     }
 
@@ -319,7 +323,9 @@ public static class SettlementEndpoints
         ITenantContext tenantContext,
         ISettlementService service,
         CancellationToken cancellationToken) =>
-        TransitionAsync(httpContext, settlementId, session, tenantContext, service.ApproveAsync, cancellationToken);
+        TransitionAsync(
+            httpContext, settlementId, session, tenantContext, TenantCapabilities.ApproveSettlement,
+            service.ApproveAsync, cancellationToken);
 
     private static Task<IResult> PayAsync(
         HttpContext httpContext,
@@ -328,13 +334,16 @@ public static class SettlementEndpoints
         ITenantContext tenantContext,
         ISettlementService service,
         CancellationToken cancellationToken) =>
-        TransitionAsync(httpContext, settlementId, session, tenantContext, service.MarkPaidAsync, cancellationToken);
+        TransitionAsync(
+            httpContext, settlementId, session, tenantContext, TenantCapabilities.MarkSettlementPaid,
+            service.MarkPaidAsync, cancellationToken);
 
     private static async Task<IResult> TransitionAsync(
         HttpContext httpContext,
         string settlementId,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
+        TenantCapability capability,
         Func<SettlementTransitionCommand, CancellationToken, Task<SettlementResult>> operation,
         CancellationToken cancellationToken)
     {
@@ -356,6 +365,7 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status200OK,
+            () => TenantCapabilityGate.Refused(session, tenantContext, capability),
             cancellationToken);
     }
 
@@ -388,6 +398,7 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status200OK,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.VoidSettlement),
             cancellationToken);
     }
 
@@ -422,12 +433,14 @@ public static class SettlementEndpoints
             return Results.File(document.Content, SettlementCsvWriter.ContentType, document.FileName);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) when (Failure(exception) is { } failure) { return failure; }
+        catch (Exception exception) when (
+            Failure(exception, () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ExportSettlementCsv)) is { } failure) { return failure; }
     }
 
     private static async Task<IResult> RespondAsync(
         Func<Task<SettlementResult>> operation,
         int successStatus,
+        Func<IResult> refused,
         CancellationToken cancellationToken)
     {
         try
@@ -435,16 +448,17 @@ public static class SettlementEndpoints
             return Results.Json(ToResponse(await operation()), statusCode: successStatus);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) when (Failure(exception) is { } failure) { return failure; }
+        catch (Exception exception) when (Failure(exception, refused) is { } failure) { return failure; }
     }
 
     /// <summary>
     /// The public outcome of a settlement failure. The Finance gateway reports racing writers and database
-    /// uniqueness as a FIN-001 concurrency conflict, which settlements publish as the uniform CONFLICT.
+    /// uniqueness as a FIN-001 concurrency conflict, which settlements publish as the uniform CONFLICT. A
+    /// capability refusal is the AI-05 Forbidden response, with MFA_REQUIRED when MFA is all that is missing.
     /// </summary>
-    private static IResult? Failure(Exception exception) => exception switch
+    private static IResult? Failure(Exception exception, Func<IResult> refused) => exception switch
     {
-        FinanceForbiddenException => FinanceEndpointBinding.Forbidden(),
+        FinanceForbiddenException => refused(),
         FinanceNotFoundException => FinanceEndpointBinding.NotFound(),
         SettlementConflictException conflict => FinanceEndpointBinding.Conflict(PublicCode(conflict.Code)),
         FinanceConflictException => FinanceEndpointBinding.Conflict(ConflictCode),

@@ -78,10 +78,14 @@ public static class OrderEndpoints
             return Conflict();
         }
 
-        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected ||
-            !OrderCreationCapability.Permits(session, tenantContext.OrganizationId))
+        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.CreateOrder) is { } denied)
+        {
+            return denied;
         }
 
         try
@@ -130,6 +134,11 @@ public static class OrderEndpoints
             return Forbidden();
         }
 
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListOrders) is { } denied)
+        {
+            return denied;
+        }
+
         try
         {
             var page = await service.ListAsync(
@@ -163,6 +172,11 @@ public static class OrderEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.GetOrder) is { } denied)
+        {
+            return denied;
         }
 
         try
@@ -251,7 +265,7 @@ public static class OrderEndpoints
         }
         catch (OrderTransitionForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.TransitionOrder);
         }
         catch (OrderTransitionConflictException)
         {

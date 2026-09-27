@@ -130,7 +130,7 @@ public static class RouteEndpoints
             return Results.Json(ToResponse(result), statusCode: StatusCodes.Status201Created);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateRoute); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
@@ -209,7 +209,7 @@ public static class RouteEndpoints
             return Results.Json(ToResponse(result), statusCode: StatusCodes.Status201Created);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AddRouteStop); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
@@ -236,7 +236,7 @@ public static class RouteEndpoints
                 cancellationToken)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.RemoveRouteStop); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
@@ -266,7 +266,7 @@ public static class RouteEndpoints
                 cancellationToken)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ReorderRouteStops); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }

@@ -87,6 +87,22 @@ public sealed class SettlementPolicyTests
             expected,
             SettlementAuthorizationPolicy.CanOperate(new FinanceAuthorizationContext(role, true, role is not null, mfa, false)));
 
+    /// <summary>D7-SETTLEMENT-MFA: approving and paying need a satisfied MFA challenge for every permitted role.</summary>
+    [Theory]
+    [InlineData("FINANCE", false, false)]
+    [InlineData("FINANCE", true, true)]
+    [InlineData("PLATFORM_ADMIN", false, false)]
+    [InlineData("PLATFORM_ADMIN", true, true)]
+    [InlineData("DISPATCHER", true, false)]
+    [InlineData("DRIVER", true, false)]
+    [InlineData("VIEWER", true, false)]
+    [InlineData(null, true, false)]
+    public void Approve_and_pay_require_MFA_for_every_permitted_role(string? role, bool mfa, bool expected) =>
+        Assert.Equal(
+            expected,
+            SettlementAuthorizationPolicy.CanApproveOrPay(
+                new FinanceAuthorizationContext(role, true, role is not null, mfa, false)));
+
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]

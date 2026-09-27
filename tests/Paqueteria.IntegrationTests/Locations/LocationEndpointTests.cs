@@ -75,7 +75,7 @@ public sealed class LocationEndpointTests : IClassFixture<SecurityWebApplication
     private static HttpRequestMessage Authenticated(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveViewer);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveDispatcher);
         return request;
     }
 }

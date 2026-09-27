@@ -44,11 +44,13 @@ public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplica
         using var noTenantResponse = await client.SendAsync(noTenant);
         Assert.Equal(HttpStatusCode.Forbidden, noTenantResponse.StatusCode);
 
-        var orderId = await CreateOrderAsync(MockIdentityProfiles.ActiveViewer);
+        var orderId = await CreateOrderAsync(MockIdentityProfiles.ActiveDispatcher);
         using var viewer = Authorized(orderId, Key(), MockIdentityProfiles.ActiveViewer);
         viewer.Content = TransitionBody("CANCELLED", "synthetic cancellation", 1);
         using var viewerResponse = await client.SendAsync(viewer);
         Assert.Equal(HttpStatusCode.Forbidden, viewerResponse.StatusCode);
+        using var viewerProblem = JsonDocument.Parse(await viewerResponse.Content.ReadAsStringAsync());
+        Assert.False(viewerProblem.RootElement.TryGetProperty("code", out _));
     }
 
     [Fact]
@@ -62,6 +64,10 @@ public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplica
         request.Content = TransitionBody("CANCELLED", "synthetic cancellation", 1);
         using var response = await client.SendAsync(request);
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        // AUTH-001-MFA-STEP-UP: a second factor is the only thing missing, so the 403 says so.
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("MFA_REQUIRED", problem.RootElement.GetProperty("code").GetString());
     }
 
     [Theory]

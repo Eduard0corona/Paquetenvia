@@ -426,7 +426,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
     private static HttpRequestMessage Authenticated(HttpMethod method, string path, Guid? organizationId = null)
     {
         var request = new HttpRequestMessage(method, path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveViewer);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveDispatcher);
         request.Headers.Add("X-Organization-Id",
             (organizationId ?? MockIdentityProfiles.ViewerOrganizationId).ToString("D"));
         return request;

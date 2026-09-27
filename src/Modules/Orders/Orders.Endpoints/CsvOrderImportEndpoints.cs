@@ -64,6 +64,11 @@ public static class CsvOrderImportEndpoints
             return Forbidden();
         }
 
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.PreviewOrderCsv) is { } denied)
+        {
+            return denied;
+        }
+
         var upload = await TryReadUploadAsync(httpContext, cancellationToken);
         if (upload is null)
         {
@@ -86,10 +91,14 @@ public static class CsvOrderImportEndpoints
             return Conflict();
         }
 
-        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected ||
-            !OrderCreationCapability.Permits(session, tenantContext.OrganizationId))
+        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.CommitOrderCsv) is { } denied)
+        {
+            return denied;
         }
 
         var upload = await TryReadUploadAsync(httpContext, cancellationToken);
