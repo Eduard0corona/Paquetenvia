@@ -9,7 +9,24 @@ namespace Custody.Infrastructure.Proofs;
 internal sealed record AuthorizedOrder(
     Guid OwnerOrganizationId,
     Guid? OperatorOrganizationId,
-    string Status);
+    string Status,
+    DateTimeOffset? LatestStatusChangeAt = null)
+{
+    /// <summary>
+    /// The <c>created_at</c> a proof finalized on this order records. ORD-002 counts a proof for
+    /// the current attempt when its <c>created_at</c> is at or after the latest status change into
+    /// the capture state (ORD-002-ATTEMPT-BOUNDARY). The application clock of this replica could
+    /// sit before a status change that committed while the order lock was awaited (another
+    /// replica's clock, or a transition already moved past an incident), so the proof then moves
+    /// just past the newest status change. ORD-002 applies the mirror rule against the order's
+    /// proofs, so under the order lock the recorded times follow the commit order, as INC-001 does
+    /// for incidents. No AI-06 column is needed.
+    /// </summary>
+    public DateTimeOffset RecordedAt(DateTimeOffset clockNow) =>
+        LatestStatusChangeAt is { } latest && latest.AddTicks(10) > clockNow
+            ? latest.AddTicks(10)
+            : clockNow;
+}
 
 internal static class CustodySql
 {
@@ -73,7 +90,12 @@ internal static class CustodySql
                     AND a.operator_org_id IS NOT DISTINCT FROM o.operator_org_id
                     AND (a.owner_org_id=@organization OR a.operator_org_id=@organization)
                     AND a.status IN ('ACCEPTED','ACTIVE'))
-              ) AS authorized
+              ) AS authorized,
+              (
+                SELECT max(e.occurred_at) FROM orders.order_events e
+                WHERE e.order_id=o.id AND e.owner_org_id=o.owner_org_id
+                  AND e.event_type='ORDER_STATUS_CHANGED'
+              ) AS latest_status_change_at
             FROM orders.orders o
             WHERE o.id=@order
             """,
@@ -97,7 +119,8 @@ internal static class CustodySql
         return new AuthorizedOrder(
             reader.GetGuid(0),
             reader.IsDBNull(1) ? null : reader.GetGuid(1),
-            reader.GetString(2));
+            reader.GetString(2),
+            reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4));
     }
 
     /// <summary>

@@ -288,6 +288,79 @@ public sealed class ProofDriverTypeAndOrderLockTests :
         Assert.True(blocked, "Finalization must wait on the order row lock held by the cancellation.");
     }
 
+    [Fact]
+    public async Task Finalization_records_the_proof_after_a_status_change_it_waited_for()
+    {
+        await ReplaceAssignmentAsync(OwnDriverId, "OWN");
+        await SetOrderStatusAsync("DELIVERING");
+        var storage = new InMemoryProofObjectStorage();
+        await using var provider = BuildProvider(storage);
+        var upload = await CreateSessionAsync(provider, OwnDriverUserId, "DELIVERY_PHOTO");
+        await MarkSessionReadyAsync(upload.Id);
+        storage.PromoteForTest(upload.Id);
+
+        // A transition into DELIVERING holds the order FOR UPDATE and records its status change
+        // ahead of this replica's clock (another replica's clock, or a time ORD-002 already moved
+        // past an incident). The proof commits after it, so it must carry the later created_at,
+        // or ORD-002-ATTEMPT-BOUNDARY would drop it from the attempt that change started.
+        await using var transition = new NpgsqlConnection(postgres.AdminConnectionString);
+        await transition.OpenAsync();
+        await using var transaction = await transition.BeginTransactionAsync();
+        await using (var lockOrder = new NpgsqlCommand(
+                         """
+                         SELECT status FROM orders.orders WHERE id=@order FOR UPDATE;
+                         UPDATE orders.orders SET version=version+1 WHERE id=@order;
+                         """,
+                         transition,
+                         transaction))
+        {
+            lockOrder.Parameters.AddWithValue("order", OrderId);
+            await lockOrder.ExecuteNonQueryAsync();
+        }
+
+        DateTimeOffset statusChangeAt;
+        await using (var change = new NpgsqlCommand(
+                         """
+                         INSERT INTO orders.order_events(
+                           id,order_id,owner_org_id,aggregate_version,event_type,payload,actor_id,occurred_at)
+                         SELECT gen_random_uuid(),o.id,o.owner_org_id,
+                           (SELECT coalesce(max(e.aggregate_version),0)+1 FROM orders.order_events e WHERE e.order_id=o.id),
+                           'ORDER_STATUS_CHANGED',
+                           jsonb_build_object('previous_status','FAILED_ATTEMPT','new_status','DELIVERING'),
+                           NULL,clock_timestamp()+interval '5 seconds'
+                         FROM orders.orders o WHERE o.id=@order
+                         RETURNING occurred_at;
+                         """,
+                         transition,
+                         transaction))
+        {
+            change.Parameters.AddWithValue("order", OrderId);
+            statusChangeAt = new DateTimeOffset((DateTime)(await change.ExecuteScalarAsync())!, TimeSpan.Zero);
+        }
+
+        var finalization = FinalizeAsync(provider, OwnDriverUserId, upload.Id, "DELIVERY_PHOTO");
+        var blocked = await WaitUntilBlockedByAsync(transition.ProcessID, finalization);
+        await transaction.CommitAsync();
+
+        var proof = await finalization;
+        var createdAt = await ReadProofCreatedAtAsync(proof.Id);
+        Assert.True(
+            createdAt > statusChangeAt,
+            $"custody.proofs.created_at {createdAt:O} must follow the status change {statusChangeAt:O} it waited for.");
+        Assert.True(blocked, "Finalization must wait on the order row lock held by the transition.");
+    }
+
+    private async Task<DateTimeOffset> ReadProofCreatedAtAsync(Guid proofId)
+    {
+        await using var connection = new NpgsqlConnection(postgres.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT created_at FROM custody.proofs WHERE id=@proof;",
+            connection);
+        command.Parameters.AddWithValue("proof", proofId);
+        return new DateTimeOffset((DateTime)(await command.ExecuteScalarAsync())!, TimeSpan.Zero);
+    }
+
     /// <summary>
     /// Waits until a backend is blocked by <paramref name="blockerPid"/>, the test's own
     /// transaction holding FOR UPDATE on the order; while it is open only the finalization's
