@@ -1109,11 +1109,9 @@ paths:
       operationId: reconcileCod
       description: >-
         FIN-001 reconciles a RECORDED collection to RECONCILED, which the order
-        state machine requires before CLOSED. Only DISPATCHER members,
-        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
-        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION) may
-        reconcile, so a collecting driver can never reconcile their own
-        collection. FINANCE never creates or modifies orders. Replaying
+        state machine requires before CLOSED. Only DISPATCHER members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge may reconcile, so
+        a collecting driver can never reconcile their own collection. Replaying
         the same Idempotency-Key returns the stored response.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -1148,11 +1146,9 @@ paths:
       operationId: getOrderFinancials
       description: >-
         FIN-001 cost by modality, margin and COD position of one order, derived
-        on read in integer MXN cents. Readable only by DISPATCHER members,
-        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
-        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION);
-        FINANCE never creates or modifies orders. The order must be owned or
-        operated by the selected organization.
+        on read in integer MXN cents. Readable only by DISPATCHER members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge; the order must be
+        owned or operated by the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -1181,11 +1177,9 @@ paths:
       description: >-
         FIN-001 cost by modality, margin and COD position of one route,
         aggregated from the orders on its stops so every total equals the sum
-        of its per-order values. Readable only by DISPATCHER members,
-        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
-        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION);
-        FINANCE never creates or modifies orders. The route must be operated by
-        the selected organization.
+        of its per-order values. Readable only by DISPATCHER members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge; the route must be
+        operated by the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/RouteId'
@@ -4010,9 +4004,10 @@ x-capability-matrix:
     exportSettlementCsv: [FINANCE, PLATFORM_ADMIN]
   driver_scope: DRIVER (OWN or EXTERNAL) sees only its own assignments, stops and offers; it has no access to orders,
     quotes, locations, CSV imports or settlements outside them
-  finance_scope: FINANCE is limited to settlements and finance; per FINANCE-COD-RECONCILIATION (project owner, 2026-09-27)
-    getOrderFinancials, getRouteFinancials and reconcileCod are permitted only to DISPATCHER members, PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION); FINANCE never creates or modifies orders; a collecting driver can never
-    reconcile their own collection
+  finance_scope: FINANCE is limited to settlements and finance. Implemented today, getOrderFinancials, getRouteFinancials
+    and reconcileCod are permitted only to DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA challenge,
+    and a collecting driver can never reconcile their own collection. Adding FINANCE is a pending delta FINANCE-COD-RECONCILIATION in x-pilot-contract-deltas, shipped by feature/pilot-contract-deltas; until then the implemented rule in the operation descriptions applies
+  finance_operations_status: PENDING_IMPLEMENTATION (pending delta FINANCE-COD-RECONCILIATION in x-pilot-contract-deltas, shipped by feature/pilot-contract-deltas; until then the implemented rule in the operation descriptions applies)
   finance_operations:
     getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
@@ -4022,6 +4017,13 @@ x-pilot-contract-deltas:
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
     Owner approval of all six API contract proposals on 2026-09-27, literal answer "Apruebo Contrato de la API (AI-05)"
   entries:
+  - id: FINANCE-COD-RECONCILIATION
+    status: DECIDED
+    decision: FINANCE-COD-RECONCILIATION and FINANCE-COD-MFA-2026-09-27 (project owner, 2026-09-27)
+    implementation: pending; shipped by feature/pilot-contract-deltas together with FinanceAuthorizationPolicy and its tests
+    delta: getOrderFinancials, getRouteFinancials and reconcileCod also admit FINANCE members with a satisfied MFA challenge;
+      FINANCE never creates or modifies orders; DISPATCHER keeps no MFA requirement and PLATFORM_ADMIN keeps MFA; a
+      collecting driver can never reconcile their own collection
   - id: D6-COD-EXPECTED
     status: DECIDED
     decision: D6-COD-PILOT

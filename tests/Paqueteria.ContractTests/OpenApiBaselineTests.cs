@@ -5,7 +5,7 @@ namespace Paqueteria.ContractTests;
 
 public sealed partial class OpenApiBaselineTests
 {
-    private const string ExpectedSha256 = "cca857708bc68171253323bae8595b20ce5810035819e241ec8c8c905148a353";
+    private const string ExpectedSha256 = "7d726ffbc3beceab9ab5d76894aa542e032c20e91c7a2ce4bd101052561db549";
 
     [Fact]
     public void Canonical_openapi_contract_exists_and_matches_v0_6()

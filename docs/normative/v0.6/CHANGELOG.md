@@ -1,5 +1,15 @@
 # Changelog
 
+## Finance en AI-05: regla vigente y delta pendiente — 2026-09-27
+
+- Las descripciones de `reconcileCod`, `getOrderFinancials` y
+  `getRouteFinancials` vuelven a la regla implementada (DISPATCHER y
+  PLATFORM_ADMIN con MFA). FINANCE con MFA (`FINANCE-COD-RECONCILIATION`,
+  `FINANCE-COD-MFA-2026-09-27`) queda como delta pendiente en
+  `x-pilot-contract-deltas` y en `x-capability-matrix`; lo publica
+  `feature/pilot-contract-deltas` junto con el código. Corrige la deriva señalada
+  en la revisión del PR #100. Paths y schemas no cambian.
+
 ## Decisiones del owner sobre los contratos del piloto — 2026-09-27
 
 - Respuesta literal del project owner: "Bloquean el MVP 1 — Apruebo 2, 3, 4, 5,
