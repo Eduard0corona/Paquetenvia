@@ -83,9 +83,32 @@ La tolerancia es `OfflineOperations:ClockToleranceSeconds` (0–300, por defecto
 300); las 72 h son fijas. La marca no forma parte del hash idempotente, así que un
 replay con más de 72 h se rechaza aunque su llave siga existiendo.
 
-La PWA del conductor todavía no envía `client_occurred_at` en transiciones ni en
-sesiones de carga (su prueba lo excluye a propósito); hasta que lo haga, el
-rechazo aplica a `finalizeProof` y a cualquier cliente que declare la marca.
+## PWA del conductor
+
+Desde el PR de seguimiento (OPS-003-PWA-CLIENT-OCCURRED-AT) la PWA envía el
+instante de captura como `client_occurred_at` en `transitionOrder` y
+`createProofUploadSession`, y como `captured_at` en `finalizeProof`, en todos
+los intentos. La regla vive en un único módulo,
+`apps/web/src/driver/offline/offline-operation-age.ts` (constante de 72 h y
+código `OFFLINE_OPERATION_EXPIRED`, verificados contra AI-05):
+
+| Situación | PWA |
+| --- | --- |
+| REST confirma que la acción ya se aplicó | se elimina como sincronizada, aunque tenga más de 72 h |
+| captura con más de 72 h según el reloj del dispositivo | se elimina sin enviarse y se avisa |
+| acción en atención o bloqueada que supera las 72 h | se elimina y se avisa, porque ya no puede reintentarse |
+| 409 `OFFLINE_OPERATION_EXPIRED` en cualquiera de los tres pasos | se elimina con su foto, nunca se reintenta y se avisa |
+| operaciones posteriores de la misma orden | las vencidas se eliminan igual; la primera restante queda en atención y el resto bloqueadas |
+| 409 de transición sin código o 409 `INVALID_REQUEST` de POD (p. ej. reloj adelantado) | sin cambios: atención como cualquier otro conflicto |
+
+El aviso dice, en español, que la acción venció tras 72 horas sin conexión y
+que debe registrarse de nuevo o reportarse a despacho.
+
+La PWA no abre incidentes. La unificación de `openIncident` con
+`OFFLINE_OPERATION_EXPIRED` (OPS-003-INCIDENT-72H-UNIFICATION; el owner eligió
+"Unificar pero configurable": mismo 409 antes del servicio, 72 h configurables
+y tolerancia de reloj de incidentes de hasta 60 min) llega en un PR de backend
+separado.
 
 ## Rollback
 

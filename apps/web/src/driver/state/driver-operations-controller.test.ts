@@ -2,14 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { DriverCachePartition } from "../cache/driver-stops-cache";
 import type { DriverOfflineQueue } from "../offline/driver-offline-queue";
 import type { DriverSyncApi } from "../offline/driver-sync-api";
-import { DriverSyncScheduler } from "../offline/driver-sync-scheduler";
+import {
+  DriverSyncScheduler,
+  type DriverSyncSchedulerOptions,
+} from "../offline/driver-sync-scheduler";
 import {
   createDriverOfflineOperation,
   type DriverOfflineOperation,
   type DriverProofBlobRecord,
 } from "../offline/operation-contract";
 import type { DriverSession } from "../session/driver-session";
-import { DriverOperationsController } from "./driver-operations-controller";
+import {
+  DriverOperationsController,
+  driverOperationExpiredMessage,
+} from "./driver-operations-controller";
 
 const partitionKey = "E".repeat(43);
 const orderId = "11111111-1111-4111-8111-111111111111";
@@ -141,6 +147,76 @@ describe("driver operations conflict resolution", () => {
       safeError: null,
     });
     await harness.controller.dispose();
+  });
+});
+
+describe("driver operations OPS-003 expiry notice", () => {
+  it("tells the driver in Spanish that the action expired after 72 hours", () => {
+    expect(driverOperationExpiredMessage(["DELIVERY_PROOF"])).toBe(
+      "La acción «Confirmar entrega» venció: pasaron más de 72 horas sin " +
+        "conexión y ya no se enviará. Vuelve a registrarla o repórtala a despacho.",
+    );
+    expect(driverOperationExpiredMessage(["CHECK_IN", "START_TRANSIT"])).toBe(
+      "2 acciones guardadas vencieron: pasaron más de 72 horas sin conexión " +
+        "y ya no se enviarán. Vuelve a registrarlas o repórtalas a despacho.",
+    );
+  });
+
+  it("shows the notice when the scheduler drops an operation, including after a manual sync", async () => {
+    const expired = operation("DELIVERY_PROOF", 8);
+    const queue = new MemoryQueue([expired]);
+    let schedulerOptions: DriverSyncSchedulerOptions | null = null;
+    const scheduler = {
+      start: vi.fn(),
+      requestSync: vi.fn(async () => {
+        await queue.deleteOperation({ key: partitionKey }, expired.id);
+        schedulerOptions?.onOperationExpired?.(expired);
+      }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DriverSyncScheduler;
+    const controller = new DriverOperationsController({
+      session,
+      queue,
+      api: {
+        transitionOrder: vi.fn(),
+        createProofUploadSession: vi.fn(),
+        finalizeProof: vi.fn(),
+      } as DriverSyncApi,
+      refreshStops: async () => [],
+      onAccessRevoked: vi.fn(),
+      schedulerFactory: (options) => {
+        schedulerOptions = options;
+        return scheduler;
+      },
+    });
+    await controller.start();
+
+    await controller.syncNow();
+
+    expect(controller.current.operations).toEqual([]);
+    expect(controller.current.message).toBe(
+      driverOperationExpiredMessage(["DELIVERY_PROOF"]),
+    );
+
+    await controller.syncNow();
+    expect(controller.current.message).toBe(
+      driverOperationExpiredMessage(["DELIVERY_PROOF"]),
+    );
+
+    // Background passes (online, timer) report only their own expirations.
+    const options = schedulerOptions as DriverSyncSchedulerOptions | null;
+    options?.onSyncPassStarted?.();
+    options?.onOperationExpired?.({ ...expired, kind: "CHECK_IN" });
+    expect(controller.current.message).toBe(
+      driverOperationExpiredMessage(["CHECK_IN"]),
+    );
+    options?.onSyncPassStarted?.();
+    options?.onOperationExpired?.(expired);
+    options?.onOperationExpired?.({ ...expired, kind: "START_TRANSIT" });
+    expect(controller.current.message).toBe(
+      driverOperationExpiredMessage(["DELIVERY_PROOF", "START_TRANSIT"]),
+    );
+    await controller.dispose();
   });
 });
 

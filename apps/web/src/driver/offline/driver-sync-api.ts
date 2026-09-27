@@ -104,6 +104,10 @@ export function createDriverSyncApi(
           reason: operation.reason,
           expected_version: operation.expectedVersion,
           metadata: {},
+          // AI-05 x-offline-operation-age: the capture instant travels on
+          // every attempt, so a replay is age-checked against when the driver
+          // acted, never against when the queue reached the server.
+          client_occurred_at: operation.clientOccurredAt,
         },
         parseTransitionReceipt,
         signal,
@@ -129,6 +133,7 @@ export function createDriverSyncApi(
           content_type: proof.contentType,
           size_bytes: proof.sizeBytes,
           sha256: proof.sha256,
+          client_occurred_at: operation.clientOccurredAt,
         },
         (value) =>
           parseUploadGrant(value, options.production ?? false),

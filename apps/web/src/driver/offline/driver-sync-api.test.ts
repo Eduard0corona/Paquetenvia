@@ -27,7 +27,7 @@ const operation = createDriverOfflineOperation({
 const hash = "a".repeat(64);
 
 describe("driver sync API", () => {
-  it("sends the exact transition body and stable key without client timestamp", async () => {
+  it("sends the exact transition body, the capture instant and the stable key", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
       jsonResponse(
         transitionResponse(),
@@ -50,8 +50,8 @@ describe("driver sync API", () => {
       reason: "DRIVER_DELIVERY_CONFIRMED",
       expected_version: 9,
       metadata: {},
+      client_occurred_at: "2026-07-26T12:00:00.000Z",
     });
-    expect(init.body).not.toContain(operation.clientOccurredAt);
     expect(init.credentials).toBe("omit");
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
       `drv2-${operation.id}-transition`,
@@ -92,6 +92,7 @@ describe("driver sync API", () => {
       content_type: "image/png",
       size_bytes: 4,
       sha256: hash,
+      client_occurred_at: "2026-07-26T12:00:00.000Z",
     });
     const sessionHeaders = new Headers(sessionRequest.headers);
     expect(sessionHeaders.get("Authorization")).toBe(

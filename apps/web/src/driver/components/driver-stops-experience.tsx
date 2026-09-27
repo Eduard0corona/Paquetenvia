@@ -11,6 +11,7 @@ import {
 import { createExternalOffersApi } from "../api/external-offers-api";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
 import {
+  driverOperationLabel,
   driverStopStatusLabel,
   driverStopTypeLabel,
 } from "../contracts/labels";
@@ -778,7 +779,7 @@ function StopAction({
           onEnqueue(kind, proof);
         }}
       >
-        {operationLabel(kind)}
+        {driverOperationLabel(kind)}
       </button>
     </fieldset>
   );
@@ -1006,21 +1007,6 @@ function RetryButton({ onClick }: Readonly<{ onClick: () => void }>) {
       Reintentar
     </button>
   );
-}
-
-function operationLabel(kind: DriverOperationKind): string {
-  switch (kind) {
-    case "CHECK_IN":
-      return "Llegué a recolección";
-    case "PICKUP_PROOF":
-      return "Confirmar recolección";
-    case "START_TRANSIT":
-      return "Iniciar traslado";
-    case "START_DELIVERY":
-      return "Llegué al destino";
-    case "DELIVERY_PROOF":
-      return "Confirmar entrega";
-  }
 }
 
 function formatTimestamp(value: string | null): string {
