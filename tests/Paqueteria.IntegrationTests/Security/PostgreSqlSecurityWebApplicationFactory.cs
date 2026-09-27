@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Incidents.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +10,7 @@ using Notifications.Infrastructure.Persistence;
 using Npgsql;
 using Paqueteria.Contracts.Tracking;
 using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Infrastructure.Tenancy;
 using Testcontainers.PostgreSql;
 
 namespace Paqueteria.IntegrationTests.Security;
@@ -73,6 +75,7 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, adminConnectionString);
         await ApplyNotificationsMigrationAsync(adminConnectionString);
+        await ApplyIncidentsMigrationAsync(adminConnectionString);
 
         await using var admin = NpgsqlDataSource.Create(adminConnectionString);
         await using (var command = admin.CreateCommand($$"""
@@ -1201,6 +1204,32 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
             })
             .Options;
         await using var context = new NotificationsDbContext(options);
+        await context.Database.MigrateAsync();
+    }
+
+    /// <summary>
+    /// The INC-001 lane lives in its module migration, not in the frozen v0.6 bundle, and a real
+    /// deployment always applies it. ORD-002 reads <c>incidents.incident_evidence</c> on every
+    /// transition into <c>PICKED_UP</c> or <c>DELIVERED</c> (a proof that is incident evidence never
+    /// completes an attempt), so the runtime API this factory hosts needs the lane too.
+    /// </summary>
+    private static async Task ApplyIncidentsMigrationAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
+        {
+            await role.ExecuteNonQueryAsync();
+        }
+
+        var options = new DbContextOptionsBuilder<IncidentsDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(typeof(IncidentsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_incidents", "platform");
+            })
+            .Options;
+        await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync();
     }
 

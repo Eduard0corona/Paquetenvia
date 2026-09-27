@@ -54,6 +54,18 @@
 - AI-06 y AI-18 no cambian. Sus propuestas SQL se describen en el PR y
   requieren una migración antes de entrar a los archivos canónicos.
 
+## ORD-002: reglas del intento en la máquina de estados — 2026-09-27
+
+- AI-04 registra las reglas de ORD-002 (PR 91) aprobadas por el project owner
+  ("Aprobar las 5"): la acción siguiente de la incidencia decide la salida de
+  `FAILED_ATTEMPT` (guard `failed_attempt_next_action_respected`); la custodia
+  solo se deriva del evento `PICKED_UP`; las pruebas valen solo para el intento
+  vigente y nunca si son evidencia de una incidencia; una incidencia justifica un
+  solo `FAILED_ATTEMPT`; el intento vigente empieza en la última entrada al estado
+  de captura (`ORD-002-ATTEMPT-RULES-2026-09-27`, `ORD-002-ATTEMPT-BOUNDARY`).
+- Se agrega `order_state_machine.guard_semantics`. Los 17 estados y las
+  transiciones no cambian.
+
 ## Reconciliación de gobernanza — 2026-09-26
 
 - Registro documental posterior de los ítems fusionados desde el 2026-08-04
@@ -352,7 +364,6 @@
 - POD por URL firmada/cuarentena y GPS batch con lane separado.
 - Política 401/403/404, COD mínimo, líneas de liquidación y ventana de reclamación.
 - Backlog ampliado a 53 tareas y nuevos ADR-016 a ADR-025.
-
 
 ## v0.4 — 2026-07-20
 

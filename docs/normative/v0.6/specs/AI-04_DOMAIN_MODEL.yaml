@@ -316,12 +316,30 @@ order_state_machine:
     - custody_acquired_recorded
     RETURNING:
     - custody_acquired_true
+    - failed_attempt_next_action_respected
+    RESCHEDULED:
+    - failed_attempt_next_action_respected
     DELIVERING:
     - if_from_failed_attempt_or_rescheduled_then_custody_acquired_true_and_valid_assignment
+    - failed_attempt_next_action_respected
   prohibited:
   - FAILED_ATTEMPT -> DELIVERED
   - RESCHEDULED -> DELIVERING when custody_acquired=false
   - CLAIM_OPEN after claim_window_ends_at
+  - custody_acquired derived from anything other than a PICKED_UP ORDER_STATUS_CHANGED event
+  - PICKED_UP or DELIVERED justified by a proof created before the latest entry into AT_PICKUP or DELIVERING, or by a proof referenced as incident evidence
+  - FAILED_ATTEMPT justified by an incident already referenced by an earlier FAILED_ATTEMPT
+  - leaving FAILED_ATTEMPT to a successor other than the one the justifying incident next_action allows
+  guard_semantics:
+    decision: ORD-002-ATTEMPT-RULES-2026-09-27
+    current_attempt: The current attempt starts at the latest ORDER_STATUS_CHANGED event into the capture state (AT_PICKUP for pickup, DELIVERING for delivery). No attempt_id column exists; the boundary is derived from the order history (ORD-002-ATTEMPT-BOUNDARY).
+    custody_acquired: True only when the order history holds a PICKED_UP ORDER_STATUS_CHANGED event. A pickup photo or incident evidence alone never establishes custody.
+    pickup_proof_complete: Requires a PICKUP_PHOTO proof of the current attempt that is not referenced as incident evidence.
+    delivery_proof_complete: Requires a DELIVERY_PHOTO proof of the current attempt that is not referenced as incident evidence.
+    attempt_stage_recorded: The FAILED_ATTEMPT is justified by exactly one incident opened in the current attempt and not referenced by an earlier FAILED_ATTEMPT.
+    eligible_driver: Evaluated with the shared DriverEligibilityPolicy (documents, zone, membership) on ASSIGNED and on the retry from FAILED_ATTEMPT or RESCHEDULED to DELIVERING.
+    capacity_available: Evaluated with the same DriverEligibilityPolicy capacity rules (vehicle capacity against the order packages) on the same transitions.
+    failed_attempt_next_action_respected: When leaving FAILED_ATTEMPT, the justifying incident next_action decides the successor. RETURNING allows only RETURNING. RESCHEDULED allows only RESCHEDULED or DELIVERING. Incidents adopted by the INC-001 backfill carry a default next_action and do not bind the successor; every other guard of the target still applies.
 decided_pending_translation:
   status: DECIDED_2026-09-26_27_TRANSLATION_PENDING
   source: decision-log D8-REASSIGNMENT-NEW-ASSIGNMENT (working session with the project owner via Claude Code)
@@ -331,8 +349,8 @@ decided_pending_translation:
     reused
   note: the guards above do not encode this rule yet; the implementing task adds the guard and its tests
   covers: RESCHEDULED -> ASSIGNED without passing through READY_FOR_PICKUP (reported by PR 90)
-  attempt_and_custody_amendments: decided by the project owner on 2026-09-27 for PR 91; PR 91 writes them into the guards
-    and prohibited lists above and into decision-log.md
+  attempt_and_custody_amendments: decided by the project owner on 2026-09-27 and recorded by PR 91 in the guards,
+    prohibited and guard_semantics above (ORD-002-ATTEMPT-RULES-2026-09-27, ORD-002-ATTEMPT-BOUNDARY)
 authorization_invariants:
 - 401 when no valid authentication token exists
 - 403 when an authenticated actor can see the tenant resource but lacks a capability

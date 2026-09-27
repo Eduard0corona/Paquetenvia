@@ -102,11 +102,14 @@ public sealed partial class PostgreSqlIncidentService(
                         return replay;
                     }
 
-                    // AT_PICKUP may still be rescheduled, but nothing can be returned before
-                    // custody was acquired: ORD-002 and ADR-014 own that precondition, so INC-001
-                    // refuses an opening whose next action the state machine could never honour
-                    // instead of persisting it and deriving custody_acquired=false beside it.
-                    if (!IncidentOrderStatePolicy.IsAllowedNextAction(order.Status, nextAction))
+                    // Nothing can be returned before custody was acquired: ORD-002 and ADR-014
+                    // own that precondition, so INC-001 refuses an opening whose next action the
+                    // state machine could never honour instead of persisting it beside
+                    // custody_acquired=false.
+                    if (!IncidentOrderStatePolicy.IsAllowedNextAction(
+                            order.Status,
+                            order.CustodyAcquired,
+                            nextAction))
                     {
                         throw new IncidentConflictException("ORDER_STATE_NOT_ALLOWED");
                     }
@@ -122,6 +125,8 @@ public sealed partial class PostgreSqlIncidentService(
                         throw new IncidentConflictException("EVIDENCE_NOT_AVAILABLE");
                     }
 
+                    var recordedAt = order.RecordedAt(now);
+
                     var incidentId = Guid.NewGuid();
                     var result = new IncidentResult(
                         incidentId,
@@ -131,21 +136,21 @@ public sealed partial class PostgreSqlIncidentService(
                         command.IncidentType,
                         command.ReasonCode,
                         command.NextAction,
-                        IncidentOrderStatePolicy.DerivesCustodyAcquired(order.Status),
+                        order.CustodyAcquired,
                         occurredAt,
                         slaDueAt,
                         command.EvidenceProofIds);
 
                     await InsertReservationAsync(
                         dbContext, command.OrganizationId, IdempotencyScope, command.IdempotencyKey,
-                        requestHash, now, token);
+                        requestHash, recordedAt, token);
                     await InsertIncidentAsync(
-                        dbContext, command, order, result, protectedDescription, now, token);
-                    await InsertEvidenceAsync(dbContext, command, order, result, now, token);
-                    await WriteAuditAsync(dbContext, command, result, now, token);
+                        dbContext, command, order, result, protectedDescription, recordedAt, token);
+                    await InsertEvidenceAsync(dbContext, command, order, result, recordedAt, token);
+                    await WriteAuditAsync(dbContext, command, result, recordedAt, token);
                     await CompleteReservationAsync(
                         dbContext, command.OrganizationId, IdempotencyScope, command.IdempotencyKey,
-                        requestHash, OpenedResponseStatus, result, now, token);
+                        requestHash, OpenedResponseStatus, result, recordedAt, token);
                     return result;
                 },
                 cancellationToken);

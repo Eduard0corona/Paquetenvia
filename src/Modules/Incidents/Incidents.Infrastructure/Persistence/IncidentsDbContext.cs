@@ -55,6 +55,8 @@ public sealed class IncidentsDbContext(
         evidence.HasIndex(value => new { value.IncidentId, value.ProofId }).IsUnique();
         evidence.HasIndex(value => new { value.OwnerOrganizationId, value.IncidentId })
             .HasDatabaseName("incident_evidence_tenant_incident_idx");
+        evidence.HasIndex(value => new { value.OrderId, value.ProofId })
+            .HasDatabaseName("incident_evidence_order_proof_idx");
         evidence.HasQueryFilter(value =>
             tenantState.OrganizationIds.Contains(value.OwnerOrganizationId) ||
             (value.OperatorOrganizationId != null &&
