@@ -180,29 +180,37 @@ public sealed class IncidentPolicyTests
         Assert.Equal(allowed, IncidentOrderStatePolicy.IsAllowedOpeningState(orderStatus));
     }
 
+    // Coverage moved from the removed IncidentRequestPolicy occurrence helpers: the configured
+    // rule itself is what the endpoint and the service evaluate.
     [Fact]
     public void An_attempt_reported_in_the_future_or_long_past_is_rejected()
     {
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now, Now));
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(-30), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(1), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(default, Now));
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+        Assert.True(policy.IsAccepted(Now, Now));
+        Assert.True(policy.IsAccepted(Now.AddMinutes(-30), Now));
+        Assert.False(policy.IsAccepted(Now.AddHours(1), Now));
+        Assert.False(policy.IsAccepted(default, Now));
     }
 
     [Fact]
     public void The_retrospective_window_is_the_approved_seventy_two_hours()
     {
-        Assert.Equal(TimeSpan.FromHours(72), IncidentRequestPolicy.MaximumOccurrenceAge);
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-71), Now));
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-72), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-73), Now));
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+        Assert.Equal(TimeSpan.FromHours(72), policy.MaximumAge);
+        Assert.True(policy.IsAccepted(Now.AddHours(-71), Now));
+        Assert.True(policy.IsAccepted(Now.AddHours(-72), Now));
+        Assert.False(policy.IsAccepted(Now.AddHours(-73), Now));
+        Assert.Equal(OfflineOperationAge.Expired, policy.Evaluate(Now.AddHours(-73), Now));
     }
 
     [Fact]
     public void A_small_clock_skew_between_device_and_server_is_tolerated()
     {
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(1), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(6), Now));
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+        Assert.Equal(TimeSpan.FromMinutes(5), policy.ClockTolerance);
+        Assert.True(policy.IsAccepted(Now.AddMinutes(1), Now));
+        Assert.False(policy.IsAccepted(Now.AddMinutes(6), Now));
+        Assert.Equal(OfflineOperationAge.AheadOfServerClock, policy.Evaluate(Now.AddMinutes(6), Now));
     }
 
     // ------------------------ OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27
