@@ -18,6 +18,7 @@ public sealed class AuthCenterOpenRegistrationTests(AuthCenterPostgreSqlWebAppli
     [Theory]
     [InlineData("false")]
     [InlineData("string-true")]
+    [InlineData("string-yes")]
     [InlineData("omitted")]
     public async Task Unverified_email_is_refused_specifically_and_creates_no_user(string variant)
     {
@@ -25,7 +26,9 @@ public sealed class AuthCenterOpenRegistrationTests(AuthCenterPostgreSqlWebAppli
         factory.AuthCenter.Behavior = variant switch
         {
             "false" => new TokenBehavior { EmailVerified = false },
-            "string-true" => new TokenBehavior { EmailVerified = "yes" },
+            // The JSON string "true" is not the JSON boolean true.
+            "string-true" => new TokenBehavior { EmailVerified = "true" },
+            "string-yes" => new TokenBehavior { EmailVerified = "yes" },
             _ => new TokenBehavior { OmitEmailVerified = true },
         };
         try

@@ -186,13 +186,16 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
     }
 
     /// <summary>
-    /// Exactly one <c>email_verified</c> claim whose value is the JSON boolean <c>true</c> (the handler
-    /// renders it as the string <c>true</c>); anything else, including an absent claim, is unverified.
+    /// Exactly one <c>email_verified</c> claim that is the JSON boolean <c>true</c>: the token handler
+    /// types it <see cref="ClaimValueTypes.Boolean"/> and renders it <c>true</c>. A JSON string such as
+    /// <c>"true"</c>, any other value, a repeated claim or an absent claim is unverified.
     /// </summary>
     internal static bool HasVerifiedEmail(ClaimsPrincipal principal)
     {
-        var values = principal.FindAll(AuthCenterDefaults.EmailVerifiedClaim).Select(claim => claim.Value).ToArray();
-        return values.Length == 1 && string.Equals(values[0], "true", StringComparison.OrdinalIgnoreCase);
+        var claims = principal.FindAll(AuthCenterDefaults.EmailVerifiedClaim).ToArray();
+        return claims.Length == 1 &&
+            string.Equals(claims[0].ValueType, ClaimValueTypes.Boolean, StringComparison.Ordinal) &&
+            string.Equals(claims[0].Value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool HasMfaMethod(ClaimsPrincipal principal) =>

@@ -72,16 +72,20 @@ public sealed class SelfServiceRegistrationTests
         Assert.Equal(expected, PostgreSqlSelfServiceRegistrationService.IsValidName(value, maximum));
 
     [Theory]
-    [InlineData(new[] { "true" }, true)]
-    [InlineData(new[] { "True" }, true)]
-    [InlineData(new[] { "false" }, false)]
-    [InlineData(new[] { "yes" }, false)]
-    [InlineData(new[] { "true", "true" }, false)]
-    [InlineData(new string[0], false)]
-    public void Only_a_single_email_verified_true_claim_counts_as_verified(string[] values, bool expected)
+    [InlineData(new[] { "true" }, ClaimValueTypes.Boolean, true)]
+    [InlineData(new[] { "True" }, ClaimValueTypes.Boolean, true)]
+    [InlineData(new[] { "false" }, ClaimValueTypes.Boolean, false)]
+    [InlineData(new[] { "true", "true" }, ClaimValueTypes.Boolean, false)]
+    [InlineData(new string[0], ClaimValueTypes.Boolean, false)]
+    // A JSON string is not the JSON boolean true, whatever it says.
+    [InlineData(new[] { "true" }, ClaimValueTypes.String, false)]
+    [InlineData(new[] { "True" }, ClaimValueTypes.String, false)]
+    [InlineData(new[] { "yes" }, ClaimValueTypes.String, false)]
+    public void Only_a_single_json_boolean_true_email_verified_claim_counts_as_verified(
+        string[] values, string valueType, bool expected)
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
-            values.Select(value => new Claim("email_verified", value)), "test"));
+            values.Select(value => new Claim("email_verified", value, valueType)), "test"));
 
         Assert.Equal(expected, AuthCenterOpenIdConnectEvents.HasVerifiedEmail(principal));
     }

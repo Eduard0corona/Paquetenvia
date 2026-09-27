@@ -53,8 +53,11 @@ public sealed class AuditArchitectureTests
             Assert.DoesNotContain("RETURNING", definition, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(1, definition.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
         });
-    }
 
+        // Exactly those two in the whole file: an insert in a DO block, in the rollback or anywhere outside
+        // the two functions fails here.
+        Assert.Equal(2, lane.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+    }
 
     [Fact]
     public void Audit_writer_is_parameterized_transactional_and_has_no_returning_or_logging()
