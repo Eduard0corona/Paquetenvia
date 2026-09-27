@@ -16,6 +16,7 @@ using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.Scheduling;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -75,7 +76,39 @@ public static class DependencyInjection
                     (new Uri(options.ServiceUrl).Scheme == Uri.UriSchemeHttps &&
                      new Uri(options.PublicPresignUrl).Scheme == Uri.UriSchemeHttps),
                 "ProofStorage:S3Compatible requires HTTPS outside Development and Testing.")
+            .Validate(options =>
+                    options.Provider != ProofStorageProvider.AzureBlob ||
+                    AzureBlobOptionsAreValid(options),
+                "ProofStorage:AzureBlob requires an https ServiceUri without path or query, a valid " +
+                "ContainerName and a UserDelegationKeyLifetimeMinutes of 15 to 1440 that outlives " +
+                "UploadUrlLifetimeMinutes and DownloadUrlLifetimeMinutes by at least 10 minutes.")
+            .Validate(options =>
+                    options.ThreatScanner != ProofThreatScannerProvider.DefenderForStorage ||
+                    options.Provider == ProofStorageProvider.AzureBlob,
+                "ProofStorage:ThreatScanner=DefenderForStorage requires ProofStorage:Provider=AzureBlob.")
+            .Validate(options =>
+                    options.ThreatScanner != ProofThreatScannerProvider.DefenderForStorage ||
+                    DefenderOptionsAreValid(options.DefenderForStorage),
+                "ProofStorage:DefenderForStorage tag names and values must be non-empty blob index " +
+                "tag strings and the clean and malicious values must differ.")
             .ValidateOnStart();
+
+        services.TryAddSingleton(TimeProvider.System);
+        var configuredStorage = configuration.GetValue<ProofStorageProvider?>(
+            $"{ProofStorageOptions.SectionName}:{nameof(ProofStorageOptions.Provider)}");
+        if (configuredStorage == ProofStorageProvider.AzureBlob)
+        {
+            // ADP-001-POD-BLOB-DEFENDER: managed identity only. The API signs user-delegation SAS;
+            // the Worker never signs URLs, so it needs no delegation permission.
+            services.AddAzureWorkloadCredential();
+            services.TryAddSingleton<IProofBlobGateway, AzureBlobProofGateway>();
+            services.AddSingleton(serviceProvider => new AzureBlobProofObjectStorage(
+                serviceProvider.GetRequiredService<IProofBlobGateway>(),
+                serviceProvider.GetRequiredService<IOptions<ProofStorageOptions>>(),
+                serviceProvider.GetRequiredService<TimeProvider>(),
+                signsUrls: !addValidationWorker));
+            services.AddSingleton<DefenderForStorageThreatScanner>();
+        }
 
         services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
             serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
@@ -112,6 +145,8 @@ public static class DependencyInjection
             {
                 ProofStorageProvider.S3Compatible =>
                     serviceProvider.GetRequiredService<S3CompatibleProofObjectStorage>(),
+                ProofStorageProvider.AzureBlob =>
+                    serviceProvider.GetRequiredService<AzureBlobProofObjectStorage>(),
                 _ => serviceProvider.GetRequiredService<DisabledProofObjectStorage>(),
             });
         services.AddSingleton<DisabledProofThreatScanner>();
@@ -122,6 +157,8 @@ public static class DependencyInjection
             {
                 ProofThreatScannerProvider.Synthetic =>
                     serviceProvider.GetRequiredService<StrictSyntheticThreatScanner>(),
+                ProofThreatScannerProvider.DefenderForStorage =>
+                    serviceProvider.GetRequiredService<DefenderForStorageThreatScanner>(),
                 _ => serviceProvider.GetRequiredService<DisabledProofThreatScanner>(),
             });
         services.AddSingleton<IProofTelemetry, ProofTelemetry>();
@@ -187,6 +224,41 @@ public static class DependencyInjection
             tags: ["ready"]);
         return services;
     }
+
+    private static bool AzureBlobOptionsAreValid(ProofStorageOptions options)
+    {
+        var blob = options.AzureBlob;
+        return blob is not null &&
+            Uri.TryCreate(blob.ServiceUri, UriKind.Absolute, out var uri) &&
+            uri.Scheme == Uri.UriSchemeHttps &&
+            string.IsNullOrEmpty(uri.UserInfo) &&
+            uri.AbsolutePath == "/" &&
+            string.IsNullOrEmpty(uri.Query) &&
+            string.IsNullOrEmpty(uri.Fragment) &&
+            blob.ContainerName is { Length: >= 3 and <= 63 } container &&
+            container.All(character => character is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-') &&
+            char.IsAsciiLetterOrDigit(container[0]) &&
+            char.IsAsciiLetterOrDigit(container[^1]) &&
+            !container.Contains("--", StringComparison.Ordinal) &&
+            blob.UserDelegationKeyLifetimeMinutes is >= 15 and <= 1_440 &&
+            blob.UserDelegationKeyLifetimeMinutes >=
+                Math.Max(options.UploadUrlLifetimeMinutes, options.DownloadUrlLifetimeMinutes) + 10;
+    }
+
+    private static bool DefenderOptionsAreValid(DefenderForStorageScannerOptions? options) =>
+        options is not null &&
+        IsTagString(options.ScanResultTagName, 128) &&
+        IsTagString(options.ScanTimeTagName, 128) &&
+        IsTagString(options.NoThreatsFoundValue, 256) &&
+        IsTagString(options.MaliciousValue, 256) &&
+        !string.Equals(options.NoThreatsFoundValue, options.MaliciousValue, StringComparison.Ordinal) &&
+        !string.Equals(options.ScanResultTagName, options.ScanTimeTagName, StringComparison.Ordinal);
+
+    /// <summary>Blob index tag keys and values: alphanumerics plus space and <c>+-.:=_/</c>.</summary>
+    private static bool IsTagString(string? value, int maximumLength) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= maximumLength &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || " +-.:=_/".Contains(character));
 
     private static bool IsAbsoluteHttpUri(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&

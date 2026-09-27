@@ -120,7 +120,8 @@ public sealed record ProofObjectDescriptor(
     string ContentType,
     string ETag,
     string? VersionId,
-    IReadOnlyDictionary<string, string> Metadata);
+    IReadOnlyDictionary<string, string> Metadata,
+    DateTimeOffset? LastModified = null);
 
 public sealed record ValidatedProofObject(
     Guid SessionId,
@@ -174,11 +175,40 @@ public interface IProofThreatScanner
     bool IsEnabled { get; }
 
     ValueTask<ProofThreatScanResult> ScanAsync(Stream content, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Scans the stored object. In-process scanners inspect <paramref name="content"/>; an
+    /// out-of-band scanner (ADP-001 Defender for Storage) reads the verdict recorded for
+    /// <paramref name="descriptor"/> and answers <see cref="ProofThreatScanResult.Pending"/> while
+    /// no verdict covers the current content.
+    /// </summary>
+    ValueTask<ProofThreatScanResult> ScanAsync(
+        ProofObjectDescriptor descriptor,
+        Stream content,
+        CancellationToken cancellationToken) => ScanAsync(content, cancellationToken);
+
+    /// <summary>
+    /// True while an out-of-band verdict for the object does not exist yet. The Worker then leaves
+    /// the object in quarantine and the session untouched, and looks again on a later pass.
+    /// </summary>
+    ValueTask<bool> IsVerdictPendingAsync(
+        ProofObjectDescriptor descriptor,
+        CancellationToken cancellationToken) => ValueTask.FromResult(false);
+
+    /// <summary>Readiness of the scanner itself; fails closed.</summary>
+    ValueTask<bool> CheckHealthAsync(CancellationToken cancellationToken) => ValueTask.FromResult(IsEnabled);
 }
 
 public sealed record ProofThreatScanResult(bool IsSafe, string Code)
 {
+    public const string PendingCode = "SCAN_PENDING";
+
     public static ProofThreatScanResult Safe { get; } = new(true, "SAFE");
+
+    /// <summary>No verdict yet: never safe, never a rejection; the object stays quarantined.</summary>
+    public static ProofThreatScanResult Pending { get; } = new(false, PendingCode);
+
+    public bool IsPending => !IsSafe && Code == PendingCode;
 }
 
 public interface IProofValidationProcessor
@@ -205,3 +235,9 @@ public sealed class ProofForbiddenException() : ProofUploadException("FORBIDDEN"
 public sealed class ProofNotFoundException() : ProofUploadException("NOT_FOUND");
 public sealed class ProofConflictException(string code) : ProofUploadException(code);
 public sealed class ProofStorageUnavailableException() : ProofUploadException("PROOF_STORAGE_UNAVAILABLE");
+
+/// <summary>
+/// The quarantine object changed after it was validated (a conditional copy failed). The session is
+/// rejected with <c>SOURCE_OBJECT_CHANGED</c>, exactly as the S3 412 path.
+/// </summary>
+public sealed class ProofObjectChangedException() : ProofUploadException("SOURCE_OBJECT_CHANGED");

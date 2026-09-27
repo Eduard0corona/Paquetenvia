@@ -93,6 +93,18 @@ public sealed class ProofValidationProcessor(
             return;
         }
 
+        // ADP-001: an out-of-band scanner (Defender for Storage) may not have a verdict yet. The
+        // object then stays in quarantine and the session is not touched; a later pass retries.
+        if (await threatScanner.IsVerdictPendingAsync(descriptor, cancellationToken))
+        {
+            telemetry.ProcessingCompleted(
+                metadata.ProofType.ToContractValue(),
+                "deferred",
+                "scan_pending",
+                stopwatch.Elapsed.TotalMilliseconds);
+            return;
+        }
+
         var claim = await ClaimAsync(descriptor, metadata, cancellationToken);
         if (claim is null)
         {
@@ -143,9 +155,25 @@ public sealed class ProofValidationProcessor(
         {
             rejectionCode = "SOURCE_OBJECT_CHANGED";
         }
+        catch (ProofObjectChangedException)
+        {
+            rejectionCode = "SOURCE_OBJECT_CHANGED";
+        }
         catch (ProofConflictException exception)
         {
             rejectionCode = exception.Code;
+        }
+
+        if (rejectionCode == ProofThreatScanResult.PendingCode)
+        {
+            // The verdict disappeared or went stale between the pre-check and the claim. Nothing is
+            // settled: the object stays quarantined and the stale-claim recovery retries it.
+            telemetry.ProcessingCompleted(
+                metadata.ProofType.ToContractValue(),
+                "deferred",
+                "scan_pending",
+                stopwatch.Elapsed.TotalMilliseconds);
+            return;
         }
 
         if (rejectionCode != "READY")
@@ -215,7 +243,7 @@ public sealed class ProofValidationProcessor(
         }
 
         content.Position = 0;
-        var scan = await threatScanner.ScanAsync(content, cancellationToken);
+        var scan = await threatScanner.ScanAsync(descriptor, content, cancellationToken);
         if (!scan.IsSafe)
         {
             return scan.Code;
