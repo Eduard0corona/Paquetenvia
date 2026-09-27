@@ -459,10 +459,13 @@ public sealed class RealtimeOutboxTests
         var firstCanFinish = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // The drain window must outlast thread-pool latency on a saturated CI runner: completing
+        // firstCanFinish resumes the started work through an asynchronous continuation. Cancelling
+        // after the window is covered by Shutdown_cancels_incomplete_started_work_after_the_drain_window.
         var processing = RealtimeOutboxBatchDrain.ProcessAsync(
             [1, 2],
             stopping.Token,
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
             (message, token) =>
             {
                 started.Add(message);
