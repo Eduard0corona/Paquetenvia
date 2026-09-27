@@ -38,7 +38,7 @@ public sealed class LocationsOpenApiImplementationTests
             "address_summary", "city_id", "id", "lat", "lng", "operating_zone_id", "service_area_id");
         AssertJsonProperties<CreateLocationRequest>(
             "address_summary", "address_text", "city_id", "contact_name", "lat", "lng",
-            "operating_zone_id", "phone", "pii_key_version", "service_area_id");
+            "operating_zone_id", "phone", "service_area_id");
 
         var exposed = typeof(LocationResponse).GetProperties().Select(property => property.Name).ToArray();
         Assert.DoesNotContain(exposed, name => name.Contains("Ciphertext", StringComparison.Ordinal));
@@ -46,6 +46,32 @@ public sealed class LocationsOpenApiImplementationTests
         Assert.DoesNotContain(exposed, name => name.Contains("Contact", StringComparison.Ordinal));
         Assert.DoesNotContain(exposed, name => name.Contains("Pii", StringComparison.Ordinal));
         Assert.DoesNotContain(typeof(CreateLocationRequest).GetProperties(), property => property.Name == "OwnerOrganizationId");
+    }
+
+    /// <summary>
+    /// AI05-REMOVE-PII-KEY-VERSION: the server PII protector selects the key version; neither the AI-05
+    /// request schema, the transport DTO nor the application command carries one.
+    /// </summary>
+    [Fact]
+    public void Create_location_request_never_carries_a_client_PII_key_version()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schema = root.Mapping("components").Mapping("schemas").Mapping("CreateLocationRequest");
+        var properties = schema.Mapping("properties").Children.Keys
+            .Cast<YamlDotNet.RepresentationModel.YamlScalarNode>()
+            .Select(key => key.Value!)
+            .ToArray();
+        var required = schema.Sequence("required").Children
+            .Cast<YamlDotNet.RepresentationModel.YamlScalarNode>()
+            .Select(node => node.Value!)
+            .ToArray();
+
+        Assert.DoesNotContain("pii_key_version", properties);
+        Assert.DoesNotContain("pii_key_version", required);
+        Assert.Equal(["address_summary", "address_text", "city_id", "lat", "lng"], required.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(typeof(CreateLocationRequest).GetProperties(), property => property.Name.Contains("Pii", StringComparison.Ordinal));
+        Assert.DoesNotContain(typeof(CreateLocationCommand).GetProperties(), property => property.Name.Contains("Pii", StringComparison.Ordinal));
+        Assert.Contains("AI05-REMOVE-PII-KEY-VERSION", schema.Scalar("description"), StringComparison.Ordinal);
     }
 
     [Fact]

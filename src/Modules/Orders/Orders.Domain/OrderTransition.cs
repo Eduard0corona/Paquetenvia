@@ -36,7 +36,8 @@ public static class OrderTransitionMatrix
             [OrderStatus.InTransit] = [OrderStatus.Delivering, OrderStatus.FailedAttempt, OrderStatus.Returning],
             [OrderStatus.Delivering] = [OrderStatus.Delivered, OrderStatus.FailedAttempt],
             [OrderStatus.FailedAttempt] = [OrderStatus.Rescheduled, OrderStatus.Returning, OrderStatus.Delivering],
-            [OrderStatus.Rescheduled] = [OrderStatus.ReadyForPickup, OrderStatus.Assigned, OrderStatus.Delivering],
+            // D8-RESCHEDULED-NO-DIRECT-DELIVERY: a rescheduled order always goes through a new assignment.
+            [OrderStatus.Rescheduled] = [OrderStatus.ReadyForPickup, OrderStatus.Assigned],
             [OrderStatus.Returning] = [OrderStatus.Returned],
             [OrderStatus.Delivered] = [OrderStatus.Closed, OrderStatus.ClaimOpen],
             [OrderStatus.Closed] = [OrderStatus.ClaimOpen],

@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Routing;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
@@ -57,6 +58,8 @@ public static class ProofEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IProofUploadSessionService service,
+        OfflineOperationAgePolicy offlinePolicy,
+        IClock clock,
         CancellationToken cancellationToken)
     {
         CreateProofUploadSessionRequest? request;
@@ -91,6 +94,11 @@ public static class ProofEndpoints
             return Conflict("INVALID_REQUEST");
         }
 
+        if (OfflineRejection(offlinePolicy.Evaluate(request.ClientOccurredAt, clock.UtcNow)) is { } rejected)
+        {
+            return rejected;
+        }
+
         try
         {
             var validRequest = request;
@@ -121,7 +129,10 @@ public static class ProofEndpoints
         }
         catch (Exception exception)
         {
-            return ToProblem(exception, cancellationToken);
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateProofUploadSession),
+                cancellationToken);
         }
     }
 
@@ -131,6 +142,8 @@ public static class ProofEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IProofFinalizationService service,
+        OfflineOperationAgePolicy offlinePolicy,
+        IClock clock,
         CancellationToken cancellationToken)
     {
         FinalizeProofRequest? request;
@@ -165,6 +178,12 @@ public static class ProofEndpoints
             return Conflict("INVALID_REQUEST");
         }
 
+        // captured_at is the offline capture instant of a POD replay (AI-05 x-offline-operation-age).
+        if (OfflineRejection(offlinePolicy.Evaluate(capturedAt, clock.UtcNow)) is { } rejected)
+        {
+            return rejected;
+        }
+
         try
         {
             var validRequest = request;
@@ -194,7 +213,10 @@ public static class ProofEndpoints
         }
         catch (Exception exception)
         {
-            return ToProblem(exception, cancellationToken);
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.FinalizeProof),
+                cancellationToken);
         }
     }
 
@@ -225,11 +247,25 @@ public static class ProofEndpoints
             (idempotencyKey = values[0]!).Length > 0;
     }
 
-    private static IResult ToProblem(Exception exception, CancellationToken cancellationToken) =>
+    /// <summary>
+    /// OPS-003-SERVER-72H-REJECTION: an operation captured more than 72 hours ago is refused before
+    /// any service, storage or database work; a client clock beyond the tolerance is an invalid request.
+    /// </summary>
+    private static IResult? OfflineRejection(OfflineOperationAge age) => age switch
+    {
+        OfflineOperationAge.Expired => Conflict(OfflineOperationAgePolicy.ExpiredCode),
+        OfflineOperationAge.AheadOfServerClock => Conflict("INVALID_REQUEST"),
+        _ => null,
+    };
+
+    private static IResult ToProblem(
+        Exception exception,
+        Func<IResult> refused,
+        CancellationToken cancellationToken) =>
         exception switch
         {
             OperationCanceledException when cancellationToken.IsCancellationRequested => throw exception,
-            ProofForbiddenException => Forbidden(),
+            ProofForbiddenException => refused(),
             ProofNotFoundException => NotFound(),
             ProofConflictException conflict => Conflict(PublicCode(conflict.Code)),
             ProofStorageUnavailableException => Unavailable(),
@@ -267,7 +303,8 @@ public sealed record CreateProofUploadSessionRequest(
     [property: JsonPropertyName("proof_type")] string? ProofType,
     [property: JsonPropertyName("content_type")] string? ContentType,
     [property: JsonPropertyName("size_bytes")] long? SizeBytes,
-    [property: JsonPropertyName("sha256")] string? Sha256)
+    [property: JsonPropertyName("sha256")] string? Sha256,
+    [property: JsonPropertyName("client_occurred_at")] DateTimeOffset? ClientOccurredAt = null)
 {
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; init; }

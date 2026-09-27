@@ -44,10 +44,12 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                     await E002NotificationStateReader.ReadAsync(connection));
                 var applied = await new E002SemanticAssertions().AssertAsync(
                     connection, E002NotificationState.Applied);
-                // The coordinator also applied the Orders LIF-001 lane (ADR-034): one more routine, owner + Worker.
-                Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_V1", applied.RoutineMap);
-                Assert.Equal(27, applied.ControlledIdentities);
-                Assert.Equal(52, applied.NormalizedExecuteRows);
+                // The coordinator also applied the Orders LIF-001 lane (ADR-034): one more routine, owner + Worker,
+                // plus the D8 DISPATCH lane (D8-OUTBOX-LANE-DISPATCH) and the Custody OPS-003 lane
+                // (OPS-003-CLEANUP-ROLE): two more routines each, owner + Worker.
+                Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1", applied.RoutineMap);
+                Assert.Equal(31, applied.ControlledIdentities);
+                Assert.Equal(60, applied.NormalizedExecuteRows);
             }
 
             Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString,
@@ -74,8 +76,10 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             await using (var mutate = new NpgsqlCommand("""
                 ALTER ROLE paqueteria_worker NOINHERIT;
                 ALTER ROLE paqueteria_lifecycle_executor NOBYPASSRLS;
+                ALTER ROLE paqueteria_cleanup_executor NOBYPASSRLS;
                 GRANT CREATE ON SCHEMA security TO paqueteria_outbox_executor;
                 GRANT CREATE ON SCHEMA security TO paqueteria_lifecycle_executor;
+                GRANT CREATE ON SCHEMA security TO paqueteria_cleanup_executor;
                 GRANT USAGE ON SCHEMA notifications TO paqueteria_maintenance;
                 ALTER FUNCTION security.purge_outbox(timestamptz,timestamptz,integer,boolean) OWNER TO paqueteria_migrator;
                 ALTER FUNCTION security.claim_outbox(text,integer,interval) RESET search_path;
@@ -93,6 +97,8 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             Assert.Contains(exception.Violations, value => value.Contains("role attributes differ: paqueteria_lifecycle_executor"));
             Assert.Contains(exception.Violations, value => value.Contains("temporary CREATE residue: security/paqueteria_outbox_executor"));
             Assert.Contains(exception.Violations, value => value.Contains("temporary CREATE residue: security/paqueteria_lifecycle_executor"));
+            Assert.Contains(exception.Violations, value => value.Contains("role attributes differ: paqueteria_cleanup_executor"));
+            Assert.Contains(exception.Violations, value => value.Contains("temporary CREATE residue: security/paqueteria_cleanup_executor"));
             // E-002 v0.8 §36: each failed invariant is classified by its own normative guard, not a generic code.
             Assert.Contains("E002_ROLE_ATTRIBUTE_MISMATCH", exception.GuardCodes);
             Assert.Contains("E002_BASELINE_SECURITY_ACL_MISMATCH", exception.GuardCodes);
@@ -387,7 +393,7 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             var membershipsBefore = await CountMembershipsAsync(connectionString);
             var fingerprintBefore = await CatalogFingerprintAsync(connectionString);
 
-            // E-002 v0.8 §35: the same apply command on a 12/12 APPLIED database is a successful read-only no-op.
+            // E-002 v0.8 §35: the same apply command on a 13/13 APPLIED database is a successful read-only no-op.
             await using var capture = new StringWriter();
             Console.SetOut(capture);
             var exitCode = await DatabaseMigratorProgram.RunAsync(
@@ -395,7 +401,7 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
             Console.SetOut(output);
 
             Assert.Equal(0, exitCode);
-            Assert.Contains("E002_APPLIED_PATH_NO_OP modules=12/12 APPLIED bridge_activation=0", capture.ToString(), StringComparison.Ordinal);
+            Assert.Contains("E002_APPLIED_PATH_NO_OP modules=13/13 APPLIED bridge_activation=0", capture.ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain("E002_APPLIED_PATH_MODULE_STATE_UNEXPECTED", capture.ToString(), StringComparison.Ordinal);
             Assert.Contains("Result: AlreadyApplied", capture.ToString(), StringComparison.Ordinal);
             Assert.Equal(membershipsBefore, await CountMembershipsAsync(connectionString));

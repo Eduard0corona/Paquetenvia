@@ -41,7 +41,6 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
             phone = "+526141234567",
             lat = 28.61,
             lng = -106.09,
-            pii_key_version = "mock-v1",
         });
 
         using var response = await client.SendAsync(request);
@@ -52,6 +51,36 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
         Assert.DoesNotContain("phone", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ciphertext", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("pii_key_version", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// AI05-REMOVE-PII-KEY-VERSION: the request no longer carries a key version. A client that still sends
+    /// one is not rejected, and the value never reaches the service: the server protector chooses it.
+    /// </summary>
+    [Fact]
+    public async Task POST_location_ignores_a_client_supplied_pii_key_version()
+    {
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/locations");
+        request.Headers.Add("Idempotency-Key", "geo001-http-legacy-key-version");
+        request.Content = JsonContent.Create(new
+        {
+            city_id = LocationHttpWebApplicationFactory.CityId,
+            service_area_id = LocationHttpWebApplicationFactory.ServiceAreaId,
+            address_text = "Synthetic private address",
+            address_summary = "Synthetic summary",
+            lat = 28.61,
+            lng = -106.09,
+            pii_key_version = "client-chosen-v9",
+        });
+
+        using var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.DoesNotContain("client-chosen-v9", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            typeof(global::Locations.Application.Locations.CreateLocationCommand).GetProperties(),
+            property => property.Name.Contains("KeyVersion", StringComparison.Ordinal));
     }
 
     public static TheoryData<string?> InvalidIdempotencyKeys => new()
@@ -113,7 +142,6 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
             address_summary = "Synthetic summary",
             lat = 28.61,
             lng = -106.09,
-            pii_key_version = "mock-v1",
         });
         using var postResponse = await client.SendAsync(post);
 
@@ -138,7 +166,7 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
     private static HttpRequestMessage Authenticated(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveViewer);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MockIdentityProfiles.ActiveDispatcher);
         request.Headers.Add("X-Organization-Id", MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
         return request;
     }
@@ -159,7 +187,6 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
             address_summary = "Synthetic summary",
             lat = 28.61,
             lng = -106.09,
-            pii_key_version = "mock-v1",
         });
         return await client.SendAsync(request);
     }

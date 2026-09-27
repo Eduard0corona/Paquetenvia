@@ -25,10 +25,17 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
     internal static readonly Guid ForeignTenantId = MockIdentityProfiles.OperationsOrganizationId;
 
     /// <summary>
-    /// The mock subject of <see cref="MockIdentityProfiles.ActiveDispatcher"/>, provisioned here as an active
-    /// FINANCE member: identity is resolved from PostgreSQL, so its role is whatever this seed grants.
+    /// An active FINANCE member with a satisfied MFA challenge, so it may run every settlement operation,
+    /// approveSettlement and markSettlementPaid included (D7-SETTLEMENT-MFA). Identity is resolved from
+    /// PostgreSQL, so its role is whatever this seed grants.
     /// </summary>
-    internal const string FinanceProfile = MockIdentityProfiles.ActiveDispatcher;
+    internal const string FinanceProfile = MockIdentityProfiles.ActiveFinanceMfa;
+
+    /// <summary>
+    /// The mock subject of <see cref="MockIdentityProfiles.ActiveDispatcher"/>, provisioned here as an active
+    /// FINANCE member without MFA: it operates settlements but may not approve or pay them.
+    /// </summary>
+    internal const string FinanceWithoutMfaProfile = MockIdentityProfiles.ActiveDispatcher;
 
     /// <summary>An MFA-satisfied DISPATCHER: dispatch capability never extends to settlements.</summary>
     internal const string DispatcherProfile = MockIdentityProfiles.LocalDispatcherMfa;
@@ -38,6 +45,8 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
     internal SettlementApiFactory Api { get; } = new();
 
     internal Guid FinanceUserId { get; } = Guid.NewGuid();
+
+    internal Guid FinanceMfaUserId { get; } = Guid.NewGuid();
 
     internal Guid DispatcherUserId { get; } = Guid.NewGuid();
 
@@ -51,13 +60,16 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
                 """
                 INSERT INTO identity.users(id,identity_subject,status) VALUES
                   (@finance,'mock-subject-active-dispatcher','ACTIVE'),
+                  (@finance_mfa,'mock-subject-active-finance-mfa','ACTIVE'),
                   (@dispatcher,'local-subject-dispatcher-mfa','ACTIVE');
                 INSERT INTO organizations.organization_memberships(
                   id,user_id,organization_id,role,status,is_default) VALUES
                   (gen_random_uuid(),@finance,@org,'FINANCE','ACTIVE',true),
+                  (gen_random_uuid(),@finance_mfa,@org,'FINANCE','ACTIVE',true),
                   (gen_random_uuid(),@dispatcher,@org,'DISPATCHER','ACTIVE',true);
                 """,
                 new NpgsqlParameter("finance", FinanceUserId),
+                new NpgsqlParameter("finance_mfa", FinanceMfaUserId),
                 new NpgsqlParameter("dispatcher", DispatcherUserId),
                 new NpgsqlParameter("org", TenantId));
         }
@@ -216,6 +228,29 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
             new NpgsqlParameter("id", settlement),
             new NpgsqlParameter("org", ForeignTenantId));
         return settlement;
+    }
+
+    /// <summary>
+    /// AI05-LIST-SETTLEMENTS: <paramref name="count"/> empty DRAFT settlements of one organization, all in
+    /// one statement so they share created_at and the keyset has to break the tie by id.
+    /// </summary>
+    internal async Task<IReadOnlyList<Guid>> SeedDraftSettlementsAsync(
+        Guid organizationId,
+        int count,
+        DateOnly periodFrom,
+        DateOnly periodTo)
+    {
+        var ids = Enumerable.Range(0, count).Select(_ => Guid.NewGuid()).ToArray();
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO finance.settlements(id,owner_org_id,payee_type,payee_id,status,total_cents,period_from,period_to)
+            SELECT id,@org,'DRIVER',gen_random_uuid(),'DRAFT',0,@from,@to FROM unnest(@ids) AS seeded(id);
+            """,
+            new NpgsqlParameter("ids", ids),
+            new NpgsqlParameter("org", organizationId),
+            new NpgsqlParameter("from", periodFrom),
+            new NpgsqlParameter("to", periodTo));
+        return ids;
     }
 
     internal async Task<SettlementSnapshot> ReadAsync(Guid settlementId)

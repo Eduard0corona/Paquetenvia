@@ -391,7 +391,7 @@ public sealed class Ops001SimulationReportTests
         AuditsMissing: 0,
         AuditsDuplicated: 0,
         AuditsMismatched: 0,
-        OutboxProcessed: 360,
+        OutboxProcessed: 380,
         OutboxDeadExpected: 1,
         OutboxDeadActual: 1,
         StaleRecoveries: 1,

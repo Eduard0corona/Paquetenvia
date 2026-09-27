@@ -33,7 +33,8 @@ public static class CsvOrderImportEndpoints
             .Produces<CsvImportPreviewResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost(CommitRoute, CommitAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -63,6 +64,11 @@ public static class CsvOrderImportEndpoints
             return Forbidden();
         }
 
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.PreviewOrderCsv) is { } denied)
+        {
+            return denied;
+        }
+
         var upload = await TryReadUploadAsync(httpContext, cancellationToken);
         if (upload is null)
         {
@@ -88,6 +94,11 @@ public static class CsvOrderImportEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.CommitOrderCsv) is { } denied)
+        {
+            return denied;
         }
 
         var upload = await TryReadUploadAsync(httpContext, cancellationToken);

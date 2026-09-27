@@ -4,6 +4,7 @@ using Orders.Application.Orders;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
@@ -22,7 +23,8 @@ public static class OrderEndpoints
             .Produces<OrderResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/orders", ListAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -31,7 +33,8 @@ public static class OrderEndpoints
             .WithTags("Orders")
             .Produces<OrderPageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/orders/{orderId:guid}", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -41,7 +44,8 @@ public static class OrderEndpoints
             .Produces<OrderDetailResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/orders/{orderId:guid}/transitions", TransitionAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -52,7 +56,8 @@ public static class OrderEndpoints
             .Produces<OrderResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -63,10 +68,12 @@ public static class OrderEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IOrderService service,
+        Paqueteria.Application.IClock clock,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
-            !IsValid(request))
+            !IsValid(request) ||
+            !OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(request.Acceptance.AcceptedAt, clock.UtcNow))
         {
             return Conflict();
         }
@@ -74,6 +81,11 @@ public static class OrderEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.CreateOrder) is { } denied)
+        {
+            return denied;
         }
 
         try
@@ -122,6 +134,11 @@ public static class OrderEndpoints
             return Forbidden();
         }
 
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListOrders) is { } denied)
+        {
+            return denied;
+        }
+
         try
         {
             var page = await service.ListAsync(
@@ -157,6 +174,11 @@ public static class OrderEndpoints
             return Forbidden();
         }
 
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.GetOrder) is { } denied)
+        {
+            return denied;
+        }
+
         try
         {
             var detail = await service.GetAsync(
@@ -187,6 +209,8 @@ public static class OrderEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IOrderTransitionService service,
+        OfflineOperationAgePolicy offlinePolicy,
+        IClock clock,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
@@ -206,6 +230,16 @@ public static class OrderEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        // OPS-003-SERVER-72H-REJECTION: an offline replay older than 72 hours never reaches the
+        // transition service, whatever its idempotency key; a clock ahead of the tolerance is invalid.
+        switch (offlinePolicy.Evaluate(request.ClientOccurredAt, clock.UtcNow))
+        {
+            case OfflineOperationAge.Expired:
+                return OfflineOperationExpired();
+            case OfflineOperationAge.AheadOfServerClock:
+                return Conflict();
         }
 
         try
@@ -231,7 +265,7 @@ public static class OrderEndpoints
         }
         catch (OrderTransitionForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.TransitionOrder);
         }
         catch (OrderTransitionConflictException)
         {
@@ -315,6 +349,12 @@ public static class OrderEndpoints
     private static IResult Conflict() =>
         Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Conflict.");
 
+    private static IResult OfflineOperationExpired() =>
+        Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Conflict.",
+            extensions: new Dictionary<string, object?> { ["code"] = OfflineOperationAgePolicy.ExpiredCode });
+
     private static IResult Forbidden() =>
         Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");
 
@@ -340,7 +380,8 @@ public sealed record TransitionOrderRequest(
     [property: JsonPropertyName("target_status")] string? TargetStatus,
     [property: JsonPropertyName("reason")] string? Reason,
     [property: JsonPropertyName("expected_version")] int ExpectedVersion,
-    [property: JsonPropertyName("metadata")] JsonElement? Metadata);
+    [property: JsonPropertyName("metadata")] JsonElement? Metadata,
+    [property: JsonPropertyName("client_occurred_at")] DateTimeOffset? ClientOccurredAt = null);
 
 public sealed record MoneyResponse(
     [property: JsonPropertyName("currency")] string Currency,

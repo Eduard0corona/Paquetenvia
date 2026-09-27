@@ -33,7 +33,9 @@ public sealed class OrderTransitionDomainTests
     public void Matrix_is_exact_and_table_driven_over_every_possible_pair()
     {
         var expected = ExpectedEdges().ToHashSet();
-        Assert.Equal(30, expected.Count);
+        // 29 since D8-RESCHEDULED-NO-DIRECT-DELIVERY removed RESCHEDULED -> DELIVERING.
+        Assert.Equal(29, expected.Count);
+        Assert.DoesNotContain((OrderStatus.Rescheduled, OrderStatus.Delivering), expected);
 
         foreach (var source in Enum.GetValues<OrderStatus>())
         {
@@ -308,14 +310,19 @@ public sealed class OrderTransitionDomainTests
     [InlineData(OrderStatus.FailedAttempt, OrderStatus.Delivered)]
     [InlineData(OrderStatus.Draft, OrderStatus.Delivered)]
     [InlineData(OrderStatus.Cancelled, OrderStatus.Confirmed)]
+    // D8-RESCHEDULED-NO-DIRECT-DELIVERY: a rescheduled order goes through a new assignment.
+    [InlineData(OrderStatus.Rescheduled, OrderStatus.Delivering)]
     public void Explicit_prohibited_edges_are_rejected(OrderStatus source, OrderStatus target) =>
         Assert.False(OrderTransitionMatrix.Evaluate(source, target, Now, Now.AddHours(1), null).Allowed);
 
     [Fact]
-    public void Rescheduled_delivery_guard_rejects_missing_custody_or_assignment()
+    public void Retry_delivery_guard_rejects_missing_custody_or_assignment()
     {
+        // D8-RESCHEDULED-NO-DIRECT-DELIVERY: the only retry into DELIVERING is FAILED_ATTEMPT -> DELIVERING.
+        Assert.False(OrderTransitionMatrix.Evaluate(
+            OrderStatus.Rescheduled, OrderStatus.Delivering, Now, Now.AddHours(1), null).Allowed);
         var registry = new OrderTransitionGuardRegistry();
-        var withoutCustody = BaseGuardContext(OrderStatus.Rescheduled, OrderStatus.Delivering);
+        var withoutCustody = BaseGuardContext(OrderStatus.FailedAttempt, OrderStatus.Delivering);
         Assert.Equal("retry_custody_acquired_true", registry.Evaluate(withoutCustody).Code);
 
         var withCustody = WithProofs();
@@ -323,7 +330,7 @@ public sealed class OrderTransitionDomainTests
 
         OrderTransitionGuardContext WithProofs() => new()
         {
-            Source = OrderStatus.Rescheduled,
+            Source = OrderStatus.FailedAttempt,
             Target = OrderStatus.Delivering,
             Reason = "retry",
             OccurredAt = Now,
@@ -529,7 +536,6 @@ public sealed class OrderTransitionDomainTests
         yield return (OrderStatus.FailedAttempt, OrderStatus.Delivering);
         yield return (OrderStatus.Rescheduled, OrderStatus.ReadyForPickup);
         yield return (OrderStatus.Rescheduled, OrderStatus.Assigned);
-        yield return (OrderStatus.Rescheduled, OrderStatus.Delivering);
         yield return (OrderStatus.Returning, OrderStatus.Returned);
         yield return (OrderStatus.Delivered, OrderStatus.Closed);
         yield return (OrderStatus.Delivered, OrderStatus.ClaimOpen);

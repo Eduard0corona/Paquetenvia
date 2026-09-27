@@ -15,6 +15,66 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+SQL_LINE_COMMENT = re.compile(r"--[^\n]*")
+GRANT_STATEMENT = re.compile(r"\bGRANT\b[^;]*;", re.S)
+GRANTEE_CLAUSE = re.compile(r"\bTO\b((?:(?!\bTO\b)[^;])*);", re.S)
+
+
+def grants_to_role(role_sql: str, role: str) -> list[str]:
+    """Every GRANT statement whose grantee list names ``role``, whatever else it names.
+
+    Comments are ignored, the grantee list is the clause after the last ``TO`` (so a
+    multi-grantee ``... TO paqueteria_app, <role>;`` is found), and statements are
+    whitespace-normalized so they compare exactly against a contract list.
+    """
+    statements = []
+    for statement in GRANT_STATEMENT.findall(SQL_LINE_COMMENT.sub("", role_sql)):
+        clause = GRANTEE_CLAUSE.search(statement)
+        if clause is None:
+            continue
+        grantees = re.split(r"\bWITH\b", clause.group(1), maxsplit=1)[0]
+        names = {re.sub(r"[^A-Za-z0-9_]", "", token) for token in re.split(r"[,\s]+", grantees)}
+        if role in names:
+            statements.append(" ".join(statement.split()))
+    return statements
+
+
+def role_grant_errors(role_sql: str, role: str, expected: list[str], label: str) -> list[str]:
+    """The role's grants must be exactly ``expected``: none missing, none widened, none shared."""
+    actual = grants_to_role(role_sql, role)
+    errors = []
+    if actual != expected:
+        errors.append(f"{label} grants differ from the contract: {actual}")
+    unexpected = [statement for statement in actual if statement not in expected]
+    if unexpected:
+        errors.append(f"{label} is named in a GRANT outside its contract: {unexpected}")
+    return errors
+
+
+LIFECYCLE_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA orders TO paqueteria_lifecycle_executor;",
+    "GRANT SELECT (id,status,claim_window_ends_at,finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
+    "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
+]
+
+CLEANUP_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA platform,custody TO paqueteria_cleanup_executor;",
+    "GRANT SELECT (owner_org_id,scope,idempotency_key,created_at,expires_at) ON platform.idempotency_keys TO paqueteria_cleanup_executor;",
+    "GRANT DELETE ON platform.idempotency_keys TO paqueteria_cleanup_executor;",
+    "GRANT SELECT (id,status,expires_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
+    "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
+]
+
+
+def executor_grant_errors(role_sql: str) -> list[str]:
+    """ADR-034 and OPS-003-CLEANUP-ROLE exact grant sets for the two dedicated executors."""
+    return role_grant_errors(
+        role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
+    ) + role_grant_errors(
+        role_sql, "paqueteria_cleanup_executor", CLEANUP_EXECUTOR_GRANTS, "Cleanup executor (OPS-003-CLEANUP-ROLE)"
+    )
+
+
 def load_yaml(relative: str) -> Any:
     return yaml.safe_load((ROOT / relative).read_text(encoding="utf-8"))
 
@@ -155,9 +215,11 @@ def main() -> int:
         "403": "#/components/responses/Forbidden",
         "404": "#/components/responses/UniformNotFound",
         "409": "#/components/responses/DispatchAssignmentConflict",
+        # AI05-DECLARE-EMITTED-ERRORS: identity resolution and the tenant middleware emit it.
+        "503": "#/components/responses/ServiceUnavailable",
     }
     actual_responses = {str(status): response for status, response in assign["responses"].items()}
-    if list(actual_responses) != ["201", "401", "403", "404", "409"]:
+    if list(actual_responses) != ["201", "401", "403", "404", "409", "503"]:
         errors.append(f"DSP-002 response status matrix drift: {list(actual_responses)}")
     if (
         actual_responses.get("201", {})
@@ -228,7 +290,7 @@ def main() -> int:
     ]:
         errors.append("DSP-002 safe conflict-code set drift")
     checks.append(
-        "DSP-002: shape validation, capability-before-state, structural visibility and 201/401/403/404/409 contract"
+        "DSP-002: shape validation, capability-before-state, structural visibility and 201/401/403/404/409/503 contract"
     )
 
     product = parsed["specs/AI-02_PRODUCT_CONTRACT.yaml"]
@@ -375,26 +437,20 @@ def main() -> int:
     for fragment in required_roles:
         if fragment not in role_sql:
             errors.append(f"Missing role-model contract: {fragment}")
-    # ADR-034: the only column-level UPDATE grant is the lifecycle executor's finalized_at grant;
-    # any other spelling or grantee is the legacy direct runtime UPDATE grant returning.
+    # ADR-034 and OPS-003-CLEANUP-ROLE: the only column-level UPDATE grants are the lifecycle
+    # executor's finalized_at grant and the cleanup executor's upload-session status grant; any other
+    # spelling or grantee is the legacy direct runtime UPDATE grant returning.
     column_update_grants = [
         " ".join(statement.split())
         for statement in re.findall(r"GRANT[^;]*\bUPDATE\s*\([^;]*;", role_sql)
     ]
     if column_update_grants != [
-        "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;"
-    ]:
-        errors.append(f"Column UPDATE grants differ from the single ADR-034 grant: {column_update_grants}")
-    lifecycle_grants = [
-        " ".join(statement.split())
-        for statement in re.findall(r"GRANT[^;]*TO paqueteria_lifecycle_executor\s*;", role_sql)
-    ]
-    if lifecycle_grants != [
-        "GRANT USAGE ON SCHEMA orders TO paqueteria_lifecycle_executor;",
-        "GRANT SELECT (id,status,claim_window_ends_at,finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
         "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
+        "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
     ]:
-        errors.append(f"Lifecycle executor grants differ from ADR-034: {lifecycle_grants}")
+        errors.append(f"Column UPDATE grants differ from the ADR-034 and OPS-003 grants: {column_update_grants}")
+    # Exact grant sets for both dedicated executors, including any multi-grantee GRANT that names them.
+    errors.extend(executor_grant_errors(role_sql))
     for fragment in [
         "CREATE ROLE paqueteria_lifecycle_executor NOLOGIN BYPASSRLS;",
         "REVOKE paqueteria_lifecycle_executor FROM paqueteria_app, paqueteria_worker;",
@@ -406,6 +462,29 @@ def main() -> int:
     if not (ROOT / "docs/adr/ADR-034_ORDER_LIFECYCLE_FINALIZATION_EXECUTOR.md").is_file():
         errors.append("ADR-034 lifecycle executor decision is missing")
     checks.append("Lifecycle executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
+    for fragment in [
+        "CREATE ROLE paqueteria_cleanup_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker;",
+        "OPS-003-CLEANUP-ROLE",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing cleanup executor contract: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_cleanup_executor\s+TO", role_sql):
+        errors.append("Cleanup executor membership granted contrary to OPS-003-CLEANUP-ROLE")
+    checks.append("Cleanup executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
+    # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
+    # the role model records its contract; it must never grant the lane to anyone but the Worker.
+    for fragment in [
+        "security.claim_dispatch_outbox(text,integer,interval)",
+        "security.requeue_stale_dispatch_outbox(interval,integer,integer)",
+        "dispatch.order-status-reaction-requested -> DISPATCH",
+        "owned by paqueteria_outbox_executor",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing D8 DISPATCH lane contract: {fragment}")
+    if re.search(r"GRANT[^;]*_dispatch_outbox[^;]*TO\s+(?!paqueteria_worker\b)", role_sql):
+        errors.append("D8 DISPATCH lane functions granted beyond paqueteria_worker")
+    checks.append("D8 DISPATCH lane: executor-owned claim/requeue, Worker-only EXECUTE")
     runtime_grant_block = re.search(r"-- Runtime table grants[\s\S]*?END \$\$;", role_sql)
     if runtime_grant_block and "'platform'" in runtime_grant_block.group(0):
         errors.append("platform remains in broad runtime grants")

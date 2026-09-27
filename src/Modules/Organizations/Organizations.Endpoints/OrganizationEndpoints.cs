@@ -10,7 +10,8 @@ public static class OrganizationEndpoints
         endpoints.MapGet("/api/v1/me/organization-contexts", ListOrganizationContextsAsync)
             .RequireAuthorization("Identity.Active")
             .WithName("listOrganizationContexts")
-            .WithTags("Identity");
+            .WithTags("Identity")
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }

@@ -19,9 +19,11 @@ public static class LocationEndpoints
             .WithName("listCities")
             .WithTags("Locations")
             .Produces<IReadOnlyList<CityResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/service-areas", ListServiceAreasAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -29,9 +31,11 @@ public static class LocationEndpoints
             .WithName("listServiceAreas")
             .WithTags("Locations")
             .Produces<IReadOnlyList<ServiceAreaResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/operating-zones", ListOperatingZonesAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -39,9 +43,11 @@ public static class LocationEndpoints
             .WithName("listOperatingZones")
             .WithTags("Locations")
             .Produces<IReadOnlyList<OperatingZoneResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/locations", ListLocationsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -49,9 +55,11 @@ public static class LocationEndpoints
             .WithName("listLocations")
             .WithTags("Locations")
             .Produces<IReadOnlyList<LocationResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/locations", CreateLocationAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -60,9 +68,11 @@ public static class LocationEndpoints
             .WithTags("Locations")
             .Accepts<CreateLocationRequest>("application/json")
             .Produces<LocationResponse>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -74,6 +84,7 @@ public static class LocationEndpoints
         CancellationToken cancellationToken) => await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListCities,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListCitiesAsync(actorId, organizationId, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -93,6 +104,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListServiceAreas,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListServiceAreasAsync(actorId, organizationId, city_id, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -113,6 +125,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListOperatingZones,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListOperatingZonesAsync(actorId, organizationId, service_area_id, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -125,8 +138,15 @@ public static class LocationEndpoints
         CancellationToken cancellationToken) => await ExecuteAsync(
             session,
             tenantContext,
-            async (actorId, organizationId) => Results.Ok(
-                (await service.ListLocationsAsync(actorId, organizationId, cancellationToken)).Select(ToResponse)),
+            TenantCapabilities.ListLocations,
+            async (actorId, organizationId) =>
+            {
+                // D5-VIEWER-LOCATION-PRECISION-2026-09-27: only DISPATCHER and PLATFORM_ADMIN see exact coordinates;
+                // a VIEWER's are rounded here, before serialization, whatever the client asks for.
+                var exact = TenantCapabilities.ReceivesExactCoordinates(session, organizationId);
+                var locations = await service.ListLocationsAsync(actorId, organizationId, cancellationToken);
+                return Results.Ok(locations.Select(location => exact ? ToResponse(location) : ToViewerResponse(location)));
+            },
             cancellationToken);
 
     private static async Task<IResult> CreateLocationAsync(
@@ -145,6 +165,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.CreateLocation,
             async (actorId, organizationId) =>
             {
                 var result = await service.CreateAsync(
@@ -161,7 +182,6 @@ public static class LocationEndpoints
                         request.Phone,
                         request.Lat,
                         request.Lng,
-                        request.PiiKeyVersion,
                         httpContext.TraceIdentifier),
                     cancellationToken);
                 return result.Status switch
@@ -180,6 +200,7 @@ public static class LocationEndpoints
     private static async Task<IResult> ExecuteAsync(
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
+        TenantCapability capability,
         Func<Guid, Guid, Task<IResult>> operation,
         CancellationToken cancellationToken)
     {
@@ -187,6 +208,11 @@ public static class LocationEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, capability) is { } denied)
+        {
+            return denied;
         }
 
         try
@@ -228,7 +254,6 @@ public static class LocationEndpoints
         request.CityId != Guid.Empty &&
         !string.IsNullOrWhiteSpace(request.AddressText) && request.AddressText.Trim().Length >= 8 &&
         !string.IsNullOrWhiteSpace(request.AddressSummary) && request.AddressSummary.Length <= 180 &&
-        !string.IsNullOrWhiteSpace(request.PiiKeyVersion) &&
         request.Lat is >= -90 and <= 90 && request.Lng is >= -180 and <= 180 &&
         !double.IsNaN(request.Lat) && !double.IsNaN(request.Lng) &&
         !double.IsInfinity(request.Lat) && !double.IsInfinity(request.Lng);
@@ -245,6 +270,13 @@ public static class LocationEndpoints
     private static LocationResponse ToResponse(LocationResult result) =>
         new(result.Id, result.CityId, result.ServiceAreaId, result.OperatingZoneId, result.AddressSummary, result.Lat, result.Lng);
 
+    private static LocationResponse ToViewerResponse(LocationResult result) =>
+        ToResponse(result) with
+        {
+            Lat = ViewerCoordinatePrecision.Round(result.Lat),
+            Lng = ViewerCoordinatePrecision.Round(result.Lng),
+        };
+
     private static IResult BadRequest() => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid request.");
     private static IResult Forbidden() => Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");
     private static IResult NotFound() => Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not found.");
@@ -259,8 +291,7 @@ public sealed record CreateLocationRequest(
     [property: JsonPropertyName("contact_name")] string? ContactName,
     [property: JsonPropertyName("phone")] string? Phone,
     [property: JsonPropertyName("lat")] double Lat,
-    [property: JsonPropertyName("lng")] double Lng,
-    [property: JsonPropertyName("pii_key_version")] string PiiKeyVersion);
+    [property: JsonPropertyName("lng")] double Lng);
 
 public sealed record CityResponse(
     [property: JsonPropertyName("id")] Guid Id,

@@ -1,4 +1,8 @@
 import { asUuid } from "../../realtime/envelope";
+import {
+  resolveRequestAuthorization,
+  type RequestAuthorization,
+} from "../../auth/request-credentials";
 import type { DriverSession } from "../session/driver-session";
 import {
   type DriverOfflineOperation,
@@ -100,6 +104,10 @@ export function createDriverSyncApi(
           reason: operation.reason,
           expected_version: operation.expectedVersion,
           metadata: {},
+          // AI-05 x-offline-operation-age: the capture instant travels on
+          // every attempt, so a replay is age-checked against when the driver
+          // acted, never against when the queue reached the server.
+          client_occurred_at: operation.clientOccurredAt,
         },
         parseTransitionReceipt,
         signal,
@@ -125,6 +133,7 @@ export function createDriverSyncApi(
           content_type: proof.contentType,
           size_bytes: proof.sizeBytes,
           sha256: proof.sha256,
+          client_occurred_at: operation.clientOccurredAt,
         },
         (value) =>
           parseUploadGrant(value, options.production ?? false),
@@ -228,18 +237,20 @@ async function requestJson<T>(
   );
   try {
     if (signal?.aborted) throw new DriverSyncApiError("cancelled");
-    const token = await options.session.getAccessToken();
-    if (typeof token !== "string" || token.length < 1) {
+    let authorization: RequestAuthorization;
+    try {
+      authorization = await resolveRequestAuthorization(options.session, "POST");
+    } catch {
       throw new DriverSyncApiError("unauthorized");
     }
     const response = await fetchImplementation(new URL(path, options.baseUrl), {
       method: "POST",
       cache: "no-store",
-      credentials: "omit",
+      credentials: authorization.credentials,
       signal: controller.signal,
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${token}`,
+        ...authorization.headers,
         "Content-Type": "application/json",
         "Idempotency-Key": idempotencyKey,
         "X-Organization-Id": options.session.organizationId,

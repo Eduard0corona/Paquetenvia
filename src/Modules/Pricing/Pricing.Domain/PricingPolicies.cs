@@ -89,10 +89,19 @@ public sealed record PricingPackage(
     int? WidthMm,
     int? HeightMm);
 
+/// <summary>
+/// AI05-INPUT-LIMITS: a quote carries 1 to <see cref="MaximumPackages"/> packages. Twenty is the largest
+/// batch a single AI-05 client submission already carries (the DRV-003 GPS batch of 1 to 20), it is well
+/// above the single-vehicle package capacities the eligibility policies are configured with, and it keeps
+/// the persisted package snapshot and the quote request hash bounded. A larger shipment is split across
+/// quotes or planned as a consolidated route.
+/// </summary>
 public static class PricingPackagePolicy
 {
+    public const int MaximumPackages = 20;
+
     public static bool IsValid(IReadOnlyList<PricingPackage>? packages) =>
-        packages is { Count: > 0 } && packages.All(package =>
+        packages is { Count: > 0 and <= MaximumPackages } && packages.All(package =>
             package is not null &&
             !string.IsNullOrWhiteSpace(package.Description) && package.Description.Length <= 250 &&
             package.WeightGrams >= 1 && package.DeclaredValueCents >= 0 &&

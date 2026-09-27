@@ -411,6 +411,47 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
 - tokens públicos de tracking cortos, rotables y con mínimo alcance;
 - escaneo de dependencias y contenedores en CI.
 
+### 17.1 Sesión web BFF con AuthCenter (GATE-002-BFF-001)
+
+- El login de GATE-002 usa el patrón **BFF** en la API .NET: la API ejecuta el flujo OIDC
+  authorization code + PKCE S256 contra AuthCenter (`/auth/login`, callback
+  `/signin-authcenter`) y emite una cookie `__Host-` `Secure`, `HttpOnly`, `SameSite=Lax`, sin
+  `Domain`. La cookie solo contiene una clave opaca; el ticket (sujeto, `sid`, evidencia MFA, secreto
+  CSRF, refresh token e ID token) vive del lado servidor. Los tokens nunca llegan al navegador, salvo el
+  `id_token_hint` de la URL de cierre de sesión (ver abajo).
+- Almacén de sesiones: tabla PostgreSQL (`BFF-SESSION-STORE-POSTGRESQL`), que requiere su cambio
+  en AI-06/AI-18. Hasta entonces el almacén es en memoria detrás de la interfaz de ticket store,
+  válido solo con una réplica de la API; una sesión perdida falla cerrado (401).
+- Mismo origen: el navegador llama a la API desde el origen web. En el piloto el ingress de Azure
+  enruta `/api`, `/hubs`, `/auth` y `/signin-authcenter` a la API (`PILOT-SAME-ORIGIN-ROUTING`);
+  las rewrites de Next.js solo aplican en desarrollo local. CORS sigue cerrado.
+- Toda escritura exige el encabezado `X-AuthCenter-CSRF` ligado a la sesión y, si hay `Origin`,
+  que sea exactamente el origen web público. La respuesta de autorización exige `iss` (RFC 9207).
+- AuthCenter solo autentica: la autorización se resuelve en cada petición desde
+  `identity.users.identity_subject` + membresías + RLS; roles y permisos de AuthCenter se ignoran.
+- El primer ingreso es por invitación previa (`AUTH-FIRST-LOGIN-INVITATION`); el login nunca
+  crea usuarios, organizaciones ni membresías.
+- Cierre de sesión (`AUTH-001-RP-INITIATED-LOGOUT`): `POST /auth/logout` exige CSRF, revoca el
+  refresh token y destruye la sesión local aunque falle el discovery; responde
+  `{ endSessionUrl }` con el `end_session_endpoint` de AuthCenter, `id_token_hint` y
+  `post_logout_redirect_uri=<origen público>/login`, y la web navega ahí para cerrar también la
+  sesión SSO. Es la única excepción a "sin tokens en el navegador": el ID token viaja solo en esa
+  URL, después de destruir la sesión local. Sin ID token o sin endpoint válido, `null`.
+- Back-channel logout (`AUTH-001-BACKCHANNEL-LOGOUT`): AuthCenter llama
+  `POST /auth/backchannel-logout` servidor a servidor; un `logout_token` válido (RS256, `typ`
+  logout+jwt, iss/aud exactos, evento back-channel, sin `nonce`, `jti` no repetido) termina las
+  sesiones de ese `sid` (o del `sub` iniciadas antes) en su siguiente petición. El registro vive
+  detrás de una interfaz para que la tabla PostgreSQL de sesiones BFF borre sus filas por
+  `authcenter_sid`.
+- Step-up MFA (`AUTH-001-MFA-STEP-UP`): no se exige MFA a todos (tampoco a repartidores). Un 403
+  cuyo único requisito faltante es MFA lleva el código `MFA_REQUIRED`; la web ofrece "Verificar
+  identidad" → `/auth/login?mfa=required`, que envía `acr_values=urn:authcenter:acr:mfa` y solo
+  acepta un ID token con `acr` mfa/phr y `mfa` en `amr`. Todo inicio de sesión reemplaza la
+  sesión previa del navegador (ticket anterior borrado, clave nueva).
+- `error=access_denied` de AuthCenter tiene su propio mensaje en `/login`
+  (`AUTH-001-ACCESS-DENIED-MESSAGE`); los demás errores siguen genéricos.
+- El contrato HTTP de `/auth/*` y `/signin-authcenter` está en AI-05 (fuera de `/api/v1`).
+
 ## 18. Observabilidad y SLO
 
 Toda petición/job/evento debe llevar `trace_id`, `correlation_id`, tenant y actor técnico redactado. Métricas mínimas:
@@ -539,7 +580,7 @@ La base usa un esquema por módulo: `identity`, `organizations`, `clients`, `loc
 
 ### 25.2 Roles, bootstrap y RLS
 
-API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. El rol `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.finalize_expired_orders(integer)`, con `SELECT (id, status, claim_window_ends_at, finalized_at)` y `UPDATE (finalized_at)` sobre `orders.orders` y `EXECUTE` concedido sólo a `paqueteria_worker` (ADR-034). Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
+API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. El rol `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.finalize_expired_orders(integer)`, con `SELECT (id, status, claim_window_ends_at, finalized_at)` y `UPDATE (finalized_at)` sobre `orders.orders` y `EXECUTE` concedido sólo a `paqueteria_worker` (ADR-034). El rol `paqueteria_cleanup_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.purge_expired_idempotency_keys(timestamptz, integer, boolean)`, con un piso fijo de 72 horas, y de `security.expire_proof_upload_sessions(integer)`, con grants exactos por columna sobre `platform.idempotency_keys` y `custody.proof_upload_sessions` y `EXECUTE` concedido sólo a `paqueteria_worker` (OPS-003-CLEANUP-ROLE). Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
 
 ### 25.3 Contexto tenant y pooling
 

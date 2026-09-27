@@ -422,13 +422,24 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
                     service.AddAdjustmentAsync(scenario.Adjust(settlement, 1, "Bono", "adjust") with { ActorId = actor }, default));
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
-                    service.ApproveAsync(scenario.Transition(settlement, "approve") with { ActorId = actor }, default));
+                    service.ApproveAsync(scenario.Transition(settlement, "approve") with { ActorId = actor, MfaSatisfied = false }, default));
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
-                    service.MarkPaidAsync(scenario.Transition(settlement, "pay") with { ActorId = actor }, default));
+                    service.MarkPaidAsync(scenario.Transition(settlement, "pay") with { ActorId = actor, MfaSatisfied = false }, default));
                 await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
                     service.VoidAsync(scenario.Void(settlement, "void") with { ActorId = actor }, default));
             }
         }
+
+        // D7-SETTLEMENT-MFA: FINANCE without MFA may not approve or pay, and the refusal changes nothing.
+        foreach (var settlement in new[] { created.Id, Guid.NewGuid() })
+        {
+            await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+                service.ApproveAsync(scenario.Transition(settlement, "approve-no-mfa") with { MfaSatisfied = false }, default));
+            await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+                service.MarkPaidAsync(scenario.Transition(settlement, "pay-no-mfa") with { MfaSatisfied = false }, default));
+        }
+
+        Assert.Equal("CALCULATED", (await service.GetAsync(scenario.Get(created.Id), default)).Status);
 
         // PLATFORM_ADMIN operates only with MFA, even when it also holds FINANCE.
         var withMfa = await service.GetAsync(scenario.Get(created.Id) with { ActorId = scenario.AdminUserId, MfaSatisfied = true }, default);
@@ -446,6 +457,108 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal(1L, await scenario.IdempotencyCountAsync(PostgreSqlSettlementService.CreateIdempotencyScope));
         Assert.Equal(0L, await scenario.IdempotencyCountAsync(PostgreSqlSettlementService.ApproveIdempotencyScope));
         Assert.Equal(("CALCULATED", 4_500L, 4_500m, 1L), await scenario.LedgerStateAsync(created.Id));
+    }
+
+    /// <summary>
+    /// AI05-LIST-SETTLEMENTS on the runtime role under FORCE RLS: a tenant lists exactly its own settlements,
+    /// even when the persisted rows of another tenant match every filter, and RLS alone already hides them.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task List_returns_only_the_selected_tenant_and_rls_hides_every_other()
+    {
+        await using var scenario = await SettlementScenario.CreateAsync(fixture);
+        await using var foreign = await SettlementScenario.CreateAsync(fixture);
+        await scenario.AddWorkAsync("DELIVERED", "DELIVERED", InPeriod, 4_500);
+        await foreign.AddWorkAsync("DELIVERED", "DELIVERED", InPeriod, 9_000);
+        var service = CreateService();
+        var own = await service.CreateAsync(scenario.Create("create"), default);
+        var draft = await scenario.InsertDraftAsync();
+        var foreignCreated = await CreateService().CreateAsync(foreign.Create("create"), default);
+
+        var page = await service.ListAsync(scenario.List(), default);
+        Assert.Equal(new[] { own.Id, draft }.Order(), page.Items.Select(item => item.Id).Order());
+        Assert.Null(page.NextCursor);
+        Assert.DoesNotContain(page.Items, item => item.Id == foreignCreated.Id);
+
+        // Each listed settlement is exactly what getSettlement returns for it.
+        Assert.Equal(Json(own), Json(page.Items.Single(item => item.Id == own.Id)));
+
+        var foreignPage = await CreateService().ListAsync(foreign.List(), default);
+        Assert.Equal([foreignCreated.Id], foreignPage.Items.Select(item => item.Id));
+
+        // The status filter, and RLS underneath the explicit tenant predicate.
+        Assert.Equal([own.Id], (await service.ListAsync(scenario.List() with { Status = "CALCULATED" }, default))
+            .Items.Select(item => item.Id));
+        Assert.Equal([draft], (await service.ListAsync(scenario.List() with { Status = "DRAFT" }, default))
+            .Items.Select(item => item.Id));
+        // Both the calculated settlement and the DRAFT header pay the settled driver; the other driver has none.
+        Assert.Equal(
+            new[] { own.Id, draft }.Order(),
+            (await service.ListAsync(scenario.List() with { PayeeId = scenario.DriverId }, default))
+                .Items.Select(item => item.Id).Order());
+        Assert.Empty((await service.ListAsync(scenario.List() with { PayeeId = scenario.OtherDriverId }, default)).Items);
+        Assert.Equal(0L, await scenario.CountSettlementsVisibleForAsync(foreign.OrganizationId));
+        Assert.Equal(2L, await scenario.CountSettlementsVisibleForAsync(scenario.OrganizationId));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task List_is_refused_to_every_role_outside_the_matrix_before_any_settlement_is_read()
+    {
+        await using var scenario = await SettlementScenario.CreateAsync(fixture);
+        await scenario.AddWorkAsync("DELIVERED", "DELIVERED", InPeriod, 4_500);
+        var service = CreateService();
+        var created = await service.CreateAsync(scenario.Create("create"), default);
+
+        foreach (var actor in new[] { scenario.DispatcherUserId, scenario.DriverUserId, scenario.ViewerUserId, scenario.AdminUserId })
+        {
+            await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+                service.ListAsync(scenario.List() with { ActorId = actor }, default));
+            await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+                service.ListAsync(scenario.List() with { ActorId = actor, Status = "CALCULATED" }, default));
+        }
+
+        // PLATFORM_ADMIN lists only with MFA; a suspended FINANCE membership lists nothing at all.
+        Assert.Equal(
+            [created.Id],
+            (await service.ListAsync(scenario.List() with { ActorId = scenario.AdminUserId, MfaSatisfied = true }, default))
+                .Items.Select(item => item.Id));
+        await scenario.SuspendAsync(scenario.FinanceUserId, "FINANCE");
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() => service.ListAsync(scenario.List(), default));
+
+        // A malformed query is refused before any transaction, whoever asks.
+        var invalid = await Assert.ThrowsAsync<SettlementConflictException>(() =>
+            service.ListAsync(scenario.List() with { ActorId = scenario.ViewerUserId, Status = "SETTLED" }, default));
+        Assert.Equal(SettlementConflictCode.InvalidRequest, invalid.Code);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task List_pages_by_keyset_and_fails_closed_on_an_inconsistent_ledger()
+    {
+        await using var scenario = await SettlementScenario.CreateAsync(fixture);
+        var drafts = new List<Guid>();
+        for (var index = 0; index < SettlementListPolicy.PageSize + 2; index++)
+        {
+            drafts.Add(await scenario.InsertDraftAsync());
+        }
+
+        var service = CreateService();
+        var first = await service.ListAsync(scenario.List(), default);
+        Assert.Equal(SettlementListPolicy.PageSize, first.Items.Count);
+        Assert.True(SettlementCursorCodec.TryDecode(first.NextCursor, out var cursor));
+        var second = await service.ListAsync(scenario.List() with { Cursor = cursor }, default);
+        Assert.Equal(2, second.Items.Count);
+        Assert.Null(second.NextCursor);
+
+        var listed = first.Items.Concat(second.Items).ToArray();
+        Assert.Equal(drafts.Order(), listed.Select(item => item.Id).Order());
+        Assert.Equal(
+            listed.OrderByDescending(item => item.CreatedAt).ThenByDescending(item => item.Id.ToString("D"), StringComparer.Ordinal)
+                .Select(item => item.Id),
+            listed.Select(item => item.Id));
+
+        // The newest settlement is on the first page, so the very first read has to fail closed.
+        await scenario.CorruptTotalBypassingTriggersAsync(drafts[^1], 1);
+        await Assert.ThrowsAsync<FinanceUnavailableException>(() => service.ListAsync(scenario.List(), default));
     }
 
     [PostgreSqlContractFact]
@@ -700,11 +813,29 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
 
         public GetSettlementQuery Get(Guid settlementId) => new(FinanceUserId, OrganizationId, settlementId, false);
 
+        public ListSettlementsQuery List() => new(FinanceUserId, OrganizationId, null, null, null, null, false);
+
+        /// <summary>How many settlements of <paramref name="ownerOrganizationId"/> RLS lets this tenant see.</summary>
+        public async Task<long> CountSettlementsVisibleForAsync(Guid ownerOrganizationId)
+        {
+            await using var tx = await TenantAsync();
+            await using var command = new NpgsqlCommand(
+                "SELECT count(*) FROM finance.settlements WHERE owner_org_id=@owner",
+                tx.Connection,
+                tx.Transaction);
+            command.Parameters.AddWithValue("owner", ownerOrganizationId);
+            return (long)(await command.ExecuteScalarAsync())!;
+        }
+
         public AddSettlementAdjustmentCommand Adjust(Guid settlementId, long amount, string reason, string key) => new(
             FinanceUserId, OrganizationId, Key(key), settlementId, amount, reason, false, key);
 
+        /// <summary>
+        /// An approve or pay step by FINANCE with a satisfied MFA challenge, which D7-SETTLEMENT-MFA requires of
+        /// every permitted role.
+        /// </summary>
         public SettlementTransitionCommand Transition(Guid settlementId, string key) => new(
-            FinanceUserId, OrganizationId, Key(key), settlementId, false, key);
+            FinanceUserId, OrganizationId, Key(key), settlementId, true, key);
 
         public VoidSettlementCommand Void(Guid settlementId, string key) => new(
             FinanceUserId, OrganizationId, Key(key), settlementId, "Liquidación calculada con periodo incorrecto", false, key);

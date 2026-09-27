@@ -351,6 +351,10 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             await CompleteOrderCreatedOutboxAsync(
                 data.OrganizationId,
                 cancellationToken);
+            await CompleteDispatchReactionOutboxAsync(
+                data.OrganizationId,
+                orders.Select(order => order.OrderId).ToArray(),
+                cancellationToken);
 
             stopwatch.Stop();
             var report = await BuildReportAsync(
@@ -487,7 +491,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             {
                 terms_version = "ops001-synthetic-terms-v1",
                 privacy_version = "ops001-synthetic-privacy-v1",
-                accepted_at = "2026-07-27T12:00:00.1234560Z",
+                accepted_at = DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O", System.Globalization.CultureInfo.InvariantCulture),
                 acceptance_channel = "API",
             },
         };
@@ -1312,6 +1316,89 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         }
 
         Assert.Equal(Ops001ScenarioData.OrderCount, completed);
+    }
+
+    /// <summary>
+    /// D8-OUTBOX-LANE-DISPATCH: every DELIVERED transition closes the order's active assignment, so
+    /// ORD-002 wrote one <c>dispatch.order-status-reaction-requested</c> row per order naming it. The
+    /// Dispatch consumer is out of OPS-001 scope (it is covered by the D8 contract and Worker tests),
+    /// so, like the Notifications rows above, the lane is drained through its own claim function.
+    /// </summary>
+    private async Task CompleteDispatchReactionOutboxAsync(
+        Guid organizationId,
+        IReadOnlyCollection<Guid> orderIds,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteAdminAsync(
+            """
+            UPDATE platform.outbox_events
+            SET available_at=clock_timestamp()
+            WHERE owner_org_id=@org AND topic='dispatch.order-status-reaction-requested'
+              AND status IN ('PENDING','RETRY')
+            """,
+            cancellationToken,
+            P("org", organizationId));
+
+        var completed = new HashSet<Guid>();
+        while (completed.Count < Ops001ScenarioData.OrderCount)
+        {
+            await using var connection = new NpgsqlConnection(
+                fixture.Database.WorkerConnectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(
+                cancellationToken);
+            await SetWorkerRoleAsync(connection, transaction, cancellationToken);
+            var claimed = new List<(Guid Id, Guid LeaseToken, string Topic, Guid OrderId, int Version, string Payload)>();
+            await using (var claim = new NpgsqlCommand(
+                             """
+                             SELECT id,lease_token,topic,aggregate_id,aggregate_version,payload::text
+                             FROM security.claim_dispatch_outbox(
+                               'ops001-dispatch-consumer',20,interval '30 seconds')
+                             """,
+                             connection,
+                             transaction))
+            await using (var reader = await claim.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    claimed.Add((
+                        reader.GetGuid(0),
+                        reader.GetGuid(1),
+                        reader.GetString(2),
+                        reader.GetGuid(3),
+                        reader.GetInt32(4),
+                        reader.GetString(5)));
+                }
+            }
+
+            Assert.NotEmpty(claimed);
+            foreach (var message in claimed)
+            {
+                Assert.Equal("dispatch.order-status-reaction-requested", message.Topic);
+                Assert.Contains(message.OrderId, orderIds);
+                Assert.Equal(9, message.Version);
+                using var payload = System.Text.Json.JsonDocument.Parse(message.Payload);
+                Assert.Equal("order-status-reaction-v1", payload.RootElement.GetProperty("schema_version").GetString());
+                Assert.Equal("DELIVERING", payload.RootElement.GetProperty("previous_status").GetString());
+                Assert.Equal("DELIVERED", payload.RootElement.GetProperty("new_status").GetString());
+                Assert.NotEqual(Guid.Empty, payload.RootElement.GetProperty("assignment_id").GetGuid());
+                await using var settle = new NpgsqlCommand(
+                    """
+                    SELECT security.settle_outbox(
+                      @id,@lease_token,'PROCESSED',NULL,NULL)
+                    """,
+                    connection,
+                    transaction);
+                settle.Parameters.Add(P("id", message.Id));
+                settle.Parameters.Add(P("lease_token", message.LeaseToken));
+                Assert.True(await settle.ExecuteScalarAsync(cancellationToken) is true);
+                Assert.True(completed.Add(message.OrderId));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        Assert.Equal(Ops001ScenarioData.OrderCount, completed.Count);
     }
 
     private async Task CompleteUnownedOutboxAsync(

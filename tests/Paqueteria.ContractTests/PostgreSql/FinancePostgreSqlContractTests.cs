@@ -308,6 +308,70 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         Assert.Equal("RECONCILED", withMfa.Status);
     }
 
+    /// <summary>
+    /// FINANCE-COD-RECONCILIATION and FINANCE-COD-MFA-2026-09-27 on the runtime role: FINANCE closes the cash
+    /// position of a collection someone else recorded and reads financials, both only with a satisfied MFA
+    /// challenge, and never records a collection.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Finance_reconciles_collected_cod_and_reads_financials_only_with_mfa()
+    {
+        await using var scenario = await FinanceScenario.CreateAsync(fixture);
+        var cod = CreateCodService(fixture.AppDataSource);
+        var financials = CreateFinancialsService(fixture.AppDataSource);
+        var recorded = await cod.RecordAsync(
+            scenario.DriverRecord(scenario.CodOrderId, 5_000, "finance-driver-record"), default);
+        Assert.Equal("RECORDED", recorded.Status);
+
+        await scenario.SetActorRoleAsync("FINANCE");
+
+        // Without MFA: the uniform 403 for reading and reconciling, and nothing changes.
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            cod.ReconcileAsync(scenario.Reconcile(recorded.Id, "finance-no-mfa"), default));
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            financials.GetOrderFinancialsAsync(scenario.OrderQuery(scenario.OwnOrderId), default));
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            financials.GetRouteFinancialsAsync(scenario.RouteQuery(scenario.RouteId), default));
+        Assert.Equal("RECORDED", await scenario.CodStatusAsync(recorded.Id));
+
+        // Recording a collection is never FINANCE's, with or without MFA.
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            cod.RecordAsync(scenario.Record(scenario.CodOrderId, 5_000, "finance-record"), default));
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            cod.RecordAsync(
+                scenario.Record(scenario.CodOrderId, 5_000, "finance-record-mfa") with { MfaSatisfied = true },
+                default));
+
+        // With MFA: financials are readable and the collection is reconciled exactly once.
+        await financials.GetOrderFinancialsAsync(
+            scenario.OrderQuery(scenario.OwnOrderId) with { MfaSatisfied = true }, default);
+        await financials.GetRouteFinancialsAsync(
+            scenario.RouteQuery(scenario.RouteId) with { MfaSatisfied = true }, default);
+        var reconcile = scenario.Reconcile(recorded.Id, "finance-mfa") with { MfaSatisfied = true };
+        var reconciled = await cod.ReconcileAsync(reconcile, default);
+        Assert.Equal("RECONCILED", reconciled.Status);
+        Assert.Equal(recorded.Id, reconciled.Id);
+        Assert.Equal(5_000, reconciled.AmountCents);
+        Assert.Equal("RECONCILED", await scenario.CodStatusAsync(recorded.Id));
+        Assert.Equal(reconciled, await cod.ReconcileAsync(reconcile, default));
+    }
+
+    /// <summary>FINANCE-COD-MFA-2026-09-27: DISPATCHER keeps reconciling and reading without MFA.</summary>
+    [PostgreSqlContractFact]
+    public async Task Dispatcher_keeps_reconciling_and_reading_financials_without_mfa()
+    {
+        await using var scenario = await FinanceScenario.CreateAsync(fixture);
+        var cod = CreateCodService(fixture.AppDataSource);
+        var financials = CreateFinancialsService(fixture.AppDataSource);
+        var recorded = await cod.RecordAsync(
+            scenario.DriverRecord(scenario.CodOrderId, 5_000, "dispatcher-driver-record"), default);
+
+        await scenario.SetActorRoleAsync("DISPATCHER");
+        await financials.GetOrderFinancialsAsync(scenario.OrderQuery(scenario.OwnOrderId), default);
+        var reconciled = await cod.ReconcileAsync(scenario.Reconcile(recorded.Id, "dispatcher-no-mfa"), default);
+        Assert.Equal("RECONCILED", reconciled.Status);
+    }
+
     private PostgreSqlCodTransactionService CreateCodService(
         NpgsqlDataSource dataSource,
         IFinanceFailureInjector? failureInjector = null)

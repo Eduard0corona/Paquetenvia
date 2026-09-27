@@ -112,6 +112,7 @@ public static class DependencyInjection
         });
         services.AddScoped<TenantTransactionContext<OrdersDbContext>>();
         services.TryAddSingleton<IClock, SystemClock>();
+        services.AddOfflineOperationAgePolicy(configuration);
         services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.TryAddSingleton<IOrderPublicIdGenerator, CryptographicOrderPublicIdGenerator>();

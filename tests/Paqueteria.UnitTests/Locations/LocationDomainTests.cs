@@ -83,6 +83,18 @@ public sealed class LocationDomainTests
         Assert.DoesNotContain(sensitive, exception.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// AI05-REMOVE-PII-KEY-VERSION: the protector, not the client, names the key version it writes with; a
+    /// disabled protector has none to offer and fails closed like its Protect.
+    /// </summary>
+    [Fact]
+    public void The_server_protector_selects_the_pii_key_version()
+    {
+        Assert.Equal("geo001-mock-v1", new DeterministicMockLocationPiiProtector().CurrentKeyVersion);
+        Assert.Equal(DeterministicMockLocationPiiProtector.KeyVersion, new DeterministicMockLocationPiiProtector().CurrentKeyVersion);
+        Assert.Throws<LocationPiiProtectionUnavailableException>(() => new DisabledLocationPiiProtector().CurrentKeyVersion);
+    }
+
     [Fact]
     public void Mock_pii_protection_is_deterministic_and_does_not_retain_plaintext()
     {

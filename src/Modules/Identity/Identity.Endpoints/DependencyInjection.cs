@@ -1,6 +1,7 @@
 using Identity.Application.Authentication;
 using Identity.Application.Session;
 using Identity.Application.Bootstrap;
+using Identity.Endpoints.AuthCenter;
 using Identity.Endpoints.Authorization;
 using Identity.Endpoints.Security;
 using Identity.Endpoints.Session;
@@ -28,7 +29,7 @@ public static class DependencyInjection
             .Bind(configuration.GetSection(IdentityAuthenticationOptions.SectionName))
             .Validate(
                 options => Enum.IsDefined(options.Provider),
-                "Authentication:Provider must be Disabled or Mock.")
+                "Authentication:Provider must be Disabled, Mock or AuthCenter.")
             .Validate(
                 options => options.Provider != IdentityProviderKind.Mock ||
                     environment.IsDevelopment() ||
@@ -50,9 +51,12 @@ public static class DependencyInjection
                 options => options.ForwardDefaultSelector = context =>
                     context.RequestServices
                         .GetRequiredService<IOptions<IdentityAuthenticationOptions>>()
-                        .Value.Provider == IdentityProviderKind.Mock
-                            ? IdentitySecurityDefaults.MockScheme
-                            : IdentitySecurityDefaults.DisabledScheme)
+                        .Value.Provider switch
+                        {
+                            IdentityProviderKind.Mock => IdentitySecurityDefaults.MockScheme,
+                            IdentityProviderKind.AuthCenter => AuthCenterDefaults.CookieScheme,
+                            _ => IdentitySecurityDefaults.DisabledScheme,
+                        })
             .AddScheme<AuthenticationSchemeOptions, MockAuthenticationHandler>(
                 IdentitySecurityDefaults.MockScheme,
                 displayName: null,
@@ -61,6 +65,8 @@ public static class DependencyInjection
                 IdentitySecurityDefaults.DisabledScheme,
                 displayName: null,
                 configureOptions: static _ => { });
+
+        services.AddAuthCenterBff(configuration, environment);
 
         services.AddSingleton<Microsoft.AspNetCore.Authentication.IClaimsTransformation,
             PaquetenviaClaimsTransformation>();

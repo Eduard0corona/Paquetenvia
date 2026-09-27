@@ -32,7 +32,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/routes", ListAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -41,7 +42,8 @@ public static class RouteEndpoints
             .WithTags("Routing")
             .Produces<RoutePageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/routes/{routeId}", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -51,7 +53,8 @@ public static class RouteEndpoints
             .Produces<RouteDetailResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/routes/{routeId}/stops", AddStopAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -63,7 +66,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapDelete("/api/v1/routes/{routeId}/stops/{stopId}", RemoveStopAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -74,7 +78,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPut("/api/v1/routes/{routeId}/stops/order", ReorderStopsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -86,7 +91,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -124,7 +130,7 @@ public static class RouteEndpoints
             return Results.Json(ToResponse(result), statusCode: StatusCodes.Status201Created);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateRoute); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
@@ -203,7 +209,7 @@ public static class RouteEndpoints
             return Results.Json(ToResponse(result), statusCode: StatusCodes.Status201Created);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AddRouteStop); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
@@ -230,7 +236,7 @@ public static class RouteEndpoints
                 cancellationToken)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.RemoveRouteStop); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
@@ -260,7 +266,7 @@ public static class RouteEndpoints
                 cancellationToken)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ReorderRouteStops); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
         catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }

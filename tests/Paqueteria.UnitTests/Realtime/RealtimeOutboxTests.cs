@@ -99,6 +99,39 @@ public sealed class RealtimeOutboxTests
         Assert.IsType<ParsedAssignmentChanged>(assignment);
     }
 
+    [Theory]
+    [InlineData("ACCEPTED", true)]
+    [InlineData("COMPLETED", true)]
+    [InlineData("CANCELLED", true)]
+    [InlineData("OFFERED", false)]
+    [InlineData("ACTIVE", false)]
+    [InlineData("cancelled", false)]
+    public void Assignment_parser_accepts_the_ai12_terminal_states(string status, bool accepted)
+    {
+        // AI12-ASSIGNMENT-TERMINAL-STATES: D8 closures publish COMPLETED and CANCELLED.
+        var message = Business(
+            RealtimeOutboxTopics.AssignmentChanged,
+            JsonSerializer.Serialize(new
+            {
+                schema_version = "assignment-changed-v1",
+                order_id = OrderId,
+                assignment_id = AssignmentId,
+                driver_id = DriverId,
+                assignment_status = status,
+                occurred_at = OccurredAt,
+            }));
+        if (accepted)
+        {
+            var parsed = Assert.IsType<ParsedAssignmentChanged>(RealtimeOutboxParser.Parse(message));
+            Assert.Equal(status, parsed.AssignmentStatus);
+            Assert.Equal(status, RealtimeOutboxEnvelopeFactory.Assignment(parsed).Payload.AssignmentStatus);
+        }
+        else
+        {
+            Assert.Throws<OutboxMessageException>(() => RealtimeOutboxParser.Parse(message));
+        }
+    }
+
     [Fact]
     public void External_offer_parser_keeps_internal_audience_out_of_the_public_envelope()
     {

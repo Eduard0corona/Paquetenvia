@@ -1,5 +1,74 @@
 # Changelog
 
+## Matriz de capacidades D5 implementada — 2026-09-27
+
+- AI-05 `x-capability-matrix` queda `IMPLEMENTED` (PR 108): cada operación de la
+  matriz decide la capacidad en el servidor antes de leer estado persistido y
+  los roles no listados reciben el 403 uniforme; un 403 cuyo único requisito
+  pendiente es MFA lleva `MFA_REQUIRED`.
+- `listLocations` admite VIEWER con lat/lng redondeadas en el servidor a 2
+  decimales (~1.1 km, mitad lejos de cero); DISPATCHER y PLATFORM_ADMIN reciben
+  coordenadas exactas (`D5-VIEWER-LOCATION-PRECISION-2026-09-27`,
+  `x-viewer-coordinate-precision`, `x-capability-matrix.viewer_location_precision`).
+- `D7-SETTLEMENT-MFA` queda implementado: aprobar y pagar liquidaciones exige MFA
+  para todo rol permitido, FINANCE incluido.
+
+## Deltas del piloto publicados con su implementación — 2026-09-27
+
+- AI-05 publica, junto con su código y sus pruebas: `listSettlements`
+  (`GET /settlements`, filtros `payee_id`, `status`, `period_from` y
+  `period_to`, schema `SettlementPage`); `Cache-Control: no-store` en
+  `exportSettlementCsv`; `CreateLocationRequest` sin `pii_key_version`; los
+  límites aprobados de aceptación (versiones de 1 a 64 caracteres de
+  `^[A-Za-z0-9._-]+$`, `accepted_at` entre -72 h y +5 min del servidor) y de
+  paquetes (1 a 20); los 503/409/429 que ya se emitían y los 400 de Locations
+  (componente `BadRequest`).
+- `reconcileCod`, `getOrderFinancials` y `getRouteFinancials` admiten FINANCE con
+  MFA (`FINANCE-COD-RECONCILIATION`, `FINANCE-COD-MFA-2026-09-27`); DISPATCHER
+  sigue sin MFA. Las entradas correspondientes de `x-pilot-contract-deltas` y
+  `finance_operations_status` quedan como implementadas.
+- AI-06/AI-18: `resolve_identity_context` exige organización `ACTIVE`, el
+  timeline público se ordena por `(occurred_at, aggregate_version)` con su grant
+  de bootstrap, y se agregan los índices parciales de purga y los cuatro
+  operativos (`AI06-PILOT-INDEXES`). Las instalaciones existentes los reciben
+  por la lane `PlatformEvolution`.
+- `validate_contracts.py` acepta la matriz DSP-002 con `503`.
+
+## AUTH-001 logout, back-channel y step-up — 2026-09-27
+
+- AI-05: `POST /auth/logout` responde 200 con `BffLogoutResult`
+  (`endSessionUrl`, `AUTH-001-RP-INITIATED-LOGOUT`); nuevo
+  `POST /auth/backchannel-logout` (anónimo, `logout_token` form-urlencoded, 200 o
+  400 `BackchannelLogoutError`, `AUTH-001-BACKCHANNEL-LOGOUT`); `GET /auth/login`
+  acepta `mfa=required` (`AUTH-001-MFA-STEP-UP`); el callback documenta
+  `access_denied` → `/login?error=access_denied`
+  (`AUTH-001-ACCESS-DENIED-MESSAGE`); la respuesta `Forbidden` usa
+  `ForbiddenProblem` con el código opcional `MFA_REQUIRED`.
+- AI-03 §17.1 y AI-24 `bff_session`: cierre de sesión RP-initiated (única excepción
+  a tokens en el navegador: `id_token_hint` en `endSessionUrl`), back-channel logout
+  detrás de una interfaz de terminación de sesiones, step-up MFA, reemplazo de sesión
+  en cada inicio y mensaje propio para `access_denied`.
+- AI-07 `/login`: mensaje de `access_denied`, oferta "Verificar identidad" y regreso
+  desde el end-session de AuthCenter.
+- Registro: `AUTH-001-RP-INITIATED-LOGOUT`, `AUTH-001-BACKCHANNEL-LOGOUT`,
+  `AUTH-001-MFA-STEP-UP` y `AUTH-001-ACCESS-DENIED-MESSAGE` en `decision-log.md`.
+
+## AUTH-001 BFF — 2026-09-27
+
+- AI-05 documenta la superficie BFF fuera de `/api/v1` (`servers: /` por ruta):
+  `GET /auth/login`, `GET /signin-authcenter`, `GET /auth/session` y
+  `POST /auth/logout`, con el esquema `bffSession` (cookie
+  `__Host-Paquetenvia.Session`), el parámetro `X-AuthCenter-CSRF` y el esquema
+  `BffSession` (`GATE-002-BFF-001`). La respuesta de autorización exige `iss`
+  (RFC 9207).
+- AI-07: `/login` es anónima (punto de entrada de sesión), sin aprovisionar
+  (`AUTH-FIRST-LOGIN-INVITATION`).
+- AI-03 §17.1 y AI-24 `bff_session` registran el patrón BFF, el almacén de
+  sesiones en PostgreSQL (`BFF-SESSION-STORE-POSTGRESQL`, cambio AI-06/AI-18
+  pendiente; en memoria y una sola réplica hasta entonces) y el enrutamiento del
+  mismo origen del piloto (`PILOT-SAME-ORIGIN-ROUTING`).
+- Registro: `AUTH-001-BFF-CONTRACT-TRANSLATION` en `decision-log.md`.
+
 ## Finance en AI-05: regla vigente y delta pendiente — 2026-09-27
 
 - Las descripciones de `reconcileCod`, `getOrderFinancials` y
@@ -118,6 +187,23 @@
   hashes vigentes de AI-06 y AI-18.
 - No cambian AI-02, AI-04, AI-05, AI-06, AI-08, AI-12, AI-18, SQL, roles,
   migraciones ni código de producción.
+
+## OPS-003 limpieza operativa y rechazo de operaciones offline de más de 72 h — 2026-09-27
+
+- `OPS-003-CLEANUP-ROLE`: AI-18 agrega `paqueteria_cleanup_executor NOLOGIN BYPASSRLS`
+  con grants exactos por columna (más `DELETE` de tabla sobre
+  `platform.idempotency_keys`, que no tiene forma por columna) y las aserciones
+  de despliegue 13 a 16. Las funciones
+  `security.purge_expired_idempotency_keys(timestamptz,integer,boolean)` (piso
+  fijo de 72 h) y `security.expire_proof_upload_sessions(integer)` las instala
+  el lane de Custody (`20260927000100_AddOperationalCleanupExecutor`), como
+  ADR-034; AI-06 no cambia. `validate_contracts.py` admite exactamente los dos
+  grants `UPDATE (...)` por columna y fija los grants del nuevo rol.
+- `OPS-003-SERVER-72H-REJECTION`: AI-05 agrega `x-offline-operation-age`,
+  `client_occurred_at` opcional en `TransitionRequest` y
+  `CreateProofUploadSessionRequest`, y las respuestas `TransitionConflict` y
+  `ProofConflict` con el código `OFFLINE_OPERATION_EXPIRED`.
+- AI-03 §25.2 y AI-08 (OPS-003) describen el rol, las funciones y los jobs.
 
 ## OPS-004 retención acotada del outbox — 2026-09-26 UTC (PR #81)
 

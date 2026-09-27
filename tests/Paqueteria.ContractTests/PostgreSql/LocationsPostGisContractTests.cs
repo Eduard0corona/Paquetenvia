@@ -54,7 +54,6 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
                 "+526141234567",
                 28.63,
                 -106.07,
-                "mock-v1",
                 "geo001-contract"), default);
 
             Assert.Equal(ServiceabilityStatus.Serviceable, result.Status);
@@ -69,7 +68,8 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
                 """
                 SELECT ST_X(l.point), ST_Y(l.point), ST_SRID(l.point),
                        position(encode(convert_to(@plaintext,'UTF8'),'hex') in encode(l.address_ciphertext,'hex')),
-                       count(a.id)
+                       count(a.id),
+                       l.pii_key_version
                 FROM locations.locations l
                 LEFT JOIN platform.audit_logs a ON a.entity_id=l.id AND a.action='LOCATION_CREATED'
                 WHERE l.id=@location_id
@@ -84,6 +84,9 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
             Assert.Equal(4326, reader.GetInt32(2));
             Assert.Equal(0, reader.GetInt32(3));
             Assert.Equal(1L, reader.GetInt64(4));
+
+            // AI05-REMOVE-PII-KEY-VERSION: the server protector chose and persisted the key version.
+            Assert.Equal(DeterministicMockLocationPiiProtector.KeyVersion, reader.GetString(5));
         }
         finally
         {
@@ -349,7 +352,6 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
         "+526141234567",
         28.61,
         -106.09,
-        "mock-v1",
         "geo001-contract");
 
     private async Task CleanupAsync(Scenario scenario)

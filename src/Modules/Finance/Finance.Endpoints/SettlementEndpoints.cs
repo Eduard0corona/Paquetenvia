@@ -13,9 +13,9 @@ using Paqueteria.Application.Tenancy;
 namespace Finance.Endpoints;
 
 /// <summary>
-/// The seven normative AI-05 SET-001 operations: createSettlement, getSettlement, addSettlementAdjustment,
-/// approveSettlement, markSettlementPaid, voidSettlement and exportSettlementCsv. There is deliberately no
-/// list operation.
+/// The eight normative AI-05 settlement operations: createSettlement, listSettlements
+/// (AI05-LIST-SETTLEMENTS), getSettlement, addSettlementAdjustment, approveSettlement, markSettlementPaid,
+/// voidSettlement and exportSettlementCsv.
 /// </summary>
 public static class SettlementEndpoints
 {
@@ -36,6 +36,17 @@ public static class SettlementEndpoints
             .Accepts<CreateSettlementRequest>("application/json")
             .Produces<SettlementResponse>(StatusCodes.Status201Created)
             .ProducesSettlementProblems();
+
+        endpoints.MapGet("/api/v1/settlements", ListAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("listSettlements")
+            .WithTags("Finance")
+            .Produces<SettlementPageResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/settlements/{settlementId}", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -126,6 +137,7 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status201Created,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateSettlement),
             cancellationToken);
     }
 
@@ -151,7 +163,122 @@ public static class SettlementEndpoints
                 new(actorId, tenantContext.OrganizationId, settlement, session.MfaSatisfied),
                 cancellationToken),
             StatusCodes.Status200OK,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.GetSettlement),
             cancellationToken);
+    }
+
+    /// <summary>
+    /// AI05-LIST-SETTLEMENTS. Each filter may appear at most once and must parse exactly; anything else is the
+    /// uniform INVALID_REQUEST, decided before capability or any persisted settlement is read.
+    /// </summary>
+    private static async Task<IResult> ListAsync(
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        ISettlementService service,
+        CancellationToken cancellationToken)
+    {
+        if (!FinanceEndpointBinding.TrySession(session, tenantContext, out var actorId))
+        {
+            return FinanceEndpointBinding.Forbidden();
+        }
+
+        if (!TryReadListFilters(httpContext.Request.Query, out var payee, out var status, out var periodFrom,
+                out var periodTo, out var cursor))
+        {
+            return FinanceEndpointBinding.Conflict(InvalidRequest);
+        }
+
+        try
+        {
+            var page = await service.ListAsync(
+                new(
+                    actorId, tenantContext.OrganizationId, status, periodFrom, periodTo, cursor, session.MfaSatisfied,
+                    payee),
+                cancellationToken);
+            return Results.Json(
+                new SettlementPageResponse(page.Items.Select(ToResponse).ToArray(), page.NextCursor),
+                statusCode: StatusCodes.Status200OK);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception) when (
+            Failure(exception, () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListSettlements)) is { } failure) { return failure; }
+    }
+
+    internal static readonly string[] ListQueryParameters = ["payee_id", "status", "period_from", "period_to", "cursor"];
+
+    internal static bool TryReadListFilters(
+        IQueryCollection query,
+        out Guid? payee,
+        out string? status,
+        out DateOnly? periodFrom,
+        out DateOnly? periodTo,
+        out SettlementCursor? cursor)
+    {
+        payee = null;
+        status = null;
+        periodFrom = null;
+        periodTo = null;
+        cursor = null;
+        if (query.Keys.Any(key => !ListQueryParameters.Contains(key, StringComparer.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        if (query.TryGetValue("payee_id", out var payeeValue))
+        {
+            if (!FinanceEndpointBinding.TryGuid(payeeValue[0] ?? string.Empty, out var parsedPayee))
+            {
+                return false;
+            }
+
+            payee = parsedPayee;
+        }
+
+        if (query.TryGetValue("status", out var statusValue))
+        {
+            // The vocabulary itself is decided by SettlementInputPolicy before any transaction opens.
+            status = statusValue[0];
+            if (string.IsNullOrEmpty(status))
+            {
+                return false;
+            }
+        }
+
+        if (!TryDate(query, "period_from", out periodFrom) || !TryDate(query, "period_to", out periodTo))
+        {
+            return false;
+        }
+
+        if (query.TryGetValue("cursor", out var cursorValue))
+        {
+            if (!SettlementCursorCodec.TryDecode(cursorValue[0], out cursor))
+            {
+                return false;
+            }
+        }
+
+        return periodFrom is not { } from || periodTo is not { } to || from <= to;
+    }
+
+    private static bool TryDate(IQueryCollection query, string name, out DateOnly? value)
+    {
+        value = null;
+        if (!query.TryGetValue(name, out var raw))
+        {
+            return true;
+        }
+
+        if (!DateOnly.TryParseExact(
+                raw[0], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsed))
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
     }
 
     private static async Task<IResult> AdjustAsync(
@@ -185,6 +312,7 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status201Created,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AddSettlementAdjustment),
             cancellationToken);
     }
 
@@ -195,7 +323,9 @@ public static class SettlementEndpoints
         ITenantContext tenantContext,
         ISettlementService service,
         CancellationToken cancellationToken) =>
-        TransitionAsync(httpContext, settlementId, session, tenantContext, service.ApproveAsync, cancellationToken);
+        TransitionAsync(
+            httpContext, settlementId, session, tenantContext, TenantCapabilities.ApproveSettlement,
+            service.ApproveAsync, cancellationToken);
 
     private static Task<IResult> PayAsync(
         HttpContext httpContext,
@@ -204,13 +334,16 @@ public static class SettlementEndpoints
         ITenantContext tenantContext,
         ISettlementService service,
         CancellationToken cancellationToken) =>
-        TransitionAsync(httpContext, settlementId, session, tenantContext, service.MarkPaidAsync, cancellationToken);
+        TransitionAsync(
+            httpContext, settlementId, session, tenantContext, TenantCapabilities.MarkSettlementPaid,
+            service.MarkPaidAsync, cancellationToken);
 
     private static async Task<IResult> TransitionAsync(
         HttpContext httpContext,
         string settlementId,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
+        TenantCapability capability,
         Func<SettlementTransitionCommand, CancellationToken, Task<SettlementResult>> operation,
         CancellationToken cancellationToken)
     {
@@ -232,6 +365,7 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status200OK,
+            () => TenantCapabilityGate.Refused(session, tenantContext, capability),
             cancellationToken);
     }
 
@@ -264,10 +398,14 @@ public static class SettlementEndpoints
                     httpContext.TraceIdentifier),
                 cancellationToken),
             StatusCodes.Status200OK,
+            () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.VoidSettlement),
             cancellationToken);
     }
 
+    internal const string ExportCacheControl = "no-store";
+
     private static async Task<IResult> ExportAsync(
+        HttpContext httpContext,
         string settlementId,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
@@ -289,15 +427,20 @@ public static class SettlementEndpoints
             var document = await service.ExportCsvAsync(
                 new(actorId, tenantContext.OrganizationId, settlement, session.MfaSatisfied),
                 cancellationToken);
+
+            // AI05-EXPORT-NO-STORE: the export carries payee and money data; no cache may keep a copy.
+            httpContext.Response.Headers.CacheControl = ExportCacheControl;
             return Results.File(document.Content, SettlementCsvWriter.ContentType, document.FileName);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) when (Failure(exception) is { } failure) { return failure; }
+        catch (Exception exception) when (
+            Failure(exception, () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ExportSettlementCsv)) is { } failure) { return failure; }
     }
 
     private static async Task<IResult> RespondAsync(
         Func<Task<SettlementResult>> operation,
         int successStatus,
+        Func<IResult> refused,
         CancellationToken cancellationToken)
     {
         try
@@ -305,16 +448,17 @@ public static class SettlementEndpoints
             return Results.Json(ToResponse(await operation()), statusCode: successStatus);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) when (Failure(exception) is { } failure) { return failure; }
+        catch (Exception exception) when (Failure(exception, refused) is { } failure) { return failure; }
     }
 
     /// <summary>
     /// The public outcome of a settlement failure. The Finance gateway reports racing writers and database
-    /// uniqueness as a FIN-001 concurrency conflict, which settlements publish as the uniform CONFLICT.
+    /// uniqueness as a FIN-001 concurrency conflict, which settlements publish as the uniform CONFLICT. A
+    /// capability refusal is the AI-05 Forbidden response, with MFA_REQUIRED when MFA is all that is missing.
     /// </summary>
-    private static IResult? Failure(Exception exception) => exception switch
+    private static IResult? Failure(Exception exception, Func<IResult> refused) => exception switch
     {
-        FinanceForbiddenException => FinanceEndpointBinding.Forbidden(),
+        FinanceForbiddenException => refused(),
         FinanceNotFoundException => FinanceEndpointBinding.NotFound(),
         SettlementConflictException conflict => FinanceEndpointBinding.Conflict(PublicCode(conflict.Code)),
         FinanceConflictException => FinanceEndpointBinding.Conflict(ConflictCode),
@@ -403,6 +547,10 @@ public sealed record SettlementLineResponse(
     [property: JsonPropertyName("amount_cents")] long AmountCents,
     [property: JsonPropertyName("source_reference")] string SourceReference,
     [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt);
+
+public sealed record SettlementPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<SettlementResponse> Items,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
 public sealed record SettlementResponse(
     [property: JsonPropertyName("id")] Guid Id,

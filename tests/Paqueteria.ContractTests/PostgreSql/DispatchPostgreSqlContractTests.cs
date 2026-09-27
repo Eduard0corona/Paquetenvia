@@ -24,7 +24,7 @@ namespace Paqueteria.ContractTests.PostgreSql;
 
 [Collection(PostgreSqlContractCollection.Name)]
 [Trait("Category", "PostgreSqlContract")]
-public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fixture)
+public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
     private static readonly DateTimeOffset OccurredAt =
         new(2026, 7, 23, 21, 0, 0, TimeSpan.Zero);

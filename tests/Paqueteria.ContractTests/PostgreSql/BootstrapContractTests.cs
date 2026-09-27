@@ -20,6 +20,7 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         "claim_location_outbox", "settle_location_outbox", "requeue_stale_location_outbox", "purge_location_outbox",
         "claim_realtime_outbox", "claim_notifications_outbox", "claim_unowned_outbox",
         "requeue_stale_realtime_outbox", "recover_stale_notifications_outbox", "requeue_stale_unowned_outbox",
+        "claim_dispatch_outbox", "requeue_stale_dispatch_outbox",
     ];
 
     [PostgreSqlContractFact]
@@ -43,8 +44,9 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         Assert.Equal(ExpectedSchemas.Order(StringComparer.Ordinal), schemas);
 
         // 47 canonical AI-06 tables plus the INC-001 incident evidence table, the SCL-001 key ring
-        // and their migration history lanes, and the SET-001 Finance history lane.
-        Assert.Equal(52, await ScalarAsync<int>("""
+        // and their migration history lanes, the SET-001 Finance history lane and the platform
+        // evolution history lane of the 2026-09-27 pilot contract deltas.
+        Assert.Equal(53, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -235,6 +237,8 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             "security.requeue_stale_realtime_outbox(interval,integer,integer)",
             "security.recover_stale_notifications_outbox(text,integer,integer,interval)",
             "security.requeue_stale_unowned_outbox(interval,integer,integer)",
+            "security.claim_dispatch_outbox(text,integer,interval)",
+            "security.requeue_stale_dispatch_outbox(interval,integer,integer)",
             "security.claim_location_outbox(text,integer,interval)",
             "security.settle_location_outbox(uuid,uuid,text,text,timestamptz)",
             "security.requeue_stale_location_outbox(interval,integer,integer)",

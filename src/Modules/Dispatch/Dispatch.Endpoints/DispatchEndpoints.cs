@@ -33,7 +33,8 @@ public static class DispatchEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/driver/me/stops", ListMyStopsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -42,7 +43,8 @@ public static class DispatchEndpoints
             .WithTags("Driver")
             .Produces<IReadOnlyList<DriverStopResponse>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/external-offers", CreateExternalOfferAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -53,7 +55,8 @@ public static class DispatchEndpoints
             .Produces<ExternalOfferResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/external-offers/{offerId}/accept", AcceptExternalOfferAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -63,7 +66,8 @@ public static class DispatchEndpoints
             .Produces<AssignmentResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/driver/me/external-offers", ListMyExternalOffersAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -72,7 +76,8 @@ public static class DispatchEndpoints
             .WithTags("Driver")
             .Produces<ExternalOfferPageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -135,7 +140,7 @@ public static class DispatchEndpoints
         }
         catch (ExternalOfferForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateExternalOffer);
         }
         catch (ExternalOfferConflictException exception)
         {
@@ -180,7 +185,7 @@ public static class DispatchEndpoints
         }
         catch (ExternalOfferForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AcceptExternalOffer);
         }
         catch (ExternalOfferConflictException exception)
         {
@@ -203,6 +208,12 @@ public static class DispatchEndpoints
         {
             return Forbidden();
         }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListMyEligibleExternalOffers) is { } denied)
+        {
+            return denied;
+        }
+
         try
         {
             var page = await service.ListEligibleAsync(
@@ -294,7 +305,7 @@ public static class DispatchEndpoints
         }
         catch (AssignmentForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AssignDriver);
         }
         catch (AssignmentNotFoundException)
         {
@@ -321,6 +332,11 @@ public static class DispatchEndpoints
             !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListMyStops) is { } denied)
+        {
+            return denied;
         }
 
         try

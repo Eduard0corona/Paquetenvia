@@ -10,6 +10,10 @@ import {
   parseOrganizationContexts,
 } from "../contracts/operations-parsers";
 import type { OperationsSession } from "../session/operations-session";
+import {
+  MissingCredentialError,
+  resolveRequestAuthorization,
+} from "../../auth/request-credentials";
 
 export interface OperationsDashboardApi {
   list(
@@ -81,14 +85,20 @@ export function createOperationsApi(
       ? AbortSignal.any([signal, timeoutController.signal])
       : timeoutController.signal;
     try {
-      const token = await waitForAbort(
-        () => session.getAccessToken(),
-        combined,
-      );
-      throwIfAborted(combined);
-      if (typeof token !== "string" || token.length < 1 || token.length > 8192) {
-        throw new OperationsApiError("unauthorized");
+      let authorization: Awaited<ReturnType<typeof resolveRequestAuthorization>>;
+      try {
+        authorization = await waitForAbort(
+          () => resolveRequestAuthorization(session, "GET"),
+          combined,
+        );
+      } catch (error) {
+        if (combined.aborted) throw abortReason(combined);
+        if (error instanceof MissingCredentialError) {
+          throw new OperationsApiError("unauthorized");
+        }
+        throw error;
       }
+      throwIfAborted(combined);
       const url = new URL(path, base);
       url.search = search.toString();
       let response: Response;
@@ -97,12 +107,12 @@ export function createOperationsApi(
         response = await fetch(url, {
           method: "GET",
           headers: {
-            Authorization: `Bearer ${token}`,
+            ...authorization.headers,
             "X-Organization-Id": session.organizationId,
             Accept: "application/json",
           },
           cache: "no-store",
-          credentials: "omit",
+          credentials: authorization.credentials,
           referrerPolicy: "no-referrer",
           signal: combined,
         });
@@ -132,14 +142,18 @@ export function createOperationsApi(
     assertUuid(input.orderId);
     if (!Number.isSafeInteger(input.commissionCents) || input.commissionCents < 0)
       throw new OperationsApiError("invalid");
-    const token = await session.getAccessToken();
-    if (!token) throw new OperationsApiError("unauthorized");
+    let authorization: Awaited<ReturnType<typeof resolveRequestAuthorization>>;
+    try {
+      authorization = await resolveRequestAuthorization(session, "POST");
+    } catch {
+      throw new OperationsApiError("unauthorized");
+    }
     let response: Response;
     try {
       response = await fetch(new URL("/api/v1/external-offers", base), {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...authorization.headers,
           "X-Organization-Id": session.organizationId,
           "Idempotency-Key": idempotencyKey,
           Accept: "application/json",
@@ -152,7 +166,7 @@ export function createOperationsApi(
           eligible_constraints: { vehicle_types: [input.vehicleType] },
         }),
         cache: "no-store",
-        credentials: "omit",
+        credentials: authorization.credentials,
         referrerPolicy: "no-referrer",
         signal,
       });

@@ -208,6 +208,24 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         Assert.All(
             backend.FinalizedProofs,
             proof => Assert.EndsWith("Z", proof.CapturedAt, StringComparison.Ordinal));
+        // OPS-003-PWA-CLIENT-OCCURRED-AT: every transition and upload session
+        // carries the instant the action was captured offline, and a proof
+        // operation uses that same instant as its captured_at.
+        Assert.Equal(5, backend.TransitionClientOccurredAt.Count);
+        Assert.All(
+            backend.TransitionClientOccurredAt,
+            value => Assert.EndsWith("Z", value, StringComparison.Ordinal));
+        Assert.Equal(
+            5,
+            backend.TransitionClientOccurredAt.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(
+            backend.SessionClientOccurredAt,
+            value => Assert.Contains(
+                value,
+                backend.FinalizedProofs.Select(proof => proof.CapturedAt)));
+        Assert.All(
+            backend.FinalizedProofs,
+            proof => Assert.Contains(proof.CapturedAt, backend.TransitionClientOccurredAt));
         Assert.All(
             backend.SessionAttempts,
             attempt => Assert.StartsWith("drv2-", attempt.Key, StringComparison.Ordinal));
@@ -272,8 +290,12 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             backend.SessionAttempts
                 .Select(attempt => attempt.Key)
                 .Distinct(StringComparer.Ordinal));
+        var capturedAt = Assert.Single(
+            backend.SessionClientOccurredAt.Distinct(StringComparer.Ordinal));
+        Assert.NotNull(capturedAt);
         Assert.Single(backend.FinalizedProofs);
-        Assert.Single(backend.TransitionTargets);
+        Assert.Equal(capturedAt, backend.FinalizedProofs[0].CapturedAt);
+        Assert.Equal([capturedAt], backend.TransitionClientOccurredAt);
     }
 
     [Fact]
@@ -347,6 +369,60 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         Assert.Equal(2, backend.TransitionKeys.Count);
         Assert.NotEqual(conflictedKey, backend.TransitionKeys[1]);
         await ExpectTextAsync(page, "En punto de recolección");
+    }
+
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Expired_offline_operation_is_dropped_once_and_the_driver_is_told()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-ops003-expired");
+        var backend = new SyntheticOfflineBackend { ExpireTransitions = true };
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Llegué a recolección");
+        await EnsureServiceWorkerControlAsync(page);
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Llegué a recolección");
+        string capturedAt;
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await EnqueueButtonAsync(page, "Llegué a recolección");
+            await WaitForOperationCountAsync(page, 1);
+            capturedAt = await ReadSingleClientOccurredAtAsync(page);
+            await page.ReloadAsync();
+            await ExpectTextAsync(page, "1 acción en el dispositivo");
+            Assert.Equal(capturedAt, await ReadSingleClientOccurredAtAsync(page));
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        // Coming back online replays the queue on its own.
+        await page.WaitForFunctionAsync("() => navigator.onLine === true");
+        await WaitForOperationCountAsync(page, 0);
+        await ExpectTextAsync(
+            page,
+            "La acción «Llegué a recolección» venció: pasaron más de 72 horas sin conexión");
+        await ExpectTextAsync(page, "Vuelve a registrarla o repórtala a despacho.");
+        Assert.Equal([capturedAt], backend.TransitionClientOccurredAt);
+
+        // Never retried: no backoff timer, reload or manual sync resends it.
+        await page.WaitForTimeoutAsync(1_100);
+        await page.ReloadAsync();
+        await ExpectTextAsync(page, "Llegué a recolección");
+        await page.WaitForTimeoutAsync(500);
+        Assert.Single(backend.TransitionKeys);
+        Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
     }
 
     [Theory]
@@ -728,6 +804,32 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             """,
             new { organizationId, cacheNamespace });
 
+    private static Task<string> ReadSingleClientOccurredAtAsync(IPage page) =>
+        page.EvaluateAsync<string>(
+            """
+            () => new Promise((resolve, reject) => {
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const request = database.transaction("operations", "readonly")
+                  .objectStore("operations").getAll();
+                request.onerror = () => {
+                  database.close();
+                  reject(request.error);
+                };
+                request.onsuccess = () => {
+                  database.close();
+                  if (request.result.length !== 1) {
+                    reject(new Error("expected exactly one queued operation"));
+                    return;
+                  }
+                  resolve(request.result[0].clientOccurredAt);
+                };
+              };
+            })
+            """);
+
     private static Task<int> ReadStoreCountAsync(IPage page, string storeName) =>
         page.EvaluateAsync<int>(
             """
@@ -802,10 +904,13 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         internal bool AbortFirstUpload { get; init; }
         internal bool AbortFirstFinalize { get; init; }
         internal bool ConflictFirstTransition { get; init; }
+        internal bool ExpireTransitions { get; init; }
         internal int? StopsFailureStatus { get; set; }
         internal bool HideOrder { get; set; }
         internal List<string> TransitionTargets { get; } = [];
         internal List<string> TransitionKeys { get; } = [];
+        internal List<string?> TransitionClientOccurredAt { get; } = [];
+        internal List<string?> SessionClientOccurredAt { get; } = [];
         internal List<(string Key, string ProofType)> SessionAttempts { get; } = [];
         internal List<string> FinalizeKeys { get; } = [];
         internal List<(string ProofType, string CapturedAt)> FinalizedProofs { get; } = [];
@@ -897,8 +1002,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             {
                 TransitionTargets.Add(target);
                 TransitionKeys.Add(key);
+                TransitionClientOccurredAt.Add(ReadClientOccurredAt(request));
                 abort = AbortFirstTransition && firstTransition;
-                if (!(ConflictFirstTransition && firstTransition))
+                if (!(ConflictFirstTransition && firstTransition) && !ExpireTransitions)
                 {
                     status = target;
                     version += 1;
@@ -912,6 +1018,17 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                     Status = 409,
                     ContentType = "application/problem+json",
                     Body = """{"code":"ORDER_VERSION_CONFLICT"}""",
+                });
+                return;
+            }
+            if (ExpireTransitions)
+            {
+                // AI-05 TransitionConflictProblem for OPS-003-SERVER-72H-REJECTION.
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 409,
+                    ContentType = "application/problem+json",
+                    Body = """{"type":"about:blank","title":"Conflict","status":409,"code":"OFFLINE_OPERATION_EXPIRED"}""",
                 });
                 return;
             }
@@ -955,6 +1072,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             lock (gate)
             {
                 SessionAttempts.Add((key, proofType));
+                SessionClientOccurredAt.Add(ReadClientOccurredAt(request));
                 if (!sessionsByKey.TryGetValue(key, out var existingSessionId))
                 {
                     sessionSequence += 1;
@@ -1037,6 +1155,11 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 },
                 201));
         }
+
+        private static string? ReadClientOccurredAt(JsonElement request) =>
+            request.TryGetProperty("client_occurred_at", out var value)
+                ? value.GetString()
+                : null;
 
         private static RouteFulfillOptions Json(object value, int status) => new()
         {

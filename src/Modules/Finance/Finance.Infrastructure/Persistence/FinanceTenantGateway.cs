@@ -29,7 +29,8 @@ public sealed class FinanceTenantGateway(
                    WHEN 'PLATFORM_ADMIN' THEN 0
                    WHEN 'DISPATCHER' THEN 1
                    WHEN 'DRIVER' THEN 2
-                   ELSE 3 END
+                   WHEN 'FINANCE' THEN 3
+                   ELSE 4 END
         LIMIT 1
         """;
 
