@@ -8,7 +8,11 @@ del estado de la orden.
 Cubre los criterios de aceptación de AI-08: motivo y evidencia obligatorios, siguiente acción
 explícita, SLA timestamp y `Idempotency-Key` en la operación de apertura.
 
-No implementa resolución de incidencias, ventana de reclamo, LIF-001, soporte a clientes ni CRM.
+El seguimiento de resolución agrega `POST /api/v1/incidents/{incidentId}/resolution`, que cierra
+una incidencia `OPEN` o `INVESTIGATING` en `RESOLVED` o `REJECTED` (ver [Resolución](#resolución)).
+
+No implementa la entrada a `INVESTIGATING`, reapertura, edición, ventana de reclamo, LIF-001,
+soporte a clientes ni CRM.
 
 ## Capas y responsabilidades
 
@@ -22,7 +26,8 @@ No implementa resolución de incidencias, ventana de reclamo, LIF-001, soporte a
   cross-schema de solo lectura (`orders`, `identity`, `organizations`, `drivers`, `dispatch`,
   `custody`) y las escrituras en `incidents`.
 - `Incidents.Endpoints` limita el contrato HTTP a binding, autenticación, tenant activo,
-  `Idempotency-Key` y mapeo 201/401/403/404/409/503.
+  `Idempotency-Key` y mapeo 201/401/403/404/409/503 en la apertura y 200/401/403/404/409/503 en
+  la resolución.
 
 ## Modelo y persistencia
 
@@ -134,7 +139,7 @@ Al cambiar AI-05 se repinnearon los hashes derivados que la gobernanza exige:
 `CHECKSUMS_SHA256.txt` y `MANIFEST.json` (regenerados con
 `tools/validate_contracts.py --write-integrity`), el pin de `OpenApiBaselineTests` y los dos
 hashes congelados de
-`SyntheticEnvironmentArchitectureTests.Frozen_governance_files_are_byte_identical_to_SEC003_base`.
+`SyntheticEnvironmentArchitectureTests.Governance_integrity_files_match_pinned_values`.
 `specs/AI-08_BACKLOG.yaml` no se tocó.
 
 `IncidentsOpenApiImplementationTests` impide que la deriva vuelva a abrirse: deriva cada
@@ -247,6 +252,40 @@ de ORD-002. La base de datos la sostiene por su cuenta con
   replica en lugar de abrir una segunda incidencia. La misma clave con otro contenido responde
   `IDEMPOTENCY_CONFLICT`; la misma clave en otro tenant abre una incidencia independiente.
 
+## Resolución
+
+`POST /api/v1/incidents/{incidentId}/resolution` (`resolveIncident`) recibe exactamente
+`{"outcome", "reason"}` y responde 200 con la representación `Incident` existente, que solo cambia
+su `status`.
+
+- **Máquina de estados.** `OPEN` e `INVESTIGATING` —el mismo par que ORD-002 considera incidencia
+  no resuelta— cierran en `RESOLVED` o `REJECTED`. Un estado terminal no vuelve a cambiar: otro
+  cierre con otra clave responde `INCIDENT_STATE_CONFLICT` sin revelar el estado actual. No se
+  agregan estados ni columnas; la resolución escribe solo `status` y `resolved_at` (reloj UTC
+  normalizado a microsegundos).
+- **Motivo.** Texto plano de 1 a 500 caracteres; se rechazan, sin recortarlos, los espacios al
+  inicio o al final y los caracteres de control. Vive solo como evidencia de auditoría.
+- **Autorización.** Solo un `DISPATCHER` activo del tenant, o un `PLATFORM_ADMIN` activo con MFA
+  satisfecho. Un `DRIVER` nunca, ni siquiera quien abrió la incidencia con su asignación activa.
+  La capacidad se evalúa antes del lock idempotente, del replay y de la visibilidad de la
+  incidencia.
+- **Orden de la transacción.** Capacidad → `pg_advisory_xact_lock` de la clave → replay exacto →
+  `SELECT … FOR UPDATE` de la incidencia en el tenant → validación de estado → reserva → `UPDATE`
+  → auditoría → cierre de la reserva, todo en una transacción. Dos cierres concurrentes con claves
+  distintas se serializan en el lock de fila: exactamente uno gana y el otro recibe
+  `INCIDENT_STATE_CONFLICT`.
+- **Idempotencia.** Scope `INC-001:RESOLVE_INCIDENT`; el hash liga tenant, incidencia, desenlace y
+  motivo exacto. El replay devuelve la respuesta original sin otro `UPDATE`, otra auditoría ni otro
+  `resolved_at`; la misma clave con otro contenido responde `IDEMPOTENCY_CONFLICT`; una reserva
+  corrupta falla cerrada como `CONFLICT`. El replay de una **apertura** sigue devolviendo su
+  respuesta `OPEN` original aunque la incidencia ya se haya cerrado.
+- **Auditoría.** `incidents.incident.resolved` o `incidents.incident.rejected`, con
+  `incident_id`, `order_id`, `previous_status`, `outcome`, `resolution_reason` y `resolved_at`,
+  pasando por el redactor de auditoría y sin la descripción protegida.
+- **Frontera con ORD-002.** La resolución no escribe `orders.orders`, no cambia la versión de la
+  orden, no infiere `RESCHEDULED` ni `RETURNING` y no toca la evidencia. Solo deja de contar como
+  incidencia no resuelta para `no_unresolved_incident`.
+
 ## Pruebas
 
 - `tests/Paqueteria.UnitTests/Incidents/IncidentPolicyTests.cs`: vocabulario, motivos, siguiente
@@ -268,6 +307,17 @@ de ORD-002. La base de datos la sostiene por su cuenta con
   el migrador canónico, verificando que ninguna incidencia se pierde, que el backfill queda
   completo, que las restricciones finales existen y que `FORCE RLS`, las políticas de tenant, la
   propiedad de los objetos y el `NOBYPASSRLS` del migrador siguen intactos.
+
+- `tests/Paqueteria.UnitTests/Incidents/IncidentResolutionPolicyTests.cs`: vocabulario de
+  desenlaces, matriz de transiciones, política del motivo y matriz de autorización.
+- `tests/Paqueteria.ContractTests/PostgreSql/IncidentsResolutionPostgreSqlContractTests.cs`: las
+  cuatro transiciones, estados terminales inmutables, `resolved_at` único, auditoría y reserva
+  atómicas con rollback ante falla inyectada, autorización por rol/estado/MFA, el conductor que
+  abrió la incidencia, `FORCE RLS` y 404 uniforme, replay y conflicto idempotente, la carrera
+  `RESOLVED`/`REJECTED` con un solo ganador, la orden y la evidencia intactas y la semántica de
+  pendiente que lee ORD-002.
+- `tests/Paqueteria.IntegrationTests/Incidents/IncidentResolutionHttpTests.cs`: la matriz HTTP
+  completa a través de la API real sobre PostgreSQL real.
 
 Las pruebas de contrato requieren Docker (Testcontainers con `postgis/postgis:18-3.6`).
 

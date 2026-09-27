@@ -288,13 +288,46 @@ tenant-scoped, evento, outbox y auditoría atómicos. Consulta
 para la matriz, lock order, redacción, pruebas, riesgos y rollback. El provider
 permanece `Disabled` por defecto y no habilita integraciones futuras ni Worker.
 
+## Ítems implementados después de MVP-0
+
+Después de la aprobación `REL-000-OWNER-001` (MVP-0_INTERNAL, datos
+sintéticos) se integraron, siempre con datos sintéticos y sin despliegue
+productivo:
+
+- **NTF-001** notificaciones outbox sintéticas `IN_APP`
+  ([guía](docs/development/ntf-001-outbox-notifications.md)).
+- **EXT-001** ofertas a repartidores externos
+  ([guía](docs/development/ext-001-external-driver-offers.md)).
+- **RTE-001** rutas manuales OWN-only
+  ([contrato](docs/development/rte-001-contract-gap.md)).
+- **SEC-003** política de entorno DevSynthetic
+  ([guía](docs/development/sec-003-synthetic-environment-policy-v0.4.md)).
+- **AZR-001** bridge de migraciones DEV-SYNTHETIC y controles de fase A
+  ([estado](docs/operations/azr-001/current-state.md)).
+- **CSV-001** carga CSV de órdenes
+  ([guía](docs/development/csv-001-order-csv-import.md)).
+- **INC-001** incidencias, intento fallido y resolución
+  ([guía](docs/development/inc-001-incidents-failed-attempt.md)).
+- **FIN-001** registro de COD y costo/ingreso por orden y ruta.
+- **SCL-001** hosts stateless y key ring compartido
+  ([guía](docs/development/scl-001-stateless-distributed-hosts.md)).
+- **SET-001** ledger de liquidaciones, flujo y exportación CSV.
+- **LIF-001** finalización de ventanas de reclamación (ADR-034)
+  ([guía](docs/development/lif-001-claim-window-finalization.md)).
+- **OPS-004** retención acotada del outbox
+  ([runbook](docs/development/ops-004-outbox-retention.md)).
+
+El registro de merges y autorizaciones está en
+`docs/normative/v0.6/decision-log.md`.
+
 ## Fuera de alcance
 
-Fuera del soporte tecnico de Identity/Organizations, Locations y la cotizacion
-sintetica de PRC-001, no se
-implementan otros casos de uso comerciales, proveedor OIDC real,
-login, endpoint público de tracking, Worker de outbox,
-hubs SignalR productivos, pricing avanzado, despacho externo o routing,
-custodia, sellos, ADR-032/ADR-033, proveedores externos, despliegue productivo
-ni lógica de negocio de módulos. ARC-001 aporta solamente estructura, catálogo y
-reglas de arquitectura; FND-002 aporta solamente dependencias locales.
+No se implementan todavía: login con un proveedor OIDC real (GATE-002 decidió
+AuthCenter con patrón BFF, pendiente de implementación; la autenticación
+disponible es `Mock` en Development, Testing y DevSynthetic), proveedores
+reales de mapas, mensajería, pagos o facturación (GATE-003 a GATE-006),
+pricing público e impuestos (GATE-011), PII real (GATE-007), sellos y
+ADR-032/ADR-033, backplane SignalR multi-instancia (GATE-013), aliados
+(ALY-*), clientes empresariales (BUS-*), piloto, staging ni despliegue
+productivo. ARC-001 aporta estructura, catálogo y reglas de arquitectura;
+FND-002 aporta solamente dependencias locales.

@@ -1,3 +1,4 @@
+using System.Data;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -19,14 +20,15 @@ internal sealed class TenantTransaction : IAsyncDisposable
         string runtimeRole,
         Guid userId,
         Guid[] organizationIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IsolationLevel isolationLevel = IsolationLevel.Unspecified)
     {
         ArgumentNullException.ThrowIfNull(organizationIds);
 
         var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            var transaction = await connection.BeginTransactionAsync(isolationLevel, cancellationToken).ConfigureAwait(false);
             try
             {
                 await using (var roleCommand = new NpgsqlCommand($"SET LOCAL ROLE {runtimeRole}", connection, transaction))

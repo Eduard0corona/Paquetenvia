@@ -18,6 +18,7 @@ namespace Paqueteria.ContractTests;
 public sealed partial class IncidentsOpenApiImplementationTests
 {
     private const string IncidentsPath = "/orders/{orderId}/incidents";
+    private const string ResolutionPath = "/incidents/{incidentId}/resolution";
 
     [Fact]
     public void Open_incident_operation_publishes_the_status_matrix_the_endpoint_implements()
@@ -29,14 +30,7 @@ public sealed partial class IncidentsOpenApiImplementationTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        var implemented = ProducedStatusPattern()
-            .Matches(EndpointSource())
-            .Select(match => match.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-
-        Assert.Equal(implemented, declared);
+        Assert.Equal(ProducedStatuses("openIncident"), declared);
 
         Assert.Equal(
             "#/components/schemas/Incident",
@@ -228,11 +222,229 @@ public sealed partial class IncidentsOpenApiImplementationTests
         Assert.True(guard < transaction, "Shape validation must reject before a tenant transaction is opened.");
     }
 
+    [Fact]
+    public void Incident_routes_are_exactly_the_AI05_incident_operations()
+    {
+        var implemented = EndpointChains()
+            .Select(chain =>
+            {
+                var route = MappedRoutePattern().Match(chain);
+                var name = OperationNamePattern().Match(chain);
+                Assert.True(route.Success && name.Success, "Every incident route must be named.");
+                return $"{route.Groups["method"].Value.ToUpperInvariant()} {route.Groups["path"].Value} {name.Groups[1].Value}";
+            })
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var published = Contract().Mapping("paths").Children
+            .SelectMany(path => ((YamlMappingNode)path.Value).Children
+                .Where(operation => operation.Value is YamlMappingNode mapping &&
+                    mapping.Children.ContainsKey(new YamlScalarNode("tags")) &&
+                    mapping.Sequence("tags").Children.Cast<YamlScalarNode>()
+                        .Any(tag => tag.Value == "Incidents"))
+                .Select(operation =>
+                    $"{((YamlScalarNode)operation.Key).Value!.ToUpperInvariant()} " +
+                    $"{((YamlScalarNode)path.Key).Value} " +
+                    $"{((YamlMappingNode)operation.Value).Scalar("operationId")}"))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        // Opening and resolving are the whole incident surface: no list, get, delete or reopen.
+        Assert.Equal(
+            [$"POST {ResolutionPath} resolveIncident", $"POST {IncidentsPath} openIncident"],
+            published);
+        Assert.Equal(published, implemented);
+    }
+
+    [Fact]
+    public void Resolve_incident_operation_publishes_the_status_matrix_the_endpoint_implements()
+    {
+        var operation = ResolveIncidentOperation();
+        var declared = operation.Mapping("responses").Children.Keys
+            .Cast<YamlScalarNode>()
+            .Select(node => node.Value!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["200", "401", "403", "404", "409", "503"], declared);
+        Assert.Equal(ProducedStatuses("resolveIncident"), declared);
+
+        var responses = operation.Mapping("responses");
+        Assert.Equal(
+            "#/components/schemas/Incident",
+            responses.Mapping("200").Mapping("content")
+                .Mapping("application/json").Mapping("schema").Scalar("$ref"));
+        Assert.Equal("#/components/responses/Unauthorized", responses.Mapping("401").Scalar("$ref"));
+        Assert.Equal("#/components/responses/Forbidden", responses.Mapping("403").Scalar("$ref"));
+        Assert.Equal("#/components/responses/UniformNotFound", responses.Mapping("404").Scalar("$ref"));
+        Assert.Equal("#/components/responses/IncidentConflict", responses.Mapping("409").Scalar("$ref"));
+        Assert.Equal("#/components/responses/ServiceUnavailable", responses.Mapping("503").Scalar("$ref"));
+
+        // The success body is the existing Incident representation, answered as 200 by the endpoint.
+        var chain = EndpointChain("resolveIncident");
+        Assert.Contains(".Produces<IncidentResponse>(StatusCodes.Status200OK)", chain, StringComparison.Ordinal);
+        Assert.Contains(
+            "return Results.Ok(ToResponse(result));",
+            HandlerSource("ResolveIncidentAsync"),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolving_requires_the_organization_context_the_incident_id_and_the_idempotency_key()
+    {
+        var parameters = ResolveIncidentOperation().Sequence("parameters").Children
+            .Cast<YamlMappingNode>()
+            .Select(parameter => parameter.Scalar("$ref"))
+            .ToArray();
+        Assert.Equal(
+            [
+                "#/components/parameters/OrganizationContext",
+                "#/components/parameters/IncidentId",
+                "#/components/parameters/IdempotencyKey",
+            ],
+            parameters);
+
+        var incidentId = Contract().Mapping("components").Mapping("parameters").Mapping("IncidentId");
+        Assert.Equal("incidentId", incidentId.Scalar("name"));
+        Assert.Equal("path", incidentId.Scalar("in"));
+        Assert.Equal("true", incidentId.Scalar("required"));
+        Assert.Equal("uuid", incidentId.Mapping("schema").Scalar("format"));
+
+        // The tenant context and a single well-formed key are enforced before the service runs, and
+        // the identifier is parsed in its canonical form only.
+        var chain = EndpointChain("resolveIncident");
+        Assert.Contains("\"/api/v1/incidents/{incidentId}/resolution\"", chain, StringComparison.Ordinal);
+        Assert.Contains(".RequireTenantContext(StatusCodes.Status403Forbidden)", chain, StringComparison.Ordinal);
+        Assert.Contains("TryReadContext(", HandlerSource("ResolveIncidentAsync"), StringComparison.Ordinal);
+        var source = EndpointSource();
+        Assert.Contains(
+            "Guid.TryParseExact(resourceId, \"D\", out parsedResourceId)",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("values.Count == 1", source, StringComparison.Ordinal);
+        Assert.Contains("IdempotencyKeyPolicy.IsValid(values[0])", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AI05_resolution_request_is_exactly_the_implemented_ResolveIncidentRequest()
+    {
+        var schema = Schema("ResolveIncidentRequest");
+        var transport = JsonProperties<ResolveIncidentRequest>();
+
+        Assert.Equal(["outcome", "reason"], transport);
+        Assert.Equal(transport, PropertyNames(schema));
+        Assert.Equal(transport, Required(schema));
+        Assert.Equal("false", schema.Scalar("additionalProperties"));
+        Assert.Equal(
+            "#/components/schemas/ResolveIncidentRequest",
+            ResolveIncidentOperation().Mapping("requestBody").Mapping("content")
+                .Mapping("application/json").Mapping("schema").Scalar("$ref"));
+
+        // The closed schema is enforced by the resolution handler itself, not merely documented.
+        Assert.Contains(
+            "request.ExtensionData is { Count: > 0 }",
+            HandlerSource("ResolveIncidentAsync"),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AI05_resolution_outcome_is_exactly_the_terminal_incident_vocabulary()
+    {
+        var outcomes = Enum.GetValues<IncidentResolutionOutcome>()
+            .Select(value => value.ToContractValue())
+            .ToArray();
+        Assert.Equal([IncidentContract.Resolved, IncidentContract.Rejected], outcomes);
+
+        AssertEnum(Schema("ResolveIncidentRequest").Mapping("properties").Mapping("outcome"), outcomes);
+        Assert.All(outcomes, value => Assert.True(IncidentContract.TryParseResolutionOutcome(value, out _)));
+        Assert.False(IncidentContract.TryParseResolutionOutcome(IncidentContract.Open, out _));
+        Assert.False(IncidentContract.TryParseResolutionOutcome(IncidentContract.Investigating, out _));
+    }
+
+    [Theory]
+    [InlineData("Reprogramado con el cliente.")]
+    [InlineData("x")]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" leading")]
+    [InlineData("trailing ")]
+    [InlineData(" lead")]
+    [InlineData("line\nbreak")]
+    [InlineData("tab\tinside")]
+    [InlineData("nul\u0000inside")]
+    [InlineData("c1\u0085inside")]
+    public void AI05_reason_pattern_accepts_exactly_what_the_reason_policy_accepts(string sample)
+    {
+        var reason = Schema("ResolveIncidentRequest").Mapping("properties").Mapping("reason");
+        Assert.Equal(
+            IncidentRequestPolicy.IsValidResolutionReason(sample),
+            Regex.IsMatch(sample, reason.Scalar("pattern")));
+    }
+
+    [Fact]
+    public void AI05_reason_bounds_are_exactly_the_implemented_policy()
+    {
+        var reason = Schema("ResolveIncidentRequest").Mapping("properties").Mapping("reason");
+        Assert.Equal("string", reason.Scalar("type"));
+        Assert.Equal(1, int.Parse(reason.Scalar("minLength")));
+        Assert.Equal(IncidentRequestPolicy.MaximumResolutionReasonLength, int.Parse(reason.Scalar("maxLength")));
+        Assert.True(IncidentRequestPolicy.IsValidResolutionReason(
+            new string('a', IncidentRequestPolicy.MaximumResolutionReasonLength)));
+        Assert.False(IncidentRequestPolicy.IsValidResolutionReason(
+            new string('a', IncidentRequestPolicy.MaximumResolutionReasonLength + 1)));
+    }
+
+    [Fact]
+    public void Resolution_settles_shape_then_capability_before_any_persisted_incident_state()
+    {
+        var operation = ResolveIncidentOperation();
+        Assert.Equal(
+            "shape-validation-then-capability-before-persisted-state",
+            operation.Scalar("x-authorization-precedence"));
+        Assert.Equal("invalid-request-without-productive-transaction", operation.Scalar("x-shape-validation"));
+        Assert.Equal(
+            ["idempotency_lock", "idempotency_record", "replay_evidence", "incident"],
+            operation.Sequence("x-capability-protected-state").Children
+                .Cast<YamlScalarNode>()
+                .Select(node => node.Value!)
+                .ToArray());
+
+        var service = ReadRepositoryFile(
+            "src", "Modules", "Incidents", "Incidents.Infrastructure", "Incidents",
+            "PostgreSqlIncidentService.Resolution.cs");
+        int[] order =
+        [
+            service.IndexOf("IncidentRequestPolicy.IsValidResolveCommandShape(command)", StringComparison.Ordinal),
+            service.IndexOf("transactionContext.ExecuteAsync", StringComparison.Ordinal),
+            service.IndexOf("IncidentsSql.ReadResolutionCapabilityAsync", StringComparison.Ordinal),
+            service.IndexOf("IncidentsSql.AcquireIdempotencyLockAsync", StringComparison.Ordinal),
+            service.IndexOf("await ReadResolutionReplayAsync", StringComparison.Ordinal),
+            service.IndexOf("IncidentsSql.ReadIncidentForUpdateAsync", StringComparison.Ordinal),
+            service.IndexOf("IncidentResolutionPolicy.CanResolve", StringComparison.Ordinal),
+            service.IndexOf("await CloseIncidentAsync", StringComparison.Ordinal),
+            service.IndexOf("await WriteResolutionAuditAsync", StringComparison.Ordinal),
+            service.IndexOf("await CompleteReservationAsync", StringComparison.Ordinal),
+        ];
+        Assert.All(order, index => Assert.True(index >= 0));
+        Assert.Equal(order.Order().ToArray(), order);
+
+        // Resolution never writes the order the incident belongs to, nor anything outside incidents.
+        Assert.DoesNotMatch(@"(?i)\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+orders\.", service);
+        Assert.Equal(
+            ["UPDATE incidents.incidents"],
+            Regex.Matches(service, @"\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+[a-z_]+\.[a-z_]+")
+                .Select(match => match.Value)
+                .ToArray());
+    }
+
     private static YamlMappingNode Contract() =>
         YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
 
     private static YamlMappingNode OpenIncidentOperation() =>
         Contract().Mapping("paths").Mapping(IncidentsPath).Mapping("post");
+
+    private static YamlMappingNode ResolveIncidentOperation() =>
+        Contract().Mapping("paths").Mapping(ResolutionPath).Mapping("post");
 
     private static YamlMappingNode Schema(string name) =>
         Contract().Mapping("components").Mapping("schemas").Mapping(name);
@@ -281,6 +493,38 @@ public sealed partial class IncidentsOpenApiImplementationTests
     private static string EndpointSource() => ReadRepositoryFile(
         "src", "Modules", "Incidents", "Incidents.Endpoints", "IncidentEndpoints.cs");
 
+    /// <summary>Every route registration of the endpoint source, from the map call to its terminator.</summary>
+    private static string[] EndpointChains()
+    {
+        var source = EndpointSource();
+        return MappedRoutePattern().Matches(source)
+            .Select(match => source[match.Index..source.IndexOf(';', match.Index)])
+            .ToArray();
+    }
+
+    private static string EndpointChain(string operationId) =>
+        Assert.Single(
+            EndpointChains(),
+            chain => chain.Contains($".WithName(\"{operationId}\")", StringComparison.Ordinal));
+
+    /// <summary>The statuses one operation's own route registration declares, never another's.</summary>
+    private static string[] ProducedStatuses(string operationId) =>
+        ProducedStatusPattern()
+            .Matches(EndpointChain(operationId))
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string HandlerSource(string handlerName)
+    {
+        var source = EndpointSource();
+        var start = source.IndexOf($"private static async Task<IResult> {handlerName}(", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"The endpoint no longer declares {handlerName}.");
+        var end = source.IndexOf("\n    private static ", start + 1, StringComparison.Ordinal);
+        return source[start..end];
+    }
+
     private static string ReadRepositoryFile(params string[] segments) =>
         File.ReadAllText(Path.Combine([RepositoryPaths.Root, .. segments]));
 
@@ -289,4 +533,10 @@ public sealed partial class IncidentsOpenApiImplementationTests
 
     [GeneratedRegex("\"([A-Z][A-Z_]+)\"")]
     private static partial Regex ConflictCodePattern();
+
+    [GeneratedRegex(@"endpoints\.Map(?<method>Get|Post|Put|Patch|Delete)\(""/api/v1(?<path>[^""]+)""")]
+    private static partial Regex MappedRoutePattern();
+
+    [GeneratedRegex(@"\.WithName\(""([A-Za-z]+)""\)")]
+    private static partial Regex OperationNamePattern();
 }

@@ -6,13 +6,13 @@ Valida únicamente este bundle: `v0.6-full-canonical-sync-7-fin001-mvp1`.
 
 1. Ejecutar `python3 tools/validate_contracts.py`.
 2. Ejecutar `sha256sum -c CHECKSUMS_SHA256.txt`.
-3. Confirmar que `database/AI-06_SCHEMA.sql` tiene SHA-256 `c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96`.
+3. Confirmar que `database/AI-06_SCHEMA.sql` tiene SHA-256 `7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163`.
 4. Confirmar que las firmas de `requeue_stale_*` tienen tres parámetros tanto en AI-06 como en AI-18.
 5. Confirmar promoción a `DEAD`, pisos de purga, backoff de settle y ausencia de privilegios directos SELECT/UPDATE/DELETE para runtime sobre ambos outbox.
 6. No sustituir archivos por adjuntos sueltos con el mismo nombre.
 
 7. Confirmar que ambos `purge_*` omiten `FOR UPDATE SKIP LOCKED` y vuelven a comprobar estado terminal y cutoff en el `DELETE` objetivo.
-8. Confirmar que AI-18 conserva su hash y que maintenance mantiene exactamente `SELECT,DELETE`, sin `UPDATE`.
+8. Confirmar que AI-18 coincide con el hash de `MANIFEST.json` (`b836ebc6…`) y que maintenance mantiene exactamente `SELECT,DELETE`, sin `UPDATE`.
 9. Confirmar que ADR-032 y ADR-033 conservan el estado `ACEPTADO como referencia de diseño para v0.7`; sólo se actualiza su referencia al hash canónico de AI-06.
 10. Confirmar que `assignDriver` declara 201/401/403/404/409, usa el Problem
     Details DSP-002 para 409 y conserva 404 uniforme para recursos ausentes o

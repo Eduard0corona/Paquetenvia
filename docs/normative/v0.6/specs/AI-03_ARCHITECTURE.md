@@ -90,7 +90,7 @@ REST y PostgreSQL son la autoridad para comandos y estado persistente. SignalR d
 | Geoespacial | PostgreSQL + PostGIS + NetTopologySuite |
 | Caché/coordinación | Redis |
 | Procesos asíncronos | .NET Worker Service + transactional outbox |
-| Jobs programados | `IJobScheduler`; implementación aprobada por ADR |
+| Jobs programados | `IJobScheduler`; implementación aprobada por ADR (MVP: `BackgroundService` periódico en `Paqueteria.Worker`, ADR-034) |
 | Archivos | S3-compatible; MinIO local |
 | Identidad | OIDC/OAuth 2.1 mediante `IIdentityProvider` |
 | Observabilidad | OpenTelemetry, logs JSON, métricas y trazas |
@@ -539,7 +539,7 @@ La base usa un esquema por módulo: `identity`, `organizations`, `clients`, `loc
 
 ### 25.2 Roles, bootstrap y RLS
 
-API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
+API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. El rol `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.finalize_expired_orders(integer)`, con `SELECT (id, status, claim_window_ends_at, finalized_at)` y `UPDATE (finalized_at)` sobre `orders.orders` y `EXECUTE` concedido sólo a `paqueteria_worker` (ADR-034). Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
 
 ### 25.3 Contexto tenant y pooling
 

@@ -16,7 +16,9 @@ describe("operations page privacy policy", () => {
     expect(source).toContain('source: "/ops/:path*"');
     expect(source).toContain('value: "no-store, private"');
     expect(source).toContain("geolocation=()");
-    expect(source).toContain("frame-ancestors 'none'");
+    expect(
+      readFileSync("src/security/security-headers.ts", "utf8"),
+    ).toContain("frame-ancestors 'none'");
   });
 
   it("does not use browser persistence or an external map provider", () => {

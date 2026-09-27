@@ -116,7 +116,7 @@ internal static class AzureOwnershipBridge
 
     /// <summary>
     /// E-002 v0.8 §18 steps 2–9, executed after canonical AI-06 (§14): SET LOCAL createrole_self_grant,
-    /// deterministic six-role pre-creation, exact attributes, effective capabilities, database ACL snapshot,
+    /// deterministic canonical-role pre-creation, exact attributes, effective capabilities, database ACL snapshot,
     /// CREATE preconditions and the two temporary CREATE grants.
     /// </summary>
     internal static async Task<E002AclSnapshot> PreludeAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
@@ -183,6 +183,7 @@ internal static class AzureOwnershipBridge
                 OR pg_catalog.has_schema_privilege('paqueteria_bootstrap', 'security', 'CREATE')
                 OR pg_catalog.has_schema_privilege('paqueteria_outbox_executor', 'security', 'CREATE')
                 OR pg_catalog.has_schema_privilege('paqueteria_maintenance', 'security', 'CREATE')
+                OR pg_catalog.has_schema_privilege('paqueteria_lifecycle_executor', 'security', 'CREATE')
             """, cancellationToken).ConfigureAwait(false);
         if (prestate)
         {
@@ -199,7 +200,7 @@ internal static class AzureOwnershipBridge
         stageObserver?.Invoke("e002-grant-security-create");
         await ExecuteAsync(connection, transaction, """
             GRANT CREATE ON SCHEMA security
-            TO paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance;
+            TO paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance, paqueteria_lifecycle_executor;
             """, cancellationToken).ConfigureAwait(false);
         return databaseAcl;
     }
@@ -228,7 +229,7 @@ internal static class AzureOwnershipBridge
             stageObserver?.Invoke("e002-revoke-security-create");
             await ExecuteAsync(connection, transaction, """
                 REVOKE CREATE ON SCHEMA security
-                FROM paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance;
+                FROM paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance, paqueteria_lifecycle_executor;
                 """, cancellationToken).ConfigureAwait(false);
             stage = "reset-schema-owner-role";
             stageObserver?.Invoke("e002-reset-role");
@@ -249,6 +250,7 @@ internal static class AzureOwnershipBridge
             SELECT NOT has_schema_privilege('paqueteria_bootstrap', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_outbox_executor', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_maintenance', 'security', 'CREATE')
+               AND NOT has_schema_privilege('paqueteria_lifecycle_executor', 'security', 'CREATE')
                AND NOT has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
             """, connection, transaction);
         if (await assertion.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
