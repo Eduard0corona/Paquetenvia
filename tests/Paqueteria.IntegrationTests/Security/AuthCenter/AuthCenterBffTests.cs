@@ -5,7 +5,7 @@ using Identity.Endpoints.AuthCenter;
 
 namespace Paqueteria.IntegrationTests.Security.AuthCenter;
 
-public sealed class AuthCenterBffTests
+public sealed partial class AuthCenterBffTests
 {
     private const string ViewerSubject = "mock-subject-active-viewer";
     private const string PrivilegedSubject = "mock-subject-platform-admin-mfa";
@@ -401,7 +401,7 @@ public sealed class AuthCenterBffTests
 
         using var logout = await SendWriteAsync(browser, AuthCenterDefaults.LogoutPath, csrf);
 
-        Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, logout.StatusCode);
         Assert.Equal(refreshToken, Assert.Single(factory.AuthCenter.RevokedTokens));
         Assert.Contains(logout.Headers.GetValues("Set-Cookie"), cookie =>
             cookie.StartsWith(AuthCenterDefaults.SessionCookieName + "=;", StringComparison.Ordinal));

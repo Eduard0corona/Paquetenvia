@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -15,7 +16,7 @@ namespace Identity.Endpoints.AuthCenter;
 internal sealed record AuthCenterProfile(string? Name, string? Email);
 
 /// <summary>
-/// Turns the stored external identity (AuthCenter <c>sub</c> + MFA evidence) into the Paquetenvia
+/// Turns the stored external identity (AuthCenter <c>sub</c>, <c>sid</c> + MFA evidence) into the Paquetenvia
 /// session on every request: the authorization context is re-resolved from the database each time,
 /// so suspensions and membership changes take effect without a new login. The same hook enforces
 /// the BFF request-forgery defenses (same-origin check and session-bound CSRF header on writes).
@@ -36,8 +37,27 @@ internal sealed class AuthCenterCookieEvents(IOptions<AuthCenterOptions> options
         if (external is null ||
             string.IsNullOrWhiteSpace(subject) ||
             mfa is not ("True" or "False") ||
-            string.IsNullOrEmpty(csrf) ||
-            !IsSameOrigin(request) ||
+            string.IsNullOrEmpty(csrf))
+        {
+            context.RejectPrincipal();
+            return;
+        }
+
+        // AUTH-001-BACKCHANNEL-LOGOUT: AuthCenter ended the single sign-on session (or every session
+        // of the user) this ticket came from. The ticket and the cookie are destroyed as well.
+        var terminations = context.HttpContext.RequestServices.GetRequiredService<IAuthCenterSessionTerminationStore>();
+        if (await terminations.IsEndedAsync(
+                SingleValue(external, AuthCenterDefaults.SessionIdClaim),
+                subject,
+                SignedInAt(context.Properties),
+                context.HttpContext.RequestAborted))
+        {
+            context.RejectPrincipal();
+            await context.HttpContext.SignOutAsync(AuthCenterDefaults.CookieScheme);
+            return;
+        }
+
+        if (!IsSameOrigin(request) ||
             (!IsSafeMethod(request.Method) && !HasValidCsrfHeader(request, csrf)))
         {
             context.RejectPrincipal();
@@ -96,6 +116,12 @@ internal sealed class AuthCenterCookieEvents(IOptions<AuthCenterOptions> options
                 Encoding.ASCII.GetBytes(provided),
                 Encoding.ASCII.GetBytes(expected));
     }
+
+    private static DateTimeOffset? SignedInAt(AuthenticationProperties properties) =>
+        properties.Items.TryGetValue(AuthCenterDefaults.SignedInAtItemKey, out var value) &&
+        long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var milliseconds)
+            ? DateTimeOffset.FromUnixTimeMilliseconds(milliseconds)
+            : null;
 
     private static string? SingleValue(ClaimsIdentity? identity, string type)
     {

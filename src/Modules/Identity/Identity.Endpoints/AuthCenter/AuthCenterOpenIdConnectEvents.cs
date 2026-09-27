@@ -14,6 +14,7 @@ namespace Identity.Endpoints.AuthCenter;
 /// </summary>
 internal sealed partial class AuthCenterOpenIdConnectEvents(
     IOptions<AuthCenterOptions> options,
+    AuthCenterSessionReplacement sessionReplacement,
     ILogger<AuthCenterOpenIdConnectEvents> logger) : OpenIdConnectEvents
 {
     public override Task RedirectToIdentityProvider(RedirectContext context)
@@ -21,6 +22,14 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
         // The API may sit behind the Next.js rewrite or an ingress; the redirect URI registered in
         // AuthCenter is always derived from the configured public origin, never from Host headers.
         context.ProtocolMessage.RedirectUri = options.Value.RedirectUri;
+
+        // AUTH-001-MFA-STEP-UP: AuthCenter asks for (or enrolls) the second factor without asking
+        // the password again when the single sign-on session is weaker than the requested class.
+        if (RequiredContextClass(context.Properties) is { } required)
+        {
+            context.ProtocolMessage.AcrValues = required;
+        }
+
         return Task.CompletedTask;
     }
 
@@ -44,12 +53,20 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
         if (issuers.Length != 1 || !string.Equals(issuers[0], options.Value.Issuer, StringComparison.Ordinal))
         {
             context.Fail("Unexpected ID token issuer.");
+            return Task.CompletedTask;
+        }
+
+        // Defense in depth for step-up: AuthCenter is trusted to honor acr_values, but the validated
+        // ID token must prove it (acr of the requested class or stronger, and "mfa" in amr).
+        if (RequiredContextClass(context.Properties) is not null && !SatisfiesMfa(context.Principal))
+        {
+            context.Fail("The requested authentication context was not satisfied.");
         }
 
         return Task.CompletedTask;
     }
 
-    public override Task TicketReceived(TicketReceivedContext context)
+    public override async Task TicketReceived(TicketReceivedContext context)
     {
         var source = context.Principal;
         var subjects = source?.FindAll(AuthCenterDefaults.SubjectClaim).Select(claim => claim.Value).ToArray() ?? [];
@@ -60,17 +77,19 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
             subjects[0].Any(char.IsControl))
         {
             context.Fail("AuthCenter did not return a usable subject.");
-            return Task.CompletedTask;
+            return;
         }
 
-        // Only the subject, MFA evidence and display profile survive. AuthCenter roles, permissions
-        // and applications are dropped: Paquetenvia authorizes from its own memberships (GATE-002).
-        var mfa = source!.FindAll("amr").Any(claim => string.Equals(claim.Value, "mfa", StringComparison.Ordinal));
+        // Only the subject, AuthCenter session id, MFA evidence and display profile survive.
+        // AuthCenter roles, permissions and applications are dropped: Paquetenvia authorizes from its
+        // own memberships (GATE-002). sid links the session to back-channel logout tokens.
+        var mfa = HasMfaMethod(source!);
         var claims = new List<Claim>
         {
             new(AuthCenterDefaults.SubjectClaim, subjects[0]),
             new(AuthCenterDefaults.MfaClaim, mfa.ToString(CultureInfo.InvariantCulture)),
         };
+        AddOptional(claims, source!, AuthCenterDefaults.SessionIdClaim, AuthCenterDefaults.MaximumSessionIdLength);
         AddOptional(claims, source!, AuthCenterDefaults.NameClaim, 200);
         AddOptional(claims, source!, AuthCenterDefaults.EmailClaim, 320);
         context.Principal = new ClaimsPrincipal(new ClaimsIdentity(
@@ -79,26 +98,41 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
             AuthCenterDefaults.NameClaim,
             roleType: null));
 
-        // Keep only the refresh token (needed to revoke on logout). ID/access tokens are not used
-        // by Paquetenvia and are not retained anywhere.
-        var refreshToken = context.Properties.GetTokenValue(AuthCenterDefaults.RefreshTokenName);
-        context.Properties.StoreTokens(string.IsNullOrEmpty(refreshToken)
-            ? []
-            : [new AuthenticationToken { Name = AuthCenterDefaults.RefreshTokenName, Value = refreshToken }]);
+        // Keep only the refresh token (revoked on logout) and the ID token (id_token_hint for
+        // RP-initiated logout), both server-side in the protected ticket. The access token is not
+        // used by Paquetenvia and is not retained anywhere.
+        var retained = new List<AuthenticationToken>();
+        foreach (var name in new[] { AuthCenterDefaults.RefreshTokenName, AuthCenterDefaults.IdTokenName })
+        {
+            if (context.Properties.GetTokenValue(name) is { Length: > 0 } value)
+            {
+                retained.Add(new AuthenticationToken { Name = name, Value = value });
+            }
+        }
+
+        context.Properties.StoreTokens(retained);
+        context.Properties.Items.Remove(AuthCenterDefaults.RequiredContextClassItemKey);
         context.Properties.Items[AuthCenterDefaults.CsrfPropertyKey] =
             Base64UrlTextEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        var now = DateTimeOffset.UtcNow;
         context.Properties.IsPersistent = false;
         context.Properties.AllowRefresh = false;
-        context.Properties.IssuedUtc = DateTimeOffset.UtcNow;
-        context.Properties.ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(options.Value.SessionLifetimeMinutes);
-        return Task.CompletedTask;
+        context.Properties.IssuedUtc = now;
+        context.Properties.ExpiresUtc = now.AddMinutes(options.Value.SessionLifetimeMinutes);
+        context.Properties.Items[AuthCenterDefaults.SignedInAtItemKey] =
+            now.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+
+        // The new session replaces any session this browser already had (step-up included): the
+        // old ticket is deleted and the cookie handler issues a brand-new key.
+        await sessionReplacement.ReplaceAsync(context.HttpContext);
     }
 
     public override Task AccessDenied(AccessDeniedContext context)
     {
+        // AUTH-001-ACCESS-DENIED-MESSAGE: reached only after state, correlation and iss validated.
         LogSignInFailed(logger, "access_denied");
         context.HandleResponse();
-        context.Response.Redirect(AuthCenterDefaults.RemoteFailureRedirect);
+        context.Response.Redirect(AuthCenterDefaults.AccessDeniedRedirect);
         return Task.CompletedTask;
     }
 
@@ -109,6 +143,28 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
         context.Response.Redirect(AuthCenterDefaults.RemoteFailureRedirect);
         return Task.CompletedTask;
     }
+
+    internal static bool SatisfiesMfa(ClaimsPrincipal? principal)
+    {
+        if (principal is null)
+        {
+            return false;
+        }
+
+        var classes = principal.FindAll("acr").Select(claim => claim.Value).ToArray();
+        return classes.Length == 1 &&
+            classes[0] is AuthCenterDefaults.MfaContextClass or AuthCenterDefaults.PhishingResistantContextClass &&
+            HasMfaMethod(principal);
+    }
+
+    private static bool HasMfaMethod(ClaimsPrincipal principal) =>
+        principal.FindAll("amr").Any(claim => string.Equals(claim.Value, "mfa", StringComparison.Ordinal));
+
+    private static string? RequiredContextClass(AuthenticationProperties? properties) =>
+        properties?.Items.TryGetValue(AuthCenterDefaults.RequiredContextClassItemKey, out var value) == true &&
+        string.Equals(value, AuthCenterDefaults.MfaContextClass, StringComparison.Ordinal)
+            ? value
+            : null;
 
     private static void AddOptional(List<Claim> claims, ClaimsPrincipal source, string type, int maximumLength)
     {

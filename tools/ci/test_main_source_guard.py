@@ -416,19 +416,28 @@ class Rel000SynchronisationTests(unittest.TestCase):
 
     def test_guard_admissions_agree_with_rel000_registry(self):
         """The guard opens main exactly for the ACTIVE admissions REL-000 validates; branches never overlap remediations."""
-        policy = self.rel000.validate_remediation_policy(copy.deepcopy(COMMITTED_POLICY))
-        expected = {
-            entry["authorized_source_branch"]: entry["id"]
-            for entry in policy["dependency_admissions"]
-            if entry["status"] == "ACTIVE" and entry["mode"] == self.rel000.DEPENDENCY_ADMISSION
-        }
-        self.assertTrue(expected)
-        admitted = guard.admitted_branches(guard.validate_policy(copy.deepcopy(COMMITTED_POLICY)), today="2026-09-27")
-        self.assertEqual(expected, admitted)
-        remediation_branches = guard.authorized_branches(guard.validate_policy(copy.deepcopy(COMMITTED_POLICY)), today="2026-09-27")
-        self.assertFalse(set(admitted) & set(remediation_branches))
-        for branch in admitted:
-            self.assertEqual(self.rel000.NORMAL_RELEASE_EVIDENCE, self.rel000.resolve_rel000_mode(policy, branch))
+        committed = copy.deepcopy(COMMITTED_POLICY)
+        self.assertTrue(committed["dependency_admissions"])
+        # The committed admissions may all be MERGED once their dependency landed, which would make the
+        # agreement vacuous, so it is also checked with every committed admission re-activated.
+        reactivated = copy.deepcopy(COMMITTED_POLICY)
+        for entry in reactivated["dependency_admissions"]:
+            entry["status"] = "ACTIVE"
+        for candidate, require_admissions in ((committed, False), (reactivated, True)):
+            policy = self.rel000.validate_remediation_policy(copy.deepcopy(candidate))
+            expected = {
+                entry["authorized_source_branch"]: entry["id"]
+                for entry in policy["dependency_admissions"]
+                if entry["status"] == "ACTIVE" and entry["mode"] == self.rel000.DEPENDENCY_ADMISSION
+            }
+            if require_admissions:
+                self.assertTrue(expected)
+            admitted = guard.admitted_branches(guard.validate_policy(copy.deepcopy(candidate)), today="2026-09-27")
+            self.assertEqual(expected, admitted)
+            remediation_branches = guard.authorized_branches(guard.validate_policy(copy.deepcopy(candidate)), today="2026-09-27")
+            self.assertFalse(set(admitted) & set(remediation_branches))
+            for branch in admitted:
+                self.assertEqual(self.rel000.NORMAL_RELEASE_EVIDENCE, self.rel000.resolve_rel000_mode(policy, branch))
 
     def test_guard_agrees_with_rel000_mode_resolution_for_committed_policy(self):
         """Every branch the guard authorizes is one REL-000 resolves to SECURITY_REMEDIATION and vice versa."""

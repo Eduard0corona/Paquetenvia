@@ -3,8 +3,11 @@ import {
   buildLoginHref,
   fetchBffSession,
   isLocalReturnUrl,
+  buildStepUpHref,
   logoutBffSession,
+  navigateAfterLogout,
   parseBffSession,
+  parseEndSessionUrl,
 } from "./bff-session";
 import {
   bootstrapBffSession,
@@ -102,18 +105,87 @@ describe("BFF session", () => {
     expect(await fetchBffSession(serverError as unknown as typeof fetch)).toEqual({ status: "unavailable" });
   });
 
-  it("logs out with POST, credentials and the CSRF header", async () => {
-    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
-    expect(await logoutBffSession(csrf, fetcher as unknown as typeof fetch)).toBe(true);
+  it("logs out with POST, credentials and the CSRF header and returns the end-session URL", async () => {
+    const endSessionUrl =
+      "https://authcenter.test/oauth/logout?id_token_hint=a.b.c&post_logout_redirect_uri=https%3A%2F%2Fapp.paquetenvia.test%2Flogin";
+    const fetcher = vi.fn(async () => jsonResponse(200, { endSessionUrl }));
+    expect(await logoutBffSession(csrf, fetcher as unknown as typeof fetch)).toEqual({
+      ok: true,
+      endSessionUrl,
+    });
     expect(fetcher).toHaveBeenCalledWith(
       "/auth/logout",
       expect.objectContaining({
         method: "POST",
         credentials: "include",
-        headers: { "X-AuthCenter-CSRF": csrf },
+        cache: "no-store",
+        headers: { "X-AuthCenter-CSRF": csrf, Accept: "application/json" },
       }),
     );
-    expect(await logoutBffSession("short", fetcher as unknown as typeof fetch)).toBe(false);
+  });
+
+  it("never sends a logout without a well-formed CSRF token", async () => {
+    const fetcher = vi.fn(async () => jsonResponse(200, { endSessionUrl: null }));
+    expect(await logoutBffSession("short", fetcher as unknown as typeof fetch)).toEqual({ ok: false });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("treats a null end-session URL, a gone session or an unreadable body as a local-only logout", async () => {
+    const nullUrl = vi.fn(async () => jsonResponse(200, { endSessionUrl: null }));
+    const gone = vi.fn(async () => new Response(null, { status: 401 }));
+    const unreadable = vi.fn(async () => new Response("not json", { status: 200 }));
+    const localOnly = { ok: true, endSessionUrl: null };
+    expect(await logoutBffSession(csrf, nullUrl as unknown as typeof fetch)).toEqual(localOnly);
+    expect(await logoutBffSession(csrf, gone as unknown as typeof fetch)).toEqual(localOnly);
+    expect(await logoutBffSession(csrf, unreadable as unknown as typeof fetch)).toEqual(localOnly);
+  });
+
+  it("reports network and server failures as a failed logout", async () => {
+    const offline = vi.fn(async () => {
+      throw new TypeError("offline");
+    });
+    const serverError = vi.fn(async () => new Response(null, { status: 503 }));
+    const legacyNoContent = vi.fn(async () => new Response(null, { status: 204 }));
+    expect(await logoutBffSession(csrf, offline as unknown as typeof fetch)).toEqual({ ok: false });
+    expect(await logoutBffSession(csrf, serverError as unknown as typeof fetch)).toEqual({ ok: false });
+    expect(await logoutBffSession(csrf, legacyNoContent as unknown as typeof fetch)).toEqual({ ok: false });
+  });
+
+  it("follows only absolute HTTPS end-session URLs without credentials", () => {
+    expect(parseEndSessionUrl("https://authcenter.test/oauth/logout?id_token_hint=x")).toBe(
+      "https://authcenter.test/oauth/logout?id_token_hint=x",
+    );
+    for (const value of [
+      null,
+      undefined,
+      42,
+      "",
+      "/oauth/logout",
+      "http://authcenter.test/oauth/logout",
+      "javascript:alert(1)",
+      "https://user:pass@authcenter.test/oauth/logout",
+      `https://authcenter.test/${"a".repeat(16_400)}`,
+    ]) {
+      expect(parseEndSessionUrl(value)).toBeNull();
+    }
+  });
+
+  it("navigates to AuthCenter with window.location.assign, or to /login when there is no URL", () => {
+    const assign = vi.fn();
+    const url = "https://authcenter.test/oauth/logout?id_token_hint=x";
+    navigateAfterLogout({ ok: true, endSessionUrl: url }, { assign });
+    navigateAfterLogout({ ok: true, endSessionUrl: null }, { assign });
+    navigateAfterLogout({ ok: false }, { assign });
+    expect(assign.mock.calls).toEqual([[url], ["/login"], ["/login"]]);
+  });
+
+  it("builds a step-up login that keeps the local-only return_url rule", () => {
+    expect(buildStepUpHref("/ops/finance?tab=cod")).toBe(
+      "/auth/login?mfa=required&return_url=%2Fops%2Ffinance%3Ftab%3Dcod",
+    );
+    for (const unsafe of ["https://evil.test", "//evil.test", "/\\evil.test", "javascript:alert(1)", null]) {
+      expect(buildStepUpHref(unsafe)).toBe("/auth/login?mfa=required&return_url=%2Flogin");
+    }
   });
 });
 
