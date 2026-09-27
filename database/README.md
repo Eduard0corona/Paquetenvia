@@ -15,7 +15,7 @@ The migrator verifies the canonical SHA-256 values before it opens PostgreSQL:
 
 ```text
 AI-06 1b7729b8901aadd362bf35cd144349ae25471c933967af901b62591ab795091c
-AI-18 e8dcd7ab4030dab79baf216166fe02181ae2b8fe667c500d41b115590a9fa3ac
+AI-18 b6e599116a0800173f461b23ba49dfaa3515b3210b8e9b07dadbf7024f928a20
 ```
 
 Use `tools/database-baseline.ps1`; see

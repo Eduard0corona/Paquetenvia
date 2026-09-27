@@ -37,7 +37,7 @@ public sealed class OrdersOpenApiImplementationTests
         AssertJsonProperties<OrderAcceptanceRequest>(
             "acceptance_channel", "accepted_at", "privacy_version", "terms_version");
         AssertJsonProperties<TransitionOrderRequest>(
-            "expected_version", "metadata", "reason", "target_status");
+            "client_occurred_at", "expected_version", "metadata", "reason", "target_status");
         AssertJsonProperties<OrderResponse>(
             "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id",
             "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
@@ -66,11 +66,58 @@ public sealed class OrdersOpenApiImplementationTests
             ["expected_version", "reason", "target_status"],
             RequiredPropertyNames(transition));
         Assert.Equal(
-            ["expected_version", "metadata", "reason", "target_status"],
+            ["client_occurred_at", "expected_version", "metadata", "reason", "target_status"],
             JsonPropertyNames<TransitionOrderRequest>());
+        Assert.Equal(
+            JsonPropertyNames<TransitionOrderRequest>(),
+            transition.Mapping("properties").Children.Keys
+                .Select(key => Assert.IsType<YamlScalarNode>(key).Value!)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
         Assert.Equal(500, OrderTransitionInputPolicy.MaximumReasonLength);
         Assert.Equal(2, OrderTransitionInputPolicy.MaximumMetadataDepth);
         Assert.Equal(4_096, OrderTransitionInputPolicy.DefaultMaximumMetadataUtf8Bytes);
+    }
+
+    /// <summary>
+    /// OPS-003-SERVER-72H-REJECTION: transitionOrder declares its 409 with the one code the endpoint
+    /// adds, the optional client timestamp is a date-time, and the endpoint emits that exact code.
+    /// </summary>
+    [Fact]
+    public void Transition_offline_age_rejection_matches_AI05()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var transition = root.Mapping("paths").Mapping("/orders/{orderId}/transitions").Mapping("post");
+        Assert.Equal(
+            "#/components/responses/TransitionConflict",
+            transition.Mapping("responses").Mapping("409").Scalar("$ref"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var problem = schemas.Mapping("TransitionConflictProblem");
+        Assert.Equal(["status", "title", "type"], RequiredPropertyNames(problem));
+        Assert.Equal(
+            [OfflineOperationAgePolicy.ExpiredCode],
+            EnumValues(problem.Mapping("properties").Mapping("code")));
+        var clientOccurredAt = schemas.Mapping("TransitionRequest").Mapping("properties").Mapping("client_occurred_at");
+        Assert.Equal("date-time", clientOccurredAt.Scalar("format"));
+        Assert.DoesNotContain(
+            "client_occurred_at",
+            RequiredPropertyNames(schemas.Mapping("TransitionRequest")));
+
+        var age = root.Mapping("x-offline-operation-age");
+        Assert.Equal("PT72H", age.Scalar("maximum_age"));
+        Assert.Equal("false", age.Scalar("maximum_age_configurable"));
+        Assert.Equal("PT5M", age.Scalar("clock_tolerance_default"));
+        Assert.Equal("PT0S..PT5M", age.Scalar("clock_tolerance_range"));
+        Assert.Equal(TimeSpan.FromHours(72), OfflineOperationAgePolicy.MaximumAge);
+        Assert.Equal(TimeSpan.FromMinutes(5), OfflineOperationAgePolicy.DefaultClockTolerance);
+        Assert.Equal(TimeSpan.FromMinutes(5), OfflineOperationAgePolicy.MaximumClockTolerance);
+        Assert.Equal(
+            "client_occurred_at (optional)",
+            age.Mapping("operations").Scalar("transitionOrder"));
+
+        var source = ReadRepositoryFile("src", "Modules", "Orders", "Orders.Endpoints", "OrderEndpoints.cs");
+        Assert.Contains("offlinePolicy.Evaluate(request.ClientOccurredAt, clock.UtcNow)", source, StringComparison.Ordinal);
+        Assert.Contains("[\"code\"] = OfflineOperationAgePolicy.ExpiredCode", source, StringComparison.Ordinal);
     }
 
     [Fact]

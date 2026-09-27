@@ -62,6 +62,13 @@ public static class E002RoutineMap
         new("security.requeue_stale_dispatch_outbox(interval,integer,integer)", "paqueteria_outbox_executor", ["paqueteria_worker"]),
     ];
 
+    /// <summary>OPS-003-CLEANUP-ROLE: installed by the Custody OPS-003 lane, independently of NTF-001 and LIF-001.</summary>
+    private static readonly E002RoutineEntry[] Ops003Entries =
+    [
+        new("security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)", "paqueteria_cleanup_executor", ["paqueteria_worker"]),
+        new("security.expire_proof_upload_sessions(integer)", "paqueteria_cleanup_executor", ["paqueteria_worker"]),
+    ];
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -76,7 +83,8 @@ public static class E002RoutineMap
         if (PendingEntries.Length != 11 || Ntf001Entries.Length != 15 || AppliedEntries.Count != 26 ||
             AppliedEntries.Sum(entry => 1 + entry.Grantees.Count) != 50 ||
             Lif001Entries.Length != 1 || Lif001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
-            DispatchLaneEntries.Length != 2 || DispatchLaneEntries.Sum(entry => 1 + entry.Grantees.Count) != 4)
+            DispatchLaneEntries.Length != 2 || DispatchLaneEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
+            Ops003Entries.Length != 2 || Ops003Entries.Sum(entry => 1 + entry.Grantees.Count) != 4)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
@@ -85,7 +93,8 @@ public static class E002RoutineMap
     public static IReadOnlyList<E002RoutineEntry> Select(
         E002RoutineMapState state,
         bool lif001Applied,
-        bool dispatchLaneApplied = false)
+        bool dispatchLaneApplied = false,
+        bool ops003Applied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -104,13 +113,19 @@ public static class E002RoutineMap
             selected = selected.Concat(Lif001Entries);
         }
 
+        if (ops003Applied)
+        {
+            selected = selected.Concat(Ops003Entries);
+        }
+
         return Array.AsReadOnly(selected.ToArray());
     }
 
     public static string Name(
         E002RoutineMapState state,
         bool lif001Applied,
-        bool dispatchLaneApplied = false)
+        bool dispatchLaneApplied = false,
+        bool ops003Applied = false)
     {
         var prefix = state switch
         {
@@ -122,6 +137,7 @@ public static class E002RoutineMap
         return prefix +
             (lif001Applied ? "_PLUS_LIF001" : string.Empty) +
             (dispatchLaneApplied ? "_PLUS_D8DISPATCH" : string.Empty) +
+            (ops003Applied ? "_PLUS_OPS003" : string.Empty) +
             "_V1";
     }
 }
