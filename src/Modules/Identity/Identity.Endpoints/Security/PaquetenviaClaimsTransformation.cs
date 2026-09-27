@@ -38,6 +38,7 @@ public sealed class PaquetenviaClaimsTransformation : IClaimsTransformation
         var statusClaims = TrustedClaims(source, IdentityClaimTypes.SourceStatus).ToArray();
         var mfaClaims = TrustedClaims(source, IdentityClaimTypes.SourceMfa).ToArray();
         var membershipClaims = TrustedClaims(source, IdentityClaimTypes.SourceMembership).ToArray();
+        var emailVerifiedClaims = TrustedClaims(source, IdentityClaimTypes.SourceEmailVerified).ToArray();
 
         var userId = Guid.Empty;
         if (subjectClaims.Length != 1 ||
@@ -49,7 +50,9 @@ public sealed class PaquetenviaClaimsTransformation : IClaimsTransformation
             statusClaims.Length == 1 && statusClaims[0].Value != "ACTIVE" ||
             statusClaims.Length == 0 && membershipClaims.Length != 0 ||
             mfaClaims.Length != 1 ||
-            !bool.TryParse(mfaClaims[0].Value, out var mfaSatisfied))
+            !bool.TryParse(mfaClaims[0].Value, out var mfaSatisfied) ||
+            emailVerifiedClaims.Length > 1 ||
+            emailVerifiedClaims.Length == 1 && emailVerifiedClaims[0].Value != "true")
         {
             sessionClaims = [];
             return false;
@@ -81,6 +84,11 @@ public sealed class PaquetenviaClaimsTransformation : IClaimsTransformation
         if (mfaSatisfied)
         {
             claims.Add(SessionClaim(IdentityClaimTypes.AuthenticationMethodReference, "mfa"));
+        }
+
+        if (emailVerifiedClaims.Length == 1)
+        {
+            claims.Add(SessionClaim(IdentityClaimTypes.EmailVerified, "true"));
         }
 
         claims.AddRange(memberships.Select(membership =>

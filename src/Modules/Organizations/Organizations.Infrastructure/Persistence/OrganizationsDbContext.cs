@@ -61,6 +61,7 @@ public sealed class OrganizationsDbContext(
     private static OrganizationStatus ParseOrganizationStatus(string value) => value switch
     {
         "ACTIVE" => OrganizationStatus.Active,
+        "PENDING_APPROVAL" => OrganizationStatus.PendingApproval,
         "SUSPENDED" => OrganizationStatus.Suspended,
         "CLOSED" => OrganizationStatus.Closed,
         _ => throw new InvalidOperationException("Unknown organization status stored in PostgreSQL."),

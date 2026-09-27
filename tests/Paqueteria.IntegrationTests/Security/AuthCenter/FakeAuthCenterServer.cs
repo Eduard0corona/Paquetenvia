@@ -328,10 +328,16 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             ["auth_time"] = new DateTimeOffset(now).ToUnixTimeSeconds(),
             ["name"] = "Usuario Sintético",
             ["email"] = "synthetic.user@paquetenvia.test",
-            ["email_verified"] = true,
             ["roles"] = "AUTHCENTER_SUPERADMIN",
             ["permissions"] = "EVERYTHING",
         };
+
+        // AUTH-EMAIL-VERIFIED-REQUIRED: the real AuthCenter emits a JSON boolean; OmitEmailVerified and
+        // EmailVerified play an ID token without the claim or with any other value.
+        if (!behavior.OmitEmailVerified)
+        {
+            claims["email_verified"] = behavior.EmailVerified ?? true;
+        }
 
         // AuthCenter honors acr_values by asking (or enrolling) the second factor: the ID token then
         // carries acr mfa and "mfa" in amr. IgnoreAcrValues plays a server that did not.
@@ -435,6 +441,8 @@ public sealed record TokenBehavior
     public string? Acr { get; init; }
     public bool IgnoreAcrValues { get; init; }
     public string? SessionId { get; init; }
+    public object? EmailVerified { get; init; }
+    public bool OmitEmailVerified { get; init; }
 }
 
 /// <summary>One deviation at a time from a valid AuthCenter logout token.</summary>

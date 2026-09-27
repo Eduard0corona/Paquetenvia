@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using Identity.Application.Registration;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -80,7 +82,32 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
             return;
         }
 
-        // Only the subject, AuthCenter session id, MFA evidence and display profile survive.
+        // AUTH-EMAIL-VERIFIED-REQUIRED: without email_verified=true from the validated ID token no user
+        // is created or linked and no session is issued; the refusal is specific, never a detail.
+        if (!HasVerifiedEmail(source!))
+        {
+            LogEmailNotVerified(logger);
+            context.HandleResponse();
+            context.Response.Redirect(AuthCenterDefaults.EmailNotVerifiedRedirect);
+            return;
+        }
+
+        // AUTH-OPEN-REGISTRATION: the first sign-in of an unknown subject creates its user (no
+        // memberships) exactly once; a known subject is left untouched whatever its status.
+        try
+        {
+            await context.HttpContext.RequestServices
+                .GetRequiredService<IIdentityRegistration>()
+                .RegisterAsync(subjects[0], context.HttpContext.RequestAborted);
+        }
+        catch (IdentityRegistrationUnavailableException)
+        {
+            context.Fail("Identity registration is unavailable.");
+            return;
+        }
+
+        // Only the subject, AuthCenter session id, MFA evidence, verified-email evidence and display
+        // profile survive.
         // AuthCenter roles, permissions and applications are dropped: Paquetenvia authorizes from its
         // own memberships (GATE-002). sid links the session to back-channel logout tokens.
         var mfa = HasMfaMethod(source!);
@@ -88,6 +115,7 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
         {
             new(AuthCenterDefaults.SubjectClaim, subjects[0]),
             new(AuthCenterDefaults.MfaClaim, mfa.ToString(CultureInfo.InvariantCulture)),
+            new(AuthCenterDefaults.EmailVerifiedClaim, "true"),
         };
         AddOptional(claims, source!, AuthCenterDefaults.SessionIdClaim, AuthCenterDefaults.MaximumSessionIdLength);
         AddOptional(claims, source!, AuthCenterDefaults.NameClaim, 200);
@@ -157,6 +185,19 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
             HasMfaMethod(principal);
     }
 
+    /// <summary>
+    /// Exactly one <c>email_verified</c> claim that is the JSON boolean <c>true</c>: the token handler
+    /// types it <see cref="ClaimValueTypes.Boolean"/> and renders it <c>true</c>. A JSON string such as
+    /// <c>"true"</c>, any other value, a repeated claim or an absent claim is unverified.
+    /// </summary>
+    internal static bool HasVerifiedEmail(ClaimsPrincipal principal)
+    {
+        var claims = principal.FindAll(AuthCenterDefaults.EmailVerifiedClaim).ToArray();
+        return claims.Length == 1 &&
+            string.Equals(claims[0].ValueType, ClaimValueTypes.Boolean, StringComparison.Ordinal) &&
+            string.Equals(claims[0].Value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool HasMfaMethod(ClaimsPrincipal principal) =>
         principal.FindAll("amr").Any(claim => string.Equals(claim.Value, "mfa", StringComparison.Ordinal));
 
@@ -177,4 +218,7 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
 
     [LoggerMessage(EventId = 4101, Level = LogLevel.Warning, Message = "AuthCenter sign-in was rejected ({FailureKind}).")]
     private static partial void LogSignInFailed(ILogger logger, string failureKind);
+
+    [LoggerMessage(EventId = 4106, Level = LogLevel.Warning, Message = "AuthCenter sign-in was refused: the email is not verified.")]
+    private static partial void LogEmailNotVerified(ILogger logger);
 }

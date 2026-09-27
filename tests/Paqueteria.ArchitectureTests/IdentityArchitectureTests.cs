@@ -57,8 +57,9 @@ public sealed class IdentityArchitectureTests
     [Fact]
     public void External_identity_contains_no_tenant_authorization_data()
     {
+        // Authentication evidence only: subject, MFA and verified email (AUTH-EMAIL-VERIFIED-REQUIRED).
         Assert.Equal(
-            ["MfaSatisfied", "Subject"],
+            ["EmailVerified", "MfaSatisfied", "Subject"],
             typeof(ExternalIdentity).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
     }
 

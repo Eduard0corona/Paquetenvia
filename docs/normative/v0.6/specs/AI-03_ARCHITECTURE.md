@@ -436,8 +436,20 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
   que sea exactamente el origen web público. La respuesta de autorización exige `iss` (RFC 9207).
 - AuthCenter solo autentica: la autorización se resuelve en cada petición desde
   `identity.users.identity_subject` + membresías + RLS; roles y permisos de AuthCenter se ignoran.
-- El primer ingreso es por invitación previa (`AUTH-FIRST-LOGIN-INVITATION`); el login nunca
-  crea usuarios, organizaciones ni membresías.
+- Registro abierto (`AUTH-OPEN-REGISTRATION`, reemplaza a `AUTH-FIRST-LOGIN-INVITATION`): el
+  primer inicio de sesión de un `sub` desconocido crea su `identity.users` una sola vez, sin
+  membresías, mediante `security.register_identity_subject`; un `sub` existente nunca se
+  revincula ni se modifica. El login nunca crea organizaciones ni membresías.
+- Correo verificado obligatorio (`AUTH-EMAIL-VERIFIED-REQUIRED`): sin exactamente un claim
+  `email_verified` igual a `true` en el ID token validado, el callback redirige a
+  `/login?error=email_not_verified`, sin sesión y sin crear ni vincular usuarios. La evidencia se
+  guarda en el ticket del servidor y el onboarding la exige.
+- Onboarding (`REG-SELF-SERVICE-ORGANIZATION`): el usuario crea su organización con
+  `POST /api/v1/onboarding/organizations`. BUSINESS queda ACTIVE con el creador como
+  BUSINESS_ADMIN; ALLY queda PENDING_APPROVAL con el creador como ALLY_ADMIN y sin acceso hasta que
+  un PLATFORM_ADMIN con MFA, desde una organización PLATFORM, la aprueba (ACTIVE; no crea relación
+  de aliado) o la rechaza (CLOSED; puede volver a solicitar). Una sola organización no CLOSED
+  creada por persona (`REG-ONE-ORGANIZATION-PER-PERSON`), garantizada por un índice único parcial.
 - Cierre de sesión (`AUTH-001-RP-INITIATED-LOGOUT`): `POST /auth/logout` exige CSRF, revoca el
   refresh token y destruye la sesión local aunque falle el discovery; responde
   `{ endSessionUrl }` con el `end_session_endpoint` de AuthCenter, `id_token_hint` y
@@ -590,7 +602,7 @@ La base usa un esquema por módulo: `identity`, `organizations`, `clients`, `loc
 
 ### 25.2 Roles, bootstrap y RLS
 
-API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. El rol `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.finalize_expired_orders(integer)`, con `SELECT (id, status, claim_window_ends_at, finalized_at)` y `UPDATE (finalized_at)` sobre `orders.orders` y `EXECUTE` concedido sólo a `paqueteria_worker` (ADR-034). El rol `paqueteria_cleanup_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.purge_expired_idempotency_keys(timestamptz, integer, boolean)`, con un piso fijo de 72 horas, y de `security.expire_proof_upload_sessions(integer)`, con grants exactos por columna sobre `platform.idempotency_keys` y `custody.proof_upload_sessions` y `EXECUTE` concedido sólo a `paqueteria_worker` (OPS-003-CLEANUP-ROLE); también es dueño de la purga de sesiones BFF `security.purge_bff_sessions(integer)`. El rol `paqueteria_session_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.create_bff_session`, `security.resolve_bff_session(bytea)` de las tres sobrecargas de `security.revoke_bff_session` y de `security.register_bff_logout_jti`, con grants por columna sobre `identity.bff_sessions` e `identity.bff_logout_jtis` (sin `DELETE`) y `EXECUTE` concedido sólo a `paqueteria_app` (BFF-SESSION-TABLE-SHAPE). Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
+API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. El rol `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.finalize_expired_orders(integer)`, con `SELECT (id, status, claim_window_ends_at, finalized_at)` y `UPDATE (finalized_at)` sobre `orders.orders` y `EXECUTE` concedido sólo a `paqueteria_worker` (ADR-034). El rol `paqueteria_cleanup_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.purge_expired_idempotency_keys(timestamptz, integer, boolean)`, con un piso fijo de 72 horas, y de `security.expire_proof_upload_sessions(integer)`, con grants exactos por columna sobre `platform.idempotency_keys` y `custody.proof_upload_sessions` y `EXECUTE` concedido sólo a `paqueteria_worker` (OPS-003-CLEANUP-ROLE); también es dueño de la purga de sesiones BFF `security.purge_bff_sessions(integer)`. El rol `paqueteria_registration_executor NOLOGIN BYPASSRLS` es propietario únicamente de las cinco funciones de REG-001 (`register_identity_subject`, `create_self_service_organization`, `list_own_organization_applications`, `list_pending_ally_organizations` y `decide_ally_organization`), con grants exactos por columna sobre `identity.users`, `organizations.organizations`, `organizations.organization_memberships` y `platform.audit_logs`, y `EXECUTE` concedido sólo a `paqueteria_app` (AUTH-OPEN-REGISTRATION). El rol `paqueteria_session_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.create_bff_session`, `security.resolve_bff_session(bytea)`, de las tres sobrecargas de `security.revoke_bff_session` y de `security.register_bff_logout_jti`, con grants por columna sobre `identity.bff_sessions` e `identity.bff_logout_jtis` (sin `DELETE`) y `EXECUTE` concedido sólo a `paqueteria_app` (BFF-SESSION-TABLE-SHAPE). Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
 
 ### 25.3 Contexto tenant y pooling
 

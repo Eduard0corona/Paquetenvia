@@ -15,6 +15,8 @@ public sealed class OrganizationRequestSessionAdapter(IAuthenticatedSession sess
 
     public bool MfaSatisfied => session.MfaSatisfied;
 
+    public bool EmailVerified => session.EmailVerified;
+
     public IReadOnlyList<OrganizationSessionMembership> ActiveMemberships => session.ActiveMemberships
         .Select(membership => new OrganizationSessionMembership(
             membership.OrganizationId,
