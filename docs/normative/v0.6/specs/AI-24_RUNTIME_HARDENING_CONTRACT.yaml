@@ -124,3 +124,24 @@ money:
 partitioning:
   location_outbox_mvp_unique: UNIQUE(driver_position_id) without FK
   before_partitioning: approve global dedup strategy
+bff_session:
+  decisions:
+  - GATE-002-BFF-001
+  - BFF-SESSION-STORE-POSTGRESQL
+  - PILOT-SAME-ORIGIN-ROUTING
+  - AUTH-FIRST-LOGIN-INVITATION
+  flow: OIDC authorization code with PKCE S256 executed by the API (BFF)
+  endpoints:
+  - GET /auth/login
+  - GET /signin-authcenter
+  - GET /auth/session
+  - POST /auth/logout
+  cookie: __Host-Paquetenvia.Session; Secure; HttpOnly; SameSite=Lax; Path=/; no Domain; opaque key only
+  tokens_in_browser: prohibited
+  session_store: PostgreSQL table (pending AI-06/AI-18 change); in-memory behind the ticket-store interface until then, single API replica only
+  csrf: X-AuthCenter-CSRF session-bound header on every unsafe method; a present Origin must equal the public web origin
+  authorization_response_iss: required and ordinal-equal to the configured issuer (RFC 9207)
+  redirect_uri: derived from the configured public origin, never from Host or X-Forwarded-* headers
+  authorization_source: identity_subject plus memberships plus RLS on every request; AuthCenter roles and permissions ignored
+  first_access: prior invitation only; sign-in never provisions users, organizations or memberships
+  same_origin_routing: pilot ingress routes /api, /hubs, /auth and /signin-authcenter to the API

@@ -411,6 +411,27 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
 - tokens públicos de tracking cortos, rotables y con mínimo alcance;
 - escaneo de dependencias y contenedores en CI.
 
+### 17.1 Sesión web BFF con AuthCenter (GATE-002-BFF-001)
+
+- El login de GATE-002 usa el patrón **BFF** en la API .NET: la API ejecuta el flujo OIDC
+  authorization code + PKCE S256 contra AuthCenter (`/auth/login`, callback
+  `/signin-authcenter`) y emite una cookie `__Host-` `Secure`, `HttpOnly`, `SameSite=Lax`, sin
+  `Domain`. La cookie solo contiene una clave opaca; el ticket (sujeto, evidencia MFA, secreto
+  CSRF y refresh token) vive del lado servidor. Los tokens nunca llegan al navegador.
+- Almacén de sesiones: tabla PostgreSQL (`BFF-SESSION-STORE-POSTGRESQL`), que requiere su cambio
+  en AI-06/AI-18. Hasta entonces el almacén es en memoria detrás de la interfaz de ticket store,
+  válido solo con una réplica de la API; una sesión perdida falla cerrado (401).
+- Mismo origen: el navegador llama a la API desde el origen web. En el piloto el ingress de Azure
+  enruta `/api`, `/hubs`, `/auth` y `/signin-authcenter` a la API (`PILOT-SAME-ORIGIN-ROUTING`);
+  las rewrites de Next.js solo aplican en desarrollo local. CORS sigue cerrado.
+- Toda escritura exige el encabezado `X-AuthCenter-CSRF` ligado a la sesión y, si hay `Origin`,
+  que sea exactamente el origen web público. La respuesta de autorización exige `iss` (RFC 9207).
+- AuthCenter solo autentica: la autorización se resuelve en cada petición desde
+  `identity.users.identity_subject` + membresías + RLS; roles y permisos de AuthCenter se ignoran.
+- El primer ingreso es por invitación previa (`AUTH-FIRST-LOGIN-INVITATION`); el login nunca
+  crea usuarios, organizaciones ni membresías.
+- El contrato HTTP de `/auth/*` y `/signin-authcenter` está en AI-05 (fuera de `/api/v1`).
+
 ## 18. Observabilidad y SLO
 
 Toda petición/job/evento debe llevar `trace_id`, `correlation_id`, tenant y actor técnico redactado. Métricas mínimas:

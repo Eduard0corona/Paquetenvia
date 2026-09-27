@@ -189,6 +189,34 @@ public sealed class AuthCenterBffTests
         Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
     }
 
+    public static TheoryData<string, string?> RejectedAuthorizationResponseIssuers => new()
+    {
+        { "authorization response omits iss", null },
+        { "empty iss", string.Empty },
+        { "wrong iss", "https://evil.test" },
+        { "iss with trailing slash", FakeAuthCenterServer.Issuer + "/" },
+        { "iss with different case", FakeAuthCenterServer.Issuer.ToUpperInvariant() },
+    };
+
+    [Theory]
+    [MemberData(nameof(RejectedAuthorizationResponseIssuers))]
+    public async Task Authorization_response_without_the_exact_issuer_is_rejected_before_code_redemption(
+        string scenario,
+        string? issuer)
+    {
+        using var factory = new AuthCenterWebApplicationFactory();
+        using var browser = factory.CreateBrowser();
+        using var login = await browser.GetAsync(AuthCenterDefaults.LoginPath);
+        var grant = factory.AuthCenter.Authorize(login.Headers.Location!, ViewerSubject);
+
+        using var callback = await browser.GetAsync(FakeAuthCenterServer.CallbackPath(grant.Code, grant.State, issuer));
+
+        AssertRejectedCallback(callback, scenario);
+        Assert.Equal(string.Empty, factory.AuthCenter.LastIdToken);
+        using var session = await browser.GetAsync(AuthCenterDefaults.SessionPath);
+        Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
+    }
+
     [Fact]
     public async Task Tampered_state_is_rejected()
     {

@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 17197,
-      "sha256": "8a0c7b5a992dbd873f0cfe31751f485a32b6bcb324303b0bca6b3affc11aed6c"
+      "bytes": 18088,
+      "sha256": "d31e32533b675ab62b15a03bd9fd6b932322195ec05d48816cc51788dc4040c9"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "7d8497021dbb9a9b9d25e388e3d4202a33ad77057ff0ab04fcf73d5fa97e850a"
+      "sha256": "33c3088219539ad55bffee386cc2ef5177902147640723f6a087296b285d9901"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 113105,
-      "sha256": "5d60203990616000660e6343fc8ddfcf8a72ec8e98ca624879faf705014eaec2"
+      "bytes": 119287,
+      "sha256": "cba9e571f003809634f0167d33111a92c31d46ad0aa0dfbb2af6d6f0e1c28284"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 25207,
-      "sha256": "05ecffebd35278534f4a76bf03a990c85980948fb1ea46f562eb6267d57b0a05"
+      "bytes": 25932,
+      "sha256": "9a9a03afaa057dad1fde598ac7bdccd51cfbfd0c69bce17503fbf7e40470db1e"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -324,8 +324,8 @@
     },
     {
       "path": "specs/AI-03_ARCHITECTURE.md",
-      "bytes": 26964,
-      "sha256": "da7e0e7696fd3ae9a488cf197302e92e9e04b0ba0304b78aea183397775f63ee"
+      "bytes": 28637,
+      "sha256": "015ece991c277da33992383a521bb77afd8025f354bbc0bf13832bb54267e86e"
     },
     {
       "path": "specs/AI-04_DOMAIN_MODEL.yaml",
@@ -334,8 +334,8 @@
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 6925,
-      "sha256": "60d7221adcc070878d0a86c53c538d35661c6ef9883895ff067f19c812728a29"
+      "bytes": 7219,
+      "sha256": "1064311f46d99ee7e7f75d8be51c16d89937290fed13afbc40562557f938358d"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 4567,
-      "sha256": "f6f87a10da5eb68edddae9045c4abec762352c9494e526c2382ccc9415138778"
+      "bytes": 5804,
+      "sha256": "a2bd8f035b9fcad21b5fc8b37262aa9ffa2839f69ee486e8a43c5164b7b0ab72"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",

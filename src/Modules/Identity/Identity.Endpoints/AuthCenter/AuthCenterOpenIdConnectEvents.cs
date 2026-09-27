@@ -26,9 +26,11 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
 
     public override Task MessageReceived(MessageReceivedContext context)
     {
-        // RFC 9207 mix-up defense: AuthCenter advertises authorization_response_iss_parameter_supported.
+        // RFC 9207 mix-up defense: AuthCenter advertises authorization_response_iss_parameter_supported
+        // and appends `iss` to every success and error redirect, so a missing `iss` is as suspect as a
+        // different one (RFC 9207 section 2.4). Both fail closed before the code is redeemed.
         var issuer = context.ProtocolMessage.GetParameter("iss");
-        if (issuer is not null && !string.Equals(issuer, options.Value.Issuer, StringComparison.Ordinal))
+        if (issuer is null || !string.Equals(issuer, options.Value.Issuer, StringComparison.Ordinal))
         {
             context.Fail("Unexpected authorization response issuer.");
         }

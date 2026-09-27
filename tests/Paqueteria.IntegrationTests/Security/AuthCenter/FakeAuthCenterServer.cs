@@ -72,8 +72,12 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         return new AuthorizationResult(code, query["state"].ToString(), query["nonce"].ToString());
     }
 
-    public static string CallbackPath(string code, string state) =>
-        $"/signin-authcenter?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}&iss={Uri.EscapeDataString(Issuer)}";
+    public static string CallbackPath(string code, string state) => CallbackPath(code, state, Issuer);
+
+    /// <summary>Authorization response with an explicit RFC 9207 <c>iss</c>; <c>null</c> omits it.</summary>
+    public static string CallbackPath(string code, string state, string? issuer) =>
+        $"/signin-authcenter?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}" +
+        (issuer is null ? string.Empty : $"&iss={Uri.EscapeDataString(issuer)}");
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
