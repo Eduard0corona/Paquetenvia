@@ -54,7 +54,8 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         var apiAddress = api.Start();
         await using var web = await DriverStopsNextServer.StartProductionAsync(
             apiAddress.GetLeftPart(UriPartial.Authority),
-            nextPort);
+            nextPort,
+            connectSources: storageOrigin);
         await using var worker = BuildProofWorkerProvider(
             database.WorkerConnectionString,
             proofSettings);

@@ -552,6 +552,11 @@ function Invoke-Start {
     $env:NODE_ENV = "development"
     $env:PAQUETERIA_DEV_PORTAL_ENABLED = "true"
     $env:NEXT_PUBLIC_API_BASE_URL = $apiUrl
+    # The web CSP connect-src must list the signed-upload storage origin.
+    $presignUrl = $env:ProofStorage__PublicPresignUrl
+    $env:PAQUETERIA_CSP_CONNECT_SOURCES = if ([string]::IsNullOrWhiteSpace($presignUrl)) { $null } else {
+        ([Uri]$presignUrl).GetLeftPart([UriPartial]::Authority)
+    }
     Start-OwnedProcess `
         -Name Web `
         -FilePath $node.Path `

@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 
 const config = readFileSync(resolve(process.cwd(), "next.config.ts"), "utf8");
 const proxy = readFileSync(resolve(process.cwd(), "src/proxy.ts"), "utf8");
+const csp = readFileSync(
+  resolve(process.cwd(), "src/security/security-headers.ts"),
+  "utf8",
+);
 
 describe("public tracking page privacy policy", () => {
   it("sets the complete tracking headers and a bounded CSP", () => {
@@ -15,13 +19,13 @@ describe("public tracking page privacy policy", () => {
       "nosniff",
       "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
     ]) {
-      expect(`${config}\n${proxy}`).toContain(header);
+      expect(`${config}\n${proxy}\n${csp}`).toContain(header);
     }
-    expect(config).toContain("default-src 'self'");
-    expect(config).toContain("object-src 'none'");
-    expect(config).toContain("frame-ancestors 'none'");
-    expect(config).toContain("connect-src");
-    expect(config).not.toContain("connect-src *");
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("connect-src");
+    expect(csp).not.toContain("connect-src *");
   });
 
   it("redacts incoming tracking paths and rewrites to a generic shell", () => {

@@ -16,8 +16,8 @@ Este ZIP completo es la única entrega que debe validarse. No mezclar archivos s
 
 ## Archivos críticos
 
-- `database/AI-06_SCHEMA.sql` SHA-256: `c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96`
-- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd`
+- `database/AI-06_SCHEMA.sql` SHA-256: `7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163`
+- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `b836ebc6978a01682d6bbc40f59117a673fc942233892d5003cbf4d0ce89b18d`
 
 El SQL canónico contiene:
 
@@ -43,6 +43,16 @@ AI-05 declara para DSP-002:
 
 AI-06 y AI-18 no cambian en esta revisión. La migración de adopción de Dispatch
 es la responsable de detectar drift contra el catálogo canónico existente.
+
+## Registro posterior — 2026-09-26
+
+Los hashes de "Archivos críticos" son los vigentes en `MANIFEST.json` y
+`CHECKSUMS_SHA256.txt`. Las revisiones anteriores (AI-06 `c7681336…`, AI-18
+`7b4d2638…`) cambiaron por los cursores de resincronización RTM-002
+(2026-07-24, commit `4738861`: AI-05, AI-06 y AI-18) y por LIF-001/ADR-034
+(AI-18, PR #83). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
+CSV-001, INC-001, FIN-001 y SET-001; ver `CHANGELOG.md` y `decision-log.md`.
+El identificador de bundle no se reemitió.
 
 
 ## Referencias de diseño registradas

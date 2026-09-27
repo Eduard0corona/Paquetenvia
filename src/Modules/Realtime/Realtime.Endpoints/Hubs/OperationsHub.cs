@@ -12,8 +12,6 @@ public sealed class OperationsHub(
     IRealtimeConnectionAuthorizer authorizer,
     IRealtimeTelemetry telemetry) : Hub<IOperationsClient>
 {
-    private bool _accepted;
-
     public override async Task OnConnectedAsync()
     {
         var httpContext = Context.GetHttpContext();
@@ -37,14 +35,14 @@ public sealed class OperationsHub(
             Context.ConnectionId,
             RealtimeGroupNames.Organization(result.Authorization.OrganizationId),
             Context.ConnectionAborted);
-        _accepted = true;
+        RealtimeConnectionState.MarkAccepted(Context);
         telemetry.ConnectionAccepted("operations", "oidc");
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        if (_accepted)
+        if (RealtimeConnectionState.TryCompleteAccepted(Context))
         {
             telemetry.ConnectionClosed("operations");
         }

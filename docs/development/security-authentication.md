@@ -54,7 +54,11 @@ cross-organization ni seleccion de tenant activo (TEN-001 sigue pendiente).
 `Authentication` admite `Disabled`, `Mock` y `AuthCenter` (AUTH-001, BFF con cookie
 `__Host-`; ver [auth-001-authcenter-bff.md](auth-001-authcenter-bff.md)). `IdentityBootstrap` admite
 `Disabled`, `Mock` y `PostgreSql`; `PublicTracking` admite `Disabled` y
-`PostgreSql`. Los mocks solo pueden iniciar en Development/Testing. PostgreSQL
+`PostgreSql`. `Authentication:Provider=Mock` puede iniciar en Development,
+Testing y, desde SEC-003, en el entorno DevSynthetic autorizado
+(`SyntheticEnvironmentPolicy.IsDevSynthetic`). `IdentityBootstrap:Provider=Mock`
+sigue limitado a Development/Testing, de modo que DevSynthetic sólo admite
+`Disabled` o `PostgreSql` para el bootstrap. PostgreSQL
 requiere `ConnectionStrings:Paqueteria`; la conexion real se inyecta por
 configuracion externa y nunca se imprime.
 
