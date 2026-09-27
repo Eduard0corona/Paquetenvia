@@ -1183,9 +1183,10 @@ paths:
         FIN-001 reconciles a RECORDED collection to RECONCILED, which the order
         state machine requires before CLOSED. Only DISPATCHER members,
         PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
-        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION) may
-        reconcile, so a collecting driver can never reconcile their own
-        collection. FINANCE never creates or modifies orders. Replaying
+        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION,
+        FINANCE-COD-MFA-2026-09-27) may reconcile, so a collecting driver can
+        never reconcile their own collection. FINANCE never creates or modifies
+        orders. Replaying
         the same Idempotency-Key returns the stored response.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -1222,9 +1223,8 @@ paths:
         FIN-001 cost by modality, margin and COD position of one order, derived
         on read in integer MXN cents. Readable only by DISPATCHER members,
         PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
-        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION);
-        FINANCE never creates or modifies orders. The order must be owned or
-        operated by the selected organization.
+        members with a satisfied MFA challenge (FINANCE-COD-MFA-2026-09-27);
+        the order must be owned or operated by the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -1255,9 +1255,8 @@ paths:
         aggregated from the orders on its stops so every total equals the sum
         of its per-order values. Readable only by DISPATCHER members,
         PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
-        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION);
-        FINANCE never creates or modifies orders. The route must be operated by
-        the selected organization.
+        members with a satisfied MFA challenge (FINANCE-COD-MFA-2026-09-27);
+        the route must be operated by the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/RouteId'
@@ -4211,9 +4210,11 @@ x-capability-matrix:
     exportSettlementCsv: [FINANCE, PLATFORM_ADMIN]
   driver_scope: DRIVER (OWN or EXTERNAL) sees only its own assignments, stops and offers; it has no access to orders,
     quotes, locations, CSV imports or settlements outside them
-  finance_scope: FINANCE is limited to settlements and finance; per FINANCE-COD-RECONCILIATION (project owner, 2026-09-27)
-    getOrderFinancials, getRouteFinancials and reconcileCod are permitted only to DISPATCHER members, PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION); FINANCE never creates or modifies orders; a collecting driver can never
-    reconcile their own collection
+  finance_scope: FINANCE is limited to settlements and finance. getOrderFinancials, getRouteFinancials and reconcileCod
+    are permitted only to DISPATCHER members, PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE members
+    with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION, FINANCE-COD-MFA-2026-09-27); FINANCE never records a COD
+    collection and never creates or modifies orders; a collecting driver can never reconcile their own collection
+  finance_operations_status: IMPLEMENTED (feature/pilot-contract-deltas, FinanceAuthorizationPolicy and its tests)
   finance_operations:
     getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
@@ -4223,6 +4224,13 @@ x-pilot-contract-deltas:
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
     Owner approval of all six API contract proposals on 2026-09-27, literal answer "Apruebo Contrato de la API (AI-05)"
   entries:
+  - id: FINANCE-COD-RECONCILIATION
+    status: DECIDED
+    decision: FINANCE-COD-RECONCILIATION and FINANCE-COD-MFA-2026-09-27 (project owner, 2026-09-27)
+    implementation: shipped by feature/pilot-contract-deltas together with FinanceAuthorizationPolicy and its tests
+    delta: getOrderFinancials, getRouteFinancials and reconcileCod also admit FINANCE members with a satisfied MFA challenge;
+      FINANCE never creates or modifies orders; DISPATCHER keeps no MFA requirement and PLATFORM_ADMIN keeps MFA; a
+      collecting driver can never reconcile their own collection
   - id: D6-COD-EXPECTED
     status: DECIDED
     decision: D6-COD-PILOT
@@ -4255,31 +4263,31 @@ x-pilot-contract-deltas:
   - id: SET-EXPORT-NO-STORE
     status: DECIDED
     decision: AI05-EXPORT-NO-STORE (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: the exportSettlementCsv 200 response declares the header Cache-Control no-store
   - id: SET-LIST
     status: DECIDED
     decision: AI05-LIST-SETTLEMENTS (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: add listSettlements (GET /settlements) with cursor pagination, filters payee_id, status, period_from and period_to,
       same capabilities as getSettlement and the uniform error matrix 401/403/409/503
   - id: LOC-PII-KEY-VERSION
     status: DECIDED
     decision: AI05-REMOVE-PII-KEY-VERSION (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: remove pii_key_version from CreateLocationRequest; the server PII protector selects and persists the key version
       (ADP-001)
   - id: ORD-ACCEPTANCE-LIMITS
     status: DECIDED
     decision: AI05-INPUT-LIMITS (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: publish explicit bounds that AI-05 lacks today, with the values approved as written in this entry - terms_version
       and privacy_version minLength 1, maxLength 64, pattern ^[A-Za-z0-9._-]+$; accepted_at not later than server time plus 5
       minutes nor earlier than server time minus 72 hours; CreateQuoteRequest packages keep minItems 1 and gain maxItems 20
   - id: UNDECLARED-STATUS-CODES
     status: DECIDED
     decision: AI05-DECLARE-EMITTED-ERRORS (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: declare the status codes the implementation already emits - 503 on createQuote, getQuote, createOrder, listOrders,
       getOrder, transitionOrder, listLocations, createLocation, createProofUploadSession and finalizeProof; 409 on
       createProofUploadSession and finalizeProof; 429 and 503 on publicTracking; 503 from the tenant-context middleware on
@@ -4290,7 +4298,7 @@ x-pilot-contract-deltas:
   - id: PUBLIC-TIMELINE-ORDER
     status: DECIDED
     decision: AI05-TIMELINE-ORDER (project owner, 2026-09-27)
-    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    implementation: shipped by feature/pilot-contract-deltas together with its code and tests
     delta: the public tracking timeline is ordered by (occurred_at, aggregate_version) so ties are deterministic; the SQL piece
       (ORDER BY in security.get_public_tracking_projection and the paqueteria_bootstrap grant on
       orders.order_events.aggregate_version) is decided too; translation to AI-06/AI-18 ships with its migration in the
