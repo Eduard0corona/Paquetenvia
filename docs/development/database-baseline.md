@@ -13,8 +13,8 @@ role model. Their mandatory hashes and order are declared in
 `database/migrations/v0.6-baseline.json`:
 
 ```text
-AI-06 7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163
-AI-18 32b6b54b9b54a65356ce33e7d8b2fbca0a94b22996f775ee05e7a3ebda50220c
+AI-06 1b7729b8901aadd362bf35cd144349ae25471c933967af901b62591ab795091c
+AI-18 e8dcd7ab4030dab79baf216166fe02181ae2b8fe667c500d41b115590a9fa3ac
 ```
 
 ## Migrator and commands
@@ -156,3 +156,18 @@ solo comprueba las tablas canónicas de sesiones/Proof, RLS forzado, políticas,
 índices y trigger append-only; no contiene DDL de negocio. Consulta
 [pod-001-secure-proof-upload.md](pod-001-secure-proof-upload.md) para el flujo,
 planificación y rollback conservador.
+
+Las decisiones del owner del 2026-09-27 (IDENTITY-ORG-ACTIVE-REQUIRED,
+AI05-TIMELINE-ORDER y AI06-PILOT-INDEXES) están en AI-06/AI-18 para las
+instalaciones nuevas y en la lane `PlatformEvolution`
+(`20260927000100_ApplyPilotContractDeltas`, historial
+`platform.__ef_migrations_history_platform_evolution`) para las existentes. La
+lane corre **al final**, después de Orders, porque la migración RTM-002 de Orders
+reescribe `security.get_public_tracking_projection(text)` en una instalación
+nueva. Solo cambia los cuerpos de las dos funciones de `paqueteria_bootstrap`
+(conservando dueño, ACL y `search_path`), agrega `SELECT(id,status)` sobre
+`organizations.organizations` y `SELECT(aggregate_version)` sobre
+`orders.order_events` a bootstrap y crea los ocho índices; verifica el conjunto
+exacto de columnas de bootstrap y la definición de cada índice, y rechaza un
+índice homónimo con otra forma. Su `Down` devuelve el contrato previo a la
+decisión (cuerpos, grants e índices) y solo debe acompañar al release anterior.

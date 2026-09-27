@@ -19,9 +19,11 @@ public static class LocationEndpoints
             .WithName("listCities")
             .WithTags("Locations")
             .Produces<IReadOnlyList<CityResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/service-areas", ListServiceAreasAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -29,9 +31,11 @@ public static class LocationEndpoints
             .WithName("listServiceAreas")
             .WithTags("Locations")
             .Produces<IReadOnlyList<ServiceAreaResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/operating-zones", ListOperatingZonesAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -39,9 +43,11 @@ public static class LocationEndpoints
             .WithName("listOperatingZones")
             .WithTags("Locations")
             .Produces<IReadOnlyList<OperatingZoneResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/locations", ListLocationsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -49,9 +55,11 @@ public static class LocationEndpoints
             .WithName("listLocations")
             .WithTags("Locations")
             .Produces<IReadOnlyList<LocationResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/locations", CreateLocationAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -60,9 +68,11 @@ public static class LocationEndpoints
             .WithTags("Locations")
             .Accepts<CreateLocationRequest>("application/json")
             .Produces<LocationResponse>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }
@@ -161,7 +171,6 @@ public static class LocationEndpoints
                         request.Phone,
                         request.Lat,
                         request.Lng,
-                        request.PiiKeyVersion,
                         httpContext.TraceIdentifier),
                     cancellationToken);
                 return result.Status switch
@@ -228,7 +237,6 @@ public static class LocationEndpoints
         request.CityId != Guid.Empty &&
         !string.IsNullOrWhiteSpace(request.AddressText) && request.AddressText.Trim().Length >= 8 &&
         !string.IsNullOrWhiteSpace(request.AddressSummary) && request.AddressSummary.Length <= 180 &&
-        !string.IsNullOrWhiteSpace(request.PiiKeyVersion) &&
         request.Lat is >= -90 and <= 90 && request.Lng is >= -180 and <= 180 &&
         !double.IsNaN(request.Lat) && !double.IsNaN(request.Lng) &&
         !double.IsInfinity(request.Lat) && !double.IsInfinity(request.Lng);
@@ -259,8 +267,7 @@ public sealed record CreateLocationRequest(
     [property: JsonPropertyName("contact_name")] string? ContactName,
     [property: JsonPropertyName("phone")] string? Phone,
     [property: JsonPropertyName("lat")] double Lat,
-    [property: JsonPropertyName("lng")] double Lng,
-    [property: JsonPropertyName("pii_key_version")] string PiiKeyVersion);
+    [property: JsonPropertyName("lng")] double Lng);
 
 public sealed record CityResponse(
     [property: JsonPropertyName("id")] Guid Id,

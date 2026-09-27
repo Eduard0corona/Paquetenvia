@@ -50,6 +50,7 @@ public sealed class DatabaseBaselineAssertions
         "outbox direct grants and lifecycle function grants",
         "forced RLS and sensitive-function PUBLIC revocation",
         "bootstrap function security and column-level grants",
+        "pilot operational and outbox purge indexes (AI06-PILOT-INDEXES)",
         "lifecycle executor boundary (ADR-034)",
         "real default-privilege inheritance probes",
     });
@@ -198,6 +199,9 @@ public sealed class DatabaseBaselineAssertions
             await AssertBootstrapContractsAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
+            await AssertPilotIndexesAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
             await AssertLifecycleExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
@@ -289,7 +293,8 @@ public sealed class DatabaseBaselineAssertions
                     '__ef_migrations_history_incidents',
                     '__ef_migrations_history_finance',
                     '__ef_migrations_history_notifications',
-                    '__ef_migrations_history_platform'
+                    '__ef_migrations_history_platform',
+                    '__ef_migrations_history_platform_evolution'
                   )
                   AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
                 """,
@@ -405,6 +410,48 @@ public sealed class DatabaseBaselineAssertions
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// AI06-PILOT-INDEXES: the four operational indexes and one partial index per terminal purge arm
+    /// of each outbox, exactly as AI-06 declares them and valid.
+    /// </summary>
+    private static async Task AssertPilotIndexesAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH expected(name,definition) AS (VALUES
+              ('orders.orders_updated_at_idx',
+               'CREATE INDEX orders_updated_at_idx ON orders.orders USING btree (updated_at)'),
+              ('dispatch.assignments_driver_idx',
+               'CREATE INDEX assignments_driver_idx ON dispatch.assignments USING btree (driver_id)'),
+              ('dispatch.assignments_route_idx',
+               'CREATE INDEX assignments_route_idx ON dispatch.assignments USING btree (route_id) WHERE (route_id IS NOT NULL)'),
+              ('routes.route_stops_order_idx',
+               'CREATE INDEX route_stops_order_idx ON routes.route_stops USING btree (order_id)'),
+              ('platform.outbox_purge_processed_idx',
+               'CREATE INDEX outbox_purge_processed_idx ON platform.outbox_events USING btree (processed_at) WHERE (status = ''PROCESSED''::text)'),
+              ('platform.outbox_purge_dead_idx',
+               'CREATE INDEX outbox_purge_dead_idx ON platform.outbox_events USING btree (COALESCE(processed_at, created_at)) WHERE (status = ''DEAD''::text)'),
+              ('platform.location_outbox_purge_processed_idx',
+               'CREATE INDEX location_outbox_purge_processed_idx ON platform.location_outbox_events USING btree (processed_at) WHERE (status = ''PROCESSED''::text)'),
+              ('platform.location_outbox_purge_dead_idx',
+               'CREATE INDEX location_outbox_purge_dead_idx ON platform.location_outbox_events USING btree (COALESCE(processed_at, created_at)) WHERE (status = ''DEAD''::text)'))
+            SELECT 'pilot index missing, invalid or different: ' || e.name
+            FROM expected e
+            LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=pg_catalog.to_regclass(e.name)
+            WHERE i.indexrelid IS NULL
+               OR NOT i.indisvalid
+               OR pg_catalog.pg_get_indexdef(i.indexrelid)<>e.definition
+            """,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task AssertBootstrapContractsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -459,6 +506,8 @@ public sealed class DatabaseBaselineAssertions
               ('organizations','organization_memberships','role'),
               ('organizations','organization_memberships','status'),
               ('organizations','organization_memberships','is_default'),
+              ('organizations','organizations','id'),
+              ('organizations','organizations','status'),
               ('orders','public_tracking_tokens','id'),
               ('orders','public_tracking_tokens','order_id'),
               ('orders','public_tracking_tokens','token_hash'),
@@ -469,6 +518,7 @@ public sealed class DatabaseBaselineAssertions
               ('orders','orders','status'),
               ('orders','orders','version'),
               ('orders','order_events','order_id'),
+              ('orders','order_events','aggregate_version'),
               ('orders','order_events','public_event_code'),
               ('orders','order_events','occurred_at')),
             actual AS (

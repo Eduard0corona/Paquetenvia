@@ -61,6 +61,146 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
     }
 
     /// <summary>
+    /// AI05-DECLARE-EMITTED-ERRORS and AI05-DECLARE-400-ERRORS: every 400, 409, 429 and 503 an operation
+    /// declares in its endpoint metadata is declared in AI-05, and so are the ones the pipeline emits on its
+    /// behalf — 503 wherever the identity context is resolved (every authorized operation) or the
+    /// PLATFORM_ADMIN tenant-activation audit is written (every tenant operation), and the tenant
+    /// middleware's status for a missing or malformed X-Organization-Id header.
+    /// </summary>
+    [Fact]
+    public void Every_error_status_the_host_emits_is_declared_in_AI05()
+    {
+        var declared = ReadDeclaredResponses();
+        var missing = new List<string>();
+        var checkedOperations = 0;
+        foreach (var (operation, endpoint) in ReadServedEndpoints())
+        {
+            if (KnownUndeclaredOperations.Contains(operation, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            Assert.True(declared.TryGetValue(operation, out var statuses), $"{operation} is not declared in AI-05.");
+            checkedOperations++;
+            var emitted = new SortedSet<int>(endpoint.Metadata
+                .GetOrderedMetadata<IProducesResponseTypeMetadata>()
+                .Select(response => response.StatusCode)
+                .Where(status => status is 400 or 409 or 429 or 503));
+            if (endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.Authorization.IAuthorizeData>() is not null)
+            {
+                emitted.Add(StatusCodes.Status503ServiceUnavailable);
+            }
+
+            if (endpoint.Metadata.GetMetadata<Organizations.Endpoints.Tenancy.RequiresTenantContextMetadata>() is { } tenant)
+            {
+                emitted.Add(StatusCodes.Status503ServiceUnavailable);
+                emitted.Add(tenant.InvalidContextStatusCode);
+            }
+
+            missing.AddRange(emitted
+                .Where(status => !statuses!.Contains(status.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                .Select(status => $"{operation} emits {status}"));
+        }
+
+        Assert.True(checkedOperations >= 40, $"Only {checkedOperations} operations were checked.");
+        Assert.Empty(missing);
+
+        // The two anonymous or specially limited cases are pinned by name.
+        Assert.Superset(new HashSet<string>(["404", "429", "503"]), new HashSet<string>(declared["GET /tracking/{}"]));
+        Assert.Contains("400", declared["GET /locations"]);
+        Assert.Contains("400", declared["POST /locations"]);
+    }
+
+    /// <summary>"METHOD /path" to the status keys of its AI-05 responses mapping.</summary>
+    private static Dictionary<string, HashSet<string>> ReadDeclaredResponses()
+    {
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var inPaths = false;
+        string? currentPath = null;
+        HashSet<string>? current = null;
+        var inResponses = false;
+        foreach (var raw in File.ReadLines(ContractPath()))
+        {
+            var line = raw.TrimEnd();
+            if (line.Length == 0 || line[0] == '#')
+            {
+                continue;
+            }
+
+            if (line[0] != ' ')
+            {
+                inPaths = line.StartsWith("paths:", StringComparison.Ordinal);
+                currentPath = null;
+                current = null;
+                continue;
+            }
+
+            if (!inPaths)
+            {
+                continue;
+            }
+
+            if (line.StartsWith("  /", StringComparison.Ordinal) && line.EndsWith(':'))
+            {
+                currentPath = line[2..^1];
+                current = null;
+                continue;
+            }
+
+            if (currentPath is not null && line.StartsWith("    ", StringComparison.Ordinal) && line[4] != ' ' &&
+                line.EndsWith(':') && HttpMethodKeys.Contains(line[4..^1]))
+            {
+                current = [];
+                result[$"{line[4..^1].ToUpperInvariant()} {Normalize(currentPath)}"] = current;
+                inResponses = false;
+                continue;
+            }
+
+            if (current is null)
+            {
+                continue;
+            }
+
+            if (line.StartsWith("      ", StringComparison.Ordinal) && line[6] != ' ')
+            {
+                inResponses = line == "      responses:";
+                continue;
+            }
+
+            if (inResponses && line.Length == 14 && line.StartsWith("        '", StringComparison.Ordinal) &&
+                line.EndsWith("':", StringComparison.Ordinal))
+            {
+                current.Add(line[9..12]);
+            }
+        }
+
+        return result;
+    }
+
+    private IEnumerable<(string Operation, RouteEndpoint Endpoint)> ReadServedEndpoints()
+    {
+        foreach (var endpoint in factory.Services.GetRequiredService<EndpointDataSource>().Endpoints)
+        {
+            if (endpoint is not RouteEndpoint route ||
+                endpoint.Metadata.GetMetadata<IExcludeFromDescriptionMetadata>()?.ExcludeFromDescription == true)
+            {
+                continue;
+            }
+
+            var template = "/" + route.RoutePattern.RawText?.TrimStart('/');
+            if (!template.StartsWith(VersionedPrefix + "/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var method in endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? [])
+            {
+                yield return ($"{method.ToUpperInvariant()} {Normalize(template[VersionedPrefix.Length..])}", route);
+            }
+        }
+    }
+
+    /// <summary>
     /// The operations the host routes, as "METHOD /path" with the version prefix removed and every
     /// route parameter reduced to <c>{}</c>, so ASP.NET route constraints and AI-05 parameter names
     /// compare equal. Endpoints excluded from the API description are the test-only ones.

@@ -19,8 +19,8 @@ using YamlDotNet.RepresentationModel;
 namespace Paqueteria.ContractTests;
 
 /// <summary>
-/// SET-001 Slice 2: the seven settlement operations as the real endpoint code maps them, against their
-/// additive AI-05 publication. A drift on either side fails here instead of reaching a client.
+/// SET-001 Slice 2 plus AI05-LIST-SETTLEMENTS: the eight settlement operations as the real endpoint code maps
+/// them, against their AI-05 publication. A drift on either side fails here instead of reaching a client.
 /// </summary>
 public sealed class SettlementImplementationContractTests
 {
@@ -29,6 +29,7 @@ public sealed class SettlementImplementationContractTests
     private static readonly (string Method, string Path, string OperationId)[] Operations =
     [
         ("POST", "/settlements", "createSettlement"),
+        ("GET", "/settlements", "listSettlements"),
         ("GET", "/settlements/{settlementId}", "getSettlement"),
         ("POST", "/settlements/{settlementId}/adjustments", "addSettlementAdjustment"),
         ("POST", "/settlements/{settlementId}/approve", "approveSettlement"),
@@ -47,7 +48,7 @@ public sealed class SettlementImplementationContractTests
     };
 
     [Fact]
-    public void AI05_publishes_exactly_the_seven_settlement_operations_and_no_list()
+    public void AI05_publishes_exactly_the_eight_settlement_operations_including_the_list()
     {
         var paths = OpenApi().Mapping("paths");
         var published = paths.Children
@@ -67,9 +68,9 @@ public sealed class SettlementImplementationContractTests
                 .ThenBy(operation => operation.Method, StringComparer.Ordinal),
             published);
 
-        // listSettlements is deferred: the collection path only creates.
-        Assert.Equal(["post"], Keys(paths.Mapping("/settlements")));
-        Assert.DoesNotContain(published, operation => operation.OperationId == "listSettlements");
+        // AI05-LIST-SETTLEMENTS: the collection path creates and lists, and nothing else.
+        Assert.Equal(["post", "get"], Keys(paths.Mapping("/settlements")));
+        Assert.Single(published, operation => operation.OperationId == "listSettlements");
     }
 
     [Fact]
@@ -96,11 +97,20 @@ public sealed class SettlementImplementationContractTests
                 .Cast<YamlMappingNode>()
                 .Select(parameter => Resolve(root, parameter))
                 .ToArray();
-            Assert.All(parameters, parameter => Assert.Equal("true", parameter.Scalar("required")));
+            var isList = EndpointName(endpoint) == "listSettlements";
+            Assert.All(
+                parameters.Where(parameter => parameter.Scalar("in") != "query"),
+                parameter => Assert.Equal("true", parameter.Scalar("required")));
+            Assert.All(
+                parameters.Where(parameter => parameter.Scalar("in") == "query"),
+                parameter => Assert.Equal("false", parameter.Scalar("required")));
             Assert.Equal(
                 endpoint.RoutePattern.Parameters.Select(parameter => $"path:{parameter.Name}")
                     .Append("header:X-Organization-Id")
                     .Concat(method == "POST" ? ["header:Idempotency-Key"] : Array.Empty<string>())
+                    .Concat(isList
+                        ? SettlementEndpoints.ListQueryParameters.Select(name => $"query:{name}")
+                        : Array.Empty<string>())
                     .Order(StringComparer.Ordinal),
                 parameters.Select(parameter => $"{parameter.Scalar("in")}:{parameter.Scalar("name")}")
                     .Order(StringComparer.Ordinal));
@@ -132,10 +142,13 @@ public sealed class SettlementImplementationContractTests
             Assert.Equal(
                 produced.Select(response => Status(response.StatusCode)).Order(StringComparer.Ordinal),
                 Keys(responses).Order(StringComparer.Ordinal));
-            foreach (var (status, component) in ProblemResponses)
+            // A list has no single resource to miss, so it is the one operation without the uniform 404.
+            foreach (var (status, component) in ProblemResponses.Where(pair => !isList || pair.Key != "404"))
             {
                 Assert.Equal($"#/components/responses/{component}", responses.Mapping(status).Scalar("$ref"));
             }
+
+            Assert.Equal(isList, !Keys(responses).Contains("404"));
 
             var success = Assert.Single(produced, response => response.StatusCode < 300);
             var content = responses.Mapping(Status(success.StatusCode)).Mapping("content");
@@ -148,7 +161,7 @@ public sealed class SettlementImplementationContractTests
             }
 
             Assert.Equal(["application/json"], Keys(content));
-            Assert.Equal(typeof(SettlementResponse), success.Type);
+            Assert.Equal(isList ? typeof(SettlementPageResponse) : typeof(SettlementResponse), success.Type);
             AssertSchemaDescribes(root, content.Mapping("application/json").Mapping("schema").Scalar("$ref"), success.Type!);
         }
     }
@@ -166,6 +179,7 @@ public sealed class SettlementImplementationContractTests
             new Dictionary<string, int>
             {
                 ["createSettlement"] = 201,
+                ["listSettlements"] = 200,
                 ["getSettlement"] = 200,
                 ["addSettlementAdjustment"] = 201,
                 ["approveSettlement"] = 200,
@@ -340,14 +354,62 @@ public sealed class SettlementImplementationContractTests
                 .Order(StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// AI05-LIST-SETTLEMENTS: the query parameters, their exact vocabulary and the page shape, and the fact that
+    /// the page is decided like every settlement read: shape first, then capability, then persisted state.
+    /// </summary>
+    [Fact]
+    public void List_settlements_query_and_page_match_AI05()
+    {
+        var root = OpenApi();
+        var list = root.Mapping("paths").Mapping("/settlements").Mapping("get");
+        var query = list.Sequence("parameters").Children
+            .Cast<YamlMappingNode>()
+            .Select(parameter => Resolve(root, parameter))
+            .Where(parameter => parameter.Scalar("in") == "query")
+            .ToDictionary(parameter => parameter.Scalar("name"), StringComparer.Ordinal);
+
+        Assert.Equal(SettlementEndpoints.ListQueryParameters.Order(StringComparer.Ordinal), query.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            SettlementContractValues.AllStatuses.Select(status => status.ToContractValue()),
+            Scalars(query["status"].Mapping("schema").Sequence("enum")));
+        Assert.Equal("uuid", query["payee_id"].Mapping("schema").Scalar("format"));
+        Assert.Equal("date", query["period_from"].Mapping("schema").Scalar("format"));
+        Assert.Equal("date", query["period_to"].Mapping("schema").Scalar("format"));
+        Assert.Equal("128", query["cursor"].Mapping("schema").Scalar("maxLength"));
+        Assert.Equal("shape-validation-then-capability-before-persisted-state", list.Scalar("x-authorization-precedence"));
+        Assert.Equal("invalid-request-without-productive-transaction", list.Scalar("x-shape-validation"));
+        Assert.Equal(["settlement"], Scalars(list.Sequence("x-capability-protected-state")));
+        Assert.Contains("AI05-LIST-SETTLEMENTS", list.Scalar("description"), StringComparison.Ordinal);
+
+        var page = root.Mapping("components").Mapping("schemas").Mapping("SettlementPage");
+        Assert.Equal(["items", "next_cursor"], Scalars(page.Sequence("required")));
+        Assert.Equal("#/components/schemas/Settlement", page.Mapping("properties").Mapping("items").Mapping("items").Scalar("$ref"));
+        Assert.Equal(50, SettlementListPolicy.PageSize);
+    }
+
+    /// <summary>AI05-EXPORT-NO-STORE: declared on the 200 response and emitted by the endpoint.</summary>
+    [Fact]
+    public void Settlement_export_declares_and_emits_cache_control_no_store()
+    {
+        var ok = OpenApi().Mapping("paths").Mapping("/settlements/{settlementId}/export.csv").Mapping("get")
+            .Mapping("responses").Mapping("200");
+        var header = ok.Mapping("headers").Mapping("Cache-Control");
+        Assert.Equal("no-store", header.Mapping("schema").Scalar("const"));
+        Assert.Equal("no-store", SettlementEndpoints.ExportCacheControl);
+
+        var endpoints = Read("src", "Modules", "Finance", "Finance.Endpoints", "SettlementEndpoints.cs");
+        Assert.Contains("httpContext.Response.Headers.CacheControl = ExportCacheControl;", endpoints, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Settlement_surface_is_mapped_by_the_API()
     {
         var program = Read("src", "Paqueteria.Api", "Program.cs");
         Assert.Contains("app.MapSettlementEndpoints();", program, StringComparison.Ordinal);
         var endpoints = Read("src", "Modules", "Finance", "Finance.Endpoints", "SettlementEndpoints.cs");
-        Assert.Equal(7, Count(endpoints, ".RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)"));
-        Assert.Equal(7, Count(endpoints, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
+        Assert.Equal(8, Count(endpoints, ".RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)"));
+        Assert.Equal(8, Count(endpoints, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
         Assert.DoesNotContain("MapPut(", endpoints, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPatch(", endpoints, StringComparison.Ordinal);
         Assert.DoesNotContain("MapDelete(", endpoints, StringComparison.Ordinal);
