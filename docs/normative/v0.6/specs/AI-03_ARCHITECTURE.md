@@ -416,8 +416,9 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
 - El login de GATE-002 usa el patrón **BFF** en la API .NET: la API ejecuta el flujo OIDC
   authorization code + PKCE S256 contra AuthCenter (`/auth/login`, callback
   `/signin-authcenter`) y emite una cookie `__Host-` `Secure`, `HttpOnly`, `SameSite=Lax`, sin
-  `Domain`. La cookie solo contiene una clave opaca; el ticket (sujeto, evidencia MFA, secreto
-  CSRF y refresh token) vive del lado servidor. Los tokens nunca llegan al navegador.
+  `Domain`. La cookie solo contiene una clave opaca; el ticket (sujeto, `sid`, evidencia MFA, secreto
+  CSRF, refresh token e ID token) vive del lado servidor. Los tokens nunca llegan al navegador, salvo el
+  `id_token_hint` de la URL de cierre de sesión (ver abajo).
 - Almacén de sesiones: tabla PostgreSQL (`BFF-SESSION-STORE-POSTGRESQL`), que requiere su cambio
   en AI-06/AI-18. Hasta entonces el almacén es en memoria detrás de la interfaz de ticket store,
   válido solo con una réplica de la API; una sesión perdida falla cerrado (401).
@@ -430,6 +431,25 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
   `identity.users.identity_subject` + membresías + RLS; roles y permisos de AuthCenter se ignoran.
 - El primer ingreso es por invitación previa (`AUTH-FIRST-LOGIN-INVITATION`); el login nunca
   crea usuarios, organizaciones ni membresías.
+- Cierre de sesión (`AUTH-001-RP-INITIATED-LOGOUT`): `POST /auth/logout` exige CSRF, revoca el
+  refresh token y destruye la sesión local aunque falle el discovery; responde
+  `{ endSessionUrl }` con el `end_session_endpoint` de AuthCenter, `id_token_hint` y
+  `post_logout_redirect_uri=<origen público>/login`, y la web navega ahí para cerrar también la
+  sesión SSO. Es la única excepción a "sin tokens en el navegador": el ID token viaja solo en esa
+  URL, después de destruir la sesión local. Sin ID token o sin endpoint válido, `null`.
+- Back-channel logout (`AUTH-001-BACKCHANNEL-LOGOUT`): AuthCenter llama
+  `POST /auth/backchannel-logout` servidor a servidor; un `logout_token` válido (RS256, `typ`
+  logout+jwt, iss/aud exactos, evento back-channel, sin `nonce`, `jti` no repetido) termina las
+  sesiones de ese `sid` (o del `sub` iniciadas antes) en su siguiente petición. El registro vive
+  detrás de una interfaz para que la tabla PostgreSQL de sesiones BFF borre sus filas por
+  `authcenter_sid`.
+- Step-up MFA (`AUTH-001-MFA-STEP-UP`): no se exige MFA a todos (tampoco a repartidores). Un 403
+  cuyo único requisito faltante es MFA lleva el código `MFA_REQUIRED`; la web ofrece "Verificar
+  identidad" → `/auth/login?mfa=required`, que envía `acr_values=urn:authcenter:acr:mfa` y solo
+  acepta un ID token con `acr` mfa/phr y `mfa` en `amr`. Todo inicio de sesión reemplaza la
+  sesión previa del navegador (ticket anterior borrado, clave nueva).
+- `error=access_denied` de AuthCenter tiene su propio mensaje en `/login`
+  (`AUTH-001-ACCESS-DENIED-MESSAGE`); los demás errores siguen genéricos.
 - El contrato HTTP de `/auth/*` y `/signin-authcenter` está en AI-05 (fuera de `/api/v1`).
 
 ## 18. Observabilidad y SLO

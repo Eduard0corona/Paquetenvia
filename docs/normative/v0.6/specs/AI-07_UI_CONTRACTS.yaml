@@ -13,9 +13,18 @@ routes:
     # GATE-002-BFF-001: sign-in entry point, reachable without a session; it starts
     # GET /auth/login (AI-05). First access is by prior invitation
     # (AUTH-FIRST-LOGIN-INVITATION); it never provisions users or memberships.
+    # ?error=access_denied shows "Tu cuenta no tiene acceso a Paquetenvia; pídelo a un
+    # administrador"; any other error shows the generic message
+    # (AUTH-001-ACCESS-DENIED-MESSAGE). ?mfa=required offers "Verificar identidad"
+    # (GET /auth/login?mfa=required) to a signed-in session without MFA
+    # (AUTH-001-MFA-STEP-UP). Logout navigates to the AuthCenter end-session URL, which
+    # returns here (AUTH-001-RP-INITIATED-LOGOUT).
     decisions:
     - GATE-002-BFF-001
     - AUTH-FIRST-LOGIN-INVITATION
+    - AUTH-001-RP-INITIATED-LOGOUT
+    - AUTH-001-MFA-STEP-UP
+    - AUTH-001-ACCESS-DENIED-MESSAGE
   /ops/dashboard:
     roles:
     - platform_admin
