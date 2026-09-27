@@ -298,7 +298,7 @@ items:
   - retorno exige custodia adquirida
   - optimistic lock evita pérdida
   - evento y auditoría en misma transacción
-  - RESCHEDULED->DELIVERING requires custody and valid assignment
+  - FAILED_ATTEMPT->DELIVERING requires custody and valid assignment; RESCHEDULED->DELIVERING does not exist (D8-RESCHEDULED-NO-DIRECT-DELIVERY)
   - claim window/finalization rules are enforced
   required_tests:
   - state matrix unit

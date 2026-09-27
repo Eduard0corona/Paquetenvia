@@ -115,6 +115,73 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
             },
             cancellationToken);
 
+    public Task<AssignmentEvidence?> ReadClosedAssignmentAsync(
+        Guid ownerOrganizationId,
+        Guid assignmentId,
+        long orderVersion,
+        CancellationToken cancellationToken) =>
+        ExecuteTenantReadAsync(
+            ownerOrganizationId,
+            async (connection, transaction, token) =>
+            {
+                // AI12-ASSIGNMENT-TERMINAL-STATES / D8: a closed assignment is published against the
+                // committed order transition that closed it; the affected driver is an audience only
+                // while that driver's profile, user and DRIVER membership are active.
+                const string sql =
+                    """
+                    SELECT a.id,a.order_id,a.driver_id,a.owner_org_id,a.operator_org_id,a.status,
+                           e.aggregate_version,e.id,e.occurred_at,
+                           (
+                             a.assignment_type IN ('OWN','EXTERNAL')
+                             AND p.id=a.driver_id
+                             AND p.org_id=a.owner_org_id
+                             AND p.driver_type=a.assignment_type
+                             AND p.status='ACTIVE'
+                             AND u.status='ACTIVE'
+                             AND EXISTS (
+                               SELECT 1
+                               FROM organizations.organization_memberships m
+                               WHERE m.user_id=p.user_id
+                                 AND m.organization_id=p.org_id
+                                 AND m.role='DRIVER'
+                                 AND m.status='ACTIVE'
+                             )
+                           ) IS TRUE AS driver_authorized
+                    FROM dispatch.assignments a
+                    JOIN orders.order_events e
+                      ON e.order_id=a.order_id
+                     AND e.owner_org_id=a.owner_org_id
+                     AND e.event_type='ORDER_STATUS_CHANGED'
+                     AND e.aggregate_version=@order_version
+                    LEFT JOIN drivers.driver_profiles p ON p.id=a.driver_id
+                    LEFT JOIN identity.users u ON u.id=p.user_id
+                    WHERE a.id=@assignment_id AND a.owner_org_id=@owner
+                      AND a.status IN ('COMPLETED','CANCELLED')
+                    """;
+                await using var command = new NpgsqlCommand(sql, connection, transaction);
+                command.Parameters.Add(P("assignment_id", NpgsqlDbType.Uuid, assignmentId));
+                command.Parameters.Add(P("order_version", NpgsqlDbType.Integer, checked((int)orderVersion)));
+                command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+                await using var reader = await command.ExecuteReaderAsync(token);
+                if (!await reader.ReadAsync(token))
+                {
+                    return null;
+                }
+
+                return new AssignmentEvidence(
+                    reader.GetGuid(0),
+                    reader.GetGuid(1),
+                    reader.GetGuid(2),
+                    reader.GetGuid(3),
+                    reader.IsDBNull(4) ? null : reader.GetGuid(4),
+                    reader.GetString(5),
+                    reader.GetInt32(6),
+                    reader.GetGuid(7),
+                    reader.GetFieldValue<DateTimeOffset>(8),
+                    reader.GetBoolean(9));
+            },
+            cancellationToken);
+
     public Task<bool> IsDriverAudienceAuthorizedAsync(
         Guid ownerOrganizationId,
         Guid orderId,

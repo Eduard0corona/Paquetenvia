@@ -326,11 +326,19 @@ internal sealed class RealtimeOutboxProcessor(
         ParsedAssignmentChanged value,
         CancellationToken cancellationToken)
     {
-        var persisted = await evidence.ReadAssignmentAsync(
-            value.OwnerOrganizationId,
-            value.AssignmentId,
-            cancellationToken);
+        var closed = value.AssignmentStatus != "ACCEPTED";
+        var persisted = closed
+            ? await evidence.ReadClosedAssignmentAsync(
+                value.OwnerOrganizationId,
+                value.AssignmentId,
+                value.AggregateVersion,
+                cancellationToken)
+            : await evidence.ReadAssignmentAsync(
+                value.OwnerOrganizationId,
+                value.AssignmentId,
+                cancellationToken);
         if (persisted is null ||
+            (closed && persisted.Status != value.AssignmentStatus) ||
             persisted.AssignmentId != value.AssignmentId ||
             persisted.OrderId != value.OrderId ||
             persisted.DriverId != value.DriverId ||

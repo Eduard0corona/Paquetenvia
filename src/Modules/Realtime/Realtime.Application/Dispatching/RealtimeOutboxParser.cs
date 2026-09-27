@@ -242,7 +242,8 @@ public static class RealtimeOutboxParser
         var driverId = RequireGuid(root, "driver_id");
         var status = RequireString(root, "assignment_status");
         var occurredAt = RequireUtcTimestamp(root, "occurred_at");
-        if (orderId != message.AggregateId || status != "ACCEPTED")
+        // AI12-ASSIGNMENT-TERMINAL-STATES: D8 closures publish COMPLETED and CANCELLED as well.
+        if (orderId != message.AggregateId || status is not ("ACCEPTED" or "COMPLETED" or "CANCELLED"))
         {
             throw InvalidPayload();
         }

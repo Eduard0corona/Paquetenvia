@@ -61,15 +61,19 @@ public sealed class E002SemanticAssertions
         var mapState = E002NotificationStateReader.SelectMap(state);
         var lif001Applied = await E002LifecycleStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
             .ConfigureAwait(false);
+        var dispatchLaneApplied = await E002NotificationStateReader
+            .IsDispatchLaneAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
-            connection, transaction, mapState, lif001Applied, violations, cancellationToken).ConfigureAwait(false);
+            connection, transaction, mapState, lif001Applied, dispatchLaneApplied, violations, cancellationToken)
+            .ConfigureAwait(false);
         await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
             throw new E002SemanticException(violations.AsReadOnly());
         }
 
-        return new E002SemanticReport(state, E002RoutineMap.Name(mapState, lif001Applied), identities, aclRows);
+        return new E002SemanticReport(
+            state, E002RoutineMap.Name(mapState, lif001Applied, dispatchLaneApplied), identities, aclRows);
     }
 
     public async Task AssertNtf001TargetAsync(
@@ -87,8 +91,10 @@ public sealed class E002SemanticAssertions
         var violations = new List<string>();
         var lif001Applied = await E002LifecycleStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
             .ConfigureAwait(false);
+        // D8-OUTBOX-LANE-DISPATCH: the NTF-001 target is asserted when its own history row is written,
+        // before the later DISPATCH lane migration of the same lane has run.
         await AssertRoutineMapCoreAsync(connection, transaction, E002RoutineMapState.Ntf001TargetApplied,
-            lif001Applied, violations, cancellationToken).ConfigureAwait(false);
+            lif001Applied, dispatchLaneApplied: false, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
             throw new E002SemanticException(violations.AsReadOnly());
@@ -270,9 +276,10 @@ public sealed class E002SemanticAssertions
 
     private static async Task<(int Identities, int ExecuteRows)> AssertRoutineMapCoreAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, E002RoutineMapState mapState,
-        bool lif001Applied, ICollection<string> violations, CancellationToken cancellationToken)
+        bool lif001Applied, bool dispatchLaneApplied, ICollection<string> violations,
+        CancellationToken cancellationToken)
     {
-        var map = E002RoutineMap.Select(mapState, lif001Applied);
+        var map = E002RoutineMap.Select(mapState, lif001Applied, dispatchLaneApplied);
         var expectedOids = new HashSet<uint>();
         var totalRows = 0;
         foreach (var routine in map)

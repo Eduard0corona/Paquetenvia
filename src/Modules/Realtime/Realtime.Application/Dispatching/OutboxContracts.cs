@@ -251,6 +251,17 @@ public interface IRealtimeOutboxEvidenceReader
         Guid assignmentId,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// AI12-ASSIGNMENT-TERMINAL-STATES: evidence for an assignment Dispatch closed (COMPLETED or
+    /// CANCELLED) in reaction to the committed order transition recorded at <paramref name="orderVersion"/>.
+    /// The driver audience requires an active driver membership, not an active assignment.
+    /// </summary>
+    Task<AssignmentEvidence?> ReadClosedAssignmentAsync(
+        Guid ownerOrganizationId,
+        Guid assignmentId,
+        long orderVersion,
+        CancellationToken cancellationToken);
+
     Task<bool> IsDriverAudienceAuthorizedAsync(
         Guid ownerOrganizationId,
         Guid orderId,

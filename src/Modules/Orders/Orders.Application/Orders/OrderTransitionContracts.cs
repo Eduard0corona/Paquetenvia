@@ -234,7 +234,6 @@ public sealed class OrderTransitionAuthorizer : IOrderTransitionAuthorizer
         (OrderStatus.FailedAttempt, OrderStatus.Rescheduled),
         (OrderStatus.FailedAttempt, OrderStatus.Returning),
         (OrderStatus.FailedAttempt, OrderStatus.Delivering),
-        (OrderStatus.Rescheduled, OrderStatus.Delivering),
         (OrderStatus.Returning, OrderStatus.Returned),
     ];
 

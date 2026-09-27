@@ -73,7 +73,8 @@ internal sealed record Ops001SimulationReport(
         Require(AuditsDuplicated == 0, "audits_duplicated", AuditsDuplicated);
         Require(AuditsMismatched == 0, "audits_mismatched", AuditsMismatched);
         Require(AuditsExactlyMatched == AuditsExpected, "audits_exactly_matched");
-        Require(OutboxProcessed == 360, "outbox_processed");
+        // D8-OUTBOX-LANE-DISPATCH adds one Dispatch reaction row per DELIVERED order (20).
+        Require(OutboxProcessed == 380, "outbox_processed");
         Require(OutboxDeadExpected == 1, "outbox_dead_expected");
         Require(OutboxDeadActual == OutboxDeadExpected, "outbox_dead_actual");
         Require(StaleRecoveries >= 1, "stale_recoveries");
