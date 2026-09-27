@@ -6,9 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orders.Application.Tracking;
-using System.Net;
-using System.Security.Cryptography;
-using System.Text;
+using Paqueteria.Application.Security;
 using System.Threading.RateLimiting;
 
 namespace Orders.Endpoints;
@@ -56,7 +54,7 @@ public static class DependencyInjection
                         .GetRequiredService<IOptions<PublicTrackingOptions>>()
                         .Value;
                     return RateLimitPartition.GetFixedWindowLimiter(
-                        GetNetworkPartition(context.Connection.RemoteIpAddress),
+                        ClientNetworkPartition.Key(context.Connection.RemoteIpAddress),
                         _ => new FixedWindowRateLimiterOptions
                         {
                             PermitLimit = options.LookupPermitLimit,
@@ -84,15 +82,6 @@ public static class DependencyInjection
             .WithOrigins(origins.ToArray())
             .WithMethods("GET")
             .WithHeaders("Accept");
-    }
-
-    private static string GetNetworkPartition(IPAddress? address)
-    {
-        var normalized = address is null
-            ? "unknown"
-            : address.MapToIPv6().ToString();
-        return Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
     }
 }
 

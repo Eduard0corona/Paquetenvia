@@ -139,7 +139,7 @@ Al cambiar AI-05 se repinnearon los hashes derivados que la gobernanza exige:
 `CHECKSUMS_SHA256.txt` y `MANIFEST.json` (regenerados con
 `tools/validate_contracts.py --write-integrity`), el pin de `OpenApiBaselineTests` y los dos
 hashes congelados de
-`SyntheticEnvironmentArchitectureTests.Frozen_governance_files_are_byte_identical_to_SEC003_base`.
+`SyntheticEnvironmentArchitectureTests.Governance_integrity_files_match_pinned_values`.
 `specs/AI-08_BACKLOG.yaml` no se tocó.
 
 `IncidentsOpenApiImplementationTests` impide que la deriva vuelva a abrirse: deriva cada

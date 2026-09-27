@@ -3,25 +3,21 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
+    # Secrets are not exposed to pull requests from forks; skip instead of failing.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read
+      # Required to publish the summary comment and inline review comments.
+      pull-requests: write
       issues: read
       id-token: write
 
@@ -33,13 +29,29 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
 
+            Review this pull request against the rules in CLAUDE.md at the repository root
+            and the normative contracts under docs/normative/v0.6 (AI-01 first).
+
+            1. Read the PR with `gh pr view <PR NUMBER>` and the diff with `gh pr diff <PR NUMBER>`.
+               Use Read/Grep/Glob on the checkout for surrounding context.
+            2. Report only concrete, verifiable problems: correctness bugs, violations of the
+               v0.6 invariants listed in CLAUDE.md, security/tenant-isolation issues, and
+               contract drift. Skip style nits.
+            3. For each finding tied to a changed line, post one inline comment with
+               `mcp__github_inline_comment__create_inline_comment` (confirmed: true).
+            4. Publish exactly one top-level summary with
+               `gh pr comment <PR NUMBER> --edit-last --create-if-none --body "<summary>"`
+               (severity counts BLOCKER/MAJOR/MINOR per AI-01 section 7, then one line per finding).
+               If there are no findings, say so in one line.
+            Do not modify files, push commits, approve or merge.
+          # Minimum tool surface: read the PR/diff, read the checkout, publish comments.
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          claude_args: |
+            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"

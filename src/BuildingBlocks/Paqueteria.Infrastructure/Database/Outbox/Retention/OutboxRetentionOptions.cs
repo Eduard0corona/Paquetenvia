@@ -75,6 +75,14 @@ public sealed class OutboxRetentionOptionsValidator : IValidateOptions<OutboxRet
     public static readonly TimeSpan MaximumRetention = TimeSpan.FromDays(3_650);
     public const int MaximumBatchesPerRun = 100;
 
+    /// <summary>
+    /// Cutoffs come from the Worker clock while AI-06 checks them against PostgreSQL's
+    /// <c>clock_timestamp()</c>. A retention equal to the normative minimum would fail with 22023
+    /// whenever the Worker clock runs even a millisecond ahead, so every retention must exceed its
+    /// minimum by this margin. It is a startup rule, not a runtime correction of the cutoffs.
+    /// </summary>
+    public static readonly TimeSpan ClockSkewMargin = TimeSpan.FromMinutes(5);
+
     public ValidateOptionsResult Validate(string? name, OutboxRetentionOptions options)
     {
         var errors = Errors(options);
@@ -109,14 +117,14 @@ public sealed class OutboxRetentionOptionsValidator : IValidateOptions<OutboxRet
                 continue;
             }
 
-            if (lane.ProcessedRetention < contract.MinimumProcessedRetention || lane.ProcessedRetention > MaximumRetention)
+            if (lane.ProcessedRetention < contract.MinimumProcessedRetention + ClockSkewMargin || lane.ProcessedRetention > MaximumRetention)
             {
-                errors.Add($"{prefix}:ProcessedRetention must be between the normative minimum {contract.MinimumProcessedRetention} and {MaximumRetention}.");
+                errors.Add($"{prefix}:ProcessedRetention must be between the normative minimum {contract.MinimumProcessedRetention} plus the clock-skew margin {ClockSkewMargin} and {MaximumRetention}.");
             }
 
-            if (lane.DeadRetention < contract.MinimumDeadRetention || lane.DeadRetention > MaximumRetention)
+            if (lane.DeadRetention < contract.MinimumDeadRetention + ClockSkewMargin || lane.DeadRetention > MaximumRetention)
             {
-                errors.Add($"{prefix}:DeadRetention must be between the normative minimum {contract.MinimumDeadRetention} and {MaximumRetention}.");
+                errors.Add($"{prefix}:DeadRetention must be between the normative minimum {contract.MinimumDeadRetention} plus the clock-skew margin {ClockSkewMargin} and {MaximumRetention}.");
             }
 
             if (lane.BatchSize < 1 || lane.BatchSize > contract.MaximumBatchSize)

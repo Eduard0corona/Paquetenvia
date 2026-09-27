@@ -22,15 +22,20 @@ persistent FND-002 database. The fixture verifies the SQL hashes and executes:
 1. `docs/normative/v0.6/database/AI-06_SCHEMA.sql`
 2. `docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql`
 
-Verified hashes:
+Current verified hashes (they must match `docs/normative/v0.6/MANIFEST.json`
+and `CHECKSUMS_SHA256.txt`):
 
 ```text
-AI-06  c7681336856421487b208ea220d05017c4b8f820f1a34e1e7e838d5da09b7b96
-AI-18  7b4d263843e3ba49812fedb1167bd8ab92b2e33efa2558abf0833af1c13760dd
+AI-06  7411de7838d7ccc53e22e53980d5de88cebc1c6140e208fa4df33d09795f5163
+AI-18  b836ebc6978a01682d6bbc40f59117a673fc942233892d5003cbf4d0ce89b18d
 ```
 
-The fixture requires PostgreSQL major version 18 and PostGIS 3.6. AI-18 is
-unchanged. Runtime connections are non-superuser logins with only their
+The original ARC-002 run validated the earlier revisions (AI-06 `c7681336…`,
+AI-18 `7b4d2638…`); see `arc-002-validation-report.md`. Both files changed
+later: RTM-002 resynchronization cursors (2026-07-24, commit `4738861`) and
+LIF-001/ADR-034 for AI-18 (2026-09-26, PR #83).
+
+The fixture requires PostgreSQL major version 18 and PostGIS 3.6. Runtime connections are non-superuser logins with only their
 intended `paqueteria_app` or `paqueteria_worker` membership.
 
 ## Purge contract
