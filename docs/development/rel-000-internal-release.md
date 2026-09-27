@@ -325,9 +325,11 @@ RTM-001-CUSTOMER-SUPPORT-ROLE permanecen abiertos según AI-10. Los advisories
 de dependencias se relacionan de forma exhaustiva con Issue #5 o Issue #30;
 `audit_tracking_gap_detected=false` y `audit_tracking_gap_count=0`.
 
-La política v2 `tools/rel-000/security-remediation-policy.json` separa el
-registro histórico ya fusionado de PR #33 y las autorizaciones activas.
-`NORMAL_RELEASE_EVIDENCE` rechaza cualquier dependency drift. La autorización
+La política v3 `tools/rel-000/security-remediation-policy.json` separa el
+registro histórico ya fusionado de PR #33, las autorizaciones activas y las
+admisiones de dependencias (`dependency_admissions`, ver más abajo).
+`NORMAL_RELEASE_EVIDENCE` rechaza cualquier dependency drift que no sea
+exactamente una admisión registrada. La autorización
 `ISSUE-5-SHARP-035-REMEDIATION` exige simultáneamente la rama
 `fix/security-sharp-035-override`, la base exacta
 `78117e6551b3f758dd82190d3fae325a95dc14c6`, Issue #5, el único advisory base y
@@ -376,6 +378,76 @@ advisory presente, archivo no autorizado, lockfile inconsistente, prerelease,
 override incompatible, versión vulnerable duplicada o smoke test ausente o
 fallido. La suite focal deriva su conteo de los tests descubiertos y exige que
 todos los casos descubiertos sean ejecutados y aprobados, sin fallos ni skips.
+
+## Admisión explícita de dependencias (GOV-DEPENDENCY-ADMISSION-001)
+
+Desde MVP-1 el owner admite dependencias nuevas una por una ("Admisión
+explícita", 2026-09-27). Cada entrada de `dependency_admissions` (política v3,
+`mode: DEPENDENCY_ADMISSION`) registra:
+
+- `id`, `status` (`ACTIVE` o `MERGED`), `owner_decision_id`, `ecosystem`
+  (`nuget`; `pnpm` está reservado y el cargador lo rechaza con
+  `DEPENDENCY_ADMISSION_ECOSYSTEM_UNSUPPORTED` mientras no exista su chequeo) y un
+  `expires` opcional (`YYYY-MM-DD`);
+- `authorized_source_branch`, única entre todos los registros de la política;
+- `admitted_direct_packages` y `admitted_transitive_packages`: `id`, versión
+  exacta estable y `content_hash` (SHA-512 del `.nupkg` tal como lo fija
+  `packages.lock.json`);
+- `allowed_dependency_files`, `required_dependency_files` y
+  `allowed_project_files` (los `.csproj` que pueden ganar el `PackageReference`).
+
+La admisión se ata a la rama y al conjunto de paquetes, no a un SHA base:
+`main` avanza (PR #84) y la base del PR de dependencias cambia sin que cambie lo
+admitido. La protección contra autoautorización viene de otro lado: REL-000 lee
+las admisiones con `git show <base>:tools/rel-000/security-remediation-policy.json`
+sobre la base probada (primer padre del merge ref), nunca del árbol del PR; una
+base con política v2 no admite nada.
+
+REL-000 corre en `NORMAL_RELEASE_EVIDENCE` y aplica dos capas:
+
+1. **Grafo permanente** (`package_graph_lockfile_diff`,
+   `validate_admitted_central_packages`). Admisiones `ACTIVE` y `MERGED` cuentan
+   para siempre. `Directory.Packages.props` debe ser la base más exactamente las
+   líneas `<PackageVersion Include=".." Version=".." />` de paquetes directos
+   admitidos; al quitarlas debe reproducir los bytes de la base. En cada lock
+   file, los nodos de la base no se quitan ni cambian (incluido `contentHash`) y
+   cada nodo nuevo es un paquete admitido con id, versión y hash exactos; sólo un
+   paquete directo admitido puede aparecer como `Direct` o `CentralTransitive`.
+   Esto mantiene verde `test_k_changed_lockfiles_preserve_the_baseline_package_graph`
+   contra la base MVP-0 `988926c7…` después de que el paquete llega a `main` y se
+   sincroniza con `development`.
+2. **Introducción contra la base probada** (`validate_dependency_admission_source`).
+   Si el PR agrega paquetes admitidos respecto de su base, debe venir de la rama
+   autorizada de una sola admisión `ACTIVE` y no vencida, cambiar sólo
+   `allowed_dependency_files` ∪ `allowed_project_files` y entregar el conjunto
+   completo (`required_dependency_files`, todos los directos en el props y todos
+   los paquetes en algún lock file). El reporte registra
+   `dependency_diff_against_base = ADMITTED_DEPENDENCIES` y
+   `dependency_admission_ids`.
+
+Todo lo demás sigue fallando cerrado con los códigos existentes
+(`BASELINE_CENTRAL_PACKAGES_CHANGED`, `UNAUTHORIZED_DEPENDENCY_FILE_CHANGED`,
+`DEPENDENCY_FILES_CHANGED`) o con los nuevos:
+`DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE`,
+`DEPENDENCY_ADMISSION_VERSION_MISMATCH`,
+`DEPENDENCY_ADMISSION_CONTENT_HASH_MISMATCH`,
+`DEPENDENCY_ADMISSION_DIRECT_PACKAGE_NOT_ADMITTED`,
+`DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED`,
+`DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED`,
+`DEPENDENCY_ADMISSION_NODE_INVALID`,
+`DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED`,
+`DEPENDENCY_ADMISSION_NOT_ACTIVE`, `DEPENDENCY_ADMISSION_EXPIRED`,
+`DEPENDENCY_ADMISSION_FILE_NOT_ALLOWED`, `DEPENDENCY_ADMISSION_INCOMPLETE` y
+`DEPENDENCY_ADMISSION_POLICY_INVALID`. Los modos `SECURITY_REMEDIATION` (Sharp,
+SEC-2026-08, SEC-2026-09) no consultan admisiones y no cambian.
+
+La primera admisión es `AUTH-001-OIDC` (PR #92, rama `deps/auth-001-oidc`):
+`Microsoft.AspNetCore.Authentication.OpenIdConnect` 10.0.10 directo y sus
+transitivos `Microsoft.IdentityModel.{Abstractions,JsonWebTokens,Logging,Protocols,Protocols.OpenIdConnect,Tokens}`
+8.19.2, `System.IdentityModel.Tokens.Jwt` 8.19.2 y `Microsoft.Bcl.Cryptography`
+10.0.2. Cuando el PR se fusione, un PR posterior hacia `development` cambia su
+`status` a `MERGED`: los paquetes siguen admitidos y la rama deja de abrir PRs a
+`main`.
 
 ## Rollback REL-000
 
