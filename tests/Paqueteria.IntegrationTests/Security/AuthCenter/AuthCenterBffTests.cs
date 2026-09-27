@@ -78,6 +78,12 @@ public sealed partial class AuthCenterBffTests
         Assert.True(root.GetProperty("csrfToken").GetString()!.Length >= 32);
         Assert.Matches("^[A-Za-z0-9_-]{32}$", root.GetProperty("sessionNamespace").GetString()!);
         Assert.Equal("Usuario Sintético", root.GetProperty("user").GetProperty("name").GetString());
+        // The fake mirrors the real AuthCenter ID token (sid, acr, azp, boolean email_verified); none
+        // of those protocol claims is echoed to the browser.
+        Assert.DoesNotContain(factory.AuthCenter.SessionId, raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("urn:authcenter:acr", raw, StringComparison.Ordinal);
+        Assert.False(root.TryGetProperty("sid", out var sid), sid.ToString());
+        Assert.False(root.TryGetProperty("acr", out var acr), acr.ToString());
     }
 
     [Fact]

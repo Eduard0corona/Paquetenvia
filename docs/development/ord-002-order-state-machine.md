@@ -7,7 +7,7 @@ No implementa despacho, captura de pruebas, incidencias, COD, settlements, track
 ## Capas y responsabilidades
 
 - `Orders.Domain` contiene el vocabulario de 17 estados, la matriz pura, los terminales, la validación de versión y la política de `public_event_code`. No depende de JSON, persistencia ni frameworks.
-- `Orders.Application` define el comando, los errores estructurados, la forma canónica, autorización, metadata allowlisted, snapshots de lectura y 23 guards ordenados y con código único.
+- `Orders.Application` define el comando, los errores estructurados, la forma canónica, autorización, metadata allowlisted, snapshots de lectura y 24 guards ordenados y con código único.
 - `Orders.Infrastructure` ejecuta la transacción, las lecturas cross-schema de solo lectura, el update optimista y las escrituras append-only.
 - `Orders.Endpoints` limita el contrato HTTP a binding, autenticación, tenant activo, validación superficial y mapeo 200/409/401/403.
 
@@ -85,17 +85,28 @@ La asignación DRIVER se verifica por identidad, organización, estado del perfi
 El registro evalúa en orden determinista y falla en el primer código no satisfecho:
 
 - confirmación: quote consumida coherente, aceptación válida y revisión de mercancía restringida;
-- asignación/reintento: una asignación activa, driver elegible, capacidad atestiguada y costo presente;
-- pickup/delivery: prueba con hash y, si corresponde, COD `RECORDED` o `RECONCILED` por el importe exacto;
-- failed attempt: `incident_id` allowlisted, incidencia exacta y custodia registrada;
+- asignación/reintento: una asignación activa, driver elegible según la política DSP-002, capacidad del vehículo y costo presente;
+- pickup/delivery: prueba con hash del intento vigente y, si corresponde, COD `RECORDED` o `RECONCILED` por el importe exacto;
+- failed attempt: `incident_id` allowlisted, incidencia pendiente abierta en el intento vigente y no usada por otro `FAILED_ATTEMPT`;
 - returning/retry: custodia adquirida;
+- salida de `FAILED_ATTEMPT`: la siguiente acción de la incidencia que lo justificó;
 - cancelación desde `AT_PICKUP`: custodia todavía no adquirida;
 - cierre: ventana presente, ninguna incidencia `OPEN`/`INVESTIGATING`, integridad monetaria y conciliación; no-COD exige ausencia de transacción COD y COD exige `RECONCILED`;
 - reclamo y resolución: ventana inclusiva, `finalized_at` nulo y reason no vacío.
 
 Los readers ejecutan solo `SELECT`; no crean aceptación, asignación, prueba, incidencia ni transacción COD.
 
-`valid_active_quote` se interpreta junto con ORD-001: la quote estaba `ACTIVE` cuando ORD-001 la consumió atómicamente, y ORD-002 exige encontrarla `USED`, con `consumed_at` y snapshots coherentes; nunca intenta devolverla a `ACTIVE`. `restricted_goods_acknowledged` es un booleano sintético y reversible para cerrar el guard de MVP-0, no una validación legal ni una integración de mercancías restringidas. Del mismo modo, la capacidad de una asignación se limita a la atestación conservadora disponible; no implementa un capacity engine.
+### Intento vigente, custodia y elegibilidad
+
+- **Custodia.** Existe exactamente cuando el historial append-only de la orden contiene un `ORDER_STATUS_CHANGED` con `new_status = PICKED_UP`. Es la única derivación y la comparten ORD-002 (`IOrderCustodyGuardReader`), INC-001 (`custody_acquired` de la incidencia y la regla `RETURNING`) y la vista de paradas DRV-001. Una `PICKUP_PHOTO` no es custodia: la incidencia de un intento en `AT_PICKUP` exige evidencia y en ese estado solo puede capturarse esa foto.
+- **Pruebas por intento.** `pickup_proof_complete` solo cuenta una `PICKUP_PHOTO` creada en o después del último cambio a `AT_PICKUP`; `delivery_proof_complete`, una `DELIVERY_PHOTO` o `DELIVERY_CODE` creada en o después del último cambio a `DELIVERING`. Sin ese evento no hay intento y nada cuenta. Una prueba ya nombrada como evidencia de incidencia no completa ninguna recolección ni entrega.
+- **Una incidencia por intento fallido.** `attempt_stage_recorded` exige que la incidencia esté `OPEN`/`INVESTIGATING`, se haya abierto en o después del último cambio al estado actual y ningún `FAILED_ATTEMPT` previo la nombre en su payload.
+- **Tiempos ordenados por el lock de la orden.** El reloj de la aplicación se lee antes de los locks, así que por sí solo podría registrar una incidencia antes de un cambio de estado que confirmó primero (o al revés). Tras el `FOR UPDATE`, la transición lee en una sentencia propia (snapshot `READ COMMITTED` nuevo) el `created_at` más reciente de las incidencias de la orden y, si el reloj quedaría antes, registra `occurred_at` un microsegundo después. INC-001 aplica la regla espejo tras su `FOR SHARE` contra el último `ORDER_STATUS_CHANGED`. Así `created_at >= started_at` sigue el orden de commit sin columnas nuevas en AI-06. Comparar por versión de la orden requeriría guardar la versión en la incidencia (columna nueva en `incidents.incidents`, AI-06), por lo que no se hizo.
+- **`next_action`.** El guard `failed_attempt_next_action_respected` lee la incidencia del último `FAILED_ATTEMPT`: `RETURNING` solo permite `RETURNING`; `RESCHEDULED` permite `RESCHEDULED` y el reintento directo `DELIVERING`. No se agrega columna ni tabla. Las incidencias **adoptadas** por INC-001 de una instalación previa no restringen el sucesor: su `next_action` lo derivó el backfill (`custody_acquired` → `RETURNING`), nadie lo eligió. Se reconocen sin columna nueva: son exactamente las incidencias sin `incident_evidence`, porque esa tabla nace en la adopción, el trigger diferido `incidents_require_evidence` rechaza toda incidencia nueva sin evidencia y ningún flujo agrega evidencia a una incidencia existente. Los demás guards del destino siguen aplicando (custodia para `RETURNING`, asignación válida para el reintento).
+- **Elegibilidad hacia `ASSIGNED` y en reintento.** El reader evalúa el conductor de la asignación vigente con `DriverEligibilityPolicy` de DSP-002 (perfil, usuario, membresía `DRIVER`, ciudad, zona, documentos vigentes) y la capacidad del vehículo contra `orders.package_items`, con la misma sección `Drivers:Eligibility`. `capacity_available` recibe los rechazos de capacidad (incluido `VEHICLE_CAPACITY_POLICY_UNAVAILABLE`, un vehículo sin límites configurados) y `eligible_driver` todos los demás. `OWN` usa `Evaluate`, `EXTERNAL` usa `EvaluateExternal` y cualquier otro tipo falla cerrado. `Orders.Infrastructure` referencia `Drivers.Application`, igual que Dispatch y Routing.
+- **Audiencia realtime.** `authorized_driver_id` del outbox incluye la asignación `OWN` o `EXTERNAL` cuyo perfil tiene el mismo `driver_type`, con el mismo criterio que `PostgreSqlRealtimeOutboxEvidenceReader`.
+
+`valid_active_quote` se interpreta junto con ORD-001: la quote estaba `ACTIVE` cuando ORD-001 la consumió atómicamente, y ORD-002 exige encontrarla `USED`, con `consumed_at` y snapshots coherentes; nunca intenta devolverla a `ACTIVE`. `restricted_goods_acknowledged` es un booleano sintético y reversible para cerrar el guard de MVP-0, no una validación legal ni una integración de mercancías restringidas. Del mismo modo, la capacidad de una asignación se limita a los límites por vehículo de la política DSP-002; no implementa un capacity engine.
 
 ## Lock order, concurrencia e idempotencia
 

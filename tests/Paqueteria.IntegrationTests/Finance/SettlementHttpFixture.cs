@@ -156,17 +156,53 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
         return work;
     }
 
-    /// <summary>An incident on the order, in the canonical baseline shape this fixture migrates.</summary>
-    internal Task SeedIncidentAsync(Guid orderId, string status) => ExecuteAdminAsync(
-        """
-        INSERT INTO incidents.incidents(
-          id,order_id,owner_org_id,incident_type,severity,status,custody_acquired,created_by)
-        VALUES (gen_random_uuid(),@order,@org,'FAILED_DELIVERY_ATTEMPT','MEDIUM',@status,false,@actor);
-        """,
-        new NpgsqlParameter("order", orderId),
-        new NpgsqlParameter("org", TenantId),
-        new NpgsqlParameter("status", status),
-        new NpgsqlParameter("actor", DispatcherUserId));
+    /// <summary>
+    /// An incident on the order in the INC-001 shape the API database carries: reason, next action,
+    /// SLA and the mandatory evidence, a proof of the same order. Written in one transaction so the
+    /// deferred evidence requirement sees the evidence row.
+    /// </summary>
+    internal Task SeedIncidentAsync(Guid orderId, string status)
+    {
+        var upload = Guid.NewGuid();
+        var proof = Guid.NewGuid();
+        var incident = Guid.NewGuid();
+        return ExecuteAdminAsync(
+            """
+            BEGIN;
+            INSERT INTO custody.proof_upload_sessions(
+              id,order_id,owner_org_id,requested_by,object_key_quarantine,
+              expected_content_type,maximum_bytes,status,expires_at)
+            VALUES (
+              @upload,@order,@org,@actor,@quarantine,'image/jpeg',1024,'CONSUMED',
+              clock_timestamp()+interval '1 day');
+            INSERT INTO custody.proofs(
+              id,order_id,owner_org_id,upload_session_id,proof_type,object_key,sha256,
+              content_type,size_bytes,captured_at,created_by)
+            VALUES (
+              @proof,@order,@org,@upload,'DELIVERY_PHOTO',@object_key,
+              decode(repeat('05',32),'hex'),'image/jpeg',100,clock_timestamp(),@actor);
+            INSERT INTO incidents.incidents(
+              id,order_id,owner_org_id,incident_type,severity,status,custody_acquired,
+              reason_code,next_action,occurred_at,sla_due_at,created_by)
+            VALUES (
+              @incident,@order,@org,'FAILED_DELIVERY_ATTEMPT','MEDIUM',@status,false,
+              'RECIPIENT_ABSENT','RESCHEDULED',
+              clock_timestamp()-interval '5 minutes',clock_timestamp()+interval '1 day',@actor);
+            INSERT INTO incidents.incident_evidence(
+              id,incident_id,order_id,owner_org_id,proof_id,created_by)
+            VALUES (gen_random_uuid(),@incident,@order,@org,@proof,@actor);
+            COMMIT;
+            """,
+            new NpgsqlParameter("upload", upload),
+            new NpgsqlParameter("proof", proof),
+            new NpgsqlParameter("incident", incident),
+            new NpgsqlParameter("quarantine", $"quarantine/{upload:N}"),
+            new NpgsqlParameter("object_key", $"proofs/{upload:N}"),
+            new NpgsqlParameter("order", orderId),
+            new NpgsqlParameter("org", TenantId),
+            new NpgsqlParameter("status", status),
+            new NpgsqlParameter("actor", DispatcherUserId));
+    }
 
     /// <summary>A settlement of another tenant, written directly so no settlement actor ever saw it.</summary>
     internal async Task<Guid> SeedForeignSettlementAsync()

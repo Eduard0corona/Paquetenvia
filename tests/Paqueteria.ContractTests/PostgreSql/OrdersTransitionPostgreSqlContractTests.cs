@@ -96,6 +96,15 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         {
             await using var scenario = new SyntheticOrderScenario(fixture);
             await scenario.InitializeAsync(source.ToContractValue());
+            // A real order reaches its status through ORD-002 history: custody, the current
+            // attempt and the failed attempt's next action are all read from it.
+            var failedAttemptIncident = source == OrderStatus.FailedAttempt
+                ? await InsertIncidentAsync(scenario, custodyAcquired: target == OrderStatus.Returning)
+                : (Guid?)null;
+            var version = await OrderStatusHistory.SeedCanonicalAsync(
+                scenario,
+                source.ToContractValue(),
+                failedAttemptIncident);
             var metadata = await PrepareGuardFixturesAsync(scenario, source, target);
             await using var scope = CreateScope();
             var key = $"ord002-edge-{(int)source:D2}-{(int)target:D2}-0001";
@@ -104,14 +113,14 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 Command(
                     scenario,
                     target,
-                    1,
+                    version,
                     key,
                     metadata,
                     "hidden@example.test Avenida Universidad 1234 token=super-secret"),
                 CancellationToken.None);
 
             Assert.Equal(target.ToContractValue(), result.Status);
-            Assert.Equal(2, result.Version);
+            Assert.Equal(version + 1, result.Version);
             if (target == OrderStatus.Delivered)
             {
                 Assert.NotNull(result.ClaimWindowEndsAt);
@@ -121,17 +130,17 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 """
                 SELECT o.status,o.version,
                   (SELECT count(*) FROM orders.order_events e
-                    WHERE e.order_id=o.id AND e.aggregate_version=2 AND e.event_type='ORDER_STATUS_CHANGED'),
+                    WHERE e.order_id=o.id AND e.aggregate_version=@version AND e.event_type='ORDER_STATUS_CHANGED'),
                   (SELECT public_event_code FROM orders.order_events e
-                    WHERE e.order_id=o.id AND e.aggregate_version=2),
+                    WHERE e.order_id=o.id AND e.aggregate_version=@version),
                   (SELECT count(*) FROM platform.outbox_events x
-                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
                       AND x.topic='orders.status-changed' AND x.status='PENDING' AND x.attempts=0),
                   (SELECT count(*) FROM platform.outbox_events x
-                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
                       AND x.topic='orders.timeline-event-added' AND x.status='PENDING' AND x.attempts=0),
                   (SELECT count(DISTINCT id) FROM platform.outbox_events x
-                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
                       AND x.topic IN ('orders.status-changed','orders.timeline-event-added')),
                   (SELECT count(*) FROM platform.audit_logs a
                     WHERE a.entity_id=o.id AND a.action='ORDER_STATUS_CHANGED'),
@@ -139,9 +148,9 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                     WHERE i.owner_org_id=o.owner_org_id AND i.scope='ORD-002:TRANSITION_ORDER'
                       AND i.idempotency_key=@key AND i.response_status=200),
                   (SELECT payload::text FROM orders.order_events e
-                    WHERE e.order_id=o.id AND e.aggregate_version=2),
+                    WHERE e.order_id=o.id AND e.aggregate_version=@version),
                   (SELECT payload::text FROM platform.outbox_events x
-                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
                       AND x.topic='orders.status-changed'),
                   (SELECT payload_redacted::text FROM platform.audit_logs a
                     WHERE a.entity_id=o.id AND a.action='ORDER_STATUS_CHANGED')
@@ -149,10 +158,11 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 """);
             verify.Parameters.AddWithValue("order", scenario.OrderId);
             verify.Parameters.AddWithValue("key", key);
+            verify.Parameters.AddWithValue("version", version + 1);
             await using var reader = await verify.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
             Assert.Equal(target.ToContractValue(), reader.GetString(0));
-            Assert.Equal(2, reader.GetInt32(1));
+            Assert.Equal(version + 1, reader.GetInt32(1));
             Assert.Equal(1L, reader.GetInt64(2));
             Assert.Equal(OrderPublicEventCodePolicy.Map(target), reader.IsDBNull(3) ? null : reader.GetString(3));
             Assert.Equal(1L, reader.GetInt64(4));
@@ -478,7 +488,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             scope.Service.TransitionAsync(command, CancellationToken.None));
         await DeleteSyntheticDriverAsync(scenario, crossTenantDriver);
 
-        await InsertAssignmentAsync(scenario);
+        await InsertAssignmentAsync(scenario, scenario.UserId);
         Assert.Equal(
             stored,
             await scope.Service.TransitionAsync(command, CancellationToken.None));
@@ -509,7 +519,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             """,
             SyntheticOrderScenario.P("user", prohibited.UserId),
             SyntheticOrderScenario.P("org", prohibited.OrganizationId));
-        await InsertAssignmentAsync(prohibited);
+        await InsertAssignmentAsync(prohibited, prohibited.UserId);
         await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
             prohibitedScope.Service.TransitionAsync(prohibitedCommand, CancellationToken.None));
         await AssertArtifactCountsAsync(prohibited, 1, 2, 1, 1);
@@ -604,25 +614,40 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         await using (var custody = new SyntheticOrderScenario(fixture))
         {
             await custody.InitializeAsync(OrderStatus.AtPickup.ToContractValue());
+            // A pickup photo is not custody; the PICKED_UP status change of an earlier attempt is.
             await InsertProofAsync(custody, "PICKUP_PHOTO");
+            var pickupOnly = await OrderStatusHistory.SeedCanonicalAsync(custody, "AT_PICKUP");
             await using var scope = CreateScope();
-            var conflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
-                scope.Service.TransitionAsync(
-                    Command(custody, OrderStatus.Cancelled, 1, Key()),
-                    CancellationToken.None));
-            Assert.Equal("if_from_at_pickup_then_custody_not_acquired", conflict.GuardCode);
+            await using (var repickup = new SyntheticOrderScenario(fixture))
+            {
+                await repickup.InitializeAsync(OrderStatus.AtPickup.ToContractValue());
+                var repickupVersion = await OrderStatusHistory.SeedAsync(
+                    repickup,
+                    [.. OrderStatusHistory.ToDelivering, "FAILED_ATTEMPT", "RESCHEDULED", "ASSIGNED", "AT_PICKUP"]);
+                var conflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+                    scope.Service.TransitionAsync(
+                        Command(repickup, OrderStatus.Cancelled, repickupVersion, Key()),
+                        CancellationToken.None));
+                Assert.Equal("if_from_at_pickup_then_custody_not_acquired", conflict.GuardCode);
+            }
+
+            var cancelled = await scope.Service.TransitionAsync(
+                Command(custody, OrderStatus.Cancelled, pickupOnly, Key()),
+                CancellationToken.None);
+            Assert.Equal("CANCELLED", cancelled.Status);
         }
 
         await using (var failed = new SyntheticOrderScenario(fixture))
         {
             await failed.InitializeAsync(OrderStatus.Delivering.ToContractValue());
+            var failedVersion = await OrderStatusHistory.SeedCanonicalAsync(failed, "DELIVERING");
             var incidentId = await InsertIncidentAsync(failed, custodyAcquired: true);
             await using var scope = CreateScope();
             var result = await scope.Service.TransitionAsync(
                 Command(
                     failed,
                     OrderStatus.FailedAttempt,
-                    1,
+                    failedVersion,
                     Key(),
                     $$"""{"incident_id":"{{incidentId:D}}"}"""),
                 CancellationToken.None);
@@ -635,30 +660,31 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             await cod.ExecuteAdminAsync(
                 "UPDATE orders.orders SET cod_expected_cents=5000 WHERE id=@order;",
                 SyntheticOrderScenario.P("order", cod.OrderId));
+            var codVersion = await OrderStatusHistory.SeedCanonicalAsync(cod, "DELIVERING");
             await InsertProofAsync(cod, "DELIVERY_PHOTO");
             await using var scope = CreateScope();
             var missing = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
                 scope.Service.TransitionAsync(
-                    Command(cod, OrderStatus.Delivered, 1, Key()),
+                    Command(cod, OrderStatus.Delivered, codVersion, Key()),
                     CancellationToken.None));
             Assert.Equal("if_cod_expected_then_cod_status_recorded_or_reconciled", missing.GuardCode);
 
             await InsertCodAsync(cod, "RECORDED", 5_000);
             var delivered = await scope.Service.TransitionAsync(
-                Command(cod, OrderStatus.Delivered, 1, Key()),
+                Command(cod, OrderStatus.Delivered, codVersion, Key()),
                 CancellationToken.None);
             Assert.NotNull(delivered.ClaimWindowEndsAt);
 
             var closeConflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
                 scope.Service.TransitionAsync(
-                    Command(cod, OrderStatus.Closed, 2, Key()),
+                    Command(cod, OrderStatus.Closed, codVersion + 1, Key()),
                     CancellationToken.None));
             Assert.Equal("if_cod_expected_then_cod_status_reconciled", closeConflict.GuardCode);
             await cod.ExecuteAdminAsync(
                 "UPDATE finance.cod_transactions SET status='RECONCILED',reconciled_at=clock_timestamp() WHERE order_id=@order;",
                 SyntheticOrderScenario.P("order", cod.OrderId));
             var closed = await scope.Service.TransitionAsync(
-                Command(cod, OrderStatus.Closed, 2, Key()),
+                Command(cod, OrderStatus.Closed, codVersion + 1, Key()),
                 CancellationToken.None);
             Assert.Equal("CLOSED", closed.Status);
             Assert.Null(closed.FinalizedAt);
@@ -750,7 +776,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                     Command(assigned, OrderStatus.AtPickup, 1, Key()),
                     CancellationToken.None));
 
-            await InsertAssignmentAsync(assigned);
+            await InsertAssignmentAsync(assigned, assigned.UserId);
             var result = await scope.Service.TransitionAsync(
                 Command(assigned, OrderStatus.AtPickup, 1, Key()),
                 CancellationToken.None);
@@ -803,8 +829,9 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             new PostgreSqlOrderTransitionAuthorizationReader(),
             new PostgreSqlOrderTransitionReplayAuthorizationReader(),
             new PostgreSqlOrderQuoteAcceptanceGuardReader(),
-            new PostgreSqlOrderAssignmentGuardReader(),
+            new PostgreSqlOrderAssignmentGuardReader(Options.Create(EligibilityOptions())),
             new PostgreSqlOrderProofGuardReader(),
+            new PostgreSqlOrderCustodyGuardReader(),
             new PostgreSqlOrderIncidentGuardReader(),
             new PostgreSqlOrderCodGuardReader(),
             new OrderTransitionAuthorizer(),
@@ -861,10 +888,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             await InsertAssignmentAsync(scenario);
         }
 
-        if (target == OrderStatus.PickedUp ||
-            target == OrderStatus.Returning ||
-            (target == OrderStatus.Delivering &&
-             source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled))
+        if (target == OrderStatus.PickedUp)
         {
             await InsertProofAsync(scenario, "PICKUP_PHOTO");
         }
@@ -908,23 +932,57 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             SyntheticOrderScenario.P("user", scenario.UserId));
     }
 
-    private static async Task InsertAssignmentAsync(SyntheticOrderScenario scenario)
+    /// <summary>
+    /// An ACTIVE assignment to a driver the DSP-002 policy accepts: an active user with an
+    /// active DRIVER membership, an active OWN profile in the order's city and one package within
+    /// the vehicle capacity. The synthetic policy of this suite requires no document.
+    /// </summary>
+    private static async Task InsertAssignmentAsync(
+        SyntheticOrderScenario scenario,
+        Guid? existingDriverUserId = null)
     {
         var driverId = Guid.NewGuid();
+        var driverUserId = existingDriverUserId ?? Guid.NewGuid();
+        if (existingDriverUserId is null)
+        {
+            await scenario.ExecuteAdminAsync(
+                """
+                INSERT INTO identity.users(id,identity_subject,status)
+                VALUES (@driver_user,@subject,'ACTIVE');
+                INSERT INTO organizations.organization_memberships(
+                  id,user_id,organization_id,role,status,is_default)
+                VALUES (gen_random_uuid(),@driver_user,@org,'DRIVER','ACTIVE',true);
+                """,
+                SyntheticOrderScenario.P("driver_user", driverUserId),
+                SyntheticOrderScenario.P("subject", $"ord002-driver|{driverUserId:N}"),
+                SyntheticOrderScenario.P("org", scenario.OrganizationId));
+        }
+
         await scenario.ExecuteAdminAsync(
             """
             INSERT INTO drivers.driver_profiles(
               id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
-            VALUES (@driver,@user,@org,@city,'OWN','MOTORCYCLE','ACTIVE');
+            VALUES (@driver,@driver_user,@org,@city,'OWN','MOTORCYCLE','ACTIVE');
+            INSERT INTO orders.package_items(
+              id,order_id,owner_org_id,description,weight_grams,declared_value_cents,dimensions_mm)
+            VALUES (gen_random_uuid(),@order,@org,'synthetic package',500,0,
+              '{"length_mm":100,"width_mm":80,"height_mm":60}');
             INSERT INTO dispatch.assignments(
               id,order_id,owner_org_id,driver_id,assignment_type,status,cost_cents)
             VALUES (gen_random_uuid(),@order,@org,@driver,'OWN','ACTIVE',100);
             """,
             SyntheticOrderScenario.P("driver", driverId),
-            SyntheticOrderScenario.P("user", scenario.UserId),
+            SyntheticOrderScenario.P("driver_user", driverUserId),
             SyntheticOrderScenario.P("org", scenario.OrganizationId),
             SyntheticOrderScenario.P("city", scenario.CityId),
             SyntheticOrderScenario.P("order", scenario.OrderId));
+    }
+
+    private static OrderTransitionDriverEligibilityOptions EligibilityOptions()
+    {
+        var options = OrderAttemptCustodyPostgreSqlContractTests.EligibilityOptions();
+        options.RequiredDocumentTypesByVehicleType["MOTORCYCLE"] = [];
+        return options;
     }
 
     private static Task DeleteSyntheticDriverAsync(

@@ -19,14 +19,18 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
 {
     public const string Authority = "https://authcenter.test";
     public const string Issuer = "https://authcenter.test";
+    public const string AcrSingleFactor = "urn:authcenter:acr:1fa";
+    public const string AcrMfa = "urn:authcenter:acr:mfa";
+    public const string AcrPhishingResistant = "urn:authcenter:acr:phr";
+
+    /// <summary>AuthCenter SSO session id (`sid`), the same value its back-channel logout_token carries.</summary>
+    public string SessionId { get; } = Guid.NewGuid().ToString();
     public const string ClientId = "paquetenvia-web-testing";
     public const string ClientSecret = "fake-authcenter-client-secret-0123456789abcdef";
     public const string PublicOrigin = "https://app.paquetenvia.test";
     public const string RedirectUri = PublicOrigin + "/signin-authcenter";
     public const string EndSessionEndpoint = Authority + "/oauth/logout";
     public const string PostLogoutRedirectUri = PublicOrigin + "/login";
-    public const string MfaContextClass = "urn:authcenter:acr:mfa";
-    public const string SingleFactorContextClass = "urn:authcenter:acr:1fa";
     public const string BackchannelLogoutEvent = "http://schemas.openid.net/event/backchannel-logout";
 
     private readonly RSA _rsa = RSA.Create(2048);
@@ -50,7 +54,7 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
 
     public string LastIdToken { get; private set; } = string.Empty;
 
-    /// <summary>AuthCenter single sign-on session id (<c>sid</c>) of the last authorization.</summary>
+    /// <summary><c>sid</c> of the last authorization: <see cref="SessionId"/> unless the behavior names another.</summary>
     public string LastSessionId { get; private set; } = string.Empty;
 
     /// <summary><c>acr_values</c> of the last authorization request; null when absent.</summary>
@@ -81,7 +85,7 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         LastRequestedAcrValues = query.TryGetValue("acr_values", out var acrValues) ? acrValues.ToString() : null;
 
         var code = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-        LastSessionId = Behavior.SessionId ?? Guid.NewGuid().ToString();
+        LastSessionId = Behavior.SessionId ?? SessionId;
         _codes[code] = new AuthorizationGrant(
             subject,
             query["nonce"].ToString(),
@@ -224,7 +228,8 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         ["token_endpoint_auth_methods_supported"] = new[] { "client_secret_basic", "client_secret_post" },
         ["code_challenge_methods_supported"] = new[] { "S256" },
         ["authorization_response_iss_parameter_supported"] = true,
-        ["acr_values_supported"] = new[] { SingleFactorContextClass, MfaContextClass, "urn:authcenter:acr:phr" },
+        // end_session_endpoint is added by Discovery() from PublishedEndSessionEndpoint.
+        ["acr_values_supported"] = new[] { AcrSingleFactor, AcrMfa, AcrPhishingResistant },
         ["backchannel_logout_supported"] = true,
         ["backchannel_logout_session_supported"] = true,
         ["frontchannel_logout_supported"] = false,
@@ -331,7 +336,7 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         // AuthCenter honors acr_values by asking (or enrolling) the second factor: the ID token then
         // carries acr mfa and "mfa" in amr. IgnoreAcrValues plays a server that did not.
         var steppedUp = !behavior.IgnoreAcrValues &&
-            grant.AcrValues?.Split(' ').Contains(MfaContextClass, StringComparer.Ordinal) == true;
+            grant.AcrValues?.Split(' ').Contains(AcrMfa, StringComparer.Ordinal) == true;
         var amr = behavior.Amr ?? (steppedUp ? ["pwd", "otp", "mfa"] : null);
         if (amr is not null)
         {
@@ -339,7 +344,7 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         }
 
         claims["acr"] = behavior.Acr ??
-            (amr?.Contains("mfa", StringComparer.Ordinal) == true ? MfaContextClass : SingleFactorContextClass);
+            (amr?.Contains("mfa", StringComparer.Ordinal) == true ? AcrMfa : AcrSingleFactor);
 
         var expires = behavior.Expired ? now.AddMinutes(-10) : now.AddMinutes(5);
         var descriptor = new SecurityTokenDescriptor

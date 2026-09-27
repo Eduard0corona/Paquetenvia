@@ -40,10 +40,34 @@ The 11 shared jobs must be identical in both files except for orchestration keys
 
 Dependency changes (`DEPS`: `Directory.Packages.props`, `packages.lock.json` with package changes, `package.json`, `pnpm-lock.yaml`, `global.json`, `.nvmrc`, …) **never go through `development`**:
 
-1. Dependency PR → `main` (authorized remediation branch, see `tools/rel-000/security-remediation-policy.json` and `tools/ci/main_source_guard.py`). Foundation CI must pass 13/13 on the PR, and then on `push` → `main`.
+1. Dependency PR → `main`, from an authorized security remediation branch or from the `authorized_source_branch` of an `ACTIVE` dependency admission (see `tools/rel-000/security-remediation-policy.json` and `tools/ci/main_source_guard.py`). Foundation CI must pass 13/13 on the PR, and then on `push` → `main`.
 2. Back-sync PR with head `main` → base `development`. The `classify` job looks up the exact Foundation `push`/`main` run whose `head_sha` equals the `main` head, with all 13 jobs `success`. If it exists, it passes `--certified-main-sha` and the plan becomes `MAIN_BACKSYNC`: every job runs except `rel000`, and `PR Gate` accepts the `DEPS` domain. Without that certification, the plan is `FULL` and `PR Gate` rejects the dependencies.
 
 A lock file that only changes the internal graph (`type: Project`) is proven by content (`NUGET_PROJECT_GRAPH`) and does not count as `DEPS`.
+
+### Explicit dependency admission (GOV-DEPENDENCY-ADMISSION-001)
+
+A **new** package (MVP-1 onward) needs an owner-approved entry in `dependency_admissions` (policy format v3, `mode: DEPENDENCY_ADMISSION`) **before** its dependency PR can pass. The entry registers:
+
+- each package id with its exact version and NuGet content hash (`admitted_direct_packages`, `admitted_transitive_packages`);
+- the authorized source branch;
+- the allowed and required dependency files, plus the `.csproj` files that may gain the `PackageReference`;
+- the owner decision ID;
+- an optional expiry.
+
+The admission is bound to the branch and the package set, not to a base SHA, because `main` keeps moving.
+
+Order of operations:
+
+1. Register the admission in a PR into `development` (`status: ACTIVE`). Promote `development` → `main`. Both `main_source_guard.py` and REL-000 read the policy **from the tested base**, so a dependency PR can never admit itself.
+2. The dependency PR from the authorized branch → `main`. REL-000 runs in `NORMAL_RELEASE_EVIDENCE`, with no remediation ID and no workflow change. It accepts the diff only if it is exactly the admitted set:
+   - `Directory.Packages.props` = baseline + the admitted `PackageVersion` lines;
+   - every lock file = baseline nodes, unchanged, + the admitted nodes;
+   - only allowed files are changed, and every required file is present.
+3. Back-sync (`MAIN_BACKSYNC`) as above.
+4. A follow-up PR into `development` flips the admission to `status: MERGED`. From then on the branch no longer opens PRs into `main`, but the packages stay admitted permanently: every later REL-000 run still compares against the MVP-0 baseline plus the admitted set.
+
+Anything unregistered still fails closed: an extra transitive package, another version or content hash, a change or removal of an existing package, or `Directory.Packages.props` changed without an admission. `PR Gate` still rejects `DEPS` into `development`. `MAIN_BACKSYNC` remains the only way dependencies reach `development`. Details and reason codes: `docs/development/rel-000-internal-release.md`.
 
 ## Re-running
 

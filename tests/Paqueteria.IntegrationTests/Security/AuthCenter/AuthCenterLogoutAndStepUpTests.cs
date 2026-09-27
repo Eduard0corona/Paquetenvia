@@ -139,6 +139,8 @@ public sealed partial class AuthCenterBffTests
         using var other = factory.CreateBrowser();
         using var callback = await SignInAsync(factory, browser, ViewerSubject);
         var sessionId = factory.AuthCenter.LastSessionId;
+        // The same person on another device: a different AuthCenter single sign-on session.
+        factory.AuthCenter.Behavior = new TokenBehavior { SessionId = Guid.NewGuid().ToString() };
         using var otherCallback = await SignInAsync(factory, other, ViewerSubject);
         using var before = await browser.GetAsync(ActiveProbe);
 
@@ -330,7 +332,7 @@ public sealed partial class AuthCenterBffTests
         Assert.Null(otherAcr);
         Assert.Equal(HttpStatusCode.Redirect, stepUp.StatusCode);
         Assert.Contains("no-store", stepUp.Headers.CacheControl!.ToString(), StringComparison.Ordinal);
-        Assert.Equal(FakeAuthCenterServer.MfaContextClass, factory.AuthCenter.LastRequestedAcrValues);
+        Assert.Equal(FakeAuthCenterServer.AcrMfa, factory.AuthCenter.LastRequestedAcrValues);
     }
 
     [Fact]
@@ -362,8 +364,8 @@ public sealed partial class AuthCenterBffTests
     public static TheoryData<string, TokenBehavior> UnsatisfiedStepUps => new()
     {
         { "AuthCenter ignored acr_values", new TokenBehavior { IgnoreAcrValues = true } },
-        { "acr mfa without amr mfa", new TokenBehavior { IgnoreAcrValues = true, Acr = FakeAuthCenterServer.MfaContextClass, Amr = ["pwd"] } },
-        { "amr mfa with acr 1fa", new TokenBehavior { Amr = ["pwd", "otp", "mfa"], Acr = FakeAuthCenterServer.SingleFactorContextClass } },
+        { "acr mfa without amr mfa", new TokenBehavior { IgnoreAcrValues = true, Acr = FakeAuthCenterServer.AcrMfa, Amr = ["pwd"] } },
+        { "amr mfa with acr 1fa", new TokenBehavior { Amr = ["pwd", "otp", "mfa"], Acr = FakeAuthCenterServer.AcrSingleFactor } },
         { "unknown acr", new TokenBehavior { Amr = ["pwd", "otp", "mfa"], Acr = "urn:authcenter:acr:unknown" } },
     };
 
@@ -480,7 +482,7 @@ public sealed partial class AuthCenterBffTests
             AuthCenterDefaults.LoginPath + "?mfa=required&return_url=" + Uri.EscapeDataString(returnUrl));
         Assert.Equal(HttpStatusCode.Redirect, login.StatusCode);
         var grant = factory.AuthCenter.Authorize(login.Headers.Location!, subject);
-        Assert.Equal(FakeAuthCenterServer.MfaContextClass, factory.AuthCenter.LastRequestedAcrValues);
+        Assert.Equal(FakeAuthCenterServer.AcrMfa, factory.AuthCenter.LastRequestedAcrValues);
         return await browser.GetAsync(FakeAuthCenterServer.CallbackPath(grant.Code, grant.State));
     }
 
