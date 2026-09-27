@@ -4150,3 +4150,128 @@ x-runtime-contracts:
   money: all cents fields are int64
   legal_acceptance: OrderAcceptanceCanonicalForm v1 fixed-order compact JSON + SHA-256
   tenant_org_setting: parameterized uuid[] converted to PostgreSQL array text; empty {} and never null
+x-capability-matrix:
+  status: DECIDED
+  decision: D5-CAPABILITY-MATRIX (project owner, 2026-09-26)
+  implementation: pending; each operation keeps its current enforced rules until the implementing task aligns them and its
+    tests
+  rules:
+  - PLATFORM_ADMIN keeps the existing MFA requirement wherever an operation already demands it
+  - unlisted roles receive the uniform 403 before any resource access
+  - VIEWER reads never return exact coordinates (lat/lng); a coarse or summary location is the only permitted form
+  operations:
+    createQuote: [DISPATCHER, PLATFORM_ADMIN]
+    getQuote: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    createOrder: [DISPATCHER, PLATFORM_ADMIN]
+    listOrders: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    getOrder: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    previewOrderCsv: [DISPATCHER, PLATFORM_ADMIN]
+    commitOrderCsv: [DISPATCHER, PLATFORM_ADMIN]
+    listCities: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    listServiceAreas: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    listOperatingZones: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    listLocations: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    createLocation: [DISPATCHER, PLATFORM_ADMIN]
+    listMyStops: [DRIVER]
+    listMyEligibleExternalOffers: [DRIVER]
+    createSettlement: [FINANCE, PLATFORM_ADMIN]
+    getSettlement: [FINANCE, PLATFORM_ADMIN]
+    addSettlementAdjustment: [FINANCE, PLATFORM_ADMIN]
+    approveSettlement: [FINANCE, PLATFORM_ADMIN]
+    markSettlementPaid: [FINANCE, PLATFORM_ADMIN]
+    voidSettlement: [FINANCE, PLATFORM_ADMIN]
+    exportSettlementCsv: [FINANCE, PLATFORM_ADMIN]
+  driver_scope: DRIVER (OWN or EXTERNAL) sees only its own assignments, stops and offers; it has no access to orders,
+    quotes, locations, CSV imports or settlements outside them
+  finance_scope: FINANCE is limited to settlements and finance. Implemented today, getOrderFinancials, getRouteFinancials
+    and reconcileCod are permitted only to DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA challenge,
+    and a collecting driver can never reconcile their own collection. Adding FINANCE is a pending delta FINANCE-COD-RECONCILIATION in x-pilot-contract-deltas, shipped by feature/pilot-contract-deltas; until then the implemented rule in the operation descriptions applies
+  finance_operations_status: PENDING_IMPLEMENTATION (pending delta FINANCE-COD-RECONCILIATION in x-pilot-contract-deltas, shipped by feature/pilot-contract-deltas; until then the implemented rule in the operation descriptions applies)
+  finance_operations:
+    getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
+    getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
+    reconcileCod: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
+x-pilot-contract-deltas:
+  purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
+    each delta together with code and tests. Every entry is an owner decision (DECIDED).
+    Owner approval of all six API contract proposals on 2026-09-27, literal answer "Apruebo Contrato de la API (AI-05)"
+  entries:
+  - id: FINANCE-COD-RECONCILIATION
+    status: DECIDED
+    decision: FINANCE-COD-RECONCILIATION and FINANCE-COD-MFA-2026-09-27 (project owner, 2026-09-27)
+    implementation: pending; shipped by feature/pilot-contract-deltas together with FinanceAuthorizationPolicy and its tests
+    delta: getOrderFinancials, getRouteFinancials and reconcileCod also admit FINANCE members with a satisfied MFA challenge;
+      FINANCE never creates or modifies orders; DISPATCHER keeps no MFA requirement and PLATFORM_ADMIN keeps MFA; a
+      collecting driver can never reconcile their own collection
+  - id: D6-COD-EXPECTED
+    status: DECIDED
+    decision: D6-COD-PILOT
+    literal: el despachador declara el monto COD al crear la orden (y en el CSV)
+    delta: CreateOrderRequest and the CSV row accept an optional non-negative integer COD expectation in MXN cents (int64),
+      declared by the dispatcher; it is copied to orders.cod_expected_cents and flows to FIN-001 and SET-001
+    quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the
+      order and in the CSV
+  - id: D7-SETTLEMENT-CLOSED-PERIOD
+    status: DECIDED
+    decision: D7-SETTLEMENT-RULES
+    delta: createSettlement rejects a period whose period_to is not strictly before the current operational date with 409
+      code SETTLEMENT_PERIOD_NOT_CLOSED
+  - id: D7-SETTLEMENT-NEGATIVE-TOTAL
+    status: DECIDED
+    decision: D7-SETTLEMENT-RULES
+    delta: createSettlement and addSettlementAdjustment reject any result with total below zero with 409 code
+      SETTLEMENT_TOTAL_NEGATIVE
+  - id: D7-SETTLEMENT-MFA
+    status: DECIDED
+    decision: D7-SETTLEMENT-RULES
+    delta: approveSettlement and markSettlementPaid require a satisfied MFA challenge for every permitted role, including
+      FINANCE
+    literal: Solo se liquidan periodos ya cerrados; un total negativo se rechaza; aprobar y pagar requieren MFA; la
+      exportación se audita
+  - id: D7-SETTLEMENT-EXPORT-AUDIT
+    status: DECIDED
+    decision: D7-SETTLEMENT-RULES
+    delta: exportSettlementCsv writes one append-only audit entry per export
+  - id: SET-EXPORT-NO-STORE
+    status: DECIDED
+    decision: AI05-EXPORT-NO-STORE (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: the exportSettlementCsv 200 response declares the header Cache-Control no-store
+  - id: SET-LIST
+    status: DECIDED
+    decision: AI05-LIST-SETTLEMENTS (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: add listSettlements (GET /settlements) with cursor pagination, filters payee_id, status, period_from and period_to,
+      same capabilities as getSettlement and the uniform error matrix 401/403/409/503
+  - id: LOC-PII-KEY-VERSION
+    status: DECIDED
+    decision: AI05-REMOVE-PII-KEY-VERSION (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: remove pii_key_version from CreateLocationRequest; the server PII protector selects and persists the key version
+      (ADP-001)
+  - id: ORD-ACCEPTANCE-LIMITS
+    status: DECIDED
+    decision: AI05-INPUT-LIMITS (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: publish explicit bounds that AI-05 lacks today, with the values approved as written in this entry - terms_version
+      and privacy_version minLength 1, maxLength 64, pattern ^[A-Za-z0-9._-]+$; accepted_at not later than server time plus 5
+      minutes nor earlier than server time minus 72 hours; CreateQuoteRequest packages keep minItems 1 and gain maxItems 20
+  - id: UNDECLARED-STATUS-CODES
+    status: DECIDED
+    decision: AI05-DECLARE-EMITTED-ERRORS (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: declare the status codes the implementation already emits - 503 on createQuote, getQuote, createOrder, listOrders,
+      getOrder, transitionOrder, listLocations, createLocation, createProofUploadSession and finalizeProof; 409 on
+      createProofUploadSession and finalizeProof; 429 and 503 on publicTracking; 503 from the tenant-context middleware on
+      every tenant operation
+    declare_400: DECIDED AI05-DECLARE-400-ERRORS (project owner, 2026-09-27) - declare the 400 responses the API already
+      returns from the Locations endpoints and for a missing or malformed tenant context header, with no behaviour change;
+      the declaration ships with the implementation PR (feature/pilot-contract-deltas)
+  - id: PUBLIC-TIMELINE-ORDER
+    status: DECIDED
+    decision: AI05-TIMELINE-ORDER (project owner, 2026-09-27)
+    implementation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05 against the code)
+    delta: the public tracking timeline is ordered by (occurred_at, aggregate_version) so ties are deterministic; the SQL piece
+      (ORDER BY in security.get_public_tracking_projection and the paqueteria_bootstrap grant on
+      orders.order_events.aggregate_version) is decided too; translation to AI-06/AI-18 ships with its migration in the
+      implementation PR
