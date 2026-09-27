@@ -11,7 +11,9 @@ namespace Paqueteria.IntegrationTests.Security.AuthCenter;
 /// <summary>
 /// In-process OIDC provider that mimics the AuthCenter contract: discovery, JWKS, token and
 /// revocation endpoints. The RSA key is generated per instance; nothing is persisted. The browser
-/// part of /oauth/authorize is played by the test itself through <see cref="Authorize"/>.
+/// parts of /oauth/authorize and /oauth/logout are played by the test itself through
+/// <see cref="Authorize"/> and <see cref="AssertEndSessionRequest"/>; back-channel logout tokens are
+/// minted with <see cref="CreateLogoutToken"/>.
 /// </summary>
 internal sealed class FakeAuthCenterServer : HttpMessageHandler
 {
@@ -21,6 +23,11 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
     public const string ClientSecret = "fake-authcenter-client-secret-0123456789abcdef";
     public const string PublicOrigin = "https://app.paquetenvia.test";
     public const string RedirectUri = PublicOrigin + "/signin-authcenter";
+    public const string EndSessionEndpoint = Authority + "/oauth/logout";
+    public const string PostLogoutRedirectUri = PublicOrigin + "/login";
+    public const string MfaContextClass = "urn:authcenter:acr:mfa";
+    public const string SingleFactorContextClass = "urn:authcenter:acr:1fa";
+    public const string BackchannelLogoutEvent = "http://schemas.openid.net/event/backchannel-logout";
 
     private readonly RSA _rsa = RSA.Create(2048);
     private readonly RsaSecurityKey _signingKey;
@@ -43,6 +50,15 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
 
     public string LastIdToken { get; private set; } = string.Empty;
 
+    /// <summary>AuthCenter single sign-on session id (<c>sid</c>) of the last authorization.</summary>
+    public string LastSessionId { get; private set; } = string.Empty;
+
+    /// <summary><c>acr_values</c> of the last authorization request; null when absent.</summary>
+    public string? LastRequestedAcrValues { get; private set; }
+
+    /// <summary>What discovery publishes as <c>end_session_endpoint</c>; null omits it.</summary>
+    public string? PublishedEndSessionEndpoint { get; set; } = EndSessionEndpoint;
+
     /// <summary>
     /// Plays the IdP interactive step: validates the authorization request exactly like AuthCenter
     /// (client, exact redirect URI, scopes, S256 PKCE, state, nonce) and returns the callback URL.
@@ -62,14 +78,91 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             ["email", "offline_access", "openid", "profile"],
             query["scope"].ToString().Split(' ').Order(StringComparer.Ordinal));
         Assert.False(query.ContainsKey("client_secret"));
+        LastRequestedAcrValues = query.TryGetValue("acr_values", out var acrValues) ? acrValues.ToString() : null;
 
         var code = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        LastSessionId = Behavior.SessionId ?? Guid.NewGuid().ToString();
         _codes[code] = new AuthorizationGrant(
             subject,
             query["nonce"].ToString(),
             query["code_challenge"].ToString(),
-            query["redirect_uri"].ToString());
+            query["redirect_uri"].ToString(),
+            LastSessionId,
+            LastRequestedAcrValues);
         return new AuthorizationResult(code, query["state"].ToString(), query["nonce"].ToString());
+    }
+
+    /// <summary>
+    /// Checks an RP-initiated logout URL the way AuthCenter /oauth/logout does: an id_token_hint
+    /// issued here for this client and the exact registered post_logout_redirect_uri.
+    /// </summary>
+    public static void AssertEndSessionRequest(string endSessionUrl, string expectedIdToken)
+    {
+        var uri = new Uri(endSessionUrl, UriKind.Absolute);
+        Assert.Equal(EndSessionEndpoint, uri.GetLeftPart(UriPartial.Path));
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        Assert.Equal(["id_token_hint", "post_logout_redirect_uri"], query.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(expectedIdToken, query["id_token_hint"].ToString());
+        Assert.Equal(PostLogoutRedirectUri, query["post_logout_redirect_uri"].ToString());
+        Assert.Equal(ClientId, Assert.Single(new JsonWebToken(expectedIdToken).Audiences));
+    }
+
+    /// <summary>Authorization error response, with state and the RFC 9207 iss AuthCenter always adds.</summary>
+    public static string CallbackErrorPath(string error, string state) =>
+        $"/signin-authcenter?error={Uri.EscapeDataString(error)}" +
+        $"&error_description={Uri.EscapeDataString("secret-detail")}" +
+        $"&state={Uri.EscapeDataString(state)}&iss={Uri.EscapeDataString(Issuer)}";
+
+    /// <summary>
+    /// Mints a back-channel logout token like AuthCenter TokenService.GenerateLogoutToken: header
+    /// typ logout+jwt, RS256 with the JWKS key, iss, aud, sub, sid, iat, exp = iat + 2 min, jti and the
+    /// back-channel logout event, never a nonce. <paramref name="options"/> breaks one property at a time.
+    /// </summary>
+    public string CreateLogoutToken(string? subject, string? sessionId, LogoutTokenOptions? options = null)
+    {
+        options ??= new LogoutTokenOptions();
+        var now = DateTime.UtcNow + options.IssuedAtOffset;
+        var claims = new Dictionary<string, object>();
+        if (options.IncludeTokenId)
+        {
+            claims["jti"] = options.TokenId ?? Guid.NewGuid().ToString();
+        }
+
+        if (subject is not null)
+        {
+            claims["sub"] = subject;
+        }
+
+        if (sessionId is not null)
+        {
+            claims["sid"] = sessionId;
+        }
+
+        if (options.IncludeEvents)
+        {
+            claims["events"] = new Dictionary<string, object> { [options.EventName] = new Dictionary<string, object>() };
+        }
+
+        if (options.Nonce is not null)
+        {
+            claims["nonce"] = options.Nonce;
+        }
+
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = options.Issuer ?? Issuer,
+            Audience = options.Audience ?? ClientId,
+            IssuedAt = now,
+            Expires = now + options.Lifetime,
+            TokenType = options.TokenType,
+            Claims = claims,
+            SigningCredentials = options.SignWithHs256
+                ? new SigningCredentials(
+                    new SymmetricSecurityKey(Encoding.UTF8.GetBytes(ClientSecret + ClientSecret)),
+                    SecurityAlgorithms.HmacSha256)
+                : new SigningCredentials(_signingKey, SecurityAlgorithms.RsaSha256),
+        };
+        return new JsonWebTokenHandler { SetDefaultTimesOnTokenCreation = false }.CreateToken(descriptor);
     }
 
     public static string CallbackPath(string code, string state) => CallbackPath(code, state, Issuer);
@@ -104,7 +197,18 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         base.Dispose(disposing);
     }
 
-    private static object Discovery() => new Dictionary<string, object>
+    private Dictionary<string, object> Discovery()
+    {
+        var discovery = CoreDiscovery();
+        if (PublishedEndSessionEndpoint is not null)
+        {
+            discovery["end_session_endpoint"] = PublishedEndSessionEndpoint;
+        }
+
+        return discovery;
+    }
+
+    private static Dictionary<string, object> CoreDiscovery() => new()
     {
         ["issuer"] = Issuer,
         ["authorization_endpoint"] = Authority + "/oauth/authorize",
@@ -120,6 +224,10 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         ["token_endpoint_auth_methods_supported"] = new[] { "client_secret_basic", "client_secret_post" },
         ["code_challenge_methods_supported"] = new[] { "S256" },
         ["authorization_response_iss_parameter_supported"] = true,
+        ["acr_values_supported"] = new[] { SingleFactorContextClass, MfaContextClass, "urn:authcenter:acr:phr" },
+        ["backchannel_logout_supported"] = true,
+        ["backchannel_logout_session_supported"] = true,
+        ["frontchannel_logout_supported"] = false,
     };
 
     private object Jwks()
@@ -209,18 +317,29 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         var claims = new Dictionary<string, object>
         {
             ["sub"] = grant.Subject,
+            ["sid"] = grant.SessionId,
+            ["azp"] = ClientId,
             ["nonce"] = behavior.OverrideNonce ?? grant.Nonce,
             ["auth_time"] = new DateTimeOffset(now).ToUnixTimeSeconds(),
             ["name"] = "Usuario Sintético",
             ["email"] = "synthetic.user@paquetenvia.test",
-            ["email_verified"] = "true",
+            ["email_verified"] = true,
             ["roles"] = "AUTHCENTER_SUPERADMIN",
             ["permissions"] = "EVERYTHING",
         };
-        if (behavior.Amr is not null)
+
+        // AuthCenter honors acr_values by asking (or enrolling) the second factor: the ID token then
+        // carries acr mfa and "mfa" in amr. IgnoreAcrValues plays a server that did not.
+        var steppedUp = !behavior.IgnoreAcrValues &&
+            grant.AcrValues?.Split(' ').Contains(MfaContextClass, StringComparer.Ordinal) == true;
+        var amr = behavior.Amr ?? (steppedUp ? ["pwd", "otp", "mfa"] : null);
+        if (amr is not null)
         {
-            claims["amr"] = behavior.Amr;
+            claims["amr"] = amr;
         }
+
+        claims["acr"] = behavior.Acr ??
+            (amr?.Contains("mfa", StringComparer.Ordinal) == true ? MfaContextClass : SingleFactorContextClass);
 
         var expires = behavior.Expired ? now.AddMinutes(-10) : now.AddMinutes(5);
         var descriptor = new SecurityTokenDescriptor
@@ -287,7 +406,13 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json"),
         };
 
-    private sealed record AuthorizationGrant(string Subject, string Nonce, string CodeChallenge, string RedirectUri);
+    private sealed record AuthorizationGrant(
+        string Subject,
+        string Nonce,
+        string CodeChallenge,
+        string RedirectUri,
+        string SessionId,
+        string? AcrValues);
 }
 
 internal sealed record AuthorizationResult(string Code, string State, string Nonce);
@@ -302,4 +427,23 @@ public sealed record TokenBehavior
     public bool SignWithHs256 { get; init; }
     public bool SignWithForeignKey { get; init; }
     public string[]? Amr { get; init; }
+    public string? Acr { get; init; }
+    public bool IgnoreAcrValues { get; init; }
+    public string? SessionId { get; init; }
+}
+
+/// <summary>One deviation at a time from a valid AuthCenter logout token.</summary>
+public sealed record LogoutTokenOptions
+{
+    public string? Issuer { get; init; }
+    public string? Audience { get; init; }
+    public string TokenType { get; init; } = "logout+jwt";
+    public bool SignWithHs256 { get; init; }
+    public bool IncludeEvents { get; init; } = true;
+    public string EventName { get; init; } = FakeAuthCenterServer.BackchannelLogoutEvent;
+    public string? Nonce { get; init; }
+    public string? TokenId { get; init; }
+    public bool IncludeTokenId { get; init; } = true;
+    public TimeSpan IssuedAtOffset { get; init; }
+    public TimeSpan Lifetime { get; init; } = TimeSpan.FromMinutes(2);
 }

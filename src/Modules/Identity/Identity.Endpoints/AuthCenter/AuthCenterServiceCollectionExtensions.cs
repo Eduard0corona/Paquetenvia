@@ -38,6 +38,12 @@ internal static class AuthCenterServiceCollectionExtensions
         services.AddSingleton<AuthCenterCookieEvents>();
         services.AddSingleton<AuthCenterOpenIdConnectEvents>();
         services.AddSingleton<AuthCenterRevocationClient>();
+        services.AddSingleton<AuthCenterEndSession>();
+        services.AddSingleton<AuthCenterSessionReplacement>();
+        services.AddSingleton<AuthCenterBackchannelLogout>();
+        // Back-channel logout markers share the ticket store's cache; the PostgreSQL session table
+        // (BFF-SESSION-TABLE-SHAPE) replaces this registration without touching the endpoints.
+        services.TryAddSingleton<IAuthCenterSessionTerminationStore, DistributedCacheAuthCenterSessionTerminationStore>();
 
         services.TryAddTransient<CookieAuthenticationHandler>();
         services.TryAddTransient<OpenIdConnectHandler>();
