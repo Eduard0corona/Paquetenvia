@@ -7,6 +7,7 @@ using Identity.Endpoints.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -16,7 +17,8 @@ namespace Identity.Endpoints.AuthCenter;
 public static class AuthCenterBffEndpoints
 {
     /// <summary>
-    /// Maps the BFF contract (login, session, logout) when <c>Authentication:Provider=AuthCenter</c>.
+    /// Maps the BFF contract (login, session, logout, back-channel logout) when
+    /// <c>Authentication:Provider=AuthCenter</c>.
     /// The OIDC callback (<see cref="AuthCenterDefaults.CallbackPath"/>) is served by the handler itself.
     /// </summary>
     public static IEndpointRouteBuilder MapAuthCenterBff(this IEndpointRouteBuilder endpoints)
@@ -39,6 +41,12 @@ public static class AuthCenterBffEndpoints
         endpoints.MapPost(AuthCenterDefaults.LogoutPath, LogoutAsync)
             .RequireAuthorization(IdentityPolicies.Authenticated)
             .ExcludeFromDescription();
+
+        // Server-to-server from AuthCenter: no cookie, no CSRF, no Origin (AUTH-001-BACKCHANNEL-LOGOUT).
+        endpoints.MapPost(AuthCenterDefaults.BackchannelLogoutPath, BackchannelLogoutAsync)
+            .AllowAnonymous()
+            .DisableAntiforgery()
+            .ExcludeFromDescription();
         return endpoints;
     }
 
@@ -54,9 +62,17 @@ public static class AuthCenterBffEndpoints
         NoStore(context.Response);
         var values = context.Request.Query["return_url"];
         var destination = values.Count == 1 && IsLocalReturnUrl(values[0]) ? values[0]! : "/";
-        await context.ChallengeAsync(
-            AuthCenterDefaults.OpenIdConnectScheme,
-            new AuthenticationProperties { RedirectUri = destination });
+        var properties = new AuthenticationProperties { RedirectUri = destination };
+
+        // Step-up (AUTH-001-MFA-STEP-UP): the requirement travels in the protected OIDC state and is
+        // re-checked against the validated ID token. Anything but exactly mfa=required is a normal login.
+        var mfa = context.Request.Query["mfa"];
+        if (mfa.Count == 1 && string.Equals(mfa[0], AuthCenterDefaults.MfaRequiredQueryValue, StringComparison.Ordinal))
+        {
+            properties.Items[AuthCenterDefaults.RequiredContextClassItemKey] = AuthCenterDefaults.MfaContextClass;
+        }
+
+        await context.ChallengeAsync(AuthCenterDefaults.OpenIdConnectScheme, properties);
     }
 
     private static IResult Session(HttpContext context, IAuthenticatedSession session)
@@ -86,12 +102,14 @@ public static class AuthCenterBffEndpoints
     private static async Task<IResult> LogoutAsync(
         HttpContext context,
         AuthCenterRevocationClient revocation,
+        AuthCenterEndSession endSession,
         CancellationToken cancellationToken)
     {
         NoStore(context.Response);
         // The CSRF header and same-origin check were already enforced while authenticating this POST.
         var authentication = await context.AuthenticateAsync(AuthCenterDefaults.CookieScheme);
         var refreshToken = authentication.Properties?.GetTokenValue(AuthCenterDefaults.RefreshTokenName);
+        var idToken = authentication.Properties?.GetTokenValue(AuthCenterDefaults.IdTokenName);
         try
         {
             if (!string.IsNullOrEmpty(refreshToken))
@@ -104,8 +122,60 @@ public static class AuthCenterBffEndpoints
             await context.SignOutAsync(AuthCenterDefaults.CookieScheme);
         }
 
-        return Results.NoContent();
+        // AUTH-001-RP-INITIATED-LOGOUT: the web navigates here (window.location.assign) so AuthCenter
+        // also ends its single sign-on session; null when it cannot be built (local logout only).
+        return Results.Ok(new { endSessionUrl = await endSession.BuildUrlAsync(idToken, cancellationToken) });
     }
+
+    private static async Task<IResult> BackchannelLogoutAsync(
+        HttpContext context,
+        AuthCenterBackchannelLogout backchannel,
+        CancellationToken cancellationToken)
+    {
+        NoStore(context.Response);
+        var request = context.Request;
+        if (!IsFormUrlEncoded(request.ContentType))
+        {
+            return InvalidBackchannelRequest();
+        }
+
+        if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } bodySize)
+        {
+            bodySize.MaxRequestBodySize = BackchannelFormOptions.BufferBodyLengthLimit;
+        }
+
+        IFormCollection form;
+        try
+        {
+            form = await request.ReadFormAsync(BackchannelFormOptions, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or BadHttpRequestException or IOException
+                                              && !cancellationToken.IsCancellationRequested)
+        {
+            return InvalidBackchannelRequest();
+        }
+
+        var tokens = form["logout_token"];
+        return tokens.Count == 1 && await backchannel.ProcessAsync(tokens[0], cancellationToken)
+            ? Results.Ok()
+            : InvalidBackchannelRequest();
+    }
+
+    private static readonly FormOptions BackchannelFormOptions = new()
+    {
+        BufferBodyLengthLimit = 32 * 1024,
+        MultipartBodyLengthLimit = 32 * 1024,
+        ValueCountLimit = 16,
+        KeyLengthLimit = 64,
+        ValueLengthLimit = AuthCenterBackchannelLogout.MaximumTokenLength,
+    };
+
+    private static bool IsFormUrlEncoded(string? contentType) =>
+        Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(contentType, out var mediaType) &&
+        mediaType.MediaType.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase);
+
+    private static IResult InvalidBackchannelRequest() =>
+        Results.Json(new { error = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
 
     /// <summary>
     /// Stable, non-reversible per-identity key the web uses to partition in-browser caches

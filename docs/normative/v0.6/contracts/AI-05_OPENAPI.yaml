@@ -923,15 +923,32 @@ paths:
         /signin-authcenter, never derived from Host or X-Forwarded-* headers. A
         return_url that is not a local absolute path falls back to "/". Nothing is
         provisioned at sign-in; first access is by prior invitation
-        (AUTH-FIRST-LOGIN-INVITATION). Responses carry Cache-Control no-store.
+        (AUTH-FIRST-LOGIN-INVITATION). mfa=required starts an MFA step-up
+        (AUTH-001-MFA-STEP-UP): the authorization request carries
+        acr_values=urn:authcenter:acr:mfa and the callback accepts only an ID token
+        whose acr is urn:authcenter:acr:mfa or urn:authcenter:acr:phr and whose amr
+        contains mfa. Every successful sign-in replaces the browser's previous session
+        (the previous ticket is deleted and a new opaque key is issued). Responses
+        carry Cache-Control no-store.
       security: []
       parameters:
       - name: return_url
         in: query
         required: false
+        description: Local absolute path only (same origin, no scheme or authority); anything else falls back to "/".
         schema:
           type: string
           maxLength: 2048
+      - name: mfa
+        in: query
+        required: false
+        description: >-
+          Exactly "required" requests the MFA step-up (AUTH-001-MFA-STEP-UP); any other
+          value is a normal sign-in. It never forces MFA on anyone who did not ask for it.
+        schema:
+          type: string
+          enum:
+          - required
       responses:
         '302':
           description: Redirect to the AuthCenter authorization endpoint; sets the __Host- correlation and nonce cookies.
@@ -949,7 +966,10 @@ paths:
         and ordinal-equal to the configured issuer), PKCE, and an RS256 ID token
         with exact issuer and audience. On success it stores the session ticket
         server-side and sets only an opaque session cookie (BFF-SESSION-STORE-POSTGRESQL).
-        Every failure redirects to a generic /login error without protocol detail.
+        After state, correlation and iss validate, error=access_denied redirects to
+        /login?error=access_denied (AUTH-001-ACCESS-DENIED-MESSAGE); every other failure
+        redirects to the generic /login?error=signin_failed. No protocol detail
+        (error_description) is forwarded.
       security: []
       parameters:
       - name: code
@@ -967,12 +987,18 @@ paths:
         required: true
         schema:
           type: string
+      - name: error
+        in: query
+        required: false
+        schema:
+          type: string
       responses:
         '302':
           description: >-
             Success redirects to the validated return_url and sets __Host-Paquetenvia.Session
             (Secure, HttpOnly, SameSite=Lax, Path=/, no Domain, session lifetime);
-            failure redirects to /login?error=signin_failed without a session.
+            access_denied redirects to /login?error=access_denied and any other failure
+            to /login?error=signin_failed, both without a session.
   /auth/session:
     servers:
     - url: /
@@ -1008,18 +1034,76 @@ paths:
       operationId: endBffSession
       description: >-
         Revokes the AuthCenter refresh token (best effort) and always deletes the
-        server-side session and its cookie. Requires the session cookie, the
-        session-bound X-AuthCenter-CSRF header and, when present, an Origin equal to
-        the public web origin; otherwise the request is unauthenticated (401).
+        server-side session and its cookie, even when AuthCenter discovery is
+        unavailable. Requires the session cookie, the session-bound X-AuthCenter-CSRF
+        header and, when present, an Origin equal to the public web origin; otherwise
+        the request is unauthenticated (401) and the session is kept.
+        AUTH-001-RP-INITIATED-LOGOUT: the response carries the AuthCenter
+        end-session URL (discovery end_session_endpoint, HTTPS on the configured
+        authority) with id_token_hint and post_logout_redirect_uri=<public origin>/login;
+        the web navigates to it with window.location.assign so AuthCenter ends its
+        single sign-on session. It is null when the session has no ID token or the
+        endpoint is missing or invalid; the web then goes to /login. Responses carry
+        Cache-Control no-store.
       security:
       - bffSession: []
       parameters:
       - $ref: '#/components/parameters/BffCsrfToken'
       responses:
-        '204':
-          description: Session ended
+        '200':
+          description: Local session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BffLogoutResult'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /auth/backchannel-logout:
+    servers:
+    - url: /
+      description: >-
+        AUTH-001 BFF surface (GATE-002-BFF-001), outside /api/v1. Called
+        server-to-server by AuthCenter; the pilot ingress routes /auth to the API
+        (PILOT-SAME-ORIGIN-ROUTING) and must accept a POST without Origin.
+    post:
+      tags:
+      - Identity
+      operationId: receiveAuthCenterBackchannelLogout
+      description: >-
+        OpenID Connect Back-Channel Logout 1.0 receiver (AUTH-001-BACKCHANNEL-LOGOUT).
+        Anonymous: no session cookie, no CSRF header and no Origin are required or
+        used. The logout_token must be an RS256 JWT with header typ logout+jwt signed
+        by a key from AuthCenter discovery, with the exact configured issuer, aud equal
+        to the client id, a valid lifetime (30 s clock skew) and a recent iat, the
+        http://schemas.openid.net/event/backchannel-logout member in events, no nonce,
+        an unseen jti (kept until exp + 5 minutes) and a sid or sub. A valid token ends
+        every BFF session created from that AuthCenter sid, or, with only sub, every
+        session of that subject signed in before the token was processed; the sessions
+        are rejected on their next request. Responses carry Cache-Control no-store.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: true
+              required:
+              - logout_token
+              properties:
+                logout_token:
+                  type: string
+                  minLength: 1
+                  maxLength: 16384
+      responses:
+        '200':
+          description: Logout token accepted; the matching sessions are ended.
+        '400':
+          description: Missing, malformed, invalid or replayed logout token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackchannelLogoutError'
   /cities:
     get:
       tags:
@@ -1812,8 +1896,8 @@ components:
       name: __Host-Paquetenvia.Session
       description: >-
         AUTH-001 BFF session (GATE-002-BFF-001). The cookie carries only an opaque,
-        Data Protection-protected key; the ticket (subject, MFA evidence, CSRF secret
-        and refresh token) is stored server-side (BFF-SESSION-STORE-POSTGRESQL). Every
+        Data Protection-protected key; the ticket (subject, AuthCenter sid, MFA evidence, CSRF secret,
+        refresh token and ID token) is stored server-side (BFF-SESSION-STORE-POSTGRESQL). Every
         unsafe method also requires the session-bound X-AuthCenter-CSRF header.
   parameters:
     BffCsrfToken:
@@ -1968,11 +2052,14 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
     Forbidden:
-      description: Authenticated actor lacks capability inside an otherwise visible tenant context
+      description: >-
+        Authenticated actor lacks capability inside an otherwise visible tenant context.
+        When the only unmet requirement of the authorization policy is MFA, the problem
+        carries code MFA_REQUIRED (AUTH-001-MFA-STEP-UP); every other 403 is generic.
       content:
         application/problem+json:
           schema:
-            $ref: '#/components/schemas/Problem'
+            $ref: '#/components/schemas/ForbiddenProblem'
     UniformNotFound:
       description: Missing, cross-tenant, expired or revoked resource. Response must not reveal existence.
       content:
@@ -2791,6 +2878,58 @@ components:
               - string
               - 'null'
               maxLength: 320
+    BffLogoutResult:
+      type: object
+      description: >-
+        AUTH-001-RP-INITIATED-LOGOUT result. endSessionUrl is the AuthCenter
+        end-session URL (id_token_hint and post_logout_redirect_uri) or null when only
+        the local session could be ended.
+      additionalProperties: false
+      required:
+      - endSessionUrl
+      properties:
+        endSessionUrl:
+          type:
+          - string
+          - 'null'
+          format: uri
+    BackchannelLogoutError:
+      type: object
+      description: AUTH-001-BACKCHANNEL-LOGOUT rejection; never reveals why the token was refused.
+      additionalProperties: false
+      required:
+      - error
+      properties:
+        error:
+          type: string
+          const: invalid_request
+    ForbiddenProblem:
+      type: object
+      description: >-
+        403 problem. code is present only as MFA_REQUIRED, when a second factor is the
+        only thing missing (AUTH-001-MFA-STEP-UP); the web then offers "Verificar
+        identidad" (/auth/login?mfa=required).
+      required:
+      - type
+      - title
+      - status
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 403
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - MFA_REQUIRED
     Problem:
       type: object
       required:

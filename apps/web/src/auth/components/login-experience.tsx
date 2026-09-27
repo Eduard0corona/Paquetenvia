@@ -4,8 +4,11 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   buildLoginHref,
+  buildStepUpHref,
   isLocalReturnUrl,
   logoutBffSession,
+  navigateAfterLogout,
+  type BffLogoutResult,
   type BffSessionState,
 } from "../bff-session";
 import {
@@ -13,6 +16,9 @@ import {
   clearInstalledSessions,
   type BffSessionInstallation,
 } from "../bff-session-installation";
+import { loginErrorMessage } from "../login-errors";
+import { shouldOfferStepUp } from "../step-up";
+import { StepUpPrompt } from "./step-up-prompt";
 
 type ViewState =
   | { readonly kind: "loading" }
@@ -31,7 +37,8 @@ export function LoginExperience() {
   const search = useSearchParams();
   const requested = search.get("return_url");
   const returnUrl = isLocalReturnUrl(requested) && requested !== "/login" ? requested : null;
-  const signInFailed = search.get("error") === "signin_failed";
+  const errorMessage = loginErrorMessage(search.get("error"));
+  const mfaRequested = search.get("mfa") === "required";
   const [view, setView] = useState<ViewState>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
 
@@ -59,13 +66,20 @@ export function LoginExperience() {
 
   async function logout(csrfToken: string) {
     setBusy(true);
+    let result: BffLogoutResult = { ok: false };
     try {
-      await logoutBffSession(csrfToken);
+      result = await logoutBffSession(csrfToken);
     } finally {
       clearInstalledSessions(window);
-      setBusy(false);
-      await reload();
     }
+    if (result.ok) {
+      // AUTH-001-RP-INITIATED-LOGOUT: AuthCenter ends its single sign-on session and returns
+      // to /login; without an end-session URL the local logout is all there is.
+      navigateAfterLogout(result, window.location);
+      return;
+    }
+    setBusy(false);
+    await reload();
   }
 
   return (
@@ -73,14 +87,13 @@ export function LoginExperience() {
       <section className="card" aria-labelledby="login-title" aria-busy={view.kind === "loading"}>
         <p className="eyebrow">Paquetenvia</p>
         <h1 id="login-title">Iniciar sesión</h1>
-        {signInFailed ? (
-          <p role="alert">No fue posible completar el inicio de sesión. Intenta de nuevo.</p>
-        ) : null}
+        {errorMessage ? <p role="alert">{errorMessage}</p> : null}
         {view.kind === "loading" ? <p role="status">Consultando tu sesión…</p> : null}
         {view.kind === "ready" ? (
           <SessionView
             view={view}
             returnUrl={returnUrl}
+            mfaRequested={mfaRequested}
             busy={busy}
             onLogout={logout}
             onRetry={reload}
@@ -94,12 +107,14 @@ export function LoginExperience() {
 function SessionView({
   view,
   returnUrl,
+  mfaRequested,
   busy,
   onLogout,
   onRetry,
 }: {
   readonly view: Extract<ViewState, { kind: "ready" }>;
   readonly returnUrl: string | null;
+  readonly mfaRequested: boolean;
   readonly busy: boolean;
   readonly onLogout: (csrfToken: string) => Promise<void>;
   readonly onRetry: () => Promise<void>;
@@ -109,7 +124,14 @@ function SessionView({
     return (
       <>
         <p>Accede con tu cuenta de AuthCenter. Paquetenvia no ve ni guarda tu contraseña.</p>
-        <a className="button" href={buildLoginHref(returnUrl ?? "/login")}>
+        <a
+          className="button"
+          href={
+            mfaRequested
+              ? buildStepUpHref(returnUrl ?? "/login")
+              : buildLoginHref(returnUrl ?? "/login")
+          }
+        >
           Continuar con AuthCenter
         </a>
       </>
@@ -135,6 +157,8 @@ function SessionView({
           Tu cuenta todavía no tiene acceso a Paquetenvia. Pide a un administrador de tu
           organización que te registre o te invite.
         </p>
+      ) : shouldOfferStepUp(session, mfaRequested) ? (
+        <StepUpPrompt returnUrl={returnUrl} />
       ) : installation.kind === "none" ? (
         <p>Tu cuenta no tiene organizaciones activas.</p>
       ) : (

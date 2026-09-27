@@ -29,6 +29,9 @@ public sealed class AuthCenterOptions
 
     internal string RedirectUri => NormalizedPublicOrigin + AuthCenterDefaults.CallbackPath;
 
+    /// <summary>Registered exactly in AuthCenter as the client's post-logout redirect URI.</summary>
+    internal string PostLogoutRedirectUri => NormalizedPublicOrigin + AuthCenterDefaults.PostLogoutRedirectPath;
+
     internal IEnumerable<string> Validate(IHostEnvironment environment)
     {
         if (!TryParseSecureBase(Authority, allowLoopbackHttp: false, out _))
