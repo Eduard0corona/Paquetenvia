@@ -1,5 +1,27 @@
 # Changelog
 
+## Unirse a una organización existente por correo (REG-002) — 2026-09-27
+
+- Respuestas literales del project owner: "El admin la agrega por correo (Recomendado)",
+  "Tabla de invitaciones + HMAC (Recomendado)", "PLATFORM_ADMIN + admins de la org con MFA
+  (Recomendado)", "Los de su tipo, incluido admin (Recomendado)", "Cualquier rol; PLATFORM_ADMIN
+  sólo en la org de plataforma (Recomendado)", "Sí; el perfil se completa después (Recomendado)",
+  "Sólo renueva la vigencia (Recomendado)", "7 días (Recomendado)" y "Acepta todas (Recomendado)".
+- AI-06: `organizations.pending_memberships` (HMAC con llave del correo normalizado y versión de
+  la llave, nunca el correo; estados PENDING, ACCEPTED y REVOKED; vence a los 7 días), FORCE RLS
+  con política de tenant.
+- AI-18: `paqueteria_app` sólo lee la tabla bajo RLS y `paqueteria_worker` no tiene privilegios;
+  `paqueteria_registration_executor` recibe grants exactos por columna (verificados por
+  `validate_contracts.py`) y la aserción 25. Sus cuatro funciones SECURITY DEFINER
+  (`add_pending_membership`, `renew_pending_membership`, `revoke_pending_membership`,
+  `apply_pending_memberships`) se instalan en la lane de Organizations
+  (`20260927000500_AddPendingMemberships`), con `EXECUTE` sólo para `paqueteria_app`.
+- AI-05: `addPendingMembership` (202 idéntica exista o no la cuenta), `listPendingMemberships`,
+  `renewPendingMembership` y `revokePendingMembership` (409 `IDEMPOTENCY_CONFLICT` o
+  `PENDING_MEMBERSHIP_NOT_PENDING`); `x-capability-matrix.membership_operations` con MFA.
+- AI-03 §17.1, AI-04 (`PendingMembership`), AI-24 `bff_session` (`pending_memberships`) y
+  AI-08 (REG-002).
+
 ## Almacén PostgreSQL de sesiones BFF — 2026-09-27
 
 - `BFF-SESSION-STORE-IMPLEMENTATION` (implementa `BFF-SESSION-STORE-POSTGRESQL` y

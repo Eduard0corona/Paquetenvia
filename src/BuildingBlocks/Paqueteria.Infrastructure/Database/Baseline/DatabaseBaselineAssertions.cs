@@ -447,7 +447,12 @@ public sealed class DatabaseBaselineAssertions
                 ('security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text)'),
                 ('security.list_own_organization_applications(uuid)'),
                 ('security.list_pending_ally_organizations(uuid,uuid,integer)'),
-                ('security.decide_ally_organization(uuid,uuid,uuid,boolean,text)')) registration(signature)
+                ('security.decide_ally_organization(uuid,uuid,uuid,boolean,text)'),
+                -- REG-002: installed by the same lane after REG-001, with the same owner.
+                ('security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text)'),
+                ('security.renew_pending_membership(uuid,uuid,uuid,text,text)'),
+                ('security.revoke_pending_membership(uuid,uuid,uuid,text,text)'),
+                ('security.apply_pending_memberships(text,bytea[],integer[])')) registration(signature)
               WHERE to_regprocedure(signature) IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
@@ -1053,8 +1058,8 @@ public sealed class DatabaseBaselineAssertions
     }
 
     /// <summary>
-    /// REG-001 lane contract: after the Organizations REG-001 migration (and after any E-002 temporary
-    /// grant is revoked) the role and its five functions must exist and satisfy the exact executor boundary.
+    /// REG-001 and REG-002 lane contract: after the Organizations lane (and after any E-002 temporary
+    /// grant is revoked) the role and its nine functions must exist and satisfy the exact executor boundary.
     /// </summary>
     public static async Task AssertRegistrationExecutorInstalledAsync(
         NpgsqlConnection connection,
@@ -1077,7 +1082,8 @@ public sealed class DatabaseBaselineAssertions
             WHERE pg_catalog.to_regprocedure(signature) IS NULL
             """,
             cancellationToken,
-            new NpgsqlParameter<string[]>("signatures", RegistrationFunctions.Select(item => item.Signature).ToArray()))
+            new NpgsqlParameter<string[]>("signatures", RegistrationFunctions.Concat(PendingMembershipFunctions)
+                .Select(item => item.Signature).ToArray()))
             .ConfigureAwait(false);
         await AssertRegistrationExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
             .ConfigureAwait(false);
@@ -1120,7 +1126,7 @@ public sealed class DatabaseBaselineAssertions
             WITH executor AS (
               SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_registration_executor'
             ),
-            expected(table_schema,table_name,column_name,privilege_type) AS (VALUES
+            expected_reg001(table_schema,table_name,column_name,privilege_type) AS (VALUES
               ('identity','users','id','SELECT'),
               ('identity','users','identity_subject','SELECT'),
               ('identity','users','status','SELECT'),
@@ -1165,6 +1171,35 @@ public sealed class DatabaseBaselineAssertions
               ('platform','audit_logs','request_id','INSERT'),
               ('platform','audit_logs','payload_redacted','INSERT'),
               ('platform','audit_logs','occurred_at','INSERT')),
+            -- REG-002: AI-06/AI-18 or the REG-002 lane add organizations.pending_memberships and its grants.
+            expected_reg002(table_schema,table_name,column_name,privilege_type) AS (VALUES
+              ('organizations','pending_memberships','id','SELECT'),
+              ('organizations','pending_memberships','organization_id','SELECT'),
+              ('organizations','pending_memberships','email_hmac','SELECT'),
+              ('organizations','pending_memberships','email_hmac_key_version','SELECT'),
+              ('organizations','pending_memberships','role','SELECT'),
+              ('organizations','pending_memberships','status','SELECT'),
+              ('organizations','pending_memberships','created_at','SELECT'),
+              ('organizations','pending_memberships','expires_at','SELECT'),
+              ('organizations','pending_memberships','id','INSERT'),
+              ('organizations','pending_memberships','organization_id','INSERT'),
+              ('organizations','pending_memberships','email_hmac','INSERT'),
+              ('organizations','pending_memberships','email_hmac_key_version','INSERT'),
+              ('organizations','pending_memberships','role','INSERT'),
+              ('organizations','pending_memberships','status','INSERT'),
+              ('organizations','pending_memberships','invited_by','INSERT'),
+              ('organizations','pending_memberships','created_at','INSERT'),
+              ('organizations','pending_memberships','expires_at','INSERT'),
+              ('organizations','pending_memberships','status','UPDATE'),
+              ('organizations','pending_memberships','expires_at','UPDATE'),
+              ('organizations','pending_memberships','accepted_user_id','UPDATE'),
+              ('organizations','pending_memberships','accepted_at','UPDATE'),
+              ('organizations','pending_memberships','revoked_at','UPDATE')),
+            expected AS (
+              SELECT * FROM expected_reg001
+              UNION ALL
+              SELECT * FROM expected_reg002
+              WHERE pg_catalog.to_regclass('organizations.pending_memberships') IS NOT NULL),
             actual AS (
               SELECT table_schema,table_name,column_name,privilege_type
               FROM information_schema.column_privileges
@@ -1178,7 +1213,15 @@ public sealed class DatabaseBaselineAssertions
               FROM unnest(@signatures::text[],@search_paths::text[]) f(signature,search_path)),
             installed AS (
               SELECT fn.signature,fn.search_path,p.oid,p.prosecdef,p.proconfig,p.prosrc
-              FROM fn JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn.signature))
+              FROM fn JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn.signature)),
+            fn_reg002 AS (
+              SELECT signature,search_path
+              FROM unnest(@reg002_signatures::text[],@reg002_search_paths::text[]) f(signature,search_path)),
+            installed_reg002 AS (
+              SELECT fn_reg002.signature,fn_reg002.search_path,p.oid,p.prosecdef,p.proconfig,p.prosrc
+              FROM fn_reg002 JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn_reg002.signature)),
+            installed_all AS (
+              SELECT * FROM installed UNION ALL SELECT * FROM installed_reg002)
             SELECT 'missing registration executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
             FROM expected e CROSS JOIN executor
             LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
@@ -1208,7 +1251,7 @@ public sealed class DatabaseBaselineAssertions
                OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
             UNION ALL
             SELECT 'registration function is unsafe: ' || installed.signature
-            FROM installed
+            FROM installed_all installed
             WHERE NOT installed.prosecdef
                OR NOT (installed.search_path=ANY(COALESCE(installed.proconfig,ARRAY[]::text[])))
                OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
@@ -1217,18 +1260,59 @@ public sealed class DatabaseBaselineAssertions
                OR NOT has_function_privilege('paqueteria_app',installed.oid,'EXECUTE')
             UNION ALL
             SELECT 'registration function exists without the registration executor role: ' || installed.signature
-            FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
+            FROM installed_all installed WHERE NOT EXISTS (SELECT 1 FROM executor)
             UNION ALL
             SELECT 'registration functions are only partially installed'
             FROM (SELECT count(*) AS present FROM installed) c
             WHERE c.present BETWEEN 1 AND 4
+            UNION ALL
+            SELECT 'pending membership functions are only partially installed'
+            FROM (SELECT count(*) AS present FROM installed_reg002) c
+            WHERE c.present BETWEEN 1 AND 3
+            UNION ALL
+            SELECT 'pending membership functions exist without the REG-001 functions'
+            WHERE EXISTS (SELECT 1 FROM installed_reg002) AND NOT EXISTS (SELECT 1 FROM installed)
+            UNION ALL
+            SELECT 'pending membership functions exist without organizations.pending_memberships'
+            WHERE EXISTS (SELECT 1 FROM installed_reg002)
+              AND pg_catalog.to_regclass('organizations.pending_memberships') IS NULL
+            UNION ALL
+            -- REG-002: runtime roles never write pending memberships directly.
+            SELECT 'organizations.pending_memberships runtime privileges differ from REG-002'
+            WHERE pg_catalog.to_regclass('organizations.pending_memberships') IS NOT NULL
+              AND (NOT has_table_privilege('paqueteria_app','organizations.pending_memberships','SELECT')
+                OR has_any_column_privilege('paqueteria_app','organizations.pending_memberships','INSERT')
+                OR has_any_column_privilege('paqueteria_app','organizations.pending_memberships','UPDATE')
+                OR has_table_privilege('paqueteria_app','organizations.pending_memberships','DELETE')
+                OR has_any_column_privilege('paqueteria_worker','organizations.pending_memberships','SELECT')
+                OR has_any_column_privilege('paqueteria_worker','organizations.pending_memberships','INSERT')
+                OR has_any_column_privilege('paqueteria_worker','organizations.pending_memberships','UPDATE')
+                OR has_table_privilege('paqueteria_worker','organizations.pending_memberships','DELETE')
+                OR NOT EXISTS (
+                  SELECT 1 FROM pg_catalog.pg_class
+                  WHERE oid='organizations.pending_memberships'::regclass AND relrowsecurity AND relforcerowsecurity))
             """,
             cancellationToken,
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray()),
             new NpgsqlParameter<string[]>("signatures", RegistrationFunctions.Select(item => item.Signature).ToArray()),
-            new NpgsqlParameter<string[]>("search_paths", RegistrationFunctions.Select(item => item.SearchPath).ToArray()))
+            new NpgsqlParameter<string[]>("search_paths", RegistrationFunctions.Select(item => item.SearchPath).ToArray()),
+            new NpgsqlParameter<string[]>("reg002_signatures", PendingMembershipFunctions.Select(item => item.Signature).ToArray()),
+            new NpgsqlParameter<string[]>("reg002_search_paths", PendingMembershipFunctions.Select(item => item.SearchPath).ToArray()))
             .ConfigureAwait(false);
     }
+
+    /// <summary>REG-002: installed by the Organizations lane after REG-001, with the same owner and rule.</summary>
+    private static readonly (string Signature, string SearchPath)[] PendingMembershipFunctions =
+    [
+        ("security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text)",
+            "search_path=pg_catalog, identity, organizations, platform, pg_temp"),
+        ("security.renew_pending_membership(uuid,uuid,uuid,text,text)",
+            "search_path=pg_catalog, identity, organizations, platform, pg_temp"),
+        ("security.revoke_pending_membership(uuid,uuid,uuid,text,text)",
+            "search_path=pg_catalog, identity, organizations, platform, pg_temp"),
+        ("security.apply_pending_memberships(text,bytea[],integer[])",
+            "search_path=pg_catalog, identity, organizations, platform, pg_temp"),
+    ];
 
     private static async Task AssertDefaultAclCatalogAsync(
         NpgsqlConnection connection,

@@ -44,6 +44,29 @@ entities:
     rules:
     - unique active user/org/role
     - one optional active default membership
+    - an administrator may add a person by email; the membership is created at that person's sign-in with the verified email (REG-JOIN-BY-ADMIN-EMAIL)
+  PendingMembership:
+    required:
+    - id
+    - organization_id
+    - email_hmac
+    - email_hmac_key_version
+    - role
+    - status
+    - invited_by
+    - created_at
+    - expires_at
+    statuses:
+    - PENDING
+    - ACCEPTED
+    - REVOKED
+    rules:
+    - stores only a keyed HMAC of the normalized email (trim, NFC, invariant lowercase) and its key version, never the address (REG-PENDING-MEMBERSHIP-STORAGE)
+    - added by an ACTIVE PLATFORM_ADMIN, ALLY_ADMIN or BUSINESS_ADMIN with MFA within the role ceiling (REG-JOIN-ADDERS-MFA, REG-ROLE-CEILING, REG-PLATFORM-ADMIN-ADDS)
+    - PENDING expires seven days after creation or renewal; an expired entry stays inert until renewed (REG-PENDING-EXPIRY-7D, REG-PENDING-RENEW-ONLY)
+    - at every sign-in with a verified email each PENDING, unexpired entry of an ACTIVE organization becomes a membership of the ACTIVE user exactly once and turns ACCEPTED (REG-ACCEPT-ALL-ORGANIZATIONS)
+    - an identical ACTIVE or SUSPENDED membership consumes the entry without a duplicate and without reactivation
+    - a DRIVER membership grants nothing operational until its driver profile exists (REG-DRIVER-PROFILE-LATER)
   City:
     required:
     - id

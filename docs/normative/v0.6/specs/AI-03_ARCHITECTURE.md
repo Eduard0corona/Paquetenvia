@@ -439,7 +439,16 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
 - Registro abierto (`AUTH-OPEN-REGISTRATION`, reemplaza a `AUTH-FIRST-LOGIN-INVITATION`): el
   primer inicio de sesión de un `sub` desconocido crea su `identity.users` una sola vez, sin
   membresías, mediante `security.register_identity_subject`; un `sub` existente nunca se
-  revincula ni se modifica. El login nunca crea organizaciones ni membresías.
+  revincula ni se modifica. El login nunca crea organizaciones; sólo crea las membresías que un
+  administrador agregó para ese correo verificado (REG-002).
+- Unirse a una organización existente (`REG-JOIN-EXISTING-BY-EMAIL`): un PLATFORM_ADMIN,
+  ALLY_ADMIN o BUSINESS_ADMIN con MFA agrega a una persona por correo y rol dentro de su techo
+  (`REG-ROLE-CEILING`; PLATFORM_ADMIN como rol sólo en una organización PLATFORM). Se guarda en
+  `organizations.pending_memberships` sólo el HMAC con llave del correo normalizado (trim, NFC,
+  minúsculas invariantes) y la versión de la llave; la llave es un secreto (Key Vault en Azure,
+  user-secrets en local). La respuesta es la misma 202 exista o no la cuenta. En cada inicio de
+  sesión con correo verificado, cada entrada PENDING vigente (7 días, renovable, revocable) de una
+  organización ACTIVE se vuelve membresía una sola vez, en todas las organizaciones que coincidan.
 - Correo verificado obligatorio (`AUTH-EMAIL-VERIFIED-REQUIRED`): sin exactamente un claim
   `email_verified` igual a `true` en el ID token validado, el callback redirige a
   `/login?error=email_not_verified`, sin sesión y sin crear ni vincular usuarios. La evidencia se

@@ -77,6 +77,9 @@ REGISTRATION_EXECUTOR_GRANTS = [
     "GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON organizations.organization_memberships TO paqueteria_registration_executor;",
     "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
     "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;",
+    "GRANT SELECT (id,organization_id,email_hmac,email_hmac_key_version,role,status,created_at,expires_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,organization_id,email_hmac,email_hmac_key_version,role,status,invited_by,created_at,expires_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
+    "GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
 ]
 
 SESSION_EXECUTOR_GRANTS = [
@@ -546,6 +549,7 @@ def main() -> int:
         "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
         "GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;",
         "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+        "GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
         "GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
     ]:
         errors.append(
@@ -585,6 +589,12 @@ def main() -> int:
         "security.list_own_organization_applications(uuid)",
         "security.list_pending_ally_organizations(uuid,uuid,integer)",
         "security.decide_ally_organization(uuid,uuid,uuid,boolean,text)",
+        "security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text)",
+        "security.renew_pending_membership(uuid,uuid,uuid,text,text)",
+        "security.revoke_pending_membership(uuid,uuid,uuid,text,text)",
+        "security.apply_pending_memberships(text,bytea[],integer[])",
+        "REVOKE INSERT,UPDATE,DELETE ON organizations.pending_memberships FROM paqueteria_app;",
+        "REVOKE ALL ON organizations.pending_memberships FROM paqueteria_worker;",
     ]:
         if fragment not in role_sql:
             errors.append(f"Missing registration executor contract: {fragment}")
@@ -594,6 +604,9 @@ def main() -> int:
         "CHECK (status IN ('ACTIVE','PENDING_APPROVAL','SUSPENDED','CLOSED'))",
         "ADD COLUMN self_service_creator_user_id uuid REFERENCES identity.users(id);",
         "WHERE self_service_creator_user_id IS NOT NULL AND status <> 'CLOSED';",
+        "CREATE TABLE organizations.pending_memberships (",
+        "CONSTRAINT pending_memberships_email_hmac_ck CHECK (octet_length(email_hmac)=32)",
+        "CREATE POLICY pending_memberships_tenant ON organizations.pending_memberships",
     ]:
         if fragment not in sql:
             errors.append(f"Missing REG-001 schema contract: {fragment}")

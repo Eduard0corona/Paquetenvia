@@ -131,6 +131,8 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         }
     }
 
+    public const string TestEmailLookupKey = "cmVnMDAyLWh0dHAtdGVzdC1rZXktMDEyMzQ1Njc4OWFiY2RlZg==";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
@@ -149,6 +151,9 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
                 ["OperationsDashboard:Provider"] = "PostgreSql",
                 ["OperationsDashboard:CommandTimeoutSeconds"] = "5",
                 ["ConnectionStrings:Paqueteria"] = _applicationConnectionString,
+                // REG-002: a test-only email lookup key (Base64 of 37 bytes), never a real one.
+                ["EmailLookup:CurrentKeyVersion"] = "1",
+                ["EmailLookup:Keys:1"] = TestEmailLookupKey,
             }));
         if (_trackingTokenHasher is not null)
         {

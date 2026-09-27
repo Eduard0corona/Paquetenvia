@@ -94,11 +94,18 @@ internal sealed partial class AuthCenterOpenIdConnectEvents(
 
         // AUTH-OPEN-REGISTRATION: the first sign-in of an unknown subject creates its user (no
         // memberships) exactly once; a known subject is left untouched whatever its status.
+        // REG-ACCEPT-ALL-ORGANIZATIONS: then every pending membership added for this verified email
+        // becomes a membership, exactly once, before the session exists.
         try
         {
-            await context.HttpContext.RequestServices
-                .GetRequiredService<IIdentityRegistration>()
-                .RegisterAsync(subjects[0], context.HttpContext.RequestAborted);
+            var registration = context.HttpContext.RequestServices.GetRequiredService<IIdentityRegistration>();
+            await registration.RegisterAsync(subjects[0], context.HttpContext.RequestAborted);
+            var emails = source!.FindAll(AuthCenterDefaults.EmailClaim).Select(claim => claim.Value).ToArray();
+            if (emails.Length == 1)
+            {
+                await registration.ApplyPendingMembershipsAsync(
+                    subjects[0], emails[0], context.HttpContext.RequestAborted);
+            }
         }
         catch (IdentityRegistrationUnavailableException)
         {

@@ -51,10 +51,10 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                 // The Identity BFF session lane (BFF-SESSION-TABLE-SHAPE, BFF-LOGOUT-JTI-PERSISTENCE) adds six
                 // routines, owner + paqueteria_app, and the Custody BFF purge one routine, owner + Worker.
                 Assert.Equal(
-                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
                     applied.RoutineMap);
-                Assert.Equal(43, applied.ControlledIdentities);
-                Assert.Equal(84, applied.NormalizedExecuteRows);
+                Assert.Equal(47, applied.ControlledIdentities);
+                Assert.Equal(92, applied.NormalizedExecuteRows);
             }
 
             Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString,

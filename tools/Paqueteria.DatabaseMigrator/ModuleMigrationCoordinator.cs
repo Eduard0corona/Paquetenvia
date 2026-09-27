@@ -43,8 +43,8 @@ internal sealed class ModuleMigrationCoordinator
     [
         ("Identity", "__ef_migrations_history_identity", AddBffSessionStore.MigrationId,
             "src/Modules/Identity/Identity.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionStore.cs"),
-        ("Organizations", "__ef_migrations_history_organizations", AddSelfServiceRegistration.MigrationId,
-            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000400_AddSelfServiceRegistration.cs"),
+        ("Organizations", "__ef_migrations_history_organizations", AddPendingMemberships.MigrationId,
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000500_AddPendingMemberships.cs"),
         ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
@@ -131,11 +131,12 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // REG-001: the lane adds the registration executor, its functions, the PENDING_APPROVAL status
-                // and the self-service creator column; its rollback removes only the functions and the new
-                // status value, and refuses while any organization is PENDING_APPROVAL.
+                // REG-002: the lane adds organizations.pending_memberships (or adopts the AI-06 one) and four
+                // more registration-executor functions; its rollback removes only those functions. REG-001 is
+                // verified below with its own fail-closed rollback.
                 "Organizations" =>
-                    source.Contains("REG001_DOWNGRADE_BLOCKED_PENDING_ORGANIZATIONS", StringComparison.Ordinal) &&
+                    source.Contains("REG002_ADMIN_REQUIRED", StringComparison.Ordinal) &&
+                    source.Contains("DROP FUNCTION IF EXISTS security.apply_pending_memberships", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
@@ -190,6 +191,12 @@ internal sealed class ModuleMigrationCoordinator
             AddOperationalCleanupExecutor.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000100_AddOperationalCleanupExecutor.cs",
             "OPS003_SCHEMA_DOWNGRADE_NOT_SUPPORTED");
+        VerifyFailClosedSource(
+            root,
+            "Organizations",
+            AddSelfServiceRegistration.MigrationId,
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000400_AddSelfServiceRegistration.cs",
+            "REG001_DOWNGRADE_BLOCKED_PENDING_ORGANIZATIONS");
         VerifyAdoptionSource(
             root,
             "Organizations",
@@ -440,7 +447,11 @@ internal sealed class ModuleMigrationCoordinator
                     AddBffSessionPurge.MigrationId,
                 ],
             "Organizations" =>
-                [AdoptCanonicalOrganizationsBaseline.MigrationId, AddSelfServiceRegistration.MigrationId],
+                [
+                    AdoptCanonicalOrganizationsBaseline.MigrationId,
+                    AddSelfServiceRegistration.MigrationId,
+                    AddPendingMemberships.MigrationId,
+                ],
             "Incidents" =>
                 [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
             "DataProtection" =>
@@ -663,7 +674,7 @@ internal sealed class ModuleMigrationCoordinator
             return;
         }
 
-        // E-002/REG-001: transferring the five registration functions to the registration executor as a
+        // E-002/REG-001/REG-002: transferring the nine registration functions to the registration executor as a
         // non-superuser needs SET on the executor and a transaction-scoped CREATE on schema security,
         // exactly like the Custody OPS-003 bridge; nothing else is granted and nothing survives the commit.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
