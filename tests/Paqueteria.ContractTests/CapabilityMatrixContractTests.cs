@@ -8,7 +8,6 @@ namespace Paqueteria.ContractTests;
 /// <summary>
 /// D5-CAPABILITY-MATRIX: the server-side capability catalog is exactly the AI-05 <c>x-capability-matrix</c>
 /// (operations and finance_operations), role for role, and every capability names a real AI-05 operation.
-/// A role the matrix admits may be withheld only through <see cref="TenantCapabilities.WithheldPendingDecision"/>.
 /// </summary>
 public sealed class CapabilityMatrixContractTests
 {
@@ -35,34 +34,59 @@ public sealed class CapabilityMatrixContractTests
                 TenantCapabilities.All.TryGetValue(operationId, out var capability),
                 $"{operationId} has no server-side capability.");
             var enforced = capability!.Grants.Select(grant => ContractValue(grant.Role)).ToHashSet(StringComparer.Ordinal);
-            var withheld = TenantCapabilities.WithheldPendingDecision.TryGetValue(operationId, out var held)
-                ? held.Select(ContractValue).ToHashSet(StringComparer.Ordinal)
-                : [];
-            Assert.Empty(enforced.Intersect(withheld));
             Assert.True(
-                roles.SetEquals(enforced.Union(withheld)),
+                roles.SetEquals(enforced),
                 $"{operationId}: AI-05 admits [{string.Join(',', roles.Order())}], the server admits " +
-                $"[{string.Join(',', enforced.Order())}] and withholds [{string.Join(',', withheld.Order())}].");
+                $"[{string.Join(',', enforced.Order())}].");
         }
     }
 
+    /// <summary>
+    /// D5-VIEWER-LOCATION-PRECISION-2026-09-27: AI-05 publishes the VIEWER precision on listLocations and the
+    /// server applies exactly it; the implementation marker is IMPLEMENTED.
+    /// </summary>
     [Fact]
-    public void Only_the_listed_withheld_roles_are_withheld_and_each_is_a_matrix_role()
+    public void Viewer_location_precision_is_published_and_the_matrix_is_implemented()
     {
-        var published = Published();
-        Assert.Equal(["listLocations"], TenantCapabilities.WithheldPendingDecision.Keys.Order().ToArray());
-        foreach (var (operationId, roles) in TenantCapabilities.WithheldPendingDecision)
-        {
-            Assert.All(roles, role => Assert.Contains(ContractValue(role), published[operationId]));
-        }
-
-        // The one withheld role is VIEWER on listLocations: AI-05 forbids exact coordinates to VIEWER and its
-        // Location schema requires exact lat/lng, so the server fails closed until a coarse form is decided.
+        Assert.StartsWith("IMPLEMENTED", Matrix.Scalar("implementation"), StringComparison.Ordinal);
         Assert.Contains("VIEWER reads never return exact coordinates", RulesText(), StringComparison.Ordinal);
+        Assert.Contains("D5-VIEWER-LOCATION-PRECISION-2026-09-27", Matrix.Scalar("viewer_location_precision"), StringComparison.Ordinal);
+
+        var listLocations = Contract.Mapping("paths").Mapping("/locations").Mapping("get");
+        var precision = listLocations.Mapping("x-viewer-coordinate-precision");
+        Assert.Equal("D5-VIEWER-LOCATION-PRECISION-2026-09-27", precision.Scalar("decision"));
+        Assert.Equal("VIEWER", precision.Scalar("applies_to"));
+        Assert.Equal(
+            Locations.Endpoints.ViewerCoordinatePrecision.DecimalPlaces.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            precision.Scalar("decimal_places"));
+        Assert.Equal(["lat", "lng"], precision.Sequence("fields").Children.Select(node => ((YamlScalarNode)node).Value));
+        Assert.Equal(
+            ["DISPATCHER", "PLATFORM_ADMIN"],
+            precision.Sequence("exact_for").Children.Select(node => ((YamlScalarNode)node).Value));
+
+        // The Location schema keeps lat and lng as required numbers: a VIEWER gets rounded values, not nulls.
         var location = Contract.Mapping("components").Mapping("schemas").Mapping("Location");
-        var required = location.Sequence("required").Children.Select(node => ((YamlScalarNode)node).Value);
+        var required = location.Sequence("required").Children.Select(node => ((YamlScalarNode)node).Value).ToArray();
         Assert.Contains("lat", required);
         Assert.Contains("lng", required);
+    }
+
+    [Theory]
+    [InlineData(24.805, 24.81)]
+    [InlineData(-107.395, -107.4)]
+    [InlineData(-0.005, -0.01)]
+    [InlineData(0.015, 0.02)]
+    [InlineData(24.8049999, 24.8)]
+    [InlineData(-0.004, 0)]
+    [InlineData(179.996, 180)]
+    [InlineData(-33.4489123, -33.45)]
+    [InlineData(28.61, 28.61)]
+    public void Viewer_coordinates_round_half_away_from_zero_on_the_decimal_value(double exact, double expected)
+    {
+        var rounded = Locations.Endpoints.ViewerCoordinatePrecision.Round(exact);
+        Assert.Equal(expected, rounded);
+        var serialized = System.Text.Json.JsonSerializer.Serialize(rounded);
+        Assert.Matches(@"^-?\d+(\.\d{1,2})?$", serialized);
     }
 
     /// <summary>

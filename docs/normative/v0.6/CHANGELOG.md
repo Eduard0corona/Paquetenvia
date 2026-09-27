@@ -1,5 +1,18 @@
 # Changelog
 
+## Matriz de capacidades D5 implementada — 2026-09-27
+
+- AI-05 `x-capability-matrix` queda `IMPLEMENTED` (PR 108): cada operación de la
+  matriz decide la capacidad en el servidor antes de leer estado persistido y
+  los roles no listados reciben el 403 uniforme; un 403 cuyo único requisito
+  pendiente es MFA lleva `MFA_REQUIRED`.
+- `listLocations` admite VIEWER con lat/lng redondeadas en el servidor a 2
+  decimales (~1.1 km, mitad lejos de cero); DISPATCHER y PLATFORM_ADMIN reciben
+  coordenadas exactas (`D5-VIEWER-LOCATION-PRECISION-2026-09-27`,
+  `x-viewer-coordinate-precision`, `x-capability-matrix.viewer_location_precision`).
+- `D7-SETTLEMENT-MFA` queda implementado: aprobar y pagar liquidaciones exige MFA
+  para todo rol permitido, FINANCE incluido.
+
 ## Deltas del piloto publicados con su implementación — 2026-09-27
 
 - AI-05 publica, junto con su código y sus pruebas: `listSettlements`

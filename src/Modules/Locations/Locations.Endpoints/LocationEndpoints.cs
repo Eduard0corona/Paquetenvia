@@ -139,8 +139,14 @@ public static class LocationEndpoints
             session,
             tenantContext,
             TenantCapabilities.ListLocations,
-            async (actorId, organizationId) => Results.Ok(
-                (await service.ListLocationsAsync(actorId, organizationId, cancellationToken)).Select(ToResponse)),
+            async (actorId, organizationId) =>
+            {
+                // D5-VIEWER-LOCATION-PRECISION-2026-09-27: only DISPATCHER and PLATFORM_ADMIN see exact coordinates;
+                // a VIEWER's are rounded here, before serialization, whatever the client asks for.
+                var exact = TenantCapabilities.ReceivesExactCoordinates(session, organizationId);
+                var locations = await service.ListLocationsAsync(actorId, organizationId, cancellationToken);
+                return Results.Ok(locations.Select(location => exact ? ToResponse(location) : ToViewerResponse(location)));
+            },
             cancellationToken);
 
     private static async Task<IResult> CreateLocationAsync(
@@ -263,6 +269,13 @@ public static class LocationEndpoints
 
     private static LocationResponse ToResponse(LocationResult result) =>
         new(result.Id, result.CityId, result.ServiceAreaId, result.OperatingZoneId, result.AddressSummary, result.Lat, result.Lng);
+
+    private static LocationResponse ToViewerResponse(LocationResult result) =>
+        ToResponse(result) with
+        {
+            Lat = ViewerCoordinatePrecision.Round(result.Lat),
+            Lng = ViewerCoordinatePrecision.Round(result.Lng),
+        };
 
     private static IResult BadRequest() => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid request.");
     private static IResult Forbidden() => Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");

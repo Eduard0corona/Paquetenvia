@@ -150,20 +150,41 @@ public sealed class TenantCapabilityTests
     }
 
     [Fact]
-    public void Viewer_is_withheld_from_exact_location_coordinates_and_admitted_to_every_other_read()
+    public void Viewer_is_admitted_to_every_matrix_read_and_never_to_a_write()
     {
         var viewer = Session(false, (Tenant, OrganizationRole.Viewer));
 
-        Assert.Equal(TenantCapabilityDecision.Forbidden, TenantCapabilities.ListLocations.Evaluate(viewer, Tenant));
         foreach (var read in new[]
                  {
                      TenantCapabilities.GetQuote, TenantCapabilities.ListOrders, TenantCapabilities.GetOrder,
                      TenantCapabilities.ListCities, TenantCapabilities.ListServiceAreas,
-                     TenantCapabilities.ListOperatingZones,
+                     TenantCapabilities.ListOperatingZones, TenantCapabilities.ListLocations,
                  })
         {
             Assert.Equal(TenantCapabilityDecision.Allowed, read.Evaluate(viewer, Tenant));
         }
+
+        foreach (var write in new[]
+                 {
+                     TenantCapabilities.CreateQuote, TenantCapabilities.CreateOrder, TenantCapabilities.CommitOrderCsv,
+                     TenantCapabilities.CreateLocation,
+                 })
+        {
+            Assert.Equal(TenantCapabilityDecision.Forbidden, write.Evaluate(viewer, Tenant));
+        }
+    }
+
+    /// <summary>D5-VIEWER-LOCATION-PRECISION-2026-09-27: only DISPATCHER or PLATFORM_ADMIN in the tenant see exact coordinates.</summary>
+    [Fact]
+    public void Only_dispatcher_or_platform_admin_in_the_selected_tenant_receive_exact_coordinates()
+    {
+        Assert.False(TenantCapabilities.ReceivesExactCoordinates(Session(true, (Tenant, OrganizationRole.Viewer)), Tenant));
+        Assert.True(TenantCapabilities.ReceivesExactCoordinates(Session(false, (Tenant, OrganizationRole.Dispatcher)), Tenant));
+        Assert.True(TenantCapabilities.ReceivesExactCoordinates(Session(false, (Tenant, OrganizationRole.PlatformAdmin)), Tenant));
+        Assert.True(TenantCapabilities.ReceivesExactCoordinates(
+            Session(false, (Tenant, OrganizationRole.Viewer), (Tenant, OrganizationRole.Dispatcher)), Tenant));
+        Assert.False(TenantCapabilities.ReceivesExactCoordinates(
+            Session(false, (Tenant, OrganizationRole.Viewer), (Other, OrganizationRole.Dispatcher)), Tenant));
     }
 
     [Fact]

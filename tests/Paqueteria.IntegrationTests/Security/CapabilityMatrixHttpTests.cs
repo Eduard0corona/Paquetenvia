@@ -369,30 +369,100 @@ public sealed class LocationCapabilityMatrixHttpTests(LocationHttpWebApplication
     }
 
     [Theory]
-    [MemberData(nameof(LocationAllowed))]
-    public async Task ListLocations_and_CreateLocation_are_open_to(string role)
+    [MemberData(nameof(GeographyReadAllowed))]
+    public async Task ListLocations_is_open_to(string role)
     {
         using var list = await client.SendAsync(
             CapabilityMatrix.Request(HttpMethod.Get, "/api/v1/locations", CapabilityMatrix.Profile(role)));
-        using var create = await client.SendAsync(CreateLocation(role));
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+    }
+
+    [Theory]
+    [MemberData(nameof(GeographyReadDenied))]
+    public async Task ListLocations_is_403_for(string role)
+    {
+        using var list = await client.SendAsync(
+            CapabilityMatrix.Request(HttpMethod.Get, "/api/v1/locations", CapabilityMatrix.Profile(role)));
+        await CapabilityMatrix.AssertForbiddenAsync(list);
+    }
+
+    [Theory]
+    [MemberData(nameof(LocationAllowed))]
+    public async Task CreateLocation_is_open_to(string role)
+    {
+        using var create = await client.SendAsync(CreateLocation(role));
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
     }
 
-    /// <summary>
-    /// VIEWER is denied both: createLocation is outside its read-only role, and listLocations would return exact
-    /// lat/lng, which D5 forbids to VIEWER, while no coarse form is decided (fail closed).
-    /// </summary>
+    /// <summary>VIEWER is read-only: it never creates a location.</summary>
     [Theory]
     [MemberData(nameof(LocationDenied))]
-    public async Task ListLocations_and_CreateLocation_are_403_for(string role)
+    public async Task CreateLocation_is_403_for(string role)
     {
-        using var list = await client.SendAsync(
-            CapabilityMatrix.Request(HttpMethod.Get, "/api/v1/locations", CapabilityMatrix.Profile(role)));
         using var create = await client.SendAsync(CreateLocation(role));
-        await CapabilityMatrix.AssertForbiddenAsync(list);
         await CapabilityMatrix.AssertForbiddenAsync(create);
     }
+
+    /// <summary>
+    /// D5-VIEWER-LOCATION-PRECISION-2026-09-27: a VIEWER receives lat/lng rounded server-side to 2 decimals, half
+    /// away from zero (midpoints and negatives included), and no number in its response carries more than 2 decimals.
+    /// </summary>
+    [Fact]
+    public async Task ListLocations_rounds_VIEWER_coordinates_to_two_decimals()
+    {
+        var locations = await ListAsync(MockIdentityProfiles.ActiveViewer);
+        Assert.Equal(LocationHttpWebApplicationFactory.ListedCoordinates.Length + 1, locations.Count);
+        foreach (var (_, viewer) in LocationHttpWebApplicationFactory.ListedCoordinates)
+        {
+            Assert.Single(locations, item => item.Lat == viewer.Lat && item.Lng == viewer.Lng);
+        }
+
+        Assert.All(locations, location =>
+        {
+            Assert.Equal("Synthetic summary", location.Summary);
+            Assert.Matches(TwoDecimalsAtMost, location.RawLat);
+            Assert.Matches(TwoDecimalsAtMost, location.RawLng);
+            Assert.NotEqual("-0", location.RawLat);
+            Assert.NotEqual("-0", location.RawLng);
+        });
+
+        // No number anywhere in the VIEWER body carries a third decimal.
+        using var response = await client.SendAsync(
+            CapabilityMatrix.Request(HttpMethod.Get, "/api/v1/locations", MockIdentityProfiles.ActiveViewer));
+        Assert.DoesNotMatch(@"[:,\[]\s*-?\d+\.\d{3,}", await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>DISPATCHER and PLATFORM_ADMIN keep the exact stored coordinates.</summary>
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveDispatcher)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa)]
+    [InlineData(MockIdentityProfiles.ActiveDispatcherPlatformAdminNoMfa)]
+    public async Task ListLocations_returns_exact_coordinates_to(string profile)
+    {
+        var locations = await ListAsync(profile);
+        foreach (var (exact, _) in LocationHttpWebApplicationFactory.ListedCoordinates)
+        {
+            Assert.Single(locations, item => item.Lat == exact.Lat && item.Lng == exact.Lng);
+        }
+    }
+
+    private const string TwoDecimalsAtMost = @"^-?\d+(\.\d{1,2})?$";
+
+    private async Task<IReadOnlyList<ListedLocation>> ListAsync(string profile)
+    {
+        using var response = await client.SendAsync(CapabilityMatrix.Request(HttpMethod.Get, "/api/v1/locations", profile));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return document.RootElement.EnumerateArray().Select(item => new ListedLocation(
+            item.GetProperty("address_summary").GetString()!,
+            item.GetProperty("lat").GetDouble(),
+            item.GetProperty("lng").GetDouble(),
+            item.GetProperty("lat").GetRawText(),
+            item.GetProperty("lng").GetRawText())).ToArray();
+    }
+
+    private sealed record ListedLocation(string Summary, double Lat, double Lng, string RawLat, string RawLng);
 
     private static HttpRequestMessage CreateLocation(string role) => CapabilityMatrix.Request(
         HttpMethod.Post,
@@ -464,6 +534,10 @@ public sealed class FinanceMfaRequiredHttpTests(FinanceHttpWebApplicationFactory
                 data.Add(operation, MockIdentityProfiles.ActiveDispatcher, false);
                 data.Add(operation, MockIdentityProfiles.ActiveViewer, false);
                 data.Add(operation, MockIdentityProfiles.ActiveDriver, false);
+
+                // PLATFORM_ADMIN + DISPATCHER without MFA: DISPATCHER needs no second factor, so MFA is not the
+                // only thing missing and any refusal stays generic.
+                data.Add(operation, MockIdentityProfiles.ActiveDispatcherPlatformAdminNoMfa, false);
             }
 
             data.Add("recordCodCollection", MockIdentityProfiles.ActivePlatformAdminNoMfa, true);
@@ -485,13 +559,15 @@ public sealed class FinanceMfaRequiredHttpTests(FinanceHttpWebApplicationFactory
     }
 
     [Theory]
-    [InlineData("reconcileCod")]
-    [InlineData("getOrderFinancials")]
-    [InlineData("getRouteFinancials")]
-    public async Task FINANCE_with_MFA_reaches_the_finance_control_operations(string operation)
+    [InlineData("reconcileCod", MockIdentityProfiles.ActiveFinanceMfa)]
+    [InlineData("getOrderFinancials", MockIdentityProfiles.ActiveFinanceMfa)]
+    [InlineData("getRouteFinancials", MockIdentityProfiles.ActiveFinanceMfa)]
+    [InlineData("reconcileCod", MockIdentityProfiles.ActiveDispatcherPlatformAdminNoMfa)]
+    [InlineData("getOrderFinancials", MockIdentityProfiles.ActiveDispatcherPlatformAdminNoMfa)]
+    [InlineData("getRouteFinancials", MockIdentityProfiles.ActiveDispatcherPlatformAdminNoMfa)]
+    public async Task Admitted_actors_reach_the_finance_control_operations(string operation, string profile)
     {
-        using var response = await client.SendAsync(
-            Request(operation, FinanceHttpWebApplicationFactory.Succeeds, MockIdentityProfiles.ActiveFinanceMfa));
+        using var response = await client.SendAsync(Request(operation, FinanceHttpWebApplicationFactory.Succeeds, profile));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 

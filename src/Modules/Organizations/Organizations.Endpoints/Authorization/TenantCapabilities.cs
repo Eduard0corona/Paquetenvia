@@ -1,3 +1,4 @@
+using Organizations.Application.Session;
 using Paqueteria.Domain.Tenancy;
 
 namespace Organizations.Endpoints.Authorization;
@@ -32,12 +33,10 @@ public static class TenantCapabilities
         Create("listOperatingZones", Dispatcher, PlatformAdmin, Viewer);
 
     /// <summary>
-    /// The matrix admits VIEWER, but only without exact coordinates, and the AI-05 <c>Location</c> schema
-    /// requires exact <c>lat</c>/<c>lng</c> while no coarse precision is decided (ADR-032 leaves the precision
-    /// threshold open under GATE-007). VIEWER is therefore withheld and fails closed until that decision
-    /// exists; see <see cref="WithheldPendingDecision"/>.
+    /// The matrix admits VIEWER, but never with exact coordinates: a VIEWER receives lat/lng rounded to about 1 km
+    /// (D5-VIEWER-LOCATION-PRECISION-2026-09-27); see <see cref="ReceivesExactCoordinates"/>.
     /// </summary>
-    public static readonly TenantCapability ListLocations = Create("listLocations", Dispatcher, PlatformAdmin);
+    public static readonly TenantCapability ListLocations = Create("listLocations", Dispatcher, PlatformAdmin, Viewer);
 
     public static readonly TenantCapability CreateLocation = Create("createLocation", Dispatcher, PlatformAdmin);
 
@@ -82,14 +81,16 @@ public static class TenantCapabilities
         Create("recordCodCollection", Dispatcher, PlatformAdminMfa, Driver);
 
     /// <summary>
-    /// Roles the D5 matrix admits that the server still refuses, each with the open decision that keeps it
-    /// closed. The contract test compares the catalog plus these entries against AI-05.
+    /// D5-VIEWER-LOCATION-PRECISION-2026-09-27: only an actor holding DISPATCHER or PLATFORM_ADMIN in the selected
+    /// organization receives exact coordinates; any other admitted actor (VIEWER) receives them rounded.
     /// </summary>
-    public static IReadOnlyDictionary<string, IReadOnlyList<OrganizationRole>> WithheldPendingDecision { get; } =
-        new Dictionary<string, IReadOnlyList<OrganizationRole>>(StringComparer.Ordinal)
-        {
-            ["listLocations"] = [OrganizationRole.Viewer],
-        };
+    public static bool ReceivesExactCoordinates(IOrganizationRequestSession session, Guid organizationId)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.ActiveMemberships.Any(membership =>
+            membership.OrganizationId == organizationId &&
+            membership.Role is OrganizationRole.Dispatcher or OrganizationRole.PlatformAdmin);
+    }
 
     /// <summary>Every capability above, keyed by AI-05 operationId.</summary>
     public static IReadOnlyDictionary<string, TenantCapability> All { get; } = typeof(TenantCapabilities)
