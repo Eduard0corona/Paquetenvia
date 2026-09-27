@@ -55,8 +55,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AddOperationalCleanupExecutor.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000100_AddOperationalCleanupExecutor.cs"),
-        ("Incidents", "__ef_migrations_history_incidents", AdoptCanonicalIncidentsBaseline.MigrationId,
-            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs"),
+        ("Incidents", "__ef_migrations_history_incidents", IndexIncidentEvidenceByOrderProof.MigrationId,
+            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260927000100_IndexIncidentEvidenceByOrderProof.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
         ("Notifications", "__ef_migrations_history_notifications", RouteManualRouteRealtime.MigrationId,
@@ -156,6 +156,11 @@ internal sealed class ModuleMigrationCoordinator
             "Orders",
             AddRealtimeResynchronizationCursor.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260725010000_AddRealtimeResynchronizationCursor.cs");
+        VerifyAdoptionSource(
+            root,
+            "Incidents",
+            AdoptCanonicalIncidentsBaseline.MigrationId,
+            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs");
 
         return result;
     }
@@ -364,6 +369,8 @@ internal sealed class ModuleMigrationCoordinator
                 ],
             "Custody" =>
                 [AdoptCanonicalCustodyProofsBaseline.MigrationId, AddOperationalCleanupExecutor.MigrationId],
+            "Incidents" =>
+                [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
             _ => [contract.MigrationId],
