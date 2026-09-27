@@ -216,7 +216,7 @@ public sealed class OutboxRetentionServiceTests : IDisposable
             foreach (var field in new[]
             {
                 "Lane", "Outcome", "DryRun", "ProcessedBefore", "DeadBefore", "BatchSize",
-                "MaxBatchesPerRun", "Batches", "AffectedRows", "Exhausted", "StartedAt", "CompletedAt", "ErrorClass",
+                "MaxBatchesPerRun", "Batches", "AffectedRows", "DeadEligible", "Exhausted", "StartedAt", "CompletedAt", "ErrorClass",
             })
             {
                 Assert.True(entry.Values.ContainsKey(field), $"Missing evidence field {field}.");
@@ -232,6 +232,145 @@ public sealed class OutboxRetentionServiceTests : IDisposable
         Assert.Equal(1, business.Values["Batches"]);
         Assert.Equal(1L, business.Values["AffectedRows"]);
         Assert.Equal("2026-09-25T12:00:00.0000000+00:00", business.Values["StartedAt"]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dead_rows_are_probed_once_per_lane_before_any_batch_and_reported(bool dryRun)
+    {
+        var logger = new CapturingLogger<OutboxRetentionService>();
+        var options = Destructive();
+        options.DryRun = dryRun;
+        var gateway = new RecordingPurgeGateway((request, _, _) => Task.FromResult(0))
+        {
+            DeadEligible = lane => lane == OutboxRetentionLane.Business ? 3 : 0,
+        };
+
+        var report = await Service(gateway, options, logger: logger).RunOnceAsync(CancellationToken.None);
+
+        var probes = gateway.DeadProbes.ToArray();
+        Assert.Equal(
+            [
+                (OutboxRetentionLane.Business, Now - options.Business.DeadRetention, options.Business.BatchSize),
+                (OutboxRetentionLane.Location, Now - options.Location.DeadRetention, options.Location.BatchSize),
+            ],
+            probes);
+        Assert.Equal(3, Assert.Single(report.Lanes, lane => lane.Lane == OutboxRetentionLane.Business).DeadEligible);
+        Assert.Equal(0, Assert.Single(report.Lanes, lane => lane.Lane == OutboxRetentionLane.Location).DeadEligible);
+        var business = Assert.Single(logger.Entries, entry => entry.EventId.Id == 4004 && Equals(entry.Values["Lane"], "business"));
+        Assert.Equal(3, business.Values["DeadEligible"]);
+
+        // Only a destructive run warns, and only for a lane that is about to purge DEAD rows.
+        var warnings = logger.Entries.Where(entry => entry.EventId.Id == 4005).ToArray();
+        if (dryRun)
+        {
+            Assert.Empty(warnings);
+        }
+        else
+        {
+            var warning = Assert.Single(warnings);
+            Assert.Equal(LogLevel.Warning, warning.Level);
+            Assert.Equal("business", warning.Values["Lane"]);
+            Assert.Equal(3, warning.Values["DeadEligible"]);
+            Assert.Equal(options.Business.BatchSize, warning.Values["DeadEligibleBound"]);
+        }
+    }
+
+    [Fact]
+    public async Task A_failed_dead_probe_is_logged_and_does_not_block_the_purge()
+    {
+        var logger = new CapturingLogger<OutboxRetentionService>();
+        var gateway = new RecordingPurgeGateway((_, _, _) => Task.FromResult(4))
+        {
+            DeadEligible = _ => throw new TimeoutException("synthetic"),
+        };
+
+        var report = await Service(gateway, Destructive(), logger: logger).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(2, gateway.DeadProbes.Count);
+        Assert.All(report.Lanes, lane =>
+        {
+            Assert.Equal(OutboxRetentionOutcomes.Success, lane.Outcome);
+            Assert.Null(lane.ErrorClass);
+            Assert.Null(lane.DeadEligible);
+            Assert.Equal(1, lane.Batches);
+            Assert.Equal(4, lane.AffectedRows);
+        });
+        Assert.Equal(2, gateway.Requests.Count);
+
+        var failures = logger.Entries.Where(entry => entry.EventId.Id == 4006).ToArray();
+        Assert.Equal(2, failures.Length);
+        Assert.All(failures, failure =>
+        {
+            Assert.Equal(LogLevel.Error, failure.Level);
+            Assert.Equal("timeout", failure.Values["ErrorClass"]);
+        });
+        Assert.DoesNotContain(logger.Entries, entry => entry.EventId.Id == 4005);
+    }
+
+    [Fact]
+    public async Task Cancellation_during_the_dead_probe_still_cancels_the_run()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var gateway = new RecordingPurgeGateway((_, _, _) => Task.FromResult(0))
+        {
+            DeadEligible = _ =>
+            {
+                cancellation.Cancel();
+                throw new OperationCanceledException(cancellation.Token);
+            },
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Service(gateway, Destructive()).RunOnceAsync(cancellation.Token));
+        Assert.Empty(gateway.Requests);
+    }
+
+    [Fact]
+    public async Task Dead_eligible_gauge_reports_the_last_probe_per_lane()
+    {
+        var measurements = new ConcurrentQueue<(string Instrument, long Value, Dictionary<string, object?> Tags)>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, meterListener) =>
+            {
+                if (ReferenceEquals(instrument.Meter, _telemetry.Meter))
+                {
+                    meterListener.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
+            measurements.Enqueue((instrument.Name, value, Tags(tags))));
+        listener.Start();
+        var gateway = new RecordingPurgeGateway((_, _, _) => Task.FromResult(0))
+        {
+            DeadEligible = lane => lane == OutboxRetentionLane.Business ? 7 : 2,
+        };
+
+        await Service(gateway, Destructive()).RunOnceAsync(CancellationToken.None);
+        listener.RecordObservableInstruments();
+
+        var gauge = measurements.Where(measurement => measurement.Instrument == "outbox.retention.dead_eligible").ToArray();
+        Assert.Equal(2, gauge.Length);
+        Assert.All(gauge, measurement => Assert.Equal(["lane"], measurement.Tags.Keys));
+        Assert.Contains(gauge, measurement => Equals(measurement.Tags["lane"], "business") && measurement.Value == 7);
+        Assert.Contains(gauge, measurement => Equals(measurement.Tags["lane"], "location") && measurement.Value == 2);
+
+        // A later run whose probe fails for business withdraws that series instead of repeating 7.
+        measurements.Clear();
+        var failingBusiness = new RecordingPurgeGateway((_, _, _) => Task.FromResult(0))
+        {
+            DeadEligible = lane => lane == OutboxRetentionLane.Business ? throw new TimeoutException("synthetic") : 5,
+        };
+        await Service(failingBusiness, Destructive()).RunOnceAsync(CancellationToken.None);
+        listener.RecordObservableInstruments();
+
+        var after = measurements.Where(measurement => measurement.Instrument == "outbox.retention.dead_eligible").ToArray();
+        var location = Assert.Single(after);
+        Assert.Equal("location", location.Tags["lane"]);
+        Assert.Equal(5, location.Value);
     }
 
     [Fact]

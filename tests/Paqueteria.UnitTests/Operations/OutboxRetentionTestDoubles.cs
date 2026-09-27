@@ -22,6 +22,18 @@ internal sealed class RecordingPurgeGateway(
         return respond(request, call, cancellationToken);
     }
 
+    /// <summary>DEAD-only probes, kept apart from purge batches so batch counts stay exact.</summary>
+    public ConcurrentQueue<(OutboxRetentionLane Lane, DateTimeOffset DeadBefore, int Limit)> DeadProbes { get; } = new();
+
+    public Func<OutboxRetentionLane, int> DeadEligible { get; init; } = _ => 0;
+
+    public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        DeadProbes.Enqueue((lane, deadBefore, limit));
+        return Task.FromResult(DeadEligible(lane));
+    }
+
     public IReadOnlyList<OutboxPurgeRequest> For(OutboxRetentionLane lane) =>
         Requests.Where(request => request.Lane == lane).ToArray();
 }
