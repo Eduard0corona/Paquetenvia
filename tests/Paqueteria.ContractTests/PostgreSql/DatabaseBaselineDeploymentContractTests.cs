@@ -322,6 +322,36 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(12, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: true).Count);
     }
 
+    [Fact]
+    public void E002_models_the_d8_dispatch_lane_as_worker_only_outbox_executor_routines()
+    {
+        // D8-OUTBOX-LANE-DISPATCH: two routines owned by paqueteria_outbox_executor, EXECUTE for the Worker only.
+        Assert.Equal(
+            Notifications.Infrastructure.Persistence.Migrations.AddDispatchOutboxLane.MigrationId,
+            E002NotificationStateReader.DispatchLaneMigrationId);
+        var lane = E002RoutineMap.Select(E002RoutineMapState.Applied, lif001Applied: true, dispatchLaneApplied: true)
+            .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, lif001Applied: true))
+            .ToArray();
+        Assert.Equal(
+            ["security.claim_dispatch_outbox(text,integer,interval)",
+             "security.requeue_stale_dispatch_outbox(interval,integer,integer)"],
+            lane.Select(entry => entry.Signature));
+        Assert.All(lane, entry =>
+        {
+            Assert.Equal("paqueteria_outbox_executor", entry.Owner);
+            Assert.Equal(["paqueteria_worker"], entry.Grantees);
+        });
+        Assert.Equal(29, E002RoutineMap.Select(E002RoutineMapState.Applied, true, true).Count);
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true));
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_D8DISPATCH_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, false, true));
+        Assert.Throws<InvalidOperationException>(() =>
+            E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: false, dispatchLaneApplied: true));
+    }
+
     [PostgreSqlContractFact]
     public async Task Azure_ownership_bridge_requires_set_authority_over_the_lifecycle_executor()
     {
@@ -427,9 +457,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         {
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
-            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_V1", semantic.RoutineMap);
-            Assert.Equal(27, semantic.ControlledIdentities);
-            Assert.Equal(52, semantic.NormalizedExecuteRows);
+            // The Notifications lane also installed the D8 DISPATCH lane: two routines, owner + Worker each.
+            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_V1", semantic.RoutineMap);
+            Assert.Equal(29, semantic.ControlledIdentities);
+            Assert.Equal(56, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>

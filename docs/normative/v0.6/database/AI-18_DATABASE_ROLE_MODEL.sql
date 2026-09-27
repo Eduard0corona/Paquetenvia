@@ -185,6 +185,16 @@ GRANT USAGE ON SCHEMA orders TO paqueteria_lifecycle_executor;
 GRANT SELECT (id,status,claim_window_ends_at,finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 
+-- D8 DISPATCH outbox lane (D8-DISPATCH-OUTBOX-CLOSURE, D8-OUTBOX-LANE-DISPATCH, project owner 2026-09-27).
+-- The Notifications migration lane (20260927000200_AddDispatchOutboxLane) installs, after NTF-001 and
+-- therefore after this baseline, security.claim_dispatch_outbox(text,integer,interval) and
+-- security.requeue_stale_dispatch_outbox(interval,integer,integer): the REALTIME lane claim/requeue
+-- bodies with the consumer literal 'DISPATCH'. It adds to security.resolve_outbox_consumer(text) the
+-- branch dispatch.order-status-reaction-requested -> DISPATCH; orders.status-changed stays REALTIME.
+-- Both functions are SECURITY DEFINER with search_path=pg_catalog, platform, security, pg_temp, are
+-- owned by paqueteria_outbox_executor, have EXECUTE revoked from PUBLIC and granted only to
+-- paqueteria_worker. Settlement reuses security.settle_outbox. No table grant changes.
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
@@ -197,3 +207,4 @@ GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 -- 9. paqueteria_lifecycle_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only security.finalize_expired_orders(integer).
 -- 10. paqueteria_lifecycle_executor holds only USAGE on schema orders plus SELECT(id,status,claim_window_ends_at,finalized_at) and UPDATE(finalized_at) on orders.orders: no INSERT/DELETE, no table-wide grant, no other table, no outbox, bootstrap or purge privilege.
 -- 11. security.finalize_expired_orders(integer) is SECURITY DEFINER with search_path=pg_catalog, orders, pg_temp, accepts only a bounded batch size, and only paqueteria_worker may EXECUTE it; PUBLIC and paqueteria_app may not.
+-- 12. once the D8 DISPATCH lane is recorded, security.claim_dispatch_outbox(text,integer,interval) and security.requeue_stale_dispatch_outbox(interval,integer,integer) exist, are owned by paqueteria_outbox_executor, are SECURITY DEFINER, and only paqueteria_worker may EXECUTE them; PUBLIC and paqueteria_app may not.

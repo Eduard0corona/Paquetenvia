@@ -59,8 +59,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", RouteManualRouteRealtime.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260829000100_RouteManualRouteRealtime.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", AddDispatchOutboxLane.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20260927000200_AddDispatchOutboxLane.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
@@ -346,6 +346,7 @@ internal sealed class ModuleMigrationCoordinator
                     AddTenantSafeOutboxNotifications.MigrationId,
                     RouteExternalOfferRealtime.MigrationId,
                     RouteManualRouteRealtime.MigrationId,
+                    AddDispatchOutboxLane.MigrationId,
                 ],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],

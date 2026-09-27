@@ -421,6 +421,16 @@ public sealed class PostgreSqlOrderTransitionService(
         await failureInjector.OnStageAsync(
             OrderTransitionStage.TimelineOutboxInserted,
             cancellationToken);
+        await InsertDispatchReactionOutboxAsync(
+            connection,
+            transaction,
+            eventId,
+            order,
+            source,
+            target,
+            newVersion,
+            occurredAt,
+            cancellationToken);
 
         var auditPayload = JsonSerializer.SerializeToElement(new
         {
@@ -837,6 +847,89 @@ public sealed class PostgreSqlOrderTransitionService(
         RequireOne(
             await command.ExecuteNonQueryAsync(cancellationToken),
             "The transition timeline outbox event was not inserted.");
+    }
+
+    /// <summary>
+    /// D8 / D8-OUTBOX-LANE-DISPATCH: a transition that closes an assignment asks Dispatch to react by
+    /// writing one more outbox row in this same transaction. It names the assignment active under the
+    /// order lock, so a late redelivery can never close a newer assignment. <c>orders.status-changed</c>
+    /// is untouched and keeps its REALTIME route.
+    /// </summary>
+    private async Task InsertDispatchReactionOutboxAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid orderEventId,
+        OrderRow order,
+        OrderStatus source,
+        OrderStatus target,
+        int newVersion,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        if (!DispatchReactionRequestPolicy.Requires(source, target))
+        {
+            return;
+        }
+
+        Guid? assignmentId;
+        await using (var active = CreateCommand(
+            connection,
+            transaction,
+            """
+            SELECT a.id
+            FROM dispatch.assignments a
+            WHERE a.order_id=@order
+              AND a.owner_org_id=@owner
+              AND a.status IN ('ACCEPTED','ACTIVE')
+            """))
+        {
+            active.Parameters.Add(P("order", NpgsqlDbType.Uuid, order.Id));
+            active.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
+            assignmentId = await active.ExecuteScalarAsync(cancellationToken) as Guid?;
+        }
+
+        if (assignmentId is null)
+        {
+            return;
+        }
+
+        var tenantContext = JsonSerializer.Serialize(new
+        {
+            organization_ids = new[] { order.OwnerOrganizationId },
+        }, JsonOptions);
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema_version = DispatchReactionRequestPolicy.SchemaVersion,
+            order_event_id = orderEventId,
+            order_id = order.Id,
+            previous_status = source.ToContractValue(),
+            new_status = target.ToContractValue(),
+            occurred_at = occurredAt,
+            assignment_id = assignmentId.Value,
+        }, JsonOptions);
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
+              priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
+              last_error,created_at,processed_at)
+            VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+            """);
+        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, Guid.NewGuid()));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
+        command.Parameters.Add(P("tenant", NpgsqlDbType.Jsonb, tenantContext));
+        command.Parameters.Add(P("topic", NpgsqlDbType.Text, DispatchReactionRequestPolicy.Topic));
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, order.Id));
+        command.Parameters.Add(P("version", NpgsqlDbType.Integer, newVersion));
+        command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
+        command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        RequireOne(
+            await command.ExecuteNonQueryAsync(cancellationToken),
+            "The Dispatch reaction outbox event was not inserted.");
     }
 
     private async Task<DriverAudienceCandidate?> ReadDriverAudienceCandidateAsync(

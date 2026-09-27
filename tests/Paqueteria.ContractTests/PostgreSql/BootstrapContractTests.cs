@@ -20,6 +20,7 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         "claim_location_outbox", "settle_location_outbox", "requeue_stale_location_outbox", "purge_location_outbox",
         "claim_realtime_outbox", "claim_notifications_outbox", "claim_unowned_outbox",
         "requeue_stale_realtime_outbox", "recover_stale_notifications_outbox", "requeue_stale_unowned_outbox",
+        "claim_dispatch_outbox", "requeue_stale_dispatch_outbox",
     ];
 
     [PostgreSqlContractFact]
@@ -235,6 +236,8 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             "security.requeue_stale_realtime_outbox(interval,integer,integer)",
             "security.recover_stale_notifications_outbox(text,integer,integer,interval)",
             "security.requeue_stale_unowned_outbox(interval,integer,integer)",
+            "security.claim_dispatch_outbox(text,integer,interval)",
+            "security.requeue_stale_dispatch_outbox(interval,integer,integer)",
             "security.claim_location_outbox(text,integer,interval)",
             "security.settle_location_outbox(uuid,uuid,text,text,timestamptz)",
             "security.requeue_stale_location_outbox(interval,integer,integer)",

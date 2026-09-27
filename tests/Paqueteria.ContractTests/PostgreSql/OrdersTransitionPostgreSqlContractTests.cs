@@ -99,6 +99,20 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             var metadata = await PrepareGuardFixturesAsync(scenario, source, target);
             await using var scope = CreateScope();
             var key = $"ord002-edge-{(int)source:D2}-{(int)target:D2}-0001";
+            if (DispatchReactionRequestPolicy.Requires(source, target) &&
+                source is not (OrderStatus.Draft or OrderStatus.Confirmed or OrderStatus.ReadyForPickup))
+            {
+                // D8: a closing edge from a state that holds an assignment exercises the reaction row.
+                await InsertAssignmentAsync(scenario);
+            }
+
+            Guid? activeAssignment;
+            await using (var active = fixture.AdminDataSource.CreateCommand(
+                "SELECT id FROM dispatch.assignments WHERE order_id=@order AND status IN ('ACCEPTED','ACTIVE');"))
+            {
+                active.Parameters.AddWithValue("order", scenario.OrderId);
+                activeAssignment = await active.ExecuteScalarAsync() as Guid?;
+            }
 
             var result = await scope.Service.TransitionAsync(
                 Command(
@@ -144,7 +158,13 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                     WHERE x.aggregate_id=o.id AND x.aggregate_version=2
                       AND x.topic='orders.status-changed'),
                   (SELECT payload_redacted::text FROM platform.audit_logs a
-                    WHERE a.entity_id=o.id AND a.action='ORDER_STATUS_CHANGED')
+                    WHERE a.entity_id=o.id AND a.action='ORDER_STATUS_CHANGED'),
+                  (SELECT count(*) FROM platform.outbox_events x
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                      AND x.topic='dispatch.order-status-reaction-requested' AND x.status='PENDING'),
+                  (SELECT payload::text FROM platform.outbox_events x
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                      AND x.topic='dispatch.order-status-reaction-requested')
                 FROM orders.orders o WHERE o.id=@order;
                 """);
             verify.Parameters.AddWithValue("order", scenario.OrderId);
@@ -160,6 +180,21 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             Assert.Equal(2L, reader.GetInt64(6));
             Assert.Equal(1L, reader.GetInt64(7));
             Assert.Equal(1L, reader.GetInt64(8));
+            // D8-OUTBOX-LANE-DISPATCH: a closing edge with an active assignment adds exactly one
+            // Dispatch reaction row naming that assignment; orders.status-changed stays single above.
+            var expectsReaction = activeAssignment is not null &&
+                DispatchReactionRequestPolicy.Requires(source, target);
+            Assert.Equal(expectsReaction ? 1L : 0L, reader.GetInt64(12));
+            if (expectsReaction)
+            {
+                using var reaction = System.Text.Json.JsonDocument.Parse(reader.GetString(13));
+                Assert.Equal("order-status-reaction-v1", reaction.RootElement.GetProperty("schema_version").GetString());
+                Assert.Equal(activeAssignment, reaction.RootElement.GetProperty("assignment_id").GetGuid());
+                Assert.Equal(source.ToContractValue(), reaction.RootElement.GetProperty("previous_status").GetString());
+                Assert.Equal(target.ToContractValue(), reaction.RootElement.GetProperty("new_status").GetString());
+                Assert.Equal(7, reaction.RootElement.EnumerateObject().Count());
+            }
+
             foreach (var ordinal in new[] { 9, 10, 11 })
             {
                 var json = reader.GetString(ordinal);

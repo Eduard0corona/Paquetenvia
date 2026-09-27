@@ -18,6 +18,7 @@ public sealed class NotificationLifecycleTests
     [InlineData("notifications.status-changed", OutboxConsumer.Realtime)]
     [InlineData("orders.created", OutboxConsumer.Notifications)]
     [InlineData("notifications.send-requested", OutboxConsumer.Notifications)]
+    [InlineData("dispatch.order-status-reaction-requested", OutboxConsumer.Dispatch)]
     [InlineData("unknown.value", OutboxConsumer.Unrouted)]
     [InlineData("", OutboxConsumer.Unrouted)]
     public void Routing_is_exhaustive_and_disjoint(string topic, OutboxConsumer expected) =>

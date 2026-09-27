@@ -406,6 +406,19 @@ def main() -> int:
     if not (ROOT / "docs/adr/ADR-034_ORDER_LIFECYCLE_FINALIZATION_EXECUTOR.md").is_file():
         errors.append("ADR-034 lifecycle executor decision is missing")
     checks.append("Lifecycle executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
+    # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
+    # the role model records its contract; it must never grant the lane to anyone but the Worker.
+    for fragment in [
+        "security.claim_dispatch_outbox(text,integer,interval)",
+        "security.requeue_stale_dispatch_outbox(interval,integer,integer)",
+        "dispatch.order-status-reaction-requested -> DISPATCH",
+        "owned by paqueteria_outbox_executor",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing D8 DISPATCH lane contract: {fragment}")
+    if re.search(r"GRANT[^;]*_dispatch_outbox[^;]*TO\s+(?!paqueteria_worker\b)", role_sql):
+        errors.append("D8 DISPATCH lane functions granted beyond paqueteria_worker")
+    checks.append("D8 DISPATCH lane: executor-owned claim/requeue, Worker-only EXECUTE")
     runtime_grant_block = re.search(r"-- Runtime table grants[\s\S]*?END \$\$;", role_sql)
     if runtime_grant_block and "'platform'" in runtime_grant_block.group(0):
         errors.append("platform remains in broad runtime grants")

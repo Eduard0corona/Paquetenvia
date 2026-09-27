@@ -24,7 +24,7 @@ namespace Paqueteria.ContractTests.PostgreSql;
 
 [Collection(PostgreSqlContractCollection.Name)]
 [Trait("Category", "PostgreSqlContract")]
-public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fixture)
+public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
     private static readonly DateTimeOffset OccurredAt =
         new(2026, 7, 23, 21, 0, 0, TimeSpan.Zero);
@@ -181,106 +181,6 @@ public sealed class DispatchPostgreSqlContractTests(PostgreSqlContractFixture fi
                 Guid.Parse("33333333-3333-3333-3333-333333333333"),
                 null,
                 default));
-    }
-
-    [PostgreSqlContractFact]
-    public async Task Unassign_reaction_cancels_assignment_idempotently_and_allows_reassignment()
-    {
-        await using var scenario = await DispatchScenario.CreateAsync(fixture);
-        var first = await CreateAssignmentService(fixture.AppDataSource)
-            .CreateOwnDriverAssignmentAsync(Command(scenario), default);
-        Assert.Equal("ASSIGNED", await ReadOrderStatusAsync(scenario.OrderId));
-
-        // ORD-002 unassign (ASSIGNED -> READY_FOR_PICKUP) committed by Orders; Dispatch has not reacted yet.
-        var unassignedAt = OccurredAt.AddMinutes(5);
-        await scenario.ExecuteAdminAsync(
-            "UPDATE orders.orders SET status='READY_FOR_PICKUP',version=version+1 WHERE id=@order;",
-            P("order", scenario.OrderId));
-        var blocked = await Assert.ThrowsAsync<AssignmentConflictException>(() =>
-            CreateAssignmentService(fixture.AppDataSource, now: OccurredAt.AddMinutes(10))
-                .CreateOwnDriverAssignmentAsync(Command(scenario), default));
-        Assert.Equal(AssignmentConflictCode.ActiveAssignmentExists, blocked.Code);
-
-        var reactor = new PostgreSqlAssignmentLifecycleReactor(fixture.WorkerDataSource);
-        var fact = new OrderStatusChangedFact(
-            Guid.NewGuid(),
-            scenario.OrganizationId,
-            scenario.OrderId,
-            "ASSIGNED",
-            "READY_FOR_PICKUP",
-            unassignedAt,
-            first.Id);
-        Assert.Equal(1, await reactor.ReactAsync(fact, default));
-        Assert.Equal(0, await reactor.ReactAsync(fact, default));
-        Assert.Equal("CANCELLED", await ReadAssignmentStatusAsync(first.Id));
-
-        var second = await CreateAssignmentService(fixture.AppDataSource, now: OccurredAt.AddMinutes(10))
-            .CreateOwnDriverAssignmentAsync(Command(scenario), default);
-        Assert.NotEqual(first.Id, second.Id);
-        Assert.Equal("ACCEPTED", second.Status);
-        Assert.Equal("ASSIGNED", await ReadOrderStatusAsync(scenario.OrderId));
-
-        // A late redelivery, with or without the assignment id, never closes the newer assignment.
-        Assert.Equal(0, await reactor.ReactAsync(fact, default));
-        Assert.Equal(0, await reactor.ReactAsync(fact with { AssignmentId = null }, default));
-        Assert.Equal("ACCEPTED", await ReadAssignmentStatusAsync(second.Id));
-        Assert.Equal(2, await CountAssignmentsAsync(scenario.OrderId));
-    }
-
-    [Theory]
-    [InlineData("AT_PICKUP", "CANCELLED", "CANCELLED")]
-    [InlineData("ASSIGNED", "CANCELLED", "CANCELLED")]
-    [InlineData("DELIVERING", "DELIVERED", "COMPLETED")]
-    [InlineData("RETURNING", "RETURNED", "COMPLETED")]
-    [InlineData("ASSIGNED", "AT_PICKUP", "ACCEPTED")]
-    [InlineData("IN_TRANSIT", "DELIVERING", "ACCEPTED")]
-    public async Task Order_transition_reaction_closes_assignment_as_contracted(
-        string previousStatus,
-        string newStatus,
-        string expectedAssignmentStatus)
-    {
-        await using var scenario = await DispatchScenario.CreateAsync(fixture);
-        var assignment = await CreateAssignmentService(fixture.AppDataSource)
-            .CreateOwnDriverAssignmentAsync(Command(scenario), default);
-        await scenario.ExecuteAdminAsync(
-            "UPDATE orders.orders SET status=@status,version=version+1 WHERE id=@order;",
-            P("status", newStatus),
-            P("order", scenario.OrderId));
-
-        var reactor = new PostgreSqlAssignmentLifecycleReactor(fixture.WorkerDataSource);
-        var fact = new OrderStatusChangedFact(
-            Guid.NewGuid(),
-            scenario.OrganizationId,
-            scenario.OrderId,
-            previousStatus,
-            newStatus,
-            OccurredAt.AddMinutes(30),
-            null);
-        var expectedClosed = expectedAssignmentStatus == "ACCEPTED" ? 0 : 1;
-        Assert.Equal(expectedClosed, await reactor.ReactAsync(fact, default));
-        Assert.Equal(0, await reactor.ReactAsync(fact, default));
-        Assert.Equal(expectedAssignmentStatus, await ReadAssignmentStatusAsync(assignment.Id));
-
-        // RLS: a fact attributed to another tenant cannot see or close the assignment.
-        var foreign = fact with { OwnerOrganizationId = Guid.NewGuid(), PreviousStatus = "ASSIGNED", NewStatus = "CANCELLED" };
-        Assert.Equal(0, await reactor.ReactAsync(foreign, default));
-        Assert.Equal(expectedAssignmentStatus, await ReadAssignmentStatusAsync(assignment.Id));
-    }
-
-    private async Task<string> ReadAssignmentStatusAsync(Guid assignmentId)
-    {
-        await using var command = fixture.AdminDataSource.CreateCommand(
-            "SELECT status FROM dispatch.assignments WHERE id=@id;");
-        command.Parameters.AddWithValue("id", assignmentId);
-        return (string)(await command.ExecuteScalarAsync())!;
-    }
-
-    private async Task<string> ReadOrderStatusAsync(Guid orderId)
-    {
-        await using var command = fixture.AdminDataSource.CreateCommand(
-            "SELECT status FROM orders.orders WHERE id=@id;");
-        command.Parameters.AddWithValue("id", orderId);
-        return (string)(await command.ExecuteScalarAsync())!;
     }
 
     [PostgreSqlContractFact]
