@@ -237,6 +237,7 @@ public sealed class PostgreSqlOrderTransitionService(
         occurredAt = await SequenceAfterCommittedIncidentsAsync(
             connection,
             transaction,
+            command.OrganizationId,
             command.OrderId,
             occurredAt,
             cancellationToken);
@@ -609,6 +610,7 @@ public sealed class PostgreSqlOrderTransitionService(
     private async Task<DateTimeOffset> SequenceAfterCommittedIncidentsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
+        Guid organizationId,
         Guid orderId,
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
@@ -619,8 +621,9 @@ public sealed class PostgreSqlOrderTransitionService(
             """
             SELECT max(i.created_at)
             FROM incidents.incidents i
-            WHERE i.order_id=@order
+            WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)
             """);
+        command.Parameters.Add(P("org", NpgsqlDbType.Uuid, organizationId));
         command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
         var latest = await command.ExecuteScalarAsync(cancellationToken);
         if (latest is not DateTime latestIncident)
