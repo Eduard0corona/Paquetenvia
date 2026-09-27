@@ -24,8 +24,9 @@ internal sealed class OperationalCleanupDataSource(string connectionString) : IA
 }
 
 /// <summary>
-/// Invokes the OPS-003-CLEANUP-ROLE functions as <c>paqueteria_worker</c>, which holds only EXECUTE on
-/// them. No tenant context is set and no tenant, key or session identifier is sent or read back: each
+/// Invokes the OPS-003-CLEANUP-ROLE functions (including the BFF session purge) as
+/// <c>paqueteria_worker</c>, which holds only EXECUTE on them. No tenant context is set and no tenant,
+/// key or session identifier is sent or read back: each
 /// call is one short transaction whose only result is a count.
 /// </summary>
 public sealed class PostgreSqlOperationalCleanupGateway : IOperationalCleanupGateway
@@ -67,6 +68,13 @@ public sealed class PostgreSqlOperationalCleanupGateway : IOperationalCleanupGat
     public Task<int> ExpireProofUploadSessionsAsync(int batchSize, CancellationToken cancellationToken) =>
         ExecuteAsync(
             "SELECT security.expire_proof_upload_sessions(@batch_size);",
+            command => command.Parameters.Add(
+                new NpgsqlParameter<int>("batch_size", NpgsqlDbType.Integer) { TypedValue = batchSize }),
+            cancellationToken);
+
+    public Task<int> PurgeBffSessionsAsync(int batchSize, CancellationToken cancellationToken) =>
+        ExecuteAsync(
+            "SELECT security.purge_bff_sessions(@batch_size);",
             command => command.Parameters.Add(
                 new NpgsqlParameter<int>("batch_size", NpgsqlDbType.Integer) { TypedValue = batchSize }),
             cancellationToken);

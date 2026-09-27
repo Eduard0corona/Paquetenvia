@@ -13,6 +13,8 @@ public static class OrganizationEndpoints
             .WithTags("Identity")
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
+        endpoints.MapRegistrationEndpoints();
+        endpoints.MapPendingMembershipEndpoints();
         return endpoints;
     }
 

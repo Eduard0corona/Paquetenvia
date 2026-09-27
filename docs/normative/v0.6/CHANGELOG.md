@@ -1,5 +1,126 @@
 # Changelog
 
+## Unirse a una organización existente por correo (REG-002) — 2026-09-27
+
+- Respuestas literales del project owner: "El admin la agrega por correo (Recomendado)",
+  "Tabla de invitaciones + HMAC (Recomendado)", "PLATFORM_ADMIN + admins de la org con MFA
+  (Recomendado)", "Los de su tipo, incluido admin (Recomendado)", "Cualquier rol; PLATFORM_ADMIN
+  sólo en la org de plataforma (Recomendado)", "Sí; el perfil se completa después (Recomendado)",
+  "Sólo renueva la vigencia (Recomendado)", "7 días (Recomendado)" y "Acepta todas (Recomendado)".
+- AI-06: `organizations.pending_memberships` (HMAC con llave del correo normalizado y versión de
+  la llave, nunca el correo; estados PENDING, ACCEPTED y REVOKED; vence a los 7 días), FORCE RLS
+  con política de tenant.
+- AI-18: `paqueteria_app` sólo lee la tabla bajo RLS y `paqueteria_worker` no tiene privilegios;
+  `paqueteria_registration_executor` recibe grants exactos por columna (verificados por
+  `validate_contracts.py`) y la aserción 25. Sus cuatro funciones SECURITY DEFINER
+  (`add_pending_membership`, `renew_pending_membership`, `revoke_pending_membership`,
+  `apply_pending_memberships`) se instalan en la lane de Organizations
+  (`20260927000500_AddPendingMemberships`), con `EXECUTE` sólo para `paqueteria_app`.
+- AI-05: `addPendingMembership` (202 idéntica exista o no la cuenta), `listPendingMemberships`,
+  `renewPendingMembership` y `revokePendingMembership` (409 `IDEMPOTENCY_CONFLICT` o
+  `PENDING_MEMBERSHIP_NOT_PENDING`); `x-capability-matrix.membership_operations` con MFA.
+- AI-03 §17.1, AI-04 (`PendingMembership`), AI-24 `bff_session` (`pending_memberships`) y
+  AI-08 (REG-002).
+
+## Almacén PostgreSQL de sesiones BFF — 2026-09-27
+
+- `BFF-SESSION-STORE-IMPLEMENTATION` (implementa `BFF-SESSION-STORE-POSTGRESQL` y
+  `BFF-SESSION-TABLE-SHAPE`): AI-06 agrega `identity.bff_sessions`, previa al
+  tenant, con FORCE RLS y sin política; guarda el SHA-256 de la clave opaca, el
+  `sub`, el `sid` de AuthCenter y el ticket cifrado con Data Protection, que la
+  revocación borra.
+- AI-18 agrega `paqueteria_session_executor NOLOGIN BYPASSRLS` con grants por
+  columna (sin `DELETE`), revoca todo privilegio de `paqueteria_app` y
+  `paqueteria_worker` sobre la tabla y registra las cinco funciones que instala
+  el lane de Identity (`20260927000400_AddBffSessionStore`):
+  `security.create_bff_session`, `security.resolve_bff_session(bytea)` y
+  `security.revoke_bff_session` por clave, por `authcenter_sid` y por `sub`
+  anterior a un momento, con `EXECUTE` solo para `paqueteria_app`. Aserciones de
+  despliegue 20 a 24.
+- La purga `security.purge_bff_sessions(integer)` se suma a
+  `paqueteria_cleanup_executor` mediante el lane de Custody
+  (`20260927000400_AddBffSessionPurge`) y un job del Worker desactivado por
+  defecto. `validate_contracts.py` fija los grants exactos del nuevo rol y que la
+  tabla no tenga grants de runtime ni política.
+- AI-03 §17.1 y §25.2, AI-24 `bff_session` y AI-08 (OPS-003) describen el
+  almacén.
+- `BFF-LOGOUT-JTI-PERSISTENCE` (respuesta literal del project owner: "Sí, a
+  PostgreSQL (Recomendado)"): AI-06 agrega `identity.bff_logout_jtis` (SHA-256
+  del `jti`, retención `exp` + 5 min con tope de un día), previa al tenant, con
+  FORCE RLS, sin política ni grants de runtime; AI-18 agrega
+  `security.register_bff_logout_jti(bytea,timestamptz)` de
+  `paqueteria_session_executor` (`INSERT ... ON CONFLICT DO NOTHING`, verdadero
+  solo en el primer registro de cualquier réplica, `EXECUTE` solo para
+  `paqueteria_app`). La API registra el `jti` y revoca las sesiones en una sola
+  transacción; `security.purge_bff_sessions(integer)` también purga los `jti`
+  vencidos. `validate_contracts.py` fija el grant exacto y la ausencia de grants
+  de runtime sobre la nueva tabla.
+## Membresía por defecto liberada al crear (REG-001) — 2026-09-27
+
+- Respuesta literal del project owner: "Liberarla al crear (Recomendado)"
+  (`REG-DEFAULT-MEMBERSHIP-RELEASE`). `create_self_service_organization` pone
+  `is_default=false` en las membresías por defecto del usuario cuya organización ya no está
+  ACTIVE (por ejemplo, un ALLY rechazado) y después hace por defecto la nueva membresía si no
+  queda ninguna por defecto en una organización ACTIVE. Nunca toca una por defecto en una
+  organización ACTIVE.
+- AI-18: `GRANT UPDATE (is_default) ON organizations.organization_memberships TO
+  paqueteria_registration_executor`; `validate_contracts.py` lo agrega a los grants exactos y a
+  la lista de grants `UPDATE` por columna.
+
+## Registro abierto y onboarding de organizaciones (REG-001) — 2026-09-27
+
+- Respuestas literales del project owner: "El login y el registro de cuentas no será por
+  invitación, cualquiera puede registrarse en Paquetenvia" (`AUTH-OPEN-REGISTRATION`, que
+  reemplaza a `AUTH-FIRST-LOGIN-INVITATION`), "Crea su propia organización", "BUSINESS, activa;
+  ALLY con aprobación (Recomendado)", "Sí, obligatorio (Recomendado)" (correo verificado),
+  "Sólo activar la org (Recomendado)", "Lista + aprobar/rechazar (Recomendado)", "Queda
+  cerrada; puede volver a solicitar (Recomendado)", "Endpoint propio de solicitudes
+  (Recomendado)" y "solo una organización por persona". Unirse a una organización existente
+  ("El admin la agrega por correo (Recomendado)") queda para un PR aparte.
+- AI-06: `organizations.status` admite `PENDING_APPROVAL`; nueva columna
+  `organizations.self_service_creator_user_id` e índice único parcial
+  `organizations_one_open_self_service_uq` (una organización no CLOSED creada por persona).
+- AI-18: rol `paqueteria_registration_executor NOLOGIN BYPASSRLS` con grants exactos por
+  columna (verificados por `validate_contracts.py`) y aserciones de despliegue 17–19. Sus cinco
+  funciones SECURITY DEFINER (`register_identity_subject`, `create_self_service_organization`,
+  `list_own_organization_applications`, `list_pending_ally_organizations`,
+  `decide_ally_organization`) se instalan en la lane de Organizations
+  (`20260927000400_AddSelfServiceRegistration`), con `EXECUTE` sólo para `paqueteria_app`.
+- AI-05: `createOnboardingOrganization` (POST /onboarding/organizations, 201; 409
+  `IDEMPOTENCY_CONFLICT` u `ORGANIZATION_LIMIT_REACHED`), `listMyOrganizationApplications`,
+  `listPendingAllyOrganizations` y `decideAllyOrganization` (409 `ALLY_DECISION_CONFLICT`);
+  `x-capability-matrix.platform_operations`; el callback redirige a
+  `/login?error=email_not_verified` sin `email_verified == true`.
+- AI-03 §17.1/§24, AI-04 (estados de Organization), AI-07 (`/login`, `/onboarding`), AI-24
+  `bff_session` (`first_access`, `email_verified`, `onboarding`) y AI-08 (REG-001).
+- Límite anti-abuso decidido; sin preguntas abiertas.
+
+## Tope de 72 h para la edad máxima de `openIncident` — 2026-09-27
+
+- Respuesta literal del project owner: "Tope en 72 h (Recomendado)"
+  (`OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27`). `Incidents:MaximumOccurrenceAgeHours`
+  sólo se configura hacia abajo (1–72 h, por defecto 72); un valor mayor impide el
+  arranque. El tope coincide con el piso de 72 h de la purga de llaves de
+  idempotencia, así que un replay cuya llave pudo purgarse siempre se rechaza.
+- AI-05 `x-offline-operation-age`: `openIncident.maximum_age_range` pasa a
+  `PT1H..PT72H`, se agrega la decisión y una regla; la descripción de
+  `openIncident` indica el tope. AI-08 (OPS-003) registra la decisión.
+
+## `openIncident` unificado con `OFFLINE_OPERATION_EXPIRED`, límites configurables — 2026-09-27
+
+- Respuesta literal del project owner: "Unificar pero configurable"
+  (`OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27`), que implementa
+  `OPS-003-INCIDENT-72H-UNIFICATION`.
+- AI-05: `openIncident` describe la regla; `IncidentConflictProblem` agrega
+  `OFFLINE_OPERATION_EXPIRED` (sólo `openIncident` lo emite);
+  `x-offline-operation-age` agrega las dos decisiones y la entrada
+  `openIncident` con `maximum_age_configurable: true`, sus ajustes
+  (`Incidents:MaximumOccurrenceAgeHours`, `Incidents:MaximumOccurrenceSkewMinutes`),
+  valores por defecto (PT72H, PT5M) y rangos (PT1H..PT720H, luego PT1H..PT72H por el tope; PT0S..PT60M); el reloj
+  adelantado y la marca ausente siguen siendo 409 `INVALID_REQUEST`. Las otras
+  tres operaciones conservan su política fija.
+- AI-08 (OPS-003) registra la decisión y la regla de `openIncident`.
+
 ## Matriz de capacidades D5 implementada — 2026-09-27
 
 - AI-05 `x-capability-matrix` queda `IMPLEMENTED` (PR 108): cada operación de la

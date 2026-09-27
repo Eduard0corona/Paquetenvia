@@ -84,18 +84,15 @@ internal sealed partial class AuthCenterBackchannelLogout(
             return Reject("invalid_claims");
         }
 
-        if (!await store.TryRegisterLogoutTokenAsync(claims.TokenId, claims.Expires + ReplayRetention, cancellationToken))
+        if (!await store.TryEndAsync(
+                claims.TokenId,
+                claims.Expires + ReplayRetention,
+                claims.SessionId,
+                claims.SessionId is null ? claims.Subject : null,
+                now,
+                cancellationToken))
         {
             return Reject("replayed");
-        }
-
-        if (claims.SessionId is not null)
-        {
-            await store.EndSessionAsync(claims.SessionId, cancellationToken);
-        }
-        else
-        {
-            await store.EndSubjectSessionsAsync(claims.Subject!, now, cancellationToken);
         }
 
         LogAccepted(logger, claims.SessionId is not null ? "sid" : "sub");

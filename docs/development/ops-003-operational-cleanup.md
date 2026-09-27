@@ -35,9 +35,13 @@ Ambas devuelven sólo un conteo `integer`: ningún identificador de tenant, llav
 sesión cruza la frontera. AI-06 no cambia (como en ADR-034, la función la instala
 el lane del módulo); AI-18 recoge el rol, los grants y las aserciones 13–16.
 
-Punto de extensión: la purga de sesiones BFF (`BFF-SESSION-STORE-POSTGRESQL`) se
-añadirá al mismo rol con su propia migración cuando exista
-`identity.bff_sessions`; esta migración no cambia una vez aplicada.
+Purga de sesiones BFF (`BFF-SESSION-TABLE-SHAPE`): la migración de Custody
+`20260927000400_AddBffSessionPurge`, posterior a esta y al lane de Identity que crea
+`identity.bff_sessions`, agrega al mismo rol `security.purge_bff_sessions(integer)`
+(lote 1–1000; borra solo filas revocadas o con `expires_at <= now`), `USAGE` sobre
+`identity`, `SELECT (session_key_hash, expires_at, revoked_at)` y `DELETE` sobre la
+tabla. Esta migración no cambió; su verificación exacta sigue describiendo el estado
+previo a la purga BFF. Ver `auth-001-authcenter-bff.md` §4.
 
 ## Jobs del Worker
 
@@ -58,6 +62,10 @@ OperationalCleanup:ProofUploadSessions:Enabled           false
 OperationalCleanup:ProofUploadSessions:PollIntervalSeconds 60 (1–3600)
 OperationalCleanup:ProofUploadSessions:BatchSize         500  (1–1000)
 OperationalCleanup:ProofUploadSessions:MaxBatchesPerCycle 10  (1–100)
+OperationalCleanup:BffSessions:Enabled                   false
+OperationalCleanup:BffSessions:PollIntervalSeconds       300  (1–3600)
+OperationalCleanup:BffSessions:BatchSize                 500  (1–1000)
+OperationalCleanup:BffSessions:MaxBatchesPerCycle        10   (1–100)
 ```
 
 Habilitar cualquiera exige `ConnectionStrings:PaqueteriaWorker`. Un dry-run es una
@@ -105,10 +113,41 @@ El aviso dice, en español, que la acción venció tras 72 horas sin conexión y
 que debe registrarse de nuevo o reportarse a despacho.
 
 La PWA no abre incidentes. La unificación de `openIncident` con
-`OFFLINE_OPERATION_EXPIRED` (OPS-003-INCIDENT-72H-UNIFICATION; el owner eligió
-"Unificar pero configurable": mismo 409 antes del servicio, 72 h configurables
-y tolerancia de reloj de incidentes de hasta 60 min) llega en un PR de backend
-separado.
+`OFFLINE_OPERATION_EXPIRED` está implementada en el backend (ver la sección
+siguiente).
+
+## `openIncident`: misma regla, límites configurables
+
+OPS-003-INCIDENT-72H-UNIFICATION queda implementada por
+OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27 (respuesta literal del
+owner: "Unificar pero configurable"). `openIncident` juzga `occurred_at` con la
+misma comparación que las otras tres operaciones
+(`OfflineOperationAgePolicy.WithConfiguredLimits`, a través de
+`IncidentOccurrenceAgePolicy`), en el endpoint, antes del servicio de
+incidentes y de su replay idempotente, pero con sus propios límites:
+
+| Ajuste | Por defecto | Rango |
+| --- | --- | --- |
+| `Incidents:MaximumOccurrenceAgeHours` | 72 | 1–72 (sólo hacia abajo) |
+| `Incidents:MaximumOccurrenceSkewMinutes` | 5 | 0–60 |
+
+| `occurred_at` | Resultado |
+| --- | --- |
+| hasta la edad máxima configurada exacta | continúa al servicio |
+| un tick más antiguo | 409 `OFFLINE_OPERATION_EXPIRED`, sin reserva, incidente, evidencia ni auditoría |
+| más adelante que ahora + tolerancia configurada | 409 `INVALID_REQUEST`, como antes |
+| ausente (es obligatorio) o el instante por defecto | 409 `INVALID_REQUEST`, como antes |
+
+Como en las demás operaciones, un replay vencido se rechaza aunque su
+`Idempotency-Key` siga guardada. `transitionOrder`, `createProofUploadSession` y
+`finalizeProof` conservan su política fija (72 h, tolerancia 0–300 s).
+
+La edad máxima tiene tope en 72 h (OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27,
+respuesta literal del owner: "Tope en 72 h (Recomendado)"): sólo puede
+reducirse, y un valor mayor impide el arranque (`ValidateOnStart`). Como el job
+de limpieza nunca purga una llave de idempotencia con menos de 72 h, un replay
+de incidente cuya llave pudo purgarse siempre se rechaza con
+`OFFLINE_OPERATION_EXPIRED` y nunca abre un segundo incidente.
 
 ## Rollback
 

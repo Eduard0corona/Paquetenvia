@@ -178,6 +178,7 @@ public static class DependencyInjection
         services.AddSingleton<OperationalCleanupTelemetry>();
         services.AddSingleton<IdempotencyKeyPurgeJob>();
         services.AddSingleton<ProofUploadSessionExpiryJob>();
+        services.AddSingleton<BffSessionPurgeJob>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IJobScheduler, PeriodicJobScheduler>();
         services.AddHostedService<OperationalCleanupHostedService>();

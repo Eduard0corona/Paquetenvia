@@ -66,13 +66,111 @@ CLEANUP_EXECUTOR_GRANTS = [
 ]
 
 
+REGISTRATION_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA identity,organizations,platform TO paqueteria_registration_executor;",
+    "GRANT SELECT (id,identity_subject,status) ON identity.users TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,identity_subject,status,created_at) ON identity.users TO paqueteria_registration_executor;",
+    "GRANT SELECT (id,organization_type,legal_name,display_name,status,self_service_creator_user_id,created_at) ON organizations.organizations TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,organization_type,legal_name,display_name,status,self_service_creator_user_id,created_at) ON organizations.organizations TO paqueteria_registration_executor;",
+    "GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;",
+    "GRANT SELECT (user_id,organization_id,role,status,is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+    "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;",
+    "GRANT SELECT (id,organization_id,email_hmac,email_hmac_key_version,role,status,created_at,expires_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,organization_id,email_hmac,email_hmac_key_version,role,status,invited_by,created_at,expires_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
+    "GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
+]
+
+SESSION_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA identity TO paqueteria_session_executor;",
+    "GRANT SELECT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
+    "GRANT INSERT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at) ON identity.bff_sessions TO paqueteria_session_executor;",
+    "GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
+    "GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paqueteria_session_executor;",
+]
+
+BFF_TABLES = ["identity.bff_sessions", "identity.bff_logout_jtis"]
+
+BFF_SESSION_FUNCTIONS = [
+    "security.create_bff_session(bytea,text,text,bytea,timestamptz)",
+    "security.resolve_bff_session(bytea)",
+    "security.revoke_bff_session(bytea)",
+    "security.revoke_bff_session(text)",
+    "security.revoke_bff_session(text,timestamptz)",
+    "security.register_bff_logout_jti(bytea,timestamptz)",
+]
+
+
 def executor_grant_errors(role_sql: str) -> list[str]:
-    """ADR-034 and OPS-003-CLEANUP-ROLE exact grant sets for the two dedicated executors."""
-    return role_grant_errors(
-        role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
-    ) + role_grant_errors(
-        role_sql, "paqueteria_cleanup_executor", CLEANUP_EXECUTOR_GRANTS, "Cleanup executor (OPS-003-CLEANUP-ROLE)"
+    """ADR-034, OPS-003-CLEANUP-ROLE, REG-001 and BFF-SESSION-TABLE-SHAPE exact grant sets for the dedicated executors."""
+    return (
+        role_grant_errors(
+            role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
+        )
+        + role_grant_errors(
+            role_sql, "paqueteria_cleanup_executor", CLEANUP_EXECUTOR_GRANTS, "Cleanup executor (OPS-003-CLEANUP-ROLE)"
+        )
+        + role_grant_errors(
+            role_sql,
+            "paqueteria_registration_executor",
+            REGISTRATION_EXECUTOR_GRANTS,
+            "Registration executor (REG-001)",
+        )
+        + role_grant_errors(
+            role_sql,
+            "paqueteria_session_executor",
+            SESSION_EXECUTOR_GRANTS,
+            "Session executor (BFF-SESSION-TABLE-SHAPE)",
+        )
     )
+
+
+def bff_session_errors(schema_sql: str, role_sql: str) -> list[str]:
+    """BFF-SESSION-TABLE-SHAPE and BFF-LOGOUT-JTI-PERSISTENCE: pre-tenant tables, no runtime grant,
+    function-only access, no policy."""
+    errors = []
+    executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
+    executable_schema = SQL_LINE_COMMENT.sub("", schema_sql)
+    for fragment in [
+        "CREATE TABLE identity.bff_sessions (",
+        "ALTER TABLE identity.bff_sessions ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE identity.bff_sessions FORCE ROW LEVEL SECURITY;",
+        "CONSTRAINT bff_sessions_key_hash_ck CHECK (octet_length(session_key_hash)=32)",
+        "CONSTRAINT bff_sessions_revocation_ck CHECK ((revoked_at IS NULL) = (ticket_ciphertext IS NOT NULL))",
+        "CREATE TABLE identity.bff_logout_jtis (",
+        "ALTER TABLE identity.bff_logout_jtis ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE identity.bff_logout_jtis FORCE ROW LEVEL SECURITY;",
+        "CONSTRAINT bff_logout_jtis_hash_ck CHECK (octet_length(jti_hash)=32)",
+    ]:
+        if fragment not in executable_schema:
+            errors.append(f"Missing BFF session table contract in AI-06: {fragment}")
+    for table in BFF_TABLES:
+        if re.search(r"CREATE\s+POLICY[^;]*ON\s+" + re.escape(table) + r"\b", executable_schema, re.S):
+            errors.append(f"{table} must stay pre-tenant: no RLS policy")
+    for fragment in [
+        "CREATE ROLE paqueteria_session_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_session_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE ALL ON identity.bff_sessions FROM paqueteria_app,paqueteria_worker;",
+        "REVOKE ALL ON identity.bff_logout_jtis FROM paqueteria_app,paqueteria_worker;",
+        "BFF-SESSION-TABLE-SHAPE",
+        "BFF-LOGOUT-JTI-PERSISTENCE",
+        "security.purge_bff_sessions(integer)",
+    ] + BFF_SESSION_FUNCTIONS:
+        if fragment not in role_sql:
+            errors.append(f"Missing BFF session contract in AI-18: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_session_executor\s+TO", executable_roles):
+        errors.append("Session executor membership granted contrary to BFF-SESSION-TABLE-SHAPE")
+    # Only the session executor may hold a baseline grant on the table; the cleanup purge grants live in
+    # the Custody lane, because the OPS-003 lane asserts its own exact pre-BFF grant set.
+    for statement in GRANT_STATEMENT.findall(executable_roles):
+        normalized = " ".join(statement.split())
+        for table in BFF_TABLES:
+            if table in normalized and not normalized.endswith("TO paqueteria_session_executor;"):
+                errors.append(f"{table} granted beyond paqueteria_session_executor: {normalized}")
+        if ("_bff_session" in normalized or "_bff_logout_jti" in normalized) and "ON FUNCTION" in normalized:
+            errors.append(f"BFF session functions are installed by their lane, not granted by AI-18: {normalized}")
+    return errors
 
 
 def load_yaml(relative: str) -> Any:
@@ -437,9 +535,11 @@ def main() -> int:
     for fragment in required_roles:
         if fragment not in role_sql:
             errors.append(f"Missing role-model contract: {fragment}")
-    # ADR-034 and OPS-003-CLEANUP-ROLE: the only column-level UPDATE grants are the lifecycle
-    # executor's finalized_at grant and the cleanup executor's upload-session status grant; any other
-    # spelling or grantee is the legacy direct runtime UPDATE grant returning.
+    # ADR-034, OPS-003-CLEANUP-ROLE, REG-001 and BFF-SESSION-TABLE-SHAPE: the only column-level UPDATE
+    # grants are the lifecycle executor's finalized_at grant, the cleanup executor's upload-session status
+    # grant, the registration executor's organization status and membership is_default grants and the
+    # session executor's revocation grant; any other spelling or grantee is the legacy direct runtime
+    # UPDATE grant returning.
     column_update_grants = [
         " ".join(statement.split())
         for statement in re.findall(r"GRANT[^;]*\bUPDATE\s*\([^;]*;", role_sql)
@@ -447,8 +547,14 @@ def main() -> int:
     if column_update_grants != [
         "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
         "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
+        "GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;",
+        "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+        "GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
+        "GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
     ]:
-        errors.append(f"Column UPDATE grants differ from the ADR-034 and OPS-003 grants: {column_update_grants}")
+        errors.append(
+            f"Column UPDATE grants differ from the ADR-034, OPS-003, REG-001 and BFF session grants: {column_update_grants}"
+        )
     # Exact grant sets for both dedicated executors, including any multi-grantee GRANT that names them.
     errors.extend(executor_grant_errors(role_sql))
     for fragment in [
@@ -472,6 +578,41 @@ def main() -> int:
     if re.search(r"GRANT\s+paqueteria_cleanup_executor\s+TO", role_sql):
         errors.append("Cleanup executor membership granted contrary to OPS-003-CLEANUP-ROLE")
     checks.append("Cleanup executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
+    # REG-001 (AUTH-OPEN-REGISTRATION): the registration executor owns the only pre-tenant and
+    # cross-tenant registration writes; it is never granted to a runtime role.
+    for fragment in [
+        "CREATE ROLE paqueteria_registration_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_registration_executor FROM paqueteria_app, paqueteria_worker;",
+        "AUTH-OPEN-REGISTRATION",
+        "security.register_identity_subject(text,uuid)",
+        "security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text)",
+        "security.list_own_organization_applications(uuid)",
+        "security.list_pending_ally_organizations(uuid,uuid,integer)",
+        "security.decide_ally_organization(uuid,uuid,uuid,boolean,text)",
+        "security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text)",
+        "security.renew_pending_membership(uuid,uuid,uuid,text,text)",
+        "security.revoke_pending_membership(uuid,uuid,uuid,text,text)",
+        "security.apply_pending_memberships(text,bytea[],integer[])",
+        "REVOKE INSERT,UPDATE,DELETE ON organizations.pending_memberships FROM paqueteria_app;",
+        "REVOKE ALL ON organizations.pending_memberships FROM paqueteria_worker;",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing registration executor contract: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_registration_executor\s+TO", role_sql):
+        errors.append("Registration executor membership granted contrary to REG-001")
+    for fragment in [
+        "CHECK (status IN ('ACTIVE','PENDING_APPROVAL','SUSPENDED','CLOSED'))",
+        "ADD COLUMN self_service_creator_user_id uuid REFERENCES identity.users(id);",
+        "WHERE self_service_creator_user_id IS NOT NULL AND status <> 'CLOSED';",
+        "CREATE TABLE organizations.pending_memberships (",
+        "CONSTRAINT pending_memberships_email_hmac_ck CHECK (octet_length(email_hmac)=32)",
+        "CREATE POLICY pending_memberships_tenant ON organizations.pending_memberships",
+    ]:
+        if fragment not in sql:
+            errors.append(f"Missing REG-001 schema contract: {fragment}")
+    checks.append("Registration executor: dedicated NOLOGIN role, exact column grants, one open self-service organization per creator")
+    errors.extend(bff_session_errors(sql, role_sql))
+    checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.
     for fragment in [

@@ -121,8 +121,9 @@ public static class MockIdentityProfiles
                 Membership(ViewerOrganizationId, OrganizationRole.BusinessOperator, true)),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
+    // Synthetic identities stand for AuthCenter accounts whose email is already verified.
     private static ExternalIdentity External(string subject, bool mfaSatisfied) =>
-        new(subject, mfaSatisfied);
+        new(subject, mfaSatisfied, EmailVerified: true);
 
     private static ResolvedIdentityContext Context(
         string userId,

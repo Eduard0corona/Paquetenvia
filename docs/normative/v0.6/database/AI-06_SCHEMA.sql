@@ -35,7 +35,9 @@ CREATE TABLE organizations.organizations (
   legal_name text NOT NULL,
   display_name text NOT NULL,
   organization_type text NOT NULL CHECK (organization_type IN ('PLATFORM','ALLY','BUSINESS')),
-  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED','CLOSED')),
+  -- REG-ALLY-APPROVAL-PATH: a self-registered ALLY is PENDING_APPROVAL until a PLATFORM_ADMIN
+  -- approves (ACTIVE) or rejects (CLOSED) it.
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','PENDING_APPROVAL','SUSPENDED','CLOSED')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -46,6 +48,14 @@ CREATE TABLE identity.users (
   status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED','DISABLED')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- REG-ONE-ORGANIZATION-PER-PERSON: the creator of an organization made through self-service
+-- onboarding (NULL for any other organization); at most one such organization not CLOSED per creator.
+ALTER TABLE organizations.organizations
+  ADD COLUMN self_service_creator_user_id uuid REFERENCES identity.users(id);
+CREATE UNIQUE INDEX organizations_one_open_self_service_uq
+  ON organizations.organizations(self_service_creator_user_id)
+  WHERE self_service_creator_user_id IS NOT NULL AND status <> 'CLOSED';
 
 CREATE TABLE organizations.organization_memberships (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -65,6 +75,94 @@ CREATE UNIQUE INDEX organization_memberships_one_default_uq
   WHERE status='ACTIVE' AND is_default;
 CREATE INDEX organization_memberships_user_idx ON organizations.organization_memberships(user_id,status);
 CREATE INDEX organization_memberships_org_idx ON organizations.organization_memberships(organization_id,status);
+
+-- REG-002 (REG-JOIN-EXISTING-BY-EMAIL): an organization administrator adds a person by email and role.
+-- The email is never stored: only a keyed HMAC of the normalized address (trim, NFC, invariant
+-- lowercase) and the key version. At every sign-in with a verified email, each PENDING, unexpired entry
+-- whose HMAC matches becomes a membership exactly once (security.apply_pending_memberships). Entries
+-- expire 7 days after creation or renewal; expired rows stay inert. Writes go only through the REG-002
+-- SECURITY DEFINER functions; paqueteria_app may only read its own organization's rows under RLS.
+CREATE TABLE organizations.pending_memberships (
+  id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  email_hmac bytea NOT NULL,
+  email_hmac_key_version integer NOT NULL,
+  role text NOT NULL,
+  status text NOT NULL,
+  invited_by uuid NOT NULL,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  accepted_user_id uuid,
+  accepted_at timestamptz,
+  revoked_at timestamptz,
+  CONSTRAINT pending_memberships_pkey PRIMARY KEY (id),
+  CONSTRAINT pending_memberships_organization_fk FOREIGN KEY (organization_id) REFERENCES organizations.organizations(id),
+  CONSTRAINT pending_memberships_invited_by_fk FOREIGN KEY (invited_by) REFERENCES identity.users(id),
+  CONSTRAINT pending_memberships_accepted_user_fk FOREIGN KEY (accepted_user_id) REFERENCES identity.users(id),
+  CONSTRAINT pending_memberships_email_hmac_ck CHECK (octet_length(email_hmac)=32),
+  CONSTRAINT pending_memberships_key_version_ck CHECK (email_hmac_key_version BETWEEN 1 AND 32767),
+  CONSTRAINT pending_memberships_role_ck CHECK (role IN ('PLATFORM_ADMIN','DISPATCHER','FINANCE','ALLY_ADMIN','ALLY_OPERATOR','BUSINESS_ADMIN','BUSINESS_OPERATOR','DRIVER','VIEWER')),
+  CONSTRAINT pending_memberships_status_ck CHECK (status IN ('PENDING','ACCEPTED','REVOKED')),
+  CONSTRAINT pending_memberships_lifetime_ck CHECK (expires_at > created_at),
+  CONSTRAINT pending_memberships_accepted_ck CHECK ((status='ACCEPTED') = (accepted_user_id IS NOT NULL AND accepted_at IS NOT NULL)),
+  CONSTRAINT pending_memberships_revoked_ck CHECK ((status='REVOKED') = (revoked_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX pending_memberships_one_pending_uq
+  ON organizations.pending_memberships(organization_id, email_hmac_key_version, email_hmac, role)
+  WHERE status='PENDING';
+CREATE INDEX pending_memberships_lookup_idx
+  ON organizations.pending_memberships(email_hmac_key_version, email_hmac)
+  WHERE status='PENDING';
+CREATE INDEX pending_memberships_org_idx
+  ON organizations.pending_memberships(organization_id, created_at);
+
+-- BFF-SESSION-TABLE-SHAPE: server-side AuthCenter BFF sessions. Pre-tenant: no tenant policy and no
+-- tenant column. Only the SHA-256 of the opaque session key is stored, never the key or the cookie;
+-- the ticket (AuthCenter tokens included) is an ASP.NET Data Protection ciphertext that revocation
+-- erases. authcenter_sid and identity_subject serve back-channel logout (AUTH-001-BACKCHANNEL-LOGOUT).
+-- Runtime roles hold no grant: access is only through the security.*_bff_session functions owned by
+-- paqueteria_session_executor (AI-18). FORCE RLS without any policy denies every other role.
+CREATE TABLE identity.bff_sessions (
+  session_key_hash bytea NOT NULL,
+  identity_subject text NOT NULL,
+  authcenter_sid text,
+  ticket_ciphertext bytea,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  CONSTRAINT bff_sessions_pkey PRIMARY KEY (session_key_hash),
+  CONSTRAINT bff_sessions_key_hash_ck CHECK (octet_length(session_key_hash)=32),
+  CONSTRAINT bff_sessions_subject_ck CHECK (char_length(identity_subject) BETWEEN 1 AND 256),
+  CONSTRAINT bff_sessions_sid_ck CHECK (authcenter_sid IS NULL OR char_length(authcenter_sid) BETWEEN 1 AND 256),
+  CONSTRAINT bff_sessions_ticket_ck CHECK (ticket_ciphertext IS NULL OR octet_length(ticket_ciphertext) BETWEEN 1 AND 65536),
+  CONSTRAINT bff_sessions_lifetime_ck CHECK (expires_at > created_at),
+  CONSTRAINT bff_sessions_revocation_ck CHECK ((revoked_at IS NULL) = (ticket_ciphertext IS NOT NULL))
+);
+CREATE INDEX bff_sessions_sid_idx ON identity.bff_sessions(authcenter_sid)
+  WHERE authcenter_sid IS NOT NULL AND revoked_at IS NULL;
+CREATE INDEX bff_sessions_subject_idx ON identity.bff_sessions(identity_subject,created_at)
+  WHERE revoked_at IS NULL;
+CREATE INDEX bff_sessions_expiry_idx ON identity.bff_sessions(expires_at);
+CREATE INDEX bff_sessions_revoked_idx ON identity.bff_sessions(revoked_at)
+  WHERE revoked_at IS NOT NULL;
+ALTER TABLE identity.bff_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity.bff_sessions FORCE ROW LEVEL SECURITY;
+
+-- BFF-LOGOUT-JTI-PERSISTENCE: back-channel logout tokens already accepted, shared by every API replica
+-- so a replayed logout_token is refused anywhere (AUTH-001-BACKCHANNEL-LOGOUT). Pre-tenant like the
+-- session table: only the SHA-256 of the jti and its retention (token exp + 5 minutes). Written only
+-- through security.register_bff_logout_jti (AI-18); FORCE RLS without any policy denies every other role.
+CREATE TABLE identity.bff_logout_jtis (
+  jti_hash bytea NOT NULL,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  CONSTRAINT bff_logout_jtis_pkey PRIMARY KEY (jti_hash),
+  CONSTRAINT bff_logout_jtis_hash_ck CHECK (octet_length(jti_hash)=32),
+  CONSTRAINT bff_logout_jtis_retention_ck CHECK (expires_at > created_at)
+);
+CREATE INDEX bff_logout_jtis_expiry_idx ON identity.bff_logout_jtis(expires_at);
+ALTER TABLE identity.bff_logout_jtis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity.bff_logout_jtis FORCE ROW LEVEL SECURITY;
 
 -- Geographic model -------------------------------------------------------------
 CREATE TABLE locations.cities (
@@ -641,6 +739,19 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
      AND p_org = ANY(COALESCE(NULLIF(current_setting('app.current_org_ids', true),'')::uuid[], ARRAY[]::uuid[]));
 $$;
 
+-- REG-001 registration functions (AUTH-OPEN-REGISTRATION) are installed by the Organizations
+-- module lane after this baseline, owned by paqueteria_registration_executor (AI-18) and executable
+-- only by paqueteria_app: security.register_identity_subject(text,uuid),
+-- security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text),
+-- security.list_own_organization_applications(uuid),
+-- security.list_pending_ally_organizations(uuid,uuid,integer) and
+-- security.decide_ally_organization(uuid,uuid,uuid,boolean,text).
+-- REG-002 functions, installed by the same lane with the same owner and EXECUTE grant:
+-- security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text),
+-- security.renew_pending_membership(uuid,uuid,uuid,text,text),
+-- security.revoke_pending_membership(uuid,uuid,uuid,text,text) and
+-- security.apply_pending_memberships(text,bytea[],integer[]).
+
 -- Bootstrap functions. Ownership changes to paqueteria_bootstrap in AI-18.
 CREATE OR REPLACE FUNCTION security.resolve_identity_context(p_identity_subject text)
 RETURNS jsonb
@@ -1015,7 +1126,7 @@ DO $$
 DECLARE item text;
 BEGIN
   FOREACH item IN ARRAY ARRAY[
-    'organizations.organizations','identity.users','organizations.organization_memberships',
+    'organizations.organizations','identity.users','organizations.organization_memberships','organizations.pending_memberships',
     'clients.client_accounts','allies.ally_relationships','locations.service_areas','locations.operating_zones','locations.locations',
     'pricing.tariff_rules','pricing.quotes','orders.orders','orders.package_items','orders.order_events','orders.public_tracking_tokens','orders.order_acceptances',
     'drivers.driver_profiles','drivers.driver_service_areas','drivers.driver_documents','drivers.driver_positions',
@@ -1039,6 +1150,8 @@ CREATE POLICY users_tenant ON identity.users
 CREATE POLICY memberships_tenant ON organizations.organization_memberships
   USING (security.app_allowed_org(organization_id) OR user_id=security.app_current_user())
   WITH CHECK (security.app_allowed_org(organization_id));
+CREATE POLICY pending_memberships_tenant ON organizations.pending_memberships
+  USING (security.app_allowed_org(organization_id)) WITH CHECK (security.app_allowed_org(organization_id));
 CREATE POLICY client_accounts_tenant ON clients.client_accounts USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 CREATE POLICY ally_relationships_tenant ON allies.ally_relationships USING (security.app_allowed_org(platform_org_id) OR security.app_allowed_org(ally_org_id)) WITH CHECK (security.app_allowed_org(platform_org_id) OR security.app_allowed_org(ally_org_id));
 CREATE POLICY service_areas_tenant ON locations.service_areas USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));

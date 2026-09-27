@@ -80,6 +80,25 @@ public static class TenantCapabilities
     public static readonly TenantCapability RecordCodCollection =
         Create("recordCodCollection", Dispatcher, PlatformAdminMfa, Driver);
 
+    // x-capability-matrix platform_operations (REG-ALLY-APPROVAL-PATH): a PLATFORM_ADMIN with a satisfied MFA
+    // challenge; the SQL function additionally requires the selected organization to be an ACTIVE PLATFORM one.
+    public static readonly TenantCapability ListPendingAllyOrganizations =
+        Create("listPendingAllyOrganizations", PlatformAdminMfa);
+    public static readonly TenantCapability DecideAllyOrganization =
+        Create("decideAllyOrganization", PlatformAdminMfa);
+
+    // x-capability-matrix membership_operations (REG-JOIN-ADDERS-MFA): PLATFORM_ADMIN, ALLY_ADMIN and
+    // BUSINESS_ADMIN members of the selected organization, each with a satisfied MFA challenge. The role ceiling
+    // (REG-ROLE-CEILING, REG-PLATFORM-ADMIN-ADDS) is enforced by the SQL functions as well.
+    public static readonly TenantCapability AddPendingMembership =
+        Create("addPendingMembership", PlatformAdminMfa, AllyAdminMfa, BusinessAdminMfa);
+    public static readonly TenantCapability ListPendingMemberships =
+        Create("listPendingMemberships", PlatformAdminMfa, AllyAdminMfa, BusinessAdminMfa);
+    public static readonly TenantCapability RenewPendingMembership =
+        Create("renewPendingMembership", PlatformAdminMfa, AllyAdminMfa, BusinessAdminMfa);
+    public static readonly TenantCapability RevokePendingMembership =
+        Create("revokePendingMembership", PlatformAdminMfa, AllyAdminMfa, BusinessAdminMfa);
+
     /// <summary>
     /// D5-VIEWER-LOCATION-PRECISION-2026-09-27: only an actor holding DISPATCHER or PLATFORM_ADMIN in the selected
     /// organization receives exact coordinates; any other admitted actor (VIEWER) receives them rounded.
@@ -106,6 +125,10 @@ public static class TenantCapabilities
     private static TenantCapabilityGrant PlatformAdminMfa => new(OrganizationRole.PlatformAdmin, true);
 
     private static TenantCapabilityGrant Viewer => new(OrganizationRole.Viewer, false);
+
+    private static TenantCapabilityGrant AllyAdminMfa => new(OrganizationRole.AllyAdmin, true);
+
+    private static TenantCapabilityGrant BusinessAdminMfa => new(OrganizationRole.BusinessAdmin, true);
 
     private static TenantCapabilityGrant Driver => new(OrganizationRole.Driver, false);
 

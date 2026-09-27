@@ -58,7 +58,9 @@ public sealed partial class PostgreSqlIncidentService(
 
         if (!IncidentRequestPolicy.IsValidCommandShape(command) ||
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
-            !policy.IsValidOccurrence(command.OccurredAt, now) ||
+            // The endpoint already refused an expired report with OFFLINE_OPERATION_EXPIRED before
+            // calling here; this second evaluation of the same rule fails closed for any other caller.
+            !new IncidentOccurrenceAgePolicy(policy).IsAccepted(command.OccurredAt, now) ||
             !policy.IsAllowedEvidenceCount(command.EvidenceProofIds.Count))
         {
             throw new IncidentConflictException("INVALID_REQUEST");

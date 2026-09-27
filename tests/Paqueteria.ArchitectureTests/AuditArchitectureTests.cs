@@ -24,11 +24,70 @@ public sealed class AuditArchitectureTests
             .Where(file => file.Source.Contains("INSERT INTO platform.audit_logs", StringComparison.Ordinal))
             .ToArray();
 
-        var source = Assert.Single(sources);
+        // REG-001 and REG-002 are the only SQL-level exceptions: onboarding, the ALLY decision and pending
+        // memberships write their audit rows for an organization the caller's tenant context cannot see yet
+        // (pre-tenant, the sign-in that accepts an entry) or at all (cross-tenant), so the rows are inserted
+        // inside the SECURITY DEFINER functions of the Organizations lane, in the same transaction as the
+        // change they record. Nothing else may insert audit rows outside the general writer.
+        var registrationLane = TestRepository.GetPath(
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000400_AddSelfServiceRegistration.cs");
+        var pendingMembershipLane = TestRepository.GetPath(
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000500_AddPendingMemberships.cs");
         Assert.Equal(
-            TestRepository.GetPath("src/BuildingBlocks/Paqueteria.Infrastructure/Auditing/PostgreSqlAppendOnlyAuditWriter.cs"),
-            source.Path,
-            ignoreCase: true);
+            new[]
+            {
+                TestRepository.GetPath("src/BuildingBlocks/Paqueteria.Infrastructure/Auditing/PostgreSqlAppendOnlyAuditWriter.cs"),
+                registrationLane,
+                pendingMembershipLane,
+            }.Order(StringComparer.OrdinalIgnoreCase),
+            sources.Select(source => source.Path).Order(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+
+        var lane = sources.Single(source => string.Equals(source.Path, registrationLane, StringComparison.OrdinalIgnoreCase)).Source;
+        var auditing = lane.Split("CREATE OR REPLACE FUNCTION ", StringSplitOptions.None).Skip(1)
+            .Where(body => body.Contains("INSERT INTO platform.audit_logs", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(
+            ["security.create_self_service_organization", "security.decide_ally_organization"],
+            auditing.Select(body => body[..body.IndexOf('(', StringComparison.Ordinal)]).Order(StringComparer.Ordinal));
+        Assert.All(auditing, body =>
+        {
+            var definition = body[..body.IndexOf("$function$;", StringComparison.Ordinal)];
+            Assert.Contains("SECURITY DEFINER", definition, StringComparison.Ordinal);
+            Assert.DoesNotContain("RETURNING", definition, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(1, definition.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+        });
+
+        // Exactly those two in the whole file: an insert in a DO block, in the rollback or anywhere outside
+        // the two functions fails here.
+        Assert.Equal(2, lane.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+
+        // REG-002: add writes ADDED or RENEWED (one insert on each path), renew, revoke and the sign-in
+        // acceptance one each; five in the whole file, none outside those functions.
+        var pending = sources.Single(source =>
+            string.Equals(source.Path, pendingMembershipLane, StringComparison.OrdinalIgnoreCase)).Source;
+        var pendingAuditing = pending.Split("CREATE OR REPLACE FUNCTION ", StringSplitOptions.None).Skip(1)
+            .Where(body => body.Contains("INSERT INTO platform.audit_logs", StringComparison.Ordinal))
+            .ToDictionary(body => body[..body.IndexOf('(', StringComparison.Ordinal)], StringComparer.Ordinal);
+        Assert.Equal(
+            [
+                "security.add_pending_membership",
+                "security.apply_pending_memberships",
+                "security.renew_pending_membership",
+                "security.revoke_pending_membership",
+            ],
+            pendingAuditing.Keys.Order(StringComparer.Ordinal));
+        foreach (var (name, body) in pendingAuditing)
+        {
+            var definition = body[..body.IndexOf("$function$;", StringComparison.Ordinal)];
+            Assert.Contains("SECURITY DEFINER", definition, StringComparison.Ordinal);
+            Assert.DoesNotContain("RETURNING", definition, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(
+                name == "security.add_pending_membership" ? 2 : 1,
+                definition.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+        }
+
+        Assert.Equal(5, pending.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
     }
 
     [Fact]

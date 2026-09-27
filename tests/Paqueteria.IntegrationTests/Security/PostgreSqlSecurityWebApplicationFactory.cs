@@ -74,8 +74,10 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         _adminConnectionString = adminConnectionString;
         var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, adminConnectionString);
+        await ApplyIdentityMigrationAsync(adminConnectionString);
         await ApplyNotificationsMigrationAsync(adminConnectionString);
         await ApplyIncidentsMigrationAsync(adminConnectionString);
+        await ApplyOrganizationsMigrationAsync(adminConnectionString);
 
         await using var admin = NpgsqlDataSource.Create(adminConnectionString);
         await using (var command = admin.CreateCommand($$"""
@@ -129,6 +131,10 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         }
     }
 
+    /// <summary>REG-002 test-only email lookup key, derived at runtime so no key-like literal is committed.</summary>
+    public static string TestEmailLookupKey { get; } = Convert.ToBase64String(
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("paquetenvia reg002 http tests")));
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
@@ -147,6 +153,9 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
                 ["OperationsDashboard:Provider"] = "PostgreSql",
                 ["OperationsDashboard:CommandTimeoutSeconds"] = "5",
                 ["ConnectionStrings:Paqueteria"] = _applicationConnectionString,
+                // REG-002: a test-only email lookup key (Base64 of 32 derived bytes), never a real one.
+                ["EmailLookup:CurrentKeyVersion"] = "1",
+                ["EmailLookup:Keys:1"] = TestEmailLookupKey,
             }));
         if (_trackingTokenHasher is not null)
         {
@@ -1230,6 +1239,59 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
             })
             .Options;
         await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync();
+    }
+
+    /// <summary>
+    /// BFF-SESSION-TABLE-SHAPE lives in the Identity lane: with the AuthCenter provider the BFF keeps its
+    /// tickets in identity.bff_sessions (AuthCenter:SessionStore=PostgreSql by default) through its
+    /// SECURITY DEFINER functions, exactly as the migration coordinator installs them.
+    /// </summary>
+    private static async Task ApplyIdentityMigrationAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
+        {
+            await role.ExecuteNonQueryAsync();
+        }
+
+        var options = new DbContextOptionsBuilder<Identity.Infrastructure.Persistence.IdentityDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(
+                    typeof(Identity.Infrastructure.Persistence.IdentityDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_identity", "platform");
+            })
+            .Options;
+        await using var context = new Identity.Infrastructure.Persistence.IdentityDbContext(
+            options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync();
+    }
+
+    /// <summary>
+    /// REG-001 (AUTH-OPEN-REGISTRATION) lives in the Organizations lane: first sign-in registration,
+    /// self-service onboarding and the ALLY decision run through its SECURITY DEFINER functions.
+    /// </summary>
+    private static async Task ApplyOrganizationsMigrationAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
+        {
+            await role.ExecuteNonQueryAsync();
+        }
+
+        var options = new DbContextOptionsBuilder<Organizations.Infrastructure.Persistence.OrganizationsDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(
+                    typeof(Organizations.Infrastructure.Persistence.OrganizationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_organizations", "platform");
+            })
+            .Options;
+        await using var context = new Organizations.Infrastructure.Persistence.OrganizationsDbContext(
+            options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync();
     }
 

@@ -39,13 +39,13 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "1b7729b8901aadd362bf35cd144349ae25471c933967af901b62591ab795091c"
+          test "$actual" = "35f1c6e839b2efbe441bfc6e5acd7a3a291534822a1de7067dddd5f7530f88bc"
 
       - name: Verify AI-18 remains unchanged
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
-          test "$actual" = "b6e599116a0800173f461b23ba49dfaa3515b3210b8e9b07dadbf7024f928a20"
+          test "$actual" = "b3b4d51607e0ce95d38da2a9ea252466efba5804fdb5dc38937fd45292bab5bf"
 
       # AZR-001 v0.8 §28 static CI guards and §29 secret scan. Foundation keeps exactly 13 jobs;
       # these guards run as steps of the normative job and never contact Azure.

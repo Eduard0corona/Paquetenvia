@@ -1,7 +1,7 @@
 namespace Custody.Application.Cleanup;
 
 /// <summary>
-/// OPS-003 port to the two OPS-003-CLEANUP-ROLE functions. Each call is one bounded, atomic,
+/// OPS-003 port to the OPS-003-CLEANUP-ROLE functions. Each call is one bounded, atomic,
 /// cross-tenant batch executed by <c>paqueteria_cleanup_executor</c>; only a count comes back.
 /// </summary>
 public interface IOperationalCleanupGateway
@@ -19,12 +19,19 @@ public interface IOperationalCleanupGateway
 
     /// <summary><c>security.expire_proof_upload_sessions</c>: marks at most <paramref name="batchSize"/> sessions EXPIRED.</summary>
     Task<int> ExpireProofUploadSessionsAsync(int batchSize, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <c>security.purge_bff_sessions</c> (BFF-SESSION-TABLE-SHAPE): deletes at most
+    /// <paramref name="batchSize"/> revoked or expired BFF sessions; a live session is never touched.
+    /// </summary>
+    Task<int> PurgeBffSessionsAsync(int batchSize, CancellationToken cancellationToken);
 }
 
 public static class OperationalCleanupLimits
 {
     public const int MaximumIdempotencyBatchSize = 5_000;
     public const int MaximumSessionBatchSize = 1_000;
+    public const int MaximumBffSessionBatchSize = 1_000;
     public const int MaximumBatchesPerCycle = 100;
 }
 

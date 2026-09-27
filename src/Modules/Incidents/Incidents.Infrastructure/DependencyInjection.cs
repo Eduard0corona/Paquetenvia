@@ -43,7 +43,7 @@ public static class DependencyInjection
             .Validate(options => options.OperationalPolicy.IsValid,
                 "Incidents operational parameters are outside the bounded MVP-1 surface: the SLA " +
                 "windows must be positive, ordered from CRITICAL to LOW, the retrospective window " +
-                "and skew must be bounded, and the evidence ceiling must stay between 1 and the " +
+                "must be 1 to 72 hours, the skew 0 to 60 minutes, and the evidence ceiling must stay between 1 and the " +
                 "maximum AI-05 publishes.")
             .ValidateOnStart();
 
@@ -85,6 +85,11 @@ public static class DependencyInjection
                 _ => serviceProvider.GetRequiredService<DisabledIncidentPiiProtector>(),
             });
         services.AddScoped<IIncidentService, PostgreSqlIncidentService>();
+        // openIncident's configurable occurrence age (OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-
+        // 2026-09-27), built from the options validated above so the endpoint and the service judge
+        // occurred_at with the same limits.
+        services.AddSingleton(serviceProvider => new IncidentOccurrenceAgePolicy(
+            serviceProvider.GetRequiredService<IOptions<IncidentsOptions>>().Value.OperationalPolicy));
         return services;
     }
 

@@ -17,6 +17,8 @@ using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
 using Organizations.Application.Provisioning;
 using Organizations.Infrastructure.Provisioning;
+using Organizations.Application.Registration;
+using Organizations.Infrastructure.Registration;
 
 namespace Organizations.Infrastructure;
 
@@ -79,6 +81,28 @@ public static class DependencyInjection
         services.TryAddScoped<IInitialOrganizationProvisioningAuthorizer, DenyInitialOrganizationProvisioningAuthorizer>();
         services.TryAddScoped<IProvisioningFailureInjector, NoOpProvisioningFailureInjector>();
         services.AddScoped<IInitialOrganizationProvisioner, PostgreSqlInitialOrganizationProvisioner>();
+
+        // REG-001 (AUTH-OPEN-REGISTRATION): self-service onboarding, own applications and ALLY approval.
+        services.TryAddSingleton<ISelfServiceOrganizationAuthorizer, VerifiedEmailSelfServiceOrganizationAuthorizer>();
+        services.AddSingleton<DisabledSelfServiceRegistrationService>();
+        services.AddScoped<PostgreSqlSelfServiceRegistrationService>();
+        services.AddScoped<ISelfServiceRegistrationService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<TenancyOptions>>().Value.Provider switch
+            {
+                TenancyProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlSelfServiceRegistrationService>(),
+                _ => serviceProvider.GetRequiredService<DisabledSelfServiceRegistrationService>(),
+            });
+
+        // REG-002 (REG-JOIN-EXISTING-BY-EMAIL): administrators add people by email; IEmailLookupHasher
+        // comes from AddEmailLookupHashing in the host.
+        services.AddSingleton<DisabledPendingMembershipService>();
+        services.AddScoped<PostgreSqlPendingMembershipService>();
+        services.AddScoped<IPendingMembershipService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<TenancyOptions>>().Value.Provider switch
+            {
+                TenancyProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlPendingMembershipService>(),
+                _ => serviceProvider.GetRequiredService<DisabledPendingMembershipService>(),
+            });
         return services;
     }
 }

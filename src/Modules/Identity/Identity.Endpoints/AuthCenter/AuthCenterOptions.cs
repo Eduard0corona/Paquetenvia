@@ -3,6 +3,17 @@ using Microsoft.Extensions.Hosting;
 namespace Identity.Endpoints.AuthCenter;
 
 /// <summary>
+/// Where BFF sessions live (BFF-SESSION-STORE-POSTGRESQL). <see cref="PostgreSql"/> is the default and the
+/// only multi-instance store; <see cref="Memory"/> keeps the single-instance in-memory store and serves as
+/// the documented rollback switch.
+/// </summary>
+public enum AuthCenterSessionStoreKind
+{
+    PostgreSql,
+    Memory,
+}
+
+/// <summary>
 /// AuthCenter BFF settings. <see cref="ClientSecret"/> must come from the environment secret store
 /// (Key Vault reference / user-secrets); it is never committed to appsettings files.
 /// </summary>
@@ -22,6 +33,9 @@ public sealed class AuthCenterOptions
     public string? PublicOrigin { get; set; }
 
     public int SessionLifetimeMinutes { get; set; } = 480;
+
+    /// <summary><c>PostgreSql</c> (default) needs <c>ConnectionStrings:Paqueteria</c>; <c>Memory</c> is single-instance.</summary>
+    public AuthCenterSessionStoreKind SessionStore { get; set; } = AuthCenterSessionStoreKind.PostgreSql;
 
     internal Uri AuthorityUri => new(Authority!.TrimEnd('/'), UriKind.Absolute);
 
@@ -63,6 +77,11 @@ public sealed class AuthCenterOptions
         if (SessionLifetimeMinutes is < 1 or > 1440)
         {
             yield return "AuthCenter:SessionLifetimeMinutes must be between 1 and 1440.";
+        }
+
+        if (!Enum.IsDefined(SessionStore))
+        {
+            yield return "AuthCenter:SessionStore must be PostgreSql or Memory.";
         }
     }
 

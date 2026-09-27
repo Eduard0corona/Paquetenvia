@@ -113,6 +113,15 @@ prueba confirme o, si confirmó primero, la finalización responde
 `409 ORDER_STATE_NOT_ALLOWED` o `403` según lo que cambió; una orden `CANCELLED`
 no recibe evidencia de custodia. Sesión, replay y descarga no toman el lock.
 
+La misma sentencia posterior al lock lee el `occurred_at` del último
+`ORDER_STATUS_CHANGED` de la orden. Si el reloj de la aplicación quedaría antes
+(el reloj de otra réplica, o una transición que ORD-002 ya movió después de una
+incidencia), `custody.proofs.created_at` se registra un microsegundo después de
+ese cambio. ORD-002 aplica la regla espejo contra las pruebas de la orden, así
+que la comparación `created_at >= inicio del intento` (ORD-002-ATTEMPT-BOUNDARY)
+sigue el orden de commit, igual que la corrección M1 de #91 para incidencias.
+Prueba: `Finalization_records_the_proof_after_a_status_change_it_waited_for`.
+
 ### POD-001-DEF-001: autorización antes del replay
 
 Una URL firmada, su object key, expiración y headers requeridos son estado

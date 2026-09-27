@@ -19,6 +19,7 @@ using Organizations.Endpoints.Testing;
 using Paqueteria.Api.Http;
 using Paqueteria.Api.Tenancy;
 using Paqueteria.Infrastructure.DataProtection;
+using Paqueteria.Infrastructure.Security;
 using Locations.Endpoints;
 using Locations.Infrastructure;
 using Pricing.Endpoints;
@@ -43,6 +44,7 @@ builder.Logging.AddJsonConsole();
 
 builder.AddHttpHardening();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
+builder.Services.AddEmailLookupHashing(builder.Configuration, builder.Environment);
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddIdentityInfrastructure(builder.Configuration, builder.Environment);

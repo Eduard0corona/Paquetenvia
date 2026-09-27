@@ -1,6 +1,10 @@
 namespace Identity.Application.Authentication;
 
-public sealed record ExternalIdentity(string Subject, bool MfaSatisfied);
+/// <summary>
+/// The validated external identity. <paramref name="EmailVerified"/> is true only when the identity
+/// provider asserted a verified email (AUTH-EMAIL-VERIFIED-REQUIRED); it never grants authorization.
+/// </summary>
+public sealed record ExternalIdentity(string Subject, bool MfaSatisfied, bool EmailVerified = false);
 
 public sealed class IdentityAuthenticationResult
 {

@@ -17,9 +17,10 @@ roles privilegiados, CORS cerrado, secretos en secret manager, sin tokens en log
    un back-sync `MAIN_BACKSYNC` certificado las trae a `development`.
 3. La autorización de negocio sigue en Paquetenvia (`organizations.organization_memberships` + RLS).
    AuthCenter solo autentica, y el `sub` validado alimenta `identity.users.identity_subject`.
-4. Las sesiones BFF irán a una tabla PostgreSQL (cambio normativo pendiente, fuera de este PR).
-   Mientras tanto el ticket queda en memoria detrás de `ITicketStore`/`IDistributedCache` (§4).
-5. Primer ingreso por invitación previa; se implementa en un PR aparte (§8).
+4. Las sesiones BFF viven en la tabla PostgreSQL `identity.bff_sessions`
+   (`BFF-SESSION-TABLE-SHAPE`, implementada en `feature/bff-session-table`, §4).
+5. ~~Primer ingreso por invitación previa~~: reemplazado el 27-sep-2026 por registro abierto
+   (`AUTH-OPEN-REGISTRATION`, REG-001, §8).
 
 `AuthCenter.Client` no está publicado en NuGet. Por eso se replica su contrato BFF con el handler
 estándar de Microsoft (`Microsoft.AspNetCore.Authentication.OpenIdConnect` 10.0.10, la misma versión
@@ -102,8 +103,25 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
   con Data Protection.
 - El ticket (identidad mínima con `sub` y `sid`, secreto CSRF, momento de inicio en milisegundos,
   refresh token e ID token) se protege con el key ring de la plataforma
-  (`DataProtection:Provider=PostgreSql` en ScaleReady) y se guarda en `IDistributedCache`. El ID
-  token solo se usa como `id_token_hint` al cerrar sesión (§14.1); el access token no se guarda.
+  (`DataProtection:Provider=PostgreSql` para varias réplicas) y se guarda en
+  `identity.bff_sessions`. El ID token solo se usa como `id_token_hint` al cerrar sesión (§14.1);
+  el access token no se guarda.
+- Tabla (`AuthCenter:SessionStore=PostgreSql`, valor por defecto; exige
+  `ConnectionStrings:Paqueteria`): clave primaria = SHA-256 de los bytes UTF-8 de la clave opaca
+  (nunca la clave ni la cookie), `identity_subject`, `authcenter_sid`, `ticket_ciphertext`,
+  `created_at` (reloj de la BD), `expires_at` (el del ticket, máximo 24 h) y `revoked_at`. Es
+  previa al tenant: FORCE RLS sin política, sin columnas de organización. `paqueteria_app` no
+  tiene grants sobre ella; la API asume `paqueteria_app` y llama las funciones
+  `security.create_bff_session`, `security.resolve_bff_session(bytea)` y
+  `security.revoke_bff_session` (por clave, por `sid` y por `sub` anterior a un momento), dueñas
+  de `paqueteria_session_executor NOLOGIN BYPASSRLS`. Revocar borra el ticket de inmediato; una
+  clave desconocida, revocada o vencida resuelve `NULL` y la petición es anónima (401). Un fallo
+  técnico de PostgreSQL responde 503, como la resolución de identidad.
+- Migraciones: lane de Identity `20260927000400_AddBffSessionStore` (tabla si falta, rol, grants,
+  funciones; adopta la tabla de AI-06 solo si es exactamente canónica) y lane de Custody
+  `20260927000400_AddBffSessionPurge` (purga por `paqueteria_cleanup_executor`). Ambas fallan
+  cerrado en `Down`. El job del Worker `OperationalCleanup:BffSessions` (desactivado por defecto)
+  borra en lotes las filas revocadas o vencidas.
 - Cada inicio de sesión exitoso reemplaza la sesión previa del navegador: se borra el ticket
   anterior y se emite una clave nueva (§14.3).
 - La vida es fija (`AuthCenter:SessionLifetimeMinutes`, 480 por defecto, máximo 1440), sin
@@ -111,12 +129,11 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
 - Las cookies de correlación y nonce del handler OIDC también usan el prefijo `__Host-`, `Secure`,
   `HttpOnly` y `SameSite=Lax`, porque AuthCenter devuelve el código por query en un GET de nivel
   superior.
-- **Limitación single-instance.** La caché por defecto es `MemoryDistributedCache`. Con más de
-  una réplica, una petición que llega a otra instancia no encuentra el ticket y responde 401
-  (falla cerrado, y el usuario vuelve a iniciar sesión). **Decisión del owner:** las sesiones irán
-  a una tabla PostgreSQL, lo que exige un cambio normativo (AI-06/AI-18) que no forma parte de este
-  PR. El almacenamiento ya está detrás de interfaces (`ITicketStore` → `AuthCenterTicketStore` →
-  `IDistributedCache`), así que el cambio sustituye la implementación sin tocar endpoints ni web.
+- Las sesiones sobreviven reinicios y sirven en cualquier réplica que comparta la BD y el key
+  ring. `AuthCenter:SessionStore=Memory` conserva el almacén anterior (`AuthCenterTicketStore` →
+  `IDistributedCache`, una sola réplica) como interruptor de rollback; endpoints y web no cambian.
+- `RenewAsync` nunca ocurre (vida fija, `ShouldRenew=false` y clave nueva en cada inicio de
+  sesión); si ocurriera, el almacén PostgreSQL revoca la clave y registra EventId 4105.
 
 ## 5. CSRF y mismo origen
 
@@ -188,20 +205,47 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
   del navegador (cola offline del repartidor) entre personas que comparten dispositivo.
 - El portal `/dev` y el modo Mock no cambian.
 
-## 8. Primer ingreso (TEN-003)
+## 8. Primer ingreso: registro abierto (REG-001)
 
-La opción segura por defecto es la que queda implementada:
+Decisiones del owner del 27-sep-2026 (`AUTH-OPEN-REGISTRATION`, que reemplaza a
+`AUTH-FIRST-LOGIN-INVITATION`, y las filas `REG-*` de `decision-log.md`):
 
-- el login **nunca** crea usuarios, organizaciones ni membresías;
-- un `sub` sin `identity.users` queda autenticado sin autorización (`authorized=false`, 403);
-- el aprovisionador inicial de TEN-003 sigue sin invocarse, y su autorizador por defecto
-  (`DenyInitialOrganizationProvisioningAuthorizer`) sigue negando todo.
-
-Vinculación posible hoy: un administrador preaprovisiona `identity.users.identity_subject = <sub>`
-con el `sub` que muestra AuthCenter (UUID del usuario) y sus membresías. El esquema AI-06 exige
-`identity_subject NOT NULL UNIQUE` y no tiene tabla de invitaciones, así que la vinculación por
-invitación o por correo verificado requiere un cambio normativo. **Decisión del owner:** el primer
-ingreso será por invitación previa y se implementa en un PR aparte.
+- **Cualquiera puede registrarse.** En el callback, `TicketReceived` exige exactamente un claim
+  `email_verified` igual a `true` en el ID token validado (`AUTH-EMAIL-VERIFIED-REQUIRED`). Sin él
+  redirige a `/login?error=email_not_verified`, sin sesión y sin crear ni vincular nada (log
+  EventId 4106, sin `sub` ni correo). La evidencia viaja en el ticket del servidor.
+- Con correo verificado, `IIdentityRegistration` llama a
+  `security.register_identity_subject(text,uuid)` como `paqueteria_app`. Crea el usuario **una
+  sola vez** (`UNIQUE(identity_subject)` decide entre inicios de sesión concurrentes), sin
+  membresías y con `email_ciphertext` en NULL como hasta ahora. Un `sub` existente nunca se
+  revincula ni se modifica, aunque esté suspendido.
+- El usuario nuevo queda autorizado sin contextos: `/me/organization-contexts` responde `[]` y la
+  web ofrece `/onboarding` (crear un negocio o registrar un aliado).
+- `POST /api/v1/onboarding/organizations` crea BUSINESS (ACTIVE, creador BUSINESS_ADMIN) o ALLY
+  (PENDING_APPROVAL, creador ALLY_ADMIN sin acceso hasta la aprobación). Una sola organización no
+  CLOSED creada por persona (`REG-ONE-ORGANIZATION-PER-PERSON`, índice único parcial); un rechazo
+  la cierra y libera el cupo. El id se deriva del usuario y del `Idempotency-Key`.
+- Un PLATFORM_ADMIN con MFA, desde una organización PLATFORM, lista y decide las solicitudes ALLY
+  (`/api/v1/platform/ally-applications`). Aprobar sólo activa la organización; rechazar la cierra.
+  Se escribe un registro de auditoría en cada organización.
+- Todas las escrituras previas al tenant o entre tenants pasan por cinco funciones SECURITY DEFINER
+  del rol `paqueteria_registration_executor` (AI-18). El rol bootstrap sigue sin escribir y el
+  aprovisionador de TEN-003 sigue negado por defecto.
+- Unirse a una organización existente (REG-002, "El admin la agrega por correo"): un PLATFORM_ADMIN,
+  ALLY_ADMIN o BUSINESS_ADMIN con MFA agrega a una persona por correo y rol
+  (`/api/v1/organizations/{organizationId}/pending-memberships`, con `X-Organization-Id` igual a la
+  organización de la ruta). Se guarda sólo el HMAC con llave del correo normalizado (trim, NFC,
+  minúsculas invariantes) y la versión de la llave en `organizations.pending_memberships`; la
+  respuesta es la misma 202 exista o no la cuenta. Techo de roles: ALLY_ADMIN agrega ALLY_ADMIN,
+  ALLY_OPERATOR, DRIVER o VIEWER; BUSINESS_ADMIN agrega BUSINESS_ADMIN, BUSINESS_OPERATOR o VIEWER;
+  PLATFORM_ADMIN cualquier rol, y PLATFORM_ADMIN sólo en una organización PLATFORM. Las entradas
+  vencen a los 7 días, se renuevan (`/renew`, sin notificar) y se revocan (`/revoke`).
+- En cada callback con correo verificado, después de `register_identity_subject`, la API llama a
+  `security.apply_pending_memberships(text,bytea[],integer[])` con el HMAC del claim `email` bajo
+  cada versión de llave configurada: cada entrada PENDING vigente de una organización ACTIVE se
+  vuelve membresía del usuario ACTIVE una sola vez (bloqueo de fila; inicios concurrentes no la
+  duplican), en todas las organizaciones que coincidan. Un DRIVER agregado así no opera hasta tener
+  perfil de conductor.
 
 ## 9. Configuración
 
@@ -213,13 +257,20 @@ ingreso será por invitación previa y se implementa en un PR aparte.
 | `AuthCenter__Issuer` | App Settings | valor exacto de `Jwt:Issuer` de AuthCenter (se compara ordinalmente) |
 | `AuthCenter__ClientId` | App Settings | `paquetenvia-web-<ambiente>` |
 | `AuthCenter__ClientSecret` | **Key Vault reference** | `@Microsoft.KeyVault(SecretUri=https://<kv>.vault.azure.net/secrets/authcenter-paquetenvia-client-secret)` |
+| `EmailLookup__CurrentKeyVersion` | App Settings | `1` (versión con la que se guardan las entradas nuevas) |
+| `EmailLookup__Keys__1` | **Key Vault reference** | `@Microsoft.KeyVault(SecretUri=https://<kv>.vault.azure.net/secrets/paquetenvia-email-lookup-key-1)`; Base64 de 32 a 128 bytes aleatorios (`openssl rand -base64 32`) |
 | `AuthCenter__PublicOrigin` | App Settings | `https://<host-web>` (sin path) |
 | `AuthCenter__SessionLifetimeMinutes` | App Settings (opcional) | `480` |
 | `NEXT_PUBLIC_AUTH_MODE` (web, build) | pipeline | `bff` |
 | `PAQUETENVIA_API_PROXY_ORIGIN` (web, solo local) | entorno de desarrollo | `http://localhost:8080`; vacío en Azure (enruta el ingress) |
 
 El secreto **nunca** va en `appsettings*.json`, en GitHub, en variables de pipeline, en logs ni en
-tickets. En local se usa `dotnet user-secrets`. La API no arranca (`ValidateOnStart`) si falta alguno
+tickets. En local se usa `dotnet user-secrets`. Lo mismo vale para `EmailLookup__Keys__<versión>`
+(REG-002): fuera de `Development`/`Testing` la API no arranca sin llave cuando `Tenancy` o
+`IdentityBootstrap` usan PostgreSql, y una llave mal formada impide el arranque en cualquier
+ambiente; en `Development`/`Testing` sin llave, agregar responde 503 y el login no aplica entradas.
+Para rotar, se agrega la versión nueva, se cambia `CurrentKeyVersion` y la anterior se retira
+después de 7 días (las entradas viejas siguen buscándose con todas las versiones configuradas). La API no arranca (`ValidateOnStart`) si falta alguno
 de estos valores, si `Authority` no es HTTPS, si el secreto tiene menos de 32 caracteres o si
 `PublicOrigin` tiene path. En `Development`/`Testing` también se acepta `http://localhost` como
 `PublicOrigin`.
@@ -257,11 +308,14 @@ de estos valores, si `Authority` no es HTTPS, si el secreto tiene menos de 32 ca
    - Post-logout redirect URI exacta: `https://<host-web>/login`.
    - Back-channel logout URI: `https://<host-web>/auth/backchannel-logout` (HTTPS).
    - En la aplicación: métodos de login (contraseña, magic link, Google, Microsoft); `RequireMfa`
-     **desactivado** (step-up); modo de registro `InviteOnly`, alineado con
-     `AUTH-FIRST-LOGIN-INVITATION`; solicitudes de acceso opcionales.
-   - Acceso de cada usuario a Paquetenvia: invitación, asignación directa, regla de grupo, SCIM o
-     solicitud aprobada. Sin acceso activo, el login hospedado indica que no hay acceso y no
-     regresa; con sesión SSO existente, el callback recibe `error=access_denied`.
+     **desactivado** (step-up); modo de registro **abierto**
+     (cualquiera puede registrarse, `AUTH-OPEN-REGISTRATION`; ya no `InviteOnly`); solicitudes de
+     acceso opcionales. El correo debe quedar verificado en AuthCenter: sin `email_verified=true`
+     Paquetenvia rechaza el ingreso (`AUTH-EMAIL-VERIFIED-REQUIRED`).
+   - Acceso a la aplicación Paquetenvia en AuthCenter: abierto a cualquier cuenta que se registre
+     (REG-001). Paquetenvia decide después la autorización con sus propias membresías. Si
+     AuthCenter niega el acceso, el login hospedado lo indica y no regresa; con sesión SSO
+     existente, el callback recibe `error=access_denied`.
 
 ### 10.1 Valores por ambiente (decisión del owner, 27-sep-2026)
 
@@ -277,18 +331,29 @@ cada uno con su propio cliente confidencial y su propio secreto; no hay ambiente
 | Back-channel logout URI | `https://dev.paquetenvia.com/auth/backchannel-logout` | `https://paquetenvia.com/auth/backchannel-logout` |
 | `AuthCenter__Authority` | `https://authcenter.info` | `https://authcenter.info` |
 | `LoginUrl` (en AuthCenter) | `https://authcenter.info/login` | `https://authcenter.info/login` |
-| `AuthCenter__Issuer` | valor `issuer` de `https://authcenter.info/.well-known/openid-configuration` | igual |
+| `AuthCenter__Issuer` | `https://authcenter.info` | `https://authcenter.info` |
 
 - Las URIs se registran **exactas**, sin `/` final: AuthCenter las compara de forma ordinal.
-- `AuthCenter__Issuer`: la configuración por defecto del repositorio de AuthCenter usa
-  `Jwt:Issuer = "AuthCenter"`. Si producción no lo sobrescribe, el `issuer` publicado no es una URL.
-  Copiar el valor tal cual aparece en discovery; no suponerlo.
+- `AuthCenter__Issuer`: el owner lo confirmó el 27-sep-2026 con el discovery de producción
+  (`https://authcenter.info/.well-known/openid-configuration`): `https://authcenter.info`, sin `/`
+  final. Ese discovery también publica lo que requiere este diseño:
+  - endpoints `/oauth/authorize`, `/oauth/token`, `/oauth/revoke` y `/oauth/logout`
+    (`end_session_endpoint`);
+  - `code_challenge_methods_supported: [S256]`;
+  - `client_secret_post` y `client_secret_basic`;
+  - ID token `RS256`;
+  - `authorization_response_iss_parameter_supported: true`;
+  - `backchannel_logout_supported` y `backchannel_logout_session_supported`;
+  - `acr_values_supported` con `urn:authcenter:acr:mfa` y `urn:authcenter:acr:phr`, que coinciden
+    con `AuthCenterDefaults`;
+  - el claim `email_verified`.
 - El ingress de cada ambiente debe aceptar el `POST` sin `Origin` hacia `/auth/backchannel-logout`
   (§14.2). AuthCenter lo llama servidor a servidor.
 
 ## 11. Preguntas abiertas para el owner
 
-1. ~~Primer ingreso~~: resuelto por el owner, por invitación previa en un PR aparte.
+1. ~~Primer ingreso~~: resuelto por el owner, primero por invitación previa y después, el
+   27-sep-2026, por registro abierto (REG-001, §8).
 2. ~~Sesión multi-instancia~~: resuelto por el owner, tabla PostgreSQL tras el cambio normativo.
 3. ~~Hosts web por ambiente y redirect URIs definitivos~~: resuelto por el owner (§10.1):
    `dev.paquetenvia.com` para dev y `paquetenvia.com` para producción, sin staging.
@@ -335,6 +400,14 @@ Logout, back-channel, step-up y `access_denied` (`AuthCenterLogoutAndStepUpTests
 Unitarias (`AuthCenterLogoutAndStepUpUnitTests.cs`): construcción de la URL de end-session,
 validación de `acr`/`amr`, detección de "solo falta MFA" y el almacén de terminaciones.
 
+Almacén PostgreSQL (`BFF-SESSION-TABLE-SHAPE`): `BffSessionStorePostgreSqlContractTests` (grants
+exactos, sin acceso directo de runtime, resolución por hash, revocación por clave, `sid` y `sub`
+anterior a un momento, purga solo de filas muertas, sin RLS tenant, migraciones up/down y
+upgrade de una instalación previa) y `AuthCenterPostgreSqlSessionStoreTests` (el login crea la
+fila, el logout la revoca, un back-channel en una instancia termina la sesión en otra, el mismo
+`logout_token` repetido en otra instancia responde 400 sin revocar sesiones posteriores y la sesión
+sobrevive a un reinicio).
+
 Web (`vitest`): estrategia de credenciales, parser de sesión, `return_url` local, logout
 (`endSessionUrl`, navegación con `window.location.assign`), enlace de step-up, detección de
 `MFA_REQUIRED`, mensajes de `/login`, instalación de sesión y rewrites.
@@ -342,7 +415,9 @@ Web (`vitest`): estrategia de credenciales, parser de sesión, `return_url` loca
 ## 13. Rollback
 
 Poner `Authentication:Provider` en `Disabled` o `Mock` (solo entornos no productivos) y quitar
-`NEXT_PUBLIC_AUTH_MODE`. No hay migraciones. Para retirar el código, revertir el PR. El cliente en
+`NEXT_PUBLIC_AUTH_MODE`. Para volver solo del almacén PostgreSQL, `AuthCenter:SessionStore=Memory`
+(una réplica); las migraciones de sesiones no se revierten (`Down` falla cerrado) y
+`OperationalRollbackSql` revoca el `EXECUTE` de `paqueteria_app`. Para retirar el código, revertir el PR. El cliente en
 AuthCenter y el secreto se conservan durante una ventana de solapamiento; si hubo exposición, se
 revocan las sesiones y se rota el secreto.
 
@@ -386,14 +461,20 @@ código de AuthCenter (discovery, `/oauth/logout`, `GenerateLogoutToken`, `acr_v
   sin `nonce`, `jti` presente y no visto (se recuerda hasta `exp` + 5 min), y `sid` o `sub`. Un
   `kid` desconocido pide refrescar el discovery para el siguiente reintento. El log solo registra
   el tipo de rechazo (EventId 4103/4104), nunca tokens, `sub` ni `sid`.
-- Efecto: `IAuthCenterSessionTerminationStore`. La implementación por defecto
-  (`DistributedCacheAuthCenterSessionTerminationStore`) guarda en `IDistributedCache`, con claves
-  SHA-256, una marca por `sid` durante `SessionLifetimeMinutes`; con solo `sub` guarda el momento
-  (ms) y termina las sesiones iniciadas antes. `ValidatePrincipal` consulta el almacén en cada
-  petición; una sesión terminada se rechaza y se borran ticket y cookie.
-- Tabla PostgreSQL futura (`BFF-SESSION-TABLE-SHAPE`): implementará la misma interfaz con una
-  columna `authcenter_sid` y borrará sus filas en lugar de guardar marcas; endpoints y web no
-  cambian.
+- Efecto: `IAuthCenterSessionTerminationStore`. Con el almacén PostgreSQL
+  (`PostgreSqlAuthCenterSessionTerminationStore`) un `sid` revoca sus filas
+  (`security.revoke_bff_session(text)`) y un token solo con `sub` revoca las filas de ese `sub`
+  creadas hasta el momento de recepción (`security.revoke_bff_session(text,timestamptz)`, acotado
+  al reloj de la BD); todas las réplicas rechazan la sesión en su siguiente petición. Con
+  `SessionStore=Memory`, `DistributedCacheAuthCenterSessionTerminationStore` guarda marcas en
+  `IDistributedCache` como antes.
+- Anti-replay del `jti` (`BFF-LOGOUT-JTI-PERSISTENCE`, "Sí, a PostgreSQL"): con el almacén
+  PostgreSQL, `security.register_bff_logout_jti(bytea,timestamptz)` guarda el SHA-256 del `jti` en
+  `identity.bff_logout_jtis` hasta `exp` + 5 min (tope de un día) con `ON CONFLICT DO NOTHING`, en la
+  misma transacción que la revocación: solo el primer registro de cualquier réplica revoca, un replay
+  responde 400 en todas, y un fallo revierte ambos pasos, así que el reintento de AuthCenter no se
+  confunde con un replay. La purga del Worker borra los `jti` vencidos. Con `SessionStore=Memory` el
+  `jti` sigue en `IDistributedCache` por réplica.
 - Ingress del piloto: `/auth` ya va a la API (`PILOT-SAME-ORIGIN-ROUTING`); debe aceptar un POST
   sin `Origin` hacia `/auth/backchannel-logout`.
 

@@ -7,7 +7,7 @@ namespace Paqueteria.ContractTests;
 
 /// <summary>
 /// D5-CAPABILITY-MATRIX: the server-side capability catalog is exactly the AI-05 <c>x-capability-matrix</c>
-/// (operations and finance_operations), role for role, and every capability names a real AI-05 operation.
+/// (operations, finance_operations, the REG-ALLY-APPROVAL-PATH platform_operations and the REG-JOIN-ADDERS-MFA membership_operations), role for role, and every capability names a real AI-05 operation.
 /// </summary>
 public sealed class CapabilityMatrixContractTests
 {
@@ -122,6 +122,9 @@ public sealed class CapabilityMatrixContractTests
                     OrganizationRole.Dispatcher or OrganizationRole.Driver or OrganizationRole.Viewer => false,
                     OrganizationRole.Finance => financeOperations.Contains(operationId),
                     OrganizationRole.PlatformAdmin => !IsMatrixOperationWithoutMfa(operationId),
+                    // REG-JOIN-ADDERS-MFA: every administrator who adds, lists, renews or revokes needs MFA.
+                    OrganizationRole.AllyAdmin or OrganizationRole.BusinessAdmin =>
+                        OperationIds(Matrix.Mapping("membership_operations")).Contains(operationId),
                     _ => throw new InvalidOperationException($"{operationId} grants unexpected role {grant.Role}."),
                 };
                 Assert.True(
@@ -166,7 +169,7 @@ public sealed class CapabilityMatrixContractTests
     private static Dictionary<string, HashSet<string>> Published()
     {
         var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var section in new[] { "operations", "finance_operations" })
+        foreach (var section in new[] { "operations", "finance_operations", "platform_operations", "membership_operations" })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)
             {

@@ -1,5 +1,6 @@
 using Incidents.Application.Incidents;
 using Incidents.Domain;
+using Paqueteria.Application.Idempotency;
 
 namespace Paqueteria.UnitTests.Incidents;
 
@@ -179,29 +180,112 @@ public sealed class IncidentPolicyTests
         Assert.Equal(allowed, IncidentOrderStatePolicy.IsAllowedOpeningState(orderStatus));
     }
 
+    // Coverage moved from the removed IncidentRequestPolicy occurrence helpers: the configured
+    // rule itself is what the endpoint and the service evaluate.
     [Fact]
     public void An_attempt_reported_in_the_future_or_long_past_is_rejected()
     {
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now, Now));
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(-30), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(1), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(default, Now));
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+        Assert.True(policy.IsAccepted(Now, Now));
+        Assert.True(policy.IsAccepted(Now.AddMinutes(-30), Now));
+        Assert.False(policy.IsAccepted(Now.AddHours(1), Now));
+        Assert.False(policy.IsAccepted(default, Now));
     }
 
     [Fact]
     public void The_retrospective_window_is_the_approved_seventy_two_hours()
     {
-        Assert.Equal(TimeSpan.FromHours(72), IncidentRequestPolicy.MaximumOccurrenceAge);
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-71), Now));
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-72), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddHours(-73), Now));
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+        Assert.Equal(TimeSpan.FromHours(72), policy.MaximumAge);
+        Assert.True(policy.IsAccepted(Now.AddHours(-71), Now));
+        Assert.True(policy.IsAccepted(Now.AddHours(-72), Now));
+        Assert.False(policy.IsAccepted(Now.AddHours(-73), Now));
+        Assert.Equal(OfflineOperationAge.Expired, policy.Evaluate(Now.AddHours(-73), Now));
     }
 
     [Fact]
     public void A_small_clock_skew_between_device_and_server_is_tolerated()
     {
-        Assert.True(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(1), Now));
-        Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(6), Now));
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+        Assert.Equal(TimeSpan.FromMinutes(5), policy.ClockTolerance);
+        Assert.True(policy.IsAccepted(Now.AddMinutes(1), Now));
+        Assert.False(policy.IsAccepted(Now.AddMinutes(6), Now));
+        Assert.Equal(OfflineOperationAge.AheadOfServerClock, policy.Evaluate(Now.AddMinutes(6), Now));
+    }
+
+    // ------------------------ OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27
+
+    [Fact]
+    public void The_default_occurrence_rule_is_the_shared_offline_rule_at_72_hours_and_5_minutes()
+    {
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+
+        Assert.Equal(TimeSpan.FromHours(72), policy.MaximumAge);
+        Assert.Equal(TimeSpan.FromMinutes(5), policy.ClockTolerance);
+        var oldest = Now - policy.MaximumAge;
+        Assert.Equal(OfflineOperationAge.Accepted, policy.Evaluate(oldest, Now));
+        Assert.Equal(OfflineOperationAge.Expired, policy.Evaluate(oldest.AddTicks(-1), Now));
+        var latest = Now + policy.ClockTolerance;
+        Assert.Equal(OfflineOperationAge.Accepted, policy.Evaluate(latest, Now));
+        Assert.Equal(OfflineOperationAge.AheadOfServerClock, policy.Evaluate(latest.AddTicks(1), Now));
+    }
+
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(24, 1)]
+    [InlineData(48, 60)]
+    [InlineData(72, 5)]
+    public void A_configured_occurrence_age_and_skew_move_both_boundaries(int ageHours, int skewMinutes)
+    {
+        var policy = new IncidentOccurrenceAgePolicy(IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceAge = TimeSpan.FromHours(ageHours),
+            MaximumOccurrenceSkew = TimeSpan.FromMinutes(skewMinutes),
+        });
+
+        var oldest = Now.AddHours(-ageHours);
+        Assert.True(policy.IsAccepted(oldest, Now));
+        Assert.Equal(OfflineOperationAge.Expired, policy.Evaluate(oldest.AddTicks(-1), Now));
+        var latest = Now.AddMinutes(skewMinutes);
+        Assert.True(policy.IsAccepted(latest, Now));
+        Assert.Equal(OfflineOperationAge.AheadOfServerClock, policy.Evaluate(latest.AddTicks(1), Now));
+    }
+
+    [Fact]
+    public void The_default_instant_is_never_an_accepted_occurrence()
+    {
+        Assert.False(IncidentOccurrenceAgePolicy.Mvp1.IsAccepted(default, Now));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidOperationalPolicies))]
+    public void An_invalid_operational_policy_never_yields_an_occurrence_rule(IncidentOperationalPolicy policy)
+    {
+        Assert.Throws<ArgumentException>(() => new IncidentOccurrenceAgePolicy(policy));
+    }
+
+    [Fact]
+    public void The_published_occurrence_bounds_cap_the_age_at_72_hours_and_the_skew_at_one_hour()
+    {
+        // OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27: the age may only be tightened below the 72-hour
+        // idempotency-key floor, never widened past it.
+        Assert.Equal(TimeSpan.FromHours(72), IncidentOperationalPolicy.LongestConfigurableOccurrenceAge);
+        Assert.Equal(TimeSpan.FromHours(1), IncidentOperationalPolicy.LongestConfigurableSkew);
+        Assert.True((IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableOccurrenceAge,
+            MaximumOccurrenceSkew = IncidentOperationalPolicy.LongestConfigurableSkew,
+        }).IsValid);
+        Assert.True((IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(1) }).IsValid);
+        Assert.False((IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableOccurrenceAge + TimeSpan.FromTicks(1),
+        }).IsValid);
+        Assert.False((IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(73) }).IsValid);
+        Assert.False((IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceSkew = IncidentOperationalPolicy.LongestConfigurableSkew + TimeSpan.FromTicks(1),
+        }).IsValid);
     }
 
     [Fact]
@@ -326,7 +410,7 @@ public sealed class IncidentPolicyTests
         };
 
         Assert.True(tightened.IsValid);
-        Assert.False(tightened.IsValidOccurrence(Now.AddHours(-25), Now));
+        Assert.False(new IncidentOccurrenceAgePolicy(tightened).IsAccepted(Now.AddHours(-25), Now));
         Assert.True(tightened.IsAllowedEvidenceCount(3));
         Assert.False(tightened.IsAllowedEvidenceCount(4));
         // The semantic floor stays where AI-08 put it.
@@ -344,6 +428,9 @@ public sealed class IncidentPolicyTests
         // The retrospective window and the skew are bounded.
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.Zero },
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromDays(400) },
+        // ...and never past the 72-hour idempotency-key floor (OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27).
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(73) },
+        IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceAge = TimeSpan.FromHours(72).Add(TimeSpan.FromTicks(1)) },
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceSkew = TimeSpan.FromMinutes(-1) },
         IncidentOperationalPolicy.Mvp1 with { MaximumOccurrenceSkew = TimeSpan.FromHours(2) },
         // Evidence may be tightened, never removed and never widened past the published bound.

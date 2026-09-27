@@ -410,6 +410,76 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
         Assert.Equal("FAILED_ATTEMPT", failed.Status);
     }
 
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task A_retry_that_waited_for_a_proof_is_recorded_after_it()
+    {
+        await using var world = await AttemptWorld.CreateAsync(fixture, OrderStatusHistory.ToDelivering);
+        var evidence = await InsertProofAsync(world, "DELIVERY_PHOTO");
+        var incident = await OpenIncidentAsync(world, [evidence], IncidentContract.Rescheduled);
+        await TransitionAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(incident));
+        var uploadId = Guid.NewGuid();
+        var proofId = Guid.NewGuid();
+
+        // A POD-001 finalization holds the order FOR SHARE; the retry into DELIVERING reads its
+        // clock first and then waits. The proof is committed with a later time than that clock
+        // reading, yet it was finalized before the attempt the retry starts.
+        await using var finalizer = await fixture.AdminDataSource.OpenConnectionAsync();
+        await using var transaction = await finalizer.BeginTransactionAsync();
+        await ExecuteAsync(finalizer, transaction,
+            "SELECT 1 FROM orders.orders WHERE id=@order FOR SHARE",
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId));
+
+        await using var scope = CreateTransitionScope();
+        var transition = scope.Service.TransitionAsync(
+            TransitionCommand(world, OrderStatus.Delivering, null),
+            CancellationToken.None);
+        await Task.WhenAny(transition, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.False(transition.IsCompleted);
+        await ExecuteAsync(finalizer, transaction,
+            """
+            INSERT INTO custody.proof_upload_sessions(
+              id,order_id,owner_org_id,requested_by,object_key_quarantine,
+              expected_content_type,maximum_bytes,status,expires_at)
+            VALUES (
+              @upload,@order,@org,@user,@quarantine,'image/jpeg',1024,'CONSUMED',clock_timestamp()+interval '1 day');
+            INSERT INTO custody.proofs(
+              id,order_id,owner_org_id,upload_session_id,proof_type,object_key,sha256,
+              content_type,size_bytes,captured_at,created_by,created_at)
+            VALUES (
+              @proof,@order,@org,@upload,'DELIVERY_PHOTO',@object_key,
+              decode(repeat('06',32),'hex'),'image/jpeg',100,clock_timestamp(),@user,clock_timestamp());
+            """,
+            SyntheticOrderScenario.P("upload", uploadId),
+            SyntheticOrderScenario.P("proof", proofId),
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId),
+            SyntheticOrderScenario.P("org", world.Scenario.OrganizationId),
+            SyntheticOrderScenario.P("user", world.Scenario.UserId),
+            SyntheticOrderScenario.P("quarantine", $"quarantine/{uploadId:N}"),
+            SyntheticOrderScenario.P("object_key", $"proofs/{uploadId:N}"));
+        await transaction.CommitAsync();
+
+        var delivering = await transition;
+        world.Version = delivering.Version;
+
+        Assert.True(await ScalarAsync<bool>(
+            """
+            SELECT e.occurred_at > p.created_at
+            FROM orders.order_events e, custody.proofs p
+            WHERE e.order_id=@order AND e.aggregate_version=@version AND p.id=@proof
+            """,
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId),
+            SyntheticOrderScenario.P("version", delivering.Version),
+            SyntheticOrderScenario.P("proof", proofId)));
+        // The proof belongs to the previous attempt, so it cannot complete this one.
+        var stale = await RefusedAsync(world, OrderStatus.Delivered);
+        Assert.Equal("delivery_proof_complete", stale.GuardCode);
+
+        await InsertProofAsync(world, "DELIVERY_PHOTO");
+        var delivered = await TransitionAsync(world, OrderStatus.Delivered);
+        Assert.Equal("DELIVERED", delivered.Status);
+    }
+
     // ------------------------------------------------------ 5. EXTERNAL realtime audience
 
     [PostgreSqlContractFact]

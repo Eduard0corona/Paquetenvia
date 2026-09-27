@@ -37,12 +37,15 @@ internal sealed class OperationalCleanupHealthCheck(
                           to_regprocedure('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)'),
                           'EXECUTE'),false))
                    AND (NOT @sessions OR COALESCE(has_function_privilege(
-                          to_regprocedure('security.expire_proof_upload_sessions(integer)'),'EXECUTE'),false));
+                          to_regprocedure('security.expire_proof_upload_sessions(integer)'),'EXECUTE'),false))
+                   AND (NOT @bff OR COALESCE(has_function_privilege(
+                          to_regprocedure('security.purge_bff_sessions(integer)'),'EXECUTE'),false));
                 """,
                 connection,
                 transaction);
             command.Parameters.AddWithValue("keys", settings.IdempotencyKeys.Enabled);
             command.Parameters.AddWithValue("sessions", settings.ProofUploadSessions.Enabled);
+            command.Parameters.AddWithValue("bff", settings.BffSessions.Enabled);
             var executable = await command.ExecuteScalarAsync(cancellationToken) is true;
             await transaction.RollbackAsync(cancellationToken);
             return executable

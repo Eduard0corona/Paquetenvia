@@ -66,6 +66,7 @@ function mustUseNetworkOnly(request) {
     url.pathname.startsWith("/api/v1/") ||
     url.pathname.startsWith("/hubs/") ||
     url.pathname === "/login" ||
+    url.pathname === "/onboarding" ||
     url.pathname.startsWith("/auth/") ||
     url.pathname === "/signin-authcenter" ||
     url.pathname.includes("/proofs/") ||

@@ -34,6 +34,11 @@ public static class IdentityClaimsPrincipalFactory
                 externalIdentity.MfaSatisfied.ToString(CultureInfo.InvariantCulture)),
         };
 
+        if (externalIdentity.EmailVerified)
+        {
+            claims.Add(InternalClaim(IdentityClaimTypes.SourceEmailVerified, "true"));
+        }
+
         if (resolution.Context is { } resolved)
         {
             claims.Add(InternalClaim(IdentityClaimTypes.SourceUserId, resolved.UserId.ToString("D", CultureInfo.InvariantCulture)));

@@ -82,17 +82,19 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             ["email", "offline_access", "openid", "profile"],
             query["scope"].ToString().Split(' ').Order(StringComparer.Ordinal));
         Assert.False(query.ContainsKey("client_secret"));
-        LastRequestedAcrValues = query.TryGetValue("acr_values", out var acrValues) ? acrValues.ToString() : null;
+        var requestedAcrValues = query.TryGetValue("acr_values", out var acrValues) ? acrValues.ToString() : null;
+        LastRequestedAcrValues = requestedAcrValues;
 
         var code = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-        LastSessionId = Behavior.SessionId ?? SessionId;
+        var sessionId = Behavior.SessionId ?? SessionId;
+        LastSessionId = sessionId;
         _codes[code] = new AuthorizationGrant(
             subject,
             query["nonce"].ToString(),
             query["code_challenge"].ToString(),
             query["redirect_uri"].ToString(),
-            LastSessionId,
-            LastRequestedAcrValues);
+            sessionId,
+            requestedAcrValues);
         return new AuthorizationResult(code, query["state"].ToString(), query["nonce"].ToString());
     }
 
@@ -289,16 +291,22 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             return Fail("invalid_grant:pkce");
         }
 
-        LastIdToken = CreateIdToken(grant);
-        LastAccessToken = "opaque-access-" + Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24));
-        LastRefreshToken = "opaque-refresh-" + Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24));
+        // The response is built from this request's own tokens. The Last* properties are only a
+        // convenience for sequential tests: concurrent redemptions overwrite them, so reading them back
+        // into the response would hand one browser another browser's ID token (and nonce).
+        var idToken = CreateIdToken(grant);
+        var accessToken = "opaque-access-" + Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24));
+        var refreshToken = "opaque-refresh-" + Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24));
+        LastIdToken = idToken;
+        LastAccessToken = accessToken;
+        LastRefreshToken = refreshToken;
         return Json(new Dictionary<string, object>
         {
-            ["access_token"] = LastAccessToken,
+            ["access_token"] = accessToken,
             ["token_type"] = "Bearer",
             ["expires_in"] = 300,
-            ["refresh_token"] = LastRefreshToken,
-            ["id_token"] = LastIdToken,
+            ["refresh_token"] = refreshToken,
+            ["id_token"] = idToken,
             ["scope"] = "openid profile email offline_access",
         });
     }
@@ -327,11 +335,17 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             ["nonce"] = behavior.OverrideNonce ?? grant.Nonce,
             ["auth_time"] = new DateTimeOffset(now).ToUnixTimeSeconds(),
             ["name"] = "Usuario Sintético",
-            ["email"] = "synthetic.user@paquetenvia.test",
-            ["email_verified"] = true,
+            ["email"] = behavior.Email ?? "synthetic.user@paquetenvia.test",
             ["roles"] = "AUTHCENTER_SUPERADMIN",
             ["permissions"] = "EVERYTHING",
         };
+
+        // AUTH-EMAIL-VERIFIED-REQUIRED: the real AuthCenter emits a JSON boolean; OmitEmailVerified and
+        // EmailVerified play an ID token without the claim or with any other value.
+        if (!behavior.OmitEmailVerified)
+        {
+            claims["email_verified"] = behavior.EmailVerified ?? true;
+        }
 
         // AuthCenter honors acr_values by asking (or enrolling) the second factor: the ID token then
         // carries acr mfa and "mfa" in amr. IgnoreAcrValues plays a server that did not.
@@ -435,6 +449,11 @@ public sealed record TokenBehavior
     public string? Acr { get; init; }
     public bool IgnoreAcrValues { get; init; }
     public string? SessionId { get; init; }
+    public object? EmailVerified { get; init; }
+    public bool OmitEmailVerified { get; init; }
+
+    /// <summary>REG-002: the email claim of the ID token; the synthetic default otherwise.</summary>
+    public string? Email { get; init; }
 }
 
 /// <summary>One deviation at a time from a valid AuthCenter logout token.</summary>

@@ -24,6 +24,8 @@ tags:
 - name: Drivers
 - name: Finance
 - name: Custody
+- name: Onboarding
+- name: Platform
 paths:
   /quotes:
     post:
@@ -698,6 +700,16 @@ paths:
       tags:
       - Incidents
       operationId: openIncident
+      description: >-
+        INC-001 opens an incident for a failed attempt. occurred_at is judged by
+        the offline operation age rule before the incident service runs
+        (x-offline-operation-age, OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27):
+        exactly the configured maximum occurrence age (default and ceiling 72
+        hours, configurable only downward to 1 hour,
+        OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27) is accepted, an older report is 409 OFFLINE_OPERATION_EXPIRED, and one later
+        than server time plus the configured clock tolerance (default 5 minutes)
+        is 409 INVALID_REQUEST. The check precedes the idempotency replay, so an
+        expired report is refused even when its Idempotency-Key is still stored.
       x-shape-validation: invalid-request-without-productive-transaction
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -906,6 +918,385 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /onboarding/organizations:
+    post:
+      tags:
+      - Onboarding
+      operationId: createOnboardingOrganization
+      description: >-
+        REG-SELF-SERVICE-ORGANIZATION. An authenticated, active Paquetenvia user whose
+        session carries email_verified=true (AUTH-EMAIL-VERIFIED-REQUIRED) creates its
+        own organization. No X-Organization-Id: the caller may have no organization yet.
+        BUSINESS is created ACTIVE and the creator becomes BUSINESS_ADMIN; ALLY is
+        created PENDING_APPROVAL and the creator becomes ALLY_ADMIN of an organization
+        that grants no access until a PLATFORM_ADMIN approves it (IDENTITY-ORG-ACTIVE-REQUIRED).
+        REG-ONE-ORGANIZATION-PER-PERSON - a user has at most one self-created
+        organization that is not CLOSED (PENDING_APPROVAL or ACTIVE, either type),
+        enforced by the database under concurrency; a second one is 409
+        ORGANIZATION_LIMIT_REACHED; a rejected ALLY is CLOSED and frees the slot;
+        memberships an administrator adds are not creations and do not count.
+        ONBOARDING-IDEMPOTENCY-DERIVED-ID - the organization id is derived from the
+        user and the Idempotency-Key; repeating the key with the same request returns
+        201 with the original organization, and with another request 409
+        IDEMPOTENCY_CONFLICT. The organization, the creator membership and the
+        ORGANIZATION_SELF_REGISTERED audit row are written in one transaction.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOnboardingOrganizationRequest'
+      responses:
+        '201':
+          description: Created, or the original organization for a replayed Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingOrganization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: >-
+            IDEMPOTENCY_CONFLICT for a reused key with another request;
+            ORGANIZATION_LIMIT_REACHED when the caller already has a self-created
+            organization that is not CLOSED.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/OnboardingConflictProblem'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /me/organization-applications:
+    get:
+      tags:
+      - Onboarding
+      operationId: listMyOrganizationApplications
+      description: >-
+        REG-OWN-APPLICATIONS-ENDPOINT. Read-only list of the BUSINESS and ALLY
+        organizations the caller administers (ACTIVE BUSINESS_ADMIN or ALLY_ADMIN
+        membership), whatever the organization status, so a PENDING_APPROVAL or CLOSED
+        ALLY is visible to its creator. It grants no access: /me/organization-contexts
+        and every authorization check are unchanged. No X-Organization-Id.
+      parameters: []
+      responses:
+        '200':
+          description: The caller's organization applications, newest first (at most 50)
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 50
+                items:
+                  $ref: '#/components/schemas/OrganizationApplication'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /platform/ally-applications:
+    get:
+      tags:
+      - Platform
+      operationId: listPendingAllyOrganizations
+      description: >-
+        REG-ALLY-APPROVAL-PATH. The ALLY organizations waiting for approval
+        (PENDING_APPROVAL), oldest first. Only a PLATFORM_ADMIN member with a satisfied
+        MFA challenge, operating from an ACTIVE organization of type PLATFORM selected
+        with X-Organization-Id; anyone else receives 403 (MFA_REQUIRED when only the
+        second factor is missing) and reads nothing.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: Pending ALLY organizations
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 200
+                items:
+                  $ref: '#/components/schemas/PendingAllyOrganization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /platform/ally-applications/{organizationId}/decision:
+    post:
+      tags:
+      - Platform
+      operationId: decideAllyOrganization
+      description: >-
+        REG-ALLY-APPROVAL-PATH. A PLATFORM_ADMIN with MFA, from an ACTIVE PLATFORM
+        organization, approves or rejects a PENDING_APPROVAL ALLY. APPROVE makes it
+        ACTIVE and only that (REG-ALLY-APPROVAL-ACTIVATE-ONLY - no ally relationship is
+        created; relationships belong to ALY-00x). REJECT makes it CLOSED
+        (REG-ALLY-REJECTION-CLOSED); its creator may apply again with a new organization.
+        One audit row (ALLY_ORGANIZATION_APPROVED or ALLY_ORGANIZATION_REJECTED) is written
+        in the platform organization and one in the ALLY organization, in the same
+        transaction. Repeating the decision already taken returns it again without new
+        audit rows; any other state is 409 ALLY_DECISION_CONFLICT.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: organizationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AllyDecisionRequest'
+      responses:
+        '200':
+          description: The ALLY organization and its resulting status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllyDecision'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          description: The ALLY is in a state this decision cannot change.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/AllyDecisionConflictProblem'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /organizations/{organizationId}/pending-memberships:
+    post:
+      tags:
+      - Organizations
+      operationId: addPendingMembership
+      description: >-
+        REG-JOIN-BY-ADMIN-EMAIL. An administrator of the organization selected with
+        X-Organization-Id (which must equal organizationId) adds a person by email and
+        role. REG-JOIN-ADDERS-MFA - PLATFORM_ADMIN, ALLY_ADMIN and BUSINESS_ADMIN members,
+        each with a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor
+        is missing). REG-ROLE-CEILING - ALLY_ADMIN adds ALLY_ADMIN, ALLY_OPERATOR, DRIVER or
+        VIEWER; BUSINESS_ADMIN adds BUSINESS_ADMIN, BUSINESS_OPERATOR or VIEWER; neither adds
+        PLATFORM_ADMIN, DISPATCHER or FINANCE. REG-PLATFORM-ADMIN-ADDS - a PLATFORM_ADMIN
+        member adds any role, PLATFORM_ADMIN only inside an organization of type PLATFORM.
+        A role outside the ceiling is the uniform 403. REG-PENDING-MEMBERSHIP-STORAGE - the
+        email is normalized (trim, NFC, invariant lowercase) and only its keyed HMAC and key
+        version are stored; it is never returned. The answer is the same 202 whether or not
+        the email belongs to an account: accounts are never looked at. REG-PENDING-RENEW-ONLY -
+        adding an email and role that are already PENDING in this organization re-arms that
+        entry for seven days and returns it. The entry id is derived from the actor, the
+        organization and the Idempotency-Key; the same key with the same request returns the
+        original entry, with another request 409 IDEMPOTENCY_CONFLICT. REG-PENDING-EXPIRY-7D -
+        entries expire seven days after creation or renewal; expired entries stay inert. At
+        every sign-in with a verified email each PENDING, unexpired entry of an ACTIVE
+        organization becomes a membership of the ACTIVE user exactly once
+        (REG-ACCEPT-ALL-ORGANIZATIONS). Audit PENDING_MEMBERSHIP_ADDED or
+        PENDING_MEMBERSHIP_RENEWED; PENDING_MEMBERSHIP_ACCEPTED at sign-in. No notification
+        is sent.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: organizationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPendingMembershipRequest'
+      responses:
+        '202':
+          description: The pending entry (new, re-armed or replayed); never reveals whether the email has an account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingMembership'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: IDEMPOTENCY_CONFLICT for a reused key with another request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/PendingMembershipConflictProblem'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      tags:
+      - Organizations
+      operationId: listPendingMemberships
+      description: >-
+        REG-JOIN-BY-ADMIN-EMAIL. The organization's pending-membership entries, newest first,
+        with role, status, created_at and expires_at; never an email or its hash. Same
+        capability as addPendingMembership; rows are read under the tenant's RLS, so an
+        organization sees only its own entries. An entry past expires_at that is still
+        PENDING is expired and inert until renewed.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: organizationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: Pending-membership entries
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 200
+                items:
+                  $ref: '#/components/schemas/PendingMembership'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /organizations/{organizationId}/pending-memberships/{pendingMembershipId}/renew:
+    post:
+      tags:
+      - Organizations
+      operationId: renewPendingMembership
+      description: >-
+        REG-PENDING-RENEW-ONLY. Re-arms a PENDING entry of the selected organization (expired
+        or not) for seven days from now; nothing is sent to anyone. Same capability and role
+        ceiling as addPendingMembership. The same Idempotency-Key replays without re-arming
+        again. An ACCEPTED or REVOKED entry is 409 PENDING_MEMBERSHIP_NOT_PENDING; an entry
+        of another organization is 404. Audit PENDING_MEMBERSHIP_RENEWED.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: organizationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pendingMembershipId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: The renewed entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingMembership'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          description: PENDING_MEMBERSHIP_NOT_PENDING when the entry is ACCEPTED or REVOKED.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/PendingMembershipConflictProblem'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /organizations/{organizationId}/pending-memberships/{pendingMembershipId}/revoke:
+    post:
+      tags:
+      - Organizations
+      operationId: revokePendingMembership
+      description: >-
+        REG-JOIN-BY-ADMIN-EMAIL. Revokes a PENDING entry of the selected organization so no
+        sign-in applies it. Same capability and role ceiling as addPendingMembership.
+        Revoking a REVOKED entry returns it again without a new audit row; an ACCEPTED entry
+        already became a membership and is 409 PENDING_MEMBERSHIP_NOT_PENDING; an entry of
+        another organization is 404. Audit PENDING_MEMBERSHIP_REVOKED.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: organizationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pendingMembershipId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: The revoked entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingMembership'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          description: PENDING_MEMBERSHIP_NOT_PENDING when the entry is ACCEPTED.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/PendingMembershipConflictProblem'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /auth/login:
     servers:
     - url: /
@@ -921,9 +1312,12 @@ paths:
         Starts the AuthCenter authorization code flow with PKCE S256 (GATE-002-BFF-001).
         Anonymous. The redirect URI is always the configured public origin plus
         /signin-authcenter, never derived from Host or X-Forwarded-* headers. A
-        return_url that is not a local absolute path falls back to "/". Nothing is
-        provisioned at sign-in; first access is by prior invitation
-        (AUTH-FIRST-LOGIN-INVITATION). mfa=required starts an MFA step-up
+        return_url that is not a local absolute path falls back to "/". Registration is
+        open (AUTH-OPEN-REGISTRATION, superseding AUTH-FIRST-LOGIN-INVITATION): the first
+        sign-in of an unknown subject whose ID token asserts email_verified=true creates its
+        Paquetenvia user, exactly once and with no memberships; sign-in never creates
+        organizations or memberships (onboarding does, POST /onboarding/organizations).
+        mfa=required starts an MFA step-up
         (AUTH-001-MFA-STEP-UP): the authorization request carries
         acr_values=urn:authcenter:acr:mfa and the callback accepts only an ID token
         whose acr is urn:authcenter:acr:mfa or urn:authcenter:acr:phr and whose amr
@@ -967,7 +1361,12 @@ paths:
         with exact issuer and audience. On success it stores the session ticket
         server-side and sets only an opaque session cookie (BFF-SESSION-STORE-POSTGRESQL).
         After state, correlation and iss validate, error=access_denied redirects to
-        /login?error=access_denied (AUTH-001-ACCESS-DENIED-MESSAGE); every other failure
+        /login?error=access_denied (AUTH-001-ACCESS-DENIED-MESSAGE). A valid ID token
+        without exactly one email_verified claim equal to true redirects to
+        /login?error=email_not_verified without a session, and no user is created or
+        linked (AUTH-EMAIL-VERIFIED-REQUIRED); email_verified is kept in the server-side
+        ticket. Otherwise the first sign-in of an unknown subject registers its user once
+        (AUTH-OPEN-REGISTRATION, security.register_identity_subject). Every other failure
         redirects to the generic /login?error=signin_failed. No protocol detail
         (error_description) is forwarded.
       security: []
@@ -997,8 +1396,9 @@ paths:
           description: >-
             Success redirects to the validated return_url and sets __Host-Paquetenvia.Session
             (Secure, HttpOnly, SameSite=Lax, Path=/, no Domain, session lifetime);
-            access_denied redirects to /login?error=access_denied and any other failure
-            to /login?error=signin_failed, both without a session.
+            access_denied redirects to /login?error=access_denied, an unverified email to
+            /login?error=email_not_verified and any other failure to
+            /login?error=signin_failed, all without a session.
   /auth/session:
     servers:
     - url: /
@@ -2030,8 +2430,11 @@ components:
     IncidentConflict:
       description: >-
         INC-001 request, idempotency, order-state, incident-state or evidence
-        conflict. Internal rejection evidence, the current incident status and
-        cross-tenant existence are never exposed.
+        conflict. openIncident also answers OFFLINE_OPERATION_EXPIRED when
+        occurred_at is older than its configured maximum occurrence age
+        (x-offline-operation-age); resolveIncident never does. Internal
+        rejection evidence, the current incident status and cross-tenant
+        existence are never exposed.
       content:
         application/problem+json:
           schema:
@@ -2742,6 +3145,10 @@ components:
         occurred_at:
           type: string
           format: date-time
+          description: >-
+            When the attempt happened on the device. Required; the
+            x-offline-operation-age rule applies with the configurable limits
+            of its openIncident entry.
         evidence_proof_ids:
           type: array
           minItems: 1
@@ -2879,8 +3286,9 @@ components:
       description: >-
         AUTH-001 BFF session view (GATE-002-BFF-001). Property names follow the
         AuthCenter.Client BFF contract. authorized is false for an authenticated
-        subject without an active Paquetenvia identity (no invitation accepted yet,
-        AUTH-FIRST-LOGIN-INVITATION, or suspended).
+        subject without an active Paquetenvia identity (suspended or disabled). A
+        newly registered user is authorized with no organization contexts until it
+        completes onboarding (AUTH-OPEN-REGISTRATION).
       additionalProperties: false
       required:
       - authenticated
@@ -3263,6 +3671,7 @@ components:
           - ORDER_STATE_NOT_ALLOWED
           - EVIDENCE_NOT_AVAILABLE
           - INCIDENT_STATE_CONFLICT
+          - OFFLINE_OPERATION_EXPIRED
           - CONFLICT
     TransitionConflictProblem:
       type: object
@@ -3429,6 +3838,269 @@ components:
       - BUSINESS_200_499
       - BUSINESS_500_PLUS
       - CUSTOM
+    CreateOnboardingOrganizationRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - organization_type
+      - legal_name
+      - display_name
+      properties:
+        organization_type:
+          type: string
+          enum:
+          - BUSINESS
+          - ALLY
+        legal_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: No leading or trailing whitespace and no control characters.
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: No leading or trailing whitespace and no control characters.
+    OnboardingOrganization:
+      type: object
+      required:
+      - organization_id
+      - organization_type
+      - legal_name
+      - display_name
+      - status
+      - role
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        organization_type:
+          type: string
+          enum:
+          - BUSINESS
+          - ALLY
+        legal_name:
+          type: string
+        display_name:
+          type: string
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - PENDING_APPROVAL
+          - SUSPENDED
+          - CLOSED
+        role:
+          type: string
+          enum:
+          - BUSINESS_ADMIN
+          - ALLY_ADMIN
+    OnboardingConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - IDEMPOTENCY_CONFLICT
+          - ORGANIZATION_LIMIT_REACHED
+    OrganizationApplication:
+      type: object
+      required:
+      - organization_id
+      - organization_type
+      - display_name
+      - status
+      - created_at
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        organization_type:
+          type: string
+          enum:
+          - BUSINESS
+          - ALLY
+        display_name:
+          type: string
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - PENDING_APPROVAL
+          - SUSPENDED
+          - CLOSED
+        created_at:
+          type: string
+          format: date-time
+    PendingAllyOrganization:
+      type: object
+      required:
+      - organization_id
+      - legal_name
+      - display_name
+      - created_at
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        legal_name:
+          type: string
+        display_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AllyDecisionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - decision
+      properties:
+        decision:
+          type: string
+          enum:
+          - APPROVE
+          - REJECT
+    AllyDecision:
+      type: object
+      required:
+      - organization_id
+      - status
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - CLOSED
+    AllyDecisionConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - ALLY_DECISION_CONFLICT
+    AddPendingMembershipRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - email
+      - role
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 320
+          description: Normalized (trim, NFC, invariant lowercase) and hashed on arrival; never stored or returned.
+        role:
+          type: string
+          enum:
+          - PLATFORM_ADMIN
+          - DISPATCHER
+          - FINANCE
+          - ALLY_ADMIN
+          - ALLY_OPERATOR
+          - BUSINESS_ADMIN
+          - BUSINESS_OPERATOR
+          - DRIVER
+          - VIEWER
+    PendingMembership:
+      type: object
+      required:
+      - id
+      - role
+      - status
+      - created_at
+      - expires_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+          - PLATFORM_ADMIN
+          - DISPATCHER
+          - FINANCE
+          - ALLY_ADMIN
+          - ALLY_OPERATOR
+          - BUSINESS_ADMIN
+          - BUSINESS_OPERATOR
+          - DRIVER
+          - VIEWER
+        status:
+          type: string
+          enum:
+          - PENDING
+          - ACCEPTED
+          - REVOKED
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    PendingMembershipConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - IDEMPOTENCY_CONFLICT
+          - PENDING_MEMBERSHIP_NOT_PENDING
     OrganizationContext:
       type: object
       required:
@@ -4601,10 +5273,24 @@ x-offline-operation-age:
   decisions:
   - OPS-003-OFFLINE-72H
   - OPS-003-SERVER-72H-REJECTION
+  - OPS-003-INCIDENT-72H-UNIFICATION
+  - OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27
+  - OPS-003-INCIDENT-AGE-CAP-72H-2026-09-27
   operations:
     transitionOrder: client_occurred_at (optional)
     createProofUploadSession: client_occurred_at (optional)
     finalizeProof: captured_at (required)
+    openIncident:
+      timestamp: occurred_at (required)
+      maximum_age_default: PT72H
+      maximum_age_configurable: true
+      maximum_age_setting: Incidents:MaximumOccurrenceAgeHours
+      maximum_age_range: PT1H..PT72H
+      clock_tolerance_default: PT5M
+      clock_tolerance_range: PT0S..PT60M
+      clock_tolerance_setting: Incidents:MaximumOccurrenceSkewMinutes
+      clock_ahead: 409 INVALID_REQUEST
+      missing_timestamp: 409 INVALID_REQUEST
   maximum_age: PT72H
   maximum_age_configurable: false
   clock_tolerance_default: PT5M
@@ -4618,6 +5304,14 @@ x-offline-operation-age:
   - an absent optional client_occurred_at is an online operation and is not age-checked; an absent captured_at is
     INVALID_REQUEST as before
   - idempotency keys younger than 72 hours are never purged, so an accepted replay always finds its key
+  - maximum_age, maximum_age_configurable and the clock_tolerance fields above apply to every operation listed with a
+    plain value; an operation listed with its own mapping (openIncident) declares its own limits there and keeps the
+    same comparison, the same inclusive bounds and the same 409 OFFLINE_OPERATION_EXPIRED
+  - openIncident's maximum age may only be tightened below PT72H, never widened past the 72-hour idempotency-key floor,
+    so a report whose key may have been purged is always refused and can never open a second incident; a larger setting
+    fails the start
+  - openIncident compares occurred_at before the incident service and before its idempotency replay, so a report older
+    than its configured maximum age is refused even when its Idempotency-Key is still stored
 x-runtime-contracts:
   token_hash: SHA-256 over exact UTF-8 bytes of Base64URL-no-padding token; bytea length 32
   money: all cents fields are int64
@@ -4667,6 +5361,19 @@ x-capability-matrix:
     getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     reconcileCod: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
+  platform_operations_decision: REG-ALLY-APPROVAL-PATH (project owner, 2026-09-27) - PLATFORM_ADMIN members with a
+    satisfied MFA challenge, operating from an ACTIVE organization of type PLATFORM selected with X-Organization-Id
+  platform_operations:
+    listPendingAllyOrganizations: [PLATFORM_ADMIN]
+    decideAllyOrganization: [PLATFORM_ADMIN]
+  membership_operations_decision: REG-JOIN-ADDERS-MFA (project owner, 2026-09-27) - PLATFORM_ADMIN, ALLY_ADMIN and
+    BUSINESS_ADMIN members of the organization selected with X-Organization-Id, each with a satisfied MFA challenge; the
+    role ceiling (REG-ROLE-CEILING, REG-PLATFORM-ADMIN-ADDS) is enforced again by the SQL functions
+  membership_operations:
+    addPendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
+    listPendingMemberships: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
+    renewPendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
+    revokePendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
