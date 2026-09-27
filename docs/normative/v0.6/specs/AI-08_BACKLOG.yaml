@@ -2,7 +2,7 @@ meta:
   version: '0.6'
   generated: '2026-07-19'
   execution_order: topological by depends_on; P0 before P1
-  item_count: 56
+  item_count: 63
 definition_of_ready:
 - normative inputs identified
 - dependencies DONE
@@ -669,6 +669,7 @@ items:
   - ninguna fila se crea antes de confirmar
   - errores por fila
   - commit idempotente
+  - 'DECIDED D6-COD-PILOT: each CSV row may declare the expected COD amount in integer cents; it flows to the created order'
   required_tests:
   - CSV e2e
   approval_gate: null
@@ -743,6 +744,7 @@ items:
   - margen por orden/ruta
   - no usa floats
   - COD expected is RECORDED before delivery and RECONCILED before close
+  - 'DECIDED D6-COD-PILOT: COD is in pilot scope; the dispatcher declares the expected COD amount when creating the order'
   required_tests:
   - financial fixtures
   approval_gate: null
@@ -761,6 +763,11 @@ items:
   - cierre bloquea efectivo/incidente pendiente
   - totales reconciliables
   - every amount is traceable to immutable settlement_lines
+  - 'DECIDED D7-SETTLEMENT-RULES: a settlement may only cover a closed period'
+  - 'DECIDED D7-SETTLEMENT-RULES: a settlement whose total would be negative is rejected'
+  - 'DECIDED D7-SETTLEMENT-RULES: approve and pay require MFA'
+  - 'DECIDED D7-SETTLEMENT-RULES: every export is audited'
+  - 'DECIDED AI05-EXPORT-NO-STORE: the export response carries Cache-Control: no-store'
   required_tests:
   - reconciliation integration
   approval_gate: null
@@ -777,6 +784,9 @@ items:
   - INC-001
   - FIN-001
   - SET-001
+  - AUTH-001
+  - ENV-001
+  - UI-001
   expected_outputs:
   - pilot readiness report
   acceptance_criteria:
@@ -1186,6 +1196,14 @@ items:
   - expired idempotency keys are deleted in bounded batches
   - expired upload sessions are marked EXPIRED and quarantined objects follow retention policy
   - job is idempotent and tenant-safe
+  - 'DECIDED OPS-003-OFFLINE-72H (literal): Una operación offline de la PWA puede reintentarse hasta 72 horas; después
+    se descarta y se avisa al conductor. Las llaves de idempotencia se purgan después de ese plazo.'
+  - 'DECIDED OPS-003-SERVER-72H-REJECTION: the server, not only the client, rejects an offline operation whose client
+    occurred_at is older than 72 hours, so a purged idempotency key can never let a stale replay execute twice'
+  - 'DECIDED OPS-003-CLEANUP-ROLE: cleanup runs through paqueteria_cleanup_executor NOLOGIN BYPASSRLS (ADR-034 pattern),
+    which owns only security.purge_expired_idempotency_keys(timestamptz,integer,boolean) with a 72-hour floor,
+    security.expire_proof_upload_sessions(integer) and the BFF session purge, with exact column grants and EXECUTE only
+    for paqueteria_worker; translation to AI-06/AI-18 ships with its migration in the implementation PR'
 - id: TEN-003
   title: Provisioning transaccional de usuario y organización
   priority: P0
@@ -1234,3 +1252,176 @@ items:
   - privilege catalog assertions
   - active-state purge rejection
   - bounded batch purge integration
+- id: AUTH-001
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
+  epic: Security
+  release: MVP-1
+  title: Login AuthCenter con BFF en la API
+  priority: P0
+  depends_on:
+  - SEC-001
+  - SEC-002
+  - TEN-001
+  expected_outputs:
+  - OIDC authorization-code flow with PKCE terminated in the .NET API (BFF)
+  - HttpOnly, Secure, SameSite session cookie issued by the API
+  - same-origin web client without tokens in browser storage
+  - dependency PR through main (GOV-DEPENDENCY-ROUTE-001)
+  acceptance_criteria:
+  - 'DECIDED GATE-002-BFF-001: AuthCenter login uses a BFF in the .NET API with an HttpOnly cookie and the web calls the
+    API through the same origin'
+  - access and refresh tokens never reach JavaScript, localStorage, sessionStorage or IndexedDB
+  - tokens are validated against the AuthCenter JWKS (RS256); AuthCenter role and permission claims are ignored for tenant
+    authorization
+  - identity_subject equals the validated OIDC subject; memberships and roles come only from PostgreSQL
+  - cookie-authenticated state-changing requests are protected against CSRF
+  - logout ends the server session and clears the cookie
+  - Mock authentication remains limited to Development, Testing and authorized DevSynthetic
+  - 'DECIDED AUTH-FIRST-LOGIN-INVITATION: first login is by prior invitation - an administrator registers the user with
+    email and membership, the first login links the AuthCenter sub, and nobody enters without an invitation'
+  - 'DECIDED BFF-SESSION-STORE-POSTGRESQL: BFF sessions are stored in a PostgreSQL table (AI-06/AI-18 change pending a
+    migration)'
+  - 'DECIDED BFF-SESSION-TABLE-SHAPE: identity.bff_sessions stores only the hash of the cookie and the AuthCenter tokens
+    encrypted with Data Protection; it is pre-tenant without tenant RLS; paqueteria_app has no direct grants and uses only
+    SECURITY DEFINER functions security.create_bff_session, security.resolve_bff_session(bytea) and
+    security.revoke_bff_session, owned by a dedicated NOLOGIN role with EXECUTE only for paqueteria_app; expired sessions
+    are purged by the OPS-003 cleanup role; translation to AI-06/AI-18 ships with its migration in the implementation PR'
+  - 'DECIDED AUTHCENTER-AMR-MFA: AuthCenter adds the amr claim when the user completed MFA; Paqueteria reads MFA from it'
+  - 'DECIDED AUTHCENTER-DOMAIN: the AuthCenter authority is authcenter.info'
+  required_tests:
+  - WebApplicationFactory login, callback and logout
+  - CSRF rejection
+  - browser test proving tokens are not exposed to JavaScript
+  - suspended user and missing membership return 403
+  approval_gate: owner_product_technology
+- id: ENV-001
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
+  epic: Operations
+  release: MVP-1
+  title: Entorno piloto
+  priority: P0
+  depends_on:
+  - OPS-002
+  - OPS-004
+  - SCL-001
+  - AUTH-001
+  expected_outputs:
+  - pilot environment definition separate from DEV-SYNTHETIC
+  - deployment provenance from a 13/13 certified main SHA
+  - migration execution through the canonical migrator, including every module lane
+  - backup and restore drill on the pilot environment
+  acceptance_criteria:
+  - no pilot deployment without GATE-007 and GATE-012 resolved or explicitly scoped by the project owner
+  - the Azure ownership bridge covers every privileged role, including paqueteria_lifecycle_executor
+  - the Data Protection key ring has an external key-encryption protector before distributed activation
+  - restore drill evidence is current before pilot start
+  - 'DECIDED PILOT-SAME-ORIGIN-ROUTING: the Azure ingress sends /api, /hubs, /auth and /signin-authcenter to the API'
+  required_tests:
+  - migrator Clean and Applied paths on the pilot database
+  - restore drill
+  - readiness checks green with production adapters enabled
+  approval_gate: owner_technology_operations
+- id: ADP-001
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
+  epic: Security
+  release: MVP-1
+  title: Adaptadores productivos de PII y antimalware
+  priority: P0
+  depends_on:
+  - GEO-001
+  - INC-001
+  - POD-001
+  expected_outputs:
+  - production PII protector for locations and incidents with key versioning
+  - production threat scanner for proof uploads
+  acceptance_criteria:
+  - pii_key_version is chosen by the server protector, never by the client
+  - protector or scanner unavailability fails closed with 503 and no partial effects
+  - key rotation keeps previously protected data readable
+  - no plaintext PII in logs, outbox, audit or snapshots
+  required_tests:
+  - protector unavailable returns 503 without effects
+  - key rotation round-trip
+  - infected upload stays quarantined
+  approval_gate: GATE-007
+- id: UI-001
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
+  epic: Operations UI
+  release: MVP-1
+  title: UI operativa del piloto
+  priority: P0
+  depends_on:
+  - AUTH-001
+  - CSV-001
+  - INC-001
+  - FIN-001
+  - SET-001
+  expected_outputs:
+  - operations screens for quotes, orders, CSV import, incidents, COD and settlements
+  acceptance_criteria:
+  - every screen uses the AI-05 REST contract; no private API
+  - visible actions mirror D5-CAPABILITY-MATRIX; the backend remains the authorization barrier
+  - VIEWER screens never render exact coordinates
+  - REST is authoritative on load, refresh and reconnect
+  required_tests:
+  - Playwright per role
+  - tenant switch clears prior state
+  approval_gate: null
+- id: OBS-002
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
+  epic: Observability
+  release: MVP-1
+  title: Observabilidad del piloto
+  priority: P1
+  depends_on:
+  - OBS-001
+  - OPS-004
+  - ENV-001
+  expected_outputs:
+  - centralized logs, metrics and alerts for API, Worker and outbox lanes
+  acceptance_criteria:
+  - alerts on outbox lag, DEAD growth, retention failures and readiness degradation
+  - no PII, tokens or payloads in telemetry dimensions
+  - dashboards cover request errors by status class and Worker job outcomes
+  required_tests:
+  - telemetry dimension allowlist test
+  approval_gate: null
+- id: MDM-001
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
+  epic: Master Data
+  release: MVP-1
+  title: Datos maestros del piloto
+  priority: P1
+  depends_on:
+  - GEO-001
+  - PRC-001
+  - DSP-001
+  expected_outputs:
+  - controlled load of cities, service areas, operating zones, tariffs and driver profiles
+  acceptance_criteria:
+  - master data loads are idempotent, audited and tenant-scoped
+  - real zones and tariffs require GATE-010 and GATE-011 resolution or explicit owner scoping
+  required_tests:
+  - idempotent reload
+  - cross-tenant isolation
+  approval_gate: GATE-010
+- id: TRK-002
+  decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
+  epic: Tracking
+  release: MVP-1
+  title: Emisión y envío de enlaces de tracking
+  priority: P1
+  depends_on:
+  - TRK-001
+  - NTF-001
+  expected_outputs:
+  - authenticated issuance endpoint for public tracking links
+  - delivery of the link through an approved channel
+  acceptance_criteria:
+  - the plaintext token is returned once and never persisted or logged
+  - issuance and revocation are audited
+  - sending links to customers requires GATE-004 and GATE-007
+  required_tests:
+  - token issued exactly once
+  - revoked token returns the uniform 404
+  approval_gate: GATE-004
