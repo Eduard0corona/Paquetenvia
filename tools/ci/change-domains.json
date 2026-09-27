@@ -142,7 +142,8 @@
       "name": "WEB_AUTH",
       "patterns": [
         "apps/web/src/auth/**",
-        "apps/web/src/app/login/**"
+        "apps/web/src/app/login/**",
+        "apps/web/src/app/onboarding/**"
       ],
       "job_sets": [
         "WEB_ALL"
