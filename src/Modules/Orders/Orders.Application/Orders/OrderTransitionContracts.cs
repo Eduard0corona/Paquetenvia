@@ -404,13 +404,17 @@ public interface IOrderCustodyGuardReader
 /// the current attempt (after the latest entry into the current status) that no earlier
 /// <c>FAILED_ATTEMPT</c> already consumed. <c>LatestFailedAttemptNextAction</c> is the next action
 /// of the incident that justified the latest <c>FAILED_ATTEMPT</c>.
+/// <c>LatestFailedAttemptIncidentAdopted</c> marks that incident as one INC-001 adopted from a
+/// pre-INC-001 installation: its next action was derived by the adoption backfill, never chosen by
+/// anyone, so it does not bind the successor of the failed attempt.
 /// </summary>
 public sealed record IncidentGuardSnapshot(
     bool RequestedIncidentValid,
     bool RequestedIncidentCustodyAcquired,
     bool AnyCustodyAcquired,
     bool HasUnresolvedIncident,
-    string? LatestFailedAttemptNextAction = null);
+    string? LatestFailedAttemptNextAction = null,
+    bool LatestFailedAttemptIncidentAdopted = false);
 
 public interface IOrderIncidentGuardReader
 {

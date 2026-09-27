@@ -286,6 +286,124 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
         Assert.Equal("RETURNING", returning.Status);
     }
 
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task An_adopted_incident_backfilled_as_returning_does_not_bind_rescheduling()
+    {
+        await using var world = await AttemptWorld.CreateAsync(fixture, OrderStatusHistory.ToDelivering);
+        var adopted = await InsertAdoptedIncidentAsync(world);
+        await TransitionAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(adopted));
+
+        var rescheduled = await TransitionAsync(world, OrderStatus.Rescheduled);
+
+        Assert.Equal("RESCHEDULED", rescheduled.Status);
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task An_adopted_incident_backfilled_as_returning_does_not_bind_redelivery()
+    {
+        await using var world = await AttemptWorld.CreateAsync(fixture, OrderStatusHistory.ToDelivering);
+        var adopted = await InsertAdoptedIncidentAsync(world);
+        await TransitionAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(adopted));
+
+        var redelivery = await TransitionAsync(world, OrderStatus.Delivering);
+
+        Assert.Equal("DELIVERING", redelivery.Status);
+    }
+
+    // ------------------------------------------ 4b. recorded times follow the order lock
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task A_transition_that_waited_for_an_incident_is_recorded_after_it()
+    {
+        await using var world = await AttemptWorld.CreateAsync(
+            fixture,
+            OrderStatusHistory.CanonicalPathTo("IN_TRANSIT"));
+        var evidence = await InsertProofAsync(world, "DELIVERY_PHOTO");
+        var incidentId = Guid.NewGuid();
+
+        // An INC-001 opening holds the order FOR SHARE; the transition reads its clock first and
+        // then waits. The incident is committed with a later time than that clock reading.
+        await using var opener = await fixture.AdminDataSource.OpenConnectionAsync();
+        await using var transaction = await opener.BeginTransactionAsync();
+        await ExecuteAsync(opener, transaction,
+            "SELECT 1 FROM orders.orders WHERE id=@order FOR SHARE",
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId));
+
+        await using var scope = CreateTransitionScope();
+        var transition = scope.Service.TransitionAsync(
+            TransitionCommand(world, OrderStatus.Delivering, null),
+            CancellationToken.None);
+        await Task.WhenAny(transition, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.False(transition.IsCompleted);
+        await InsertOpenIncidentAsync(opener, transaction, world, incidentId, evidence);
+        await transaction.CommitAsync();
+
+        var delivering = await transition;
+        world.Version = delivering.Version;
+
+        Assert.True(await ScalarAsync<bool>(
+            """
+            SELECT e.occurred_at > i.created_at
+            FROM orders.order_events e, incidents.incidents i
+            WHERE e.order_id=@order AND e.aggregate_version=@version AND i.id=@incident
+            """,
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId),
+            SyntheticOrderScenario.P("version", delivering.Version),
+            SyntheticOrderScenario.P("incident", incidentId)));
+        // The incident belongs to the previous stage, so it cannot justify this attempt.
+        var stale = await RefusedAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(incidentId));
+        Assert.Equal("attempt_stage_recorded", stale.GuardCode);
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task An_incident_that_waited_for_a_transition_is_recorded_after_it()
+    {
+        await using var world = await AttemptWorld.CreateAsync(
+            fixture,
+            OrderStatusHistory.CanonicalPathTo("IN_TRANSIT"));
+        var evidence = await InsertProofAsync(world, "DELIVERY_PHOTO");
+
+        // A transition into DELIVERING holds the order FOR UPDATE; the opening reads its clock
+        // first and then waits. The status change is committed with a later time than that.
+        await using var writer = await fixture.AdminDataSource.OpenConnectionAsync();
+        await using var transaction = await writer.BeginTransactionAsync();
+        await ExecuteAsync(writer, transaction,
+            "UPDATE orders.orders SET status='DELIVERING',version=version+1 WHERE id=@order",
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId));
+
+        await using var scope = CreateIncidentScope();
+        var opening = scope.Service.OpenAsync(
+            OpenCommand(world, [evidence], IncidentContract.Rescheduled),
+            CancellationToken.None);
+        await Task.WhenAny(opening, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.False(opening.IsCompleted);
+        await ExecuteAsync(writer, transaction,
+            """
+            INSERT INTO orders.order_events(
+              id,order_id,owner_org_id,aggregate_version,event_type,payload,actor_id,occurred_at)
+            VALUES (
+              gen_random_uuid(),@order,@org,@version,'ORDER_STATUS_CHANGED',
+              jsonb_build_object('previous_status','IN_TRANSIT','new_status','DELIVERING'),
+              @actor,clock_timestamp())
+            """,
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId),
+            SyntheticOrderScenario.P("org", world.Scenario.OrganizationId),
+            SyntheticOrderScenario.P("version", world.Version + 1),
+            SyntheticOrderScenario.P("actor", world.Scenario.UserId));
+        await transaction.CommitAsync();
+        world.Version++;
+
+        var incident = await opening;
+
+        // Opened in the attempt the status change started, so it justifies that attempt.
+        var failed = await TransitionAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(incident));
+        Assert.Equal("FAILED_ATTEMPT", failed.Status);
+    }
+
     // ------------------------------------------------------ 5. EXTERNAL realtime audience
 
     [PostgreSqlContractFact]
@@ -369,10 +487,115 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
             stops.Select(stop => stop.OrderId).ToArray());
     }
 
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Driver_stops_follow_the_sequence_of_the_stop_they_are_heading_to()
+    {
+        // The main order is in custody, so its stop is DELIVERY (sequence 4) even though its
+        // PICKUP stop comes first on the route; the sibling still has to be picked up (sequence 2).
+        await using var world = await AttemptWorld.CreateAsync(fixture, OrderStatusHistory.ToDelivering);
+        var sibling = await world.AddSiblingAssignmentAsync();
+        await world.AddTypedRouteAsync(
+        [
+            (world.Scenario.OrderId, "PICKUP"),
+            (sibling, "PICKUP"),
+            (sibling, "DELIVERY"),
+            (world.Scenario.OrderId, "DELIVERY"),
+        ]);
+
+        var stops = await CreateStopsQuery().ListCurrentDriverStopsAsync(
+            world.DriverUserId,
+            world.Scenario.OrganizationId,
+            CancellationToken.None);
+
+        Assert.Equal(
+            [(sibling, "PICKUP"), (world.Scenario.OrderId, "DELIVERY")],
+            stops.Select(stop => (stop.OrderId, stop.StopType)).ToArray());
+    }
+
     // ------------------------------------------------------------------- helpers
 
-    private static string IncidentMetadata(IncidentResult incident) =>
-        $$"""{"incident_id":"{{incident.Id:D}}"}""";
+    private static string IncidentMetadata(IncidentResult incident) => IncidentMetadata(incident.Id);
+
+    private static string IncidentMetadata(Guid incidentId) =>
+        $$"""{"incident_id":"{{incidentId:D}}"}""";
+
+    /// <summary>
+    /// An incident as a pre-INC-001 installation left it after the INC-001 adoption: no evidence
+    /// (the evidence table did not exist yet) and the next action the backfill derived from
+    /// custody, here RETURNING. The row predates the evidence trigger, so the seed skips triggers
+    /// for its own transaction only; foreign keys and check constraints still hold.
+    /// </summary>
+    private async Task<Guid> InsertAdoptedIncidentAsync(AttemptWorld world)
+    {
+        var incidentId = Guid.NewGuid();
+        await using var connection = await fixture.AdminDataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await ExecuteAsync(connection, transaction, "SET LOCAL session_replication_role=replica");
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO incidents.incidents(
+              id,order_id,owner_org_id,incident_type,severity,status,custody_acquired,
+              created_by,created_at,reason_code,next_action,occurred_at,sla_due_at)
+            VALUES (
+              @incident,@order,@org,'FAILED_DELIVERY_ATTEMPT','MEDIUM','OPEN',true,
+              @user,clock_timestamp(),'FAILED_DELIVERY_ATTEMPT','RETURNING',
+              clock_timestamp(),clock_timestamp()+interval '24 hours')
+            """,
+            SyntheticOrderScenario.P("incident", incidentId),
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId),
+            SyntheticOrderScenario.P("org", world.Scenario.OrganizationId),
+            SyntheticOrderScenario.P("user", world.Scenario.UserId));
+        await transaction.CommitAsync();
+        Assert.Equal(0L, await ScalarAsync<long>(
+            "SELECT count(*) FROM incidents.incident_evidence WHERE incident_id=@incident",
+            SyntheticOrderScenario.P("incident", incidentId)));
+        return incidentId;
+    }
+
+    /// <summary>A pending INC-001 incident with its evidence, written inside the caller's transaction.</summary>
+    private static Task InsertOpenIncidentAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        AttemptWorld world,
+        Guid incidentId,
+        Guid proofId) =>
+        ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO incidents.incidents(
+              id,order_id,owner_org_id,incident_type,severity,status,custody_acquired,
+              created_by,created_at,reason_code,next_action,occurred_at,sla_due_at)
+            VALUES (
+              @incident,@order,@org,'FAILED_DELIVERY_ATTEMPT','MEDIUM','OPEN',true,
+              @user,clock_timestamp(),'RECIPIENT_ABSENT','RESCHEDULED',
+              clock_timestamp(),clock_timestamp()+interval '24 hours');
+            INSERT INTO incidents.incident_evidence(
+              id,incident_id,order_id,owner_org_id,operator_org_id,proof_id,created_by,created_at)
+            VALUES (gen_random_uuid(),@incident,@order,@org,NULL,@proof,@user,clock_timestamp());
+            """,
+            SyntheticOrderScenario.P("incident", incidentId),
+            SyntheticOrderScenario.P("order", world.Scenario.OrderId),
+            SyntheticOrderScenario.P("org", world.Scenario.OrganizationId),
+            SyntheticOrderScenario.P("user", world.Scenario.UserId),
+            SyntheticOrderScenario.P("proof", proofId));
+
+    private static async Task ExecuteAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sql,
+        params NpgsqlParameter[] parameters)
+    {
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        command.Parameters.AddRange(parameters);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<T> ScalarAsync<T>(string sql, params NpgsqlParameter[] parameters)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(sql);
+        command.Parameters.AddRange(parameters);
+        return (T)(await command.ExecuteScalarAsync())!;
+    }
 
     private async Task<OrderResult> TransitionAsync(
         AttemptWorld world,
@@ -701,7 +924,11 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
         }
 
         /// <summary>One RTE-001 route of the driver whose DELIVERY stops follow the given order.</summary>
-        public async Task AddRouteAsync(IReadOnlyList<Guid> orderIds)
+        public Task AddRouteAsync(IReadOnlyList<Guid> orderIds) =>
+            AddTypedRouteAsync(orderIds.Select(orderId => (orderId, "DELIVERY")).ToArray());
+
+        /// <summary>One RTE-001 route of the driver whose stops follow the given order and types.</summary>
+        public async Task AddTypedRouteAsync(IReadOnlyList<(Guid OrderId, string StopType)> stops)
         {
             var routeId = Guid.NewGuid();
             routeIds.Add(routeId);
@@ -714,20 +941,21 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
                 SyntheticOrderScenario.P("org", Scenario.OrganizationId),
                 SyntheticOrderScenario.P("city", Scenario.CityId),
                 SyntheticOrderScenario.P("driver", DriverId));
-            for (var index = 0; index < orderIds.Count; index++)
+            for (var index = 0; index < stops.Count; index++)
             {
                 await Scenario.ExecuteAdminAsync(
                     """
                     INSERT INTO routes.route_stops(
                       id,route_id,order_id,operator_org_id,sequence,stop_type,status)
-                    VALUES (gen_random_uuid(),@route,@order,@org,@sequence,'DELIVERY','PENDING');
+                    VALUES (gen_random_uuid(),@route,@order,@org,@sequence,@stop_type,'PENDING');
                     UPDATE dispatch.assignments SET route_id=@route
                     WHERE order_id=@order AND status='ACTIVE';
                     """,
                     SyntheticOrderScenario.P("route", routeId),
-                    SyntheticOrderScenario.P("order", orderIds[index]),
+                    SyntheticOrderScenario.P("order", stops[index].OrderId),
                     SyntheticOrderScenario.P("org", Scenario.OrganizationId),
-                    SyntheticOrderScenario.P("sequence", index + 1));
+                    SyntheticOrderScenario.P("sequence", index + 1),
+                    SyntheticOrderScenario.P("stop_type", stops[index].StopType));
             }
         }
 

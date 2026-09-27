@@ -67,6 +67,9 @@ internal static class OrderTransitionEligibility
         DriverEligibilityRejectionCodes.PackageLengthExceeded,
         DriverEligibilityRejectionCodes.PackageWidthExceeded,
         DriverEligibilityRejectionCodes.PackageHeightExceeded,
+        // A vehicle type without a configured capacity cannot attest capacity: it is a capacity
+        // failure, not a driver-eligibility one.
+        DriverEligibilityRejectionCodes.VehicleCapacityPolicyUnavailable,
     };
 
     /// <summary>An invalid requirement the policy always rejects as a capacity failure.</summary>

@@ -400,6 +400,44 @@ public sealed class OrderTransitionDomainTests
         }
     }
 
+    [Theory]
+    [InlineData(OrderStatus.Rescheduled, true, true)]
+    [InlineData(OrderStatus.Delivering, true, true)]
+    [InlineData(OrderStatus.Returning, true, true)]
+    [InlineData(OrderStatus.Returning, false, false)]
+    public void An_adopted_incident_next_action_does_not_bind_the_successor(
+        OrderStatus target,
+        bool custodyAcquired,
+        bool satisfied)
+    {
+        // The adoption backfilled RETURNING (custody) for this incident; it was never chosen.
+        var registry = new OrderTransitionGuardRegistry();
+        var context = new OrderTransitionGuardContext
+        {
+            Source = OrderStatus.FailedAttempt,
+            Target = target,
+            Reason = "synthetic",
+            OccurredAt = Now,
+            ClaimWindowEndsAt = null,
+            FinalizedAt = null,
+            CodExpectedCents = 0,
+            MonetaryIntegrityValid = true,
+            Metadata = NormalizedTransitionMetadata.Empty,
+            Custody = new CustodyGuardSnapshot(custodyAcquired),
+            Assignment = new AssignmentGuardSnapshot(true, true, true, true),
+            Incidents = new IncidentGuardSnapshot(false, false, false, true, "RETURNING", LatestFailedAttemptIncidentAdopted: true),
+        };
+
+        var result = registry.Evaluate(context);
+
+        Assert.Equal(satisfied, result.Satisfied);
+        if (!satisfied)
+        {
+            // Every other guard of the target still holds: nothing is returned without custody.
+            Assert.Equal("custody_acquired_true", result.Code);
+        }
+    }
+
     [Fact]
     public void Central_redactor_removes_sensitive_reason_values()
     {

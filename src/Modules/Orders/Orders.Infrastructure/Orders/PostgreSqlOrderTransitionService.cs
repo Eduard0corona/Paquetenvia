@@ -234,6 +234,12 @@ public sealed class PostgreSqlOrderTransitionService(
         }
 
         await failureInjector.OnStageAsync(OrderTransitionStage.OrderLocked, cancellationToken);
+        occurredAt = await SequenceAfterCommittedIncidentsAsync(
+            connection,
+            transaction,
+            command.OrderId,
+            occurredAt,
+            cancellationToken);
         var version = OrderTransitionMatrix.EvaluateVersion(order.Version, command.ExpectedVersion);
         if (!version.Allowed)
         {
@@ -588,6 +594,42 @@ public sealed class PostgreSqlOrderTransitionService(
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, createdAt));
         command.Parameters.Add(P("expires", NpgsqlDbType.TimestampTz, expiresAt));
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "The transition reservation was not inserted.");
+    }
+
+    /// <summary>
+    /// The transition's time is read from the application clock before the order lock, and
+    /// INC-001 opens incidents under a share lock on the same row. Whichever commits first, the
+    /// later one must carry the later time, or an incident opened during the previous attempt
+    /// could look newer than the status change that starts the next one. This runs after the
+    /// order lock in its own statement (a fresh READ COMMITTED snapshot, so it sees every incident
+    /// committed while the lock was awaited) and moves the transition just past the newest
+    /// incident of the order when the clock alone would have placed it earlier. INC-001 applies
+    /// the mirror rule against the order history. No AI-06 column is needed.
+    /// </summary>
+    private async Task<DateTimeOffset> SequenceAfterCommittedIncidentsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid orderId,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            SELECT max(i.created_at)
+            FROM incidents.incidents i
+            WHERE i.order_id=@order
+            """);
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
+        var latest = await command.ExecuteScalarAsync(cancellationToken);
+        if (latest is not DateTime latestIncident)
+        {
+            return occurredAt;
+        }
+
+        var after = new DateTimeOffset(DateTime.SpecifyKind(latestIncident, DateTimeKind.Utc)).AddTicks(10);
+        return after > occurredAt ? after : occurredAt;
     }
 
     private async Task<OrderRow?> ReadOrderForUpdateAsync(

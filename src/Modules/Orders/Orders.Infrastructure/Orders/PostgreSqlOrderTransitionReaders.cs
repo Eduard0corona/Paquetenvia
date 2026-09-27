@@ -460,7 +460,13 @@ public sealed class PostgreSqlOrderCustodyGuardReader : IOrderCustodyGuardReader
 /// An incident justifies one failed attempt: the requested incident must be pending, opened after
 /// the latest status change into the order's current status, and not already named by an earlier
 /// <c>FAILED_ATTEMPT</c>. Also reads the next action of the incident behind the latest
-/// <c>FAILED_ATTEMPT</c>, which decides the only successors the order may take.
+/// <c>FAILED_ATTEMPT</c>, which decides the only successors the order may take, unless INC-001
+/// adopted that incident from a pre-INC-001 installation. Adopted incidents are recognised without
+/// a new AI-06 column: INC-001 creates <c>incidents.incident_evidence</c> in the adoption itself and
+/// a deferred constraint trigger refuses every later incident without evidence, while nothing adds
+/// evidence to an existing incident. An incident without evidence is therefore exactly one that
+/// existed before the adoption, whose next action the backfill derived from
+/// <c>custody_acquired</c>.
 /// </summary>
 public sealed class PostgreSqlOrderIncidentGuardReader : IOrderIncidentGuardReader
 {
@@ -513,15 +519,21 @@ public sealed class PostgreSqlOrderIncidentGuardReader : IOrderIncidentGuardRead
                 SELECT 1 FROM incidents.incidents i
                 WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)
                   AND i.status IN ('OPEN','INVESTIGATING')),
-              (
-                SELECT i.next_action
-                FROM incidents.incidents i
-                JOIN (
-                  SELECT f.incident_id FROM failed_attempts f
-                  ORDER BY f.aggregate_version DESC LIMIT 1
-                ) latest ON latest.incident_id=i.id::text
-                WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)
-              )
+              latest_incident.next_action,
+              COALESCE(latest_incident.adopted,false)
+            FROM (SELECT 1) anchor
+            LEFT JOIN LATERAL (
+              SELECT i.next_action,
+                     NOT EXISTS (
+                       SELECT 1 FROM incidents.incident_evidence ev WHERE ev.incident_id=i.id
+                     ) AS adopted
+              FROM incidents.incidents i
+              JOIN (
+                SELECT f.incident_id FROM failed_attempts f
+                ORDER BY f.aggregate_version DESC LIMIT 1
+              ) latest ON latest.incident_id=i.id::text
+              WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)
+            ) latest_incident ON true
             """);
         command.Parameters.Add(TransitionReaderCommand.P("org", NpgsqlDbType.Uuid, organizationId));
         command.Parameters.Add(TransitionReaderCommand.P("order", NpgsqlDbType.Uuid, orderId));
@@ -533,7 +545,8 @@ public sealed class PostgreSqlOrderIncidentGuardReader : IOrderIncidentGuardRead
                 reader.GetBoolean(1),
                 reader.GetBoolean(2),
                 reader.GetBoolean(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4))
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.GetBoolean(5))
             : new(false, false, false, false);
     }
 }

@@ -125,6 +125,8 @@ public sealed partial class PostgreSqlIncidentService(
                         throw new IncidentConflictException("EVIDENCE_NOT_AVAILABLE");
                     }
 
+                    var recordedAt = order.RecordedAt(now);
+
                     var incidentId = Guid.NewGuid();
                     var result = new IncidentResult(
                         incidentId,
@@ -141,14 +143,14 @@ public sealed partial class PostgreSqlIncidentService(
 
                     await InsertReservationAsync(
                         dbContext, command.OrganizationId, IdempotencyScope, command.IdempotencyKey,
-                        requestHash, now, token);
+                        requestHash, recordedAt, token);
                     await InsertIncidentAsync(
-                        dbContext, command, order, result, protectedDescription, now, token);
-                    await InsertEvidenceAsync(dbContext, command, order, result, now, token);
-                    await WriteAuditAsync(dbContext, command, result, now, token);
+                        dbContext, command, order, result, protectedDescription, recordedAt, token);
+                    await InsertEvidenceAsync(dbContext, command, order, result, recordedAt, token);
+                    await WriteAuditAsync(dbContext, command, result, recordedAt, token);
                     await CompleteReservationAsync(
                         dbContext, command.OrganizationId, IdempotencyScope, command.IdempotencyKey,
-                        requestHash, OpenedResponseStatus, result, now, token);
+                        requestHash, OpenedResponseStatus, result, recordedAt, token);
                     return result;
                 },
                 cancellationToken);

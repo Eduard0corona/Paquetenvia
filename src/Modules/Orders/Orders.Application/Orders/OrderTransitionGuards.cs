@@ -140,8 +140,11 @@ public sealed class OrderTransitionGuardRegistry
             Guard(210, "retry_custody_acquired_true", RetryDelivery, c => c.CustodyAcquired),
             Guard(220, "retry_valid_assignment", RetryDelivery,
                 c => c.Assignment.ExactlyOneActive && c.Assignment.EligibleDriver),
+            // An adopted incident's next action is a backfilled default, not a decision: it does
+            // not bind the successor. Every other guard of the target (custody for RETURNING, a
+            // valid assignment for redelivery) still applies.
             Guard(230, "failed_attempt_next_action_respected", LeaveFailedAttempt,
-                c => c.Target switch
+                c => c.Incidents.LatestFailedAttemptIncidentAdopted || c.Target switch
                 {
                     OrderStatus.Returning => c.Incidents.LatestFailedAttemptNextAction == "RETURNING",
                     OrderStatus.Rescheduled or OrderStatus.Delivering =>

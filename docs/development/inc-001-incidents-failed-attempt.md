@@ -230,7 +230,9 @@ ORD-002 ya define:
    otro `FAILED_ATTEMPT`: una incidencia justifica un solo intento fallido.
 6. `no_unresolved_incident` sigue bloqueando `CLOSED` mientras la incidencia siga abierta.
 7. Al salir de `FAILED_ATTEMPT`, ORD-002 respeta `next_action`: `RETURNING` solo permite
-   `RETURNING`; `RESCHEDULED` permite `RESCHEDULED` o el reintento `DELIVERING`.
+   `RETURNING`; `RESCHEDULED` permite `RESCHEDULED` o el reintento `DELIVERING`. Una incidencia
+   adoptada de una instalación previa (sin evidencia; su `next_action` lo rellenó el backfill) no
+   restringe el sucesor.
 8. La evidencia de una incidencia nunca completa una recolección ni una entrega en ORD-002.
 
 `next_action` registra de forma explícita si el siguiente paso operativo es `RESCHEDULED` o
@@ -335,5 +337,16 @@ Las pruebas de contrato requieren Docker (Testcontainers con `postgis/postgis:18
 1. Retirar `MapIncidentEndpoints` y `AddIncidentsInfrastructure` de la composición de la API.
 2. Revertir los commits INC-001.
 
-La migración no se revierte: la evidencia de incidencia es registro operativo append-only. Las
-columnas y la tabla agregadas permanecen y son inertes sin el módulo.
+La migración de adopción no se revierte: la evidencia de incidencia es registro operativo
+append-only. Las columnas y la tabla agregadas permanecen y son inertes sin el módulo.
+
+### Índice de evidencia por orden y prueba
+
+`20260927000100_IndexIncidentEvidenceByOrderProof` agrega
+`incident_evidence_order_proof_idx ON incidents.incident_evidence(order_id, proof_id)`, que sirve la
+consulta de ORD-002 "¿esta prueba ya es evidencia de incidencia?" (ni
+`(owner_org_id, incident_id)` ni `UNIQUE (incident_id, proof_id)` la cubren). La tabla la crea la
+migración del módulo, no AI-06, así que el índice pertenece al carril Incidents del migrador. Esta
+migración sí se revierte (`DROP INDEX IF EXISTS`): solo quita un camino de acceso. Subida, bajada y
+nueva subida están probadas contra PostgreSQL real en
+`IncidentEvidenceIndexMigrationPostgreSqlContractTests`.

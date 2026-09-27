@@ -11,7 +11,22 @@ internal sealed record AuthorizedOrder(
     Guid OwnerOrganizationId,
     Guid? OperatorOrganizationId,
     string Status,
-    bool CustodyAcquired);
+    bool CustodyAcquired,
+    DateTimeOffset? LatestStatusChangeAt = null)
+{
+    /// <summary>
+    /// The time an incident opened on this order records. The application clock is read before
+    /// the order lock, so on its own it could place the incident before a status change that
+    /// committed while the lock was awaited; the incident then moves just past the newest status
+    /// change. ORD-002 applies the mirror rule against the order's incidents, so under the order
+    /// lock the recorded times follow the commit order and <c>created_at</c> compared with the
+    /// start of the current attempt is decided by what really happened first.
+    /// </summary>
+    public DateTimeOffset RecordedAt(DateTimeOffset clockNow) =>
+        LatestStatusChangeAt is { } latest && latest.AddTicks(10) > clockNow
+            ? latest.AddTicks(10)
+            : clockNow;
+}
 
 internal sealed record ResolutionCapability(bool IsActiveDispatcher, bool IsActivePlatformAdmin);
 
@@ -44,6 +59,10 @@ internal static class IncidentsSql
     /// concurrent ORD-002 transition (which locks it <c>FOR UPDATE</c>) either commits first and is
     /// seen here, or waits until the incident is committed. Custody is the single derivation
     /// ORD-002 and the driver stops view share: a <c>PICKED_UP</c> status change in the history.
+    /// The lock is taken by its own statement first: a READ COMMITTED statement that waits for a
+    /// row lock re-reads only the locked row, while its subqueries keep the snapshot taken before
+    /// the wait. Reading status, history and custody in a second statement gives them all the
+    /// snapshot that already holds whatever the lock waited for.
     /// </summary>
     internal static async Task<AuthorizedOrder?> ReadAuthorizedOrderAsync(
         DbContext context,
@@ -54,6 +73,18 @@ internal static class IncidentsSql
         CancellationToken cancellationToken)
     {
         var (connection, transaction) = Database(context);
+        await using (var lockCommand = new NpgsqlCommand(
+                         "SELECT 1 FROM orders.orders o WHERE o.id=@order FOR SHARE OF o",
+                         connection,
+                         transaction))
+        {
+            lockCommand.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
+            if (await lockCommand.ExecuteScalarAsync(cancellationToken) is null)
+            {
+                return null;
+            }
+        }
+
         await using var command = new NpgsqlCommand(
             """
             SELECT o.owner_org_id,o.operator_org_id,o.status,
@@ -95,10 +126,14 @@ internal static class IncidentsSql
                     AND a.operator_org_id IS NOT DISTINCT FROM o.operator_org_id
                     AND (a.owner_org_id=@organization OR a.operator_org_id=@organization)
                     AND a.status IN ('ACCEPTED','ACTIVE'))
-              ) AS authorized
+              ) AS authorized,
+              (
+                SELECT max(e.occurred_at) FROM orders.order_events e
+                WHERE e.order_id=o.id AND e.owner_org_id=o.owner_org_id
+                  AND e.event_type='ORDER_STATUS_CHANGED'
+              ) AS latest_status_change_at
             FROM orders.orders o
             WHERE o.id=@order
-            FOR SHARE OF o
             """,
             connection,
             transaction);
@@ -121,7 +156,8 @@ internal static class IncidentsSql
             reader.GetGuid(0),
             reader.IsDBNull(1) ? null : reader.GetGuid(1),
             reader.GetString(2),
-            reader.GetBoolean(3));
+            reader.GetBoolean(3),
+            reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5));
     }
 
     /// <summary>

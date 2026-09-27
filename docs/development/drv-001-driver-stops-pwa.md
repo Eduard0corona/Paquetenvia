@@ -117,7 +117,9 @@ La key es un SHA-256 base64url del namespace opaco y la organización. No contie
 el token, el tenant en claro ni PII. Un 200 válido reemplaza atómicamente el
 snapshot completo, conserva el orden REST y elimina paradas que dejaron de
 estar asignadas. El orden REST sigue la ruta del conductor (RTE-001): primero las
-asignaciones ligadas a una ruta, por ruta y `sequence` de la parada; después las
+asignaciones ligadas a una ruta, por ruta y `sequence` de la parada del tipo al que
+se dirige el conductor (`PICKUP` antes de la custodia, `DELIVERY` después, `RETURN`
+al devolver; si la ruta no tiene parada de ese tipo, la primera de la orden); después las
 no ruteadas, por antigüedad de la asignación. El tipo de parada usa la custodia
 única de ORD-002: un `PICKED_UP` en el historial de la orden; una foto de
 recolección usada como evidencia de incidencia no convierte la parada en entrega.
