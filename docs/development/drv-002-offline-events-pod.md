@@ -122,8 +122,11 @@ drv2-{operationId}-session-{sessionAttempt}
 drv2-{operationId}-finalize-{sessionAttempt}
 ```
 
-El timestamp del cliente sólo se envía como `captured_at` al finalizar POD. No
-se agrega al body de transición ni altera la fecha autoritativa del backend.
+El timestamp del cliente viaja como `client_occurred_at` en la transición y en
+la creación de la sesión de carga, y como `captured_at` al finalizar POD
+(AI-05 `x-offline-operation-age`, decisión OPS-003-PWA-CLIENT-OCCURRED-AT). Es
+el mismo instante de captura en cada reintento y después de recargar; no altera
+la fecha autoritativa del backend, que sólo lo usa para la regla de 72 h.
 
 ## Sincronización
 
@@ -147,7 +150,8 @@ Una transición envía exactamente:
   "target_status": "<destino>",
   "reason": "<motivo DRIVER_*>",
   "expected_version": 1,
-  "metadata": {}
+  "metadata": {},
+  "client_occurred_at": "<instante de captura UTC>"
 }
 ```
 
@@ -185,6 +189,7 @@ sola transición funcional.
 | 409 de transición | `NEEDS_ATTENTION`; bloquea las posteriores de esa orden |
 | 409 POD “not ready” | `WAITING_VALIDATION` y reintento |
 | otro 409 POD o respuesta inválida | atención fail-closed |
+| 409 `OFFLINE_OPERATION_EXPIRED` (o captura con más de 72 h) | elimina operación y blob, nunca reintenta y avisa al conductor (OPS-003) |
 
 La limpieza nunca toca otra organización ni otro IndexedDB. Offline no permite
 detectar una revocación nueva; al siguiente 401/403 conocido se elimina el
@@ -284,7 +289,11 @@ La categoría `DriverOfflineOperationsPwa` ejecuta Chromium real y cubre:
   preflight y upload 2xx, y termina en `DELIVERED`, dos proofs, dos sesiones
   consumidas, cinco eventos, nueve registros idempotentes y cero duplicados.
 
-Son once escenarios de navegador en la categoría. El harness serializa el
+- una operación que el servidor rechaza con `OFFLINE_OPERATION_EXPIRED` se
+  elimina una sola vez, conserva su instante de captura tras recargar y muestra
+  el aviso al conductor.
+
+Son doce escenarios de navegador en la categoría. El harness serializa el
 servidor Next entre procesos de test y libera el lock al terminar; esto no
 modifica comportamiento productivo.
 
@@ -320,7 +329,6 @@ dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.cspr
   confirmó el paso.
 - Un proof puede quedar confirmado aunque su transición posterior termine en
   conflicto; REST sigue siendo autoridad y SignalR sólo solicita un refresh.
-- Las transiciones no aceptan el timestamp del cliente.
 - Los 409/503 de POD conservan el drift normativo heredado; DRV-002 no cambia
   OpenAPI ni backend para resolverlo.
 - No existe failed attempt, workflow de incidentes ni frontend COD.

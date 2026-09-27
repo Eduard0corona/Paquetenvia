@@ -22,6 +22,8 @@ import {
   type DriverSyncSchedulerOptions,
 } from "../offline/driver-sync-scheduler";
 import type { DriverSyncApi } from "../offline/driver-sync-api";
+import { OfflineOperationMaximumAgeHours } from "../offline/offline-operation-age";
+import { driverOperationLabel } from "../contracts/labels";
 import {
   validateDriverProof,
   type ValidatedDriverProof,
@@ -51,6 +53,29 @@ export interface DriverOperationsControllerOptions {
   readonly randomUuid?: () => string;
 }
 
+/**
+ * OPS-003-OFFLINE-72H: the driver is told, in plain Spanish, that the action
+ * was discarded because it waited too long without connection and that it has
+ * to be registered again or reported to dispatch.
+ */
+export function driverOperationExpiredMessage(
+  kinds: readonly DriverOperationKind[],
+): string {
+  const limit = `${OfflineOperationMaximumAgeHours} horas`;
+  if (kinds.length === 1) {
+    return (
+      `La acción «${driverOperationLabel(kinds[0])}» venció: pasaron más de ` +
+      `${limit} sin conexión y ya no se enviará. Vuelve a registrarla o ` +
+      "repórtala a despacho."
+    );
+  }
+  return (
+    `${kinds.length} acciones guardadas vencieron: pasaron más de ${limit} ` +
+    "sin conexión y ya no se enviarán. Vuelve a registrarlas o repórtalas a " +
+    "despacho."
+  );
+}
+
 const initialState: DriverOperationsState = Object.freeze({
   operations: [],
   loading: true,
@@ -70,6 +95,7 @@ export class DriverOperationsController {
   private scheduler: DriverSyncScheduler | null = null;
   private readonly telemetry: DriverSyncTelemetry;
   private disposed = false;
+  private expiredKinds: DriverOperationKind[] = [];
 
   public constructor(private readonly options: DriverOperationsControllerOptions) {
     this.queue = options.queue ?? new IndexedDbDriverOfflineQueue();
@@ -104,6 +130,7 @@ export class DriverOperationsController {
         onQueueChanged: (next) =>
           this.setState({ ...this.state, operations: next, loading: false }),
         onAccessRevoked: this.options.onAccessRevoked,
+        onOperationExpired: (operation) => this.notifyExpired(operation.kind),
         telemetry: this.telemetry,
         now: this.options.now,
         randomUuid: this.options.randomUuid,
@@ -145,7 +172,7 @@ export class DriverOperationsController {
       return;
     }
 
-    this.setState({ ...this.state, mutating: true, message: null });
+    this.beginMutation();
     try {
       let proof: ValidatedDriverProof | undefined;
       if (definition.proofType) proof = await validateDriverProof(blob);
@@ -179,9 +206,14 @@ export class DriverOperationsController {
   }
 
   public async syncNow(): Promise<void> {
+    this.expiredKinds = [];
     this.setMessage("Sincronizando acciones pendientes.");
     await this.scheduler?.requestSync(true);
-    await this.reload(null);
+    await this.reload(
+      this.expiredKinds.length > 0
+        ? driverOperationExpiredMessage(this.expiredKinds)
+        : null,
+    );
   }
 
   public async discard(
@@ -193,7 +225,7 @@ export class DriverOperationsController {
     const discarded = this.state.operations.find(
       (candidate) => candidate.id === operationId,
     );
-    this.setState({ ...this.state, mutating: true, message: null });
+    this.beginMutation();
     await this.queue.deleteOperation(this.partition, operationId);
     if (
       discarded &&
@@ -221,7 +253,7 @@ export class DriverOperationsController {
     ) {
       return;
     }
-    this.setState({ ...this.state, mutating: true, message: null });
+    this.beginMutation();
     await this.queue.replaceOperation(this.partition, {
       ...operation,
       status: "PENDING",
@@ -263,7 +295,7 @@ export class DriverOperationsController {
       this.setMessage("La versión confirmada cambió; crea una acción nueva.");
       return;
     }
-    this.setState({ ...this.state, mutating: true, message: null });
+    this.beginMutation();
     await this.queue.replaceOperation(this.partition, {
       ...operation,
       status: "PENDING",
@@ -287,7 +319,7 @@ export class DriverOperationsController {
       this.setMessage("La acción ya no corresponde al estado confirmado.");
       return;
     }
-    this.setState({ ...this.state, mutating: true, message: null });
+    this.beginMutation();
     const replacement = createDriverOfflineOperation({
       partitionKey: this.partition.key,
       orderId: old.orderId,
@@ -382,6 +414,16 @@ export class DriverOperationsController {
               : operation.safeError,
       });
     }
+  }
+
+  private beginMutation(): void {
+    this.expiredKinds = [];
+    this.setState({ ...this.state, mutating: true, message: null });
+  }
+
+  private notifyExpired(kind: DriverOperationKind): void {
+    this.expiredKinds = [...this.expiredKinds, kind];
+    this.setMessage(driverOperationExpiredMessage(this.expiredKinds));
   }
 
   private setMessage(message: string): void {

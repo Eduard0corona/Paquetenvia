@@ -1,4 +1,7 @@
-import type { DriverOperationalStatus } from "../offline/operation-contract";
+import type {
+  DriverOperationKind,
+  DriverOperationalStatus,
+} from "../offline/operation-contract";
 import type { DriverStop } from "./driver-stop";
 
 const typeLabels: Readonly<Record<DriverStop["stop_type"], string>> = {
@@ -27,4 +30,16 @@ export function driverStopTypeLabel(value: DriverStop["stop_type"]): string {
 
 export function driverStopStatusLabel(value: DriverDisplayStatus): string {
   return statusLabels[value];
+}
+
+const operationLabels: Readonly<Record<DriverOperationKind, string>> = {
+  CHECK_IN: "Llegué a recolección",
+  PICKUP_PROOF: "Confirmar recolección",
+  START_TRANSIT: "Iniciar traslado",
+  START_DELIVERY: "Llegué al destino",
+  DELIVERY_PROOF: "Confirmar entrega",
+};
+
+export function driverOperationLabel(kind: DriverOperationKind): string {
+  return operationLabels[kind];
 }

@@ -10,6 +10,10 @@ import {
 import type {
   DriverOfflineOperation,
 } from "./operation-contract";
+import {
+  isOfflineOperationExpired,
+  isOfflineOperationExpiredCode,
+} from "./offline-operation-age";
 
 export const DriverSyncBackoffMilliseconds = [
   1_000, 2_000, 5_000, 10_000, 30_000,
@@ -44,6 +48,12 @@ export interface DriverSyncSchedulerOptions {
     operations: readonly DriverOfflineOperation[],
   ) => void;
   readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
+  /**
+   * Called once for every operation removed because it is older than the
+   * OPS-003 maximum age. The operation is already gone from the queue and
+   * will never be sent again; the caller only tells the driver.
+   */
+  readonly onOperationExpired?: (operation: DriverOfflineOperation) => void;
   readonly telemetry?: DriverSyncTelemetry;
   readonly now?: () => Date;
   readonly randomUuid?: () => string;
@@ -156,6 +166,19 @@ export class DriverSyncScheduler {
           this.options.partition,
         );
         this.publishQueue(operations);
+        // An action held for the driver's attention is never sent on its own,
+        // but it still may not outlive the OPS-003 window: once it could no
+        // longer be retried it is discarded and the driver is told.
+        const stale = operations.find(
+          (candidate) =>
+            (candidate.status === "NEEDS_ATTENTION" ||
+              candidate.status === "BLOCKED") &&
+            isOfflineOperationExpired(candidate.clientOccurredAt, this.now()),
+        );
+        if (stale) {
+          await this.expire(stale);
+          continue;
+        }
         const operation = selectRunnableOperation(
           operations,
           this.now(),
@@ -207,6 +230,13 @@ export class DriverSyncScheduler {
       }
       if (current.status === "AWAITING_REST_CONFIRMATION") {
         await this.deferRestConfirmation(current);
+        return;
+      }
+      // REST has just shown the action was not applied. Past the OPS-003
+      // window the server would only answer OFFLINE_OPERATION_EXPIRED, so the
+      // queue discards it now instead of sending it.
+      if (isOfflineOperationExpired(current.clientOccurredAt, this.now())) {
+        await this.expire(current);
         return;
       }
 
@@ -400,6 +430,13 @@ export class DriverSyncScheduler {
       this.telemetry.syncDeferred("network");
       return;
     }
+    if (
+      error.category === "conflict" &&
+      isOfflineOperationExpiredCode(error.publicCode)
+    ) {
+      await this.expire(operation);
+      return;
+    }
     if (error.category === "session-expired") {
       await this.persist(operation, {
         status: "NEEDS_ATTENTION",
@@ -412,6 +449,54 @@ export class DriverSyncScheduler {
       operation,
       phase === "proof" ? "EVIDENCE_REJECTED" : "VERSION_CONFLICT",
     );
+  }
+
+  /**
+   * OPS-003-OFFLINE-72H: an expired operation is removed permanently, with its
+   * local evidence, and is never retried. Later operations for the same order
+   * were built on top of it, so they can no longer apply: each one that is
+   * itself expired is removed the same way, and the first remaining one is
+   * held for the driver's attention with the rest blocked behind it.
+   */
+  private async expire(operation: DriverOfflineOperation): Promise<void> {
+    await this.options.queue.deleteOperation(
+      this.options.partition,
+      operation.id,
+    );
+    this.telemetry.conflictRaised("offline-operation-expired");
+    this.options.onOperationExpired?.(operation);
+
+    const dependents = (
+      await this.options.queue.listOperations(this.options.partition)
+    )
+      .filter(
+        (candidate) =>
+          candidate.orderId === operation.orderId &&
+          compareOperations(candidate, operation) > 0,
+      )
+      .sort(compareOperations);
+    let held = false;
+    for (const candidate of dependents) {
+      if (
+        candidate.status !== "AWAITING_REST_CONFIRMATION" &&
+        isOfflineOperationExpired(candidate.clientOccurredAt, this.now())
+      ) {
+        await this.options.queue.deleteOperation(
+          this.options.partition,
+          candidate.id,
+        );
+        this.telemetry.conflictRaised("offline-operation-expired");
+        this.options.onOperationExpired?.(candidate);
+      } else if (!held) {
+        held = true;
+        await this.persist(candidate, {
+          status: "NEEDS_ATTENTION",
+          safeError: "VERSION_CONFLICT",
+        });
+      } else {
+        await this.persist(candidate, { status: "BLOCKED" });
+      }
+    }
   }
 
   private async markAttentionAndBlock(
