@@ -104,10 +104,11 @@ código `OFFLINE_OPERATION_EXPIRED`, verificados contra AI-05):
 El aviso dice, en español, que la acción venció tras 72 horas sin conexión y
 que debe registrarse de nuevo o reportarse a despacho.
 
-`openIncident` conserva su regla configurable de 72 h con `INVALID_REQUEST`; la
-PWA no abre incidentes, y su unificación con `OFFLINE_OPERATION_EXPIRED`
-(OPS-003-INCIDENT-72H-UNIFICATION) requiere cambios de backend y AI-05 que
-siguen pendientes de decisión.
+La PWA no abre incidentes. La unificación de `openIncident` con
+`OFFLINE_OPERATION_EXPIRED` (OPS-003-INCIDENT-72H-UNIFICATION; el owner eligió
+"Unificar pero configurable": mismo 409 antes del servicio, 72 h configurables
+y tolerancia de reloj de incidentes de hasta 60 min) llega en un PR de backend
+separado.
 
 ## Rollback
 
