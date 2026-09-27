@@ -99,6 +99,9 @@ public sealed class PostgreSqlProofFinalizationService(
                     token);
                 ValidateTrustedObject(command, lockedSession, storedObject);
                 var now = clock.UtcNow;
+                // Read after the order lock with a fresh snapshot, so it sees every status change
+                // committed while the lock was awaited; see AuthorizedOrder.RecordedAt.
+                var createdAt = order.RecordedAt(now);
                 var proofId = Guid.NewGuid();
                 var result = new ProofResult(
                     proofId,
@@ -111,7 +114,7 @@ public sealed class PostgreSqlProofFinalizationService(
                     command.CapturedAt,
                     command.Latitude,
                     command.Longitude,
-                    now);
+                    createdAt);
                 await InsertReservationAsync(dbContext, command, requestHash, now, token);
                 await InsertProofAsync(dbContext, command, order, objectKey, storedObject, result, token);
                 await ConsumeSessionAsync(dbContext, command.UploadSessionId, now, token);
