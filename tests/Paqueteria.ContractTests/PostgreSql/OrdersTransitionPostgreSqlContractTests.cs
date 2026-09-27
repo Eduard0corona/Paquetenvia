@@ -169,10 +169,10 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                   (SELECT payload_redacted::text FROM platform.audit_logs a
                     WHERE a.entity_id=o.id AND a.action='ORDER_STATUS_CHANGED'),
                   (SELECT count(*) FROM platform.outbox_events x
-                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
                       AND x.topic='dispatch.order-status-reaction-requested' AND x.status='PENDING'),
                   (SELECT payload::text FROM platform.outbox_events x
-                    WHERE x.aggregate_id=o.id AND x.aggregate_version=2
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
                       AND x.topic='dispatch.order-status-reaction-requested')
                 FROM orders.orders o WHERE o.id=@order;
                 """);
