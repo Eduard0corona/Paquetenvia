@@ -425,6 +425,26 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(
             "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
             E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true));
+
+        // REG-002: four more registration-executor routines for paqueteria_app, after REG-001.
+        Assert.Equal(
+            Organizations.Infrastructure.Persistence.Migrations.AddPendingMemberships.MigrationId,
+            E002RegistrationStateReader.Reg002MigrationId);
+        var pending = E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true, true, reg002Applied: true)
+            .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true, true))
+            .ToArray();
+        Assert.Equal(
+            Organizations.Infrastructure.Persistence.Migrations.AddPendingMemberships.OwnedFunctions,
+            pending.Select(entry => entry.Signature));
+        Assert.All(pending, entry =>
+        {
+            Assert.Equal("paqueteria_registration_executor", entry.Owner);
+            Assert.Equal(["paqueteria_app"], entry.Grantees);
+        });
+        Assert.Equal(47, E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true, true, true).Count);
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true, true));
     }
 
     [PostgreSqlContractFact]
@@ -522,10 +542,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
                 semantic.RoutineMap);
-            Assert.Equal(43, semantic.ControlledIdentities);
-            Assert.Equal(84, semantic.NormalizedExecuteRows);
+            Assert.Equal(47, semantic.ControlledIdentities);
+            Assert.Equal(92, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> CustodyLaneAsync() =>
@@ -606,10 +626,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
                 semantic.RoutineMap);
-            Assert.Equal(43, semantic.ControlledIdentities);
-            Assert.Equal(84, semantic.NormalizedExecuteRows);
+            Assert.Equal(47, semantic.ControlledIdentities);
+            Assert.Equal(92, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> IdentityLaneAsync() =>
@@ -625,8 +645,9 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
         var coordinator = new ModuleMigrationCoordinator();
 
-        // Every other lane is applied by the privileged fixture principal; this contract is the REG-001 step.
-        // Rewinding it leaves a populated installation whose registration executor was pre-provisioned per E-002.
+        // Every other lane is applied by the privileged fixture principal; this contract is the REG-001 and REG-002
+        // steps. Rewinding both leaves a populated installation whose registration executor was pre-provisioned
+        // per E-002 and whose pending_memberships table the REG-002 lane adopts.
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION security.register_identity_subject(text,uuid);
@@ -634,8 +655,12 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             DROP FUNCTION security.list_own_organization_applications(uuid);
             DROP FUNCTION security.list_pending_ally_organizations(uuid,uuid,integer);
             DROP FUNCTION security.decide_ally_organization(uuid,uuid,uuid,boolean,text);
+            DROP FUNCTION security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text);
+            DROP FUNCTION security.renew_pending_membership(uuid,uuid,uuid,text,text);
+            DROP FUNCTION security.revoke_pending_membership(uuid,uuid,uuid,text,text);
+            DROP FUNCTION security.apply_pending_memberships(text,bytea[],integer[]);
             DELETE FROM platform."__ef_migrations_history_organizations"
-              WHERE "MigrationId"='{E002RegistrationStateReader.Reg001MigrationId}';
+              WHERE "MigrationId" IN ('{E002RegistrationStateReader.Reg001MigrationId}','{E002RegistrationStateReader.Reg002MigrationId}');
             """);
         Assert.Equal("PENDING", await OrganizationsLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
@@ -672,7 +697,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(
             string.Join(';', Enumerable.Repeat(
                 "paqueteria_registration_executor|{paqueteria_registration_executor=X/paqueteria_registration_executor,paqueteria_app=X/paqueteria_registration_executor}",
-                5)),
+                9)),
             await environment.TextAsync("""
                 SELECT string_agg(pg_get_userbyid(proowner) || '|' || proacl::text, ';' ORDER BY proname)
                 FROM pg_proc WHERE proowner='paqueteria_registration_executor'::regrole
@@ -692,10 +717,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
                 semantic.RoutineMap);
-            Assert.Equal(43, semantic.ControlledIdentities);
-            Assert.Equal(84, semantic.NormalizedExecuteRows);
+            Assert.Equal(47, semantic.ControlledIdentities);
+            Assert.Equal(92, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrganizationsLaneAsync() =>
@@ -841,10 +866,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             // The Notifications lane also installed the D8 DISPATCH lane and the Custody OPS-003 lane is applied
             // too: two routines each, owner + Worker.
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
                 semantic.RoutineMap);
-            Assert.Equal(43, semantic.ControlledIdentities);
-            Assert.Equal(84, semantic.NormalizedExecuteRows);
+            Assert.Equal(47, semantic.ControlledIdentities);
+            Assert.Equal(92, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>

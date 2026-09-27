@@ -50,11 +50,12 @@ public sealed class SelfServiceRegistrationPostgreSqlContractTests(PostgreSqlCon
         }
 
         Assert.Equal(
-            string.Join(',', AddSelfServiceRegistration.OwnedFunctions.Order(StringComparer.Ordinal)),
+            string.Join(',', AddSelfServiceRegistration.OwnedFunctions.Concat(AddPendingMemberships.OwnedFunctions)
+                .Order(StringComparer.Ordinal)),
             await ScalarAsync<string>(
                 "SELECT string_agg(oid::regprocedure::text, ',' ORDER BY oid::regprocedure::text) FROM pg_proc WHERE proowner=@executor::regrole",
                 ("executor", Executor)));
-        foreach (var signature in AddSelfServiceRegistration.OwnedFunctions)
+        foreach (var signature in AddSelfServiceRegistration.OwnedFunctions.Concat(AddPendingMemberships.OwnedFunctions))
         {
             Assert.Equal(
                 "t|f|f|t",
@@ -322,7 +323,8 @@ public sealed class SelfServiceRegistrationPostgreSqlContractTests(PostgreSqlCon
             var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
             await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
             await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
-            Assert.Equal(5, await ScalarAsync<long>(connectionString,
+            // REG-002 shares the executor: the lane owns the five REG-001 and the four REG-002 functions.
+            Assert.Equal(9, await ScalarAsync<long>(connectionString,
                 "SELECT count(*) FROM pg_proc WHERE proowner='paqueteria_registration_executor'::regrole"));
 
             // Down: functions gone, three-value status check back, history row removed.
@@ -353,7 +355,8 @@ public sealed class SelfServiceRegistrationPostgreSqlContractTests(PostgreSqlCon
                 await transaction.RollbackAsync();
             }
 
-            // A PENDING_APPROVAL organization blocks the rollback, and nothing changes.
+            // A PENDING_APPROVAL organization blocks the REG-001 rollback, and nothing of REG-001 changes. EF
+            // rolls REG-002 back first in its own transaction, so only the five REG-001 functions remain.
             await ExecuteAsync(connectionString, """
                 INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type,status)
                 VALUES ('0b0b0b0b-0000-0000-0000-000000000001','P','P','ALLY','PENDING_APPROVAL');
@@ -456,6 +459,7 @@ public sealed class SelfServiceRegistrationPostgreSqlContractTests(PostgreSqlCon
             Provider = IdentityBootstrapProviderKind.PostgreSql,
             CommandTimeoutSeconds = 30,
         }),
+        EmailLookupTestHasher.Create(),
         NullLogger<PostgreSqlIdentityRegistration>.Instance);
 
     private static CreateSelfServiceOrganizationCommand Command(

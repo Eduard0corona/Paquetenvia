@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Application.Security;
 
 namespace Identity.Infrastructure.Registration;
 
@@ -11,14 +12,88 @@ namespace Identity.Infrastructure.Registration;
 /// REG-001: <c>security.register_identity_subject(text,uuid)</c>, owned by
 /// <c>paqueteria_registration_executor</c>, inside an explicit transaction as <c>paqueteria_app</c>.
 /// The application generates the candidate user id; UNIQUE(identity_subject) decides which concurrent
-/// sign-in wins, and the losers leave the existing user untouched. Never logs the subject.
+/// sign-in wins, and the losers leave the existing user untouched. REG-002 pending memberships are
+/// applied through <c>security.apply_pending_memberships(text,bytea[],integer[])</c> with the keyed
+/// HMACs of the verified email, never the address. Never logs the subject or the email.
 /// </summary>
 public sealed class PostgreSqlIdentityRegistration(
     NpgsqlDataSource dataSource,
     IOptions<IdentityBootstrapOptions> options,
+    IEmailLookupHasher emailLookupHasher,
     ILogger<PostgreSqlIdentityRegistration> logger) : IIdentityRegistration
 {
     private const string Query = "SELECT security.register_identity_subject(@identity_subject, @user_id);";
+    private const string ApplyQuery =
+        "SELECT security.apply_pending_memberships(@identity_subject, @email_hmacs, @key_versions);";
+
+    public async ValueTask<int> ApplyPendingMembershipsAsync(
+        string identitySubject,
+        string verifiedEmail,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identitySubject);
+        if (!EmailLookupNormalizer.TryNormalize(verifiedEmail, out var normalized))
+        {
+            return 0;
+        }
+
+        if (!emailLookupHasher.IsAvailable)
+        {
+            // Only Development and Testing may run without a key (EmailLookup fails fast elsewhere).
+            logger.LogWarning("Pending memberships were not applied because no email lookup key is configured.");
+            return 0;
+        }
+
+        var hashes = emailLookupHasher.HashForLookup(normalized);
+        try
+        {
+            await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await using (var roleCommand = new NpgsqlCommand("SET LOCAL ROLE paqueteria_app;", connection, transaction)
+            {
+                CommandTimeout = options.Value.CommandTimeoutSeconds,
+            })
+            {
+                await roleCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using var command = new NpgsqlCommand(ApplyQuery, connection, transaction)
+            {
+                CommandTimeout = options.Value.CommandTimeoutSeconds,
+            };
+            command.Parameters.Add(new NpgsqlParameter<string>("identity_subject", NpgsqlDbType.Text)
+            {
+                TypedValue = identitySubject,
+            });
+            command.Parameters.Add(new NpgsqlParameter<byte[][]>("email_hmacs", NpgsqlDbType.Array | NpgsqlDbType.Bytea)
+            {
+                TypedValue = hashes.Select(hash => hash.Hash).ToArray(),
+            });
+            command.Parameters.Add(new NpgsqlParameter<int[]>("key_versions", NpgsqlDbType.Array | NpgsqlDbType.Integer)
+            {
+                TypedValue = hashes.Select(hash => hash.KeyVersion).ToArray(),
+            });
+            var value = await command.ExecuteScalarAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return value is int accepted and >= 0
+                ? accepted
+                : throw new IdentityRegistrationUnavailableException("Pending membership application returned no count.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (IdentityRegistrationUnavailableException)
+        {
+            logger.LogError("Pending membership application returned data that violates the expected contract.");
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError("Pending membership application failed due to a technical database error.");
+            throw new IdentityRegistrationUnavailableException("Pending membership application is unavailable.", exception);
+        }
+    }
 
     public async ValueTask RegisterAsync(string identitySubject, CancellationToken cancellationToken)
     {
@@ -80,11 +155,24 @@ public sealed class MockIdentityRegistration : IIdentityRegistration
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.CompletedTask;
     }
+
+    /// <summary>Mock memberships are synthetic and fixed; nothing is applied.</summary>
+    public ValueTask<int> ApplyPendingMembershipsAsync(
+        string identitySubject, string verifiedEmail, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identitySubject);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(0);
+    }
 }
 
 /// <summary>Disabled bootstrap: nothing can be registered, so sign-in fails closed.</summary>
 public sealed class DisabledIdentityRegistration : IIdentityRegistration
 {
     public ValueTask RegisterAsync(string identitySubject, CancellationToken cancellationToken) =>
+        throw new IdentityRegistrationUnavailableException("Identity registration is disabled.");
+
+    public ValueTask<int> ApplyPendingMembershipsAsync(
+        string identitySubject, string verifiedEmail, CancellationToken cancellationToken) =>
         throw new IdentityRegistrationUnavailableException("Identity registration is disabled.");
 }

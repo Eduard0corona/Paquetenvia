@@ -264,6 +264,23 @@ GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON o
 -- no longer ACTIVE, so the new organization can become the usable default.
 GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;
 GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;
+
+-- REG-002 (REG-JOIN-EXISTING-BY-EMAIL): the same executor owns four more SECURITY DEFINER functions of the
+-- Organizations lane (20260927000500_AddPendingMemberships), EXECUTE only for paqueteria_app:
+--   security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text): an ACTIVE PLATFORM_ADMIN,
+--     ALLY_ADMIN or BUSINESS_ADMIN of the ACTIVE organization adds an email HMAC and a role within its
+--     ceiling (REG-ROLE-CEILING); PLATFORM_ADMIN is grantable only inside an organization of type PLATFORM;
+--   security.renew_pending_membership(uuid,uuid,uuid,text,text) and
+--   security.revoke_pending_membership(uuid,uuid,uuid,text,text): same actor rule, same organization only;
+--   security.apply_pending_memberships(text,bytea[],integer[]): at every sign-in with a verified email, each
+--     PENDING unexpired entry of an ACTIVE organization matching the HMAC becomes a membership exactly once.
+-- Runtime roles never write pending memberships directly: paqueteria_app keeps SELECT under RLS only and
+-- paqueteria_worker has no privilege on the table.
+REVOKE INSERT,UPDATE,DELETE ON organizations.pending_memberships FROM paqueteria_app;
+REVOKE ALL ON organizations.pending_memberships FROM paqueteria_worker;
+GRANT SELECT (id,organization_id,email_hmac,email_hmac_key_version,role,status,created_at,expires_at) ON organizations.pending_memberships TO paqueteria_registration_executor;
+GRANT INSERT (id,organization_id,email_hmac,email_hmac_key_version,role,status,invited_by,created_at,expires_at) ON organizations.pending_memberships TO paqueteria_registration_executor;
+GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON organizations.pending_memberships TO paqueteria_registration_executor;
 -- BFF session store is a separate security capability (BFF-SESSION-TABLE-SHAPE, BFF-SESSION-STORE-POSTGRESQL).
 -- paqueteria_session_executor owns only the SECURITY DEFINER functions the Identity migration lane
 -- (20260927000400_AddBffSessionStore) installs after this baseline, each with
@@ -304,7 +321,7 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- 14. paqueteria_cleanup_executor holds only USAGE on schemas platform and custody, SELECT(owner_org_id,scope,idempotency_key,created_at,expires_at) plus DELETE on platform.idempotency_keys, and SELECT(id,status,expires_at) plus UPDATE(status,updated_at) on custody.proof_upload_sessions: no INSERT, no other table except the BFF session purge grants of assertion 24, no outbox, bootstrap, lifecycle or purge-outbox privilege.
 -- 15. both cleanup functions are SECURITY DEFINER with search_path=pg_catalog, platform, pg_temp (idempotency) and pg_catalog, custody, pg_temp (sessions), accept only bounded batch sizes, return only a count, and only paqueteria_worker may EXECUTE them; PUBLIC and paqueteria_app may not.
 -- 16. security.purge_expired_idempotency_keys never deletes a key created less than 72 hours before its own clock_timestamp() nor one that has not expired, whatever cutoff, batch size or mode it receives; dry-run mutates nothing.
--- 17. paqueteria_registration_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only the five REG-001 functions.
+-- 17. paqueteria_registration_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only the five REG-001 functions and, once REG-002 is recorded, the four REG-002 functions.
 -- 18. paqueteria_registration_executor holds only USAGE on schemas identity, organizations and platform and exactly the column grants above: no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup or purge privilege.
 -- 19. the five REG-001 functions are SECURITY DEFINER with a pinned search_path and only paqueteria_app may EXECUTE them; PUBLIC and paqueteria_worker may not.
 -- 20. paqueteria_session_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only security.create_bff_session(bytea,text,text,bytea,timestamptz), security.resolve_bff_session(bytea), security.revoke_bff_session(bytea), security.revoke_bff_session(text), security.revoke_bff_session(text,timestamptz) and security.register_bff_logout_jti(bytea,timestamptz).
@@ -312,3 +329,4 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- 22. the six session functions are SECURITY DEFINER with search_path=pg_catalog, identity, pg_temp, validate every argument, and only paqueteria_app may EXECUTE them; PUBLIC and paqueteria_worker may not.
 -- 23. identity.bff_sessions and identity.bff_logout_jtis have ENABLE and FORCE ROW LEVEL SECURITY with no policy, and paqueteria_app and paqueteria_worker hold no table or column privilege on them.
 -- 24. once the Custody BFF purge lane is recorded, paqueteria_cleanup_executor additionally owns security.purge_bff_sessions(integer) and holds USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on identity.bff_sessions and SELECT(jti_hash,expires_at) and DELETE on identity.bff_logout_jtis, and nothing else there; only paqueteria_worker may EXECUTE the purge.
+-- 25. once REG-002 is recorded, the four REG-002 functions are SECURITY DEFINER with a pinned search_path, owned by paqueteria_registration_executor, and only paqueteria_app may EXECUTE them; organizations.pending_memberships has ENABLE and FORCE ROW LEVEL SECURITY with the tenant policy, paqueteria_app holds only SELECT on it and paqueteria_worker holds nothing.

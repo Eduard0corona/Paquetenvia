@@ -106,6 +106,18 @@ public static class E002RoutineMap
         new("security.purge_bff_sessions(integer)", "paqueteria_cleanup_executor", ["paqueteria_worker"]),
     ];
 
+    /// <summary>
+    /// REG-002 (REG-JOIN-EXISTING-BY-EMAIL): installed by the Organizations lane migration
+    /// 20260927000500_AddPendingMemberships after REG-001, with the same owner and grantee.
+    /// </summary>
+    private static readonly E002RoutineEntry[] Reg002Entries =
+    [
+        new("security.add_pending_membership(uuid,uuid,uuid,bytea,integer,text,text,text)", "paqueteria_registration_executor", ["paqueteria_app"]),
+        new("security.renew_pending_membership(uuid,uuid,uuid,text,text)", "paqueteria_registration_executor", ["paqueteria_app"]),
+        new("security.revoke_pending_membership(uuid,uuid,uuid,text,text)", "paqueteria_registration_executor", ["paqueteria_app"]),
+        new("security.apply_pending_memberships(text,bytea[],integer[])", "paqueteria_registration_executor", ["paqueteria_app"]),
+    ];
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -124,7 +136,8 @@ public static class E002RoutineMap
             Ops003Entries.Length != 2 || Ops003Entries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
             Reg001Entries.Length != 5 || Reg001Entries.Sum(entry => 1 + entry.Grantees.Count) != 10 ||
             BffSessionEntries.Length != 6 || BffSessionEntries.Sum(entry => 1 + entry.Grantees.Count) != 12 ||
-            BffPurgeEntries.Length != 1 || BffPurgeEntries.Sum(entry => 1 + entry.Grantees.Count) != 2)
+            BffPurgeEntries.Length != 1 || BffPurgeEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
+            Reg002Entries.Length != 4 || Reg002Entries.Sum(entry => 1 + entry.Grantees.Count) != 8)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
@@ -137,7 +150,8 @@ public static class E002RoutineMap
         bool ops003Applied = false,
         bool reg001Applied = false,
         bool bffSessionApplied = false,
-        bool bffPurgeApplied = false)
+        bool bffPurgeApplied = false,
+        bool reg002Applied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -176,6 +190,11 @@ public static class E002RoutineMap
             selected = selected.Concat(BffPurgeEntries);
         }
 
+        if (reg002Applied)
+        {
+            selected = selected.Concat(Reg002Entries);
+        }
+
         return Array.AsReadOnly(selected.ToArray());
     }
 
@@ -186,7 +205,8 @@ public static class E002RoutineMap
         bool ops003Applied = false,
         bool reg001Applied = false,
         bool bffSessionApplied = false,
-        bool bffPurgeApplied = false)
+        bool bffPurgeApplied = false,
+        bool reg002Applied = false)
     {
         var prefix = state switch
         {
@@ -202,6 +222,7 @@ public static class E002RoutineMap
             (reg001Applied ? "_PLUS_REG001" : string.Empty) +
             (bffSessionApplied ? "_PLUS_BFFSESSION" : string.Empty) +
             (bffPurgeApplied ? "_PLUS_BFFPURGE" : string.Empty) +
+            (reg002Applied ? "_PLUS_REG002" : string.Empty) +
             "_V1";
     }
 }

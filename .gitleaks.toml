@@ -20,4 +20,8 @@ regexes = [
   # It is only in the history of feature/pilot-contract-deltas (the fixture now derives its token at
   # runtime) and that pushed history cannot be rewritten.
   '''cGlsb3QtdGltZWxpbmUtb3JkZXItYWdncmVnYXRlLXZlcnNpb24''',
+  # REG-002 HTTP-test email lookup key, base64("reg002-http-test-key-0123456789abcdef"). It is only in
+  # the history of feature/reg-join-by-email (the factory now derives its key at runtime) and that
+  # pushed history cannot be rewritten.
+  '''cmVnMDAyLWh0dHAtdGVzdC1rZXktMDEyMzQ1Njc4OWFiY2RlZg==''',
 ]

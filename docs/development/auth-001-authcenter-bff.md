@@ -231,7 +231,21 @@ Decisiones del owner del 27-sep-2026 (`AUTH-OPEN-REGISTRATION`, que reemplaza a
 - Todas las escrituras previas al tenant o entre tenants pasan por cinco funciones SECURITY DEFINER
   del rol `paqueteria_registration_executor` (AI-18). El rol bootstrap sigue sin escribir y el
   aprovisionador de TEN-003 sigue negado por defecto.
-- Unirse a una organización existente ("El admin la agrega por correo") queda para REG-002.
+- Unirse a una organización existente (REG-002, "El admin la agrega por correo"): un PLATFORM_ADMIN,
+  ALLY_ADMIN o BUSINESS_ADMIN con MFA agrega a una persona por correo y rol
+  (`/api/v1/organizations/{organizationId}/pending-memberships`, con `X-Organization-Id` igual a la
+  organización de la ruta). Se guarda sólo el HMAC con llave del correo normalizado (trim, NFC,
+  minúsculas invariantes) y la versión de la llave en `organizations.pending_memberships`; la
+  respuesta es la misma 202 exista o no la cuenta. Techo de roles: ALLY_ADMIN agrega ALLY_ADMIN,
+  ALLY_OPERATOR, DRIVER o VIEWER; BUSINESS_ADMIN agrega BUSINESS_ADMIN, BUSINESS_OPERATOR o VIEWER;
+  PLATFORM_ADMIN cualquier rol, y PLATFORM_ADMIN sólo en una organización PLATFORM. Las entradas
+  vencen a los 7 días, se renuevan (`/renew`, sin notificar) y se revocan (`/revoke`).
+- En cada callback con correo verificado, después de `register_identity_subject`, la API llama a
+  `security.apply_pending_memberships(text,bytea[],integer[])` con el HMAC del claim `email` bajo
+  cada versión de llave configurada: cada entrada PENDING vigente de una organización ACTIVE se
+  vuelve membresía del usuario ACTIVE una sola vez (bloqueo de fila; inicios concurrentes no la
+  duplican), en todas las organizaciones que coincidan. Un DRIVER agregado así no opera hasta tener
+  perfil de conductor.
 
 ## 9. Configuración
 
@@ -243,13 +257,20 @@ Decisiones del owner del 27-sep-2026 (`AUTH-OPEN-REGISTRATION`, que reemplaza a
 | `AuthCenter__Issuer` | App Settings | valor exacto de `Jwt:Issuer` de AuthCenter (se compara ordinalmente) |
 | `AuthCenter__ClientId` | App Settings | `paquetenvia-web-<ambiente>` |
 | `AuthCenter__ClientSecret` | **Key Vault reference** | `@Microsoft.KeyVault(SecretUri=https://<kv>.vault.azure.net/secrets/authcenter-paquetenvia-client-secret)` |
+| `EmailLookup__CurrentKeyVersion` | App Settings | `1` (versión con la que se guardan las entradas nuevas) |
+| `EmailLookup__Keys__1` | **Key Vault reference** | `@Microsoft.KeyVault(SecretUri=https://<kv>.vault.azure.net/secrets/paquetenvia-email-lookup-key-1)`; Base64 de 32 a 128 bytes aleatorios (`openssl rand -base64 32`) |
 | `AuthCenter__PublicOrigin` | App Settings | `https://<host-web>` (sin path) |
 | `AuthCenter__SessionLifetimeMinutes` | App Settings (opcional) | `480` |
 | `NEXT_PUBLIC_AUTH_MODE` (web, build) | pipeline | `bff` |
 | `PAQUETENVIA_API_PROXY_ORIGIN` (web, solo local) | entorno de desarrollo | `http://localhost:8080`; vacío en Azure (enruta el ingress) |
 
 El secreto **nunca** va en `appsettings*.json`, en GitHub, en variables de pipeline, en logs ni en
-tickets. En local se usa `dotnet user-secrets`. La API no arranca (`ValidateOnStart`) si falta alguno
+tickets. En local se usa `dotnet user-secrets`. Lo mismo vale para `EmailLookup__Keys__<versión>`
+(REG-002): fuera de `Development`/`Testing` la API no arranca sin llave cuando `Tenancy` o
+`IdentityBootstrap` usan PostgreSql, y una llave mal formada impide el arranque en cualquier
+ambiente; en `Development`/`Testing` sin llave, agregar responde 503 y el login no aplica entradas.
+Para rotar, se agrega la versión nueva, se cambia `CurrentKeyVersion` y la anterior se retira
+después de 7 días (las entradas viejas siguen buscándose con todas las versiones configuradas). La API no arranca (`ValidateOnStart`) si falta alguno
 de estos valores, si `Authority` no es HTTPS, si el secreto tiene menos de 32 caracteres o si
 `PublicOrigin` tiene path. En `Development`/`Testing` también se acepta `http://localhost` como
 `PublicOrigin`.

@@ -560,7 +560,9 @@ public sealed class AddSelfServiceRegistration : Migration
              OR (SELECT array_agg(table_schema || '.' || table_name || '.' || column_name || ':' || privilege_type
                    ORDER BY table_schema, table_name, privilege_type, column_name)
                  FROM information_schema.column_privileges
-                 WHERE grantee='paqueteria_registration_executor')
+                 WHERE grantee='paqueteria_registration_executor'
+                   -- REG-002 owns the pending_memberships grants; a fresh AI-18 already carries them.
+                   AND table_name <> 'pending_memberships')
                IS DISTINCT FROM ARRAY[
                  'identity.users.created_at:INSERT',
                  'identity.users.id:INSERT',

@@ -92,6 +92,17 @@ public static class DependencyInjection
                 TenancyProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlSelfServiceRegistrationService>(),
                 _ => serviceProvider.GetRequiredService<DisabledSelfServiceRegistrationService>(),
             });
+
+        // REG-002 (REG-JOIN-EXISTING-BY-EMAIL): administrators add people by email; IEmailLookupHasher
+        // comes from AddEmailLookupHashing in the host.
+        services.AddSingleton<DisabledPendingMembershipService>();
+        services.AddScoped<PostgreSqlPendingMembershipService>();
+        services.AddScoped<IPendingMembershipService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<TenancyOptions>>().Value.Provider switch
+            {
+                TenancyProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlPendingMembershipService>(),
+                _ => serviceProvider.GetRequiredService<DisabledPendingMembershipService>(),
+            });
         return services;
     }
 }

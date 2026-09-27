@@ -335,7 +335,7 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             ["nonce"] = behavior.OverrideNonce ?? grant.Nonce,
             ["auth_time"] = new DateTimeOffset(now).ToUnixTimeSeconds(),
             ["name"] = "Usuario Sintético",
-            ["email"] = "synthetic.user@paquetenvia.test",
+            ["email"] = behavior.Email ?? "synthetic.user@paquetenvia.test",
             ["roles"] = "AUTHCENTER_SUPERADMIN",
             ["permissions"] = "EVERYTHING",
         };
@@ -451,6 +451,9 @@ public sealed record TokenBehavior
     public string? SessionId { get; init; }
     public object? EmailVerified { get; init; }
     public bool OmitEmailVerified { get; init; }
+
+    /// <summary>REG-002: the email claim of the ID token; the synthetic default otherwise.</summary>
+    public string? Email { get; init; }
 }
 
 /// <summary>One deviation at a time from a valid AuthCenter logout token.</summary>

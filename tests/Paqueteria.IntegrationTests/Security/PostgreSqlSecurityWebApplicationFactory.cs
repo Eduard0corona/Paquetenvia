@@ -131,6 +131,10 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         }
     }
 
+    /// <summary>REG-002 test-only email lookup key, derived at runtime so no key-like literal is committed.</summary>
+    public static string TestEmailLookupKey { get; } = Convert.ToBase64String(
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("paquetenvia reg002 http tests")));
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
@@ -149,6 +153,9 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
                 ["OperationsDashboard:Provider"] = "PostgreSql",
                 ["OperationsDashboard:CommandTimeoutSeconds"] = "5",
                 ["ConnectionStrings:Paqueteria"] = _applicationConnectionString,
+                // REG-002: a test-only email lookup key (Base64 of 32 derived bytes), never a real one.
+                ["EmailLookup:CurrentKeyVersion"] = "1",
+                ["EmailLookup:Keys:1"] = TestEmailLookupKey,
             }));
         if (_trackingTokenHasher is not null)
         {

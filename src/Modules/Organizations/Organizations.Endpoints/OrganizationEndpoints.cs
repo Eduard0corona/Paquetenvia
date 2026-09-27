@@ -14,6 +14,7 @@ public static class OrganizationEndpoints
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapRegistrationEndpoints();
+        endpoints.MapPendingMembershipEndpoints();
         return endpoints;
     }
 
