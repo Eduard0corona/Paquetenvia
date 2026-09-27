@@ -21,6 +21,13 @@ public static class MockIdentityProfiles
     public const string RevokedMembership = "revoked-membership";
     public const string ActiveWithoutMemberships = "active-without-memberships";
     public const string UnknownSubject = "unknown-subject";
+    public const string ActiveFinance = "active-finance";
+    public const string ActiveFinanceMfa = "active-finance-mfa";
+    public const string ActiveDispatcherPlatformAdminNoMfa = "active-dispatcher-platform-admin-no-mfa";
+    public const string ActiveAllyAdmin = "active-ally-admin";
+    public const string ActiveAllyOperator = "active-ally-operator";
+    public const string ActiveBusinessAdmin = "active-business-admin";
+    public const string ActiveBusinessOperator = "active-business-operator";
 
     public static readonly Guid ViewerOrganizationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     public static readonly Guid OperationsOrganizationId = Guid.Parse("22222222-2222-2222-2222-222222222222");
@@ -44,6 +51,13 @@ public static class MockIdentityProfiles
             [RevokedMembership] = External("mock-subject-revoked-membership", true),
             [ActiveWithoutMemberships] = External("mock-subject-no-memberships", false),
             [UnknownSubject] = External("mock-subject-not-provisioned", false),
+            [ActiveFinance] = External("mock-subject-active-finance", false),
+            [ActiveFinanceMfa] = External("mock-subject-active-finance-mfa", true),
+            [ActiveDispatcherPlatformAdminNoMfa] = External("mock-subject-dispatcher-platform-admin-no-mfa", false),
+            [ActiveAllyAdmin] = External("mock-subject-active-ally-admin", false),
+            [ActiveAllyOperator] = External("mock-subject-active-ally-operator", false),
+            [ActiveBusinessAdmin] = External("mock-subject-active-business-admin", false),
+            [ActiveBusinessOperator] = External("mock-subject-active-business-operator", false),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     internal static FrozenDictionary<string, ResolvedIdentityContext> AuthorizationProfiles { get; } =
@@ -83,6 +97,28 @@ public static class MockIdentityProfiles
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa8"),
             ["mock-subject-no-memberships"] = Context(
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9"),
+            ["mock-subject-active-finance"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa30",
+                Membership(ViewerOrganizationId, OrganizationRole.Finance, true)),
+            ["mock-subject-active-finance-mfa"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa31",
+                Membership(ViewerOrganizationId, OrganizationRole.Finance, true)),
+            ["mock-subject-dispatcher-platform-admin-no-mfa"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa32",
+                Membership(ViewerOrganizationId, OrganizationRole.PlatformAdmin, true),
+                Membership(ViewerOrganizationId, OrganizationRole.Dispatcher, false)),
+            ["mock-subject-active-ally-admin"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa33",
+                Membership(ViewerOrganizationId, OrganizationRole.AllyAdmin, true)),
+            ["mock-subject-active-ally-operator"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa34",
+                Membership(ViewerOrganizationId, OrganizationRole.AllyOperator, true)),
+            ["mock-subject-active-business-admin"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa35",
+                Membership(ViewerOrganizationId, OrganizationRole.BusinessAdmin, true)),
+            ["mock-subject-active-business-operator"] = Context(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa36",
+                Membership(ViewerOrganizationId, OrganizationRole.BusinessOperator, true)),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     private static ExternalIdentity External(string subject, bool mfaSatisfied) =>

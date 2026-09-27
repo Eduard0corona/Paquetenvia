@@ -258,7 +258,8 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
                 using (request)
                 {
                     using var response = await client.SendAsync(request);
-                    await AssertProblemAsync(response, HttpStatusCode.Forbidden, "Forbidden.");
+                    AssertForbiddenCode(
+                        await AssertProblemAsync(response, HttpStatusCode.Forbidden, "Forbidden."), profile);
                 }
             }
         }
@@ -486,7 +487,7 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
         foreach (var path in new[] { "/api/v1/settlements", "/api/v1/settlements?status=DRAFT&period_from=2025-02-01" })
         {
             using var response = await client.SendAsync(Get(path, profile));
-            await AssertProblemAsync(response, HttpStatusCode.Forbidden, "Forbidden.");
+            AssertForbiddenCode(await AssertProblemAsync(response, HttpStatusCode.Forbidden, "Forbidden."), profile);
         }
     }
 
@@ -678,6 +679,23 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
         return JsonSerializer.Serialize(root.EnumerateObject()
             .Where(property => property.Name != "traceId")
             .ToDictionary(property => property.Name, property => property.Value.ToString()));
+    }
+
+    /// <summary>
+    /// AUTH-001-MFA-STEP-UP: a PLATFORM_ADMIN without MFA lacks only the second factor, so its 403 carries
+    /// MFA_REQUIRED; DISPATCHER, DRIVER and VIEWER lack the capability itself and get the generic 403.
+    /// </summary>
+    private static void AssertForbiddenCode(string body, string profile)
+    {
+        using var document = JsonDocument.Parse(body);
+        if (profile == MockIdentityProfiles.ActivePlatformAdminNoMfa)
+        {
+            Assert.Equal("MFA_REQUIRED", document.RootElement.GetProperty("code").GetString());
+        }
+        else
+        {
+            Assert.False(document.RootElement.TryGetProperty("code", out _));
+        }
     }
 
     private static async Task<string> AssertConflictAsync(HttpResponseMessage response, string code)

@@ -84,6 +84,7 @@ public static class LocationEndpoints
         CancellationToken cancellationToken) => await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListCities,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListCitiesAsync(actorId, organizationId, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -103,6 +104,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListServiceAreas,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListServiceAreasAsync(actorId, organizationId, city_id, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -123,6 +125,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListOperatingZones,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListOperatingZonesAsync(actorId, organizationId, service_area_id, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -135,6 +138,7 @@ public static class LocationEndpoints
         CancellationToken cancellationToken) => await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.ListLocations,
             async (actorId, organizationId) => Results.Ok(
                 (await service.ListLocationsAsync(actorId, organizationId, cancellationToken)).Select(ToResponse)),
             cancellationToken);
@@ -155,6 +159,7 @@ public static class LocationEndpoints
         return await ExecuteAsync(
             session,
             tenantContext,
+            TenantCapabilities.CreateLocation,
             async (actorId, organizationId) =>
             {
                 var result = await service.CreateAsync(
@@ -189,6 +194,7 @@ public static class LocationEndpoints
     private static async Task<IResult> ExecuteAsync(
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
+        TenantCapability capability,
         Func<Guid, Guid, Task<IResult>> operation,
         CancellationToken cancellationToken)
     {
@@ -196,6 +202,11 @@ public static class LocationEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, capability) is { } denied)
+        {
+            return denied;
         }
 
         try

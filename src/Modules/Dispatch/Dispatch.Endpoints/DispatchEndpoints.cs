@@ -140,7 +140,7 @@ public static class DispatchEndpoints
         }
         catch (ExternalOfferForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateExternalOffer);
         }
         catch (ExternalOfferConflictException exception)
         {
@@ -185,7 +185,7 @@ public static class DispatchEndpoints
         }
         catch (ExternalOfferForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AcceptExternalOffer);
         }
         catch (ExternalOfferConflictException exception)
         {
@@ -208,6 +208,12 @@ public static class DispatchEndpoints
         {
             return Forbidden();
         }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListMyEligibleExternalOffers) is { } denied)
+        {
+            return denied;
+        }
+
         try
         {
             var page = await service.ListEligibleAsync(
@@ -299,7 +305,7 @@ public static class DispatchEndpoints
         }
         catch (AssignmentForbiddenException)
         {
-            return Forbidden();
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AssignDriver);
         }
         catch (AssignmentNotFoundException)
         {
@@ -326,6 +332,11 @@ public static class DispatchEndpoints
             !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListMyStops) is { } denied)
+        {
+            return denied;
         }
 
         try

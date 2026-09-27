@@ -121,7 +121,10 @@ public static class ProofEndpoints
         }
         catch (Exception exception)
         {
-            return ToProblem(exception, cancellationToken);
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateProofUploadSession),
+                cancellationToken);
         }
     }
 
@@ -194,7 +197,10 @@ public static class ProofEndpoints
         }
         catch (Exception exception)
         {
-            return ToProblem(exception, cancellationToken);
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.FinalizeProof),
+                cancellationToken);
         }
     }
 
@@ -225,11 +231,14 @@ public static class ProofEndpoints
             (idempotencyKey = values[0]!).Length > 0;
     }
 
-    private static IResult ToProblem(Exception exception, CancellationToken cancellationToken) =>
+    private static IResult ToProblem(
+        Exception exception,
+        Func<IResult> refused,
+        CancellationToken cancellationToken) =>
         exception switch
         {
             OperationCanceledException when cancellationToken.IsCancellationRequested => throw exception,
-            ProofForbiddenException => Forbidden(),
+            ProofForbiddenException => refused(),
             ProofNotFoundException => NotFound(),
             ProofConflictException conflict => Conflict(PublicCode(conflict.Code)),
             ProofStorageUnavailableException => Unavailable(),

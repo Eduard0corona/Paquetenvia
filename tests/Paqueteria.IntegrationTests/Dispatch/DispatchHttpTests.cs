@@ -314,14 +314,22 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         }
 
         Assert.Equal(beforeEffects, factory.Effects);
+
+        // AUTH-001-MFA-STEP-UP: only a platform admin whose sole missing requirement is MFA is told so.
+        var mfaOnly = profile == MockIdentityProfiles.ActivePlatformAdminNoMfa;
         Assert.All(bodies, body =>
         {
             using var problem = JsonDocument.Parse(body);
             Assert.Equal(
-                ["status", "title", "traceId", "type"],
+                mfaOnly ? ["code", "status", "title", "traceId", "type"] : ["status", "title", "traceId", "type"],
                 problem.RootElement.EnumerateObject()
                     .Select(value => value.Name)
                     .Order(StringComparer.Ordinal));
+            if (mfaOnly)
+            {
+                Assert.Equal("MFA_REQUIRED", problem.RootElement.GetProperty("code").GetString());
+            }
+
             Assert.Equal("Forbidden.", problem.RootElement.GetProperty("title").GetString());
             Assert.Equal(403, problem.RootElement.GetProperty("status").GetInt32());
             Assert.DoesNotContain("idempotency", body, StringComparison.OrdinalIgnoreCase);
