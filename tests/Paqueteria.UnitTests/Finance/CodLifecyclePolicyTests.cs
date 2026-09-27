@@ -129,6 +129,8 @@ public sealed class CodLifecyclePolicyTests
     [InlineData("PLATFORM_ADMIN", false, false, false, false)]
     [InlineData("DRIVER", false, true, false, false)]
     [InlineData("VIEWER", true, false, false, false)]
+    [InlineData("FINANCE", false, false, true, false)]
+    [InlineData("FINANCE", true, false, true, false)]
     public void Fin001_capabilities_are_fail_closed_and_segregate_duties(
         string role,
         bool mfa,
@@ -141,6 +143,24 @@ public sealed class CodLifecyclePolicyTests
         Assert.Equal(canRecord, FinanceAuthorizationPolicy.CanRecordCod(context));
         Assert.Equal(canReconcile, FinanceAuthorizationPolicy.CanReconcileCod(context));
         Assert.Equal(canRead, FinanceAuthorizationPolicy.CanReadFinancials(context));
+    }
+
+    /// <summary>
+    /// FINANCE-COD-RECONCILIATION: FINANCE reconciles collected COD only while its user and membership are
+    /// active; it never records a collection and never reads margins.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    public void Finance_reconciles_collected_cod_only_while_active(bool userActive, bool membershipActive, bool expected)
+    {
+        var context = new FinanceAuthorizationContext("FINANCE", userActive, membershipActive, false, true);
+
+        Assert.Equal(expected, FinanceAuthorizationPolicy.CanReconcileCod(context));
+        Assert.False(FinanceAuthorizationPolicy.CanRecordCod(context));
+        Assert.False(FinanceAuthorizationPolicy.MayAttemptRecordCod(context));
+        Assert.False(FinanceAuthorizationPolicy.CanReadFinancials(context));
     }
 
     [Fact]

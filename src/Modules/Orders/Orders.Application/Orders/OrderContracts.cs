@@ -124,15 +124,26 @@ public static class OrderInputPolicy
         value is "WEB" or "PWA" or "ASSISTED" or "API";
 }
 
+/// <summary>
+/// AI05-INPUT-LIMITS: the legal acceptance evidence has the same bounds on <c>POST /orders</c> and on a
+/// CSV-001 row. A version identifier is 1 to <see cref="MaximumVersionLength"/> characters, the bound
+/// CSV-001 already enforced per row; anything longer is rejected before a transaction opens, so the
+/// append-only <c>orders.order_acceptances</c> evidence never stores an unbounded client string.
+/// </summary>
 public static class OrderAcceptanceInputPolicy
 {
+    public const int MaximumVersionLength = 64;
+
     public static bool IsValid(
         string? termsVersion,
         string? privacyVersion,
         DateTimeOffset acceptedAt,
         string? acceptanceChannel) =>
-        !string.IsNullOrWhiteSpace(termsVersion) &&
-        !string.IsNullOrWhiteSpace(privacyVersion) &&
+        IsVersion(termsVersion) &&
+        IsVersion(privacyVersion) &&
         acceptedAt != default &&
         OrderInputPolicy.IsAcceptanceChannel(acceptanceChannel);
+
+    public static bool IsVersion(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= MaximumVersionLength;
 }

@@ -239,6 +239,8 @@ CREATE INDEX orders_owner_status_idx ON orders.orders(owner_org_id,status,create
 CREATE INDEX orders_operator_status_idx ON orders.orders(operator_org_id,status,created_at DESC);
 CREATE INDEX orders_city_status_idx ON orders.orders(city_id,status,created_at DESC);
 CREATE INDEX orders_claim_window_idx ON orders.orders(claim_window_ends_at) WHERE status='CLOSED' AND finalized_at IS NULL;
+-- AI06-PILOT-INDEXES: recency scans by last change.
+CREATE INDEX orders_updated_at_idx ON orders.orders(updated_at);
 
 CREATE TABLE orders.package_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -375,6 +377,8 @@ CREATE TABLE routes.route_stops (
   status text NOT NULL CHECK (status IN ('PENDING','ARRIVED','COMPLETED','FAILED','SKIPPED')),
   UNIQUE(route_id,sequence)
 );
+-- AI06-PILOT-INDEXES: route membership lookups by order.
+CREATE INDEX route_stops_order_idx ON routes.route_stops(order_id);
 
 CREATE TABLE dispatch.external_offers (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -407,6 +411,9 @@ CREATE TABLE dispatch.assignments (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX one_active_assignment_per_order ON dispatch.assignments(order_id) WHERE status IN ('ACCEPTED','ACTIVE');
+-- AI06-PILOT-INDEXES: driver workload and route membership lookups.
+CREATE INDEX assignments_driver_idx ON dispatch.assignments(driver_id);
+CREATE INDEX assignments_route_idx ON dispatch.assignments(route_id) WHERE route_id IS NOT NULL;
 
 -- Custody and incidents ---------------------------------------------------------
 CREATE TABLE custody.proof_upload_sessions (
@@ -575,6 +582,9 @@ CREATE TABLE platform.outbox_events (
 CREATE INDEX outbox_claim_idx ON platform.outbox_events(priority DESC,available_at,created_at) WHERE status IN ('PENDING','RETRY');
 CREATE INDEX outbox_processing_lease_idx ON platform.outbox_events(lease_expires_at) WHERE status='PROCESSING';
 CREATE INDEX outbox_tenant_aggregate_idx ON platform.outbox_events(owner_org_id,aggregate_type,aggregate_id,created_at);
+-- AI06-PILOT-INDEXES: one partial index per terminal purge arm of security.purge_outbox.
+CREATE INDEX outbox_purge_processed_idx ON platform.outbox_events(processed_at) WHERE status='PROCESSED';
+CREATE INDEX outbox_purge_dead_idx ON platform.outbox_events((COALESCE(processed_at,created_at))) WHERE status='DEAD';
 
 CREATE TABLE platform.location_outbox_events (
   id uuid PRIMARY KEY,
@@ -601,6 +611,9 @@ CREATE TABLE platform.location_outbox_events (
 CREATE INDEX location_outbox_claim_idx ON platform.location_outbox_events(available_at,created_at) WHERE status IN ('PENDING','RETRY');
 CREATE INDEX location_outbox_processing_lease_idx ON platform.location_outbox_events(lease_expires_at) WHERE status='PROCESSING';
 CREATE INDEX location_outbox_position_idx ON platform.location_outbox_events(driver_position_id,created_at);
+-- AI06-PILOT-INDEXES: one partial index per terminal purge arm of security.purge_location_outbox.
+CREATE INDEX location_outbox_purge_processed_idx ON platform.location_outbox_events(processed_at) WHERE status='PROCESSED';
+CREATE INDEX location_outbox_purge_dead_idx ON platform.location_outbox_events((COALESCE(processed_at,created_at))) WHERE status='DEAD';
 
 CREATE TABLE platform.idempotency_keys (
   owner_org_id uuid NOT NULL REFERENCES organizations.organizations(id),
@@ -649,6 +662,10 @@ BEGIN
   FROM identity.users u
   LEFT JOIN organizations.organization_memberships m
     ON m.user_id=u.id AND m.status='ACTIVE'
+   -- IDENTITY-ORG-ACTIVE-REQUIRED: a membership only counts inside an ACTIVE organization.
+   AND EXISTS (
+     SELECT 1 FROM organizations.organizations org
+     WHERE org.id=m.organization_id AND org.status='ACTIVE')
   WHERE u.identity_subject=p_identity_subject AND u.status='ACTIVE'
   GROUP BY u.id,u.status;
   RETURN v_result;
@@ -699,7 +716,7 @@ BEGIN
     'timeline', COALESCE((
       SELECT jsonb_agg(
         jsonb_build_object('code',e.public_event_code,'occurred_at',e.occurred_at)
-        ORDER BY e.occurred_at
+        ORDER BY e.occurred_at, e.aggregate_version
       )
       FROM orders.order_events e
       WHERE e.order_id=o.id

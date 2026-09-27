@@ -13,9 +13,9 @@ using Paqueteria.Application.Tenancy;
 namespace Finance.Endpoints;
 
 /// <summary>
-/// The seven normative AI-05 SET-001 operations: createSettlement, getSettlement, addSettlementAdjustment,
-/// approveSettlement, markSettlementPaid, voidSettlement and exportSettlementCsv. There is deliberately no
-/// list operation.
+/// The eight normative AI-05 settlement operations: createSettlement, listSettlements
+/// (AI05-LIST-SETTLEMENTS), getSettlement, addSettlementAdjustment, approveSettlement, markSettlementPaid,
+/// voidSettlement and exportSettlementCsv.
 /// </summary>
 public static class SettlementEndpoints
 {
@@ -36,6 +36,17 @@ public static class SettlementEndpoints
             .Accepts<CreateSettlementRequest>("application/json")
             .Produces<SettlementResponse>(StatusCodes.Status201Created)
             .ProducesSettlementProblems();
+
+        endpoints.MapGet("/api/v1/settlements", ListAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("listSettlements")
+            .WithTags("Finance")
+            .Produces<SettlementPageResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/settlements/{settlementId}", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -154,6 +165,105 @@ public static class SettlementEndpoints
             cancellationToken);
     }
 
+    /// <summary>
+    /// AI05-LIST-SETTLEMENTS. Each filter may appear at most once and must parse exactly; anything else is the
+    /// uniform INVALID_REQUEST, decided before capability or any persisted settlement is read.
+    /// </summary>
+    private static async Task<IResult> ListAsync(
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        ISettlementService service,
+        CancellationToken cancellationToken)
+    {
+        if (!FinanceEndpointBinding.TrySession(session, tenantContext, out var actorId))
+        {
+            return FinanceEndpointBinding.Forbidden();
+        }
+
+        if (!TryReadListFilters(httpContext.Request.Query, out var status, out var periodFrom, out var periodTo,
+                out var cursor))
+        {
+            return FinanceEndpointBinding.Conflict(InvalidRequest);
+        }
+
+        try
+        {
+            var page = await service.ListAsync(
+                new(actorId, tenantContext.OrganizationId, status, periodFrom, periodTo, cursor, session.MfaSatisfied),
+                cancellationToken);
+            return Results.Json(
+                new SettlementPageResponse(page.Items.Select(ToResponse).ToArray(), page.NextCursor),
+                statusCode: StatusCodes.Status200OK);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception) when (Failure(exception) is { } failure) { return failure; }
+    }
+
+    internal static readonly string[] ListQueryParameters = ["status", "period_from", "period_to", "cursor"];
+
+    internal static bool TryReadListFilters(
+        IQueryCollection query,
+        out string? status,
+        out DateOnly? periodFrom,
+        out DateOnly? periodTo,
+        out SettlementCursor? cursor)
+    {
+        status = null;
+        periodFrom = null;
+        periodTo = null;
+        cursor = null;
+        if (query.Keys.Any(key => !ListQueryParameters.Contains(key, StringComparer.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        if (query.TryGetValue("status", out var statusValue))
+        {
+            // The vocabulary itself is decided by SettlementInputPolicy before any transaction opens.
+            status = statusValue[0];
+            if (string.IsNullOrEmpty(status))
+            {
+                return false;
+            }
+        }
+
+        if (!TryDate(query, "period_from", out periodFrom) || !TryDate(query, "period_to", out periodTo))
+        {
+            return false;
+        }
+
+        if (query.TryGetValue("cursor", out var cursorValue))
+        {
+            if (!SettlementCursorCodec.TryDecode(cursorValue[0], out cursor))
+            {
+                return false;
+            }
+        }
+
+        return periodFrom is not { } from || periodTo is not { } to || from <= to;
+    }
+
+    private static bool TryDate(IQueryCollection query, string name, out DateOnly? value)
+    {
+        value = null;
+        if (!query.TryGetValue(name, out var raw))
+        {
+            return true;
+        }
+
+        if (!DateOnly.TryParseExact(
+                raw[0], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsed))
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
     private static async Task<IResult> AdjustAsync(
         HttpContext httpContext,
         string settlementId,
@@ -267,7 +377,10 @@ public static class SettlementEndpoints
             cancellationToken);
     }
 
+    internal const string ExportCacheControl = "no-store";
+
     private static async Task<IResult> ExportAsync(
+        HttpContext httpContext,
         string settlementId,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
@@ -289,6 +402,9 @@ public static class SettlementEndpoints
             var document = await service.ExportCsvAsync(
                 new(actorId, tenantContext.OrganizationId, settlement, session.MfaSatisfied),
                 cancellationToken);
+
+            // AI05-EXPORT-NO-STORE: the export carries payee and money data; no cache may keep a copy.
+            httpContext.Response.Headers.CacheControl = ExportCacheControl;
             return Results.File(document.Content, SettlementCsvWriter.ContentType, document.FileName);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -403,6 +519,10 @@ public sealed record SettlementLineResponse(
     [property: JsonPropertyName("amount_cents")] long AmountCents,
     [property: JsonPropertyName("source_reference")] string SourceReference,
     [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt);
+
+public sealed record SettlementPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<SettlementResponse> Items,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
 public sealed record SettlementResponse(
     [property: JsonPropertyName("id")] Guid Id,

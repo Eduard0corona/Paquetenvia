@@ -101,6 +101,10 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
 
         using var export = await client.SendAsync(Get($"/api/v1/settlements/{settlement:D}/export.csv"));
         Assert.Equal(HttpStatusCode.OK, export.StatusCode);
+
+        // AI05-EXPORT-NO-STORE: no cache may keep the export, and nothing weaker stands in for it.
+        Assert.Equal(["no-store"], export.Headers.GetValues("Cache-Control"));
+        Assert.True(export.Headers.CacheControl?.NoStore);
         Assert.Equal("text/csv", export.Content.Headers.ContentType?.MediaType);
         Assert.Equal("utf-8", export.Content.Headers.ContentType?.CharSet);
         Assert.Equal("attachment", export.Content.Headers.ContentDisposition?.DispositionType);
@@ -399,6 +403,180 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
                 Assert.DoesNotContain("disabled", body, StringComparison.OrdinalIgnoreCase);
             }
         }
+    }
+
+    [Fact]
+    public async Task ListSettlements_pages_only_the_selected_tenant_newest_first_with_an_exact_cursor()
+    {
+        // A dedicated period keeps this listing independent of every other test sharing the fixture.
+        var from = new DateOnly(2025, 1, 1);
+        var to = new DateOnly(2025, 1, 31);
+        var own = await fixture.SeedDraftSettlementsAsync(SettlementHttpFixture.TenantId, SettlementPageSize + 1, from, to);
+        var foreign = await fixture.SeedDraftSettlementsAsync(SettlementHttpFixture.ForeignTenantId, 3, from, to);
+        var query = "/api/v1/settlements?period_from=2025-01-01&period_to=2025-01-31";
+
+        using var first = await client.SendAsync(Get(query));
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        using var firstPage = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ["items", "next_cursor"],
+            firstPage.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        var firstItems = firstPage.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(SettlementPageSize, firstItems.Length);
+        Assert.All(firstItems, item => Assert.Equal(
+            ["created_at", "id", "lines", "payee_id", "payee_type", "period_from", "period_to", "status", "total_cents"],
+            item.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal)));
+        var cursor = firstPage.RootElement.GetProperty("next_cursor").GetString();
+        Assert.False(string.IsNullOrEmpty(cursor));
+
+        using var second = await client.SendAsync(Get($"{query}&cursor={Uri.EscapeDataString(cursor!)}"));
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        using var secondPage = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        var secondItems = secondPage.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Single(secondItems);
+        Assert.Equal(JsonValueKind.Null, secondPage.RootElement.GetProperty("next_cursor").ValueKind);
+
+        // Every own settlement exactly once, no foreign one, and ties on created_at broken by id descending.
+        var listed = firstItems.Concat(secondItems).Select(item => item.GetProperty("id").GetGuid()).ToArray();
+        Assert.Equal(own.Order(), listed.Order());
+        Assert.Empty(listed.Intersect(foreign));
+        Assert.Equal(own.OrderByDescending(id => id.ToString("D"), StringComparer.Ordinal), listed);
+    }
+
+    [Fact]
+    public async Task ListSettlements_filters_by_status_and_by_whole_period()
+    {
+        var driver = await fixture.SeedDriverAsync(SettlementHttpFixture.TenantId);
+        await fixture.SeedWorkAsync(driver, "DELIVERED", "DELIVERED", InPeriod, 4_500);
+        var calculated = await CreateAsync(driver);
+        var drafts = await fixture.SeedDraftSettlementsAsync(
+            SettlementHttpFixture.TenantId, 2, new DateOnly(2026, 9, 14), new DateOnly(2026, 9, 20));
+        var outside = await fixture.SeedDraftSettlementsAsync(
+            SettlementHttpFixture.TenantId, 1, new DateOnly(2026, 9, 13), new DateOnly(2026, 9, 20));
+
+        var calculatedIds = await ListIdsAsync($"status=CALCULATED&period_from={PeriodFrom}&period_to={PeriodTo}");
+        Assert.Contains(calculated, calculatedIds);
+        Assert.DoesNotContain(drafts[0], calculatedIds);
+
+        var draftIds = await ListIdsAsync($"status=DRAFT&period_from={PeriodFrom}&period_to={PeriodTo}");
+        Assert.Contains(drafts[0], draftIds);
+        Assert.Contains(drafts[1], draftIds);
+        Assert.DoesNotContain(calculated, draftIds);
+
+        // A period filter keeps only settlements whose whole period lies inside it.
+        Assert.DoesNotContain(outside[0], draftIds);
+        Assert.Contains(outside[0], await ListIdsAsync("status=DRAFT&period_to=2026-09-20"));
+    }
+
+    [Theory]
+    [InlineData(SettlementHttpFixture.DispatcherProfile)]
+    [InlineData(MockIdentityProfiles.ActiveDriver)]
+    [InlineData(MockIdentityProfiles.ActiveViewer)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa)]
+    public async Task ListSettlements_is_403_for_every_role_outside_the_capability_matrix(string profile)
+    {
+        await fixture.SeedDraftSettlementsAsync(
+            SettlementHttpFixture.TenantId, 1, new DateOnly(2025, 2, 1), new DateOnly(2025, 2, 28));
+
+        // Refused before any settlement is read, whatever the filters.
+        foreach (var path in new[] { "/api/v1/settlements", "/api/v1/settlements?status=DRAFT&period_from=2025-02-01" })
+        {
+            using var response = await client.SendAsync(Get(path, profile));
+            await AssertProblemAsync(response, HttpStatusCode.Forbidden, "Forbidden.");
+        }
+    }
+
+    [Fact]
+    public async Task ListSettlements_is_401_without_authentication_and_open_to_an_MFA_platform_admin()
+    {
+        using (var anonymous = await client.SendAsync(Get("/api/v1/settlements", profile: null)))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        }
+
+        using var admin = await client.SendAsync(Get("/api/v1/settlements", MockIdentityProfiles.ActivePlatformAdminMfa));
+        Assert.Equal(HttpStatusCode.OK, admin.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("status=NOPE")]
+    [InlineData("status=draft")]
+    [InlineData("status=")]
+    [InlineData("period_from=2026-9-1")]
+    [InlineData("period_to=20260920")]
+    [InlineData("period_from=2026-09-21&period_to=2026-09-20")]
+    [InlineData("cursor=not-a-cursor")]
+    [InlineData("status=DRAFT&status=PAID")]
+    [InlineData("page_size=500")]
+    public async Task ListSettlements_rejects_a_malformed_query_as_409_invalid_request(string query)
+    {
+        using var response = await client.SendAsync(Get($"/api/v1/settlements?{query}"));
+        await AssertConflictAsync(response, "INVALID_REQUEST");
+    }
+
+    [Fact]
+    public async Task ListSettlements_is_503_when_finance_is_disabled()
+    {
+        await using var disabled = fixture.Api.WithWebHostBuilder(builder =>
+            builder.ConfigureAppConfiguration(configuration =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Finance:Provider"] = "Disabled",
+                })));
+        using var disabledClient = disabled.CreateClient();
+        using var response = await disabledClient.SendAsync(Get("/api/v1/settlements"));
+        await AssertProblemAsync(response, HttpStatusCode.ServiceUnavailable, "Service unavailable.");
+    }
+
+    /// <summary>
+    /// FINANCE-COD-RECONCILIATION: a FINANCE-only member never creates orders, by JSON or by CSV commit, and is
+    /// refused with the uniform 403 before anything is read; a DISPATCHER sending the same request is not.
+    /// </summary>
+    [Fact]
+    public async Task A_finance_only_member_never_creates_orders()
+    {
+        var body = $$"""
+            {"quote_id":"{{Guid.NewGuid():D}}","payer_type":"SENDER","acceptance":{"terms_version":"terms-2026-09","privacy_version":"privacy-2026-09","accepted_at":"2026-09-27T12:00:00Z","acceptance_channel":"WEB"}}
+            """;
+
+        using (var order = await client.SendAsync(Post("/api/v1/orders", body)))
+        {
+            await AssertProblemAsync(order, HttpStatusCode.Forbidden, "Forbidden.");
+        }
+
+        using (var commit = await client.SendAsync(Post("/api/v1/orders/csv/commit", null)))
+        {
+            await AssertProblemAsync(commit, HttpStatusCode.Forbidden, "Forbidden.");
+        }
+
+        using var dispatcher = await client.SendAsync(
+            Post("/api/v1/orders", body, profile: SettlementHttpFixture.DispatcherProfile));
+        Assert.NotEqual(HttpStatusCode.Forbidden, dispatcher.StatusCode);
+    }
+
+    private const int SettlementPageSize = 50;
+
+    /// <summary>Every settlement the filter admits, following the cursor to the last page.</summary>
+    private async Task<Guid[]> ListIdsAsync(string query)
+    {
+        var ids = new List<Guid>();
+        string? cursor = null;
+        do
+        {
+            var path = cursor is null
+                ? $"/api/v1/settlements?{query}"
+                : $"/api/v1/settlements?{query}&cursor={Uri.EscapeDataString(cursor)}";
+            using var response = await client.SendAsync(Get(path));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            ids.AddRange(document.RootElement.GetProperty("items").EnumerateArray()
+                .Select(item => item.GetProperty("id").GetGuid()));
+            cursor = document.RootElement.GetProperty("next_cursor").GetString();
+        }
+        while (cursor is not null);
+
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+        return [.. ids];
     }
 
     private const string VoidBody = """{"reason":"Periodo calculado por error"}""";

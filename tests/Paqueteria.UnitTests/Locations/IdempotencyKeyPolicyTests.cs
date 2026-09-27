@@ -79,7 +79,6 @@ public sealed class IdempotencyKeyPolicyTests
         null,
         28.61,
         -106.09,
-        "mock-v1",
         "geo001-def-001");
 
     private sealed class ObservingGeocodingProvider : IGeocodingProvider

@@ -32,7 +32,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/routes", ListAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -41,7 +42,8 @@ public static class RouteEndpoints
             .WithTags("Routing")
             .Produces<RoutePageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/routes/{routeId}", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -51,7 +53,8 @@ public static class RouteEndpoints
             .Produces<RouteDetailResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/routes/{routeId}/stops", AddStopAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -63,7 +66,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapDelete("/api/v1/routes/{routeId}/stops/{stopId}", RemoveStopAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -74,7 +78,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPut("/api/v1/routes/{routeId}/stops/order", ReorderStopsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -86,7 +91,8 @@ public static class RouteEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }

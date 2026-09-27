@@ -89,8 +89,11 @@ public sealed class DispatchImplementationContractTests
         var conflict = schemas.Mapping("DispatchAssignmentConflictProblem");
 
         Assert.Equal(
-            ["201", "401", "403", "404", "409"],
+            ["201", "401", "403", "404", "409", "503"],
             responses.Children.Keys.Cast<YamlScalarNode>().Select(value => value.Value));
+        Assert.Equal(
+            "#/components/responses/ServiceUnavailable",
+            responses.Mapping("503").Scalar("$ref"));
         Assert.Equal(
             "#/components/responses/UniformNotFound",
             responses.Mapping("404").Scalar("$ref"));

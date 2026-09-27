@@ -52,6 +52,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders:
     post:
       tags:
@@ -79,6 +81,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     get:
       tags:
       - Orders
@@ -118,6 +122,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/preview:
     post:
       tags:
@@ -147,6 +153,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/commit:
     post:
       tags:
@@ -208,6 +216,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/transitions:
     post:
       tags:
@@ -236,6 +246,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/assignments:
     post:
       tags:
@@ -294,6 +306,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/DispatchAssignmentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes:
     post:
       tags:
@@ -334,6 +348,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     get:
       tags:
       - Routing
@@ -373,6 +389,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}:
     get:
       tags:
@@ -399,6 +417,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}/stops:
     post:
       tags:
@@ -445,6 +465,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}/stops/{stopId}:
     delete:
       tags:
@@ -484,6 +506,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes/{routeId}/stops/order:
     put:
       tags:
@@ -524,6 +548,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/RoutingConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /external-offers:
     post:
       tags:
@@ -546,6 +572,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/IdempotencyKey'
@@ -576,6 +606,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /driver/me/external-offers:
     get:
       tags:
@@ -605,6 +637,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /driver/me/stops:
     get:
       tags:
@@ -623,6 +657,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
   /orders/{orderId}/proofs:
@@ -653,6 +689,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/incidents:
     post:
       tags:
@@ -758,6 +798,10 @@ paths:
                 $ref: '#/components/schemas/PublicTrackingProjection'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /organizations/{organizationId}/audit:
     get:
       tags:
@@ -841,6 +885,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /me/organization-contexts:
     get:
       tags:
@@ -858,6 +904,8 @@ paths:
                   $ref: '#/components/schemas/OrganizationContext'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /cities:
     get:
       tags:
@@ -872,12 +920,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/City'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
   /service-areas:
@@ -902,12 +954,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ServiceArea'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /operating-zones:
     get:
       tags:
@@ -930,12 +986,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/OperatingZone'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /locations:
     get:
       tags:
@@ -950,12 +1010,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
     post:
@@ -978,12 +1042,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/proof-upload-sessions:
     post:
       tags:
@@ -1012,6 +1080,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /driver/me/documents:
     get:
       tags:
@@ -1266,6 +1338,76 @@ paths:
           $ref: '#/components/responses/SettlementConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      tags:
+      - Finance
+      operationId: listSettlements
+      description: >-
+        AI05-LIST-SETTLEMENTS returns one page of the settlements of the
+        selected organization, newest first by created_at then id, each with
+        its immutable lines exactly as getSettlement returns them. The server
+        owns the bounded page size; clients cannot configure it. status keeps
+        the settlements in that status; period_from and period_to keep the
+        settlements whose whole period lies inside them, and both bounds may
+        be used alone. Same capability as getSettlement: FINANCE members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge; DISPATCHER,
+        DRIVER, VIEWER and every other role receive the uniform 403 before any
+        settlement is read. Every query parameter appears at most once and
+        parses exactly; an unknown parameter, an unknown status, a malformed
+        date, period_to before period_from or a cursor that was not issued by
+        this operation is INVALID_REQUEST. Another tenant's settlements are
+        never listed, and a page holding a header whose total does not equal
+        the exact sum of its lines fails closed as 503.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - settlement
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - DRAFT
+          - CALCULATED
+          - APPROVED
+          - PAID
+          - VOID
+      - name: period_from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: period_to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+      responses:
+        '200':
+          description: Cursor-paginated tenant settlements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /settlements/{settlementId}:
     get:
       tags:
@@ -1513,6 +1655,11 @@ paths:
               description: attachment with filename settlement-{settlementId}.csv
               schema:
                 type: string
+            Cache-Control:
+              description: AI05-EXPORT-NO-STORE; no cache may keep a copy of the export.
+              schema:
+                type: string
+                const: no-store
           content:
             text/csv:
               schema:
@@ -1585,6 +1732,16 @@ components:
         type: string
         format: uuid
   responses:
+    BadRequest:
+      description: >-
+        AI05-DECLARE-400-ERRORS - malformed request. The Locations operations
+        answer 400 for a missing, repeated or malformed X-Organization-Id
+        header and for a request whose parameters or body do not have the
+        contracted shape; no resource is read or written.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     ValidationError:
       description: Validation failed
       content:
@@ -1690,7 +1847,12 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
     ServiceUnavailable:
-      description: Required provider or infrastructure dependency is unavailable
+      description: >-
+        Required provider or infrastructure dependency is unavailable. Every
+        authenticated operation can report it while the identity context
+        cannot be resolved, and every tenant operation while the mandatory
+        PLATFORM_ADMIN tenant-activation audit cannot be written
+        (AI05-DECLARE-EMITTED-ERRORS).
       content:
         application/problem+json:
           schema:
@@ -1781,6 +1943,8 @@ components:
         packages:
           type: array
           minItems: 1
+          maxItems: 20
+          description: AI05-INPUT-LIMITS; more than 20 packages is a validation error (422).
           items:
             $ref: '#/components/schemas/PackageInput'
       description: Owner organization is derived from X-Organization-Id after membership validation.
@@ -1924,8 +2088,14 @@ components:
           properties:
             terms_version:
               type: string
+              minLength: 1
+              maxLength: 64
+              description: AI05-INPUT-LIMITS; the bound CSV-001 already applies per row. A longer value is rejected with 409 before any order is created.
             privacy_version:
               type: string
+              minLength: 1
+              maxLength: 64
+              description: AI05-INPUT-LIMITS; the bound CSV-001 already applies per row. A longer value is rejected with 409 before any order is created.
             accepted_at:
               type: string
               format: date-time
@@ -2913,13 +3083,16 @@ components:
           - INACTIVE
     CreateLocationRequest:
       type: object
+      description: >-
+        AI05-REMOVE-PII-KEY-VERSION - the client never supplies the PII key
+        version; the server PII protector selects it and persists it next to
+        every ciphertext.
       required:
       - city_id
       - address_text
       - address_summary
       - lat
       - lng
-      - pii_key_version
       properties:
         city_id:
           type: string
@@ -2956,8 +3129,6 @@ components:
           type: number
           minimum: -180
           maximum: 180
-        pii_key_version:
-          type: string
     Location:
       type: object
       required:
@@ -3655,6 +3826,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SettlementLine'
+    SettlementPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Settlement'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Opaque cursor of the next page; null on the last page.
     RouteStatus:
       type: string
       enum:

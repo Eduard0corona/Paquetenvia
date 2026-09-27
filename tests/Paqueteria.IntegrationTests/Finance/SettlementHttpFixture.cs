@@ -182,6 +182,29 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
         return settlement;
     }
 
+    /// <summary>
+    /// AI05-LIST-SETTLEMENTS: <paramref name="count"/> empty DRAFT settlements of one organization, all in
+    /// one statement so they share created_at and the keyset has to break the tie by id.
+    /// </summary>
+    internal async Task<IReadOnlyList<Guid>> SeedDraftSettlementsAsync(
+        Guid organizationId,
+        int count,
+        DateOnly periodFrom,
+        DateOnly periodTo)
+    {
+        var ids = Enumerable.Range(0, count).Select(_ => Guid.NewGuid()).ToArray();
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO finance.settlements(id,owner_org_id,payee_type,payee_id,status,total_cents,period_from,period_to)
+            SELECT id,@org,'DRIVER',gen_random_uuid(),'DRAFT',0,@from,@to FROM unnest(@ids) AS seeded(id);
+            """,
+            new NpgsqlParameter("ids", ids),
+            new NpgsqlParameter("org", organizationId),
+            new NpgsqlParameter("from", periodFrom),
+            new NpgsqlParameter("to", periodTo));
+        return ids;
+    }
+
     internal async Task<SettlementSnapshot> ReadAsync(Guid settlementId)
     {
         await using var connection = new NpgsqlConnection(Api.AdminConnectionString);

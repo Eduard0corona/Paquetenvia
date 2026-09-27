@@ -470,7 +470,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         await using var timelineCommand = CreateCommand(
             connection,
             transaction,
-            "SELECT event_type,occurred_at FROM orders.order_events WHERE order_id=@id ORDER BY occurred_at,id;");
+            "SELECT event_type,occurred_at FROM orders.order_events WHERE order_id=@id ORDER BY occurred_at,aggregate_version;");
         timelineCommand.Parameters.Add(P("id", NpgsqlDbType.Uuid, orderId));
         var timeline = new List<OrderTimelineItem>();
         await using var timelineReader = await timelineCommand.ExecuteReaderAsync(cancellationToken);

@@ -308,6 +308,38 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         Assert.Equal("RECONCILED", withMfa.Status);
     }
 
+    /// <summary>
+    /// FINANCE-COD-RECONCILIATION on the runtime role: FINANCE closes the cash position of a collection
+    /// someone else recorded, and does nothing else — it never records a collection and never reads margins.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Finance_reconciles_collected_cod_and_nothing_else()
+    {
+        await using var scenario = await FinanceScenario.CreateAsync(fixture);
+        var cod = CreateCodService(fixture.AppDataSource);
+        var financials = CreateFinancialsService(fixture.AppDataSource);
+        var recorded = await cod.RecordAsync(
+            scenario.DriverRecord(scenario.CodOrderId, 5_000, "finance-driver-record"), default);
+        Assert.Equal("RECORDED", recorded.Status);
+
+        await scenario.SetActorRoleAsync("FINANCE");
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            cod.RecordAsync(scenario.Record(scenario.CodOrderId, 5_000, "finance-record"), default));
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            financials.GetOrderFinancialsAsync(scenario.OrderQuery(scenario.OwnOrderId), default));
+        await Assert.ThrowsAsync<FinanceForbiddenException>(() =>
+            financials.GetRouteFinancialsAsync(scenario.RouteQuery(scenario.RouteId), default));
+
+        var reconciled = await cod.ReconcileAsync(scenario.Reconcile(recorded.Id, "finance-reconcile"), default);
+        Assert.Equal("RECONCILED", reconciled.Status);
+        Assert.Equal(recorded.Id, reconciled.Id);
+        Assert.Equal(5_000, reconciled.AmountCents);
+        Assert.Equal("RECONCILED", await scenario.CodStatusAsync(recorded.Id));
+
+        // Replaying the same key returns the same reconciliation and writes nothing new.
+        Assert.Equal(reconciled, await cod.ReconcileAsync(scenario.Reconcile(recorded.Id, "finance-reconcile"), default));
+    }
+
     private PostgreSqlCodTransactionService CreateCodService(
         NpgsqlDataSource dataSource,
         IFinanceFailureInjector? failureInjector = null)

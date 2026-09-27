@@ -109,6 +109,52 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         Assert.Equal(0, factory.CreateCallCount);
     }
 
+    /// <summary>
+    /// AI05-INPUT-LIMITS: terms_version and privacy_version accept 1 to 64 characters. A 65-character value is
+    /// the uniform 409 and never reaches the service; 64 characters is created.
+    /// </summary>
+    [Theory]
+    [InlineData("terms_version", 64, HttpStatusCode.Created)]
+    [InlineData("privacy_version", 64, HttpStatusCode.Created)]
+    [InlineData("terms_version", 65, HttpStatusCode.Conflict)]
+    [InlineData("privacy_version", 65, HttpStatusCode.Conflict)]
+    [InlineData("terms_version", 0, HttpStatusCode.Conflict)]
+    public async Task POST_bounds_the_acceptance_versions(string field, int length, HttpStatusCode expected)
+    {
+        factory.ResetCreateObservations();
+        var version = new string('v', length);
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
+        request.Headers.Add("Idempotency-Key", Key());
+        request.Content = JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
+            acceptance = new
+            {
+                terms_version = field == "terms_version" ? version : "terms-synthetic-v1",
+                privacy_version = field == "privacy_version" ? version : "privacy-synthetic-v1",
+                accepted_at = "2026-07-22T12:00:00Z",
+                acceptance_channel = "WEB",
+            },
+        });
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(expected, response.StatusCode);
+        if (expected == HttpStatusCode.Conflict)
+        {
+            await AssertUniformConflictAsync(response);
+            Assert.Equal(0, factory.CreateCallCount);
+        }
+        else
+        {
+            Assert.Equal(1, factory.CreateCallCount);
+            Assert.Equal(64, field == "terms_version"
+                ? factory.LastCreateCommand!.Acceptance.TermsVersion.Length
+                : factory.LastCreateCommand!.Acceptance.PrivacyVersion.Length);
+        }
+    }
+
     [Fact]
     public async Task POST_with_valid_UTC_timestamp_preserves_the_client_instant()
     {

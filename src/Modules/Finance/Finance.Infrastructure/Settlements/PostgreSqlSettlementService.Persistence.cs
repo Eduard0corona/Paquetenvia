@@ -105,6 +105,122 @@ public sealed partial class PostgreSqlSettlementService
         ORDER BY created_at,id
         """;
 
+    /// <summary>
+    /// One keyset page of settlement headers, newest first. The tenant predicate is explicit and RLS still
+    /// applies underneath it; a period filter keeps the settlements whose whole period lies inside it.
+    /// </summary>
+    private const string PageHeadersSql =
+        """
+        SELECT id,payee_type,payee_id,status,total_cents,period_from,period_to,created_at
+        FROM finance.settlements
+        WHERE owner_org_id=@organization
+          AND (@status::text IS NULL OR status=@status::text)
+          AND (@period_from::date IS NULL OR period_from >= @period_from::date)
+          AND (@period_to::date IS NULL OR period_to <= @period_to::date)
+          AND (@cursor_created::timestamptz IS NULL
+            OR (created_at,id) < (@cursor_created::timestamptz,@cursor_id::uuid))
+        ORDER BY created_at DESC,id DESC
+        LIMIT @limit
+        """;
+
+    private const string PageLinesSql =
+        """
+        SELECT settlement_id,id,line_type,order_id,amount_cents,source_reference,created_at
+        FROM finance.settlement_lines
+        WHERE owner_org_id=@organization AND settlement_id = ANY(@settlements)
+        ORDER BY settlement_id,created_at,id
+        """;
+
+    private async Task<IReadOnlyList<SettlementResult>> ReadPageAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ListSettlementsQuery query,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var headers = new List<(Guid Id, string PayeeType, Guid PayeeId, SettlementStatus Status, long TotalCents,
+            DateOnly PeriodFrom, DateOnly PeriodTo, DateTimeOffset CreatedAt)>();
+        await using (var command = Create(connection, transaction, PageHeadersSql, gateway.CommandTimeoutSeconds))
+        {
+            command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, query.OrganizationId));
+            command.Parameters.Add(P("status", NpgsqlDbType.Text, query.Status));
+            command.Parameters.Add(P("period_from", NpgsqlDbType.Date, query.PeriodFrom));
+            command.Parameters.Add(P("period_to", NpgsqlDbType.Date, query.PeriodTo));
+            command.Parameters.Add(P("cursor_created", NpgsqlDbType.TimestampTz, query.Cursor?.CreatedAt));
+            command.Parameters.Add(P("cursor_id", NpgsqlDbType.Uuid, query.Cursor?.Id));
+            command.Parameters.Add(P("limit", NpgsqlDbType.Integer, limit));
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (!SettlementContractValues.TryParsePayeeType(reader.GetString(1), out var payee) ||
+                    !SettlementContractValues.TryParseStatus(reader.GetString(3), out var status))
+                {
+                    throw Inconsistent();
+                }
+
+                headers.Add((
+                    reader.GetGuid(0),
+                    payee.ToContractValue(),
+                    reader.GetGuid(2),
+                    status,
+                    reader.GetInt64(4),
+                    reader.GetFieldValue<DateOnly>(5),
+                    reader.GetFieldValue<DateOnly>(6),
+                    reader.GetFieldValue<DateTimeOffset>(7)));
+            }
+        }
+
+        if (headers.Count == 0)
+        {
+            return [];
+        }
+
+        var lines = headers.ToDictionary(header => header.Id, _ => new List<SettlementLineResult>());
+        await using (var command = Create(connection, transaction, PageLinesSql, gateway.CommandTimeoutSeconds))
+        {
+            command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, query.OrganizationId));
+            command.Parameters.Add(P(
+                "settlements", NpgsqlDbType.Array | NpgsqlDbType.Uuid, headers.Select(header => header.Id).ToArray()));
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (!SettlementContractValues.TryParseLineType(reader.GetString(2), out var lineType) ||
+                    !lines.TryGetValue(reader.GetGuid(0), out var owner))
+                {
+                    throw Inconsistent();
+                }
+
+                owner.Add(new(
+                    reader.GetGuid(1),
+                    lineType.ToContractValue(),
+                    reader.IsDBNull(3) ? null : reader.GetGuid(3),
+                    reader.GetInt64(4),
+                    reader.GetString(5),
+                    reader.GetFieldValue<DateTimeOffset>(6)));
+            }
+        }
+
+        return headers.Select(header =>
+        {
+            var owned = lines[header.Id];
+            if (!SettlementLedger.Reconciles(header.TotalCents, owned.Select(line => line.AmountCents)))
+            {
+                throw Inconsistent();
+            }
+
+            return new SettlementResult(
+                header.Id,
+                header.PayeeType,
+                header.PayeeId,
+                header.Status.ToContractValue(),
+                header.TotalCents,
+                header.PeriodFrom,
+                header.PeriodTo,
+                header.CreatedAt,
+                owned);
+        }).ToArray();
+    }
+
     private async Task<FinanceAuthorizationContext> ReadAuthorizationAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,

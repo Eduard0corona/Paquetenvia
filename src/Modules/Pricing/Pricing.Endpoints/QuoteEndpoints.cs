@@ -21,7 +21,8 @@ public static class QuoteEndpoints
             .Produces<QuoteResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status422UnprocessableEntity);
+            .ProducesProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/quotes/{quoteId:guid}", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -31,7 +32,8 @@ public static class QuoteEndpoints
             .Produces<QuoteResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }
 
@@ -134,7 +136,8 @@ public static class QuoteEndpoints
     }
 
     private static bool IsValid(CreateQuoteRequest request) =>
-        request.Origin is not null && request.Destination is not null && request.Packages is { Count: > 0 } &&
+        request.Origin is not null && request.Destination is not null &&
+        request.Packages is { Count: > 0 and <= QuoteInputLimits.MaximumPackages } &&
         IsValid(request.Origin) && IsValid(request.Destination) && request.Packages.All(IsValid);
 
     private static bool IsValid(AddressInput request) =>

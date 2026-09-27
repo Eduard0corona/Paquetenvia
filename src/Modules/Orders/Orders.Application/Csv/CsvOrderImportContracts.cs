@@ -18,7 +18,7 @@ public static class CsvOrderImportContract
 
     public const int MaximumFileBytes = 1_048_576;
     public const int MaximumDataRows = 500;
-    public const int MaximumVersionLength = 64;
+    public const int MaximumVersionLength = Orders.OrderAcceptanceInputPolicy.MaximumVersionLength;
 
     public static readonly ImmutableArray<string> Header =
     [

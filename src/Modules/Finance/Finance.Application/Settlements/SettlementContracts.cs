@@ -22,6 +22,27 @@ public sealed record GetSettlementQuery(
     Guid SettlementId,
     bool MfaSatisfied);
 
+/// <summary>
+/// AI05-LIST-SETTLEMENTS: one server-sized page of the selected organization's settlements, newest first.
+/// Every filter is optional; a period filter keeps the settlements whose whole period lies inside it.
+/// </summary>
+public sealed record ListSettlementsQuery(
+    Guid ActorId,
+    Guid OrganizationId,
+    string? Status,
+    DateOnly? PeriodFrom,
+    DateOnly? PeriodTo,
+    SettlementCursor? Cursor,
+    bool MfaSatisfied);
+
+/// <summary>The keyset position after the last settlement of a page: its created_at and id.</summary>
+public sealed record SettlementCursor(DateTimeOffset CreatedAt, Guid Id);
+
+public sealed record SettlementPageResult(IReadOnlyList<SettlementResult> Items, string? NextCursor)
+{
+    public IReadOnlyList<SettlementResult> Items { get; } = Items.ToArray();
+}
+
 public sealed record AddSettlementAdjustmentCommand(
     Guid ActorId,
     Guid OrganizationId,
@@ -80,6 +101,8 @@ public interface ISettlementService
     Task<SettlementResult> CreateAsync(CreateSettlementCommand command, CancellationToken cancellationToken);
 
     Task<SettlementResult> GetAsync(GetSettlementQuery query, CancellationToken cancellationToken);
+
+    Task<SettlementPageResult> ListAsync(ListSettlementsQuery query, CancellationToken cancellationToken);
 
     Task<SettlementResult> AddAdjustmentAsync(
         AddSettlementAdjustmentCommand command,
@@ -149,6 +172,13 @@ public static class SettlementInputPolicy
     public static bool IsValid(GetSettlementQuery value) =>
         Actor(value.ActorId, value.OrganizationId) && value.SettlementId != Guid.Empty;
 
+    /// <summary>An inverted period window can match nothing, so it is a request error rather than an empty page.</summary>
+    public static bool IsValid(ListSettlementsQuery value) =>
+        Actor(value.ActorId, value.OrganizationId) &&
+        (value.Status is null || SettlementContractValues.TryParseStatus(value.Status, out _)) &&
+        (value.PeriodFrom is not { } from || value.PeriodTo is not { } to || from <= to) &&
+        (value.Cursor is null || value.Cursor.Id != Guid.Empty);
+
     /// <summary>A non-zero signed amount: an adjustment that does not move the total records nothing.</summary>
     public static bool IsValid(AddSettlementAdjustmentCommand value) =>
         Actor(value.ActorId, value.OrganizationId) &&
@@ -170,6 +200,68 @@ public static class SettlementInputPolicy
 
     private static bool Actor(Guid actorId, Guid organizationId) =>
         actorId != Guid.Empty && organizationId != Guid.Empty;
+}
+
+/// <summary>
+/// The page size of listSettlements is owned by the server, like every other AI-05 list: clients cannot
+/// configure it. Each item carries its lines, so the page stays small.
+/// </summary>
+public static class SettlementListPolicy
+{
+    public const int PageSize = 50;
+}
+
+/// <summary>
+/// Opaque Base64URL cursor: the UTC ticks of the last item's created_at and its id. A cursor that does not
+/// decode exactly is rejected as INVALID_REQUEST; it is never reinterpreted.
+/// </summary>
+public static class SettlementCursorCodec
+{
+    public static string Encode(SettlementCursor value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var text = string.Create(CultureInfo.InvariantCulture, $"{value.CreatedAt.UtcTicks}:{value.Id:D}");
+        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    public static bool TryDecode(string? value, out SettlementCursor? cursor)
+    {
+        cursor = null;
+        if (string.IsNullOrEmpty(value) || value.Length > 128)
+        {
+            return false;
+        }
+
+        try
+        {
+            var base64 = value.Replace('-', '+').Replace('_', '/');
+            base64 += (base64.Length % 4) switch
+            {
+                2 => "==",
+                3 => "=",
+                0 => string.Empty,
+                _ => throw new FormatException("Invalid Base64URL."),
+            };
+            var text = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+            var separator = text.IndexOf(':', StringComparison.Ordinal);
+            if (separator <= 0 ||
+                !long.TryParse(text.AsSpan(0, separator), NumberStyles.None, CultureInfo.InvariantCulture, out var ticks) ||
+                ticks < DateTimeOffset.MinValue.UtcTicks || ticks > DateTimeOffset.MaxValue.UtcTicks ||
+                !Guid.TryParseExact(text.AsSpan(separator + 1), "D", out var id) || id == Guid.Empty ||
+                Encode(new SettlementCursor(new DateTimeOffset(ticks, TimeSpan.Zero), id)) != value)
+            {
+                return false;
+            }
+
+            cursor = new SettlementCursor(new DateTimeOffset(ticks, TimeSpan.Zero), id);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 }
 
 /// <summary>

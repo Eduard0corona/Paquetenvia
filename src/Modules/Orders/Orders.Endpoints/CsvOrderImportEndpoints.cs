@@ -33,7 +33,8 @@ public static class CsvOrderImportEndpoints
             .Produces<CsvImportPreviewResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost(CommitRoute, CommitAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -85,7 +86,8 @@ public static class CsvOrderImportEndpoints
             return Conflict();
         }
 
-        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
+        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected ||
+            !OrderCreationCapability.Permits(session, tenantContext.OrganizationId))
         {
             return Forbidden();
         }
