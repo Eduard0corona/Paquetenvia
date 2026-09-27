@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "a396f005ba27c5de8f45b35ac41cbf8642ee6ffbafa02050d9391f1194ac8eec"
+      "sha256": "5f4e5bc3f8260541ae68375ed32bf7a88664627fbe5c7bb9c43b9cbaa1d3c136"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -374,8 +374,8 @@
     },
     {
       "path": "tools/validate_contracts.py",
-      "bytes": 24500,
-      "sha256": "bb83f9c5d0c7272ce9964e0bc1607bc512637cc6f4256274418259ab82d6ce23"
+      "bytes": 26151,
+      "sha256": "57dc55c45d766579c035ed98bb743ad3bf2eaa5f204caff0286247eedfc00103"
     }
   ]
 }
