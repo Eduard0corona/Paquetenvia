@@ -340,6 +340,17 @@ order_state_machine:
     eligible_driver: Evaluated with the shared DriverEligibilityPolicy (documents, zone, membership) on ASSIGNED and on the retry from FAILED_ATTEMPT or RESCHEDULED to DELIVERING.
     capacity_available: Evaluated with the same DriverEligibilityPolicy capacity rules (vehicle capacity against the order packages) on the same transitions.
     failed_attempt_next_action_respected: When leaving FAILED_ATTEMPT, the justifying incident next_action decides the successor. RETURNING allows only RETURNING. RESCHEDULED allows only RESCHEDULED or DELIVERING. Incidents adopted by the INC-001 backfill carry a default next_action and do not bind the successor; every other guard of the target still applies.
+decided_pending_translation:
+  status: DECIDED_2026-09-26_27_TRANSLATION_PENDING
+  source: decision-log D8-REASSIGNMENT-NEW-ASSIGNMENT (working session with the project owner via Claude Code)
+  reassignment:
+  - when an order is rescheduled, its previous assignment is closed as CANCELLED
+  - reassignment always creates a new assignment through DSP-002 or a new external offer; the previous assignment is never
+    reused
+  note: the guards above do not encode this rule yet; the implementing task adds the guard and its tests
+  covers: RESCHEDULED -> ASSIGNED without passing through READY_FOR_PICKUP (reported by PR 90)
+  attempt_and_custody_amendments: decided by the project owner on 2026-09-27 and recorded by PR 91 in the guards,
+    prohibited and guard_semantics above (ORD-002-ATTEMPT-RULES-2026-09-27, ORD-002-ATTEMPT-BOUNDARY)
 authorization_invariants:
 - 401 when no valid authentication token exists
 - 403 when an authenticated actor can see the tenant resource but lacks a capability
