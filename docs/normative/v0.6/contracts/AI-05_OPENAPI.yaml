@@ -4013,6 +4013,7 @@ x-pilot-contract-deltas:
   - id: D6-COD-EXPECTED
     status: DECIDED
     decision: D6-COD-PILOT
+    literal: el despachador declara el monto COD al crear la orden (y en el CSV)
     delta: CreateOrderRequest and the CSV row accept an optional non-negative integer COD expectation in MXN cents (int64),
       declared by the dispatcher; it is copied to orders.cod_expected_cents and flows to FIN-001 and SET-001
     open_point: whether the quote also carries the COD expectation is not stated by D6 (PROPOSED - keep it on the order
@@ -4032,11 +4033,15 @@ x-pilot-contract-deltas:
     decision: D7-SETTLEMENT-RULES
     delta: approveSettlement and markSettlementPaid require a satisfied MFA challenge for every permitted role, including
       FINANCE
+    literal: Solo se liquidan periodos ya cerrados; un total negativo se rechaza; aprobar y pagar requieren MFA; la
+      exportación se audita
   - id: D7-SETTLEMENT-EXPORT-AUDIT
     status: DECIDED
     decision: D7-SETTLEMENT-RULES
-    delta: exportSettlementCsv writes one append-only audit entry per export and its 200 response declares the header
-      Cache-Control no-store
+    delta: exportSettlementCsv writes one append-only audit entry per export
+  - id: SET-EXPORT-NO-STORE
+    status: PROPOSED
+    delta: the exportSettlementCsv 200 response declares the header Cache-Control no-store (not part of D7 as decided)
   - id: SET-LIST
     status: PROPOSED
     delta: add listSettlements (GET /settlements) with cursor pagination, filters payee_id, status, period_from and period_to,

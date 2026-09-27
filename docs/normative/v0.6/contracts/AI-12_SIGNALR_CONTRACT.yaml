@@ -111,7 +111,7 @@ events:
     - occurred_at
     proposed_amendment:
       status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
-      source: draft PR #90 (D8 assignment closure)
+      source: draft PR 90 (D8 assignment closure)
       text: assignment_status may be ACCEPTED, COMPLETED or CANCELLED; for a closed assignment the audience is operations
         plus the affected driver only while that driver's membership is active; until the Realtime parser and evidence
         rule accept closed statuses, no producer may emit AssignmentChanged for COMPLETED or CANCELLED

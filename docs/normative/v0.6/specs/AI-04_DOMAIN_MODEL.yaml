@@ -322,9 +322,17 @@ order_state_machine:
   - FAILED_ATTEMPT -> DELIVERED
   - RESCHEDULED -> DELIVERING when custody_acquired=false
   - CLAIM_OPEN after claim_window_ends_at
+decided_pending_translation:
+  status: DECIDED_2026-09-26_27_TRANSLATION_PENDING
+  source: decision-log D8-REASSIGNMENT-NEW-ASSIGNMENT (working session with the project owner via Claude Code)
+  reassignment:
+  - when an order is rescheduled, its previous assignment is closed as CANCELLED
+  - reassignment always creates a new assignment through DSP-002 or a new external offer; the previous assignment is never
+    reused
+  note: the guards above do not encode this rule yet; the implementing task adds the guard and its tests
 proposed_amendments:
   status: PROPOSED_2026-09-26_OWNER_DECISION_PENDING
-  source: draft PR #91 (ORD-002 attempt-scoped proofs, single custody derivation, per-attempt incidents)
+  source: draft PR 91 (ORD-002 attempt-scoped proofs, single custody derivation, per-attempt incidents)
   note: Not normative until the project owner approves them; order_state_machine.guards and prohibited above remain authoritative.
   order_state_machine_guards_to_add:
     RESCHEDULED:
@@ -343,9 +351,9 @@ proposed_amendments:
   decision_to_record:
   - the current attempt starts at the latest ORDER_STATUS_CHANGED event into the capture state, so no attempt_id column is
     added to custody.proofs or incidents.incidents
-  open_product_question:
-  - RESCHEDULED -> ASSIGNED without passing through READY_FOR_PICKUP keeps the previous assignment active; D8 does not cover
-    it (reported by PR #90)
+  resolved_by_owner:
+  - RESCHEDULED -> ASSIGNED without passing through READY_FOR_PICKUP (reported by PR 90) is covered by
+    D8-REASSIGNMENT-NEW-ASSIGNMENT - the previous assignment is closed as CANCELLED and a new one is created
 authorization_invariants:
 - 401 when no valid authentication token exists
 - 403 when an authenticated actor can see the tenant resource but lacks a capability

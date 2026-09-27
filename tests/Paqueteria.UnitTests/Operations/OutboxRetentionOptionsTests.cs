@@ -63,13 +63,41 @@ public sealed class OutboxRetentionOptionsTests
     }
 
     [Fact]
-    public void The_normative_minimum_itself_is_accepted_because_the_database_stays_authoritative()
+    public void The_normative_minimum_itself_is_rejected_because_worker_clock_skew_would_trip_22023()
     {
         var options = new OutboxRetentionOptions();
         foreach (var contract in OutboxRetentionLaneContract.All)
         {
             options.For(contract.Lane).ProcessedRetention = contract.MinimumProcessedRetention;
             options.For(contract.Lane).DeadRetention = contract.MinimumDeadRetention;
+        }
+
+        var errors = OutboxRetentionOptionsValidator.Errors(options);
+
+        Assert.Equal(4, errors.Count);
+        Assert.All(errors, error => Assert.Contains("clock-skew margin", error, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Retention_just_inside_the_clock_skew_margin_is_rejected()
+    {
+        var options = new OutboxRetentionOptions();
+        var margin = OutboxRetentionOptionsValidator.ClockSkewMargin;
+        options.Business.ProcessedRetention = OutboxRetentionLaneContract.Business.MinimumProcessedRetention + margin - TimeSpan.FromMilliseconds(1);
+
+        var error = Assert.Single(OutboxRetentionOptionsValidator.Errors(options));
+        Assert.Contains("OutboxRetention:Business:ProcessedRetention", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_normative_minimum_plus_the_clock_skew_margin_is_accepted()
+    {
+        Assert.True(OutboxRetentionOptionsValidator.ClockSkewMargin >= TimeSpan.FromMinutes(1));
+        var options = new OutboxRetentionOptions();
+        foreach (var contract in OutboxRetentionLaneContract.All)
+        {
+            options.For(contract.Lane).ProcessedRetention = contract.MinimumProcessedRetention + OutboxRetentionOptionsValidator.ClockSkewMargin;
+            options.For(contract.Lane).DeadRetention = contract.MinimumDeadRetention + OutboxRetentionOptionsValidator.ClockSkewMargin;
         }
 
         Assert.Empty(OutboxRetentionOptionsValidator.Errors(options));

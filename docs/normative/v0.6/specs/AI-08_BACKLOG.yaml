@@ -766,7 +766,8 @@ items:
   - 'DECIDED D7-SETTLEMENT-RULES: a settlement may only cover a closed period'
   - 'DECIDED D7-SETTLEMENT-RULES: a settlement whose total would be negative is rejected'
   - 'DECIDED D7-SETTLEMENT-RULES: approve and pay require MFA'
-  - 'DECIDED D7-SETTLEMENT-RULES: every export is audited and served with Cache-Control: no-store'
+  - 'DECIDED D7-SETTLEMENT-RULES: every export is audited'
+  - 'PROPOSED (owner decision pending): the export response carries Cache-Control: no-store'
   required_tests:
   - reconciliation integration
   approval_gate: null
@@ -1192,11 +1193,10 @@ items:
   - expired idempotency keys are deleted in bounded batches
   - expired upload sessions are marked EXPIRED and quarantined objects follow retention policy
   - job is idempotent and tenant-safe
-  - 'DECIDED OPS-003-OFFLINE-72H: an offline PWA operation older than 72 hours is discarded by the client and the driver
-    is notified'
+  - 'DECIDED OPS-003-OFFLINE-72H (literal): Una operación offline de la PWA puede reintentarse hasta 72 horas; después
+    se descarta y se avisa al conductor. Las llaves de idempotencia se purgan después de ese plazo.'
   - 'PROPOSED (owner decision pending): the server rejects an offline operation whose client occurred_at is older than
     72 hours, so a purged idempotency key can never let a stale replay execute twice'
-  - 'DECIDED OPS-003-OFFLINE-72H: idempotency keys are eligible for purge only after the 72-hour offline window has elapsed'
   - 'PROPOSED (owner decision pending): cleanup runs through a dedicated NOLOGIN cleanup-executor role that owns only
     bounded cleanup functions, following the ADR-034 pattern; see governance/pilot-contracts PR'
 - id: TEN-003
@@ -1272,6 +1272,12 @@ items:
   - cookie-authenticated state-changing requests are protected against CSRF
   - logout ends the server session and clears the cookie
   - Mock authentication remains limited to Development, Testing and authorized DevSynthetic
+  - 'DECIDED AUTH-FIRST-LOGIN-INVITATION: first login is by prior invitation - an administrator registers the user with
+    email and membership, the first login links the AuthCenter sub, and nobody enters without an invitation'
+  - 'DECIDED BFF-SESSION-STORE-POSTGRESQL: BFF sessions are stored in a PostgreSQL table (AI-06/AI-18 change pending a
+    migration)'
+  - 'DECIDED AUTHCENTER-AMR-MFA: AuthCenter adds the amr claim when the user completed MFA; Paqueteria reads MFA from it'
+  - 'DECIDED AUTHCENTER-DOMAIN: the AuthCenter authority is authcenter.info'
   required_tests:
   - WebApplicationFactory login, callback and logout
   - CSRF rejection
@@ -1299,6 +1305,7 @@ items:
   - the Azure ownership bridge covers every privileged role, including paqueteria_lifecycle_executor
   - the Data Protection key ring has an external key-encryption protector before distributed activation
   - restore drill evidence is current before pilot start
+  - 'DECIDED PILOT-SAME-ORIGIN-ROUTING: the Azure ingress sends /api, /hubs, /auth and /signin-authcenter to the API'
   required_tests:
   - migrator Clean and Applied paths on the pilot database
   - restore drill

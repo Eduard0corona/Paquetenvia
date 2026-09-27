@@ -129,6 +129,11 @@ asignación como `CANCELLED`; `*→CANCELLED` la cierra como `CANCELLED`;
 solo afecta a asignaciones `ACCEPTED/ACTIVE` con `created_at <= occurred_at` y,
 si el evento lo trae, a su `assignment_id`.
 
+**Decidido** (`D8-REASSIGNMENT-NEW-ASSIGNMENT`, 2026-09-26/27): al reprogramar,
+la asignación anterior se cierra como `CANCELLED`, y la reasignación siempre
+crea una asignación nueva por DSP-002 o una oferta externa nueva; nunca se
+reutiliza la anterior. Esto incluye `RESCHEDULED→ASSIGNED`.
+
 **Propuesto, pendiente de decisión del owner** (PR #90): el consumer
 `AssignmentLifecycleReactor` (Dispatch) consume el topic interno
 `dispatch.order-status-reaction-requested` (payload
