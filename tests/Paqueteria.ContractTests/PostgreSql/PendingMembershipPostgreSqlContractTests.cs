@@ -132,7 +132,8 @@ public sealed class PendingMembershipPostgreSqlContractTests(PostgreSqlContractF
 
         // Re-adding the same email and role while pending re-arms that entry: one row, a later expiry.
         await AgeAsync(first.Entry.Id, TimeSpan.FromDays(3));
-        var rearmed = await service.AddAsync(command with { IdempotencyKey = "reg002-replay-000002" }, CancellationToken.None);
+        var rearmCommand = Add(admin, organization, $"reg002-rearm-{Guid.NewGuid():N}", command.Email, command.Role);
+        var rearmed = await service.AddAsync(rearmCommand, CancellationToken.None);
         Assert.Equal(PendingMembershipOutcome.Succeeded, rearmed.Outcome);
         Assert.Equal(first.Entry.Id, rearmed.Entry!.Id);
         Assert.True(rearmed.Entry.ExpiresAt > DateTimeOffset.UtcNow.AddDays(6.9));
@@ -143,7 +144,7 @@ public sealed class PendingMembershipPostgreSqlContractTests(PostgreSqlContractF
             "SELECT string_agg(action, ',' ORDER BY occurred_at) FROM platform.audit_logs WHERE entity_id=@id",
             ("id", first.Entry.Id)));
         // A repeated re-arm key re-arms nothing more and writes no second audit row.
-        await service.AddAsync(command with { IdempotencyKey = "reg002-replay-000002" }, CancellationToken.None);
+        await service.AddAsync(rearmCommand, CancellationToken.None);
         Assert.Equal(2, await ScalarAsync<long>(
             "SELECT count(*) FROM platform.audit_logs WHERE entity_id=@id", ("id", first.Entry.Id)));
         Assert.Equal("{\"role\": \"BUSINESS_OPERATOR\"}", await ScalarAsync<string>(
