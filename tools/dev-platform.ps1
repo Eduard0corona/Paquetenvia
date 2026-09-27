@@ -925,11 +925,14 @@ function Complete-SeedProof($Order, [string] $Alias, [string] $ProofType) {
         $uploadHeaders[$property.Name] = [string]$property.Value
     }
     Invoke-WebRequest -Method Put -Uri $upload.upload_url -Headers $uploadHeaders -Body $bytes -UseBasicParsing | Out-Null
+    # OPS-003-SERVER-72H-REJECTION: a capture older than 72 hours is OFFLINE_OPERATION_EXPIRED, so the
+    # synthetic capture happens now; it is fixed before the retries so every attempt sends the same request.
+    $capturedAt = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         try {
             [void](Invoke-ApiPost "/api/v1/orders/$($Order.id)/proofs" "active-driver" "local-seed-$Alias-$operation-finalize-v1" @{
-                upload_session_id=$upload.id; proof_type=$ProofType; captured_at="2026-01-02T12:30:00Z"; sha256=$sha256
+                upload_session_id=$upload.id; proof_type=$ProofType; captured_at=$capturedAt; sha256=$sha256
             })
             return
         }
