@@ -1,4 +1,6 @@
+using Custody.Application.Cleanup;
 using Custody.Application.ProofUploads;
+using Custody.Infrastructure.Cleanup;
 using Custody.Infrastructure.Persistence;
 using Custody.Infrastructure.Proofs;
 using Custody.Infrastructure.ProofStorage;
@@ -11,8 +13,10 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Scheduling;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Custody.Infrastructure;
@@ -98,6 +102,7 @@ public static class DependencyInjection
         services.AddScoped<TenantTransactionContext<CustodyDbContext>>();
         services.AddScoped<WorkerTenantTransactionContext<CustodyDbContext>>();
         services.TryAddSingleton<IClock, SystemClock>();
+        services.AddOfflineOperationAgePolicy(configuration);
         services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.AddSingleton<DisabledProofObjectStorage>();
@@ -136,6 +141,49 @@ public static class DependencyInjection
             services.AddHostedService<ProofValidationWorker>();
         }
 
+        return services;
+    }
+
+    /// <summary>
+    /// OPS-003 Worker composition: the idempotency-key purge and the proof upload-session expiry on
+    /// the shared <see cref="IJobScheduler"/>. Both stay idle unless enabled under
+    /// <c>OperationalCleanup</c>, and only reach the OPS-003-CLEANUP-ROLE functions as the Worker role.
+    /// </summary>
+    public static IServiceCollection AddCustodyOperationalCleanup(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+        services.AddOptions<OperationalCleanupOptions>()
+            .Bind(configuration.GetSection(OperationalCleanupOptions.SectionName))
+            .Validate(
+                options => OperationalCleanupOptions.Errors(options).Count == 0,
+                "OperationalCleanup contains an invalid bounded option.")
+            .Validate(
+                options => !options.AnyEnabled ||
+                    !string.IsNullOrWhiteSpace(configuration.GetConnectionString(
+                        OperationalCleanupOptions.WorkerConnectionStringName)),
+                "OperationalCleanup requires ConnectionStrings:PaqueteriaWorker when a job is enabled.")
+            .ValidateOnStart();
+        services.AddSingleton(_ => new OperationalCleanupDataSource(
+            configuration.GetConnectionString(OperationalCleanupOptions.WorkerConnectionStringName) ?? string.Empty));
+        services.AddSingleton<IOperationalCleanupGateway>(serviceProvider =>
+        {
+            var dataSource = serviceProvider.GetRequiredService<OperationalCleanupDataSource>();
+            return new PostgreSqlOperationalCleanupGateway(
+                () => dataSource.Value,
+                serviceProvider.GetRequiredService<IOptions<OperationalCleanupOptions>>().Value.CommandTimeoutSeconds);
+        });
+        services.AddSingleton<OperationalCleanupTelemetry>();
+        services.AddSingleton<IdempotencyKeyPurgeJob>();
+        services.AddSingleton<ProofUploadSessionExpiryJob>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IJobScheduler, PeriodicJobScheduler>();
+        services.AddHostedService<OperationalCleanupHostedService>();
+        services.AddHealthChecks().AddCheck<OperationalCleanupHealthCheck>(
+            "custody_operational_cleanup",
+            tags: ["ready"]);
         return services;
     }
 

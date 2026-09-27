@@ -188,6 +188,23 @@
 - No cambian AI-02, AI-04, AI-05, AI-06, AI-08, AI-12, AI-18, SQL, roles,
   migraciones ni código de producción.
 
+## OPS-003 limpieza operativa y rechazo de operaciones offline de más de 72 h — 2026-09-27
+
+- `OPS-003-CLEANUP-ROLE`: AI-18 agrega `paqueteria_cleanup_executor NOLOGIN BYPASSRLS`
+  con grants exactos por columna (más `DELETE` de tabla sobre
+  `platform.idempotency_keys`, que no tiene forma por columna) y las aserciones
+  de despliegue 13 a 16. Las funciones
+  `security.purge_expired_idempotency_keys(timestamptz,integer,boolean)` (piso
+  fijo de 72 h) y `security.expire_proof_upload_sessions(integer)` las instala
+  el lane de Custody (`20260927000100_AddOperationalCleanupExecutor`), como
+  ADR-034; AI-06 no cambia. `validate_contracts.py` admite exactamente los dos
+  grants `UPDATE (...)` por columna y fija los grants del nuevo rol.
+- `OPS-003-SERVER-72H-REJECTION`: AI-05 agrega `x-offline-operation-age`,
+  `client_occurred_at` opcional en `TransitionRequest` y
+  `CreateProofUploadSessionRequest`, y las respuestas `TransitionConflict` y
+  `ProofConflict` con el código `OFFLINE_OPERATION_EXPIRED`.
+- AI-03 §25.2 y AI-08 (OPS-003) describen el rol, las funciones y los jobs.
+
 ## OPS-004 retención acotada del outbox — 2026-09-26 UTC (PR #81)
 
 - Job de Worker sobre las funciones de purga aprobadas de AI-06/AI-18

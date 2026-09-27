@@ -20,6 +20,7 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_outbox_executor",
         "paqueteria_maintenance",
         "paqueteria_lifecycle_executor",
+        "paqueteria_cleanup_executor",
     ];
 
     private static readonly string[] SensitiveFunctions =
@@ -52,6 +53,7 @@ public sealed class DatabaseBaselineAssertions
         "bootstrap function security and column-level grants",
         "pilot operational and outbox purge indexes (AI06-PILOT-INDEXES)",
         "lifecycle executor boundary (ADR-034)",
+        "cleanup executor boundary (OPS-003-CLEANUP-ROLE)",
         "real default-privilege inheritance probes",
     });
 
@@ -151,9 +153,16 @@ public sealed class DatabaseBaselineAssertions
                 lifecycle(name,bypass_rls) AS (
                   SELECT 'paqueteria_lifecycle_executor',true
                   WHERE pg_catalog.to_regrole('paqueteria_lifecycle_executor') IS NOT NULL
-                     OR pg_catalog.to_regprocedure('security.finalize_expired_orders(integer)') IS NOT NULL)
+                     OR pg_catalog.to_regprocedure('security.finalize_expired_orders(integer)') IS NOT NULL),
+                -- OPS-003-CLEANUP-ROLE: the same rule for installations that predate the cleanup executor.
+                cleanup(name,bypass_rls) AS (
+                  SELECT 'paqueteria_cleanup_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_cleanup_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.expire_proof_upload_sessions(integer)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
-                FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle) expected
+                FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
+                      UNION ALL SELECT name,bypass_rls FROM cleanup) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
@@ -203,6 +212,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertLifecycleExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertCleanupExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -385,6 +397,13 @@ public sealed class DatabaseBaselineAssertions
                 ('security.requeue_stale_dispatch_outbox(interval,integer,integer)')) dispatch_lane(signature)
               WHERE to_regprocedure('security.claim_dispatch_outbox(text,integer,interval)') IS NOT NULL
                  OR to_regprocedure('security.requeue_stale_dispatch_outbox(interval,integer,integer)') IS NOT NULL
+              UNION ALL
+              -- OPS-003-CLEANUP-ROLE: installed by the Custody OPS-003 lane after the baseline.
+              SELECT signature,'paqueteria_cleanup_executor'
+              FROM (VALUES
+                ('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)'),
+                ('security.expire_proof_upload_sessions(integer)')) cleanup(signature)
+              WHERE to_regprocedure(signature) IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
@@ -397,7 +416,7 @@ public sealed class DatabaseBaselineAssertions
             JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
             JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
-                'paqueteria_lifecycle_executor')
+                'paqueteria_lifecycle_executor','paqueteria_cleanup_executor')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -647,6 +666,145 @@ public sealed class DatabaseBaselineAssertions
             UNION ALL
             SELECT 'lifecycle finalization function exists without the lifecycle executor role'
             FROM fn WHERE NOT EXISTS (SELECT 1 FROM executor)
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// OPS-003-CLEANUP-ROLE lane contract: after the Custody OPS-003 migration (and after any E-002
+    /// temporary grant is revoked) the role and both functions must exist and satisfy the exact
+    /// executor boundary, including no CREATE on any application or shared schema.
+    /// </summary>
+    public static async Task AssertCleanupExecutorInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'cleanup executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_cleanup_executor') IS NULL
+            UNION ALL
+            SELECT 'cleanup function is missing: ' || signature
+            FROM (VALUES
+              ('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)'),
+              ('security.expire_proof_upload_sessions(integer)')) expected(signature)
+            WHERE pg_catalog.to_regprocedure(signature) IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await AssertCleanupExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
+    /// OPS-003-CLEANUP-ROLE: once the cleanup executor exists it holds exactly USAGE on
+    /// <c>platform</c> and <c>custody</c>, SELECT on five key columns plus DELETE on
+    /// <c>platform.idempotency_keys</c>, SELECT(id,status,expires_at) plus UPDATE(status,updated_at) on
+    /// <c>custody.proof_upload_sessions</c>, inherits nothing, and its two functions are pinned
+    /// SECURITY DEFINERs executable by <c>paqueteria_worker</c> only.
+    /// </summary>
+    private static async Task AssertCleanupExecutorBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_cleanup_executor'
+            ),
+            expected(table_schema,table_name,column_name,privilege_type) AS (VALUES
+              ('platform','idempotency_keys','owner_org_id','SELECT'),
+              ('platform','idempotency_keys','scope','SELECT'),
+              ('platform','idempotency_keys','idempotency_key','SELECT'),
+              ('platform','idempotency_keys','created_at','SELECT'),
+              ('platform','idempotency_keys','expires_at','SELECT'),
+              ('custody','proof_upload_sessions','id','SELECT'),
+              ('custody','proof_upload_sessions','status','SELECT'),
+              ('custody','proof_upload_sessions','expires_at','SELECT'),
+              ('custody','proof_upload_sessions','status','UPDATE'),
+              ('custody','proof_upload_sessions','updated_at','UPDATE')),
+            actual AS (
+              SELECT table_schema,table_name,column_name,privilege_type
+              FROM information_schema.column_privileges
+              WHERE grantee='paqueteria_cleanup_executor'),
+            expected_tables(table_schema,table_name,privilege_type) AS (VALUES
+              ('platform','idempotency_keys','DELETE')),
+            actual_tables AS (
+              SELECT table_schema,table_name,privilege_type
+              FROM information_schema.table_privileges
+              WHERE grantee='paqueteria_cleanup_executor'),
+            fn(signature,search_path) AS (VALUES
+              ('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)',
+               'search_path=pg_catalog, platform, pg_temp'),
+              ('security.expire_proof_upload_sessions(integer)',
+               'search_path=pg_catalog, custody, pg_temp')),
+            installed AS (
+              SELECT fn.signature,fn.search_path,p.oid,p.prosecdef,p.proconfig,p.prosrc
+              FROM fn JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn.signature))
+            SELECT 'missing cleanup executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected cleanup executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'missing cleanup executor table grant: ' || e.table_schema || '.' || e.table_name || ':' || e.privilege_type
+            FROM expected_tables e CROSS JOIN executor
+            LEFT JOIN actual_tables a USING(table_schema,table_name,privilege_type)
+            WHERE a.table_name IS NULL
+            UNION ALL
+            SELECT 'unexpected cleanup executor table grant: ' || a.table_schema || '.' || a.table_name || ':' || a.privilege_type
+            FROM actual_tables a LEFT JOIN expected_tables e USING(table_schema,table_name,privilege_type)
+            WHERE e.table_name IS NULL
+            UNION ALL
+            SELECT 'cleanup executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM (n.nspname IN ('platform','custody')))
+            UNION ALL
+            SELECT 'cleanup executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m JOIN executor ON m.member=executor.oid
+            UNION ALL
+            SELECT 'cleanup executor owns a relation, schema or type'
+            FROM executor
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
+            UNION ALL
+            SELECT 'cleanup function is unsafe: ' || installed.signature
+            FROM installed
+            WHERE NOT installed.prosecdef
+               OR NOT (installed.search_path=ANY(COALESCE(installed.proconfig,ARRAY[]::text[])))
+               OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR has_function_privilege('public',installed.oid,'EXECUTE')
+               OR has_function_privilege('paqueteria_app',installed.oid,'EXECUTE')
+               OR NOT has_function_privilege('paqueteria_worker',installed.oid,'EXECUTE')
+            UNION ALL
+            SELECT 'cleanup function exists without the cleanup executor role: ' || installed.signature
+            FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
+            UNION ALL
+            SELECT 'cleanup functions are only partially installed'
+            FROM (SELECT count(*) AS present FROM installed) c
+            WHERE c.present=1
             """,
             cancellationToken,
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);

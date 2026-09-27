@@ -4,6 +4,7 @@ using Orders.Application.Orders;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
@@ -208,6 +209,8 @@ public static class OrderEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IOrderTransitionService service,
+        OfflineOperationAgePolicy offlinePolicy,
+        IClock clock,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
@@ -227,6 +230,16 @@ public static class OrderEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        // OPS-003-SERVER-72H-REJECTION: an offline replay older than 72 hours never reaches the
+        // transition service, whatever its idempotency key; a clock ahead of the tolerance is invalid.
+        switch (offlinePolicy.Evaluate(request.ClientOccurredAt, clock.UtcNow))
+        {
+            case OfflineOperationAge.Expired:
+                return OfflineOperationExpired();
+            case OfflineOperationAge.AheadOfServerClock:
+                return Conflict();
         }
 
         try
@@ -336,6 +349,12 @@ public static class OrderEndpoints
     private static IResult Conflict() =>
         Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Conflict.");
 
+    private static IResult OfflineOperationExpired() =>
+        Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Conflict.",
+            extensions: new Dictionary<string, object?> { ["code"] = OfflineOperationAgePolicy.ExpiredCode });
+
     private static IResult Forbidden() =>
         Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");
 
@@ -361,7 +380,8 @@ public sealed record TransitionOrderRequest(
     [property: JsonPropertyName("target_status")] string? TargetStatus,
     [property: JsonPropertyName("reason")] string? Reason,
     [property: JsonPropertyName("expected_version")] int ExpectedVersion,
-    [property: JsonPropertyName("metadata")] JsonElement? Metadata);
+    [property: JsonPropertyName("metadata")] JsonElement? Metadata,
+    [property: JsonPropertyName("client_occurred_at")] DateTimeOffset? ClientOccurredAt = null);
 
 public sealed record MoneyResponse(
     [property: JsonPropertyName("currency")] string Currency,
