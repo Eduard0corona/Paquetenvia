@@ -5,7 +5,7 @@
     {
       "id": "AUTH-001-OIDC",
       "mode": "DEPENDENCY_ADMISSION",
-      "status": "ACTIVE",
+      "status": "MERGED",
       "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
       "authorized_source_branch": "deps/auth-001-oidc",
       "tracked_pull_request": 92,
