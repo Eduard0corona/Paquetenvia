@@ -89,7 +89,21 @@ OWNER_APPROVAL_SCOPE = {
 NORMAL_RELEASE_EVIDENCE = "NORMAL_RELEASE_EVIDENCE"
 SECURITY_REMEDIATION = "SECURITY_REMEDIATION"
 REL000_MODES = {NORMAL_RELEASE_EVIDENCE, SECURITY_REMEDIATION}
-REMEDIATION_POLICY_FORMAT = "paquetenvia-rel000-security-remediation-policy-v2"
+REMEDIATION_POLICY_FORMAT = "paquetenvia-rel000-security-remediation-policy-v3"
+# v2 predates dependency admissions. It is accepted only when the policy is read
+# from an older tested base commit, where it means "no dependency admissions".
+LEGACY_REMEDIATION_POLICY_FORMATS = frozenset(
+    {"paquetenvia-rel000-security-remediation-policy-v2"}
+)
+REMEDIATION_POLICY_PATH = "tools/rel-000/security-remediation-policy.json"
+DEPENDENCY_ADMISSION = "DEPENDENCY_ADMISSION"
+DEPENDENCY_ADMISSION_STATUSES = frozenset({"ACTIVE", "MERGED"})
+DEPENDENCY_ADMISSION_ECOSYSTEMS = frozenset({"nuget", "pnpm"})
+# Only the NuGet package-graph check exists. A pnpm admission is rejected when the
+# policy loads, so it can never be mistaken for an enforced admission.
+SUPPORTED_DEPENDENCY_ADMISSION_ECOSYSTEMS = frozenset({"nuget"})
+CENTRAL_PACKAGES_PATH = "Directory.Packages.props"
+ADMITTED_DEPENDENCY_DIFF = "ADMITTED_DEPENDENCIES"
 SHARP_REMEDIATION_ID = "ISSUE-5-SHARP-035-REMEDIATION"
 WEB_TRANSITIVE_REMEDIATION_ID = "SEC-2026-08-SECURITY-BASELINE"
 NEXT_CRITICAL_REMEDIATION_ID = "SEC-2026-09-NEXT-CRITICAL"
@@ -434,7 +448,10 @@ def load_json(path: Path) -> Any:
 
 
 def load_remediation_policy(path: Path) -> dict[str, Any]:
-    policy = load_json(path)
+    return validate_remediation_policy(load_json(path))
+
+
+def validate_remediation_policy(policy: Any) -> dict[str, Any]:
     if not isinstance(policy, dict):
         fail("REMEDIATION_POLICY_INVALID", "The remediation policy must be a JSON object.")
     if policy.get("format_version") != REMEDIATION_POLICY_FORMAT:
@@ -639,7 +656,231 @@ def load_remediation_policy(path: Path) -> dict[str, Any]:
                     "REMEDIATION_POLICY_INVALID",
                     "The Next.js critical remediation authorization is incomplete or inconsistent.",
                 )
+    validate_dependency_admission_registry(policy, identifiers, branches)
     return policy
+
+
+_ADMISSION_VERSION_PATTERN = re.compile(r"[0-9]+(?:\.[0-9]+){1,3}")
+_ADMISSION_CONTENT_HASH_PATTERN = re.compile(r"[A-Za-z0-9+/]{86}==")
+_ADMISSION_DECISION_PATTERN = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+")
+_ISO_DATE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _admission_invalid(message: str, **details: Any) -> None:
+    fail("DEPENDENCY_ADMISSION_POLICY_INVALID", message, **details)
+
+
+def validate_dependency_admission_registry(
+    policy: dict[str, Any],
+    identifiers: set[str],
+    branches: set[str],
+) -> list[dict[str, Any]]:
+    """Validate the owner-approved dependency admissions (policy v3).
+
+    Each admission registers exact packages (id, version and NuGet SHA-512 content
+    hash), the only branch that may introduce them, the files it may touch and the
+    owner decision behind it. Identifiers and branches are unique across every
+    registry, and a package may be admitted by exactly one admission.
+    """
+
+    admissions = policy.get("dependency_admissions")
+    if not isinstance(admissions, list):
+        _admission_invalid("dependency_admissions must be an array.")
+    required = {
+        "id",
+        "mode",
+        "status",
+        "owner_decision_id",
+        "authorized_source_branch",
+        "ecosystem",
+        "admitted_direct_packages",
+        "admitted_transitive_packages",
+        "allowed_dependency_files",
+        "required_dependency_files",
+        "allowed_project_files",
+    }
+    optional = {"expires", "tracked_pull_request", "description"}
+    admitted_packages: dict[str, str] = {}
+    for admission in admissions:
+        if not isinstance(admission, dict) or not required.issubset(admission):
+            _admission_invalid("A dependency admission is incomplete.")
+        unknown = set(admission) - required - optional
+        if unknown:
+            _admission_invalid(
+                "A dependency admission contains unknown fields.",
+                id=admission.get("id"),
+                fields=sorted(unknown),
+            )
+        identifier = admission["id"]
+        branch = admission["authorized_source_branch"]
+        if not isinstance(identifier, str) or not identifier or identifier in identifiers:
+            _admission_invalid("A dependency admission ID is missing or duplicated.", id=identifier)
+        if not isinstance(branch, str) or not branch or branch in branches:
+            _admission_invalid(
+                "A dependency admission source branch is missing or duplicated.",
+                id=identifier,
+            )
+        if branch in {"main", "development"}:
+            _admission_invalid(
+                "A dependency admission must name a dedicated source branch.", id=identifier
+            )
+        if admission["mode"] != DEPENDENCY_ADMISSION:
+            _admission_invalid("A dependency admission has an invalid mode.", id=identifier)
+        if admission["status"] not in DEPENDENCY_ADMISSION_STATUSES:
+            _admission_invalid("A dependency admission has an invalid status.", id=identifier)
+        decision = admission["owner_decision_id"]
+        if not isinstance(decision, str) or _ADMISSION_DECISION_PATTERN.fullmatch(decision) is None:
+            _admission_invalid(
+                "A dependency admission must cite its owner decision ID.", id=identifier
+            )
+        ecosystem = admission["ecosystem"]
+        if ecosystem not in DEPENDENCY_ADMISSION_ECOSYSTEMS:
+            _admission_invalid("A dependency admission has an unknown ecosystem.", id=identifier)
+        if ecosystem not in SUPPORTED_DEPENDENCY_ADMISSION_ECOSYSTEMS:
+            fail(
+                "DEPENDENCY_ADMISSION_ECOSYSTEM_UNSUPPORTED",
+                "REL-000 cannot enforce admissions for this ecosystem yet.",
+                id=identifier,
+                ecosystem=ecosystem,
+            )
+        expires = admission.get("expires")
+        if expires is not None:
+            try:
+                valid_expiry = (
+                    isinstance(expires, str)
+                    and _ISO_DATE_PATTERN.fullmatch(expires) is not None
+                    and dt.date.fromisoformat(expires).isoformat() == expires
+                )
+            except ValueError:
+                valid_expiry = False
+            if not valid_expiry:
+                _admission_invalid("A dependency admission expiry must be YYYY-MM-DD.", id=identifier)
+        tracked = admission.get("tracked_pull_request")
+        if tracked is not None and (not isinstance(tracked, int) or isinstance(tracked, bool) or tracked < 1):
+            _admission_invalid("tracked_pull_request must be a positive integer.", id=identifier)
+        direct = admission["admitted_direct_packages"]
+        transitive = admission["admitted_transitive_packages"]
+        if not isinstance(direct, list) or not direct or not isinstance(transitive, list):
+            _admission_invalid(
+                "A dependency admission must admit at least one direct package.", id=identifier
+            )
+        for package in [*direct, *transitive]:
+            if (
+                not isinstance(package, dict)
+                or set(package) != {"id", "version", "content_hash"}
+                or not isinstance(package["id"], str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", package["id"]) is None
+                or not isinstance(package["version"], str)
+                or _ADMISSION_VERSION_PATTERN.fullmatch(package["version"]) is None
+                or not isinstance(package["content_hash"], str)
+                or _ADMISSION_CONTENT_HASH_PATTERN.fullmatch(package["content_hash"]) is None
+            ):
+                _admission_invalid(
+                    "An admitted package must declare an exact stable id, version and content hash.",
+                    id=identifier,
+                )
+            key = package["id"].casefold()
+            if key in admitted_packages:
+                _admission_invalid(
+                    "A package is admitted more than once.",
+                    id=identifier,
+                    package=package["id"],
+                    admitted_by=admitted_packages[key],
+                )
+            admitted_packages[key] = identifier
+        allowed = admission["allowed_dependency_files"]
+        required_files = admission["required_dependency_files"]
+        projects = admission["allowed_project_files"]
+        if (
+            not isinstance(allowed, list)
+            or not allowed
+            or len(set(allowed)) != len(allowed)
+            or any(
+                not isinstance(value, str)
+                or value.startswith("/")
+                or "\\" in value
+                or ".." in Path(value).parts
+                or Path(value).name not in {CENTRAL_PACKAGES_PATH, "packages.lock.json"}
+                for value in allowed
+            )
+            or CENTRAL_PACKAGES_PATH not in allowed
+            or not isinstance(required_files, list)
+            or len(set(required_files)) != len(required_files)
+            or CENTRAL_PACKAGES_PATH not in required_files
+            or not set(required_files).issubset(allowed)
+            or not isinstance(projects, list)
+            or len(set(projects)) != len(projects)
+            or any(
+                not isinstance(value, str)
+                or value.startswith("/")
+                or "\\" in value
+                or ".." in Path(value).parts
+                or Path(value).suffix.lower() != ".csproj"
+                for value in projects
+            )
+        ):
+            _admission_invalid(
+                "A NuGet dependency admission file scope is invalid.", id=identifier
+            )
+        identifiers.add(identifier)
+        branches.add(branch)
+    return admissions
+
+
+def admitted_package_catalog(
+    admissions: Iterable[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Map casefolded package id → exact admitted package (ACTIVE and MERGED admissions)."""
+
+    catalog: dict[str, dict[str, Any]] = {}
+    for admission in admissions or ():
+        if admission.get("status") not in DEPENDENCY_ADMISSION_STATUSES:
+            continue
+        for direct, packages in (
+            (True, admission["admitted_direct_packages"]),
+            (False, admission["admitted_transitive_packages"]),
+        ):
+            for package in packages:
+                catalog[package["id"].casefold()] = {
+                    "id": package["id"],
+                    "version": package["version"],
+                    "content_hash": package["content_hash"],
+                    "direct": direct,
+                    "admission_id": admission["id"],
+                }
+    return catalog
+
+
+def load_base_dependency_admissions(
+    repository_root: Path,
+    base_main_sha: str,
+) -> list[dict[str, Any]]:
+    """Read the dependency admissions exactly as committed on the tested base.
+
+    A pull request can never admit its own packages: the admissions that judge it
+    come from ``git show <base>:tools/rel-000/security-remediation-policy.json``.
+    A v2 base policy predates admissions and admits nothing.
+    """
+
+    raw = run_git(
+        repository_root,
+        "show",
+        f"{base_main_sha}:{REMEDIATION_POLICY_PATH}",
+        allow_failure=True,
+    )
+    if not raw:
+        return []
+    try:
+        policy = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        fail(
+            "REMEDIATION_POLICY_INVALID",
+            "The base remediation policy is invalid JSON.",
+            error=str(exc),
+        )
+    if isinstance(policy, dict) and policy.get("format_version") in LEGACY_REMEDIATION_POLICY_FORMATS:
+        return []
+    return validate_remediation_policy(policy)["dependency_admissions"]
 
 
 def resolve_rel000_mode(
@@ -4335,26 +4576,157 @@ def _xml_local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _central_package_versions_from_xml(
+    raw: str,
+    reason_code: str,
+    label: str,
+) -> dict[str, tuple[str, str]]:
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        fail(reason_code, f"The {label} central package manifest is invalid XML.", error=str(exc))
+    versions: dict[str, tuple[str, str]] = {}
+    for element in root.iter():
+        if _xml_local_name(element.tag).casefold() != "packageversion":
+            continue
+        package = element.attrib.get("Include")
+        version = element.attrib.get("Version")
+        if not package or not version or set(element.attrib) != {"Include", "Version"}:
+            fail(
+                reason_code,
+                f"A {label} PackageVersion must use only explicit Include and Version attributes.",
+            )
+        key = package.casefold()
+        if key in versions:
+            fail(
+                reason_code,
+                f"The {label} central package manifest contains a duplicate package ID.",
+                package=package,
+            )
+        versions[key] = (package, version)
+    return versions
+
+
+def validate_admitted_central_packages(
+    repository_root: Path,
+    base_main_sha: str,
+    admissions: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Prove Directory.Packages.props == baseline + admitted PackageVersion lines.
+
+    Without admissions the manifest must stay byte-identical. With admissions, every
+    baseline PackageVersion keeps its exact version, every added PackageVersion is
+    an admitted direct package at its exact version, and removing exactly those
+    added lines must reproduce the baseline bytes (no other edit is possible).
+    """
+
+    baseline_raw = run_git(repository_root, "show", f"{base_main_sha}:{CENTRAL_PACKAGES_PATH}")
+    current_path = repository_root / CENTRAL_PACKAGES_PATH
+    if not current_path.is_file():
+        fail(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            "Directory.Packages.props must remain byte-identical to the baseline.",
+        )
+    current_raw = current_path.read_text(encoding="utf-8")
+    if current_raw.strip() == baseline_raw:
+        return {"changed": False, "admitted": []}
+    catalog = admitted_package_catalog(admissions)
+    if not catalog:
+        fail(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            "Directory.Packages.props must remain byte-identical to the baseline.",
+        )
+    baseline_versions = _central_package_versions_from_xml(
+        baseline_raw, "BASE_DEPENDENCY_MANIFEST_INVALID", "baseline"
+    )
+    current_versions = _central_package_versions_from_xml(
+        current_raw, "BASELINE_CENTRAL_PACKAGES_CHANGED", "current"
+    )
+    removed_or_changed = sorted(
+        package
+        for key, (package, version) in baseline_versions.items()
+        if current_versions.get(key) != (package, version)
+    )
+    if removed_or_changed:
+        fail(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            "A baseline central package was removed or changed.",
+            packages=removed_or_changed,
+        )
+    added = {
+        key: value for key, value in current_versions.items() if key not in baseline_versions
+    }
+    for key, (package, version) in sorted(added.items()):
+        admitted = catalog.get(key)
+        if admitted is None or not admitted["direct"]:
+            fail(
+                "DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE",
+                "A central package is not an admitted direct package.",
+                package=package,
+                version=version,
+            )
+        if package != admitted["id"] or version != admitted["version"]:
+            fail(
+                "DEPENDENCY_ADMISSION_VERSION_MISMATCH",
+                "A central package does not match its exact admitted id and version.",
+                package=package,
+                version=version,
+                admitted_version=admitted["version"],
+                admission_id=admitted["admission_id"],
+            )
+    reduced = current_raw
+    for package, version in added.values():
+        line = re.compile(
+            rf'^[ \t]*<PackageVersion Include="{re.escape(package)}" '
+            rf'Version="{re.escape(version)}" />[ \t]*\r?\n',
+            re.MULTILINE,
+        )
+        reduced, count = line.subn("", reduced)
+        if count != 1:
+            fail(
+                "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                "An admitted central package must be one canonical PackageVersion line.",
+                package=package,
+            )
+    if reduced.strip() != baseline_raw:
+        fail(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            "Directory.Packages.props differs from the baseline beyond admitted packages.",
+        )
+    return {
+        "changed": bool(added),
+        "admitted": sorted(package for package, _ in added.values()),
+        "admission_ids": sorted({catalog[key]["admission_id"] for key in added}),
+        "versions": current_versions,
+    }
+
+
 def _baseline_central_package_versions(
     repository_root: Path,
     base_main_sha: str,
     all_changed: set[str],
+    admissions: list[dict[str, Any]] | None = None,
 ) -> dict[str, tuple[str, str]]:
-    props_path = "Directory.Packages.props"
-    if props_path in all_changed:
-        fail(
-            "BASELINE_CENTRAL_PACKAGES_CHANGED",
-            "Directory.Packages.props must remain byte-identical to the baseline.",
-        )
-    baseline_raw = run_git(repository_root, "show", f"{base_main_sha}:{props_path}")
-    current_path = repository_root / props_path
-    if not current_path.is_file() or current_path.read_text(encoding="utf-8").strip() != baseline_raw:
-        fail(
-            "BASELINE_CENTRAL_PACKAGES_CHANGED",
-            "Directory.Packages.props must remain byte-identical to the baseline.",
-        )
+    props_path = CENTRAL_PACKAGES_PATH
+    if not admissions:
+        if props_path in all_changed:
+            fail(
+                "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                "Directory.Packages.props must remain byte-identical to the baseline.",
+            )
+        baseline_raw = run_git(repository_root, "show", f"{base_main_sha}:{props_path}")
+        current_path = repository_root / props_path
+        if not current_path.is_file() or current_path.read_text(encoding="utf-8").strip() != baseline_raw:
+            fail(
+                "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                "Directory.Packages.props must remain byte-identical to the baseline.",
+            )
+        root_raw = baseline_raw
+    else:
+        validate_admitted_central_packages(repository_root, base_main_sha, admissions)
+        root_raw = (repository_root / props_path).read_text(encoding="utf-8")
     try:
-        root = ET.fromstring(baseline_raw)
+        root = ET.fromstring(root_raw)
     except ET.ParseError as exc:
         fail(
             "BASE_DEPENDENCY_MANIFEST_INVALID",
@@ -4486,25 +4858,172 @@ def _requested_version_matches_central(requested: Any, version: str) -> bool:
     return isinstance(requested, str) and requested == f"[{version}, )"
 
 
+def _check_admitted_node(
+    relative: str,
+    framework: str,
+    package: str,
+    node: dict[str, Any],
+    catalog: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Fail unless a lockfile node is exactly an admitted package."""
+
+    admitted = catalog.get(package.casefold())
+    if admitted is None:
+        fail(
+            "DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE",
+            "A lockfile adds a package that no dependency admission registers.",
+            file=relative,
+            framework=framework,
+            package=package,
+            version=node.get("resolved"),
+        )
+    if package != admitted["id"] or node.get("resolved") != admitted["version"]:
+        fail(
+            "DEPENDENCY_ADMISSION_VERSION_MISMATCH",
+            "A lockfile package does not match its exact admitted id and version.",
+            file=relative,
+            framework=framework,
+            package=package,
+            version=node.get("resolved"),
+            admitted_version=admitted["version"],
+            admission_id=admitted["admission_id"],
+        )
+    if node.get("contentHash") != admitted["content_hash"]:
+        fail(
+            "DEPENDENCY_ADMISSION_CONTENT_HASH_MISMATCH",
+            "A lockfile package does not match its admitted content hash.",
+            file=relative,
+            framework=framework,
+            package=package,
+            admission_id=admitted["admission_id"],
+        )
+    dependencies = node.get("dependencies", {})
+    node_type = node.get("type")
+    if (
+        not set(node).issubset({"type", "requested", "resolved", "contentHash", "dependencies"})
+        or not isinstance(dependencies, dict)
+        or any(
+            not isinstance(name, str) or not isinstance(version, str)
+            for name, version in dependencies.items()
+        )
+        or node_type not in {"Direct", "CentralTransitive", "Transitive"}
+        or (node_type == "Transitive" and "requested" in node)
+    ):
+        fail(
+            "DEPENDENCY_ADMISSION_NODE_INVALID",
+            "An admitted lockfile node has an unexpected shape.",
+            file=relative,
+            framework=framework,
+            package=package,
+        )
+    if node_type in {"Direct", "CentralTransitive"}:
+        if not admitted["direct"]:
+            fail(
+                "DEPENDENCY_ADMISSION_DIRECT_PACKAGE_NOT_ADMITTED",
+                "A package admitted only as transitive is referenced centrally or directly.",
+                file=relative,
+                framework=framework,
+                package=package,
+                admission_id=admitted["admission_id"],
+            )
+        if not _requested_version_matches_central(node.get("requested"), admitted["version"]):
+            fail(
+                "DEPENDENCY_ADMISSION_VERSION_MISMATCH",
+                "A central lockfile node does not request its exact admitted version.",
+                file=relative,
+                framework=framework,
+                package=package,
+                admission_id=admitted["admission_id"],
+            )
+    return admitted
+
+
+def _existing_lock_admitted_diff(
+    relative: str,
+    base_packages: dict[tuple[str, str], dict[str, Any]],
+    current_packages: dict[tuple[str, str], dict[str, Any]],
+    catalog: dict[str, dict[str, Any]],
+) -> list[str] | None:
+    """Validate an existing lockfile whose graph changed.
+
+    Returns ``None`` when no admitted package is involved (the caller keeps the
+    legacy fail-closed path). Otherwise the diff must be exactly baseline + admitted
+    nodes: no removal, no change to any baseline node (content hash included), and
+    every added node an exact admitted package. Returns the admitted package ids.
+    """
+
+    added = sorted(set(current_packages) - set(base_packages))
+    removed = sorted(set(base_packages) - set(current_packages))
+    changed = sorted(
+        key
+        for key in set(base_packages) & set(current_packages)
+        if base_packages[key] != current_packages[key]
+    )
+    if not any(package.casefold() in catalog for _, package in [*added, *removed, *changed]):
+        return None
+    for framework, package in removed:
+        fail(
+            "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED",
+            "A lockfile with admitted packages removed a baseline package.",
+            file=relative,
+            framework=framework,
+            package=package,
+        )
+    for framework, package in changed:
+        if package.casefold() in catalog:
+            _check_admitted_node(relative, framework, package, current_packages[(framework, package)], catalog)
+        fail(
+            "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED",
+            "A lockfile with admitted packages changed a baseline package node.",
+            file=relative,
+            framework=framework,
+            package=package,
+        )
+    return sorted(
+        {
+            _check_admitted_node(relative, framework, package, current_packages[(framework, package)], catalog)["id"]
+            for framework, package in added
+        }
+    )
+
+
 def validate_baseline_package_graph_lockfile_diff(
     repository_root: Path,
     base_main_sha: str,
     all_changed: list[str],
+    admissions: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Accept only lock drift whose full package graph exists in the baseline.
 
     Existing locks may change only Project nodes. New locks must have one
     corresponding changed project, use baseline Central Package Management,
     and contain exact baseline package metadata for every non-Project node.
+    With dependency admissions (ACTIVE or MERGED), the accepted graph is the
+    baseline plus the exact admitted packages; see ``package_graph_lockfile_diff``.
     """
+
+    return package_graph_lockfile_diff(
+        repository_root, base_main_sha, all_changed, admissions
+    )[0]
+
+
+def package_graph_lockfile_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    admissions: list[dict[str, Any]] | None = None,
+) -> tuple[list[str], dict[str, list[str]]]:
+    """Return the accepted lockfiles and, per admitted package id, where it appears."""
 
     lockfiles = sorted(
         path for path in all_changed if Path(path).name == "packages.lock.json"
     )
     if not lockfiles:
-        return []
+        return [], {}
+    catalog = admitted_package_catalog(admissions)
     base_catalog: dict[tuple[str, str], list[dict[str, Any]]] | None = None
     baseline_graph_only: list[str] = []
+    usage: dict[str, set[str]] = {}
     changed_set = set(all_changed)
     for relative in lockfiles:
         current = load_json(repository_root / relative)
@@ -4527,8 +5046,17 @@ def validate_baseline_package_graph_lockfile_diff(
                     file=relative,
                     error=str(exc),
                 )
-            if current.get("version") != base.get("version") or current_packages != _nuget_package_nodes(base):
+            base_packages = _nuget_package_nodes(base)
+            if current.get("version") != base.get("version"):
                 continue
+            if current_packages != base_packages:
+                admitted = _existing_lock_admitted_diff(
+                    relative, base_packages, current_packages, catalog
+                )
+                if admitted is None:
+                    continue
+                for package in admitted:
+                    usage.setdefault(package, set()).add(relative)
             baseline_graph_only.append(relative)
             continue
 
@@ -4544,6 +5072,7 @@ def validate_baseline_package_graph_lockfile_diff(
             repository_root,
             base_main_sha,
             changed_set,
+            admissions if catalog else None,
         )
         project_relative = project_files[0]
         direct_references = _new_project_package_references(
@@ -4586,9 +5115,21 @@ def validate_baseline_package_graph_lockfile_diff(
                     )
         if base_catalog is None:
             base_catalog = _base_nuget_package_catalog(repository_root, base_main_sha)
-        if all(node in base_catalog.get(key, []) for key, node in current_packages.items()):
-            baseline_graph_only.append(relative)
-    return baseline_graph_only
+        unknown = [
+            key for key, node in current_packages.items() if node not in base_catalog.get(key, [])
+        ]
+        admitted_nodes = [key for key in unknown if key[1].casefold() in catalog]
+        if not admitted_nodes:
+            if not unknown:
+                baseline_graph_only.append(relative)
+            continue
+        for framework, package in unknown:
+            admitted = _check_admitted_node(
+                relative, framework, package, current_packages[(framework, package)], catalog
+            )
+            usage.setdefault(admitted["id"], set()).add(relative)
+        baseline_graph_only.append(relative)
+    return baseline_graph_only, {package: sorted(files) for package, files in usage.items()}
 
 
 def validate_next_critical_remediation_diff(
@@ -4751,11 +5292,95 @@ def validate_next_critical_remediation_diff(
     }
 
 
+def validate_dependency_admission_source(
+    all_changed: list[str],
+    admissions: list[dict[str, Any]],
+    admission_ids: list[str],
+    usage: dict[str, list[str]],
+    central: dict[str, Any] | None,
+    source_branch: str,
+    today: str,
+) -> dict[str, Any]:
+    """Bind packages added relative to the tested base to their admission branch.
+
+    The permanent graph check accepts ACTIVE and MERGED admissions anywhere. Adding
+    admitted packages to a tested base is only legitimate from the single ACTIVE,
+    unexpired admission's authorized source branch, touching only its allowed files
+    and delivering its complete registered package set.
+    """
+
+    if len(admission_ids) != 1:
+        fail(
+            "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+            "A pull request may introduce the packages of exactly one dependency admission.",
+            admission_ids=admission_ids,
+        )
+    admission = next(item for item in admissions if item["id"] == admission_ids[0])
+    if source_branch != admission["authorized_source_branch"]:
+        fail(
+            "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+            "Admitted packages may be introduced only from their authorized source branch.",
+            admission_id=admission["id"],
+            source_branch=source_branch,
+        )
+    if admission["status"] != "ACTIVE":
+        fail(
+            "DEPENDENCY_ADMISSION_NOT_ACTIVE",
+            "A merged dependency admission cannot introduce packages again.",
+            admission_id=admission["id"],
+        )
+    expires = admission.get("expires")
+    if expires is not None and expires < today:
+        fail(
+            "DEPENDENCY_ADMISSION_EXPIRED",
+            "The dependency admission expired before its packages were introduced.",
+            admission_id=admission["id"],
+            expires=expires,
+        )
+    allowed = set(admission["allowed_dependency_files"]) | set(admission["allowed_project_files"])
+    outside = sorted(path for path in all_changed if path not in allowed)
+    if outside:
+        fail(
+            "DEPENDENCY_ADMISSION_FILE_NOT_ALLOWED",
+            "A dependency admission pull request changed files outside its allowlist.",
+            admission_id=admission["id"],
+            files=outside,
+        )
+    missing_files = sorted(set(admission["required_dependency_files"]) - set(all_changed))
+    admitted_central = set((central or {}).get("admitted", []))
+    missing_direct = sorted(
+        package["id"]
+        for package in admission["admitted_direct_packages"]
+        if package["id"] not in admitted_central
+    )
+    missing_packages = sorted(
+        package["id"]
+        for package in [
+            *admission["admitted_direct_packages"],
+            *admission["admitted_transitive_packages"],
+        ]
+        if package["id"] not in usage
+    )
+    if missing_files or missing_direct or missing_packages:
+        fail(
+            "DEPENDENCY_ADMISSION_INCOMPLETE",
+            "The dependency admission pull request does not deliver its exact registered set.",
+            admission_id=admission["id"],
+            missing_files=missing_files,
+            missing_central_packages=missing_direct,
+            missing_lock_packages=missing_packages,
+        )
+    return admission
+
+
 def validate_dependency_diff(
     repository_root: Path,
     base_main_sha: str,
     mode: str = NORMAL_RELEASE_EVIDENCE,
     authorization: dict[str, Any] | None = None,
+    admissions: list[dict[str, Any]] | None = None,
+    source_branch: str = "",
+    today: str | None = None,
 ) -> dict[str, Any]:
     all_changed = sorted(
         {
@@ -4768,11 +5393,22 @@ def validate_dependency_diff(
             if path.strip()
         }
     )
-    baseline_package_graph_lockfiles = validate_baseline_package_graph_lockfile_diff(
+    # Admissions apply to normal release evidence only; remediation scopes are unchanged.
+    normal_admissions = admissions if mode == NORMAL_RELEASE_EVIDENCE else None
+    baseline_package_graph_lockfiles, admitted_usage = package_graph_lockfile_diff(
         repository_root,
         base_main_sha,
         all_changed,
+        normal_admissions,
     )
+    accepted_dependency_files = list(baseline_package_graph_lockfiles)
+    central: dict[str, Any] | None = None
+    if normal_admissions and CENTRAL_PACKAGES_PATH in all_changed:
+        central = validate_admitted_central_packages(
+            repository_root, base_main_sha, normal_admissions
+        )
+        if central["changed"]:
+            accepted_dependency_files.append(CENTRAL_PACKAGES_PATH)
     allowed_dependency_files = (
         set(authorization["allowed_dependency_files"])
         if authorization is not None
@@ -4783,7 +5419,7 @@ def validate_dependency_diff(
         path
         for path in all_changed
         if Path(path).name in DEPENDENCY_FILE_NAMES
-        and path not in baseline_package_graph_lockfiles
+        and path not in accepted_dependency_files
         and path not in allowed_dependency_files
     )
     if unexpected_dependency_files:
@@ -4799,13 +5435,31 @@ def validate_dependency_diff(
                 "Dependency manifests or lockfiles changed in normal release-evidence mode.",
                 files=changed,
             )
+        catalog = admitted_package_catalog(normal_admissions)
+        admission_ids = sorted(
+            {catalog[package.casefold()]["admission_id"] for package in admitted_usage}
+            | set((central or {}).get("admission_ids", []))
+        )
+        if admission_ids:
+            validate_dependency_admission_source(
+                all_changed,
+                normal_admissions or [],
+                admission_ids,
+                admitted_usage,
+                central,
+                source_branch,
+                today or dt.datetime.now(dt.timezone.utc).date().isoformat(),
+            )
         return {
-            "dependency_manifest_changed": False,
+            "dependency_manifest_changed": bool(central and central["changed"]),
             "dependency_lockfile_changed": bool(baseline_package_graph_lockfiles),
             "dependency_workspace_changed": False,
-            "dependency_diff_against_base": "CLEAN",
-            "changed_dependency_files": baseline_package_graph_lockfiles,
+            "dependency_diff_against_base": (
+                ADMITTED_DEPENDENCY_DIFF if admission_ids else "CLEAN"
+            ),
+            "changed_dependency_files": sorted(accepted_dependency_files),
             "baseline_package_graph_lockfiles": baseline_package_graph_lockfiles,
+            "dependency_admission_ids": admission_ids,
             "lockfile_consistency_verified": True,
             "vulnerable_lock_versions": [],
         }
@@ -5292,7 +5946,10 @@ def validate_issue_and_audit(
                 "Issue #30 must remain closed during the Issue #5 remediation.",
             )
     elif mode == NORMAL_RELEASE_EVIDENCE:
-        if dependency_diff.get("dependency_diff_against_base") != "CLEAN":
+        if dependency_diff.get("dependency_diff_against_base") not in {
+            "CLEAN",
+            ADMITTED_DEPENDENCY_DIFF,
+        }:
             fail("DEPENDENCY_FILES_CHANGED", "Normal release evidence requires a clean dependency diff.")
     else:
         fail("REL000_MODE_INVALID", "The audit validator received an invalid mode.")
@@ -5778,6 +6435,9 @@ def release_report(
         "changed_dependency_files": security["dependency_diff"][
             "changed_dependency_files"
         ],
+        "dependency_admission_ids": security["dependency_diff"].get(
+            "dependency_admission_ids", []
+        ),
         "lockfile_consistency_verified": security["dependency_diff"][
             "lockfile_consistency_verified"
         ],
@@ -6171,6 +6831,8 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         trace["base_main_sha"],
         args.mode,
         authorization,
+        load_base_dependency_admissions(repository_root, trace["base_main_sha"]),
+        args.source_branch,
     )
     security = validate_issue_and_audit(
         issue,
