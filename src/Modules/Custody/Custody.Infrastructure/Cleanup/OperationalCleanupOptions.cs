@@ -22,7 +22,9 @@ public sealed class OperationalCleanupOptions
 
     public ProofUploadSessionCleanupOptions ProofUploadSessions { get; set; } = new();
 
-    public bool AnyEnabled => IdempotencyKeys.Enabled || ProofUploadSessions.Enabled;
+    public BffSessionCleanupOptions BffSessions { get; set; } = new();
+
+    public bool AnyEnabled => IdempotencyKeys.Enabled || ProofUploadSessions.Enabled || BffSessions.Enabled;
 
     public static IReadOnlyList<string> Errors(OperationalCleanupOptions? options)
     {
@@ -55,6 +57,16 @@ public sealed class OperationalCleanupOptions
         {
             Validate("ProofUploadSessions", sessions.PollIntervalSeconds, sessions.BatchSize,
                 OperationalCleanupLimits.MaximumSessionBatchSize, sessions.MaxBatchesPerCycle, errors);
+        }
+
+        if (options.BffSessions is not { } bff)
+        {
+            errors.Add("OperationalCleanup:BffSessions is required.");
+        }
+        else
+        {
+            Validate("BffSessions", bff.PollIntervalSeconds, bff.BatchSize,
+                OperationalCleanupLimits.MaximumBffSessionBatchSize, bff.MaxBatchesPerCycle, errors);
         }
 
         return errors;
@@ -117,4 +129,24 @@ public sealed class ProofUploadSessionCleanupOptions
 
     public OperationalCleanupPolicy ToPolicy() =>
         new(BatchSize, OperationalCleanupLimits.MaximumSessionBatchSize, MaxBatchesPerCycle, dryRun: false);
+}
+
+/// <summary>
+/// BFF-SESSION-TABLE-SHAPE purge of revoked and expired BFF sessions. Off until enabled; there is no
+/// dry-run because the function never reaches a live session.
+/// </summary>
+public sealed class BffSessionCleanupOptions
+{
+    public bool Enabled { get; set; }
+
+    public int PollIntervalSeconds { get; set; } = 300;
+
+    public int BatchSize { get; set; } = 500;
+
+    public int MaxBatchesPerCycle { get; set; } = 10;
+
+    public TimeSpan PollInterval => TimeSpan.FromSeconds(PollIntervalSeconds);
+
+    public OperationalCleanupPolicy ToPolicy() =>
+        new(BatchSize, OperationalCleanupLimits.MaximumBffSessionBatchSize, MaxBatchesPerCycle, dryRun: false);
 }

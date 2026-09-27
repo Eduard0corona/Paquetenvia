@@ -419,9 +419,16 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
   `Domain`. La cookie solo contiene una clave opaca; el ticket (sujeto, `sid`, evidencia MFA, secreto
   CSRF, refresh token e ID token) vive del lado servidor. Los tokens nunca llegan al navegador, salvo el
   `id_token_hint` de la URL de cierre de sesión (ver abajo).
-- Almacén de sesiones: tabla PostgreSQL (`BFF-SESSION-STORE-POSTGRESQL`), que requiere su cambio
-  en AI-06/AI-18. Hasta entonces el almacén es en memoria detrás de la interfaz de ticket store,
-  válido solo con una réplica de la API; una sesión perdida falla cerrado (401).
+- Almacén de sesiones: tabla PostgreSQL `identity.bff_sessions` (`BFF-SESSION-STORE-POSTGRESQL`,
+  `BFF-SESSION-TABLE-SHAPE`), previa al tenant, con FORCE RLS y sin política. Guarda solo el SHA-256
+  de la clave opaca y el ticket cifrado con Data Protection, que la revocación borra.
+  `paqueteria_app` no tiene grants sobre la tabla: solo ejecuta `security.create_bff_session`,
+  `security.resolve_bff_session(bytea)` y `security.revoke_bff_session` (por clave, por
+  `authcenter_sid` o por `sub` anterior a un momento), propiedad de `paqueteria_session_executor`.
+  Las filas revocadas o vencidas las purga `paqueteria_cleanup_executor` desde el Worker. Las
+  sesiones sobreviven reinicios y sirven en varias réplicas; una sesión desconocida, revocada o
+  vencida falla cerrado (401). `AuthCenter:SessionStore=Memory` conserva el almacén en memoria de
+  una réplica como rollback.
 - Mismo origen: el navegador llama a la API desde el origen web. En el piloto el ingress de Azure
   enruta `/api`, `/hubs`, `/auth` y `/signin-authcenter` a la API (`PILOT-SAME-ORIGIN-ROUTING`);
   las rewrites de Next.js solo aplican en desarrollo local. CORS sigue cerrado.
@@ -452,9 +459,12 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
 - Back-channel logout (`AUTH-001-BACKCHANNEL-LOGOUT`): AuthCenter llama
   `POST /auth/backchannel-logout` servidor a servidor; un `logout_token` válido (RS256, `typ`
   logout+jwt, iss/aud exactos, evento back-channel, sin `nonce`, `jti` no repetido) termina las
-  sesiones de ese `sid` (o del `sub` iniciadas antes) en su siguiente petición. El registro vive
-  detrás de una interfaz para que la tabla PostgreSQL de sesiones BFF borre sus filas por
-  `authcenter_sid`.
+  sesiones de ese `sid` (o del `sub` iniciadas antes) en su siguiente petición. Con el almacén
+  PostgreSQL la terminación revoca las filas por `authcenter_sid` (o por `sub` y momento) en todas
+  las réplicas. El SHA-256 del `jti` se registra en `identity.bff_logout_jtis` (previa al tenant, sin
+  grants de runtime) con `security.register_bff_logout_jti` en la misma transacción que la revocación,
+  así que un replay se rechaza en cualquier réplica hasta `exp` + 5 minutos
+  (`BFF-LOGOUT-JTI-PERSISTENCE`).
 - Step-up MFA (`AUTH-001-MFA-STEP-UP`): no se exige MFA a todos (tampoco a repartidores). Un 403
   cuyo único requisito faltante es MFA lleva el código `MFA_REQUIRED`; la web ofrece "Verificar
   identidad" → `/auth/login?mfa=required`, que envía `acr_values=urn:authcenter:acr:mfa` y solo
@@ -592,7 +602,7 @@ La base usa un esquema por módulo: `identity`, `organizations`, `clients`, `loc
 
 ### 25.2 Roles, bootstrap y RLS
 
-API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. El rol `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.finalize_expired_orders(integer)`, con `SELECT (id, status, claim_window_ends_at, finalized_at)` y `UPDATE (finalized_at)` sobre `orders.orders` y `EXECUTE` concedido sólo a `paqueteria_worker` (ADR-034). El rol `paqueteria_cleanup_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.purge_expired_idempotency_keys(timestamptz, integer, boolean)`, con un piso fijo de 72 horas, y de `security.expire_proof_upload_sessions(integer)`, con grants exactos por columna sobre `platform.idempotency_keys` y `custody.proof_upload_sessions` y `EXECUTE` concedido sólo a `paqueteria_worker` (OPS-003-CLEANUP-ROLE). El rol `paqueteria_registration_executor NOLOGIN BYPASSRLS` es propietario únicamente de las cinco funciones de REG-001 (`register_identity_subject`, `create_self_service_organization`, `list_own_organization_applications`, `list_pending_ally_organizations` y `decide_ally_organization`), con grants exactos por columna sobre `identity.users`, `organizations.organizations`, `organizations.organization_memberships` y `platform.audit_logs`, y `EXECUTE` concedido sólo a `paqueteria_app` (AUTH-OPEN-REGISTRATION). Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
+API y Worker usan roles `NOBYPASSRLS` que no poseen objetos. El rol `paqueteria_bootstrap NOLOGIN BYPASSRLS` es propietario exclusivamente de `resolve_identity_context` y `get_public_tracking_projection`, con SELECT por columna, `search_path` fijo y `EXECUTE` revocado a PUBLIC. El rol `paqueteria_outbox_executor NOLOGIN BYPASSRLS` es propietario únicamente de las funciones de claim cross-tenant. El rol `paqueteria_lifecycle_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.finalize_expired_orders(integer)`, con `SELECT (id, status, claim_window_ends_at, finalized_at)` y `UPDATE (finalized_at)` sobre `orders.orders` y `EXECUTE` concedido sólo a `paqueteria_worker` (ADR-034). El rol `paqueteria_cleanup_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.purge_expired_idempotency_keys(timestamptz, integer, boolean)`, con un piso fijo de 72 horas, y de `security.expire_proof_upload_sessions(integer)`, con grants exactos por columna sobre `platform.idempotency_keys` y `custody.proof_upload_sessions` y `EXECUTE` concedido sólo a `paqueteria_worker` (OPS-003-CLEANUP-ROLE); también es dueño de la purga de sesiones BFF `security.purge_bff_sessions(integer)`. El rol `paqueteria_registration_executor NOLOGIN BYPASSRLS` es propietario únicamente de las cinco funciones de REG-001 (`register_identity_subject`, `create_self_service_organization`, `list_own_organization_applications`, `list_pending_ally_organizations` y `decide_ally_organization`), con grants exactos por columna sobre `identity.users`, `organizations.organizations`, `organizations.organization_memberships` y `platform.audit_logs`, y `EXECUTE` concedido sólo a `paqueteria_app` (AUTH-OPEN-REGISTRATION). El rol `paqueteria_session_executor NOLOGIN BYPASSRLS` es propietario únicamente de `security.create_bff_session`, `security.resolve_bff_session(bytea)`, de las tres sobrecargas de `security.revoke_bff_session` y de `security.register_bff_logout_jti`, con grants por columna sobre `identity.bff_sessions` e `identity.bff_logout_jtis` (sin `DELETE`) y `EXECUTE` concedido sólo a `paqueteria_app` (BFF-SESSION-TABLE-SHAPE). Ninguna credencial runtime puede `SET ROLE` a roles privilegiados.
 
 ### 25.3 Contexto tenant y pooling
 

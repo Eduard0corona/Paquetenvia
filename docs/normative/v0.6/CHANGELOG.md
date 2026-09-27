@@ -1,5 +1,38 @@
 # Changelog
 
+## Almacén PostgreSQL de sesiones BFF — 2026-09-27
+
+- `BFF-SESSION-STORE-IMPLEMENTATION` (implementa `BFF-SESSION-STORE-POSTGRESQL` y
+  `BFF-SESSION-TABLE-SHAPE`): AI-06 agrega `identity.bff_sessions`, previa al
+  tenant, con FORCE RLS y sin política; guarda el SHA-256 de la clave opaca, el
+  `sub`, el `sid` de AuthCenter y el ticket cifrado con Data Protection, que la
+  revocación borra.
+- AI-18 agrega `paqueteria_session_executor NOLOGIN BYPASSRLS` con grants por
+  columna (sin `DELETE`), revoca todo privilegio de `paqueteria_app` y
+  `paqueteria_worker` sobre la tabla y registra las cinco funciones que instala
+  el lane de Identity (`20260927000400_AddBffSessionStore`):
+  `security.create_bff_session`, `security.resolve_bff_session(bytea)` y
+  `security.revoke_bff_session` por clave, por `authcenter_sid` y por `sub`
+  anterior a un momento, con `EXECUTE` solo para `paqueteria_app`. Aserciones de
+  despliegue 20 a 24.
+- La purga `security.purge_bff_sessions(integer)` se suma a
+  `paqueteria_cleanup_executor` mediante el lane de Custody
+  (`20260927000400_AddBffSessionPurge`) y un job del Worker desactivado por
+  defecto. `validate_contracts.py` fija los grants exactos del nuevo rol y que la
+  tabla no tenga grants de runtime ni política.
+- AI-03 §17.1 y §25.2, AI-24 `bff_session` y AI-08 (OPS-003) describen el
+  almacén.
+- `BFF-LOGOUT-JTI-PERSISTENCE` (respuesta literal del project owner: "Sí, a
+  PostgreSQL (Recomendado)"): AI-06 agrega `identity.bff_logout_jtis` (SHA-256
+  del `jti`, retención `exp` + 5 min con tope de un día), previa al tenant, con
+  FORCE RLS, sin política ni grants de runtime; AI-18 agrega
+  `security.register_bff_logout_jti(bytea,timestamptz)` de
+  `paqueteria_session_executor` (`INSERT ... ON CONFLICT DO NOTHING`, verdadero
+  solo en el primer registro de cualquier réplica, `EXECUTE` solo para
+  `paqueteria_app`). La API registra el `jti` y revoca las sesiones en una sola
+  transacción; `security.purge_bff_sessions(integer)` también purga los `jti`
+  vencidos. `validate_contracts.py` fija el grant exacto y la ausencia de grants
+  de runtime sobre la nueva tabla.
 ## Membresía por defecto liberada al crear (REG-001) — 2026-09-27
 
 - Respuesta literal del project owner: "Liberarla al crear (Recomendado)"

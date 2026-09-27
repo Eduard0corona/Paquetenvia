@@ -136,6 +136,12 @@ public sealed class OperationalCleanupTests
         Assert.False(options.ProofUploadSessions.ToPolicy().DryRun);
         Assert.Equal(5_000, OperationalCleanupLimits.MaximumIdempotencyBatchSize);
         Assert.Equal(1_000, OperationalCleanupLimits.MaximumSessionBatchSize);
+        Assert.False(options.BffSessions.Enabled);
+        Assert.Equal(TimeSpan.FromMinutes(5), options.BffSessions.PollInterval);
+        Assert.Equal(500, options.BffSessions.BatchSize);
+        Assert.Equal(10, options.BffSessions.MaxBatchesPerCycle);
+        Assert.False(options.BffSessions.ToPolicy().DryRun);
+        Assert.Equal(1_000, OperationalCleanupLimits.MaximumBffSessionBatchSize);
     }
 
     [Theory]
@@ -153,6 +159,12 @@ public sealed class OperationalCleanupTests
     [InlineData("ProofUploadSessions:BatchSize", "1001")]
     [InlineData("ProofUploadSessions:MaxBatchesPerCycle", "0")]
     [InlineData("ProofUploadSessions:MaxBatchesPerCycle", "101")]
+    [InlineData("BffSessions:PollIntervalSeconds", "0")]
+    [InlineData("BffSessions:PollIntervalSeconds", "3601")]
+    [InlineData("BffSessions:BatchSize", "0")]
+    [InlineData("BffSessions:BatchSize", "1001")]
+    [InlineData("BffSessions:MaxBatchesPerCycle", "0")]
+    [InlineData("BffSessions:MaxBatchesPerCycle", "101")]
     public void Out_of_range_settings_fail_validation(string key, string value)
     {
         using var provider = Provider(new() { [$"OperationalCleanup:{key}"] = value });
@@ -164,6 +176,7 @@ public sealed class OperationalCleanupTests
     [Theory]
     [InlineData("IdempotencyKeys")]
     [InlineData("ProofUploadSessions")]
+    [InlineData("BffSessions")]
     public void Enabling_either_job_requires_the_worker_connection_string(string job)
     {
         using var withoutConnection = Provider(new() { [$"OperationalCleanup:{job}:Enabled"] = "true" });
@@ -197,6 +210,9 @@ public sealed class OperationalCleanupTests
         Assert.Equal(TimeSpan.FromMinutes(15), keys.Interval);
         Assert.Equal("operations.cleanup.proof-upload-sessions", sessions.Name);
         Assert.Equal(TimeSpan.FromMinutes(1), sessions.Interval);
+        var bff = provider.GetRequiredService<BffSessionPurgeJob>();
+        Assert.Equal("operations.cleanup.bff-sessions", bff.Name);
+        Assert.Equal(TimeSpan.FromMinutes(5), bff.Interval);
         var check = Assert.Single(
             provider.GetRequiredService<IOptions<HealthCheckServiceOptions>>().Value.Registrations,
             registration => registration.Name == "custody_operational_cleanup");
@@ -222,6 +238,7 @@ public sealed class OperationalCleanupTests
     [InlineData(true, true, new[] { "operations.cleanup.idempotency-keys", "operations.cleanup.proof-upload-sessions" })]
     public async Task Only_enabled_jobs_are_handed_to_the_scheduler(bool keys, bool sessions, string[] expected)
     {
+        // The BFF session purge stays off here; it has its own scheduling test.
         var scheduler = new RecordingScheduler();
         await using var provider = Provider(
             new()
@@ -295,6 +312,50 @@ public sealed class OperationalCleanupTests
         Assert.Equal([2, 2], gateway.SessionCalls);
 
         gateway.SessionCounts.Enqueue(-5);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => job.RunOnceAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task The_bff_session_purge_is_scheduled_only_when_enabled_and_never_touches_other_jobs()
+    {
+        var scheduler = new RecordingScheduler();
+        await using var provider = Provider(
+            new()
+            {
+                ["OperationalCleanup:BffSessions:Enabled"] = "true",
+                ["OperationalCleanup:BffSessions:PollIntervalSeconds"] = "45",
+                ["ConnectionStrings:PaqueteriaWorker"] = WorkerConnection,
+            },
+            scheduler);
+
+        await RunHostedServiceAsync(provider);
+
+        var job = Assert.Single(scheduler.Jobs);
+        Assert.IsType<BffSessionPurgeJob>(job);
+        Assert.Equal("operations.cleanup.bff-sessions", job.Name);
+        Assert.Equal(TimeSpan.FromSeconds(45), job.Interval);
+    }
+
+    [Fact]
+    public async Task The_bff_session_job_runs_bounded_batches_and_surfaces_failures_to_the_scheduler()
+    {
+        var gateway = new ScriptedGateway { BffSessionCounts = new Queue<int>([3, 3, 3]) };
+        await using var provider = Provider(
+            new()
+            {
+                ["OperationalCleanup:BffSessions:BatchSize"] = "3",
+                ["OperationalCleanup:BffSessions:MaxBatchesPerCycle"] = "2",
+            },
+            gateway: gateway);
+        var job = provider.GetRequiredService<BffSessionPurgeJob>();
+
+        await job.RunOnceAsync(CancellationToken.None);
+        Assert.Equal([3, 3], gateway.BffSessionCalls);
+        Assert.Empty(gateway.IdempotencyCalls);
+        Assert.Empty(gateway.SessionCalls);
+
+        gateway.BffSessionCounts.Clear();
+        gateway.BffSessionCounts.Enqueue(4);
         await Assert.ThrowsAsync<InvalidOperationException>(() => job.RunOnceAsync(CancellationToken.None));
     }
 
@@ -377,6 +438,10 @@ public sealed class OperationalCleanupTests
 
         public List<int> SessionCalls { get; } = [];
 
+        public Queue<int> BffSessionCounts { get; init; } = new();
+
+        public List<int> BffSessionCalls { get; } = [];
+
         public Task<int> PurgeExpiredIdempotencyKeysAsync(
             DateTimeOffset expiredBefore,
             int batchSize,
@@ -391,6 +456,12 @@ public sealed class OperationalCleanupTests
         {
             SessionCalls.Add(batchSize);
             return Task.FromResult(SessionCounts.Dequeue());
+        }
+
+        public Task<int> PurgeBffSessionsAsync(int batchSize, CancellationToken cancellationToken)
+        {
+            BffSessionCalls.Add(batchSize);
+            return Task.FromResult(BffSessionCounts.Dequeue());
         }
     }
 

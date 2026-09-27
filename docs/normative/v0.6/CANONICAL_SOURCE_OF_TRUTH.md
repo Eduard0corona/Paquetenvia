@@ -16,8 +16,8 @@ Este ZIP completo es la única entrega que debe validarse. No mezclar archivos s
 
 ## Archivos críticos
 
-- `database/AI-06_SCHEMA.sql` SHA-256: `a363ac38cf5954ce1eee3130178e16e923e8172d27d7cecca67cdf4143f4bbcf`
-- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `e05a1a8e69854442c78bed7d4dca8ca1e749d130a70271c03bc33ccc2f4a800d`
+- `database/AI-06_SCHEMA.sql` SHA-256: `28fe95be20025da7ce79270c000803d5d9fe2042618608193646d5c51199ced0`
+- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `d110849cfb34965ddef56f446481143d0719c2b2b47a402040603be049fc0c32`
 
 El SQL canónico contiene:
 
@@ -51,7 +51,9 @@ Los hashes de "Archivos críticos" son los vigentes en `MANIFEST.json` y
 `7b4d2638…`) cambiaron por los cursores de resincronización RTM-002
 (2026-07-24, commit `4738861`: AI-05, AI-06 y AI-18) y por LIF-001/ADR-034
 (AI-18, PR #83), y por OPS-003 (`OPS-003-CLEANUP-ROLE`: AI-18; AI-05
-`x-offline-operation-age`). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
+`x-offline-operation-age`), por los deltas del piloto (AI-06 y AI-18) y por el
+almacén PostgreSQL de sesiones BFF (`BFF-SESSION-STORE-IMPLEMENTATION`: AI-06
+`identity.bff_sessions`; AI-18 `paqueteria_session_executor`). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
 CSV-001, INC-001, FIN-001 y SET-001; ver `CHANGELOG.md` y `decision-log.md`.
 El identificador de bundle no se reemitió.
 

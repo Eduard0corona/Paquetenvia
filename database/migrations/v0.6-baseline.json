@@ -5,7 +5,7 @@
       "id": "0001-canonical-schema",
       "order": 1,
       "path": "docs/normative/v0.6/database/AI-06_SCHEMA.sql",
-      "sha256": "a363ac38cf5954ce1eee3130178e16e923e8172d27d7cecca67cdf4143f4bbcf",
+      "sha256": "28fe95be20025da7ce79270c000803d5d9fe2042618608193646d5c51199ced0",
       "credential": "privileged-deployment",
       "description": "Install the canonical v0.6 PostgreSQL and PostGIS schema.",
       "required": true
@@ -14,7 +14,7 @@
       "id": "0002-role-model",
       "order": 2,
       "path": "docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "sha256": "e05a1a8e69854442c78bed7d4dca8ca1e749d130a70271c03bc33ccc2f4a800d",
+      "sha256": "d110849cfb34965ddef56f446481143d0719c2b2b47a402040603be049fc0c32",
       "credential": "privileged-deployment",
       "description": "Normalize ownership and install the canonical least-privilege role model.",
       "required": true

@@ -83,6 +83,29 @@ public static class E002RoutineMap
         new("security.decide_ally_organization(uuid,uuid,uuid,boolean,text)", "paqueteria_registration_executor", ["paqueteria_app"]),
     ];
 
+    /// <summary>
+    /// BFF-SESSION-TABLE-SHAPE: installed by the Identity lane migration 20260927000400_AddBffSessionStore,
+    /// owned by paqueteria_session_executor and executable only by paqueteria_app.
+    /// </summary>
+    private static readonly E002RoutineEntry[] BffSessionEntries =
+    [
+        new("security.create_bff_session(bytea,text,text,bytea,timestamp with time zone)", "paqueteria_session_executor", ["paqueteria_app"]),
+        new("security.resolve_bff_session(bytea)", "paqueteria_session_executor", ["paqueteria_app"]),
+        new("security.revoke_bff_session(bytea)", "paqueteria_session_executor", ["paqueteria_app"]),
+        new("security.revoke_bff_session(text)", "paqueteria_session_executor", ["paqueteria_app"]),
+        new("security.revoke_bff_session(text,timestamp with time zone)", "paqueteria_session_executor", ["paqueteria_app"]),
+        new("security.register_bff_logout_jti(bytea,timestamp with time zone)", "paqueteria_session_executor", ["paqueteria_app"]),
+    ];
+
+    /// <summary>
+    /// BFF-SESSION-TABLE-SHAPE purge through OPS-003-CLEANUP-ROLE: installed by the Custody lane migration
+    /// 20260927000400_AddBffSessionPurge, owned by paqueteria_cleanup_executor, executable only by paqueteria_worker.
+    /// </summary>
+    private static readonly E002RoutineEntry[] BffPurgeEntries =
+    [
+        new("security.purge_bff_sessions(integer)", "paqueteria_cleanup_executor", ["paqueteria_worker"]),
+    ];
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -99,7 +122,9 @@ public static class E002RoutineMap
             Lif001Entries.Length != 1 || Lif001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             DispatchLaneEntries.Length != 2 || DispatchLaneEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
             Ops003Entries.Length != 2 || Ops003Entries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
-            Reg001Entries.Length != 5 || Reg001Entries.Sum(entry => 1 + entry.Grantees.Count) != 10)
+            Reg001Entries.Length != 5 || Reg001Entries.Sum(entry => 1 + entry.Grantees.Count) != 10 ||
+            BffSessionEntries.Length != 6 || BffSessionEntries.Sum(entry => 1 + entry.Grantees.Count) != 12 ||
+            BffPurgeEntries.Length != 1 || BffPurgeEntries.Sum(entry => 1 + entry.Grantees.Count) != 2)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
@@ -110,7 +135,9 @@ public static class E002RoutineMap
         bool lif001Applied,
         bool dispatchLaneApplied = false,
         bool ops003Applied = false,
-        bool reg001Applied = false)
+        bool reg001Applied = false,
+        bool bffSessionApplied = false,
+        bool bffPurgeApplied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -139,6 +166,16 @@ public static class E002RoutineMap
             selected = selected.Concat(Reg001Entries);
         }
 
+        if (bffSessionApplied)
+        {
+            selected = selected.Concat(BffSessionEntries);
+        }
+
+        if (bffPurgeApplied)
+        {
+            selected = selected.Concat(BffPurgeEntries);
+        }
+
         return Array.AsReadOnly(selected.ToArray());
     }
 
@@ -147,7 +184,9 @@ public static class E002RoutineMap
         bool lif001Applied,
         bool dispatchLaneApplied = false,
         bool ops003Applied = false,
-        bool reg001Applied = false)
+        bool reg001Applied = false,
+        bool bffSessionApplied = false,
+        bool bffPurgeApplied = false)
     {
         var prefix = state switch
         {
@@ -161,6 +200,8 @@ public static class E002RoutineMap
             (dispatchLaneApplied ? "_PLUS_D8DISPATCH" : string.Empty) +
             (ops003Applied ? "_PLUS_OPS003" : string.Empty) +
             (reg001Applied ? "_PLUS_REG001" : string.Empty) +
+            (bffSessionApplied ? "_PLUS_BFFSESSION" : string.Empty) +
+            (bffPurgeApplied ? "_PLUS_BFFPURGE" : string.Empty) +
             "_V1";
     }
 }

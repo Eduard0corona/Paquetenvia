@@ -34,6 +34,37 @@ internal interface IAuthCenterSessionTerminationStore
     /// sign-in moment cannot prove it is newer than a subject-wide logout and counts as ended.
     /// </summary>
     Task<bool> IsEndedAsync(string? sessionId, string subject, DateTimeOffset? signedInAt, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Accepts a logout token once and ends the sessions it names (the <paramref name="sessionId"/>, or
+    /// otherwise those of <paramref name="subject"/> issued at or before <paramref name="endedAt"/>).
+    /// Returns false for a replayed token id, which ends nothing. Stores that can do so apply both steps
+    /// atomically (BFF-LOGOUT-JTI-PERSISTENCE).
+    /// </summary>
+    async Task<bool> TryEndAsync(
+        string tokenId,
+        DateTimeOffset retainUntil,
+        string? sessionId,
+        string? subject,
+        DateTimeOffset endedAt,
+        CancellationToken cancellationToken)
+    {
+        if (!await TryRegisterLogoutTokenAsync(tokenId, retainUntil, cancellationToken))
+        {
+            return false;
+        }
+
+        if (sessionId is not null)
+        {
+            await EndSessionAsync(sessionId, cancellationToken);
+        }
+        else if (subject is not null)
+        {
+            await EndSubjectSessionsAsync(subject, endedAt, cancellationToken);
+        }
+
+        return true;
+    }
 }
 
 internal sealed class DistributedCacheAuthCenterSessionTerminationStore(
