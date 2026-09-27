@@ -33,7 +33,8 @@ public static class DispatchEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/driver/me/stops", ListMyStopsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -42,7 +43,8 @@ public static class DispatchEndpoints
             .WithTags("Driver")
             .Produces<IReadOnlyList<DriverStopResponse>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/external-offers", CreateExternalOfferAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -53,7 +55,8 @@ public static class DispatchEndpoints
             .Produces<ExternalOfferResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/external-offers/{offerId}/accept", AcceptExternalOfferAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -63,7 +66,8 @@ public static class DispatchEndpoints
             .Produces<AssignmentResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/driver/me/external-offers", ListMyExternalOffersAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
@@ -72,7 +76,8 @@ public static class DispatchEndpoints
             .WithTags("Driver")
             .Produces<ExternalOfferPageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;
     }

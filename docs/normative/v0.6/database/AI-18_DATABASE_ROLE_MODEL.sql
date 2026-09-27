@@ -127,10 +127,13 @@ GRANT INSERT ON platform.outbox_events,platform.location_outbox_events
 GRANT SELECT (id,identity_subject,status) ON identity.users TO paqueteria_bootstrap;
 GRANT SELECT (id,user_id,organization_id,role,status,is_default)
   ON organizations.organization_memberships TO paqueteria_bootstrap;
+-- IDENTITY-ORG-ACTIVE-REQUIRED: identity resolution only counts memberships of ACTIVE organizations.
+GRANT SELECT (id,status) ON organizations.organizations TO paqueteria_bootstrap;
 GRANT SELECT (id,order_id,token_hash,expires_at,revoked_at)
   ON orders.public_tracking_tokens TO paqueteria_bootstrap;
 GRANT SELECT (id,public_id,status,version) ON orders.orders TO paqueteria_bootstrap;
-GRANT SELECT (order_id,public_event_code,occurred_at) ON orders.order_events TO paqueteria_bootstrap;
+-- AI05-TIMELINE-ORDER: the public timeline is ordered by (occurred_at, aggregate_version).
+GRANT SELECT (order_id,aggregate_version,public_event_code,occurred_at) ON orders.order_events TO paqueteria_bootstrap;
 
 ALTER FUNCTION security.resolve_identity_context(text) OWNER TO paqueteria_bootstrap;
 ALTER FUNCTION security.get_public_tracking_projection(text) OWNER TO paqueteria_bootstrap;

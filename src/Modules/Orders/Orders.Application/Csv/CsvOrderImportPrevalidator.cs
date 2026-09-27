@@ -196,9 +196,7 @@ public static class CsvOrderImportPrevalidator
             CsvOrderImportContract.Header[index],
             StringComparison.OrdinalIgnoreCase)).Any();
 
-    private static bool IsVersion(string value) =>
-        !string.IsNullOrWhiteSpace(value) &&
-        value.Length <= CsvOrderImportContract.MaximumVersionLength;
+    private static bool IsVersion(string value) => OrderAcceptanceInputPolicy.IsVersion(value);
 
     /// <summary>
     /// Parses <c>accepted_at</c> against the explicit ISO-8601 shapes AI-05 contracts and nothing

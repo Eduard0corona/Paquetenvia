@@ -56,11 +56,18 @@ public sealed class DeterministicMockGeocodingProvider : IGeocodingProvider
 
 public sealed class DisabledLocationPiiProtector : ILocationPiiProtector
 {
+    public string CurrentKeyVersion => throw new LocationPiiProtectionUnavailableException();
+
     public byte[] Protect(string plaintext, string keyVersion) => throw new LocationPiiProtectionUnavailableException();
 }
 
 public sealed class DeterministicMockLocationPiiProtector : ILocationPiiProtector
 {
+    /// <summary>The synthetic-only key version; it is never a Staging or Production key.</summary>
+    public const string KeyVersion = "geo001-mock-v1";
+
+    public string CurrentKeyVersion => KeyVersion;
+
     public byte[] Protect(string plaintext, string keyVersion)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(plaintext);

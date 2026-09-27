@@ -84,6 +84,22 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
         Assert.Equal((HttpStatusCode)422, response.StatusCode);
     }
 
+    /// <summary>AI05-INPUT-LIMITS: 1 to 20 packages per quote; 21 is the declared 422 validation error.</summary>
+    [Theory]
+    [InlineData(20, HttpStatusCode.Created)]
+    [InlineData(21, HttpStatusCode.UnprocessableEntity)]
+    [InlineData(0, HttpStatusCode.UnprocessableEntity)]
+    public async Task POST_bounds_the_package_count(int packageCount, HttpStatusCode expected)
+    {
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/quotes");
+        request.Headers.Add("Idempotency-Key", $"quote-http-packages-{Guid.NewGuid():N}");
+        request.Content = ValidBody(packageCount: packageCount);
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(expected, response.StatusCode);
+    }
+
     [Fact]
     public async Task POST_creates_and_replays_same_safe_response()
     {
@@ -215,7 +231,8 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
         bool consolidated = false,
         string originAddress = "Synthetic origin 100",
         double originLat = 24.8,
-        string packageDescription = "Synthetic parcel") => JsonContent.Create(new
+        string packageDescription = "Synthetic parcel",
+        int packageCount = 1) => JsonContent.Create(new
         {
             client_account_id = (Guid?)null,
             origin = new
@@ -237,17 +254,14 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
             },
             service_type = "SAME_DAY",
             consolidated_route = consolidated,
-            packages = new[]
+            packages = Enumerable.Range(0, packageCount).Select(_ => new
             {
-                new
-                {
-                    description = packageDescription,
-                    weight_grams = 1000,
-                    declared_value_cents = 5000L,
-                    length_mm = 100,
-                    width_mm = 100,
-                    height_mm = 100,
-                },
-            },
+                description = packageDescription,
+                weight_grams = 1000,
+                declared_value_cents = 5000L,
+                length_mm = 100,
+                width_mm = 100,
+                height_mm = 100,
+            }).ToArray(),
         });
 }

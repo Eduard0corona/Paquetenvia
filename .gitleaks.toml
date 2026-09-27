@@ -16,4 +16,8 @@ regexes = [
   # Contract-test idempotency keys.
   '''orders-pg-(?:same-key|distinct)-\d{4}''',
   '''prc001-def001-reservation-\d{2}''',
+  # AI05-TIMELINE-ORDER contract-test tracking token, base64url("pilot-timeline-order-aggregate-version").
+  # It is only in the history of feature/pilot-contract-deltas (the fixture now derives its token at
+  # runtime) and that pushed history cannot be rewritten.
+  '''cGlsb3QtdGltZWxpbmUtb3JkZXItYWdncmVnYXRlLXZlcnNpb24''',
 ]

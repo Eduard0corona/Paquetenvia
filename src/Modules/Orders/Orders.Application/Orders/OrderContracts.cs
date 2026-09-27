@@ -124,15 +124,37 @@ public static class OrderInputPolicy
         value is "WEB" or "PWA" or "ASSISTED" or "API";
 }
 
+/// <summary>
+/// AI05-INPUT-LIMITS, with the values the owner approved in AI-05 <c>x-pilot-contract-deltas</c>
+/// (ORD-ACCEPTANCE-LIMITS): a version identifier is 1 to <see cref="MaximumVersionLength"/> characters of
+/// <c>^[A-Za-z0-9._-]+$</c>, the same on <c>POST /orders</c> and on a CSV-001 row, and <c>accepted_at</c>
+/// lies no later than <see cref="MaximumFutureSkew"/> after and no earlier than <see cref="MaximumAge"/>
+/// before server time. Everything is rejected before a transaction opens, so the append-only
+/// <c>orders.order_acceptances</c> evidence never stores an unbounded or implausible client value.
+/// </summary>
 public static class OrderAcceptanceInputPolicy
 {
+    public const int MaximumVersionLength = 64;
+    public const string VersionPattern = "^[A-Za-z0-9._-]+$";
+    public static readonly TimeSpan MaximumFutureSkew = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan MaximumAge = TimeSpan.FromHours(72);
+
     public static bool IsValid(
         string? termsVersion,
         string? privacyVersion,
         DateTimeOffset acceptedAt,
         string? acceptanceChannel) =>
-        !string.IsNullOrWhiteSpace(termsVersion) &&
-        !string.IsNullOrWhiteSpace(privacyVersion) &&
+        IsVersion(termsVersion) &&
+        IsVersion(privacyVersion) &&
         acceptedAt != default &&
         OrderInputPolicy.IsAcceptanceChannel(acceptanceChannel);
+
+    public static bool IsVersion(string? value) =>
+        !string.IsNullOrEmpty(value) &&
+        value.Length <= MaximumVersionLength &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-');
+
+    /// <summary>Both bounds are inclusive: exactly +5 minutes and exactly -72 hours are accepted.</summary>
+    public static bool IsWithinAcceptanceWindow(DateTimeOffset acceptedAt, DateTimeOffset serverNow) =>
+        acceptedAt <= serverNow + MaximumFutureSkew && acceptedAt >= serverNow - MaximumAge;
 }

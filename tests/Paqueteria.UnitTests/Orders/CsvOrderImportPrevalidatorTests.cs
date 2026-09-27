@@ -282,9 +282,14 @@ public sealed class CsvOrderImportPrevalidatorTests
             $"{FirstQuote:D},SENDER,\"terms,\"\"v1\"\"\nline two\",privacy-synthetic-v1,{AcceptedAt},WEB\n" +
             $"{SecondQuote:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAt},WEB\n");
 
+        // The quoted field still parses as one field spanning two lines, so the next record is row 4. Its
+        // decoded value is outside the AI05-INPUT-LIMITS pattern, so that row is refused by name.
         Assert.Empty(result.FileErrors);
-        Assert.Equal("terms,\"v1\"\nline two", result.ValidRows[0].TermsVersion);
         Assert.Equal([2, 4], result.Rows.Select(row => row.RowNumber));
+        Assert.Contains(
+            result.Rows[0].Errors,
+            error => error.Code == CsvOrderImportRowErrorCodes.TermsVersionInvalid);
+        Assert.Equal(SecondQuote, Assert.Single(result.ValidRows).QuoteId);
     }
 
     [Fact]
@@ -331,9 +336,7 @@ public sealed class CsvOrderImportPrevalidatorTests
 
     [Theory]
     [InlineData("\"terms-v1\"", "terms-v1")]
-    [InlineData("\"terms \"\"v1\"\"\"", "terms \"v1\"")]
-    [InlineData("\"\"\"\"", "\"")]
-    [InlineData("\"terms,v1\"", "terms,v1")]
+    [InlineData("\"terms.v1_a-b\"", "terms.v1_a-b")]
     public void A_well_formed_quoted_field_keeps_its_escaped_content(string termsVersion, string expected)
     {
         var result = Prevalidate(
@@ -342,6 +345,27 @@ public sealed class CsvOrderImportPrevalidatorTests
         Assert.Empty(result.FileErrors);
         Assert.True(result.IsCommittable);
         Assert.Equal(expected, Assert.Single(result.ValidRows).TermsVersion);
+    }
+
+    /// <summary>
+    /// A well-formed quoted field whose decoded value holds a comma, a space or a quote still parses without a
+    /// file error, and AI05-INPUT-LIMITS (^[A-Za-z0-9._-]+$) then refuses the row with its own code.
+    /// </summary>
+    [Theory]
+    [InlineData("\"terms \"\"v1\"\"\"")]
+    [InlineData("\"\"\"\"")]
+    [InlineData("\"terms,v1\"")]
+    public void A_well_formed_quoted_field_outside_the_version_pattern_is_a_row_error(string termsVersion)
+    {
+        var result = Prevalidate(
+            $"{Header}\n{FirstQuote:D},SENDER,{termsVersion},privacy-synthetic-v1,{AcceptedAt},WEB\n");
+
+        Assert.Empty(result.FileErrors);
+        Assert.False(result.IsCommittable);
+        Assert.Empty(result.ValidRows);
+        Assert.Contains(
+            Assert.Single(result.Rows).Errors,
+            error => error.Code == CsvOrderImportRowErrorCodes.TermsVersionInvalid);
     }
 
     [Fact]

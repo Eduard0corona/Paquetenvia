@@ -342,6 +342,8 @@ public sealed class PostgreSqlLocationService(
                         return new CreateLocationResult(serviceability.Status, null);
                     }
 
+                    // AI05-REMOVE-PII-KEY-VERSION: the protector, never the client, selects the key version.
+                    var keyVersion = piiProtector.CurrentKeyVersion;
                     var entity = new DomainLocation(
                         locationId,
                         command.OrganizationId,
@@ -349,11 +351,11 @@ public sealed class PostgreSqlLocationService(
                         serviceability.ServiceAreaId,
                         serviceability.OperatingZoneId,
                         point,
-                        piiProtector.Protect(command.AddressText, command.PiiKeyVersion),
+                        piiProtector.Protect(command.AddressText, keyVersion),
                         geocoded.AddressSummary,
-                        ProtectOptional(command.ContactName, command.PiiKeyVersion),
-                        ProtectOptional(command.Phone, command.PiiKeyVersion),
-                        command.PiiKeyVersion,
+                        ProtectOptional(command.ContactName, keyVersion),
+                        ProtectOptional(command.Phone, keyVersion),
+                        keyVersion,
                         clock.UtcNow);
 
                     dbContext.Locations.Add(entity);
@@ -567,7 +569,6 @@ public sealed class PostgreSqlLocationService(
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             string.IsNullOrWhiteSpace(command.AddressText) || command.AddressText.Trim().Length < 8 ||
             string.IsNullOrWhiteSpace(command.AddressSummary) || command.AddressSummary.Length > 180 ||
-            string.IsNullOrWhiteSpace(command.PiiKeyVersion) ||
             command.Lat is < -90 or > 90 || command.Lng is < -180 or > 180 ||
             double.IsNaN(command.Lat) || double.IsNaN(command.Lng) ||
             double.IsInfinity(command.Lat) || double.IsInfinity(command.Lng))

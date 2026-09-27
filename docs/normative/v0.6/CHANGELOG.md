@@ -1,5 +1,26 @@
 # Changelog
 
+## Deltas del piloto publicados con su implementación — 2026-09-27
+
+- AI-05 publica, junto con su código y sus pruebas: `listSettlements`
+  (`GET /settlements`, filtros `payee_id`, `status`, `period_from` y
+  `period_to`, schema `SettlementPage`); `Cache-Control: no-store` en
+  `exportSettlementCsv`; `CreateLocationRequest` sin `pii_key_version`; los
+  límites aprobados de aceptación (versiones de 1 a 64 caracteres de
+  `^[A-Za-z0-9._-]+$`, `accepted_at` entre -72 h y +5 min del servidor) y de
+  paquetes (1 a 20); los 503/409/429 que ya se emitían y los 400 de Locations
+  (componente `BadRequest`).
+- `reconcileCod`, `getOrderFinancials` y `getRouteFinancials` admiten FINANCE con
+  MFA (`FINANCE-COD-RECONCILIATION`, `FINANCE-COD-MFA-2026-09-27`); DISPATCHER
+  sigue sin MFA. Las entradas correspondientes de `x-pilot-contract-deltas` y
+  `finance_operations_status` quedan como implementadas.
+- AI-06/AI-18: `resolve_identity_context` exige organización `ACTIVE`, el
+  timeline público se ordena por `(occurred_at, aggregate_version)` con su grant
+  de bootstrap, y se agregan los índices parciales de purga y los cuatro
+  operativos (`AI06-PILOT-INDEXES`). Las instalaciones existentes los reciben
+  por la lane `PlatformEvolution`.
+- `validate_contracts.py` acepta la matriz DSP-002 con `503`.
+
 ## AUTH-001 logout, back-channel y step-up — 2026-09-27
 
 - AI-05: `POST /auth/logout` responde 200 con `BffLogoutResult`
