@@ -73,16 +73,41 @@ public sealed class TenantCapabilityTests
     [Fact]
     public void Settlements_admit_finance_without_mfa_and_platform_admin_only_with_it()
     {
-        Assert.Equal(
-            TenantCapabilityDecision.Allowed,
-            TenantCapabilities.ApproveSettlement.Evaluate(Session(false, (Tenant, OrganizationRole.Finance)), Tenant));
-        Assert.Equal(
-            TenantCapabilityDecision.MfaRequired,
-            TenantCapabilities.ApproveSettlement.Evaluate(
-                Session(false, (Tenant, OrganizationRole.PlatformAdmin)), Tenant));
-        Assert.Equal(
-            TenantCapabilityDecision.Forbidden,
-            TenantCapabilities.ApproveSettlement.Evaluate(Session(true, (Tenant, OrganizationRole.Dispatcher)), Tenant));
+        foreach (var capability in new[]
+                 {
+                     TenantCapabilities.CreateSettlement, TenantCapabilities.GetSettlement,
+                     TenantCapabilities.ListSettlements, TenantCapabilities.AddSettlementAdjustment,
+                     TenantCapabilities.VoidSettlement, TenantCapabilities.ExportSettlementCsv,
+                 })
+        {
+            Assert.Equal(
+                TenantCapabilityDecision.Allowed,
+                capability.Evaluate(Session(false, (Tenant, OrganizationRole.Finance)), Tenant));
+            Assert.Equal(
+                TenantCapabilityDecision.MfaRequired,
+                capability.Evaluate(Session(false, (Tenant, OrganizationRole.PlatformAdmin)), Tenant));
+            Assert.Equal(
+                TenantCapabilityDecision.Forbidden,
+                capability.Evaluate(Session(true, (Tenant, OrganizationRole.Dispatcher)), Tenant));
+        }
+    }
+
+    /// <summary>D7-SETTLEMENT-MFA: approving and paying need MFA for every permitted role, FINANCE included.</summary>
+    [Fact]
+    public void Approve_and_pay_require_mfa_for_finance_and_platform_admin()
+    {
+        foreach (var capability in new[] { TenantCapabilities.ApproveSettlement, TenantCapabilities.MarkSettlementPaid })
+        {
+            foreach (var role in new[] { OrganizationRole.Finance, OrganizationRole.PlatformAdmin })
+            {
+                Assert.Equal(TenantCapabilityDecision.MfaRequired, capability.Evaluate(Session(false, (Tenant, role)), Tenant));
+                Assert.Equal(TenantCapabilityDecision.Allowed, capability.Evaluate(Session(true, (Tenant, role)), Tenant));
+            }
+
+            Assert.Equal(
+                TenantCapabilityDecision.Forbidden,
+                capability.Evaluate(Session(true, (Tenant, OrganizationRole.Dispatcher)), Tenant));
+        }
     }
 
     [Fact]

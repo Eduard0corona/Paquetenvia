@@ -160,6 +160,13 @@ public static class SettlementAuthorizationPolicy
                 _ => false,
             };
     }
+
+    /// <summary>
+    /// D7-SETTLEMENT-MFA (D7-SETTLEMENT-RULES, AI-05 x-pilot-contract-deltas): approveSettlement and
+    /// markSettlementPaid require a satisfied MFA challenge for every permitted role, FINANCE included.
+    /// </summary>
+    public static bool CanApproveOrPay(FinanceAuthorizationContext context) =>
+        CanOperate(context) && context.MfaSatisfied;
 }
 
 /// <summary>Request shape, decided before any productive transaction is opened.</summary>

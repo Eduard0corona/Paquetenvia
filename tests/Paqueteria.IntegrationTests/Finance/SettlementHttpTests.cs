@@ -69,6 +69,67 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
         Assert.Equal(root.ToString(), JsonDocument.Parse(await get.Content.ReadAsStringAsync()).RootElement.ToString());
     }
 
+    /// <summary>
+    /// D7-SETTLEMENT-MFA: FINANCE without MFA still creates, reads, lists, adjusts and exports settlements, but
+    /// approving and paying need a satisfied MFA challenge; the refusal is MFA_REQUIRED and changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task Finance_without_MFA_operates_settlements_but_approve_and_pay_are_MFA_REQUIRED()
+    {
+        const string noMfa = SettlementHttpFixture.FinanceWithoutMfaProfile;
+        var driver = await fixture.SeedDriverAsync(SettlementHttpFixture.TenantId);
+        await fixture.SeedWorkAsync(driver, "DELIVERED", "DELIVERED", InPeriod, 4_500);
+        Guid settlement;
+        using (var created = await client.SendAsync(Post("/api/v1/settlements", CreateBody(driver), profile: noMfa)))
+        {
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            using var document = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+            settlement = document.RootElement.GetProperty("id").GetGuid();
+        }
+
+        using (var read = await client.SendAsync(Get($"/api/v1/settlements/{settlement:D}", noMfa)))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        }
+
+        using (var list = await client.SendAsync(Get("/api/v1/settlements", noMfa)))
+        {
+            Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        }
+
+        using (var adjusted = await client.SendAsync(Post(
+                   $"/api/v1/settlements/{settlement:D}/adjustments", """{"amount_cents":100,"reason":"Bono"}""", profile: noMfa)))
+        {
+            Assert.Equal(HttpStatusCode.Created, adjusted.StatusCode);
+        }
+
+        using (var export = await client.SendAsync(Get($"/api/v1/settlements/{settlement:D}/export.csv", noMfa)))
+        {
+            Assert.Equal(HttpStatusCode.OK, export.StatusCode);
+        }
+
+        var before = await fixture.ReadAsync(settlement);
+        foreach (var operation in new[] { "approve", "pay" })
+        {
+            using var refused = await client.SendAsync(
+                Post($"/api/v1/settlements/{settlement:D}/{operation}", null, profile: noMfa));
+            var body = await AssertProblemAsync(refused, HttpStatusCode.Forbidden, "Forbidden.");
+            using var document = JsonDocument.Parse(body);
+            Assert.Equal("MFA_REQUIRED", document.RootElement.GetProperty("code").GetString());
+        }
+
+        Assert.Equal(before, await fixture.ReadAsync(settlement));
+
+        foreach (var (operation, status) in new[] { ("approve", "APPROVED"), ("pay", "PAID") })
+        {
+            using var response = await client.SendAsync(Post(
+                $"/api/v1/settlements/{settlement:D}/{operation}", null, profile: SettlementHttpFixture.FinanceProfile));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(status, document.RootElement.GetProperty("status").GetString());
+        }
+    }
+
     [Fact]
     public async Task A_settlement_moves_through_adjustment_approval_and_payment_and_exports_its_ledger()
     {

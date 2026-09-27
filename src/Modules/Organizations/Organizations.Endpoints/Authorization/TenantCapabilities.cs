@@ -51,8 +51,8 @@ public static class TenantCapabilities
     public static readonly TenantCapability ListSettlements = Settlement("listSettlements");
     public static readonly TenantCapability GetSettlement = Settlement("getSettlement");
     public static readonly TenantCapability AddSettlementAdjustment = Settlement("addSettlementAdjustment");
-    public static readonly TenantCapability ApproveSettlement = Settlement("approveSettlement");
-    public static readonly TenantCapability MarkSettlementPaid = Settlement("markSettlementPaid");
+    public static readonly TenantCapability ApproveSettlement = SettlementWithMfa("approveSettlement");
+    public static readonly TenantCapability MarkSettlementPaid = SettlementWithMfa("markSettlementPaid");
     public static readonly TenantCapability VoidSettlement = Settlement("voidSettlement");
     public static readonly TenantCapability ExportSettlementCsv = Settlement("exportSettlementCsv");
 
@@ -114,6 +114,13 @@ public static class TenantCapabilities
     /// <summary>SET-001: FINANCE, and PLATFORM_ADMIN with a satisfied MFA challenge.</summary>
     private static TenantCapability Settlement(string operationId) =>
         Create(operationId, new(OrganizationRole.Finance, false), PlatformAdminMfa);
+
+    /// <summary>
+    /// D7-SETTLEMENT-MFA (AI-05 x-pilot-contract-deltas, D7-SETTLEMENT-RULES): approving and paying a settlement
+    /// require a satisfied MFA challenge for every permitted role, FINANCE included.
+    /// </summary>
+    private static TenantCapability SettlementWithMfa(string operationId) =>
+        Create(operationId, new(OrganizationRole.Finance, true), PlatformAdminMfa);
 
     /// <summary>FIN-001 control reads and reconciliation: DISPATCHER, and PLATFORM_ADMIN or FINANCE with MFA.</summary>
     private static TenantCapability FinanceControl(string operationId) =>

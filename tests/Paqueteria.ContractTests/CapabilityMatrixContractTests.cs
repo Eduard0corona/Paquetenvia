@@ -66,9 +66,9 @@ public sealed class CapabilityMatrixContractTests
     }
 
     /// <summary>
-    /// MFA: settlements need it for PLATFORM_ADMIN only; the finance control operations need it for
-    /// PLATFORM_ADMIN and FINANCE (FINANCE-COD-MFA-2026-09-27); DISPATCHER never needs it; the rest of the matrix
-    /// never demanded MFA and keeps none.
+    /// MFA: settlements need it for PLATFORM_ADMIN, and approve and pay for FINANCE too (D7-SETTLEMENT-MFA); the
+    /// finance control operations need it for PLATFORM_ADMIN and FINANCE (FINANCE-COD-MFA-2026-09-27); DISPATCHER
+    /// never needs it; the rest of the matrix never demanded MFA and keeps none.
     /// </summary>
     [Fact]
     public void Mfa_requirements_follow_the_published_rules()
@@ -78,7 +78,17 @@ public sealed class CapabilityMatrixContractTests
         Assert.Contains("PLATFORM_ADMIN members with a satisfied MFA challenge", financeScope, StringComparison.Ordinal);
         Assert.Contains("FINANCE members with a satisfied MFA challenge", financeScope, StringComparison.Ordinal);
 
+        // D7-SETTLEMENT-MFA: approve and pay need MFA for every permitted role, FINANCE included.
+        var settlementMfa = Contract.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Single(entry => entry.Scalar("id") == "D7-SETTLEMENT-MFA");
+        Assert.Equal("DECIDED", settlementMfa.Scalar("status"));
+        var mfaForEveryRole = new[] { "approveSettlement", "markSettlementPaid" };
+        Assert.All(mfaForEveryRole, id => Assert.Contains(id, settlementMfa.Scalar("delta"), StringComparison.Ordinal));
+        Assert.Contains("every permitted role, including", settlementMfa.Scalar("delta"), StringComparison.Ordinal);
+
         var financeOperations = OperationIds(Matrix.Mapping("finance_operations"));
+        financeOperations.UnionWith(mfaForEveryRole);
         foreach (var (operationId, capability) in TenantCapabilities.All)
         {
             foreach (var grant in capability.Grants)
