@@ -81,9 +81,15 @@ proveedor Mock. Por eso:
   `authorized=false` y las políticas activas responden 403 genérico;
 - un fallo técnico de PostgreSQL responde 503 genérico, como en SEC-002.
 
-MFA: `ExternalIdentity.MfaSatisfied` sale únicamente del claim `amr` del ID token validado. Hoy
-AuthCenter no emite `amr`, así que los roles que exigen MFA (`PrivilegedMfa`) responden 403 hasta
-que AuthCenter lo emita (ver "Datos que debe registrar el owner").
+MFA: `ExternalIdentity.MfaSatisfied` sale únicamente del claim `amr` del ID token validado
+(contiene `mfa`). AuthCenter ya emite `amr` (por ejemplo `["pwd","otp","mfa"]` o `["pop","mfa"]`
+con passkey) y `acr` (`urn:authcenter:acr:1fa`, `urn:authcenter:acr:mfa`,
+`urn:authcenter:acr:phr`); la decisión `AUTHCENTER-AMR-MFA` está cumplida del lado de AuthCenter
+(AuthCenter#36). AuthCenter solo exige el segundo factor si la aplicación tiene `RequireMfa`, si
+el usuario ya tiene uno activo, si una política de acceso lo pide o si el cliente envía
+`acr_values`. El owner eligió **step-up** (`acr_values`) en lugar de `RequireMfa`; el step-up para
+roles `PrivilegedMfa` llega en el PR de seguimiento. Mientras tanto, esos roles responden 403 si
+la sesión no trae `mfa` en `amr`.
 
 ## 4. Sesión del lado servidor
 
@@ -226,12 +232,30 @@ de estos valores, si `Authority` no es HTTPS, si el secreto tiene menos de 32 ca
 3. Entregar el secreto una sola vez, escribiéndolo directamente en el Key Vault del ambiente
    (`authcenter-paquetenvia-client-secret`). La API lee el valor con su identidad administrada
    (`Key Vault Secrets User` solo sobre ese secreto).
-4. Confirmar el `issuer` exacto (`Jwt:Issuer`) y la URL pública (`Oidc:PublicOrigin`) por ambiente.
-5. Para MFA: emitir `amr` (por ejemplo `["pwd","mfa"]`) en el ID token cuando el usuario completó
-   MFA. Sin ese claim, `PLATFORM_ADMIN` y los demás flujos `PrivilegedMfa` quedan denegados.
-6. AuthCenter no publica `end_session_endpoint`: el logout de Paquetenvia revoca el refresh y
-   destruye la sesión local, pero la sesión SSO de AuthCenter puede seguir activa en equipos
-   compartidos.
+4. Issuer: copiar **exactamente** el valor `issuer` del discovery de producción
+   (`/.well-known/openid-configuration`) a `AuthCenter__Issuer`; se compara de forma ordinal.
+   Confirmar también la URL pública (`Oidc:PublicOrigin`) por ambiente.
+5. MFA: AuthCenter ya emite `amr` y `acr` en el ID token (`AUTHCENTER-AMR-MFA` cumplida,
+   AuthCenter#36). **No** activar `RequireMfa` en la aplicación: el owner eligió step-up con
+   `acr_values` para los roles `PrivilegedMfa` (llega en el PR de seguimiento).
+6. Logout: AuthCenter ya publica `end_session_endpoint` (`/oauth/logout`) y back-channel logout
+   (`backchannel_logout_supported` y `backchannel_logout_session_supported` en discovery; el
+   `sid` del ID token coincide con el del `logout_token`). El owner aprobó RP-initiated logout y
+   back-channel logout; se implementan en el PR de seguimiento. Hasta entonces el logout de
+   Paquetenvia revoca el refresh y destruye la sesión local, pero la sesión SSO de AuthCenter
+   puede seguir activa en equipos compartidos.
+7. Datos adicionales de registro:
+   - `LoginUrl` = `https://<host-authcenter>/login` (obligatorio, login hospedado).
+   - `AutoConsent` habilitado (aplicación first-party; si no, el primer login muestra
+     consentimiento).
+   - Post-logout redirect URI exacta: `https://<host-web>/login`.
+   - Back-channel logout URI: `https://<host-web>/auth/backchannel-logout` (HTTPS).
+   - En la aplicación: métodos de login (contraseña, magic link, Google, Microsoft); `RequireMfa`
+     **desactivado** (step-up); modo de registro `InviteOnly`, alineado con
+     `AUTH-FIRST-LOGIN-INVITATION`; solicitudes de acceso opcionales.
+   - Acceso de cada usuario a Paquetenvia: invitación, asignación directa, regla de grupo, SCIM o
+     solicitud aprobada. Sin acceso activo, el login hospedado indica que no hay acceso y no
+     regresa; con sesión SSO existente, el callback recibe `error=access_denied`.
 
 ## 11. Preguntas abiertas para el owner
 

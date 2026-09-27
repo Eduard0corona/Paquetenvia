@@ -17,6 +17,12 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
 {
     public const string Authority = "https://authcenter.test";
     public const string Issuer = "https://authcenter.test";
+    public const string AcrSingleFactor = "urn:authcenter:acr:1fa";
+    public const string AcrMfa = "urn:authcenter:acr:mfa";
+    public const string AcrPhishingResistant = "urn:authcenter:acr:phr";
+
+    /// <summary>AuthCenter SSO session id (`sid`), the same value its back-channel logout_token carries.</summary>
+    public string SessionId { get; } = Guid.NewGuid().ToString();
     public const string ClientId = "paquetenvia-web-testing";
     public const string ClientSecret = "fake-authcenter-client-secret-0123456789abcdef";
     public const string PublicOrigin = "https://app.paquetenvia.test";
@@ -120,6 +126,10 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
         ["token_endpoint_auth_methods_supported"] = new[] { "client_secret_basic", "client_secret_post" },
         ["code_challenge_methods_supported"] = new[] { "S256" },
         ["authorization_response_iss_parameter_supported"] = true,
+        ["end_session_endpoint"] = Authority + "/oauth/logout",
+        ["acr_values_supported"] = new[] { AcrSingleFactor, AcrMfa, AcrPhishingResistant },
+        ["backchannel_logout_supported"] = true,
+        ["backchannel_logout_session_supported"] = true,
     };
 
     private object Jwks()
@@ -213,7 +223,10 @@ internal sealed class FakeAuthCenterServer : HttpMessageHandler
             ["auth_time"] = new DateTimeOffset(now).ToUnixTimeSeconds(),
             ["name"] = "Usuario Sintético",
             ["email"] = "synthetic.user@paquetenvia.test",
-            ["email_verified"] = "true",
+            ["email_verified"] = true,
+            ["sid"] = SessionId,
+            ["azp"] = ClientId,
+            ["acr"] = behavior.Amr is { } amr && amr.Contains("mfa", StringComparer.Ordinal) ? AcrMfa : AcrSingleFactor,
             ["roles"] = "AUTHCENTER_SUPERADMIN",
             ["permissions"] = "EVERYTHING",
         };
