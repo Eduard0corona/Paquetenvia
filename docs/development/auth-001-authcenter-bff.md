@@ -365,7 +365,8 @@ Almacén PostgreSQL (`BFF-SESSION-TABLE-SHAPE`): `BffSessionStorePostgreSqlContr
 exactos, sin acceso directo de runtime, resolución por hash, revocación por clave, `sid` y `sub`
 anterior a un momento, purga solo de filas muertas, sin RLS tenant, migraciones up/down y
 upgrade de una instalación previa) y `AuthCenterPostgreSqlSessionStoreTests` (el login crea la
-fila, el logout la revoca, un back-channel en una instancia termina la sesión en otra y la sesión
+fila, el logout la revoca, un back-channel en una instancia termina la sesión en otra, el mismo
+`logout_token` repetido en otra instancia responde 400 sin revocar sesiones posteriores y la sesión
 sobrevive a un reinicio).
 
 Web (`vitest`): estrategia de credenciales, parser de sesión, `return_url` local, logout
@@ -428,11 +429,13 @@ código de AuthCenter (discovery, `/oauth/logout`, `GenerateLogoutToken`, `acr_v
   al reloj de la BD); todas las réplicas rechazan la sesión en su siguiente petición. Con
   `SessionStore=Memory`, `DistributedCacheAuthCenterSessionTerminationStore` guarda marcas en
   `IDistributedCache` como antes.
-- El registro anti-replay del `jti` sigue en `IDistributedCache` (memoria por réplica) hasta
-  `exp` + 5 min en ambos modos: persistirlo en PostgreSQL necesita un objeto que
-  `BFF-SESSION-TABLE-SHAPE` no cubre (pregunta abierta `BFF-LOGOUT-JTI-PERSISTENCE`). Un replay
-  hacia otra réplica dentro de esa ventana revocaría otra vez las sesiones del mismo `sid` (ya
-  revocadas) o, con solo `sub`, las creadas después del primer envío.
+- Anti-replay del `jti` (`BFF-LOGOUT-JTI-PERSISTENCE`, "Sí, a PostgreSQL"): con el almacén
+  PostgreSQL, `security.register_bff_logout_jti(bytea,timestamptz)` guarda el SHA-256 del `jti` en
+  `identity.bff_logout_jtis` hasta `exp` + 5 min (tope de un día) con `ON CONFLICT DO NOTHING`, en la
+  misma transacción que la revocación: solo el primer registro de cualquier réplica revoca, un replay
+  responde 400 en todas, y un fallo revierte ambos pasos, así que el reintento de AuthCenter no se
+  confunde con un replay. La purga del Worker borra los `jti` vencidos. Con `SessionStore=Memory` el
+  `jti` sigue en `IDistributedCache` por réplica.
 - Ingress del piloto: `/auth` ya va a la API (`PILOT-SAME-ORIGIN-ROUTING`); debe aceptar un POST
   sin `Origin` hacia `/auth/backchannel-logout`.
 

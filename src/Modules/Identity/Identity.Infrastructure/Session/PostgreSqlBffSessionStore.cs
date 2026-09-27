@@ -99,6 +99,73 @@ public sealed partial class PostgreSqlBffSessionStore(
             cancellationToken);
     }
 
+    public async Task<bool> ApplyLogoutTokenAsync(BffLogoutTokenEffect effect, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(effect);
+        RequireHash(effect.TokenIdHash);
+        try
+        {
+            await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await using (var role = new NpgsqlCommand($"SET LOCAL ROLE {RuntimeRole};", connection, transaction)
+            {
+                CommandTimeout = options.Value.CommandTimeoutSeconds,
+            })
+            {
+                await role.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            bool first;
+            await using (var register = new NpgsqlCommand(
+                "SELECT security.register_bff_logout_jti(@jti_hash, @retain_until);", connection, transaction)
+            {
+                CommandTimeout = options.Value.CommandTimeoutSeconds,
+            })
+            {
+                register.Parameters.Add(Bytes("jti_hash", effect.TokenIdHash));
+                register.Parameters.Add(new NpgsqlParameter<DateTimeOffset>("retain_until", NpgsqlDbType.TimestampTz)
+                {
+                    TypedValue = effect.RetainUntil.ToUniversalTime(),
+                });
+                first = await register.ExecuteScalarAsync(cancellationToken) is true;
+            }
+
+            if (first && (effect.AuthCenterSessionId is not null || effect.Subject is not null))
+            {
+                await using var revoke = effect.AuthCenterSessionId is { } sid
+                    ? new NpgsqlCommand("SELECT security.revoke_bff_session(@sid);", connection, transaction)
+                    {
+                        Parameters = { Text("sid", sid) },
+                    }
+                    : new NpgsqlCommand("SELECT security.revoke_bff_session(@subject, @issued_before);", connection, transaction)
+                    {
+                        Parameters =
+                        {
+                            Text("subject", effect.Subject!),
+                            new NpgsqlParameter<DateTimeOffset>("issued_before", NpgsqlDbType.TimestampTz)
+                            {
+                                TypedValue = effect.EndedAt.ToUniversalTime(),
+                            },
+                        },
+                    };
+                revoke.CommandTimeout = options.Value.CommandTimeoutSeconds;
+                await revoke.ExecuteScalarAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return first;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is NpgsqlException or InvalidOperationException or TimeoutException)
+        {
+            LogFailed(logger, "logout_token", exception is PostgresException postgres ? postgres.SqlState : "transport");
+            throw new IdentityContextInfrastructureException("The BFF session store is unavailable.", exception);
+        }
+    }
+
     private async Task<T> ExecuteAsync<T>(
         string sql,
         Action<NpgsqlCommand> bind,

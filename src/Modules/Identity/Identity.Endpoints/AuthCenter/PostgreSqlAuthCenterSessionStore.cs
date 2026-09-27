@@ -141,27 +141,39 @@ internal sealed partial class PostgreSqlAuthCenterTicketStore : ITicketStore
 }
 
 /// <summary>
-/// Back-channel logout effect on the PostgreSQL store (AUTH-001-BACKCHANNEL-LOGOUT): the sessions of a
-/// <c>sid</c>, or those of a <c>sub</c> created at or before the logout, are revoked in the shared table,
-/// so every replica refuses them on the next request. Replay protection of the logout token
-/// <c>jti</c> keeps its AUTH-001-BACKCHANNEL-LOGOUT semantics in <see cref="Microsoft.Extensions.Caching.Distributed.IDistributedCache"/>
-/// (see the single-instance store): persisting it in PostgreSQL is outside BFF-SESSION-TABLE-SHAPE.
+/// Back-channel logout effect on the PostgreSQL store (AUTH-001-BACKCHANNEL-LOGOUT,
+/// BFF-LOGOUT-JTI-PERSISTENCE): the logout-token jti is registered in <c>identity.bff_logout_jtis</c> and,
+/// in the same transaction and only the first time any replica sees it, the sessions of the <c>sid</c>
+/// (or those of the <c>sub</c> created at or before the logout) are revoked in the shared table. Every
+/// replica therefore refuses both the ended sessions and a replayed token.
 /// </summary>
-internal sealed class PostgreSqlAuthCenterSessionTerminationStore(
-    IBffSessionStore sessions,
-    DistributedCacheAuthCenterSessionTerminationStore replayCache) : IAuthCenterSessionTerminationStore
+internal sealed class PostgreSqlAuthCenterSessionTerminationStore(IBffSessionStore sessions)
+    : IAuthCenterSessionTerminationStore
 {
     public Task<bool> TryRegisterLogoutTokenAsync(
         string tokenId,
         DateTimeOffset retainUntil,
         CancellationToken cancellationToken) =>
-        replayCache.TryRegisterLogoutTokenAsync(tokenId, retainUntil, cancellationToken);
+        sessions.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(Hash(tokenId), retainUntil, null, null, retainUntil),
+            cancellationToken);
 
     public Task EndSessionAsync(string sessionId, CancellationToken cancellationToken) =>
         sessions.RevokeByAuthCenterSessionAsync(sessionId, cancellationToken);
 
     public Task EndSubjectSessionsAsync(string subject, DateTimeOffset endedAt, CancellationToken cancellationToken) =>
         sessions.RevokeBySubjectAsync(subject, endedAt, cancellationToken);
+
+    public Task<bool> TryEndAsync(
+        string tokenId,
+        DateTimeOffset retainUntil,
+        string? sessionId,
+        string? subject,
+        DateTimeOffset endedAt,
+        CancellationToken cancellationToken) =>
+        sessions.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(Hash(tokenId), retainUntil, sessionId, sessionId is null ? subject : null, endedAt),
+            cancellationToken);
 
     /// <summary>
     /// A revoked session never resolves a ticket, so a principal that reaches validation belongs to a
@@ -173,4 +185,7 @@ internal sealed class PostgreSqlAuthCenterSessionTerminationStore(
         DateTimeOffset? signedInAt,
         CancellationToken cancellationToken) =>
         Task.FromResult(false);
+
+    /// <summary>The jti is stored only as the SHA-256 of its exact UTF-8 bytes.</summary>
+    internal static byte[] Hash(string tokenId) => SHA256.HashData(Encoding.UTF8.GetBytes(tokenId));
 }

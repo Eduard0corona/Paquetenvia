@@ -373,7 +373,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(13, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: false, ops003Applied: true).Count);
         Assert.Equal(14, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: true, ops003Applied: true).Count);
 
-        // BFF-SESSION-TABLE-SHAPE: five session routines for paqueteria_app, one purge for the Worker.
+        // BFF-SESSION-TABLE-SHAPE: six session routines for paqueteria_app, one purge for the Worker.
         var sessions = E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, bffSessionApplied: true)
             .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true))
             .ToArray();
@@ -392,7 +392,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             new E002RoutineEntry("security.purge_bff_sessions(integer)", "paqueteria_cleanup_executor", purge.Grantees),
             purge);
         Assert.Equal(["paqueteria_worker"], purge.Grantees);
-        Assert.Equal(37, E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true).Count);
+        Assert.Equal(38, E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true).Count);
         Assert.Equal(
             "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
             E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true));
@@ -431,6 +431,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             DROP FUNCTION security.expire_proof_upload_sessions(integer);
             DROP FUNCTION security.purge_bff_sessions(integer);
             REVOKE ALL ON identity.bff_sessions FROM paqueteria_cleanup_executor;
+            REVOKE ALL ON identity.bff_logout_jtis FROM paqueteria_cleanup_executor;
             REVOKE USAGE ON SCHEMA identity FROM paqueteria_cleanup_executor;
             DELETE FROM platform."__ef_migrations_history_custody"
               WHERE "MigrationId" IN ('{E002CleanupStateReader.Ops003MigrationId}','{E002BffSessionStateReader.PurgeMigrationId}');
@@ -494,8 +495,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             Assert.Equal(
                 "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(37, semantic.ControlledIdentities);
-            Assert.Equal(72, semantic.NormalizedExecuteRows);
+            Assert.Equal(38, semantic.ControlledIdentities);
+            Assert.Equal(74, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> CustodyLaneAsync() =>
@@ -520,6 +521,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             DROP FUNCTION security.revoke_bff_session(bytea);
             DROP FUNCTION security.revoke_bff_session(text);
             DROP FUNCTION security.revoke_bff_session(text,timestamptz);
+            DROP FUNCTION security.register_bff_logout_jti(bytea,timestamptz);
             DELETE FROM platform."__ef_migrations_history_identity"
               WHERE "MigrationId"='{E002BffSessionStateReader.SessionStoreMigrationId}';
             """);
@@ -555,10 +557,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(
             string.Join(';', Enumerable.Repeat(
                 "paqueteria_session_executor|{paqueteria_session_executor=X/paqueteria_session_executor,paqueteria_app=X/paqueteria_session_executor}",
-                5)),
+                6)),
             await environment.TextAsync("""
                 SELECT string_agg(pg_get_userbyid(proowner) || '|' || proacl::text, ';' ORDER BY oid::regprocedure::text)
-                FROM pg_proc WHERE proname IN ('create_bff_session','resolve_bff_session','revoke_bff_session')
+                FROM pg_proc WHERE proname IN ('create_bff_session','resolve_bff_session','revoke_bff_session','register_bff_logout_jti')
                 """));
         Assert.False(await environment.ScalarAsync(
             "SELECT has_schema_privilege('paqueteria_session_executor','security','CREATE')"));
@@ -577,8 +579,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             Assert.Equal(
                 "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(37, semantic.ControlledIdentities);
-            Assert.Equal(72, semantic.NormalizedExecuteRows);
+            Assert.Equal(38, semantic.ControlledIdentities);
+            Assert.Equal(74, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> IdentityLaneAsync() =>
@@ -726,8 +728,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             Assert.Equal(
                 "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(37, semantic.ControlledIdentities);
-            Assert.Equal(72, semantic.NormalizedExecuteRows);
+            Assert.Equal(38, semantic.ControlledIdentities);
+            Assert.Equal(74, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>

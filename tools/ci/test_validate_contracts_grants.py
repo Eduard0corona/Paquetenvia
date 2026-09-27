@@ -102,7 +102,7 @@ class BffSessionContractRuleTests(unittest.TestCase):
             any("outside its contract" in error for error in self.validator.executor_grant_errors(widened))
         )
         narrowed = self.role_sql.replace(
-            "GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;", ""
+            "GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paqueteria_session_executor;", ""
         )
         self.assertNotEqual(narrowed, self.role_sql)
         self.assertTrue(
@@ -114,6 +114,9 @@ class BffSessionContractRuleTests(unittest.TestCase):
             "GRANT SELECT ON identity.bff_sessions TO paqueteria_app;",
             "GRANT SELECT (session_key_hash,expires_at,revoked_at) ON identity.bff_sessions TO paqueteria_cleanup_executor;",
             "GRANT EXECUTE ON FUNCTION security.resolve_bff_session(bytea) TO paqueteria_worker;",
+            "GRANT SELECT ON identity.bff_logout_jtis TO paqueteria_app;",
+            "GRANT DELETE ON identity.bff_logout_jtis TO paqueteria_cleanup_executor;",
+            "GRANT EXECUTE ON FUNCTION security.register_bff_logout_jti(bytea,timestamptz) TO paqueteria_worker;",
             "GRANT paqueteria_session_executor TO paqueteria_app;",
         ]:
             with self.subTest(widening=widening):
@@ -122,8 +125,13 @@ class BffSessionContractRuleTests(unittest.TestCase):
                 )
 
     def test_a_tenant_policy_or_missing_force_rls_fails(self) -> None:
-        with_policy = self.schema_sql + "\nCREATE POLICY bff_tenant ON identity.bff_sessions USING (true);\n"
-        self.assertNotEqual([], self.validator.bff_session_errors(with_policy, self.role_sql))
+        for table in ["identity.bff_sessions", "identity.bff_logout_jtis"]:
+            with self.subTest(table=table):
+                with_policy = self.schema_sql + f"\nCREATE POLICY bff_tenant ON {table} USING (true);\n"
+                self.assertNotEqual([], self.validator.bff_session_errors(with_policy, self.role_sql))
+        without_jti_force = self.schema_sql.replace("ALTER TABLE identity.bff_logout_jtis FORCE ROW LEVEL SECURITY;", "")
+        self.assertNotEqual(without_jti_force, self.schema_sql)
+        self.assertNotEqual([], self.validator.bff_session_errors(without_jti_force, self.role_sql))
         without_force = self.schema_sql.replace("ALTER TABLE identity.bff_sessions FORCE ROW LEVEL SECURITY;", "")
         self.assertNotEqual(without_force, self.schema_sql)
         self.assertNotEqual([], self.validator.bff_session_errors(without_force, self.role_sql))

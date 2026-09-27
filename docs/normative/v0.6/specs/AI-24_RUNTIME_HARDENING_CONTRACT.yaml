@@ -129,6 +129,7 @@ bff_session:
   - GATE-002-BFF-001
   - BFF-SESSION-STORE-POSTGRESQL
   - BFF-SESSION-TABLE-SHAPE
+  - BFF-LOGOUT-JTI-PERSISTENCE
   - PILOT-SAME-ORIGIN-ROUTING
   - AUTH-FIRST-LOGIN-INVITATION
   - AUTH-001-RP-INITIATED-LOGOUT
@@ -158,7 +159,7 @@ bff_session:
     logout_token: RS256 only; typ logout+jwt; exact iss; aud = client id; lifetime with 30 s skew and recent iat; events has http://schemas.openid.net/event/backchannel-logout; no nonce; sid or sub; jti accepted once and remembered until exp + 5 minutes
     responses: 200 accepted; 400 {"error":"invalid_request"} otherwise
     effect: sid marked terminated for SessionLifetimeMinutes and rejected on the next request (ticket and cookie destroyed); a sub-only token ends the subject's sessions signed in before it
-    store: behind a session-termination interface; with the PostgreSQL store the rows of the sid (security.revoke_bff_session(text)) or of the subject created at or before the logout (security.revoke_bff_session(text,timestamptz)) are revoked in identity.bff_sessions and refused by every replica; the jti replay record stays in IDistributedCache until exp + 5 minutes; the Memory store keeps cache markers
+    store: behind a session-termination interface; with the PostgreSQL store the rows of the sid (security.revoke_bff_session(text)) or of the subject created at or before the logout (security.revoke_bff_session(text,timestamptz)) are revoked in identity.bff_sessions and refused by every replica; the SHA-256 of the jti is registered in the pre-tenant identity.bff_logout_jtis through security.register_bff_logout_jti(bytea,timestamptz) (ON CONFLICT DO NOTHING, first registration across replicas only, retained until exp + 5 minutes and at most one day) in the same transaction as the revocation (BFF-LOGOUT-JTI-PERSISTENCE); the Memory store keeps cache markers and a per-replica jti cache
   mfa_step_up: /auth/login?mfa=required sends acr_values urn:authcenter:acr:mfa; the ID token must carry acr urn:authcenter:acr:mfa or urn:authcenter:acr:phr and mfa in amr; a 403 whose only unmet requirement is MFA carries problem code MFA_REQUIRED; nobody is forced to MFA (drivers included)
   callback_errors: access_denied (after state, correlation and iss validate) redirects to /login?error=access_denied; every other failure to /login?error=signin_failed; no protocol detail forwarded
   same_origin_routing: pilot ingress routes /api, /hubs, /auth and /signin-authcenter to the API

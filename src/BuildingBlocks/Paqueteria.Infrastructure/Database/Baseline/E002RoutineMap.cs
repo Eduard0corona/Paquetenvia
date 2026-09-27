@@ -80,6 +80,7 @@ public static class E002RoutineMap
         new("security.revoke_bff_session(bytea)", "paqueteria_session_executor", ["paqueteria_app"]),
         new("security.revoke_bff_session(text)", "paqueteria_session_executor", ["paqueteria_app"]),
         new("security.revoke_bff_session(text,timestamp with time zone)", "paqueteria_session_executor", ["paqueteria_app"]),
+        new("security.register_bff_logout_jti(bytea,timestamp with time zone)", "paqueteria_session_executor", ["paqueteria_app"]),
     ];
 
     /// <summary>
@@ -107,7 +108,7 @@ public static class E002RoutineMap
             Lif001Entries.Length != 1 || Lif001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             DispatchLaneEntries.Length != 2 || DispatchLaneEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
             Ops003Entries.Length != 2 || Ops003Entries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
-            BffSessionEntries.Length != 5 || BffSessionEntries.Sum(entry => 1 + entry.Grantees.Count) != 10 ||
+            BffSessionEntries.Length != 6 || BffSessionEntries.Sum(entry => 1 + entry.Grantees.Count) != 12 ||
             BffPurgeEntries.Length != 1 || BffPurgeEntries.Sum(entry => 1 + entry.Grantees.Count) != 2)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");

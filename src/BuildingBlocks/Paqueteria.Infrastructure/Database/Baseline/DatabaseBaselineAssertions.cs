@@ -425,7 +425,8 @@ public sealed class DatabaseBaselineAssertions
                 ('security.resolve_bff_session(bytea)'),
                 ('security.revoke_bff_session(bytea)'),
                 ('security.revoke_bff_session(text)'),
-                ('security.revoke_bff_session(text,timestamp with time zone)')) session_store(signature)
+                ('security.revoke_bff_session(text,timestamp with time zone)'),
+                ('security.register_bff_logout_jti(bytea,timestamp with time zone)')) session_store(signature)
               WHERE to_regprocedure(signature) IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
@@ -774,7 +775,9 @@ public sealed class DatabaseBaselineAssertions
               SELECT * FROM (VALUES
                 ('identity','bff_sessions','session_key_hash','SELECT'),
                 ('identity','bff_sessions','expires_at','SELECT'),
-                ('identity','bff_sessions','revoked_at','SELECT')) bff_purge(a,b,c,d)
+                ('identity','bff_sessions','revoked_at','SELECT'),
+                ('identity','bff_logout_jtis','jti_hash','SELECT'),
+                ('identity','bff_logout_jtis','expires_at','SELECT')) bff_purge(a,b,c,d)
               WHERE EXISTS (SELECT 1 FROM bff)),
             actual AS (
               SELECT table_schema,table_name,column_name,privilege_type
@@ -783,7 +786,9 @@ public sealed class DatabaseBaselineAssertions
             expected_tables(table_schema,table_name,privilege_type) AS (
               SELECT 'platform','idempotency_keys','DELETE'
               UNION ALL
-              SELECT 'identity','bff_sessions','DELETE' WHERE EXISTS (SELECT 1 FROM bff)),
+              SELECT 'identity','bff_sessions','DELETE' WHERE EXISTS (SELECT 1 FROM bff)
+              UNION ALL
+              SELECT 'identity','bff_logout_jtis','DELETE' WHERE EXISTS (SELECT 1 FROM bff)),
             actual_tables AS (
               SELECT table_schema,table_name,privilege_type
               FROM information_schema.table_privileges
@@ -881,13 +886,17 @@ public sealed class DatabaseBaselineAssertions
             SELECT 'BFF session table is missing'
             WHERE pg_catalog.to_regclass('identity.bff_sessions') IS NULL
             UNION ALL
+            SELECT 'BFF logout jti table is missing'
+            WHERE pg_catalog.to_regclass('identity.bff_logout_jtis') IS NULL
+            UNION ALL
             SELECT 'BFF session function is missing: ' || signature
             FROM (VALUES
               ('security.create_bff_session(bytea,text,text,bytea,timestamp with time zone)'),
               ('security.resolve_bff_session(bytea)'),
               ('security.revoke_bff_session(bytea)'),
               ('security.revoke_bff_session(text)'),
-              ('security.revoke_bff_session(text,timestamp with time zone)')) expected(signature)
+              ('security.revoke_bff_session(text,timestamp with time zone)'),
+              ('security.register_bff_logout_jti(bytea,timestamp with time zone)')) expected(signature)
             WHERE pg_catalog.to_regprocedure(signature) IS NULL
             """,
             cancellationToken).ConfigureAwait(false);
@@ -902,9 +911,10 @@ public sealed class DatabaseBaselineAssertions
     /// <summary>
     /// BFF-SESSION-TABLE-SHAPE: once the session executor exists it holds exactly USAGE on
     /// <c>identity</c>, SELECT on the seven columns, INSERT on the six non-revocation columns and
-    /// UPDATE(ticket_ciphertext,revoked_at) of <c>identity.bff_sessions</c>, inherits nothing, and its five
-    /// functions are pinned SECURITY DEFINERs executable by <c>paqueteria_app</c> only. The table forces
-    /// RLS without any policy and grants nothing to the runtime roles or PUBLIC.
+    /// UPDATE(ticket_ciphertext,revoked_at) of <c>identity.bff_sessions</c> plus INSERT(jti_hash,created_at,
+    /// expires_at) on <c>identity.bff_logout_jtis</c> (BFF-LOGOUT-JTI-PERSISTENCE), inherits nothing, and
+    /// its six functions are pinned SECURITY DEFINERs executable by <c>paqueteria_app</c> only. Both tables
+    /// force RLS without any policy and grant nothing to the runtime roles or PUBLIC.
     /// </summary>
     private static async Task AssertSessionExecutorBoundaryAsync(
         NpgsqlConnection connection,
@@ -921,9 +931,10 @@ public sealed class DatabaseBaselineAssertions
               SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_session_executor'
             ),
             sessions AS (
-              SELECT c.oid,c.relrowsecurity,c.relforcerowsecurity
+              SELECT c.oid,c.relname,c.relrowsecurity,c.relforcerowsecurity
               FROM pg_catalog.pg_class c
-              WHERE c.oid=pg_catalog.to_regclass('identity.bff_sessions')
+              WHERE c.oid IN (pg_catalog.to_regclass('identity.bff_sessions'),
+                              pg_catalog.to_regclass('identity.bff_logout_jtis'))
             ),
             expected(table_schema,table_name,column_name,privilege_type) AS (VALUES
               ('identity','bff_sessions','session_key_hash','SELECT'),
@@ -940,7 +951,10 @@ public sealed class DatabaseBaselineAssertions
               ('identity','bff_sessions','created_at','INSERT'),
               ('identity','bff_sessions','expires_at','INSERT'),
               ('identity','bff_sessions','ticket_ciphertext','UPDATE'),
-              ('identity','bff_sessions','revoked_at','UPDATE')),
+              ('identity','bff_sessions','revoked_at','UPDATE'),
+              ('identity','bff_logout_jtis','jti_hash','INSERT'),
+              ('identity','bff_logout_jtis','created_at','INSERT'),
+              ('identity','bff_logout_jtis','expires_at','INSERT')),
             actual AS (
               SELECT table_schema,table_name,column_name,privilege_type
               FROM information_schema.column_privileges
@@ -950,7 +964,8 @@ public sealed class DatabaseBaselineAssertions
               ('security.resolve_bff_session(bytea)'),
               ('security.revoke_bff_session(bytea)'),
               ('security.revoke_bff_session(text)'),
-              ('security.revoke_bff_session(text,timestamp with time zone)')),
+              ('security.revoke_bff_session(text,timestamp with time zone)'),
+              ('security.register_bff_logout_jti(bytea,timestamp with time zone)')),
             installed AS (
               SELECT fn.signature,p.oid,p.prosecdef,p.proconfig,p.prosrc
               FROM fn JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn.signature))
@@ -996,17 +1011,17 @@ public sealed class DatabaseBaselineAssertions
             UNION ALL
             SELECT 'BFF session functions are only partially installed'
             FROM (SELECT count(*) AS present FROM installed) c
-            WHERE c.present BETWEEN 1 AND 4
+            WHERE c.present BETWEEN 1 AND 5
             UNION ALL
-            SELECT 'session executor exists without identity.bff_sessions'
-            FROM executor WHERE NOT EXISTS (SELECT 1 FROM sessions)
+            SELECT 'session executor exists without identity.bff_sessions and identity.bff_logout_jtis'
+            FROM executor WHERE (SELECT count(*) FROM sessions) <> 2
             UNION ALL
-            SELECT 'identity.bff_sessions must force RLS without any policy'
+            SELECT 'identity.' || sessions.relname || ' must force RLS without any policy'
             FROM sessions
             WHERE NOT sessions.relrowsecurity OR NOT sessions.relforcerowsecurity
                OR EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid=sessions.oid)
             UNION ALL
-            SELECT 'identity.bff_sessions is directly reachable by ' || grantee.name
+            SELECT 'identity.' || sessions.relname || ' is directly reachable by ' || grantee.name
             FROM sessions CROSS JOIN (VALUES ('paqueteria_app'),('paqueteria_worker'),('public')) grantee(name)
             WHERE has_table_privilege(grantee.name,sessions.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
                OR has_any_column_privilege(grantee.name,sessions.oid,'SELECT,INSERT,UPDATE,REFERENCES')

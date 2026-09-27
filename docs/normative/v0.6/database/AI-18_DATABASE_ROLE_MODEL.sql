@@ -110,9 +110,11 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON platform.idempotency_keys TO paqueteria_app
 -- Global geographic references are read-only at runtime.
 REVOKE INSERT,UPDATE,DELETE ON locations.cities FROM paqueteria_app,paqueteria_worker;
 
--- BFF-SESSION-TABLE-SHAPE: the pre-tenant BFF session table holds no runtime grant at all; the API
--- reaches it only through the SECURITY DEFINER functions of paqueteria_session_executor.
+-- BFF-SESSION-TABLE-SHAPE and BFF-LOGOUT-JTI-PERSISTENCE: the pre-tenant BFF session and logout-jti
+-- tables hold no runtime grant at all; the API reaches them only through the SECURITY DEFINER
+-- functions of paqueteria_session_executor.
 REVOKE ALL ON identity.bff_sessions FROM paqueteria_app,paqueteria_worker;
+REVOKE ALL ON identity.bff_logout_jtis FROM paqueteria_app,paqueteria_worker;
 
 -- Append-only records: runtime may insert/read within tenant context, never update/delete.
 REVOKE UPDATE,DELETE ON
@@ -215,8 +217,10 @@ GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 -- BFF session purge (BFF-SESSION-TABLE-SHAPE, OPS-003-CLEANUP-ROLE): the Custody migration lane
 -- (20260927000400_AddBffSessionPurge), after the OPS-003 lane, adds security.purge_bff_sessions(integer)
 -- to this role together with USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and
--- DELETE on identity.bff_sessions. The function deletes only revoked rows and rows whose expires_at is
--- not after its own clock_timestamp(), in batches of 1..1000, returns only a count, is SECURITY DEFINER
+-- DELETE on identity.bff_sessions, and SELECT(jti_hash,expires_at) and DELETE on identity.bff_logout_jtis
+-- (BFF-LOGOUT-JTI-PERSISTENCE). The function deletes only revoked sessions, sessions whose expires_at is
+-- not after its own clock_timestamp() and, with what remains of the batch, logout jtis past their
+-- retention, in batches of 1..1000 in total, returns only a count, is SECURITY DEFINER
 -- with search_path=pg_catalog, identity, pg_temp and only paqueteria_worker may EXECUTE it. Those grants
 -- live in that lane and not in this baseline, because the OPS-003 lane asserts its own exact grant set.
 REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker;
@@ -236,7 +240,10 @@ GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_
 --   security.revoke_bff_session(bytea) revokes one session by key hash (logout, session replacement);
 --   security.revoke_bff_session(text) revokes every live session of an AuthCenter sid (back-channel logout);
 --   security.revoke_bff_session(text,timestamptz) revokes every live session of a subject created at or
---     before the given moment, never after the function's own clock (sub-only back-channel logout).
+--     before the given moment, never after the function's own clock (sub-only back-channel logout);
+--   security.register_bff_logout_jti(bytea,timestamptz) records the SHA-256 of a back-channel logout_token
+--     jti until its retention (exp + 5 minutes, at most one day ahead) with INSERT ... ON CONFLICT DO
+--     NOTHING and returns true only the first time any replica registers it (BFF-LOGOUT-JTI-PERSISTENCE).
 -- Revocation sets revoked_at and erases ticket_ciphertext; the revoke functions return only a count.
 -- The role has no DELETE: revoked and expired rows are purged by paqueteria_cleanup_executor.
 REVOKE paqueteria_session_executor FROM paqueteria_app, paqueteria_worker;
@@ -244,6 +251,7 @@ GRANT USAGE ON SCHEMA identity TO paqueteria_session_executor;
 GRANT SELECT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;
 GRANT INSERT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at) ON identity.bff_sessions TO paqueteria_session_executor;
 GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;
+GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paqueteria_session_executor;
 
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
@@ -262,8 +270,8 @@ GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueter
 -- 14. paqueteria_cleanup_executor holds only USAGE on schemas platform and custody, SELECT(owner_org_id,scope,idempotency_key,created_at,expires_at) plus DELETE on platform.idempotency_keys, and SELECT(id,status,expires_at) plus UPDATE(status,updated_at) on custody.proof_upload_sessions: no INSERT, no other table except the BFF session purge grants of assertion 21, no outbox, bootstrap, lifecycle or purge-outbox privilege.
 -- 15. both cleanup functions are SECURITY DEFINER with search_path=pg_catalog, platform, pg_temp (idempotency) and pg_catalog, custody, pg_temp (sessions), accept only bounded batch sizes, return only a count, and only paqueteria_worker may EXECUTE them; PUBLIC and paqueteria_app may not.
 -- 16. security.purge_expired_idempotency_keys never deletes a key created less than 72 hours before its own clock_timestamp() nor one that has not expired, whatever cutoff, batch size or mode it receives; dry-run mutates nothing.
--- 17. paqueteria_session_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only security.create_bff_session(bytea,text,text,bytea,timestamptz), security.resolve_bff_session(bytea), security.revoke_bff_session(bytea), security.revoke_bff_session(text) and security.revoke_bff_session(text,timestamptz).
--- 18. paqueteria_session_executor holds only USAGE on schema identity plus SELECT on the seven columns, INSERT on the six non-revocation columns and UPDATE(ticket_ciphertext,revoked_at) of identity.bff_sessions: no DELETE, no table-wide grant, no other table, no outbox, bootstrap, lifecycle or cleanup privilege.
--- 19. the five session functions are SECURITY DEFINER with search_path=pg_catalog, identity, pg_temp, validate every argument, and only paqueteria_app may EXECUTE them; PUBLIC and paqueteria_worker may not.
--- 20. identity.bff_sessions has ENABLE and FORCE ROW LEVEL SECURITY with no policy, and paqueteria_app and paqueteria_worker hold no table or column privilege on it.
--- 21. once the Custody BFF purge lane is recorded, paqueteria_cleanup_executor additionally owns security.purge_bff_sessions(integer) and holds USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on identity.bff_sessions, and nothing else there; only paqueteria_worker may EXECUTE the purge.
+-- 17. paqueteria_session_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only security.create_bff_session(bytea,text,text,bytea,timestamptz), security.resolve_bff_session(bytea), security.revoke_bff_session(bytea), security.revoke_bff_session(text), security.revoke_bff_session(text,timestamptz) and security.register_bff_logout_jti(bytea,timestamptz).
+-- 18. paqueteria_session_executor holds only USAGE on schema identity plus SELECT on the seven columns, INSERT on the six non-revocation columns and UPDATE(ticket_ciphertext,revoked_at) of identity.bff_sessions, plus INSERT(jti_hash,created_at,expires_at) on identity.bff_logout_jtis: no DELETE, no table-wide grant, no other table, no outbox, bootstrap, lifecycle or cleanup privilege.
+-- 19. the six session functions are SECURITY DEFINER with search_path=pg_catalog, identity, pg_temp, validate every argument, and only paqueteria_app may EXECUTE them; PUBLIC and paqueteria_worker may not.
+-- 20. identity.bff_sessions and identity.bff_logout_jtis have ENABLE and FORCE ROW LEVEL SECURITY with no policy, and paqueteria_app and paqueteria_worker hold no table or column privilege on them.
+-- 21. once the Custody BFF purge lane is recorded, paqueteria_cleanup_executor additionally owns security.purge_bff_sessions(integer) and holds USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on identity.bff_sessions and SELECT(jti_hash,expires_at) and DELETE on identity.bff_logout_jtis, and nothing else there; only paqueteria_worker may EXECUTE the purge.

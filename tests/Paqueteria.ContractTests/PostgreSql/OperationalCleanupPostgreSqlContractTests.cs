@@ -32,6 +32,7 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
         $"""
         DROP FUNCTION security.purge_bff_sessions(integer);
         REVOKE ALL ON identity.bff_sessions FROM {Executor};
+        REVOKE ALL ON identity.bff_logout_jtis FROM {Executor};
         REVOKE USAGE ON SCHEMA identity FROM {Executor};
         """;
 
@@ -72,7 +73,8 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal(
             "custody.proof_upload_sessions.expires_at:SELECT,custody.proof_upload_sessions.id:SELECT," +
             "custody.proof_upload_sessions.status:SELECT,custody.proof_upload_sessions.status:UPDATE," +
-            "custody.proof_upload_sessions.updated_at:UPDATE,identity.bff_sessions.expires_at:SELECT," +
+            "custody.proof_upload_sessions.updated_at:UPDATE,identity.bff_logout_jtis.expires_at:SELECT," +
+            "identity.bff_logout_jtis.jti_hash:SELECT,identity.bff_sessions.expires_at:SELECT," +
             "identity.bff_sessions.revoked_at:SELECT,identity.bff_sessions.session_key_hash:SELECT," +
             "platform.idempotency_keys.created_at:SELECT," +
             "platform.idempotency_keys.expires_at:SELECT,platform.idempotency_keys.idempotency_key:SELECT," +
@@ -85,7 +87,7 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
                 """,
                 ("executor", Executor)));
         Assert.Equal(
-            "identity.bff_sessions:DELETE,platform.idempotency_keys:DELETE",
+            "identity.bff_logout_jtis:DELETE,identity.bff_sessions:DELETE,platform.idempotency_keys:DELETE",
             await ScalarAsync<string>(
                 """
                 SELECT string_agg(table_schema || '.' || table_name || ':' || privilege_type, ','

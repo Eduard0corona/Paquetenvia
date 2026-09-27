@@ -21,8 +21,18 @@
   defecto. `validate_contracts.py` fija los grants exactos del nuevo rol y que la
   tabla no tenga grants de runtime ni política.
 - AI-03 §17.1 y §25.2, AI-24 `bff_session` y AI-08 (OPS-003) describen el
-  almacén. El `jti` de back-channel sigue en `IDistributedCache` (pregunta
-  abierta `BFF-LOGOUT-JTI-PERSISTENCE`).
+  almacén.
+- `BFF-LOGOUT-JTI-PERSISTENCE` (respuesta literal del project owner: "Sí, a
+  PostgreSQL (Recomendado)"): AI-06 agrega `identity.bff_logout_jtis` (SHA-256
+  del `jti`, retención `exp` + 5 min con tope de un día), previa al tenant, con
+  FORCE RLS, sin política ni grants de runtime; AI-18 agrega
+  `security.register_bff_logout_jti(bytea,timestamptz)` de
+  `paqueteria_session_executor` (`INSERT ... ON CONFLICT DO NOTHING`, verdadero
+  solo en el primer registro de cualquier réplica, `EXECUTE` solo para
+  `paqueteria_app`). La API registra el `jti` y revoca las sesiones en una sola
+  transacción; `security.purge_bff_sessions(integer)` también purga los `jti`
+  vencidos. `validate_contracts.py` fija el grant exacto y la ausencia de grants
+  de runtime sobre la nueva tabla.
 
 ## Tope de 72 h para la edad máxima de `openIncident` — 2026-09-27
 

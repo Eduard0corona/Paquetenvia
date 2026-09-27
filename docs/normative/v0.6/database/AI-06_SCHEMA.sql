@@ -98,6 +98,22 @@ CREATE INDEX bff_sessions_revoked_idx ON identity.bff_sessions(revoked_at)
 ALTER TABLE identity.bff_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE identity.bff_sessions FORCE ROW LEVEL SECURITY;
 
+-- BFF-LOGOUT-JTI-PERSISTENCE: back-channel logout tokens already accepted, shared by every API replica
+-- so a replayed logout_token is refused anywhere (AUTH-001-BACKCHANNEL-LOGOUT). Pre-tenant like the
+-- session table: only the SHA-256 of the jti and its retention (token exp + 5 minutes). Written only
+-- through security.register_bff_logout_jti (AI-18); FORCE RLS without any policy denies every other role.
+CREATE TABLE identity.bff_logout_jtis (
+  jti_hash bytea NOT NULL,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  CONSTRAINT bff_logout_jtis_pkey PRIMARY KEY (jti_hash),
+  CONSTRAINT bff_logout_jtis_hash_ck CHECK (octet_length(jti_hash)=32),
+  CONSTRAINT bff_logout_jtis_retention_ck CHECK (expires_at > created_at)
+);
+CREATE INDEX bff_logout_jtis_expiry_idx ON identity.bff_logout_jtis(expires_at);
+ALTER TABLE identity.bff_logout_jtis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity.bff_logout_jtis FORCE ROW LEVEL SECURITY;
+
 -- Geographic model -------------------------------------------------------------
 CREATE TABLE locations.cities (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

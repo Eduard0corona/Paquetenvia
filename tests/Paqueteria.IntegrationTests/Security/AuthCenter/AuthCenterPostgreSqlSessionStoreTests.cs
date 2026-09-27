@@ -125,6 +125,41 @@ public sealed class AuthCenterPostgreSqlSessionStoreTests(AuthCenterPostgreSqlSe
     }
 
     [Fact]
+    public async Task A_logout_token_replayed_on_another_instance_is_rejected_and_ends_no_later_session()
+    {
+        using var first = database.CreateApi();
+        using var second = database.CreateApi(first.AuthCenter);
+        using var browser = first.CreateBrowser();
+        using var earlier = await SignInAsync(first, browser);
+        var token = first.AuthCenter.CreateLogoutToken(ViewerSubject, sessionId: null);
+
+        using var accepted = await PostLogoutTokenAsync(first, token);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        using var ended = await SendWithCookieAsync(second, HttpMethod.Get, ActiveProbe, SessionCookie(earlier));
+        Assert.Equal(HttpStatusCode.Unauthorized, ended.StatusCode);
+
+        // A session signed in after the first delivery must survive the replay, on either instance.
+        using var laterBrowser = second.CreateBrowser();
+        using var later = await SignInAsync(second, laterBrowser);
+        var laterCookie = SessionCookie(later);
+
+        using var replayed = await PostLogoutTokenAsync(second, token);
+        Assert.Equal(HttpStatusCode.BadRequest, replayed.StatusCode);
+        var body = await replayed.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("invalid_request", body.GetProperty("error").GetString());
+        using var replayedOnFirst = await PostLogoutTokenAsync(first, token);
+        Assert.Equal(HttpStatusCode.BadRequest, replayedOnFirst.StatusCode);
+
+        foreach (var api in new[] { first, second })
+        {
+            using var alive = await SendWithCookieAsync(api, HttpMethod.Get, ActiveProbe, laterCookie);
+            Assert.Equal(HttpStatusCode.NoContent, alive.StatusCode);
+        }
+
+        Assert.Null((await database.RowAsync(Hash(SessionKey(second, laterCookie))))!.Value.RevokedAt);
+    }
+
+    [Fact]
     public async Task A_session_survives_an_api_restart()
     {
         string cookie;

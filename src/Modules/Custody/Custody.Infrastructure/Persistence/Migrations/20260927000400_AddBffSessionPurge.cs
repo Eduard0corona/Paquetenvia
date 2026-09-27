@@ -10,8 +10,10 @@ namespace Custody.Infrastructure.Persistence.Migrations;
 /// executor owns "the BFF session purge"). It adds <c>security.purge_bff_sessions(integer)</c>, owned by
 /// <c>paqueteria_cleanup_executor</c> and executable only by <c>paqueteria_worker</c>, together with the
 /// executor's USAGE on schema <c>identity</c>, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on
-/// <c>identity.bff_sessions</c>. The function deletes only revoked rows and rows whose expiry is not
-/// after its own clock, in one statement, and returns only a count. It is the extension point the OPS-003
+/// <c>identity.bff_sessions</c>, and SELECT(jti_hash,expires_at) and DELETE on
+/// <c>identity.bff_logout_jtis</c> (BFF-LOGOUT-JTI-PERSISTENCE). The function deletes only revoked
+/// sessions and sessions whose expiry is not after its own clock and, with what remains of the batch,
+/// logout jtis past their retention; it returns only a count. It is the extension point the OPS-003
 /// lane (<see cref="AddOperationalCleanupExecutor"/>) reserved: it runs after that migration, whose own
 /// exact grant verification stays untouched, and after the Identity lane has created the table.
 /// Nothing is dropped and no row is rewritten by the migration itself.
@@ -55,12 +57,23 @@ public sealed class AddBffSessionPurge : Migration
             RAISE EXCEPTION 'The BFF session purge requires the canonical AI-06 expiry and revocation indexes';
           END IF;
 
+          IF to_regclass('identity.bff_logout_jtis') IS NULL
+             OR to_regclass('identity.bff_logout_jtis_expiry_idx') IS NULL
+             OR (SELECT array_agg(column_name || ':' || data_type || ':' || is_nullable ORDER BY column_name)
+                 FROM information_schema.columns
+                 WHERE table_schema='identity' AND table_name='bff_logout_jtis'
+                   AND column_name IN ('expires_at','jti_hash'))
+                IS DISTINCT FROM ARRAY['expires_at:timestamp with time zone:NO', 'jti_hash:bytea:NO'] THEN
+            RAISE EXCEPTION 'The BFF session purge requires the canonical AI-06 identity.bff_logout_jtis and its expiry index';
+          END IF;
+
           -- The purge deletes rows and nothing else; a user trigger could widen that.
           IF EXISTS (
             SELECT 1 FROM pg_trigger
-            WHERE tgrelid='identity.bff_sessions'::regclass AND NOT tgisinternal
+            WHERE tgrelid IN ('identity.bff_sessions'::regclass, 'identity.bff_logout_jtis'::regclass)
+              AND NOT tgisinternal
           ) THEN
-            RAISE EXCEPTION 'The BFF session purge refuses identity.bff_sessions with user triggers';
+            RAISE EXCEPTION 'The BFF session purge refuses identity.bff_sessions or identity.bff_logout_jtis with user triggers';
           END IF;
 
           -- The OPS-003 lane created and verified the executor; it must own nothing but its functions.
@@ -85,6 +98,8 @@ public sealed class AddBffSessionPurge : Migration
         GRANT USAGE ON SCHEMA identity TO paqueteria_cleanup_executor;
         GRANT SELECT (session_key_hash,expires_at,revoked_at) ON identity.bff_sessions TO paqueteria_cleanup_executor;
         GRANT DELETE ON identity.bff_sessions TO paqueteria_cleanup_executor;
+        GRANT SELECT (jti_hash,expires_at) ON identity.bff_logout_jtis TO paqueteria_cleanup_executor;
+        GRANT DELETE ON identity.bff_logout_jtis TO paqueteria_cleanup_executor;
 
         CREATE OR REPLACE FUNCTION security.purge_bff_sessions(p_batch_size integer)
         RETURNS integer
@@ -96,6 +111,7 @@ public sealed class AddBffSessionPurge : Migration
         DECLARE
           v_now timestamptz := pg_catalog.clock_timestamp();
           v_count integer;
+          v_jtis integer := 0;
         BEGIN
           IF p_batch_size IS NULL OR p_batch_size < 1 OR p_batch_size > 1000 THEN
             RAISE EXCEPTION USING
@@ -118,7 +134,25 @@ public sealed class AddBffSessionPurge : Migration
             AND (s.revoked_at IS NOT NULL OR s.expires_at <= v_now);
 
           GET DIAGNOSTICS v_count = ROW_COUNT;
-          RETURN v_count;
+
+          -- BFF-LOGOUT-JTI-PERSISTENCE: the rest of the batch removes logout jtis past their retention, so
+          -- the total never exceeds the batch and a short batch still means both tables are drained.
+          IF v_count < p_batch_size THEN
+            WITH candidates AS (
+              SELECT j.jti_hash
+              FROM identity.bff_logout_jtis j
+              WHERE j.expires_at <= v_now
+              ORDER BY j.expires_at
+              LIMIT p_batch_size - v_count
+            )
+            DELETE FROM identity.bff_logout_jtis j
+            USING candidates c
+            WHERE j.jti_hash = c.jti_hash
+              AND j.expires_at <= v_now;
+            GET DIAGNOSTICS v_jtis = ROW_COUNT;
+          END IF;
+
+          RETURN v_count + v_jtis;
         END
         $function$;
 
@@ -151,7 +185,8 @@ public sealed class AddBffSessionPurge : Migration
                 ORDER BY table_schema, table_name, privilege_type)
               FROM information_schema.table_privileges
               WHERE grantee='paqueteria_cleanup_executor')
-               IS DISTINCT FROM ARRAY['identity.bff_sessions:DELETE', 'platform.idempotency_keys:DELETE']
+               IS DISTINCT FROM ARRAY[
+                 'identity.bff_logout_jtis:DELETE', 'identity.bff_sessions:DELETE', 'platform.idempotency_keys:DELETE']
              OR (SELECT array_agg(table_schema || '.' || table_name || '.' || column_name || ':' || privilege_type
                    ORDER BY table_schema, table_name, privilege_type, column_name)
                  FROM information_schema.column_privileges
@@ -162,6 +197,8 @@ public sealed class AddBffSessionPurge : Migration
                  'custody.proof_upload_sessions.status:SELECT',
                  'custody.proof_upload_sessions.status:UPDATE',
                  'custody.proof_upload_sessions.updated_at:UPDATE',
+                 'identity.bff_logout_jtis.expires_at:SELECT',
+                 'identity.bff_logout_jtis.jti_hash:SELECT',
                  'identity.bff_sessions.expires_at:SELECT',
                  'identity.bff_sessions.revoked_at:SELECT',
                  'identity.bff_sessions.session_key_hash:SELECT',

@@ -10,7 +10,9 @@ namespace Identity.Infrastructure.Persistence.Migrations;
 /// PostgreSQL BFF session store: the pre-tenant <c>identity.bff_sessions</c> table and the five
 /// SECURITY DEFINER functions <c>security.create_bff_session</c>, <c>security.resolve_bff_session(bytea)</c>
 /// and the three <c>security.revoke_bff_session</c> overloads (by key hash, by AuthCenter <c>sid</c>, by
-/// subject issued at or before a moment), owned by the dedicated
+/// subject issued at or before a moment), plus <c>security.register_bff_logout_jti</c> over the
+/// pre-tenant <c>identity.bff_logout_jtis</c> table that makes back-channel logout-token replay
+/// protection shared by every replica (BFF-LOGOUT-JTI-PERSISTENCE), all owned by the dedicated
 /// <c>paqueteria_session_executor NOLOGIN BYPASSRLS</c> role and executable only by <c>paqueteria_app</c>.
 /// The table stores the SHA-256 of the opaque session key and a Data Protection ciphertext of the
 /// ticket; runtime roles hold no privilege on it and FORCE RLS without any policy denies every role
@@ -32,6 +34,12 @@ public sealed class AddBffSessionStore : Migration
     public const string RevokeBySessionIdSignature = "security.revoke_bff_session(text)";
     public const string RevokeBySubjectSignature =
         "security.revoke_bff_session(text,timestamp with time zone)";
+    public const string RegisterLogoutJtiSignature =
+        "security.register_bff_logout_jti(bytea,timestamp with time zone)";
+    public const string LogoutJtiTable = "identity.bff_logout_jtis";
+
+    /// <summary>A logout-token jti is never retained longer than this, whatever its exp claims.</summary>
+    public static readonly TimeSpan MaximumJtiRetention = TimeSpan.FromDays(1);
     public const string SearchPath = "search_path=pg_catalog, identity, pg_temp";
 
     /// <summary>The longest session the function accepts: AuthCenter:SessionLifetimeMinutes caps at 1440.</summary>
@@ -51,6 +59,7 @@ public sealed class AddBffSessionStore : Migration
         RevokeByKeySignature,
         RevokeBySessionIdSignature,
         RevokeBySubjectSignature,
+        RegisterLogoutJtiSignature,
     });
 
     public const string UpSql =
@@ -126,6 +135,54 @@ public sealed class AddBffSessionStore : Migration
               RAISE EXCEPTION 'identity.bff_sessions must be owned by paqueteria_migrator with FORCE RLS, no policy and no user trigger';
             END IF;
           END IF;
+
+          IF to_regclass('identity.bff_logout_jtis') IS NOT NULL THEN
+            SELECT array_agg(column_name || ':' || data_type || ':' || is_nullable ORDER BY column_name)
+            INTO v_columns
+            FROM information_schema.columns
+            WHERE table_schema='identity' AND table_name='bff_logout_jtis';
+            IF v_columns IS DISTINCT FROM ARRAY[
+              'created_at:timestamp with time zone:NO',
+              'expires_at:timestamp with time zone:NO',
+              'jti_hash:bytea:NO'
+            ] THEN
+              RAISE EXCEPTION 'identity.bff_logout_jtis columns do not match the canonical AI-06 contract';
+            END IF;
+
+            SELECT array_agg(conname || ':' || pg_get_constraintdef(oid) ORDER BY conname)
+            INTO v_constraints
+            FROM pg_constraint
+            WHERE conrelid='identity.bff_logout_jtis'::regclass AND contype IN ('c','p','u','f','x');
+            IF v_constraints IS DISTINCT FROM ARRAY[
+              'bff_logout_jtis_hash_ck:CHECK ((octet_length(jti_hash) = 32))',
+              'bff_logout_jtis_pkey:PRIMARY KEY (jti_hash)',
+              'bff_logout_jtis_retention_ck:CHECK ((expires_at > created_at))'
+            ] THEN
+              RAISE EXCEPTION 'identity.bff_logout_jtis constraints do not match the canonical AI-06 contract';
+            END IF;
+
+            SELECT array_agg(pg_get_indexdef(indexrelid) ORDER BY pg_get_indexdef(indexrelid))
+            INTO v_indexes
+            FROM pg_index
+            WHERE indrelid='identity.bff_logout_jtis'::regclass;
+            IF v_indexes IS DISTINCT FROM ARRAY[
+              'CREATE INDEX bff_logout_jtis_expiry_idx ON identity.bff_logout_jtis USING btree (expires_at)',
+              'CREATE UNIQUE INDEX bff_logout_jtis_pkey ON identity.bff_logout_jtis USING btree (jti_hash)'
+            ] THEN
+              RAISE EXCEPTION 'identity.bff_logout_jtis indexes do not match the canonical AI-06 contract';
+            END IF;
+
+            IF NOT EXISTS (
+                 SELECT 1 FROM pg_class
+                 WHERE oid='identity.bff_logout_jtis'::regclass AND relrowsecurity AND relforcerowsecurity
+                   AND pg_get_userbyid(relowner)='paqueteria_migrator')
+               OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid='identity.bff_logout_jtis'::regclass)
+               OR EXISTS (
+                 SELECT 1 FROM pg_trigger WHERE tgrelid='identity.bff_logout_jtis'::regclass AND NOT tgisinternal)
+            THEN
+              RAISE EXCEPTION 'identity.bff_logout_jtis must be owned by paqueteria_migrator with FORCE RLS, no policy and no user trigger';
+            END IF;
+          END IF;
         END
         $adoption$;
 
@@ -163,6 +220,7 @@ public sealed class AddBffSessionStore : Migration
                  AND oid IS DISTINCT FROM to_regprocedure('security.revoke_bff_session(bytea)')
                  AND oid IS DISTINCT FROM to_regprocedure('security.revoke_bff_session(text)')
                  AND oid IS DISTINCT FROM to_regprocedure('security.revoke_bff_session(text,timestamp with time zone)')
+                 AND oid IS DISTINCT FROM to_regprocedure('security.register_bff_logout_jti(bytea,timestamp with time zone)')
              ) THEN
             RAISE EXCEPTION 'paqueteria_session_executor already owns objects outside the BFF-SESSION-TABLE-SHAPE contract';
           END IF;
@@ -209,6 +267,20 @@ public sealed class AddBffSessionStore : Migration
         GRANT INSERT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at)
           ON identity.bff_sessions TO paqueteria_session_executor;
         GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;
+
+        CREATE TABLE IF NOT EXISTS identity.bff_logout_jtis (
+          jti_hash bytea NOT NULL,
+          created_at timestamptz NOT NULL,
+          expires_at timestamptz NOT NULL,
+          CONSTRAINT bff_logout_jtis_pkey PRIMARY KEY (jti_hash),
+          CONSTRAINT bff_logout_jtis_hash_ck CHECK (octet_length(jti_hash)=32),
+          CONSTRAINT bff_logout_jtis_retention_ck CHECK (expires_at > created_at)
+        );
+        CREATE INDEX IF NOT EXISTS bff_logout_jtis_expiry_idx ON identity.bff_logout_jtis(expires_at);
+        ALTER TABLE identity.bff_logout_jtis ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE identity.bff_logout_jtis FORCE ROW LEVEL SECURITY;
+        REVOKE ALL ON identity.bff_logout_jtis FROM PUBLIC, paqueteria_app, paqueteria_worker;
+        GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paqueteria_session_executor;
 
         RESET ROLE;
 
@@ -360,6 +432,37 @@ public sealed class AddBffSessionStore : Migration
         END
         $function$;
 
+        CREATE OR REPLACE FUNCTION security.register_bff_logout_jti(
+          p_jti_hash bytea,
+          p_retain_until timestamptz)
+        RETURNS boolean
+        LANGUAGE plpgsql
+        VOLATILE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, identity, pg_temp
+        AS $function$
+        DECLARE
+          v_now timestamptz := pg_catalog.clock_timestamp();
+          v_count integer;
+        BEGIN
+          IF p_jti_hash IS NULL OR pg_catalog.octet_length(p_jti_hash) <> 32
+             OR p_retain_until IS NULL OR p_retain_until <= v_now THEN
+            RAISE EXCEPTION USING
+              ERRCODE = '22023',
+              MESSAGE = 'BFF_SESSION_ARGUMENT_OUT_OF_RANGE';
+          END IF;
+
+          -- BFF-LOGOUT-JTI-PERSISTENCE: the unique key makes a concurrent second registration wait for the
+          -- first and then insert nothing, so exactly one replica ever sees true. Retention past one day
+          -- is pointless: a token that old already fails the iat and exp checks.
+          INSERT INTO identity.bff_logout_jtis (jti_hash, created_at, expires_at)
+          VALUES (p_jti_hash, v_now, LEAST(p_retain_until, v_now + interval '1 day'))
+          ON CONFLICT DO NOTHING;
+          GET DIAGNOSTICS v_count = ROW_COUNT;
+          RETURN v_count = 1;
+        END
+        $function$;
+
         -- ACL first, while the deploying role still owns the functions: ALTER ... OWNER rewrites the
         -- grantor to the new owner, and a managed-service deployer then needs no inherited executor rights.
         REVOKE ALL ON FUNCTION security.create_bff_session(bytea,text,text,bytea,timestamptz) FROM PUBLIC;
@@ -367,16 +470,19 @@ public sealed class AddBffSessionStore : Migration
         REVOKE ALL ON FUNCTION security.revoke_bff_session(bytea) FROM PUBLIC;
         REVOKE ALL ON FUNCTION security.revoke_bff_session(text) FROM PUBLIC;
         REVOKE ALL ON FUNCTION security.revoke_bff_session(text,timestamptz) FROM PUBLIC;
+        REVOKE ALL ON FUNCTION security.register_bff_logout_jti(bytea,timestamptz) FROM PUBLIC;
         GRANT EXECUTE ON FUNCTION security.create_bff_session(bytea,text,text,bytea,timestamptz) TO paqueteria_app;
         GRANT EXECUTE ON FUNCTION security.resolve_bff_session(bytea) TO paqueteria_app;
         GRANT EXECUTE ON FUNCTION security.revoke_bff_session(bytea) TO paqueteria_app;
         GRANT EXECUTE ON FUNCTION security.revoke_bff_session(text) TO paqueteria_app;
         GRANT EXECUTE ON FUNCTION security.revoke_bff_session(text,timestamptz) TO paqueteria_app;
+        GRANT EXECUTE ON FUNCTION security.register_bff_logout_jti(bytea,timestamptz) TO paqueteria_app;
         ALTER FUNCTION security.create_bff_session(bytea,text,text,bytea,timestamptz) OWNER TO paqueteria_session_executor;
         ALTER FUNCTION security.resolve_bff_session(bytea) OWNER TO paqueteria_session_executor;
         ALTER FUNCTION security.revoke_bff_session(bytea) OWNER TO paqueteria_session_executor;
         ALTER FUNCTION security.revoke_bff_session(text) OWNER TO paqueteria_session_executor;
         ALTER FUNCTION security.revoke_bff_session(text,timestamptz) OWNER TO paqueteria_session_executor;
+        ALTER FUNCTION security.register_bff_logout_jti(bytea,timestamptz) OWNER TO paqueteria_session_executor;
 
         DO $verify$
         BEGIN
@@ -386,15 +492,16 @@ public sealed class AddBffSessionStore : Migration
                   to_regprocedure('security.resolve_bff_session(bytea)'),
                   to_regprocedure('security.revoke_bff_session(bytea)'),
                   to_regprocedure('security.revoke_bff_session(text)'),
-                  to_regprocedure('security.revoke_bff_session(text,timestamp with time zone)'))
+                  to_regprocedure('security.revoke_bff_session(text,timestamp with time zone)'),
+                  to_regprocedure('security.register_bff_logout_jti(bytea,timestamp with time zone)'))
                 AND pg_get_userbyid(p.proowner)='paqueteria_session_executor'
                 AND p.prosecdef
                 AND p.prosrc !~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
                 AND 'search_path=pg_catalog, identity, pg_temp' = ANY(COALESCE(p.proconfig, ARRAY[]::text[]))
                 AND NOT has_function_privilege('public', p.oid, 'EXECUTE')
                 AND NOT has_function_privilege('paqueteria_worker', p.oid, 'EXECUTE')
-                AND has_function_privilege('paqueteria_app', p.oid, 'EXECUTE')) <> 5
-             OR (SELECT count(*) FROM pg_proc WHERE proowner='paqueteria_session_executor'::regrole) <> 5
+                AND has_function_privilege('paqueteria_app', p.oid, 'EXECUTE')) <> 6
+             OR (SELECT count(*) FROM pg_proc WHERE proowner='paqueteria_session_executor'::regrole) <> 6
           THEN
             RAISE EXCEPTION 'BFF session function security verification failed';
           END IF;
@@ -407,6 +514,9 @@ public sealed class AddBffSessionStore : Migration
                  FROM information_schema.column_privileges
                  WHERE grantee='paqueteria_session_executor')
                IS DISTINCT FROM ARRAY[
+                 'identity.bff_logout_jtis.created_at:INSERT',
+                 'identity.bff_logout_jtis.expires_at:INSERT',
+                 'identity.bff_logout_jtis.jti_hash:INSERT',
                  'identity.bff_sessions.authcenter_sid:INSERT',
                  'identity.bff_sessions.created_at:INSERT',
                  'identity.bff_sessions.expires_at:INSERT',
@@ -451,18 +561,25 @@ public sealed class AddBffSessionStore : Migration
                SELECT 1
                FROM pg_class c
                CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) acl
-               WHERE c.oid='identity.bff_sessions'::regclass
+               WHERE c.oid IN ('identity.bff_sessions'::regclass, 'identity.bff_logout_jtis'::regclass)
                  AND (acl.grantee = 0
                    OR acl.grantee IN ('paqueteria_app'::regrole, 'paqueteria_worker'::regrole)))
              OR has_any_column_privilege('paqueteria_app', 'identity.bff_sessions', 'SELECT,INSERT,UPDATE,REFERENCES')
              OR has_any_column_privilege('paqueteria_worker', 'identity.bff_sessions', 'SELECT,INSERT,UPDATE,REFERENCES')
+             OR has_any_column_privilege('paqueteria_app', 'identity.bff_logout_jtis', 'SELECT,INSERT,UPDATE,REFERENCES')
+             OR has_any_column_privilege('paqueteria_worker', 'identity.bff_logout_jtis', 'SELECT,INSERT,UPDATE,REFERENCES')
+             OR NOT EXISTS (
+               SELECT 1 FROM pg_class
+               WHERE oid='identity.bff_logout_jtis'::regclass AND relrowsecurity AND relforcerowsecurity
+                 AND pg_get_userbyid(relowner)='paqueteria_migrator')
+             OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid='identity.bff_logout_jtis'::regclass)
              OR NOT EXISTS (
                SELECT 1 FROM pg_class
                WHERE oid='identity.bff_sessions'::regclass AND relrowsecurity AND relforcerowsecurity
                  AND pg_get_userbyid(relowner)='paqueteria_migrator')
              OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid='identity.bff_sessions'::regclass)
           THEN
-            RAISE EXCEPTION 'identity.bff_sessions is reachable outside the BFF-SESSION-TABLE-SHAPE functions';
+            RAISE EXCEPTION 'identity.bff_sessions or identity.bff_logout_jtis is reachable outside the BFF session functions';
           END IF;
 
           IF pg_has_role('paqueteria_app', 'paqueteria_session_executor', 'MEMBER')
@@ -502,6 +619,7 @@ public sealed class AddBffSessionStore : Migration
         REVOKE EXECUTE ON FUNCTION security.revoke_bff_session(bytea) FROM paqueteria_app;
         REVOKE EXECUTE ON FUNCTION security.revoke_bff_session(text) FROM paqueteria_app;
         REVOKE EXECUTE ON FUNCTION security.revoke_bff_session(text,timestamptz) FROM paqueteria_app;
+        REVOKE EXECUTE ON FUNCTION security.register_bff_logout_jti(bytea,timestamptz) FROM paqueteria_app;
         """;
 
     protected override void Up(MigrationBuilder migrationBuilder) => migrationBuilder.Sql(UpSql);

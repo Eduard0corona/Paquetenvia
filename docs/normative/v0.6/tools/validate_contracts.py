@@ -71,7 +71,10 @@ SESSION_EXECUTOR_GRANTS = [
     "GRANT SELECT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
     "GRANT INSERT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at) ON identity.bff_sessions TO paqueteria_session_executor;",
     "GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
+    "GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paqueteria_session_executor;",
 ]
+
+BFF_TABLES = ["identity.bff_sessions", "identity.bff_logout_jtis"]
 
 BFF_SESSION_FUNCTIONS = [
     "security.create_bff_session(bytea,text,text,bytea,timestamptz)",
@@ -79,6 +82,7 @@ BFF_SESSION_FUNCTIONS = [
     "security.revoke_bff_session(bytea)",
     "security.revoke_bff_session(text)",
     "security.revoke_bff_session(text,timestamptz)",
+    "security.register_bff_logout_jti(bytea,timestamptz)",
 ]
 
 
@@ -101,7 +105,8 @@ def executor_grant_errors(role_sql: str) -> list[str]:
 
 
 def bff_session_errors(schema_sql: str, role_sql: str) -> list[str]:
-    """BFF-SESSION-TABLE-SHAPE: pre-tenant table, no runtime grant, function-only access, no policy."""
+    """BFF-SESSION-TABLE-SHAPE and BFF-LOGOUT-JTI-PERSISTENCE: pre-tenant tables, no runtime grant,
+    function-only access, no policy."""
     errors = []
     executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
     executable_schema = SQL_LINE_COMMENT.sub("", schema_sql)
@@ -111,16 +116,23 @@ def bff_session_errors(schema_sql: str, role_sql: str) -> list[str]:
         "ALTER TABLE identity.bff_sessions FORCE ROW LEVEL SECURITY;",
         "CONSTRAINT bff_sessions_key_hash_ck CHECK (octet_length(session_key_hash)=32)",
         "CONSTRAINT bff_sessions_revocation_ck CHECK ((revoked_at IS NULL) = (ticket_ciphertext IS NOT NULL))",
+        "CREATE TABLE identity.bff_logout_jtis (",
+        "ALTER TABLE identity.bff_logout_jtis ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE identity.bff_logout_jtis FORCE ROW LEVEL SECURITY;",
+        "CONSTRAINT bff_logout_jtis_hash_ck CHECK (octet_length(jti_hash)=32)",
     ]:
         if fragment not in executable_schema:
             errors.append(f"Missing BFF session table contract in AI-06: {fragment}")
-    if re.search(r"CREATE\s+POLICY[^;]*ON\s+identity\.bff_sessions", executable_schema, re.S):
-        errors.append("identity.bff_sessions must stay pre-tenant: no RLS policy")
+    for table in BFF_TABLES:
+        if re.search(r"CREATE\s+POLICY[^;]*ON\s+" + re.escape(table) + r"\b", executable_schema, re.S):
+            errors.append(f"{table} must stay pre-tenant: no RLS policy")
     for fragment in [
         "CREATE ROLE paqueteria_session_executor NOLOGIN BYPASSRLS;",
         "REVOKE paqueteria_session_executor FROM paqueteria_app, paqueteria_worker;",
         "REVOKE ALL ON identity.bff_sessions FROM paqueteria_app,paqueteria_worker;",
+        "REVOKE ALL ON identity.bff_logout_jtis FROM paqueteria_app,paqueteria_worker;",
         "BFF-SESSION-TABLE-SHAPE",
+        "BFF-LOGOUT-JTI-PERSISTENCE",
         "security.purge_bff_sessions(integer)",
     ] + BFF_SESSION_FUNCTIONS:
         if fragment not in role_sql:
@@ -131,9 +143,10 @@ def bff_session_errors(schema_sql: str, role_sql: str) -> list[str]:
     # the Custody lane, because the OPS-003 lane asserts its own exact pre-BFF grant set.
     for statement in GRANT_STATEMENT.findall(executable_roles):
         normalized = " ".join(statement.split())
-        if "identity.bff_sessions" in normalized and not normalized.endswith("TO paqueteria_session_executor;"):
-            errors.append(f"identity.bff_sessions granted beyond paqueteria_session_executor: {normalized}")
-        if "_bff_session" in normalized and "ON FUNCTION" in normalized:
+        for table in BFF_TABLES:
+            if table in normalized and not normalized.endswith("TO paqueteria_session_executor;"):
+                errors.append(f"{table} granted beyond paqueteria_session_executor: {normalized}")
+        if ("_bff_session" in normalized or "_bff_logout_jti" in normalized) and "ON FUNCTION" in normalized:
             errors.append(f"BFF session functions are installed by their lane, not granted by AI-18: {normalized}")
     return errors
 

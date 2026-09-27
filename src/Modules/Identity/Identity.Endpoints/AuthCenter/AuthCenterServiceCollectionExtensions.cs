@@ -33,7 +33,7 @@ internal static class AuthCenterServiceCollectionExtensions
             configuration,
             provider.GetRequiredService<IOptions<IdentityAuthenticationOptions>>()));
 
-        // Logout-token replay protection and the Memory session store use this cache. A shared
+        // The Memory session store and its logout-token replay protection use this cache. A shared
         // IDistributedCache registered before this call wins.
         services.AddDistributedMemoryCache();
         services.TryAddSingleton(TimeProvider.System);
@@ -45,8 +45,9 @@ internal static class AuthCenterServiceCollectionExtensions
         services.AddSingleton<AuthCenterEndSession>();
         services.AddSingleton<AuthCenterSessionReplacement>();
         services.AddSingleton<AuthCenterBackchannelLogout>();
-        // Back-channel logout follows the session store: the PostgreSQL store revokes rows in
-        // identity.bff_sessions (BFF-SESSION-TABLE-SHAPE); the Memory store keeps cache markers.
+        // Back-channel logout follows the session store: the PostgreSQL store registers the jti in
+        // identity.bff_logout_jtis and revokes rows in identity.bff_sessions atomically
+        // (BFF-SESSION-TABLE-SHAPE, BFF-LOGOUT-JTI-PERSISTENCE); the Memory store keeps cache markers.
         services.AddSingleton<DistributedCacheAuthCenterSessionTerminationStore>();
         services.AddSingleton<PostgreSqlAuthCenterSessionTerminationStore>();
         services.TryAddSingleton<IAuthCenterSessionTerminationStore>(provider =>

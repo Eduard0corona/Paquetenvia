@@ -31,10 +31,31 @@ public interface IBffSessionStore
     /// </summary>
     Task<int> RevokeBySubjectAsync(string subject, DateTimeOffset issuedBefore, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// BFF-LOGOUT-JTI-PERSISTENCE: in one transaction, <c>security.register_bff_logout_jti</c> records the
+    /// logout-token jti hash and, only when no replica registered it before, the sessions it names are
+    /// revoked (by sid, or by subject up to <see cref="BffLogoutTokenEffect.EndedAt"/>). Returns false for a
+    /// replayed token, in which case nothing is revoked. A failure rolls both back, so a retried delivery
+    /// is not mistaken for a replay.
+    /// </summary>
+    Task<bool> ApplyLogoutTokenAsync(BffLogoutTokenEffect effect, CancellationToken cancellationToken);
+
     public const int KeyHashLength = 32;
     public const int MaximumIdentifierLength = 256;
     public const int MaximumTicketLength = 65_536;
 }
+
+/// <summary>
+/// The effect of one accepted back-channel logout token: the SHA-256 of its jti, how long the jti is
+/// remembered (exp + 5 minutes), and the sessions it ends. With neither a sid nor a subject only the jti
+/// is registered.
+/// </summary>
+public sealed record BffLogoutTokenEffect(
+    byte[] TokenIdHash,
+    DateTimeOffset RetainUntil,
+    string? AuthCenterSessionId,
+    string? Subject,
+    DateTimeOffset EndedAt);
 
 /// <summary>
 /// One BFF session as the store receives it: the SHA-256 of the opaque session key, the AuthCenter

@@ -69,6 +69,8 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
             """,
             ("executor", Executor)));
         Assert.Equal(
+            "identity.bff_logout_jtis.created_at:INSERT,identity.bff_logout_jtis.expires_at:INSERT," +
+            "identity.bff_logout_jtis.jti_hash:INSERT," +
             "identity.bff_sessions.authcenter_sid:INSERT,identity.bff_sessions.authcenter_sid:SELECT," +
             "identity.bff_sessions.created_at:INSERT,identity.bff_sessions.created_at:SELECT," +
             "identity.bff_sessions.expires_at:INSERT,identity.bff_sessions.expires_at:SELECT," +
@@ -125,6 +127,7 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                      (AddBffSessionStore.RevokeByKeySignature, "integer"),
                      (AddBffSessionStore.RevokeBySessionIdSignature, "integer"),
                      (AddBffSessionStore.RevokeBySubjectSignature, "integer"),
+                     (AddBffSessionStore.RegisterLogoutJtiSignature, "boolean"),
                  })
         {
             // SECURITY DEFINER, pinned search_path, EXECUTE for paqueteria_app only, no dynamic SQL.
@@ -154,12 +157,15 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
     {
         foreach (var role in new[] { "paqueteria_app", "paqueteria_worker", "public" })
         {
-            Assert.False(await ScalarAsync<bool>(
-                """
-                SELECT has_table_privilege(@role,'identity.bff_sessions','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-                    OR has_any_column_privilege(@role,'identity.bff_sessions','SELECT,INSERT,UPDATE,REFERENCES')
-                """,
-                ("role", role)));
+            foreach (var table in new[] { AddBffSessionStore.Table, AddBffSessionStore.LogoutJtiTable })
+            {
+                Assert.False(await ScalarAsync<bool>(
+                    """
+                    SELECT has_table_privilege(@role,@table,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                        OR has_any_column_privilege(@role,@table,'SELECT,INSERT,UPDATE,REFERENCES')
+                    """,
+                    ("role", role), ("table", table)));
+            }
         }
 
         foreach (var (source, role) in new[] { (fixture.AppDataSource, "paqueteria_app"), (fixture.WorkerDataSource, "paqueteria_worker") })
@@ -172,6 +178,9 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                          "UPDATE identity.bff_sessions SET revoked_at=now()",
                          "DELETE FROM identity.bff_sessions",
                          "TRUNCATE identity.bff_sessions",
+                         "SELECT count(*) FROM identity.bff_logout_jtis",
+                         "INSERT INTO identity.bff_logout_jtis(jti_hash,created_at,expires_at) VALUES (decode(repeat('00',32),'hex'),now(),now()+interval '1 hour')",
+                         "DELETE FROM identity.bff_logout_jtis",
                      })
             {
                 await using var connection = await source.OpenConnectionAsync();
@@ -371,14 +380,18 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
     [PostgreSqlContractFact]
     public async Task The_store_is_pre_tenant_and_row_level_security_is_not_involved()
     {
-        Assert.Equal(
-            "t|t|0",
-            await ScalarAsync<string>(
-                """
-                SELECT concat_ws('|',c.relrowsecurity,c.relforcerowsecurity,
-                  (SELECT count(*) FROM pg_policy p WHERE p.polrelid=c.oid))
-                FROM pg_class c WHERE c.oid='identity.bff_sessions'::regclass
-                """));
+        foreach (var table in new[] { AddBffSessionStore.Table, AddBffSessionStore.LogoutJtiTable })
+        {
+            Assert.Equal(
+                "t|t|0",
+                await ScalarAsync<string>(
+                    """
+                    SELECT concat_ws('|',c.relrowsecurity,c.relforcerowsecurity,
+                      (SELECT count(*) FROM pg_policy p WHERE p.polrelid=c.oid))
+                    FROM pg_class c WHERE c.oid=@table::regclass
+                    """,
+                    ("table", table)));
+        }
         Assert.Equal(0, await ScalarAsync<long>(
             """
             SELECT count(*) FROM information_schema.columns
@@ -478,11 +491,12 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                 """,
                 ("function", AddBffSessionPurge.PurgeSignature)));
         Assert.Equal(
+            "identity.bff_logout_jtis.expires_at:SELECT,identity.bff_logout_jtis.jti_hash:SELECT," +
             "identity.bff_sessions.expires_at:SELECT,identity.bff_sessions.revoked_at:SELECT,identity.bff_sessions.session_key_hash:SELECT",
             await ScalarAsync<string>(
                 """
                 SELECT string_agg(table_schema || '.' || table_name || '.' || column_name || ':' || privilege_type, ','
-                  ORDER BY column_name)
+                  ORDER BY table_name, column_name)
                 FROM information_schema.column_privileges
                 WHERE grantee=@executor AND table_schema='identity'
                 """,
@@ -510,6 +524,12 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                      "GRANT SELECT ON identity.bff_sessions TO paqueteria_app;",
                      "GRANT SELECT (session_key_hash) ON identity.bff_sessions TO paqueteria_worker;",
                      "GRANT DELETE ON identity.bff_sessions TO PUBLIC;",
+                     "GRANT SELECT ON identity.bff_logout_jtis TO paqueteria_app;",
+                     $"GRANT DELETE ON identity.bff_logout_jtis TO {Executor};",
+                     $"GRANT SELECT (jti_hash) ON identity.bff_logout_jtis TO {Executor};",
+                     $"GRANT INSERT (jti_hash) ON identity.bff_logout_jtis TO {CleanupExecutor};",
+                     "ALTER TABLE identity.bff_logout_jtis NO FORCE ROW LEVEL SECURITY;",
+                     "GRANT EXECUTE ON FUNCTION security.register_bff_logout_jti(bytea,timestamptz) TO paqueteria_worker;",
                      $"GRANT DELETE ON identity.bff_sessions TO {Executor};",
                      $"GRANT UPDATE (expires_at) ON identity.bff_sessions TO {Executor};",
                      $"REVOKE UPDATE (revoked_at) ON identity.bff_sessions FROM {Executor};",
@@ -565,6 +585,8 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                      ("ALTER TABLE identity.bff_sessions ADD COLUMN refresh_token text;", "columns do not match"),
                      ("ALTER TABLE identity.bff_sessions DROP CONSTRAINT bff_sessions_revocation_ck;", "constraints do not match"),
                      ("DROP INDEX identity.bff_sessions_sid_idx;", "indexes do not match"),
+                     ("ALTER TABLE identity.bff_logout_jtis ADD COLUMN issuer text;", "bff_logout_jtis columns do not match"),
+                     ("CREATE POLICY jti_open ON identity.bff_logout_jtis USING (true);", "bff_logout_jtis must be owned by paqueteria_migrator"),
                      ("ALTER TABLE identity.bff_sessions NO FORCE ROW LEVEL SECURITY;", "FORCE RLS, no policy and no user trigger"),
                      ("CREATE POLICY bff_open ON identity.bff_sessions USING (true);", "FORCE RLS, no policy and no user trigger"),
                      ($"ALTER ROLE {Executor} LOGIN;", "exists with attributes outside the BFF-SESSION-TABLE-SHAPE contract"),
@@ -630,7 +652,13 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                      ("""
                       CREATE FUNCTION identity.bff_touch() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN OLD; END';
                       CREATE TRIGGER bff_touch BEFORE DELETE ON identity.bff_sessions FOR EACH ROW EXECUTE FUNCTION identity.bff_touch();
-                      """, "refuses identity.bff_sessions with user triggers"),
+                      """, "refuses identity.bff_sessions or identity.bff_logout_jtis with user triggers"),
+                     ("""
+                      CREATE FUNCTION identity.jti_touch() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN OLD; END';
+                      CREATE TRIGGER jti_touch BEFORE DELETE ON identity.bff_logout_jtis FOR EACH ROW EXECUTE FUNCTION identity.jti_touch();
+                      """, "refuses identity.bff_sessions or identity.bff_logout_jtis with user triggers"),
+                     ("DROP INDEX identity.bff_logout_jtis_expiry_idx;", "requires the canonical AI-06 identity.bff_logout_jtis"),
+                     ($"GRANT SELECT (created_at) ON identity.bff_logout_jtis TO {CleanupExecutor};", "privileges differ from the OPS-003-CLEANUP-ROLE contract"),
                      ("DROP INDEX identity.bff_sessions_revoked_idx;", "requires the canonical AI-06 expiry and revocation indexes"),
                      ($"GRANT SELECT (ticket_ciphertext) ON identity.bff_sessions TO {CleanupExecutor};", "privileges differ from the OPS-003-CLEANUP-ROLE contract"),
                      ($"GRANT USAGE ON SCHEMA orders TO {CleanupExecutor};", "schema privileges differ from the OPS-003-CLEANUP-ROLE contract"),
@@ -687,6 +715,7 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                 $"""
                 DROP FUNCTION security.purge_bff_sessions(integer);
                 DROP TABLE identity.bff_sessions;
+                DROP TABLE identity.bff_logout_jtis;
                 REVOKE USAGE ON SCHEMA identity FROM {CleanupExecutor};
                 DROP OWNED BY {Executor};
                 DROP ROLE {Executor};
@@ -757,6 +786,133 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
         var semantic = await new E002SemanticAssertions().AssertAsync(
             connection, await E002NotificationStateReader.ReadAsync(connection));
         Assert.EndsWith("_PLUS_BFFSESSION_PLUS_BFFPURGE_V1", semantic.RoutineMap, StringComparison.Ordinal);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task A_logout_jti_registers_once_and_only_its_hash_is_kept()
+    {
+        var store = Store();
+        var jti = Hash(NewSid());
+        var retainUntil = DateTimeOffset.UtcNow.AddMinutes(7);
+
+        Assert.True(await store.ApplyLogoutTokenAsync(new BffLogoutTokenEffect(jti, retainUntil, null, null, retainUntil), CancellationToken.None));
+        Assert.False(await store.ApplyLogoutTokenAsync(new BffLogoutTokenEffect(jti, retainUntil, null, null, retainUntil), CancellationToken.None));
+        Assert.True(await store.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(Hash(NewSid()), retainUntil, null, null, retainUntil), CancellationToken.None));
+        Assert.Equal(1, await ScalarAsync<long>("SELECT count(*) FROM identity.bff_logout_jtis WHERE jti_hash=@hash", ("hash", jti)));
+
+        // An exp far in the future is retained at most one day; a past retention is refused.
+        var far = Hash(NewSid());
+        Assert.True(await store.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(far, DateTimeOffset.UtcNow.AddDays(30), null, null, DateTimeOffset.UtcNow), CancellationToken.None));
+        Assert.True(await ScalarAsync<bool>(
+            "SELECT expires_at - created_at <= interval '1 day' FROM identity.bff_logout_jtis WHERE jti_hash=@hash", ("hash", far)));
+        foreach (var call in new[]
+                 {
+                     "SELECT security.register_bff_logout_jti(decode(repeat('ab',31),'hex'),clock_timestamp()+interval '5 minutes')",
+                     "SELECT security.register_bff_logout_jti(NULL,clock_timestamp()+interval '5 minutes')",
+                     "SELECT security.register_bff_logout_jti(decode(repeat('ab',32),'hex'),clock_timestamp()-interval '1 second')",
+                     "SELECT security.register_bff_logout_jti(decode(repeat('ab',32),'hex'),NULL)",
+                 })
+        {
+            await using var connection = await fixture.AppDataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await ExecuteAsync(connection, transaction, "SET LOCAL ROLE paqueteria_app;");
+            var refused = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync(connection, transaction, call));
+            Assert.Equal("22023", refused.SqlState);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Concurrent_registrations_of_one_jti_from_many_replicas_accept_exactly_one()
+    {
+        var jti = Hash(NewSid());
+        var retainUntil = DateTimeOffset.UtcNow.AddMinutes(7);
+        var subject = NewSubject();
+        var key = NewKey();
+        await Store().CreateAsync(Record(key, subject, NewSid()), CancellationToken.None);
+
+        // Each call has its own store and connection, as separate API replicas would.
+        using var start = new SemaphoreSlim(0);
+        var calls = Enumerable.Range(0, 12).Select(async _ =>
+        {
+            await start.WaitAsync();
+            return await Store().ApplyLogoutTokenAsync(
+                new BffLogoutTokenEffect(jti, retainUntil, null, subject, DateTimeOffset.UtcNow), CancellationToken.None);
+        }).ToArray();
+        start.Release(calls.Length);
+        var results = await Task.WhenAll(calls);
+
+        Assert.Single(results, first => first);
+        Assert.Equal(1, await ScalarAsync<long>("SELECT count(*) FROM identity.bff_logout_jtis WHERE jti_hash=@hash", ("hash", jti)));
+        Assert.Null(await Store().ResolveAsync(Hash(key), CancellationToken.None));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task A_replayed_logout_token_revokes_nothing_and_a_failed_revocation_does_not_burn_the_jti()
+    {
+        var store = Store();
+        var subject = NewSubject();
+        var jti = Hash(NewSid());
+        var retainUntil = DateTimeOffset.UtcNow.AddMinutes(7);
+        var before = NewKey();
+        await store.CreateAsync(Record(before, subject, NewSid()), CancellationToken.None);
+        var first = await ScalarAsync<DateTime>("SELECT clock_timestamp()");
+        Assert.True(await store.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(jti, retainUntil, null, subject, new DateTimeOffset(first, TimeSpan.Zero)), CancellationToken.None));
+        Assert.Null(await store.ResolveAsync(Hash(before), CancellationToken.None));
+
+        var after = NewKey();
+        await store.CreateAsync(Record(after, subject, NewSid()), CancellationToken.None);
+        Assert.False(await store.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(jti, retainUntil, null, subject, DateTimeOffset.UtcNow.AddMinutes(1)), CancellationToken.None));
+        Assert.NotNull(await store.ResolveAsync(Hash(after), CancellationToken.None));
+
+        // Registration and revocation are one transaction: when the revocation fails, the jti is not
+        // kept, so AuthCenter's retry of the same token is still accepted.
+        var retried = Hash(NewSid());
+        await Assert.ThrowsAsync<IdentityContextInfrastructureException>(() => store.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(retried, retainUntil, null, new string('s', 257), DateTimeOffset.UtcNow), CancellationToken.None));
+        Assert.Equal(0, await ScalarAsync<long>("SELECT count(*) FROM identity.bff_logout_jtis WHERE jti_hash=@hash", ("hash", retried)));
+        Assert.True(await store.ApplyLogoutTokenAsync(
+            new BffLogoutTokenEffect(retried, retainUntil, null, subject, DateTimeOffset.UtcNow), CancellationToken.None));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task The_purge_removes_only_logout_jtis_past_their_retention_within_the_batch_bound()
+    {
+        await DrainAsync();
+        var store = Store();
+        var live = Hash(NewSid());
+        var expiredA = Hash(NewSid());
+        var expiredB = Hash(NewSid());
+        foreach (var jti in new[] { live, expiredA, expiredB })
+        {
+            Assert.True(await store.ApplyLogoutTokenAsync(
+                new BffLogoutTokenEffect(jti, DateTimeOffset.UtcNow.AddMinutes(7), null, null, DateTimeOffset.UtcNow),
+                CancellationToken.None));
+        }
+
+        await ExecuteAdminAsync(
+            """
+            UPDATE identity.bff_logout_jtis
+            SET created_at=clock_timestamp()-interval '1 hour', expires_at=clock_timestamp()-interval '1 second'
+            WHERE jti_hash=ANY(@hashes)
+            """,
+            ("hashes", new[] { expiredA, expiredB }));
+        var revokedSession = NewKey();
+        await store.CreateAsync(Record(revokedSession, NewSubject(), NewSid()), CancellationToken.None);
+        await store.RevokeAsync(Hash(revokedSession), CancellationToken.None);
+
+        // Sessions first, then jtis with what remains of the batch: 1 revoked session + 1 expired jti.
+        var gateway = new PostgreSqlOperationalCleanupGateway(fixture.WorkerDataSource, 30);
+        Assert.Equal(2, await gateway.PurgeBffSessionsAsync(2, CancellationToken.None));
+        Assert.Equal(1, await gateway.PurgeBffSessionsAsync(AddBffSessionPurge.MaximumBatchSize, CancellationToken.None));
+        Assert.Equal(0, await gateway.PurgeBffSessionsAsync(AddBffSessionPurge.MaximumBatchSize, CancellationToken.None));
+        Assert.Equal(1, await ScalarAsync<long>(
+            "SELECT count(*) FROM identity.bff_logout_jtis WHERE jti_hash=ANY(@hashes)",
+            ("hashes", new[] { live, expiredA, expiredB })));
+        Assert.Equal(1, await ScalarAsync<long>("SELECT count(*) FROM identity.bff_logout_jtis WHERE jti_hash=@hash", ("hash", live)));
     }
 
     private static PostgresException FindPostgresException(Exception exception)

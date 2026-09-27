@@ -16,8 +16,8 @@ Este ZIP completo es la única entrega que debe validarse. No mezclar archivos s
 
 ## Archivos críticos
 
-- `database/AI-06_SCHEMA.sql` SHA-256: `abce084a17ea4c91b9d10973e595e48b8e398604135ba0b77b825531df54a9e1`
-- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `bd8479df7abd9b636c70dc06d228d14b828fb5593b384aa96a1fb2e899c934aa`
+- `database/AI-06_SCHEMA.sql` SHA-256: `345a172fcd6462dbdb15ecbd379ecda3eba9528a4a6460f95debdd4ef0f9da1a`
+- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `c6b8eda159b1aef5252c9aa152dc995099db268d9301b644102f9cb83f565de6`
 
 El SQL canónico contiene:
 
