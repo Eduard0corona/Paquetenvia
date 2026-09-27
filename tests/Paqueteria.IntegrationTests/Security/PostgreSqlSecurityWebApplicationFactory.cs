@@ -74,6 +74,7 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         _adminConnectionString = adminConnectionString;
         var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, adminConnectionString);
+        await ApplyIdentityMigrationAsync(adminConnectionString);
         await ApplyNotificationsMigrationAsync(adminConnectionString);
         await ApplyIncidentsMigrationAsync(adminConnectionString);
         await ApplyOrganizationsMigrationAsync(adminConnectionString);
@@ -1231,6 +1232,33 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
             })
             .Options;
         await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync();
+    }
+
+    /// <summary>
+    /// BFF-SESSION-TABLE-SHAPE lives in the Identity lane: with the AuthCenter provider the BFF keeps its
+    /// tickets in identity.bff_sessions (AuthCenter:SessionStore=PostgreSql by default) through its
+    /// SECURITY DEFINER functions, exactly as the migration coordinator installs them.
+    /// </summary>
+    private static async Task ApplyIdentityMigrationAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
+        {
+            await role.ExecuteNonQueryAsync();
+        }
+
+        var options = new DbContextOptionsBuilder<Identity.Infrastructure.Persistence.IdentityDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(
+                    typeof(Identity.Infrastructure.Persistence.IdentityDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_identity", "platform");
+            })
+            .Options;
+        await using var context = new Identity.Infrastructure.Persistence.IdentityDbContext(
+            options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync();
     }
 

@@ -741,7 +741,7 @@ public sealed class BffSessionStorePostgreSqlContractTests(PostgreSqlContractFix
                 await new DatabaseBaselineAssertions().AssertAsync(connection);
                 var semantic = await new E002SemanticAssertions().AssertAsync(
                     connection, await E002NotificationStateReader.ReadAsync(connection));
-                Assert.EndsWith("_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1", semantic.RoutineMap, StringComparison.Ordinal);
+                Assert.EndsWith("_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_V1", semantic.RoutineMap, StringComparison.Ordinal);
                 Assert.Equal("paqueteria_migrator", await ScalarAsync<string>(
                     "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='identity.bff_sessions'::regclass"));
             }
