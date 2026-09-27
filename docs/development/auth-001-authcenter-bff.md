@@ -11,11 +11,15 @@ roles privilegiados, CORS cerrado, secretos en secret manager, sin tokens en log
 ## 1. Decisiones del owner (26-sep-2026)
 
 1. Se usa BFF en la API .NET con cookie HttpOnly. La web consume la API por el **mismo origen**:
-   Next reescribe `/api`, `/hubs`, `/auth` y `/signin-authcenter`, o lo hace el ingress en Azure.
+   En el piloto de Azure el **ingress** enruta `/api`, `/hubs`, `/auth` y `/signin-authcenter` a la
+   API; las rewrites de Next quedan solo para desarrollo local.
 2. Las dependencias nuevas entran por `main`. El PR Gate rechaza `DEPS` hacia `development`, y solo
    un back-sync `MAIN_BACKSYNC` certificado las trae a `development`.
 3. La autorización de negocio sigue en Paquetenvia (`organizations.organization_memberships` + RLS).
    AuthCenter solo autentica, y el `sub` validado alimenta `identity.users.identity_subject`.
+4. Las sesiones BFF irán a una tabla PostgreSQL (cambio normativo pendiente, fuera de este PR).
+   Mientras tanto el ticket queda en memoria detrás de `ITicketStore`/`IDistributedCache` (§4).
+5. Primer ingreso por invitación previa; se implementa en un PR aparte (§8).
 
 `AuthCenter.Client` no está publicado en NuGet. Por eso se replica su contrato BFF con el handler
 estándar de Microsoft (`Microsoft.AspNetCore.Authentication.OpenIdConnect` 10.0.10, la misma versión
@@ -96,9 +100,10 @@ que AuthCenter lo emita (ver "Datos que debe registrar el owner").
   superior.
 - **Limitación single-instance.** La caché por defecto es `MemoryDistributedCache`. Con más de
   una réplica, una petición que llega a otra instancia no encuentra el ticket y responde 401
-  (falla cerrado, y el usuario vuelve a iniciar sesión). Antes de escalar se necesita un
-  `IDistributedCache` compartido: Redis (paquete nuevo, ruta `main`) o una tabla PostgreSQL
-  (cambio normativo AI-06/AI-18). Esa decisión es del owner.
+  (falla cerrado, y el usuario vuelve a iniciar sesión). **Decisión del owner:** las sesiones irán
+  a una tabla PostgreSQL, lo que exige un cambio normativo (AI-06/AI-18) que no forma parte de este
+  PR. El almacenamiento ya está detrás de interfaces (`ITicketStore` → `AuthCenterTicketStore` →
+  `IDistributedCache`), así que el cambio sustituye la implementación sin tocar endpoints ni web.
 
 ## 5. CSRF y mismo origen
 
@@ -134,15 +139,21 @@ que AuthCenter lo emita (ver "Datos que debe registrar el owner").
   `NEXT_PUBLIC_API_BASE_URL` debe estar **vacía**; `next.config.ts` falla si no lo está. Los
   clientes usan `window.location.origin`.
 - `PAQUETENVIA_API_PROXY_ORIGIN` (solo servidor, sin prefijo `NEXT_PUBLIC_`) activa las rewrites
-  `/api/:path*`, `/hubs/:path*`, `/auth/:path*` y `/signin-authcenter` hacia la API. Se evalúa al
-  ejecutar `next build`/`next start`, así que debe existir en ambos momentos. Sin la variable, no
-  se agregan rewrites (caso del ingress).
+  `/api/:path*`, `/hubs/:path*`, `/auth/:path*` y `/signin-authcenter` hacia la API. Next resuelve
+  las rewrites al evaluar la configuración en `next dev`/`next build` (quedan en el routes
+  manifest). Sin la variable no se agregan rewrites (caso del ingress, que es el del piloto).
+- La lógica de rewrites vive **dentro** de `next.config.ts`, sin imports relativos: la imagen de
+  runtime (`deploy/azure/Dockerfile.web`) solo copia `.next`, `node_modules`, `public`,
+  `package.json` y `next.config.ts`, y `next start` evalúa la configuración. Una prueba
+  (`src/lib/api-proxy.test.ts`) verifica que el único import sea `next`.
+- `deploy/azure/Dockerfile.web` declara `NEXT_PUBLIC_AUTH_MODE` como `ARG`/`ENV` de build
+  (guarda AZR-001 G06). Sin valor, la web queda en el modo previo.
 - Verificado localmente con `next start` (16.3.3) contra un upstream de prueba: HTTP reenvía la
   cookie y agrega `x-forwarded-host`; el upgrade WebSocket de `/hubs/*` se proxifica
   correctamente. Si un proxy intermedio no soporta upgrade, SignalR cae a SSE o long-polling, que
   también funcionan por las rewrites.
-- **Azure:** se recomienda que el ingress/Front Door enrute esos cuatro prefijos directamente a
-  la API y el resto a Next (sin salto extra y con WebSocket nativo). En ese caso
+- **Azure (decisión del owner para el piloto):** el ingress enruta esos cuatro prefijos
+  directamente a la API y el resto a Next (sin salto extra y con WebSocket nativo).
   `PAQUETENVIA_API_PROXY_ORIGIN` queda vacía.
 - La API **no** deriva el `redirect_uri` de `Host`/`X-Forwarded-*`: usa
   `AuthCenter:PublicOrigin`. Esto evita depender de los forwarded headers que configura otro PR.
@@ -176,8 +187,8 @@ La opción segura por defecto es la que queda implementada:
 Vinculación posible hoy: un administrador preaprovisiona `identity.users.identity_subject = <sub>`
 con el `sub` que muestra AuthCenter (UUID del usuario) y sus membresías. El esquema AI-06 exige
 `identity_subject NOT NULL UNIQUE` y no tiene tabla de invitaciones, así que la vinculación por
-invitación o por correo verificado requiere un cambio normativo. Pregunta abierta para el owner en
-el PR (ver §11).
+invitación o por correo verificado requiere un cambio normativo. **Decisión del owner:** el primer
+ingreso será por invitación previa y se implementa en un PR aparte.
 
 ## 9. Configuración
 
@@ -192,7 +203,7 @@ el PR (ver §11).
 | `AuthCenter__PublicOrigin` | App Settings | `https://<host-web>` (sin path) |
 | `AuthCenter__SessionLifetimeMinutes` | App Settings (opcional) | `480` |
 | `NEXT_PUBLIC_AUTH_MODE` (web, build) | pipeline | `bff` |
-| `PAQUETENVIA_API_PROXY_ORIGIN` (web, build+runtime) | pipeline/App Settings | `http://paqueteria-api:8080` o vacío si enruta el ingress |
+| `PAQUETENVIA_API_PROXY_ORIGIN` (web, solo local) | entorno de desarrollo | `http://localhost:8080`; vacío en Azure (enruta el ingress) |
 
 El secreto **nunca** va en `appsettings*.json`, en GitHub, en variables de pipeline, en logs ni en
 tickets. En local se usa `dotnet user-secrets`. La API no arranca (`ValidateOnStart`) si falta alguno
@@ -224,10 +235,8 @@ de estos valores, si `Authority` no es HTTPS, si el secreto tiene menos de 32 ca
 
 ## 11. Preguntas abiertas para el owner
 
-1. Primer ingreso: ¿se mantiene solo el preaprovisionamiento por `sub`, o se diseña una tabla de
-   invitaciones (cambio AI-04/AI-06/AI-18) para vincular por correo verificado?
-2. Sesión multi-instancia: ¿Redis (paquete nuevo por `main`) o tabla PostgreSQL (cambio normativo)
-   para `IDistributedCache`?
+1. ~~Primer ingreso~~: resuelto por el owner, por invitación previa en un PR aparte.
+2. ~~Sesión multi-instancia~~: resuelto por el owner, tabla PostgreSQL tras el cambio normativo.
 3. ¿Hosts web por ambiente y redirect URIs definitivos (dev/staging/prod)?
 
 ## 12. Pruebas

@@ -139,6 +139,20 @@
       ]
     },
     {
+      "name": "WEB_AUTH",
+      "patterns": [
+        "apps/web/src/auth/**",
+        "apps/web/src/app/login/**"
+      ],
+      "job_sets": [
+        "WEB_ALL"
+      ],
+      "jobs": [
+        "azr-static",
+        "dotnet"
+      ]
+    },
+    {
       "name": "WEB_SHARED",
       "patterns": [
         "apps/web/src/app/*",

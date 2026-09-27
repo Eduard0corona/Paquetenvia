@@ -159,6 +159,11 @@ class ImpactModelTests(unittest.TestCase):
         self.assertEqual({"secret-scan", "azr-static", *WEB_ALL}, jobs(plan))
         self.assertNotIn("dotnet", jobs(plan))
 
+    def test_web_auth_runs_every_web_surface_and_the_bff_backend(self):
+        plan = classify(["apps/web/src/auth/bff-session.ts", "apps/web/src/app/login/page.tsx"])
+        self.assertEqual({"secret-scan", "azr-static", "dotnet", *WEB_ALL}, jobs(plan))
+        self.assertEqual([], plan["unmatched_paths"])
+
     def test_next_config_adds_dotnet(self):
         plan = classify(["apps/web/next.config.ts"])
         self.assertEqual({"secret-scan", "azr-static", "dotnet", *WEB_ALL}, jobs(plan))
