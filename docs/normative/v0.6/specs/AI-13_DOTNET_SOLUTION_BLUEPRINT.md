@@ -125,9 +125,15 @@ Correspondencia del PR borrador #90 (`AssignmentLifecyclePolicy`), aprobada con
 `D8-OUTBOX-LANE-DISPATCH` (2026-09-27, "Apruebo 2" y "Aprobado todo"):
 `ASSIGNED→READY_FOR_PICKUP` y `RESCHEDULED→READY_FOR_PICKUP` cierran la
 asignación como `CANCELLED`; `*→CANCELLED` la cierra como `CANCELLED`;
-`DELIVERED` o `RETURNED` la cierran como `COMPLETED`. El cierre es idempotente:
-solo afecta a asignaciones `ACCEPTED/ACTIVE` con `created_at <= occurred_at` y,
-si el evento lo trae, a su `assignment_id`.
+`DELIVERED` o `RETURNED` la cierran como `COMPLETED`. Implementado (PR #90): por
+`D8-REASSIGNMENT-NEW-ASSIGNMENT`, `FAILED_ATTEMPT→RESCHEDULED` también la cierra
+como `CANCELLED`; el reintento `FAILED_ATTEMPT→DELIVERING` y `*→RETURNING` la
+conservan. El mapa cubre las 29 transiciones de AI-04 (`D8-RESCHEDULED-NO-DIRECT-DELIVERY`
+quitó `RESCHEDULED→DELIVERING`: una orden reprogramada pasa por una asignación
+nueva; el reintento inmediato `FAILED_ATTEMPT→DELIVERING` conserva la asignación). El cierre es idempotente:
+el evento siempre nombra el `assignment_id` activo bajo el lock de la orden en
+la transacción de ORD-002, y solo se cierra si esa asignación sigue
+`ACCEPTED/ACTIVE`; una asignación nueva nunca coincide.
 
 **Decidido** (`D8-REASSIGNMENT-NEW-ASSIGNMENT`, 2026-09-26/27): al reprogramar,
 la asignación anterior se cierra como `CANCELLED`, y la reasignación siempre
@@ -144,8 +150,11 @@ outbox, solo cuando la transición cierra una asignación. El lane requiere
 funciones `claim_dispatch_outbox` y `requeue_stale_dispatch_outbox` y la rama
 `dispatch.order-status-reaction-requested → DISPATCH` de
 `security.resolve_outbox_consumer`, propiedad de `paqueteria_outbox_executor`, con
-`EXECUTE` solo para `paqueteria_worker`. La traducción a AI-06/AI-18 llega con su
-migración en el PR de implementación.
+`EXECUTE` solo para `paqueteria_worker`. Traducido (PR #90): AI-18 registra el
+contrato del lane, instalado por la migración del lane Notifications
+`20260927000200_AddDispatchOutboxLane` (AI-06 sin cambios: el outbox no cambia).
+En una sola transacción del Worker el consumer cierra la asignación, escribe
+`AssignmentChanged` y la auditoría, y liquida la fila con su `lease_token`.
 
 `AssignmentChanged` admite los estados `COMPLETED` y `CANCELLED`
 (`AI12-ASSIGNMENT-TERMINAL-STATES`, 2026-09-27; ver AI-12).

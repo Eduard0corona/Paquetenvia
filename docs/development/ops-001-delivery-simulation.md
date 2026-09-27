@@ -74,7 +74,7 @@ La aceptación exige, por corrida:
   y proofs reales, correlacionadas una por una;
 - cero auditorías faltantes, duplicadas o inconsistentes; duplicar una acción
   no compensa la ausencia de otra;
-- 360 outbox procesados, un poison `DEAD` esperado y ningún outbox activo;
+- 380 outbox procesados (incluye 20 filas del lane `DISPATCH` de D8), un poison `DEAD` esperado y ningún outbox activo;
 - tracking público final sin driver, assignment ni payload interno;
 - dashboard con las 20 órdenes correctas y sin filas del tenant señuelo;
 - stops del conductor vacíos al terminar;

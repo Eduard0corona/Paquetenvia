@@ -276,7 +276,6 @@ order_state_machine:
     RESCHEDULED:
     - READY_FOR_PICKUP
     - ASSIGNED
-    - DELIVERING
     RETURNING:
     - RETURNED
     DELIVERED:
@@ -320,11 +319,11 @@ order_state_machine:
     RESCHEDULED:
     - failed_attempt_next_action_respected
     DELIVERING:
-    - if_from_failed_attempt_or_rescheduled_then_custody_acquired_true_and_valid_assignment
+    - if_from_failed_attempt_then_custody_acquired_true_and_valid_assignment
     - failed_attempt_next_action_respected
   prohibited:
   - FAILED_ATTEMPT -> DELIVERED
-  - RESCHEDULED -> DELIVERING when custody_acquired=false
+  - 'RESCHEDULED -> DELIVERING (D8-RESCHEDULED-NO-DIRECT-DELIVERY: a rescheduled order goes through a new assignment, RESCHEDULED -> ASSIGNED -> ... -> DELIVERING)'
   - CLAIM_OPEN after claim_window_ends_at
   - custody_acquired derived from anything other than a PICKED_UP ORDER_STATUS_CHANGED event
   - PICKED_UP or DELIVERED justified by a proof created before the latest entry into AT_PICKUP or DELIVERING, or by a proof referenced as incident evidence
@@ -337,9 +336,9 @@ order_state_machine:
     pickup_proof_complete: Requires a PICKUP_PHOTO proof of the current attempt that is not referenced as incident evidence.
     delivery_proof_complete: Requires a DELIVERY_PHOTO proof of the current attempt that is not referenced as incident evidence.
     attempt_stage_recorded: The FAILED_ATTEMPT is justified by exactly one incident opened in the current attempt and not referenced by an earlier FAILED_ATTEMPT.
-    eligible_driver: Evaluated with the shared DriverEligibilityPolicy (documents, zone, membership) on ASSIGNED and on the retry from FAILED_ATTEMPT or RESCHEDULED to DELIVERING.
+    eligible_driver: Evaluated with the shared DriverEligibilityPolicy (documents, zone, membership) on ASSIGNED and on the immediate retry from FAILED_ATTEMPT to DELIVERING, which keeps the active assignment (D8-RESCHEDULED-NO-DIRECT-DELIVERY).
     capacity_available: Evaluated with the same DriverEligibilityPolicy capacity rules (vehicle capacity against the order packages) on the same transitions.
-    failed_attempt_next_action_respected: When leaving FAILED_ATTEMPT, the justifying incident next_action decides the successor. RETURNING allows only RETURNING. RESCHEDULED allows only RESCHEDULED or DELIVERING. Incidents adopted by the INC-001 backfill carry a default next_action and do not bind the successor; every other guard of the target still applies.
+    failed_attempt_next_action_respected: When leaving FAILED_ATTEMPT, the justifying incident next_action decides the successor. RETURNING allows only RETURNING. RESCHEDULED allows only RESCHEDULED or DELIVERING (the immediate FAILED_ATTEMPT -> DELIVERING retry; RESCHEDULED -> DELIVERING does not exist, D8-RESCHEDULED-NO-DIRECT-DELIVERY). Incidents adopted by the INC-001 backfill carry a default next_action and do not bind the successor; every other guard of the target still applies.
 decided_pending_translation:
   status: DECIDED_2026-09-26_27_TRANSLATION_PENDING
   source: decision-log D8-REASSIGNMENT-NEW-ASSIGNMENT (working session with the project owner via Claude Code)

@@ -10,6 +10,7 @@ public enum OutboxConsumer
 {
     Realtime,
     Notifications,
+    Dispatch,
     Unrouted,
 }
 
@@ -18,6 +19,9 @@ public static class NotificationOutboxTopics
     public const string OrdersCreated = "orders.created";
     public const string SendRequested = "notifications.send-requested";
     public const string StatusChanged = "notifications.status-changed";
+
+    /// <summary>D8-OUTBOX-LANE-DISPATCH: consumed by the Dispatch assignment-lifecycle lane.</summary>
+    public const string DispatchReactionRequested = "dispatch.order-status-reaction-requested";
 
     private static readonly HashSet<string> RealtimeTopics =
     [
@@ -31,6 +35,7 @@ public static class NotificationOutboxTopics
     public static OutboxConsumer Resolve(string topic) => topic switch
     {
         OrdersCreated or SendRequested => OutboxConsumer.Notifications,
+        DispatchReactionRequested => OutboxConsumer.Dispatch,
         _ when RealtimeTopics.Contains(topic) => OutboxConsumer.Realtime,
         _ => OutboxConsumer.Unrouted,
     };
