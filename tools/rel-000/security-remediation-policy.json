@@ -1,6 +1,50 @@
 {
-  "format_version": "paquetenvia-rel000-security-remediation-policy-v2",
+  "format_version": "paquetenvia-rel000-security-remediation-policy-v3",
   "default_mode": "NORMAL_RELEASE_EVIDENCE",
+  "dependency_admissions": [
+    {
+      "id": "AUTH-001-OIDC",
+      "mode": "DEPENDENCY_ADMISSION",
+      "status": "ACTIVE",
+      "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+      "authorized_source_branch": "deps/auth-001-oidc",
+      "tracked_pull_request": 92,
+      "ecosystem": "nuget",
+      "description": "AuthCenter OpenID Connect handler for the AUTH-001 BFF login (GATE-002-BFF-001).",
+      "admitted_direct_packages": [
+        {"id": "Microsoft.AspNetCore.Authentication.OpenIdConnect", "version": "10.0.10", "content_hash": "JSFSrOzl1N1iBbUIVGVdB+WaKeswxHR6qJAlE+PxImYZPhSM8KlrBRRSi3Oxytpx3DY25W8BJMKHvtMbHBxFZg=="}
+      ],
+      "admitted_transitive_packages": [
+        {"id": "Microsoft.Bcl.Cryptography", "version": "10.0.2", "content_hash": "LG9Yll3B5aNpxv0+D47g6LiOiKBIlodhcHdQwcYzo8VeexFLGqx5ymetmA2aBRyo9cCcWsQWrFsdbsr8LvmWDw=="},
+        {"id": "Microsoft.IdentityModel.Abstractions", "version": "8.19.2", "content_hash": "HJbo/lnSfNHUfphPRT910poQc4T2/9+8svFLvzuaYHGAOJ2Tu+oEDqpX0BVP3BJ4OuUM1kylEKyaiX2fCAK3Cw=="},
+        {"id": "Microsoft.IdentityModel.JsonWebTokens", "version": "8.19.2", "content_hash": "ui3fuBT4fs8kdKfBthI4NzLYIBIneEVS8UrL1JVBzAn80UiKmngBBi0BEByE7n/9c+EElcfFlCMFFTqpkBSLNA=="},
+        {"id": "Microsoft.IdentityModel.Logging", "version": "8.19.2", "content_hash": "r5YLDIxGOnkVJHrqXv/iD1FM1CgGrQOdriXuvuWvTPmKbnGANhEysq9XKmN6IHjf2a+9bAGEpnoRBsAQlvJU5w=="},
+        {"id": "Microsoft.IdentityModel.Protocols", "version": "8.19.2", "content_hash": "sGxSsSrZXNmca6D+jHH2rVRyo2nNRd/g4H9CFbPmLLq0xgoH1U0orLWE5minfijw7+zq49tBs7txenbfAErRoQ=="},
+        {"id": "Microsoft.IdentityModel.Protocols.OpenIdConnect", "version": "8.19.2", "content_hash": "1XOcyY36cVymzE3qKdzKaUEZ4Pzt7ZpSa14JZoPPK1NLFUkQDs85TCqpV6XDo0YjFXj6nVK00AfOHppjghjhtw=="},
+        {"id": "Microsoft.IdentityModel.Tokens", "version": "8.19.2", "content_hash": "GtPC1S02uH1gOO4fQ+zRysIicKmEXaYFP8PIkdJYXqMyruYhopre4ozVHp0XiDSA0+GJvOZH9prxCPvgBMg4Ww=="},
+        {"id": "System.IdentityModel.Tokens.Jwt", "version": "8.19.2", "content_hash": "gqhDC/icByKEutygpr+OFgAmjwTVowyzFjWB8K0q1ww8uFj5a1BQNL+QvijUl9uhq4p8OdDwcAIrjVC+eC9FVA=="}
+      ],
+      "allowed_dependency_files": [
+        "Directory.Packages.props",
+        "src/Modules/Identity/Identity.Endpoints/packages.lock.json",
+        "src/Paqueteria.Api/packages.lock.json",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        "tests/Paqueteria.UnitTests/packages.lock.json"
+      ],
+      "required_dependency_files": [
+        "Directory.Packages.props",
+        "src/Modules/Identity/Identity.Endpoints/packages.lock.json",
+        "src/Paqueteria.Api/packages.lock.json",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        "tests/Paqueteria.UnitTests/packages.lock.json"
+      ],
+      "allowed_project_files": [
+        "src/Modules/Identity/Identity.Endpoints/Identity.Endpoints.csproj"
+      ]
+    }
+  ],
   "historical_remediations": [
     {
       "id": "ISSUES-5-30-WEB-DEPENDENCIES",
