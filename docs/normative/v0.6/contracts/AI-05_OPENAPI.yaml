@@ -1109,9 +1109,11 @@ paths:
       operationId: reconcileCod
       description: >-
         FIN-001 reconciles a RECORDED collection to RECONCILED, which the order
-        state machine requires before CLOSED. Only DISPATCHER members and
-        PLATFORM_ADMIN members with a satisfied MFA challenge may reconcile, so
-        a collecting driver can never reconcile their own collection. Replaying
+        state machine requires before CLOSED. Only DISPATCHER members,
+        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
+        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION) may
+        reconcile, so a collecting driver can never reconcile their own
+        collection. FINANCE never creates or modifies orders. Replaying
         the same Idempotency-Key returns the stored response.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -1146,9 +1148,11 @@ paths:
       operationId: getOrderFinancials
       description: >-
         FIN-001 cost by modality, margin and COD position of one order, derived
-        on read in integer MXN cents. Readable only by DISPATCHER members and
-        PLATFORM_ADMIN members with a satisfied MFA challenge; the order must be
-        owned or operated by the selected organization.
+        on read in integer MXN cents. Readable only by DISPATCHER members,
+        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
+        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION);
+        FINANCE never creates or modifies orders. The order must be owned or
+        operated by the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -1177,9 +1181,11 @@ paths:
       description: >-
         FIN-001 cost by modality, margin and COD position of one route,
         aggregated from the orders on its stops so every total equals the sum
-        of its per-order values. Readable only by DISPATCHER members and
-        PLATFORM_ADMIN members with a satisfied MFA challenge; the route must be
-        operated by the selected organization.
+        of its per-order values. Readable only by DISPATCHER members,
+        PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE
+        members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION);
+        FINANCE never creates or modifies orders. The route must be operated by
+        the selected organization.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/RouteId'
@@ -4005,7 +4011,8 @@ x-capability-matrix:
   driver_scope: DRIVER (OWN or EXTERNAL) sees only its own assignments, stops and offers; it has no access to orders,
     quotes, locations, CSV imports or settlements outside them
   finance_scope: FINANCE is limited to settlements and finance; per FINANCE-COD-RECONCILIATION (project owner, 2026-09-27)
-    FINANCE reads and reconciles collected COD only and never creates or modifies orders
+    getOrderFinancials, getRouteFinancials and reconcileCod are permitted only to DISPATCHER members, PLATFORM_ADMIN members with a satisfied MFA challenge and FINANCE members with a satisfied MFA challenge (FINANCE-COD-RECONCILIATION); FINANCE never creates or modifies orders; a collecting driver can never
+    reconcile their own collection
   finance_operations:
     getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
