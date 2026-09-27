@@ -16,8 +16,8 @@ See `specs/AI-10_DECISIONS_AND_GATES.yaml`.
   merge se registra como hecho en la tabla; la autorización formal previa no
   consta en el repositorio y queda pendiente de ratificación explícita del
   project owner. Esta entrada no es una decisión aprobada.
-- `PILOT-CONTRACTS-2026-09` — Propuestas normativas para el piloto pendientes
-  de decisión del project owner (AI-10 `open_decisions`): enmiendas de AI-04 y
+- `PILOT-CONTRACTS-2026-09` — Resuelto el 2026-09-27. Propuestas normativas
+  para el piloto (AI-10): enmiendas de AI-04 y
   AI-12 marcadas `PROPOSED`, entradas `PROPOSED` de `x-pilot-contract-deltas`
   en AI-05, ítems habilitadores nuevos de AI-08 y cambios SQL descritos fuera de
   AI-06/AI-18 hasta que exista migración. Las entradas `DECIDED` reflejan D5,
@@ -26,9 +26,9 @@ See `specs/AI-10_DECISIONS_AND_GATES.yaml`.
   BFF-SESSION-TABLE-SHAPE, OPS-003-CLEANUP-ROLE, OPS-003-SERVER-72H-REJECTION).
   También las seis decisiones AI05-* y AI06-PILOT-INDEXES,
   IDENTITY-ORG-ACTIVE-REQUIRED, FINANCE-COD-RECONCILIATION, QUOTE-NO-COD y
-  AI08-PILOT-ITEMS del mismo día. Solo sigue pendiente el destino de las
-  respuestas 400 de Locations y del header de contexto tenant, que no tuvo
-  recomendación. Esta entrada no es una decisión aprobada.
+  AI08-PILOT-ITEMS del mismo día, y AI05-DECLARE-400-ERRORS, que cerró el
+  último punto abierto. No queda nada pendiente; AI-10 lo registra en
+  `resolved_decisions`.
 
 ## Entries
 
@@ -134,3 +134,4 @@ See `specs/AI-10_DECISIONS_AND_GATES.yaml`.
 | 2026-09-27 | FINANCE-COD-RECONCILIATION | Authorization decision | Owner answers "Acepto todas las sugerencias para Base de datos y pagos contra entrega" and "Aprobado todo": FINANCE reads and reconciles collected COD only and cannot create or modify orders; the AI-05 surface change ships with its implementation (the `*OpenApiImplementationTests` compare AI-05 against the code) | AI-05 x-capability-matrix, Finance | Project owner (2026-09-27, sesión de trabajo con el owner vía Claude Code) |
 | 2026-09-27 | QUOTE-NO-COD | Product decision | Owner answers "Acepto todas las sugerencias para Base de datos y pagos contra entrega" and "Aprobado todo": quotes do not carry COD for now; COD is declared only on the order and in the CSV, per D6 | AI-05, Pricing, Orders | Project owner (2026-09-27, sesión de trabajo con el owner vía Claude Code) |
 | 2026-09-27 | AI08-PILOT-ITEMS | Backlog decision | Owner answers "Acepto todas las sugerencias para Base de datos y pagos contra entrega" and "Aprobado todo": AUTH-001, ENV-001, ADP-001, UI-001, OBS-002, MDM-001 and TRK-002 are approved backlog items; of them, REL-001 depends only on AUTH-001, ENV-001 and UI-001 | AI-08, REL-001 | Project owner (2026-09-27, sesión de trabajo con el owner vía Claude Code) |
+| 2026-09-27 | AI05-DECLARE-400-ERRORS | Contract decision | Owner chose "Declararlos en AI-05 (Recomendado)": declare in AI-05 the 400 responses the API already returns from the Locations endpoints and for a missing or malformed tenant context header, with no behaviour change; the declaration ships with the implementation PR (feature/pilot-contract-deltas), because the `*OpenApiImplementationTests` compare AI-05 against the code | AI-05 | Project owner (2026-09-27, sesión de trabajo con el owner vía Claude Code) |

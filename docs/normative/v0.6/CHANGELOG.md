@@ -24,8 +24,11 @@
   `FINANCE-COD-RECONCILIATION`, `QUOTE-NO-COD` y `AI08-PILOT-ITEMS`. Los siete
   ítems nuevos de AI-08 quedan aprobados y REL-001 pasa a depender también de
   AUTH-001, ENV-001 y UI-001. El inventario MVP-0/P0 sigue en 29.
-- Solo queda abierto el destino de las respuestas 400 (Locations y header de
-  contexto tenant), que no tuvo recomendación.
+- El owner eligió "Declararlos en AI-05 (Recomendado)" para las respuestas 400
+  de Locations y del header de contexto tenant (`AI05-DECLARE-400-ERRORS`): se
+  declaran sin cambiar el comportamiento, en el PR de implementación
+  `feature/pilot-contract-deltas`. `PILOT-CONTRACTS-2026-09` pasa a
+  `resolved_decisions` en AI-10; no queda ningún punto abierto.
 
 ## Contratos del piloto — 2026-09-26 (propuesta y decisiones)
 

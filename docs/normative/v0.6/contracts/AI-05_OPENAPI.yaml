@@ -4012,7 +4012,7 @@ x-capability-matrix:
     reconcileCod: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
-    each delta together with code and tests. Every entry is an owner decision (DECIDED); open points are marked open_point.
+    each delta together with code and tests. Every entry is an owner decision (DECIDED).
     Owner approval of all six API contract proposals on 2026-09-27, literal answer "Apruebo Contrato de la API (AI-05)"
   entries:
   - id: D6-COD-EXPECTED
@@ -4076,8 +4076,9 @@ x-pilot-contract-deltas:
       getOrder, transitionOrder, listLocations, createLocation, createProofUploadSession and finalizeProof; 409 on
       createProofUploadSession and finalizeProof; 429 and 503 on publicTracking; 503 from the tenant-context middleware on
       every tenant operation
-    open_point: whether the 400 responses returned by the Locations endpoints and for a missing or malformed tenant context
-      header become part of the contract or are replaced by 409 INVALID_REQUEST or 403 is not covered by the decision
+    declare_400: DECIDED AI05-DECLARE-400-ERRORS (project owner, 2026-09-27) - declare the 400 responses the API already
+      returns from the Locations endpoints and for a missing or malformed tenant context header, with no behaviour change;
+      the declaration ships with the implementation PR (feature/pilot-contract-deltas)
   - id: PUBLIC-TIMELINE-ORDER
     status: DECIDED
     decision: AI05-TIMELINE-ORDER (project owner, 2026-09-27)

@@ -109,10 +109,12 @@ open_decisions:
   - add CUSTOMER_SUPPORT as a canonical organization role with explicit capabilities
   - defer/remove customer_support from MVP-0 contracts
   - explicitly assign the actor's responsibilities to an existing role
+resolved_decisions:
 - id: PILOT-CONTRACTS-2026-09
   topic: pilot_contract_decisions
-  severity: MAJOR
   recorded_on: 2026-09-26
+  resolved_on: 2026-09-27
+  resolved_by: project_owner
   decided_on_2026_09_27:
   - D8-OUTBOX-LANE-DISPATCH
   - AI12-ASSIGNMENT-TERMINAL-STATES
@@ -131,12 +133,10 @@ open_decisions:
   - FINANCE-COD-RECONCILIATION
   - QUOTE-NO-COD
   - AI08-PILOT-ITEMS
+  - AI05-DECLARE-400-ERRORS
   ai05_translation: the AI-05 surface change ships with its implementation (the *OpenApiImplementationTests compare AI-05
     against the code)
   decided_translation: translation to AI-06/AI-18 ships with its migration in the implementation PR
-  decision_needed:
-  - whether the 400 responses of Locations and of a missing or malformed tenant context header join AI-05 or are replaced
-    by 409 INVALID_REQUEST or 403; no recommendation was made and it is not covered by AI05-DECLARE-EMITTED-ERRORS
   work_allowed:
   - implementation of DECIDED items D5, D6, D7, D8 direction, D8-REASSIGNMENT-NEW-ASSIGNMENT, GATE-002-BFF-001,
     AUTH-FIRST-LOGIN-INVITATION, BFF-SESSION-STORE-POSTGRESQL, PILOT-SAME-ORIGIN-ROUTING, AUTHCENTER-AMR-MFA,
@@ -144,8 +144,8 @@ open_decisions:
     BFF-SESSION-TABLE-SHAPE, OPS-003-CLEANUP-ROLE, OPS-003-SERVER-72H-REJECTION, the six AI05-* decisions,
     AI06-PILOT-INDEXES, IDENTITY-ORG-ACTIVE-REQUIRED, FINANCE-COD-RECONCILIATION, QUOTE-NO-COD and AI08-PILOT-ITEMS under
     their own backlog tasks
-  - the 400-response question is not implemented before an owner decision
-resolved_decisions:
+  - AI05-DECLARE-400-ERRORS ships with the implementation PR feature/pilot-contract-deltas, with no behaviour change
+  open_points: none
 - id: GATE-002
   topic: identity_provider
   resolved_on: 2026-07-21
