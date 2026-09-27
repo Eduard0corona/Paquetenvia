@@ -57,7 +57,24 @@ public static class PiiProtectionServiceCollectionExtensions
 /// <summary>Whether one module selected the Key Vault protector, read from its bound options.</summary>
 public sealed class PiiKeyVaultSelection(Func<bool> isSelected)
 {
-    public bool IsSelected => isSelected();
+    /// <summary>
+    /// A module whose own options are invalid is reported as not selecting Key Vault: its own
+    /// start validation already fails the host with the precise message.
+    /// </summary>
+    public bool IsSelected
+    {
+        get
+        {
+            try
+            {
+                return isSelected();
+            }
+            catch (OptionsValidationException)
+            {
+                return false;
+            }
+        }
+    }
 }
 
 /// <summary>

@@ -113,3 +113,156 @@ Neither workload may hold `Storage Blob Data Owner` or any role with
 tamper-resistant against principals that can write them. The upload SAS never carries the `t`
 (tags) permission, so a client cannot forge a verdict either. The Worker needs no access to the
 PII key.
+
+## PII envelope protector (ADP-001-PII-KEYVAULT-ENVELOPE)
+
+`Paqueteria.Infrastructure.Security.Pii.PiiEnvelopeProtector` seals every value independently:
+
+1. The server asks the key-encryption client for the **current** key version. The Key Vault client
+   reads it from Key Vault (`GET /keys/{name}`), checks the key is enabled, not expired, RSA and
+   allowed to wrap and unwrap, and caches it for `CurrentVersionRefreshSeconds`. Configuration and
+   clients never supply a version.
+2. A fresh 256-bit data key per value encrypts it with AES-256-GCM. The associated data binds the
+   ciphertext to its column (`locations.address_text`, `locations.contact_name`,
+   `locations.phone`, `incidents.description`) and to the key version, so a value cannot be moved
+   to another column or relabelled with another version.
+3. The data key is wrapped with `RSA-OAEP-256` under that exact version
+   (`CryptographyClient.WrapKey`) and zeroed from memory.
+
+Envelope format v1 (stored as-is in the existing `bytea` columns): `PQE\x01`, a big-endian
+`uint16` wrapped-key length, the wrapped key, a 12-byte nonce, the 16-byte tag and the ciphertext.
+`pii_key_version` holds `akv:{key name}/{Key Vault version}` (text, as AI-06 already defines).
+**No schema change and no migration**: the columns (`address_ciphertext`, `contact_name_ciphertext`,
+`phone_ciphertext`, `description_ciphertext`, `pii_key_version`) are the AI-06 ones.
+
+Unwrapping always addresses the recorded version (`/keys/{name}/{version}/unwrapkey`), so
+rotation keeps earlier rows readable while their version stays enabled. A stored version naming
+another key is refused before any call to Key Vault.
+
+`ILocationPiiProtector` and `IIncidentPiiProtector` became asynchronous and return the key
+version they chose. Both services now protect **before** opening the database transaction:
+an unavailable vault ends in `503` with no row, idempotency reservation, audit entry or outbox
+event, and no Key Vault call is made while a transaction is held. The quote-location path
+(PRC-001) no longer pins the synthetic label `PRC-001-SYNTHETIC-V1`; it uses the protector's
+version like location creation. The mocks keep their exact bytes and labels.
+
+The ciphertext is not deterministic. That is safe for idempotency: location replays are keyed by
+the derived location id and incident replays hash the plaintext request, never the ciphertext.
+No read path of PII exists yet; `UnprotectAsync` is used by tests and is the future read seam.
+
+## Proof storage and Defender verdict (ADP-001-POD-BLOB-DEFENDER)
+
+`AzureBlobProofObjectStorage` keeps the POD-001 invariants: the API never receives the bytes.
+
+- **Upload grant**: a user-delegation SAS for the single blob
+  `quarantine/{owner}/{order}/{session}`, permissions `cw` only (never `t`, `r`, `d` or list),
+  resource `b`, HTTPS only, expiry = the POD-001 upload lifetime (a longer expiry is refused).
+  The delegation key is cached and always outlives the SAS it signs. Only the API signs; the
+  Worker is built with signing disabled.
+- **Required headers**: `Content-Type`, `x-ms-blob-type: BlockBlob` and the POD-001 metadata as
+  `x-ms-meta-sessionid`, `orderid`, `ownerorgid`, `requestedby`, `prooftype`, `sizebytes`
+  (and `sha256` when supplied). Azure metadata names must be C# identifiers, so hyphens are
+  dropped; the adapter maps them back to the POD-001 names. They satisfy the PWA header rule
+  `[a-z0-9-]{1,80}`, so `apps/web` needs no change. Idempotent replays recompute this shape.
+- **Worker**: lists `quarantine/`, validates as before and promotes with a server-side copy
+  conditioned on the validated ETag (`x-ms-source-if-match`) and on the destination not existing;
+  the final metadata is rebuilt by the server. A changed source is `SOURCE_OBJECT_CHANGED`, exactly
+  like the S3 `412`.
+- **Internal download**: read-only (`r`) SAS for the final blob, `DownloadUrlLifetimeMinutes`.
+- **Readiness**: container exists and is private, listing works and (API) a delegation key can be
+  obtained.
+
+`DefenderForStorageThreatScanner` reads Defender's blob index tags:
+
+| Tags on the quarantine blob | Result |
+| --- | --- |
+| no result tag, or a scan time earlier than the blob's last modification | pending: the Worker skips it before claiming; the object stays in quarantine and the session is untouched |
+| `No threats found`, scanned after the last modification | safe: validation continues and the object may be promoted |
+| `Malicious` | session `REJECTED` with `THREAT_DETECTED`; the object stays in quarantine (never promoted or deleted) |
+| anything else (`Not scanned`, `SAM2592xx` errors) | session `REJECTED` with `THREAT_SCAN_FAILED`; the object stays in quarantine |
+
+The scan-time check means a verdict written for an earlier upload can never vouch for replaced
+content, and the ETag-conditioned promotion means the promoted bytes are the ones that were
+validated. A verdict that vanishes between the pre-check and the claim leaves the claim for the
+POD-001 stale-claim recovery. The scanner's readiness probes the tag-read permission with a Get
+Blob Tags on a blob that never exists (`404` = permitted, `403` = not permitted).
+
+The tag names and values default to Microsoft's documentation (checked 2026-09-27, "Understand
+malware scanning results": a result tag with `No threats found`, `Malicious`, `Not scanned` and
+`SAM2592xx` error states, plus a scan time tag). The exact capitalization of the keys
+(`Malware Scanning scan result` / `Malware Scanning scan time UTC`; the page itself writes
+"Malware scanning scan result") and the scan-time format must be confirmed on the first real
+scan; both keys are configurable and an unparseable scan time is treated as pending (fail closed).
+
+## Data Protection key-encryption key
+
+`DataProtection:KeyEncryption:Provider=AzureKeyVault` calls `ProtectKeysWithAzureKeyVault` with the
+Key Vault `KeyResolver` (managed identity). It is accepted only with `DataProtection:Provider=PostgreSql`
+and is `None` by default. New ring entries are written wrapped; entries written before activation
+stay readable (they were not encrypted). The `data_protection_key_encryption` ready check resolves
+the key and round-trips a random probe. Unlike the adapters above, this switch is read when the
+host registers Data Protection (as SCL-001 already does for `DataProtection:Provider`), so it must
+be present in the host configuration (environment variables), not in a later-added source.
+
+## Provider selection and fail-closed start
+
+| Setting | Default | Production value | Validated on start |
+| --- | --- | --- | --- |
+| `Locations:PiiProtector` | `Disabled` | `AzureKeyVault` | `PiiProtection` when selected |
+| `Incidents:PiiProtector` | `Disabled` | `AzureKeyVault` | `PiiProtection` when selected |
+| `ProofStorage:Provider` | `Disabled` | `AzureBlob` | `ProofStorage:AzureBlob` |
+| `ProofStorage:ThreatScanner` | `Disabled` | `DefenderForStorage` | tag options; requires `AzureBlob` |
+| `DataProtection:KeyEncryption:Provider` | `None` | `AzureKeyVault` | versionless key URI; requires `PostgreSql` |
+
+The PII and proof adapters are registered lazily and chosen from the bound options at runtime, so
+nothing Azure-related is constructed unless it is selected. Ready checks: `pii_key_vault`,
+`proof_storage`, `proof_scanner`, `data_protection_key_encryption`.
+
+## Tests and evidence
+
+| AI-08 ADP-001 requirement | Tests |
+| --- | --- |
+| protector unavailable returns 503 without effects | `Adp001IncidentKeyVaultHttpTests.An_unavailable_key_vault_answers_503_without_effects_or_plaintext_logs` (API + PostgreSQL); `LocationsPostGisContractTests.An_unavailable_key_vault_protector_fails_closed_with_zero_effects`; `IncidentsPostgreSqlContractTests.An_unavailable_key_vault_fails_closed_with_zero_effects`; `Adp001KeyVaultWrapClientHttpTests.A_denied_or_disabled_key_fails_closed` |
+| key rotation round-trip | `Adp001KeyVaultWrapClientHttpTests.The_server_reads_the_current_version_from_key_vault_and_rotation_keeps_old_rows_readable` (real Key Vault SDK over an in-process fake REST surface); `LocationsPostGisContractTests.Key_vault_envelopes_persist_under_the_server_version_and_stay_readable_after_rotation`; `IncidentsPostgreSqlContractTests.Key_vault_descriptions_use_the_server_version_and_survive_a_key_rotation`; `Adp001PiiEnvelopeTests.Key_rotation_keeps_data_protected_under_the_previous_version_readable` |
+| infected upload stays quarantined | `Adp001AzureBlobDefenderPipelineTests.Infected_upload_is_rejected_and_stays_quarantined` (session service, real Worker processor, PostgreSQL); `Unscanned_upload_stays_quarantined_and_the_session_is_untouched`; `Adp001AzureBlobProofStorageTests.Defender_verdict_rules_fail_closed` |
+| no plaintext PII in logs, outbox, audit or snapshots | the contract tests above search `platform.audit_logs` and `platform.outbox_events` (text and Base64) and the stored ciphertexts; the HTTP tests capture every API log entry; the new paths write no snapshot |
+
+Azure SDK clients are exercised without Azure: the Key Vault client runs the real SDK over a fake
+HTTP transport (challenge authentication, get key, wrap/unwrap); the Blob adapter runs over an
+in-memory gateway (`IProofBlobGateway`), whose Azure implementation is a thin pass-through that is
+not exercised against a real storage account here.
+
+```bash
+CI=true MSBUILDDISABLENODEREUSE=1 dotnet build Paqueteria.sln
+dotnet test tests/Paqueteria.UnitTests/Paqueteria.UnitTests.csproj --filter "FullyQualifiedName~Adp001"
+dotnet test tests/Paqueteria.ArchitectureTests/Paqueteria.ArchitectureTests.csproj
+dotnet test tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj --filter "FullyQualifiedName~LocationsPostGisContractTests|FullyQualifiedName~IncidentsPostgreSqlContractTests"
+dotnet test tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj --filter "FullyQualifiedName~Adp001|Category=SecureProofUpload"
+```
+
+## Residual risks
+
+- No test ran against real Azure. First activation must confirm the Defender tag key
+  capitalization and scan-time format, that the server-side copy completes within the Worker
+  pass, that Get Blob Tags on a missing blob answers `404` (not `403`) with the tag-read role, and
+  the CORS rule for the PWA.
+- A SAS cannot sign request headers (an S3 presigned PUT can). The Worker's database-backed checks
+  (key, requester, size, content type, metadata/key consistency) remain the barrier; the optional
+  upload-time `sha256` becomes client-omittable with Blob, while the finalize-time SHA-256
+  comparison against the promoted object stays mandatory.
+- Rejected and never-scanned objects stay in quarantine indefinitely (POD-001 retention is still a
+  GATE-007 decision) and the Worker re-reads their tags on each pass.
+- Rotation depends on earlier Key Vault key versions staying enabled; disabling or purging a
+  version makes its rows unreadable. Changing the key **name** needs a re-encryption procedure
+  that does not exist yet.
+- GATE-007 stays open: these adapters make real PII protection possible but do not authorize real
+  PII (PILOT-REAL-PEOPLE, GATE-007-PRIVACY-DRAFT).
+
+## Rollback
+
+Set the selectors back to their defaults (`Locations:PiiProtector` / `Incidents:PiiProtector` =
+`Disabled`, `ProofStorage:Provider` = `Disabled` or `S3Compatible`,
+`DataProtection:KeyEncryption:Provider` = `None`) and redeploy; then revert the ADP-001 commits.
+Rows already protected under Key Vault need the key to be read, and ring entries written with the
+KEK need the KEK: never delete the keys or their versions as part of a rollback. No migration is
+involved.

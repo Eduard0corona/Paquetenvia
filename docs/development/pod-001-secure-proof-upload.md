@@ -203,7 +203,11 @@ de inicio a Development/Testing; no se presenta como antivirus productivo. Con
 scanner o storage `Disabled`, las operaciones fallan con `503` y nunca generan
 una URL o un `READY` falso. Fuera de Development/Testing, S3 exige HTTPS.
 Además, readiness es `unhealthy` con storage o scanner `Disabled`; un scanner
-productivo concreto sigue pendiente de GATE-007.
+productivo concreto sigue pendiente de GATE-007. ADP-001 agrega el almacenamiento `AzureBlob`
+(SAS de delegación de usuario sólo create/write para el blob de cuarentena) y el scanner
+`DefenderForStorage` (veredicto de Microsoft Defender for Storage); ver
+`docs/development/adp-001-production-adapters.md`. La ruta local `S3Compatible` + `Synthetic`
+no cambia.
 
 `GET /health/ready` incluye `proof_storage`. Con el proveedor deshabilitado el
 check es neutral únicamente en Development/Testing porque POD queda totalmente

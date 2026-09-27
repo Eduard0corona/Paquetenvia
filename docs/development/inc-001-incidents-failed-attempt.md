@@ -205,6 +205,9 @@ dos implementaciones, seleccionadas por `Incidents:PiiProtector`:
 - `Disabled` (valor por omisión) — no protege nada y por lo tanto no se persiste nada;
 - `Mock` — protector sintético determinista, `DEV_SYNTHETIC_ONLY`, rechazado fuera de Development,
   Testing y DevSynthetic autorizado.
+- `AzureKeyVault` — protector productivo de ADP-001 (cifrado envolvente, llave RSA en Key Vault vía
+  identidad administrada). La versión de llave la elige el servidor desde Key Vault e
+  `Incidents:PiiKeyVersion` sólo aplica al `Mock`. Ver `docs/development/adp-001-production-adapters.md`.
 
 La protección se ejecuta **antes** de abrir la transacción. Si no está disponible, la petición
 termina en 503 sin haber escrito incidencia, evidencia, reserva idempotente ni auditoría: cero
