@@ -16,7 +16,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     /// any network access. The deployable artifact only accepts HTTPS signed
     /// upload URLs, exactly as it does against real object storage.
     /// </summary>
-    private const string SyntheticStorageOrigin = "https://storage.synthetic.test";
+    private const string SyntheticStorageOrigin = DriverStopsNextServerFixture.TestStorageOrigin;
     private static readonly byte[] SyntheticPng =
         [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 

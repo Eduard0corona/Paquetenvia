@@ -102,7 +102,7 @@ public sealed class SyntheticEnvironmentArchitectureTests
     public void Web_deployment_class_has_no_public_or_request_control_plane()
     {
         var policy = Read("apps/web/src/dev/dev-portal-policy.ts");
-        var page = Read("apps/web/src/app/dev/page.tsx");
+        var page = Read("apps/web/src/app/dev/page.dev.tsx");
         Assert.Contains("process.env.PAQUETERIA_DEPLOYMENT_CLASS", page, StringComparison.Ordinal);
         Assert.DoesNotContain("NEXT_PUBLIC_", policy + page, StringComparison.Ordinal);
         Assert.DoesNotContain("headers()", policy + page, StringComparison.Ordinal);
