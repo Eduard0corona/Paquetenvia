@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Security.KeyVault.Keys;
 using Azure.Security.KeyVault.Keys.Cryptography;
 using Microsoft.Extensions.Options;
@@ -39,6 +40,16 @@ public sealed partial class AzureKeyVaultPiiKeyWrapClient : IPiiKeyWrapClient
         IOptions<PiiProtectionOptions> options,
         TokenCredential credential,
         TimeProvider timeProvider)
+        : this(options, credential, timeProvider, transport: null)
+    {
+    }
+
+    /// <summary>Test seam: routes the Key Vault SDK through <paramref name="transport"/>.</summary>
+    internal AzureKeyVaultPiiKeyWrapClient(
+        IOptions<PiiProtectionOptions> options,
+        TokenCredential credential,
+        TimeProvider timeProvider,
+        HttpPipelineTransport? transport)
     {
         var settings = options.Value.AzureKeyVault;
         if (!KeyVaultKeyIds.TryParseVersionless(settings.KeyId, out var vaultUri, out var keyName))
@@ -51,8 +62,8 @@ public sealed partial class AzureKeyVaultPiiKeyWrapClient : IPiiKeyWrapClient
         _credential = credential;
         _timeProvider = timeProvider;
         _refreshInterval = TimeSpan.FromSeconds(settings.CurrentVersionRefreshSeconds);
-        _keyClient = new KeyClient(vaultUri, credential, Configure(new KeyClientOptions()));
-        _cryptographyOptions = Configure(new CryptographyClientOptions());
+        _keyClient = new KeyClient(vaultUri, credential, Configure(new KeyClientOptions(), transport));
+        _cryptographyOptions = Configure(new CryptographyClientOptions(), transport);
     }
 
     public async Task<string> GetCurrentKeyVersionAsync(CancellationToken cancellationToken)
@@ -148,9 +159,14 @@ public sealed partial class AzureKeyVaultPiiKeyWrapClient : IPiiKeyWrapClient
 
     private static bool IsKeyVaultVersion(string? value) => value is not null && KeyVaultVersionPattern().IsMatch(value);
 
-    private static T Configure<T>(T options)
+    private static T Configure<T>(T options, HttpPipelineTransport? transport)
         where T : ClientOptions
     {
+        if (transport is not null)
+        {
+            options.Transport = transport;
+        }
+
         options.Retry.MaxRetries = 2;
         options.Retry.NetworkTimeout = TimeSpan.FromSeconds(10);
         options.Diagnostics.IsLoggingContentEnabled = false;
