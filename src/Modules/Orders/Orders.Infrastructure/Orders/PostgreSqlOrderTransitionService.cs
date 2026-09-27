@@ -234,7 +234,7 @@ public sealed class PostgreSqlOrderTransitionService(
         }
 
         await failureInjector.OnStageAsync(OrderTransitionStage.OrderLocked, cancellationToken);
-        occurredAt = await SequenceAfterCommittedIncidentsAsync(
+        occurredAt = await SequenceAfterCommittedIncidentsAndProofsAsync(
             connection,
             transaction,
             command.OrganizationId,
@@ -609,15 +609,16 @@ public sealed class PostgreSqlOrderTransitionService(
 
     /// <summary>
     /// The transition's time is read from the application clock before the order lock, and
-    /// INC-001 opens incidents under a share lock on the same row. Whichever commits first, the
-    /// later one must carry the later time, or an incident opened during the previous attempt
-    /// could look newer than the status change that starts the next one. This runs after the
-    /// order lock in its own statement (a fresh READ COMMITTED snapshot, so it sees every incident
-    /// committed while the lock was awaited) and moves the transition just past the newest
-    /// incident of the order when the clock alone would have placed it earlier. INC-001 applies
-    /// the mirror rule against the order history. No AI-06 column is needed.
+    /// INC-001 opens incidents and POD-001 finalizes proofs under a share lock on the same row.
+    /// Whichever commits first, the later one must carry the later time, or an incident opened or
+    /// a proof finalized during the previous attempt could look newer than the status change that
+    /// starts the next one (ORD-002-ATTEMPT-BOUNDARY). This runs after the order lock in its own
+    /// statement (a fresh READ COMMITTED snapshot, so it sees every incident and proof committed
+    /// while the lock was awaited) and moves the transition just past the newest incident or
+    /// proof of the order when the clock alone would have placed it earlier. INC-001 and POD-001
+    /// apply the mirror rule against the order history. No AI-06 column is needed.
     /// </summary>
-    private async Task<DateTimeOffset> SequenceAfterCommittedIncidentsAsync(
+    private async Task<DateTimeOffset> SequenceAfterCommittedIncidentsAndProofsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid organizationId,
@@ -629,19 +630,23 @@ public sealed class PostgreSqlOrderTransitionService(
             connection,
             transaction,
             """
-            SELECT max(i.created_at)
-            FROM incidents.incidents i
-            WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)
+            SELECT greatest(
+              (SELECT max(i.created_at)
+               FROM incidents.incidents i
+               WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)),
+              (SELECT max(p.created_at)
+               FROM custody.proofs p
+               WHERE p.order_id=@order AND (p.owner_org_id=@org OR p.operator_org_id=@org)))
             """);
         command.Parameters.Add(P("org", NpgsqlDbType.Uuid, organizationId));
         command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
         var latest = await command.ExecuteScalarAsync(cancellationToken);
-        if (latest is not DateTime latestIncident)
+        if (latest is not DateTime latestRecord)
         {
             return occurredAt;
         }
 
-        var after = new DateTimeOffset(DateTime.SpecifyKind(latestIncident, DateTimeKind.Utc)).AddTicks(10);
+        var after = new DateTimeOffset(DateTime.SpecifyKind(latestRecord, DateTimeKind.Utc)).AddTicks(10);
         return after > occurredAt ? after : occurredAt;
     }
 
