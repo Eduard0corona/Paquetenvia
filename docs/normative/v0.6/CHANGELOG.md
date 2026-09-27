@@ -1,5 +1,21 @@
 # Changelog
 
+## AUTH-001 BFF — 2026-09-27
+
+- AI-05 documenta la superficie BFF fuera de `/api/v1` (`servers: /` por ruta):
+  `GET /auth/login`, `GET /signin-authcenter`, `GET /auth/session` y
+  `POST /auth/logout`, con el esquema `bffSession` (cookie
+  `__Host-Paquetenvia.Session`), el parámetro `X-AuthCenter-CSRF` y el esquema
+  `BffSession` (`GATE-002-BFF-001`). La respuesta de autorización exige `iss`
+  (RFC 9207).
+- AI-07: `/login` es anónima (punto de entrada de sesión), sin aprovisionar
+  (`AUTH-FIRST-LOGIN-INVITATION`).
+- AI-03 §17.1 y AI-24 `bff_session` registran el patrón BFF, el almacén de
+  sesiones en PostgreSQL (`BFF-SESSION-STORE-POSTGRESQL`, cambio AI-06/AI-18
+  pendiente; en memoria y una sola réplica hasta entonces) y el enrutamiento del
+  mismo origen del piloto (`PILOT-SAME-ORIGIN-ROUTING`).
+- Registro: `AUTH-001-BFF-CONTRACT-TRANSLATION` en `decision-log.md`.
+
 ## Finance en AI-05: regla vigente y delta pendiente — 2026-09-27
 
 - Las descripciones de `reconcileCod`, `getOrderFinancials` y

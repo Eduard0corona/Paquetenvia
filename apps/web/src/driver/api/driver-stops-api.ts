@@ -4,6 +4,10 @@ import {
   type DriverStop,
 } from "../contracts/driver-stop";
 import type { DriverSession } from "../session/driver-session";
+import {
+  resolveRequestAuthorization,
+  type RequestAuthorization,
+} from "../../auth/request-credentials";
 
 export interface DriverStopsApi {
   listStops(signal?: AbortSignal): Promise<readonly DriverStop[]>;
@@ -51,18 +55,21 @@ export function createDriverStopsApi(
         if (signal?.aborted) {
           throw new DriverStopsApiError("cancelled");
         }
-        const token = await options.session.getAccessToken();
-        if (typeof token !== "string" || token.length < 1) {
+        let authorization: RequestAuthorization;
+        try {
+          authorization = await resolveRequestAuthorization(options.session, "GET");
+        } catch {
           throw new DriverStopsApiError("unauthorized");
         }
 
         const response = await fetchImplementation(endpoint, {
           method: "GET",
           cache: "no-store",
+          credentials: authorization.credentials,
           signal: controller.signal,
           headers: {
             Accept: "application/json",
-            Authorization: `Bearer ${token}`,
+            ...authorization.headers,
             "X-Organization-Id": options.session.organizationId,
           },
         });

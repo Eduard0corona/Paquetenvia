@@ -1,5 +1,6 @@
 import { ExternalOfferContractError, parseExternalOfferPage, type ExternalOfferPage } from "../contracts/external-offer";
 import type { DriverSession } from "../session/driver-session";
+import { resolveRequestAuthorization, type RequestAuthorization } from "../../auth/request-credentials";
 
 export type ExternalOffersApiFailure = "unauthorized" | "forbidden" | "conflict" | "recoverable" | "invalid-contract" | "cancelled";
 
@@ -17,16 +18,21 @@ export interface ExternalOffersApi {
 
 export function createExternalOffersApi(baseUrl: string, session: DriverSession, fetcher: typeof fetch = fetch): ExternalOffersApi {
   async function request(path: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
-    const token = await session.getAccessToken();
-    if (!token) throw new ExternalOffersApiError("unauthorized");
+    let authorization: RequestAuthorization;
+    try {
+      authorization = await resolveRequestAuthorization(session, init.method ?? "GET");
+    } catch {
+      throw new ExternalOffersApiError("unauthorized");
+    }
     try {
       const response = await fetcher(new URL(path, baseUrl), {
         ...init,
         signal,
         cache: "no-store",
+        credentials: authorization.credentials,
         headers: {
           Accept: "application/json",
-          Authorization: `Bearer ${token}`,
+          ...authorization.headers,
           "X-Organization-Id": session.organizationId,
           ...init.headers,
         },

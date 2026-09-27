@@ -10,7 +10,10 @@ export type RestResynchronizer = () => Promise<RestSynchronizationSnapshot>;
 
 export interface BaseRealtimeConnectionOptions {
   readonly baseUrl: string;
-  readonly tokenFactory: RealtimeTokenFactory;
+  /** Bearer mode (Mock provider, public tracking token). Exclusive with csrfTokenFactory. */
+  readonly tokenFactory?: RealtimeTokenFactory;
+  /** AuthCenter BFF mode: same-origin cookie plus the CSRF header on negotiate/transport POSTs. */
+  readonly csrfTokenFactory?: () => string;
   readonly resynchronizeFromRest: RestResynchronizer;
   readonly reconnectDelaysMilliseconds?: readonly number[];
   readonly onReconnecting?: (error?: Error) => void;

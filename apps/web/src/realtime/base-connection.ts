@@ -3,7 +3,9 @@ import {
   HubConnectionBuilder,
   HubConnectionState,
   LogLevel,
+  type IHttpConnectionOptions,
 } from "@microsoft/signalr";
+import { csrfHeaderName } from "../auth/request-credentials";
 import type {
   BaseRealtimeConnectionOptions,
   RestSynchronizationSnapshot,
@@ -44,7 +46,7 @@ export function buildManagedConnection(
     options.reconnectDelaysMilliseconds ?? defaultReconnectDelaysMilliseconds;
   const guard = new RealtimeEventGuard();
   const connection = new HubConnectionBuilder()
-    .withUrl(url, { accessTokenFactory: options.tokenFactory })
+    .withUrl(url, transportOptions(options))
     .withAutomaticReconnect([...reconnectDelays])
     .configureLogging(options.suppressLogging ? LogLevel.None : LogLevel.Warning)
     .build();
@@ -101,9 +103,26 @@ export async function resynchronizeAfterReconnect(
   guard.replaceAggregateVersions(snapshot.aggregate_versions);
 }
 
+function transportOptions(
+  options: BaseRealtimeConnectionOptions,
+): IHttpConnectionOptions {
+  if (options.csrfTokenFactory !== undefined) {
+    // Browsers attach the HttpOnly session cookie to same-origin negotiate,
+    // SSE/long-polling and WebSocket requests; the CSRF header covers the
+    // POSTs and the API checks Origin on the WebSocket upgrade.
+    return {
+      withCredentials: true,
+      headers: { [csrfHeaderName]: options.csrfTokenFactory() },
+    };
+  }
+  return { accessTokenFactory: options.tokenFactory };
+}
+
 function assertOptions(options: BaseRealtimeConnectionOptions): void {
-  if (typeof options.tokenFactory !== "function") {
-    throw new Error("A token callback is required.");
+  const hasToken = typeof options.tokenFactory === "function";
+  const hasCsrf = typeof options.csrfTokenFactory === "function";
+  if (hasToken === hasCsrf) {
+    throw new Error("Exactly one credential callback is required.");
   }
 
   if (typeof options.resynchronizeFromRest !== "function") {
