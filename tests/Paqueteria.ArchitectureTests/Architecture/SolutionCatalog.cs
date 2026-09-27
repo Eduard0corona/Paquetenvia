@@ -284,6 +284,7 @@ internal static class SolutionCatalog
             "Identity.Infrastructure",
             "Organizations.Infrastructure",
             "Notifications.Infrastructure",
+            "Dispatch.Infrastructure",
         ]);
 
     internal static IReadOnlyList<ProjectComponent> All { get; } =

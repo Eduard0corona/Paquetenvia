@@ -345,13 +345,18 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             Custody.Infrastructure.Persistence.Migrations.AddOperationalCleanupExecutor.OwnedFunctions,
             cleanup.Select(entry => entry.Signature));
 
-        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_V1", E002RoutineMap.Name(E002RoutineMapState.Applied, false, false));
-        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_V1", E002RoutineMap.Name(E002RoutineMapState.Applied, true, false));
+        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_V1", E002RoutineMap.Name(E002RoutineMapState.Applied, false));
+        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_V1", E002RoutineMap.Name(E002RoutineMapState.Applied, true));
         Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_OPS003_V1",
-            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true));
-        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_OPS003_V1", E002RoutineMap.Name(E002RoutineMapState.Applied, false, true));
-        Assert.Equal("ROUTINE_MAP_AI18_PENDING_V1", E002RoutineMap.Name(E002RoutineMapState.Pending, false, false));
-        Assert.Equal("ROUTINE_MAP_AI18_PENDING_PLUS_LIF001_V1", E002RoutineMap.Name(E002RoutineMapState.Pending, true, false));
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, ops003Applied: true));
+        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_OPS003_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, false, ops003Applied: true));
+        Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, dispatchLaneApplied: true, ops003Applied: true));
+        Assert.Equal(31, E002RoutineMap.Select(
+            E002RoutineMapState.Applied, lif001Applied: true, dispatchLaneApplied: true, ops003Applied: true).Count);
+        Assert.Equal("ROUTINE_MAP_AI18_PENDING_V1", E002RoutineMap.Name(E002RoutineMapState.Pending, false));
+        Assert.Equal("ROUTINE_MAP_AI18_PENDING_PLUS_LIF001_V1", E002RoutineMap.Name(E002RoutineMapState.Pending, true));
         Assert.Equal(11, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: false, ops003Applied: false).Count);
         Assert.Equal(12, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: true, ops003Applied: false).Count);
         Assert.Equal(13, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: false, ops003Applied: true).Count);
@@ -446,14 +451,44 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         {
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
-            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_OPS003_V1", semantic.RoutineMap);
-            Assert.Equal(29, semantic.ControlledIdentities);
-            Assert.Equal(56, semantic.NormalizedExecuteRows);
+            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1", semantic.RoutineMap);
+            Assert.Equal(31, semantic.ControlledIdentities);
+            Assert.Equal(60, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> CustodyLaneAsync() =>
             (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
                 .Single(state => state.Module == "Custody").Status;
+    }
+
+    [Fact]
+    public void E002_models_the_d8_dispatch_lane_as_worker_only_outbox_executor_routines()
+    {
+        // D8-OUTBOX-LANE-DISPATCH: two routines owned by paqueteria_outbox_executor, EXECUTE for the Worker only.
+        Assert.Equal(
+            Notifications.Infrastructure.Persistence.Migrations.AddDispatchOutboxLane.MigrationId,
+            E002NotificationStateReader.DispatchLaneMigrationId);
+        var lane = E002RoutineMap.Select(E002RoutineMapState.Applied, lif001Applied: true, dispatchLaneApplied: true)
+            .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, lif001Applied: true))
+            .ToArray();
+        Assert.Equal(
+            ["security.claim_dispatch_outbox(text,integer,interval)",
+             "security.requeue_stale_dispatch_outbox(interval,integer,integer)"],
+            lane.Select(entry => entry.Signature));
+        Assert.All(lane, entry =>
+        {
+            Assert.Equal("paqueteria_outbox_executor", entry.Owner);
+            Assert.Equal(["paqueteria_worker"], entry.Grantees);
+        });
+        Assert.Equal(29, E002RoutineMap.Select(E002RoutineMapState.Applied, true, true).Count);
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true));
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_D8DISPATCH_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, false, true));
+        Assert.Throws<InvalidOperationException>(() =>
+            E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: false, dispatchLaneApplied: true));
     }
 
     [PostgreSqlContractFact]
@@ -561,10 +596,11 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         {
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
-            // The Custody OPS-003 lane is applied too, so both executors' routines are in the map.
-            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_OPS003_V1", semantic.RoutineMap);
-            Assert.Equal(29, semantic.ControlledIdentities);
-            Assert.Equal(56, semantic.NormalizedExecuteRows);
+            // The Notifications lane also installed the D8 DISPATCH lane and the Custody OPS-003 lane is applied
+            // too: two routines each, owner + Worker.
+            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1", semantic.RoutineMap);
+            Assert.Equal(31, semantic.ControlledIdentities);
+            Assert.Equal(60, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>

@@ -51,6 +51,17 @@ public static class E002RoutineMap
         new("security.finalize_expired_orders(integer)", "paqueteria_lifecycle_executor", ["paqueteria_worker"]),
     ];
 
+    /// <summary>
+    /// D8-OUTBOX-LANE-DISPATCH: installed by the Notifications lane migration
+    /// 20260927000200_AddDispatchOutboxLane after NTF-001, owned by paqueteria_outbox_executor and
+    /// executable only by paqueteria_worker.
+    /// </summary>
+    private static readonly E002RoutineEntry[] DispatchLaneEntries =
+    [
+        new("security.claim_dispatch_outbox(text,integer,interval)", "paqueteria_outbox_executor", ["paqueteria_worker"]),
+        new("security.requeue_stale_dispatch_outbox(interval,integer,integer)", "paqueteria_outbox_executor", ["paqueteria_worker"]),
+    ];
+
     /// <summary>OPS-003-CLEANUP-ROLE: installed by the Custody OPS-003 lane, independently of NTF-001 and LIF-001.</summary>
     private static readonly E002RoutineEntry[] Ops003Entries =
     [
@@ -72,6 +83,7 @@ public static class E002RoutineMap
         if (PendingEntries.Length != 11 || Ntf001Entries.Length != 15 || AppliedEntries.Count != 26 ||
             AppliedEntries.Sum(entry => 1 + entry.Grantees.Count) != 50 ||
             Lif001Entries.Length != 1 || Lif001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
+            DispatchLaneEntries.Length != 2 || DispatchLaneEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
             Ops003Entries.Length != 2 || Ops003Entries.Sum(entry => 1 + entry.Grantees.Count) != 4)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
@@ -81,15 +93,21 @@ public static class E002RoutineMap
     public static IReadOnlyList<E002RoutineEntry> Select(
         E002RoutineMapState state,
         bool lif001Applied,
-        bool ops003Applied)
+        bool dispatchLaneApplied = false,
+        bool ops003Applied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
-            E002RoutineMapState.Pending => Array.AsReadOnly(PendingEntries),
+            E002RoutineMapState.Pending when !dispatchLaneApplied => Array.AsReadOnly(PendingEntries),
             E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied => AppliedEntries,
             _ => throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID"),
         };
-        IEnumerable<E002RoutineEntry> selected = entries;
+        var selected = entries.AsEnumerable();
+        if (dispatchLaneApplied)
+        {
+            selected = selected.Concat(DispatchLaneEntries);
+        }
+
         if (lif001Applied)
         {
             selected = selected.Concat(Lif001Entries);
@@ -100,18 +118,26 @@ public static class E002RoutineMap
             selected = selected.Concat(Ops003Entries);
         }
 
-        return lif001Applied || ops003Applied ? Array.AsReadOnly(selected.ToArray()) : entries;
+        return Array.AsReadOnly(selected.ToArray());
     }
 
-    public static string Name(E002RoutineMapState state, bool lif001Applied, bool ops003Applied)
+    public static string Name(
+        E002RoutineMapState state,
+        bool lif001Applied,
+        bool dispatchLaneApplied = false,
+        bool ops003Applied = false)
     {
-        var baseName = state switch
+        var prefix = state switch
         {
-            E002RoutineMapState.Pending => "ROUTINE_MAP_AI18_PENDING",
-            E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied => "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED",
+            E002RoutineMapState.Pending when !dispatchLaneApplied => "ROUTINE_MAP_AI18_PENDING",
+            E002RoutineMapState.Applied or E002RoutineMapState.Ntf001TargetApplied =>
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED",
             _ => throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID"),
         };
-        return baseName + (lif001Applied ? "_PLUS_LIF001" : string.Empty) +
-            (ops003Applied ? "_PLUS_OPS003" : string.Empty) + "_V1";
+        return prefix +
+            (lif001Applied ? "_PLUS_LIF001" : string.Empty) +
+            (dispatchLaneApplied ? "_PLUS_D8DISPATCH" : string.Empty) +
+            (ops003Applied ? "_PLUS_OPS003" : string.Empty) +
+            "_V1";
     }
 }

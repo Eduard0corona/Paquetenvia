@@ -33,7 +33,7 @@ La migración Custody `20260927000100_AddOperationalCleanupExecutor`:
 
 Ambas devuelven sólo un conteo `integer`: ningún identificador de tenant, llave o
 sesión cruza la frontera. AI-06 no cambia (como en ADR-034, la función la instala
-el lane del módulo); AI-18 recoge el rol, los grants y las aserciones 12–15.
+el lane del módulo); AI-18 recoge el rol, los grants y las aserciones 13–16.
 
 Punto de extensión: la purga de sesiones BFF (`BFF-SESSION-STORE-POSTGRESQL`) se
 añadirá al mismo rol con su propia migración cuando exista

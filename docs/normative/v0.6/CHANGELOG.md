@@ -180,7 +180,7 @@
 - `OPS-003-CLEANUP-ROLE`: AI-18 agrega `paqueteria_cleanup_executor NOLOGIN BYPASSRLS`
   con grants exactos por columna (más `DELETE` de tabla sobre
   `platform.idempotency_keys`, que no tiene forma por columna) y las aserciones
-  de despliegue 12 a 15. Las funciones
+  de despliegue 13 a 16. Las funciones
   `security.purge_expired_idempotency_keys(timestamptz,integer,boolean)` (piso
   fijo de 72 h) y `security.expire_proof_upload_sessions(integer)` las instala
   el lane de Custody (`20260927000100_AddOperationalCleanupExecutor`), como

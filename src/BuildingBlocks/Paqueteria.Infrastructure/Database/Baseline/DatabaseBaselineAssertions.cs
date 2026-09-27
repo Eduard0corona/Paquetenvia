@@ -390,6 +390,14 @@ public sealed class DatabaseBaselineAssertions
               SELECT 'security.finalize_expired_orders(integer)','paqueteria_lifecycle_executor'
               WHERE to_regprocedure('security.finalize_expired_orders(integer)') IS NOT NULL
               UNION ALL
+              -- D8-OUTBOX-LANE-DISPATCH: installed by the Notifications lane after NTF-001.
+              SELECT signature,'paqueteria_outbox_executor'
+              FROM (VALUES
+                ('security.claim_dispatch_outbox(text,integer,interval)'),
+                ('security.requeue_stale_dispatch_outbox(interval,integer,integer)')) dispatch_lane(signature)
+              WHERE to_regprocedure('security.claim_dispatch_outbox(text,integer,interval)') IS NOT NULL
+                 OR to_regprocedure('security.requeue_stale_dispatch_outbox(interval,integer,integer)') IS NOT NULL
+              UNION ALL
               -- OPS-003-CLEANUP-ROLE: installed by the Custody OPS-003 lane after the baseline.
               SELECT signature,'paqueteria_cleanup_executor'
               FROM (VALUES
@@ -920,6 +928,25 @@ public sealed class DatabaseBaselineAssertions
                 "security.finalize_notification_max_attempts(uuid,uuid,uuid,integer,timestamp with time zone)",
             }
             : SensitiveFunctions.Skip(3).ToArray();
+        var dispatchLaneInstalled = await ScalarAsync<bool>(
+            connection,
+            transaction,
+            """
+            SELECT to_regprocedure('security.claim_dispatch_outbox(text,integer,interval)') IS NOT NULL
+                OR to_regprocedure('security.requeue_stale_dispatch_outbox(interval,integer,integer)') IS NOT NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        if (dispatchLaneInstalled)
+        {
+            // D8-OUTBOX-LANE-DISPATCH: EXECUTE for paqueteria_worker only.
+            workerFunctions =
+            [
+                .. workerFunctions,
+                "security.claim_dispatch_outbox(text,integer,interval)",
+                "security.requeue_stale_dispatch_outbox(interval,integer,integer)",
+            ];
+        }
+
         foreach (var signature in workerFunctions)
         {
             if (!await HasFunctionPrivilegeAsync(connection, transaction, "paqueteria_worker", signature, cancellationToken).ConfigureAwait(false))

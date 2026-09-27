@@ -357,10 +357,16 @@ Característica: Política 401 403 404
 
 Característica: Custodia después de reprogramación
   Escenario: Reanudar entrega sin custodia
-    Dado una orden FAILED_ATTEMPT que pasó a RESCHEDULED
+    Dado una orden en FAILED_ATTEMPT
     Y custody_acquired=false
+    Cuando se intenta FAILED_ATTEMPT a DELIVERING
+    Entonces la transición se rechaza
+
+  Escenario: Una orden reprogramada no sale directo a reparto (D8-RESCHEDULED-NO-DIRECT-DELIVERY)
+    Dado una orden FAILED_ATTEMPT que pasó a RESCHEDULED
     Cuando se intenta RESCHEDULED a DELIVERING
     Entonces la transición se rechaza
+    Y la orden debe pasar por una asignación nueva: RESCHEDULED a ASSIGNED
 
 Característica: COD mínimo en MVP-0
   Escenario: Entregar COD sin registro de efectivo

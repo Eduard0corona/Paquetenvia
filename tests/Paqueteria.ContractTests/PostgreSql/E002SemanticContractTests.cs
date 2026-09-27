@@ -45,10 +45,11 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                 var applied = await new E002SemanticAssertions().AssertAsync(
                     connection, E002NotificationState.Applied);
                 // The coordinator also applied the Orders LIF-001 lane (ADR-034): one more routine, owner + Worker,
-                // and the Custody OPS-003 lane (OPS-003-CLEANUP-ROLE): two more routines, owner + Worker each.
-                Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_OPS003_V1", applied.RoutineMap);
-                Assert.Equal(29, applied.ControlledIdentities);
-                Assert.Equal(56, applied.NormalizedExecuteRows);
+                // plus the D8 DISPATCH lane (D8-OUTBOX-LANE-DISPATCH) and the Custody OPS-003 lane
+                // (OPS-003-CLEANUP-ROLE): two more routines each, owner + Worker.
+                Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1", applied.RoutineMap);
+                Assert.Equal(31, applied.ControlledIdentities);
+                Assert.Equal(60, applied.NormalizedExecuteRows);
             }
 
             Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString,
