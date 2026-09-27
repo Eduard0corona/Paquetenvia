@@ -202,6 +202,20 @@ describe("driver operations OPS-003 expiry notice", () => {
     expect(controller.current.message).toBe(
       driverOperationExpiredMessage(["DELIVERY_PROOF"]),
     );
+
+    // Background passes (online, timer) report only their own expirations.
+    const options = schedulerOptions as DriverSyncSchedulerOptions | null;
+    options?.onSyncPassStarted?.();
+    options?.onOperationExpired?.({ ...expired, kind: "CHECK_IN" });
+    expect(controller.current.message).toBe(
+      driverOperationExpiredMessage(["CHECK_IN"]),
+    );
+    options?.onSyncPassStarted?.();
+    options?.onOperationExpired?.(expired);
+    options?.onOperationExpired?.({ ...expired, kind: "START_TRANSIT" });
+    expect(controller.current.message).toBe(
+      driverOperationExpiredMessage(["DELIVERY_PROOF", "START_TRANSIT"]),
+    );
     await controller.dispose();
   });
 });

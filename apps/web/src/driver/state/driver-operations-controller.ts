@@ -131,6 +131,11 @@ export class DriverOperationsController {
           this.setState({ ...this.state, operations: next, loading: false }),
         onAccessRevoked: this.options.onAccessRevoked,
         onOperationExpired: (operation) => this.notifyExpired(operation.kind),
+        // Each pass reports only its own expirations; a notice already shown
+        // is never folded into a later one.
+        onSyncPassStarted: () => {
+          this.expiredKinds = [];
+        },
         telemetry: this.telemetry,
         now: this.options.now,
         randomUuid: this.options.randomUuid,

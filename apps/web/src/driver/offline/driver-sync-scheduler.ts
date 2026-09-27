@@ -54,6 +54,11 @@ export interface DriverSyncSchedulerOptions {
    * will never be sent again; the caller only tells the driver.
    */
   readonly onOperationExpired?: (operation: DriverOfflineOperation) => void;
+  /**
+   * Called when a sync pass (manual, `online`, visibility or backoff timer)
+   * holds the lease and starts, so expiry notices can be grouped per pass.
+   */
+  readonly onSyncPassStarted?: () => void;
   readonly telemetry?: DriverSyncTelemetry;
   readonly now?: () => Date;
   readonly randomUuid?: () => string;
@@ -151,6 +156,7 @@ export class DriverSyncScheduler {
       this.leaseMilliseconds,
     );
     if (!acquired) return;
+    this.options.onSyncPassStarted?.();
 
     this.abortController = new AbortController();
     this.leaseLost = false;
