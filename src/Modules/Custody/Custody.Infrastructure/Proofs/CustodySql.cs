@@ -24,9 +24,18 @@ internal static class CustodySql
         Guid actorId,
         Guid organizationId,
         bool mfaSatisfied,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool lockOrderForShare = false)
     {
         var (connection, transaction) = Database(context);
+        if (lockOrderForShare && !await LockOrderForShareAsync(connection, transaction, orderId, cancellationToken))
+        {
+            return null;
+        }
+
+        // A new statement: under READ COMMITTED it takes a fresh snapshot after the lock above,
+        // so the order state and every authorization subquery (memberships, driver profile,
+        // assignment) see what committed while this transaction waited for the lock.
         await using var command = new NpgsqlCommand(
             """
             SELECT o.owner_org_id,o.operator_org_id,o.status,
@@ -58,8 +67,8 @@ internal static class CustodySql
                   WHERE u.id=@actor AND u.status='ACTIVE'
                     AND m.organization_id=@organization AND m.status='ACTIVE'
                     AND m.role='DRIVER'
-                    AND d.driver_type='OWN' AND d.status='ACTIVE'
-                    AND a.assignment_type='OWN'
+                    AND d.driver_type IN ('OWN','EXTERNAL') AND d.status='ACTIVE'
+                    AND a.assignment_type=d.driver_type
                     AND a.owner_org_id=o.owner_org_id
                     AND a.operator_org_id IS NOT DISTINCT FROM o.operator_org_id
                     AND (a.owner_org_id=@organization OR a.operator_org_id=@organization)
@@ -89,6 +98,28 @@ internal static class CustodySql
             reader.GetGuid(0),
             reader.IsDBNull(1) ? null : reader.GetGuid(1),
             reader.GetString(2));
+    }
+
+    /// <summary>
+    /// POD finalization holds FOR SHARE on the order so a concurrent ORD-002 transition (which
+    /// takes FOR UPDATE) either commits first and is observed by the next statement, or waits
+    /// for the proof to commit. The lock is its own statement on purpose: with FOR SHARE inside
+    /// the authorization query, PostgreSQL would re-check only the locked order row after the
+    /// wait (EvalPlanQual) while the EXISTS subqueries kept the statement's older snapshot.
+    /// Read-only callers (upload session, replay, download) keep the non-locking read.
+    /// </summary>
+    private static async Task<bool> LockOrderForShareAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid orderId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT 1 FROM orders.orders WHERE id=@order FOR SHARE",
+            connection,
+            transaction);
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
     internal static async Task AcquireIdempotencyLockAsync(
