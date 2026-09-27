@@ -28,6 +28,11 @@ on:
         options:
           - none
           - bind
+      rotate_runtime_logins:
+        description: Generate new runtime LOGIN passwords for API and Worker (new secret versions, re-keyed logins, restarted revisions).
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -152,11 +157,14 @@ jobs:
     env:
       TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
       CUSTOM_DOMAIN_PHASE: ${{ inputs.custom_domain_phase }}
+      ROTATE_RUNTIME_LOGINS: ${{ inputs.rotate_runtime_logins }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       PILOT_RESOURCE_GROUP: ${{ vars.PILOT_RESOURCE_GROUP }}
       PILOT_BUDGET_START_DATE: ${{ vars.PILOT_BUDGET_START_DATE }}
       PILOT_BUDGET_EMAILS: ${{ vars.PILOT_BUDGET_EMAILS }}
       PILOT_TRACKING_SUPPORT_URL: ${{ vars.PILOT_TRACKING_SUPPORT_URL }}
+      PILOT_GATE_007_DECISION: ${{ vars.PILOT_GATE_007_DECISION }}
+      PILOT_GATE_012_DECISION: ${{ vars.PILOT_GATE_012_DECISION }}
     steps:
       - name: Validate inputs and environment variables
         shell: bash
@@ -175,6 +183,25 @@ jobs:
         with:
           ref: ${{ inputs.tested_git_sha }}
           fetch-depth: 1
+
+      # ENV-001 acceptance: no pilot deployment without GATE-007 (privacy) and GATE-012 (cloud and data
+      # residency) resolved or explicitly scoped by the owner. Each variable names the decision-log row
+      # (in the deployed tree) that resolves or scopes the gate; a missing or unknown id stops here.
+      - name: Require owner decisions for GATE-007 and GATE-012 (STOP_FOR_OWNER_DECISION)
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=docs/normative/v0.6/decision-log.md
+          for gate in 007 012; do
+            var="PILOT_GATE_${gate}_DECISION"
+            id="${!var:-}"
+            if [[ ! "${id}" =~ ^[A-Z0-9][A-Z0-9-]{2,80}$ ]]; then
+              echo "::error::${var} must name the decision-log row that resolves or scopes GATE-${gate} (STOP_FOR_OWNER_DECISION)"; exit 1
+            fi
+            if ! grep -Fq "| ${id} |" "${log}" || ! grep -F "| ${id} |" "${log}" | grep -Fq "GATE-${gate}"; then
+              echo "::error::decision ${id} is not recorded for GATE-${gate} in ${log} at tested_git_sha (STOP_FOR_OWNER_DECISION)"; exit 1
+            fi
+          done
 
       - name: Install pinned Bicep CLI
         shell: bash
@@ -300,7 +327,7 @@ jobs:
           put_secret pg-migrate-connection "${RUNNER_TEMP}/s"
           # Runtime LOGIN passwords are generated once; the job receives only their SCRAM verifiers.
           for role in api worker; do
-            if has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then continue; fi
+            if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then continue; fi
             password="$(openssl rand -hex 32)"
             echo "::add-mask::${password}"
             printf 'Host=%s;Database=paqueteria;Username=pv_pilot_%s;Password=%s;Maximum Pool Size=5;Minimum Pool Size=0;%s' \
@@ -399,6 +426,13 @@ jobs:
               "piiKeyUri=${PII_KEY_URI}" "dataProtectionKeyUri=${DP_KEY_URI}" "blobServiceUri=${BLOB_URI}" \
               "trustedProxyNetwork=${PROXY_NETWORK}" "businessSettings=@deploy/azure/pilot/apps.settings.json" \
             --only-show-errors --output none
+          if [[ "${ROTATE_RUNTIME_LOGINS}" == "true" ]]; then
+            # Key Vault references refresh lazily; restart so the re-keyed logins take effect now.
+            for app in ca-pv-pilot-api ca-pv-pilot-worker; do
+              revision="$(az containerapp show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --query properties.latestRevisionName -o tsv)"
+              az containerapp revision restart --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${revision}" --only-show-errors --output none
+            done
+          fi
           fqdn="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-apps --query properties.outputs.routeFqdn.value -o tsv)"
           echo "routeFqdn=${fqdn}" >> "${GITHUB_OUTPUT}"
 

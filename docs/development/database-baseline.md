@@ -87,6 +87,21 @@ schema to prove future table and sequence privileges. No probe table remains.
 - Worker is an external non-superuser/NOBYPASSRLS login that may assume only
   `paqueteria_worker`.
 
+ENV-001 adds `runtime-logins --connection-env NAME` for the Azure pilot, where no
+operator can reach the private database. The command:
+
+- runs only against an Applied baseline;
+- creates or re-keys `pv_pilot_api` (member of `paqueteria_app` only) and
+  `pv_pilot_worker` (member of `paqueteria_worker` only), both as
+  `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`;
+- removes any other membership, asserts the exact shape and commits in one
+  transaction.
+
+It accepts SCRAM-SHA-256 verifiers only, in `PAQUETERIA_API_LOGIN_VERIFIER` and
+`PAQUETERIA_WORKER_LOGIN_VERIFIER`, never a plaintext password. On failure it
+reports only the stage and SQLSTATE (exit code 7). See
+`docs/operations/env-001-pilot/README.md`.
+
 AI-18 roles are NOLOGIN. Runtime cannot assume migrator, bootstrap, executor or
 maintenance, does not own objects, and cannot create in `public`. Bootstrap
 owns only approved identity/tracking functions. Executor owns

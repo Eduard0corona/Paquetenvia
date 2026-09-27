@@ -8,7 +8,7 @@ How changes move from a task branch to `main`, which workflow validates each ste
 |---|---|---|
 | `feature/*`, `fix/*` | One backlog task per branch/PR | Agents and developers (PRs in **draft**) |
 | `development` | Integration branch | Only merges of PRs validated by PR Validation |
-| `main` | Certified baseline; the only source for `deploy-azure-dev.yml` | Only promotion PRs from `development`, the dependency route and authorized security remediations |
+| `main` | Certified baseline; the only source for `deploy-azure-dev.yml` and `deploy-azure-pilot.yml` | Only promotion PRs from `development`, the dependency route and authorized security remediations |
 
 Nobody pushes directly to `main` or `development`, and nobody rebases or force-pushes shared branches. Only the owner merges.
 
@@ -75,6 +75,14 @@ Anything unregistered still fails closed: an extra transitive package, another v
 - **Development Push Validation:** *Run workflow* (`workflow_dispatch`) on `development`, or *Re-run* on the run.
 - **Foundation push/main:** re-run from Actions. For a deploy, use the `id` of the green run whose `head_sha` is the commit to deploy.
 - **Deploy (`deploy-azure-dev.yml`):** `workflow_dispatch` from `main` only. `tested_git_sha` must match `^[0-9a-f]{40}$` and `foundation_run_id` must match `^[0-9]+$`. The inputs are validated before use and reach the shells only through `env:`.
+- **Pilot deploy (`deploy-azure-pilot.yml`, ENV-001):**
+  - Runs by `workflow_dispatch` from `main` only, with the same `tested_git_sha` / `foundation_run_id`
+    inputs and the same 13/13 gate.
+  - Needs the `azure-pilot` GitHub Environment, owner-recorded GATE-007/GATE-012 decision ids, and
+    `deploy/azure/pilot/apps.settings.json` without `OWNER_DECISION_REQUIRED`.
+  - Runbook: `docs/operations/env-001-pilot/README.md`.
+  - Its templates and workflow belong to the `AZURE` / `DEPLOY_WORKFLOW` domains, so `azr-static`
+    runs the pilot guard tests (`tools/azr-001/test_env001_pilot_guards.py`).
 - **Locally:** `python3 -m unittest discover -s tools/ci -p "test_*.py"`, `python3 -m unittest discover -s tools/azr-001 -p "test_*.py"`, `python3 docs/normative/v0.6/tools/validate_contracts.py`.
 
 ## Workflow conventions

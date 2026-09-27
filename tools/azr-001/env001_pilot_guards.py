@@ -359,7 +359,8 @@ def guard_03_environment(ctx: Context) -> GuardResult:
 
 def guard_04_provenance(ctx: Context) -> GuardResult:
     failures = []
-    for needle in ("azr001_static_guards.py deploy-gate", "--foundation-jobs-json", "^[0-9a-f]{40}$", "^[0-9]+$", DIGEST_REGEX_LITERAL):
+    for needle in ("azr001_static_guards.py deploy-gate", "--foundation-jobs-json", "^[0-9a-f]{40}$", "^[0-9]+$", DIGEST_REGEX_LITERAL,
+                   "PILOT_GATE_007_DECISION", "PILOT_GATE_012_DECISION"):
         if needle not in ctx.workflow_text:
             failures.append(f"workflow lacks provenance/digest control: {needle}")
     for name, job in (ctx.workflow.get("jobs", {}) or {}).items():
