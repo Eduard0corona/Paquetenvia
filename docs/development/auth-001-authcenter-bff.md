@@ -293,12 +293,22 @@ cada uno con su propio cliente confidencial y su propio secreto; no hay ambiente
 | Back-channel logout URI | `https://dev.paquetenvia.com/auth/backchannel-logout` | `https://paquetenvia.com/auth/backchannel-logout` |
 | `AuthCenter__Authority` | `https://authcenter.info` | `https://authcenter.info` |
 | `LoginUrl` (en AuthCenter) | `https://authcenter.info/login` | `https://authcenter.info/login` |
-| `AuthCenter__Issuer` | valor `issuer` de `https://authcenter.info/.well-known/openid-configuration` | igual |
+| `AuthCenter__Issuer` | `https://authcenter.info` | `https://authcenter.info` |
 
 - Las URIs se registran **exactas**, sin `/` final: AuthCenter las compara de forma ordinal.
-- `AuthCenter__Issuer`: la configuración por defecto del repositorio de AuthCenter usa
-  `Jwt:Issuer = "AuthCenter"`. Si producción no lo sobrescribe, el `issuer` publicado no es una URL.
-  Copiar el valor tal cual aparece en discovery; no suponerlo.
+- `AuthCenter__Issuer`: el owner lo confirmó el 27-sep-2026 con el discovery de producción
+  (`https://authcenter.info/.well-known/openid-configuration`): `https://authcenter.info`, sin `/`
+  final. Ese discovery también publica lo que requiere este diseño:
+  - endpoints `/oauth/authorize`, `/oauth/token`, `/oauth/revoke` y `/oauth/logout`
+    (`end_session_endpoint`);
+  - `code_challenge_methods_supported: [S256]`;
+  - `client_secret_post` y `client_secret_basic`;
+  - ID token `RS256`;
+  - `authorization_response_iss_parameter_supported: true`;
+  - `backchannel_logout_supported` y `backchannel_logout_session_supported`;
+  - `acr_values_supported` con `urn:authcenter:acr:mfa` y `urn:authcenter:acr:phr`, que coinciden
+    con `AuthCenterDefaults`;
+  - el claim `email_verified`.
 - El ingress de cada ambiente debe aceptar el `POST` sin `Origin` hacia `/auth/backchannel-logout`
   (§14.2). AuthCenter lo llama servidor a servidor.
 
