@@ -145,6 +145,7 @@ export function isTrackingPath(pathname: string): boolean {
 export function isPrivateNoStorePath(pathname: string): boolean {
   return (
     isTrackingPath(pathname) ||
+    pathname === "/onboarding" ||
     pathname === "/ops" ||
     pathname.startsWith("/ops/")
   );

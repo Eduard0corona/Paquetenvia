@@ -67,7 +67,10 @@ internal sealed class AuthCenterCookieEvents(IOptions<AuthCenterOptions> options
         var resolver = context.HttpContext.RequestServices.GetRequiredService<IIdentityContextResolver>();
         var resolution = await resolver.ResolveAsync(subject, context.HttpContext.RequestAborted);
         if (!IdentityClaimsPrincipalFactory.TryCreate(
-                new ExternalIdentity(subject, mfa == "True"),
+                new ExternalIdentity(
+                    subject,
+                    mfa == "True",
+                    SingleValue(external, AuthCenterDefaults.EmailVerifiedClaim) == "true"),
                 resolution,
                 out var principal) ||
             principal is null)

@@ -21,6 +21,7 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_maintenance",
         "paqueteria_lifecycle_executor",
         "paqueteria_cleanup_executor",
+        "paqueteria_registration_executor",
     ];
 
     private static readonly string[] SensitiveFunctions =
@@ -54,6 +55,7 @@ public sealed class DatabaseBaselineAssertions
         "pilot operational and outbox purge indexes (AI06-PILOT-INDEXES)",
         "lifecycle executor boundary (ADR-034)",
         "cleanup executor boundary (OPS-003-CLEANUP-ROLE)",
+        "registration executor boundary (REG-001)",
         "real default-privilege inheritance probes",
     });
 
@@ -159,10 +161,16 @@ public sealed class DatabaseBaselineAssertions
                   SELECT 'paqueteria_cleanup_executor',true
                   WHERE pg_catalog.to_regrole('paqueteria_cleanup_executor') IS NOT NULL
                      OR pg_catalog.to_regprocedure('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)') IS NOT NULL
-                     OR pg_catalog.to_regprocedure('security.expire_proof_upload_sessions(integer)') IS NOT NULL)
+                     OR pg_catalog.to_regprocedure('security.expire_proof_upload_sessions(integer)') IS NOT NULL),
+                -- REG-001: the same rule for installations that predate the registration executor.
+                registration(name,bypass_rls) AS (
+                  SELECT 'paqueteria_registration_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_registration_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.register_identity_subject(text,uuid)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
                 FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
-                      UNION ALL SELECT name,bypass_rls FROM cleanup) expected
+                      UNION ALL SELECT name,bypass_rls FROM cleanup
+                      UNION ALL SELECT name,bypass_rls FROM registration) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
@@ -215,6 +223,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertCleanupExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertRegistrationExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -404,6 +415,16 @@ public sealed class DatabaseBaselineAssertions
                 ('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)'),
                 ('security.expire_proof_upload_sessions(integer)')) cleanup(signature)
               WHERE to_regprocedure(signature) IS NOT NULL
+              UNION ALL
+              -- REG-001: installed by the Organizations lane after the baseline.
+              SELECT signature,'paqueteria_registration_executor'
+              FROM (VALUES
+                ('security.register_identity_subject(text,uuid)'),
+                ('security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text)'),
+                ('security.list_own_organization_applications(uuid)'),
+                ('security.list_pending_ally_organizations(uuid,uuid,integer)'),
+                ('security.decide_ally_organization(uuid,uuid,uuid,boolean,text)')) registration(signature)
+              WHERE to_regprocedure(signature) IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
@@ -416,7 +437,7 @@ public sealed class DatabaseBaselineAssertions
             JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
             JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
-                'paqueteria_lifecycle_executor','paqueteria_cleanup_executor')
+                'paqueteria_lifecycle_executor','paqueteria_cleanup_executor','paqueteria_registration_executor')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -808,6 +829,183 @@ public sealed class DatabaseBaselineAssertions
             """,
             cancellationToken,
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// REG-001 lane contract: after the Organizations REG-001 migration (and after any E-002 temporary
+    /// grant is revoked) the role and its five functions must exist and satisfy the exact executor boundary.
+    /// </summary>
+    public static async Task AssertRegistrationExecutorInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'registration executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_registration_executor') IS NULL
+            UNION ALL
+            SELECT 'registration function is missing: ' || signature
+            FROM unnest(@signatures::text[]) expected(signature)
+            WHERE pg_catalog.to_regprocedure(signature) IS NULL
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("signatures", RegistrationFunctions.Select(item => item.Signature).ToArray()))
+            .ConfigureAwait(false);
+        await AssertRegistrationExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    private static readonly (string Signature, string SearchPath)[] RegistrationFunctions =
+    [
+        ("security.register_identity_subject(text,uuid)", "search_path=pg_catalog, identity, pg_temp"),
+        ("security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text)",
+            "search_path=pg_catalog, identity, organizations, platform, pg_temp"),
+        ("security.list_own_organization_applications(uuid)", "search_path=pg_catalog, identity, organizations, pg_temp"),
+        ("security.list_pending_ally_organizations(uuid,uuid,integer)",
+            "search_path=pg_catalog, identity, organizations, pg_temp"),
+        ("security.decide_ally_organization(uuid,uuid,uuid,boolean,text)",
+            "search_path=pg_catalog, identity, organizations, platform, pg_temp"),
+    ];
+
+    /// <summary>
+    /// REG-001: once the registration executor exists it holds exactly USAGE on <c>identity</c>,
+    /// <c>organizations</c> and <c>platform</c> and the AI-18 column grants, no table-wide grant, inherits
+    /// nothing, owns no relation, and its functions are pinned SECURITY DEFINERs executable by
+    /// <c>paqueteria_app</c> only. The role may exist without functions (fresh AI-18 before the lane, or
+    /// after the lane is rolled back); a function without the role, or a partial set, is a violation.
+    /// </summary>
+    private static async Task AssertRegistrationExecutorBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_registration_executor'
+            ),
+            expected(table_schema,table_name,column_name,privilege_type) AS (VALUES
+              ('identity','users','id','SELECT'),
+              ('identity','users','identity_subject','SELECT'),
+              ('identity','users','status','SELECT'),
+              ('identity','users','id','INSERT'),
+              ('identity','users','identity_subject','INSERT'),
+              ('identity','users','status','INSERT'),
+              ('identity','users','created_at','INSERT'),
+              ('organizations','organizations','id','SELECT'),
+              ('organizations','organizations','organization_type','SELECT'),
+              ('organizations','organizations','legal_name','SELECT'),
+              ('organizations','organizations','display_name','SELECT'),
+              ('organizations','organizations','status','SELECT'),
+              ('organizations','organizations','self_service_creator_user_id','SELECT'),
+              ('organizations','organizations','created_at','SELECT'),
+              ('organizations','organizations','id','INSERT'),
+              ('organizations','organizations','organization_type','INSERT'),
+              ('organizations','organizations','legal_name','INSERT'),
+              ('organizations','organizations','display_name','INSERT'),
+              ('organizations','organizations','status','INSERT'),
+              ('organizations','organizations','self_service_creator_user_id','INSERT'),
+              ('organizations','organizations','created_at','INSERT'),
+              ('organizations','organizations','status','UPDATE'),
+              ('organizations','organization_memberships','user_id','SELECT'),
+              ('organizations','organization_memberships','organization_id','SELECT'),
+              ('organizations','organization_memberships','role','SELECT'),
+              ('organizations','organization_memberships','status','SELECT'),
+              ('organizations','organization_memberships','is_default','SELECT'),
+              ('organizations','organization_memberships','id','INSERT'),
+              ('organizations','organization_memberships','user_id','INSERT'),
+              ('organizations','organization_memberships','organization_id','INSERT'),
+              ('organizations','organization_memberships','role','INSERT'),
+              ('organizations','organization_memberships','status','INSERT'),
+              ('organizations','organization_memberships','is_default','INSERT'),
+              ('organizations','organization_memberships','granted_at','INSERT'),
+              ('platform','audit_logs','id','INSERT'),
+              ('platform','audit_logs','org_id','INSERT'),
+              ('platform','audit_logs','actor_id','INSERT'),
+              ('platform','audit_logs','action','INSERT'),
+              ('platform','audit_logs','entity_type','INSERT'),
+              ('platform','audit_logs','entity_id','INSERT'),
+              ('platform','audit_logs','request_id','INSERT'),
+              ('platform','audit_logs','payload_redacted','INSERT'),
+              ('platform','audit_logs','occurred_at','INSERT')),
+            actual AS (
+              SELECT table_schema,table_name,column_name,privilege_type
+              FROM information_schema.column_privileges
+              WHERE grantee='paqueteria_registration_executor'),
+            actual_tables AS (
+              SELECT table_schema,table_name,privilege_type
+              FROM information_schema.table_privileges
+              WHERE grantee='paqueteria_registration_executor'),
+            fn AS (
+              SELECT signature,search_path
+              FROM unnest(@signatures::text[],@search_paths::text[]) f(signature,search_path)),
+            installed AS (
+              SELECT fn.signature,fn.search_path,p.oid,p.prosecdef,p.proconfig,p.prosrc
+              FROM fn JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn.signature))
+            SELECT 'missing registration executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected registration executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected registration executor table grant: ' || a.table_schema || '.' || a.table_name || ':' || a.privilege_type
+            FROM actual_tables a
+            UNION ALL
+            SELECT 'registration executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM
+                   (n.nspname IN ('identity','organizations','platform')))
+            UNION ALL
+            SELECT 'registration executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m JOIN executor ON m.member=executor.oid
+            UNION ALL
+            SELECT 'registration executor owns a relation, schema or type'
+            FROM executor
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
+            UNION ALL
+            SELECT 'registration function is unsafe: ' || installed.signature
+            FROM installed
+            WHERE NOT installed.prosecdef
+               OR NOT (installed.search_path=ANY(COALESCE(installed.proconfig,ARRAY[]::text[])))
+               OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR has_function_privilege('public',installed.oid,'EXECUTE')
+               OR has_function_privilege('paqueteria_worker',installed.oid,'EXECUTE')
+               OR NOT has_function_privilege('paqueteria_app',installed.oid,'EXECUTE')
+            UNION ALL
+            SELECT 'registration function exists without the registration executor role: ' || installed.signature
+            FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
+            UNION ALL
+            SELECT 'registration functions are only partially installed'
+            FROM (SELECT count(*) AS present FROM installed) c
+            WHERE c.present BETWEEN 1 AND 4
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray()),
+            new NpgsqlParameter<string[]>("signatures", RegistrationFunctions.Select(item => item.Signature).ToArray()),
+            new NpgsqlParameter<string[]>("search_paths", RegistrationFunctions.Select(item => item.SearchPath).ToArray()))
+            .ConfigureAwait(false);
     }
 
     private static async Task AssertDefaultAclCatalogAsync(

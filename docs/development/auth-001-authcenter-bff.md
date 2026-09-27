@@ -19,7 +19,8 @@ roles privilegiados, CORS cerrado, secretos en secret manager, sin tokens en log
    AuthCenter solo autentica, y el `sub` validado alimenta `identity.users.identity_subject`.
 4. Las sesiones BFF irán a una tabla PostgreSQL (cambio normativo pendiente, fuera de este PR).
    Mientras tanto el ticket queda en memoria detrás de `ITicketStore`/`IDistributedCache` (§4).
-5. Primer ingreso por invitación previa; se implementa en un PR aparte (§8).
+5. ~~Primer ingreso por invitación previa~~: reemplazado el 27-sep-2026 por registro abierto
+   (`AUTH-OPEN-REGISTRATION`, REG-001, §8).
 
 `AuthCenter.Client` no está publicado en NuGet. Por eso se replica su contrato BFF con el handler
 estándar de Microsoft (`Microsoft.AspNetCore.Authentication.OpenIdConnect` 10.0.10, la misma versión
@@ -188,20 +189,33 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
   del navegador (cola offline del repartidor) entre personas que comparten dispositivo.
 - El portal `/dev` y el modo Mock no cambian.
 
-## 8. Primer ingreso (TEN-003)
+## 8. Primer ingreso: registro abierto (REG-001)
 
-La opción segura por defecto es la que queda implementada:
+Decisiones del owner del 27-sep-2026 (`AUTH-OPEN-REGISTRATION`, que reemplaza a
+`AUTH-FIRST-LOGIN-INVITATION`, y las filas `REG-*` de `decision-log.md`):
 
-- el login **nunca** crea usuarios, organizaciones ni membresías;
-- un `sub` sin `identity.users` queda autenticado sin autorización (`authorized=false`, 403);
-- el aprovisionador inicial de TEN-003 sigue sin invocarse, y su autorizador por defecto
-  (`DenyInitialOrganizationProvisioningAuthorizer`) sigue negando todo.
-
-Vinculación posible hoy: un administrador preaprovisiona `identity.users.identity_subject = <sub>`
-con el `sub` que muestra AuthCenter (UUID del usuario) y sus membresías. El esquema AI-06 exige
-`identity_subject NOT NULL UNIQUE` y no tiene tabla de invitaciones, así que la vinculación por
-invitación o por correo verificado requiere un cambio normativo. **Decisión del owner:** el primer
-ingreso será por invitación previa y se implementa en un PR aparte.
+- **Cualquiera puede registrarse.** En el callback, `TicketReceived` exige exactamente un claim
+  `email_verified` igual a `true` en el ID token validado (`AUTH-EMAIL-VERIFIED-REQUIRED`). Sin él
+  redirige a `/login?error=email_not_verified`, sin sesión y sin crear ni vincular nada (log
+  EventId 4106, sin `sub` ni correo). La evidencia viaja en el ticket del servidor.
+- Con correo verificado, `IIdentityRegistration` llama a
+  `security.register_identity_subject(text,uuid)` como `paqueteria_app`. Crea el usuario **una
+  sola vez** (`UNIQUE(identity_subject)` decide entre inicios de sesión concurrentes), sin
+  membresías y con `email_ciphertext` en NULL como hasta ahora. Un `sub` existente nunca se
+  revincula ni se modifica, aunque esté suspendido.
+- El usuario nuevo queda autorizado sin contextos: `/me/organization-contexts` responde `[]` y la
+  web ofrece `/onboarding` (crear un negocio o registrar un aliado).
+- `POST /api/v1/onboarding/organizations` crea BUSINESS (ACTIVE, creador BUSINESS_ADMIN) o ALLY
+  (PENDING_APPROVAL, creador ALLY_ADMIN sin acceso hasta la aprobación). Una sola organización no
+  CLOSED creada por persona (`REG-ONE-ORGANIZATION-PER-PERSON`, índice único parcial); un rechazo
+  la cierra y libera el cupo. El id se deriva del usuario y del `Idempotency-Key`.
+- Un PLATFORM_ADMIN con MFA, desde una organización PLATFORM, lista y decide las solicitudes ALLY
+  (`/api/v1/platform/ally-applications`). Aprobar sólo activa la organización; rechazar la cierra.
+  Se escribe un registro de auditoría en cada organización.
+- Todas las escrituras previas al tenant o entre tenants pasan por cinco funciones SECURITY DEFINER
+  del rol `paqueteria_registration_executor` (AI-18). El rol bootstrap sigue sin escribir y el
+  aprovisionador de TEN-003 sigue negado por defecto.
+- Unirse a una organización existente ("El admin la agrega por correo") queda para REG-002.
 
 ## 9. Configuración
 
@@ -257,11 +271,14 @@ de estos valores, si `Authority` no es HTTPS, si el secreto tiene menos de 32 ca
    - Post-logout redirect URI exacta: `https://<host-web>/login`.
    - Back-channel logout URI: `https://<host-web>/auth/backchannel-logout` (HTTPS).
    - En la aplicación: métodos de login (contraseña, magic link, Google, Microsoft); `RequireMfa`
-     **desactivado** (step-up); modo de registro `InviteOnly`, alineado con
-     `AUTH-FIRST-LOGIN-INVITATION`; solicitudes de acceso opcionales.
-   - Acceso de cada usuario a Paquetenvia: invitación, asignación directa, regla de grupo, SCIM o
-     solicitud aprobada. Sin acceso activo, el login hospedado indica que no hay acceso y no
-     regresa; con sesión SSO existente, el callback recibe `error=access_denied`.
+     **desactivado** (step-up); modo de registro **abierto**
+     (cualquiera puede registrarse, `AUTH-OPEN-REGISTRATION`; ya no `InviteOnly`); solicitudes de
+     acceso opcionales. El correo debe quedar verificado en AuthCenter: sin `email_verified=true`
+     Paquetenvia rechaza el ingreso (`AUTH-EMAIL-VERIFIED-REQUIRED`).
+   - Acceso a la aplicación Paquetenvia en AuthCenter: abierto a cualquier cuenta que se registre
+     (REG-001). Paquetenvia decide después la autorización con sus propias membresías. Si
+     AuthCenter niega el acceso, el login hospedado lo indica y no regresa; con sesión SSO
+     existente, el callback recibe `error=access_denied`.
 
 ### 10.1 Valores por ambiente (decisión del owner, 27-sep-2026)
 
@@ -288,7 +305,8 @@ cada uno con su propio cliente confidencial y su propio secreto; no hay ambiente
 
 ## 11. Preguntas abiertas para el owner
 
-1. ~~Primer ingreso~~: resuelto por el owner, por invitación previa en un PR aparte.
+1. ~~Primer ingreso~~: resuelto por el owner, primero por invitación previa y después, el
+   27-sep-2026, por registro abierto (REG-001, §8).
 2. ~~Sesión multi-instancia~~: resuelto por el owner, tabla PostgreSQL tras el cambio normativo.
 3. ~~Hosts web por ambiente y redirect URIs definitivos~~: resuelto por el owner (§10.1):
    `dev.paquetenvia.com` para dev y `paquetenvia.com` para producción, sin staging.

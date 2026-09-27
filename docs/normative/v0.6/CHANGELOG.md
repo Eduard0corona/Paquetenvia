@@ -1,5 +1,33 @@
 # Changelog
 
+## Registro abierto y onboarding de organizaciones (REG-001) — 2026-09-27
+
+- Respuestas literales del project owner: "El login y el registro de cuentas no será por
+  invitación, cualquiera puede registrarse en Paquetenvia" (`AUTH-OPEN-REGISTRATION`, que
+  reemplaza a `AUTH-FIRST-LOGIN-INVITATION`), "Crea su propia organización", "BUSINESS, activa;
+  ALLY con aprobación (Recomendado)", "Sí, obligatorio (Recomendado)" (correo verificado),
+  "Sólo activar la org (Recomendado)", "Lista + aprobar/rechazar (Recomendado)", "Queda
+  cerrada; puede volver a solicitar (Recomendado)", "Endpoint propio de solicitudes
+  (Recomendado)" y "solo una organización por persona". Unirse a una organización existente
+  ("El admin la agrega por correo (Recomendado)") queda para un PR aparte.
+- AI-06: `organizations.status` admite `PENDING_APPROVAL`; nueva columna
+  `organizations.self_service_creator_user_id` e índice único parcial
+  `organizations_one_open_self_service_uq` (una organización no CLOSED creada por persona).
+- AI-18: rol `paqueteria_registration_executor NOLOGIN BYPASSRLS` con grants exactos por
+  columna (verificados por `validate_contracts.py`) y aserciones de despliegue 17–19. Sus cinco
+  funciones SECURITY DEFINER (`register_identity_subject`, `create_self_service_organization`,
+  `list_own_organization_applications`, `list_pending_ally_organizations`,
+  `decide_ally_organization`) se instalan en la lane de Organizations
+  (`20260927000400_AddSelfServiceRegistration`), con `EXECUTE` sólo para `paqueteria_app`.
+- AI-05: `createOnboardingOrganization` (POST /onboarding/organizations, 201; 409
+  `IDEMPOTENCY_CONFLICT` u `ORGANIZATION_LIMIT_REACHED`), `listMyOrganizationApplications`,
+  `listPendingAllyOrganizations` y `decideAllyOrganization` (409 `ALLY_DECISION_CONFLICT`);
+  `x-capability-matrix.platform_operations`; el callback redirige a
+  `/login?error=email_not_verified` sin `email_verified == true`.
+- AI-03 §17.1/§24, AI-04 (estados de Organization), AI-07 (`/login`, `/onboarding`), AI-24
+  `bff_session` (`first_access`, `email_verified`, `onboarding`) y AI-08 (REG-001).
+- Límite anti-abuso decidido; sin preguntas abiertas.
+
 ## Tope de 72 h para la edad máxima de `openIncident` — 2026-09-27
 
 - Respuesta literal del project owner: "Tope en 72 h (Recomendado)"

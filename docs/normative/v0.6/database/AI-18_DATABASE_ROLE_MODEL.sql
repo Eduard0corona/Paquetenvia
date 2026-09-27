@@ -10,6 +10,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION 
 DO $$ BEGIN CREATE ROLE paqueteria_maintenance NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_lifecycle_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_cleanup_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_registration_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -216,6 +217,36 @@ GRANT DELETE ON platform.idempotency_keys TO paqueteria_cleanup_executor;
 GRANT SELECT (id,status,expires_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;
 GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;
 
+-- Open registration is a separate security capability (REG-001: AUTH-OPEN-REGISTRATION,
+-- REG-SELF-SERVICE-ORGANIZATION, REG-ONE-ORGANIZATION-PER-PERSON, REG-ALLY-APPROVAL-PATH,
+-- REG-OWN-APPLICATIONS-ENDPOINT; ADR-034 pattern). The bootstrap role never writes, so the executor
+-- owns the only pre-tenant and cross-tenant registration writes, inside five SECURITY DEFINER
+-- functions installed by the Organizations migration lane (20260927000400_AddSelfServiceRegistration)
+-- after this baseline, each with a pinned search_path starting with pg_catalog and ending with pg_temp,
+-- EXECUTE revoked from PUBLIC and granted only to paqueteria_app:
+--   security.register_identity_subject(text,uuid): first sign-in of a subject with a verified email,
+--     exactly once per subject (UNIQUE(identity_subject) arbitrates concurrent sign-ins);
+--   security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text): one BUSINESS
+--     (ACTIVE) or ALLY (PENDING_APPROVAL), the creator's admin membership and its audit row;
+--     organizations_one_open_self_service_uq enforces one organization not CLOSED per creator;
+--   security.list_own_organization_applications(uuid): the caller's own organizations and status;
+--   security.list_pending_ally_organizations(uuid,uuid,integer) and
+--   security.decide_ally_organization(uuid,uuid,uuid,boolean,text): only for an ACTIVE PLATFORM_ADMIN
+--     member of an ACTIVE PLATFORM organization; approval only activates the ALLY, rejection closes it,
+--     with one audit row in the platform organization and one in the ALLY organization.
+-- It has no outbox, bootstrap, lifecycle, cleanup or purge rights, no USAGE on schema security and no
+-- broad business-schema grant.
+REVOKE paqueteria_registration_executor FROM paqueteria_app, paqueteria_worker;
+GRANT USAGE ON SCHEMA identity,organizations,platform TO paqueteria_registration_executor;
+GRANT SELECT (id,identity_subject,status) ON identity.users TO paqueteria_registration_executor;
+GRANT INSERT (id,identity_subject,status,created_at) ON identity.users TO paqueteria_registration_executor;
+GRANT SELECT (id,organization_type,legal_name,display_name,status,self_service_creator_user_id,created_at) ON organizations.organizations TO paqueteria_registration_executor;
+GRANT INSERT (id,organization_type,legal_name,display_name,status,self_service_creator_user_id,created_at) ON organizations.organizations TO paqueteria_registration_executor;
+GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;
+GRANT SELECT (user_id,organization_id,role,status,is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;
+GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON organizations.organization_memberships TO paqueteria_registration_executor;
+GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
@@ -233,3 +264,6 @@ GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_
 -- 14. paqueteria_cleanup_executor holds only USAGE on schemas platform and custody, SELECT(owner_org_id,scope,idempotency_key,created_at,expires_at) plus DELETE on platform.idempotency_keys, and SELECT(id,status,expires_at) plus UPDATE(status,updated_at) on custody.proof_upload_sessions: no INSERT, no other table, no outbox, bootstrap, lifecycle or purge-outbox privilege.
 -- 15. both cleanup functions are SECURITY DEFINER with search_path=pg_catalog, platform, pg_temp (idempotency) and pg_catalog, custody, pg_temp (sessions), accept only bounded batch sizes, return only a count, and only paqueteria_worker may EXECUTE them; PUBLIC and paqueteria_app may not.
 -- 16. security.purge_expired_idempotency_keys never deletes a key created less than 72 hours before its own clock_timestamp() nor one that has not expired, whatever cutoff, batch size or mode it receives; dry-run mutates nothing.
+-- 17. paqueteria_registration_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and owns only the five REG-001 functions.
+-- 18. paqueteria_registration_executor holds only USAGE on schemas identity, organizations and platform and exactly the column grants above: no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup or purge privilege.
+-- 19. the five REG-001 functions are SECURITY DEFINER with a pinned search_path and only paqueteria_app may EXECUTE them; PUBLIC and paqueteria_worker may not.

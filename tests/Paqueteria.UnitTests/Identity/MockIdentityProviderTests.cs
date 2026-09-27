@@ -9,14 +9,19 @@ public sealed class MockIdentityProviderTests
     private readonly MockIdentityContextResolver _resolver = new();
 
     [Fact]
-    public async Task Known_token_authenticates_only_subject_and_mfa()
+    public async Task Known_token_authenticates_only_subject_mfa_and_verified_email()
     {
         var result = await _provider.AuthenticateAsync(MockIdentityProfiles.ActiveViewer, default);
 
         Assert.True(result.IsValid);
         Assert.Equal("mock-subject-active-viewer", result.Identity?.Subject);
         Assert.False(result.Identity?.MfaSatisfied);
-        Assert.Equal(2, result.Identity!.GetType().GetProperties().Length);
+        // Authentication evidence only (AUTH-EMAIL-VERIFIED-REQUIRED adds the verified-email fact);
+        // nothing that could authorize.
+        Assert.True(result.Identity?.EmailVerified);
+        Assert.Equal(
+            ["EmailVerified", "MfaSatisfied", "Subject"],
+            result.Identity!.GetType().GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -29,7 +34,7 @@ public sealed class MockIdentityProviderTests
     }
 
     [Fact]
-    public async Task Local_dispatcher_profile_contains_only_subject_and_mfa()
+    public async Task Local_dispatcher_profile_contains_only_subject_mfa_and_verified_email()
     {
         var result = await _provider.AuthenticateAsync(
             MockIdentityProfiles.LocalDispatcherMfa,
@@ -38,7 +43,12 @@ public sealed class MockIdentityProviderTests
         Assert.True(result.IsValid);
         Assert.Equal("local-subject-dispatcher-mfa", result.Identity?.Subject);
         Assert.True(result.Identity?.MfaSatisfied);
-        Assert.Equal(2, result.Identity!.GetType().GetProperties().Length);
+        // Authentication evidence only (AUTH-EMAIL-VERIFIED-REQUIRED adds the verified-email fact);
+        // nothing that could authorize.
+        Assert.True(result.Identity?.EmailVerified);
+        Assert.Equal(
+            ["EmailVerified", "MfaSatisfied", "Subject"],
+            result.Identity!.GetType().GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
     }
 
     [Theory]

@@ -66,12 +66,34 @@ CLEANUP_EXECUTOR_GRANTS = [
 ]
 
 
+REGISTRATION_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA identity,organizations,platform TO paqueteria_registration_executor;",
+    "GRANT SELECT (id,identity_subject,status) ON identity.users TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,identity_subject,status,created_at) ON identity.users TO paqueteria_registration_executor;",
+    "GRANT SELECT (id,organization_type,legal_name,display_name,status,self_service_creator_user_id,created_at) ON organizations.organizations TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,organization_type,legal_name,display_name,status,self_service_creator_user_id,created_at) ON organizations.organizations TO paqueteria_registration_executor;",
+    "GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;",
+    "GRANT SELECT (user_id,organization_id,role,status,is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+    "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;",
+]
+
+
 def executor_grant_errors(role_sql: str) -> list[str]:
-    """ADR-034 and OPS-003-CLEANUP-ROLE exact grant sets for the two dedicated executors."""
-    return role_grant_errors(
-        role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
-    ) + role_grant_errors(
-        role_sql, "paqueteria_cleanup_executor", CLEANUP_EXECUTOR_GRANTS, "Cleanup executor (OPS-003-CLEANUP-ROLE)"
+    """ADR-034, OPS-003-CLEANUP-ROLE and REG-001 exact grant sets for the three dedicated executors."""
+    return (
+        role_grant_errors(
+            role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
+        )
+        + role_grant_errors(
+            role_sql, "paqueteria_cleanup_executor", CLEANUP_EXECUTOR_GRANTS, "Cleanup executor (OPS-003-CLEANUP-ROLE)"
+        )
+        + role_grant_errors(
+            role_sql,
+            "paqueteria_registration_executor",
+            REGISTRATION_EXECUTOR_GRANTS,
+            "Registration executor (REG-001)",
+        )
     )
 
 
@@ -437,9 +459,10 @@ def main() -> int:
     for fragment in required_roles:
         if fragment not in role_sql:
             errors.append(f"Missing role-model contract: {fragment}")
-    # ADR-034 and OPS-003-CLEANUP-ROLE: the only column-level UPDATE grants are the lifecycle
-    # executor's finalized_at grant and the cleanup executor's upload-session status grant; any other
-    # spelling or grantee is the legacy direct runtime UPDATE grant returning.
+    # ADR-034, OPS-003-CLEANUP-ROLE and REG-001: the only column-level UPDATE grants are the lifecycle
+    # executor's finalized_at grant, the cleanup executor's upload-session status grant and the
+    # registration executor's organization status grant; any other spelling or grantee is the legacy
+    # direct runtime UPDATE grant returning.
     column_update_grants = [
         " ".join(statement.split())
         for statement in re.findall(r"GRANT[^;]*\bUPDATE\s*\([^;]*;", role_sql)
@@ -447,8 +470,9 @@ def main() -> int:
     if column_update_grants != [
         "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
         "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
+        "GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;",
     ]:
-        errors.append(f"Column UPDATE grants differ from the ADR-034 and OPS-003 grants: {column_update_grants}")
+        errors.append(f"Column UPDATE grants differ from the ADR-034, OPS-003 and REG-001 grants: {column_update_grants}")
     # Exact grant sets for both dedicated executors, including any multi-grantee GRANT that names them.
     errors.extend(executor_grant_errors(role_sql))
     for fragment in [
@@ -472,6 +496,30 @@ def main() -> int:
     if re.search(r"GRANT\s+paqueteria_cleanup_executor\s+TO", role_sql):
         errors.append("Cleanup executor membership granted contrary to OPS-003-CLEANUP-ROLE")
     checks.append("Cleanup executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
+    # REG-001 (AUTH-OPEN-REGISTRATION): the registration executor owns the only pre-tenant and
+    # cross-tenant registration writes; it is never granted to a runtime role.
+    for fragment in [
+        "CREATE ROLE paqueteria_registration_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_registration_executor FROM paqueteria_app, paqueteria_worker;",
+        "AUTH-OPEN-REGISTRATION",
+        "security.register_identity_subject(text,uuid)",
+        "security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text)",
+        "security.list_own_organization_applications(uuid)",
+        "security.list_pending_ally_organizations(uuid,uuid,integer)",
+        "security.decide_ally_organization(uuid,uuid,uuid,boolean,text)",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing registration executor contract: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_registration_executor\s+TO", role_sql):
+        errors.append("Registration executor membership granted contrary to REG-001")
+    for fragment in [
+        "CHECK (status IN ('ACTIVE','PENDING_APPROVAL','SUSPENDED','CLOSED'))",
+        "ADD COLUMN self_service_creator_user_id uuid REFERENCES identity.users(id);",
+        "WHERE self_service_creator_user_id IS NOT NULL AND status <> 'CLOSED';",
+    ]:
+        if fragment not in sql:
+            errors.append(f"Missing REG-001 schema contract: {fragment}")
+    checks.append("Registration executor: dedicated NOLOGIN role, exact column grants, one open self-service organization per creator")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.
     for fragment in [

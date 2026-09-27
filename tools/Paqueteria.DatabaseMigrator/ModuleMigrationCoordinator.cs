@@ -43,8 +43,8 @@ internal sealed class ModuleMigrationCoordinator
     [
         ("Identity", "__ef_migrations_history_identity", AdoptCanonicalIdentityBaseline.MigrationId,
             "src/Modules/Identity/Identity.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalIdentityBaseline.cs"),
-        ("Organizations", "__ef_migrations_history_organizations", AdoptCanonicalOrganizationsBaseline.MigrationId,
-            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrganizationsBaseline.cs"),
+        ("Organizations", "__ef_migrations_history_organizations", AddSelfServiceRegistration.MigrationId,
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000400_AddSelfServiceRegistration.cs"),
         ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
@@ -119,6 +119,19 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // REG-001: the lane adds the registration executor, its functions, the PENDING_APPROVAL status
+                // and the self-service creator column; its rollback removes only the functions and the new
+                // status value, and refuses while any organization is PENDING_APPROVAL.
+                "Organizations" =>
+                    source.Contains("REG001_DOWNGRADE_BLOCKED_PENDING_ORGANIZATIONS", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -154,6 +167,11 @@ internal sealed class ModuleMigrationCoordinator
                 "VERIFIED"));
         }
 
+        VerifyAdoptionSource(
+            root,
+            "Organizations",
+            AdoptCanonicalOrganizationsBaseline.MigrationId,
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrganizationsBaseline.cs");
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -215,7 +233,7 @@ internal sealed class ModuleMigrationCoordinator
 
         if (before.Single(state => state.Module == "Organizations").Status == "PENDING")
         {
-            await MigrateOrganizationsAsync(connectionString, cancellationToken);
+            await MigrateOrganizationsAsync(connectionString, cancellationToken, azureOwnershipBridge);
         }
         if (before.Single(state => state.Module == "Locations").Status == "PENDING")
         {
@@ -392,6 +410,8 @@ internal sealed class ModuleMigrationCoordinator
                 ],
             "Custody" =>
                 [AdoptCanonicalCustodyProofsBaseline.MigrationId, AddOperationalCleanupExecutor.MigrationId],
+            "Organizations" =>
+                [AdoptCanonicalOrganizationsBaseline.MigrationId, AddSelfServiceRegistration.MigrationId],
             "Incidents" =>
                 [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
             "DataProtection" =>
@@ -444,7 +464,8 @@ internal sealed class ModuleMigrationCoordinator
         await context.Database.MigrateAsync(cancellationToken);
     }
 
-    private static async Task MigrateOrganizationsAsync(string connectionString, CancellationToken cancellationToken)
+    private static async Task MigrateOrganizationsAsync(string connectionString, CancellationToken cancellationToken,
+        bool azureOwnershipBridge)
     {
         await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
         var options = new DbContextOptionsBuilder<OrganizationsDbContext>()
@@ -454,8 +475,123 @@ internal sealed class ModuleMigrationCoordinator
                 postgres.MigrationsHistoryTable("__ef_migrations_history_organizations", "platform");
             })
             .Options;
-        await using var context = new OrganizationsDbContext(options, new TenantDatabaseExecutionState());
-        await context.Database.MigrateAsync(cancellationToken);
+        if (!azureOwnershipBridge)
+        {
+            await using (var context = new OrganizationsDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            await using var verification = await connection.BeginTransactionAsync(cancellationToken);
+            await DatabaseBaselineAssertions.AssertRegistrationExecutorInstalledAsync(
+                connection, verification, cancellationToken);
+            await verification.RollbackAsync(cancellationToken);
+            return;
+        }
+
+        // E-002/REG-001: transferring the five registration functions to the registration executor as a
+        // non-superuser needs SET on the executor and a transaction-scoped CREATE on schema security,
+        // exactly like the Custody OPS-003 bridge; nothing else is granted and nothing survives the commit.
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var stage = "lock";
+        try
+        {
+            await using (var advisory = new NpgsqlCommand(
+                "SELECT pg_catalog.pg_advisory_xact_lock(@key)", connection, transaction))
+            {
+                advisory.Parameters.AddWithValue("key", CanonicalBaselineContract.AdvisoryLockKey);
+                await advisory.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "capability-gate";
+            await using (var capability = new NpgsqlCommand("""
+                SELECT pg_catalog.to_regrole('paqueteria_registration_executor') IS NOT NULL
+                   AND pg_catalog.pg_has_role(session_user,'paqueteria_registration_executor','SET')
+                """, connection, transaction))
+            {
+                if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_registration_executor; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "create-prestate";
+            await using (var prestate = new NpgsqlCommand(
+                "SELECT pg_catalog.has_schema_privilege('paqueteria_registration_executor','security','CREATE')",
+                connection, transaction))
+            {
+                if (await prestate.ExecuteScalarAsync(cancellationToken) is true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_CREATE_PRESTATE_PRESENT role=paqueteria_registration_executor schema=security; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "grant-temporary-create";
+            await using (var grant = new NpgsqlCommand(
+                "GRANT CREATE ON SCHEMA security TO paqueteria_registration_executor", connection, transaction))
+            {
+                await grant.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "reg001-ef-migration";
+            await using (var context = new OrganizationsDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await using (var historyExists = new NpgsqlCommand(
+                    "SELECT to_regclass('platform.__ef_migrations_history_organizations') IS NOT NULL",
+                    connection, transaction))
+                {
+                    if (await historyExists.ExecuteScalarAsync(cancellationToken) is not true)
+                    {
+                        var createHistory = context.GetService<IHistoryRepository>().GetCreateScript();
+                        await using var create = new NpgsqlCommand(createHistory, connection, transaction);
+                        await create.ExecuteNonQueryAsync(cancellationToken);
+                    }
+                }
+
+                await context.Database.UseTransactionAsync(transaction, cancellationToken);
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            // Revoke as the schema owner that granted it, whatever role the migration left active.
+            stage = "revoke-temporary-create";
+            await using (var revoke = new NpgsqlCommand("""
+                SET LOCAL ROLE paqueteria_migrator;
+                REVOKE CREATE ON SCHEMA security FROM paqueteria_registration_executor;
+                RESET ROLE;
+                """, connection, transaction))
+            {
+                await revoke.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "assert-registration-boundary";
+            await DatabaseBaselineAssertions.AssertRegistrationExecutorInstalledAsync(
+                connection, transaction, cancellationToken);
+            stage = "commit";
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (PostgresException exception)
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw new InvalidOperationException(
+                $"E002_ORGANIZATIONS_BRIDGE_FAILED stage={stage} SQLSTATE={exception.SqlState} message={exception.MessageText}; " +
+                "STOP_FOR_CONTRACT_REVIEW",
+                exception);
+        }
+        catch
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw;
+        }
     }
 
     private static async Task MigrateLocationsAsync(string connectionString, CancellationToken cancellationToken)

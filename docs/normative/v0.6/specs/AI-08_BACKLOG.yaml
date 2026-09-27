@@ -2,7 +2,7 @@ meta:
   version: '0.6'
   generated: '2026-07-19'
   execution_order: topological by depends_on; P0 before P1
-  item_count: 63
+  item_count: 64
 definition_of_ready:
 - normative inputs identified
 - dependencies DONE
@@ -1303,8 +1303,7 @@ items:
   - cookie-authenticated state-changing requests are protected against CSRF
   - logout ends the server session and clears the cookie
   - Mock authentication remains limited to Development, Testing and authorized DevSynthetic
-  - 'DECIDED AUTH-FIRST-LOGIN-INVITATION: first login is by prior invitation - an administrator registers the user with
-    email and membership, the first login links the AuthCenter sub, and nobody enters without an invitation'
+  - 'SUPERSEDED AUTH-FIRST-LOGIN-INVITATION (replaced on 2026-09-27 by AUTH-OPEN-REGISTRATION, implemented by REG-001)'
   - 'DECIDED BFF-SESSION-STORE-POSTGRESQL: BFF sessions are stored in a PostgreSQL table (AI-06/AI-18 change pending a
     migration)'
   - 'DECIDED BFF-SESSION-TABLE-SHAPE: identity.bff_sessions stores only the hash of the cookie and the AuthCenter tokens
@@ -1319,6 +1318,47 @@ items:
   - CSRF rejection
   - browser test proving tokens are not exposed to JavaScript
   - suspended user and missing membership return 403
+  approval_gate: owner_product_technology
+- id: REG-001
+  decision: AUTH-OPEN-REGISTRATION (project owner, 2026-09-27)
+  epic: Security
+  release: MVP-1
+  title: Registro abierto y onboarding de organizaciones
+  priority: P0
+  depends_on:
+  - AUTH-001
+  - TEN-003
+  expected_outputs:
+  - first sign-in of a verified subject creates its user exactly once, with no memberships
+  - self-service BUSINESS (ACTIVE) and ALLY (PENDING_APPROVAL) creation with the creator admin membership and audit
+  - PLATFORM_ADMIN list and decision of pending ALLY organizations
+  - the caller's own applications and their status
+  - web onboarding screen for a signed-in user without organization context
+  acceptance_criteria:
+  - 'DECIDED AUTH-OPEN-REGISTRATION: login and account registration are not by invitation; anyone can register'
+  - 'DECIDED AUTH-EMAIL-VERIFIED-REQUIRED: without email_verified == true no user or organization is created or linked;
+    /login?error=email_not_verified'
+  - 'DECIDED REG-SELF-SERVICE-ORGANIZATION and REG-ORGANIZATION-TYPES: BUSINESS active with BUSINESS_ADMIN; ALLY
+    PENDING_APPROVAL with ALLY_ADMIN and no access until approval'
+  - 'DECIDED REG-ALLY-APPROVAL-PATH, REG-ALLY-APPROVAL-ACTIVATE-ONLY and REG-ALLY-REJECTION-CLOSED: PLATFORM_ADMIN with MFA
+    from a PLATFORM organization approves (ACTIVE, no ally relationship) or rejects (CLOSED, may apply again); audit in
+    both organizations'
+  - 'DECIDED REG-OWN-APPLICATIONS-ENDPOINT: separate read-only endpoint; /me/organization-contexts unchanged'
+  - 'DECIDED REG-ONE-ORGANIZATION-PER-PERSON: one self-created organization not CLOSED per person, enforced by the database'
+  - 'DECIDED ONBOARDING-IDEMPOTENCY-DERIVED-ID: organization id derived from user and Idempotency-Key'
+  - 'PENDING REG-JOIN-EXISTING-BY-EMAIL: joining an existing organization ships in a separate PR'
+  implementation:
+    status: IMPLEMENTED (feature/auth-open-registration, PR 1)
+    migration: Organizations lane 20260927000400_AddSelfServiceRegistration (up/down tested on PostgreSQL 18)
+    role: paqueteria_registration_executor NOLOGIN BYPASSRLS, five SECURITY DEFINER functions, EXECUTE only for paqueteria_app
+  required_tests:
+  - unverified email refused at the callback
+  - concurrent first sign-ins create exactly one user
+  - a new user has empty organization contexts
+  - BUSINESS active with BUSINESS_ADMIN; ALLY pending, unusable, approved by PLATFORM_ADMIN with MFA, usable afterwards
+  - rejected ALLY stays unusable and frees the slot
+  - idempotent replay, one-organization limit under concurrency, audit rows and D5 403s
+  - migration up and down on real PostgreSQL
   approval_gate: owner_product_technology
 - id: ENV-001
   decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)

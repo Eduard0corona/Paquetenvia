@@ -17,6 +17,12 @@ public interface IOrganizationRequestSession
 
     bool MfaSatisfied { get; }
 
+    /// <summary>
+    /// AUTH-EMAIL-VERIFIED-REQUIRED: the identity provider asserted a verified email for this session.
+    /// Fails closed (false) for any session that does not say otherwise.
+    /// </summary>
+    bool EmailVerified => false;
+
     IReadOnlyList<OrganizationSessionMembership> ActiveMemberships { get; }
 
     bool HasOrganizationAccess(Guid organizationId);

@@ -80,6 +80,13 @@ public static class TenantCapabilities
     public static readonly TenantCapability RecordCodCollection =
         Create("recordCodCollection", Dispatcher, PlatformAdminMfa, Driver);
 
+    // x-capability-matrix platform_operations (REG-ALLY-APPROVAL-PATH): a PLATFORM_ADMIN with a satisfied MFA
+    // challenge; the SQL function additionally requires the selected organization to be an ACTIVE PLATFORM one.
+    public static readonly TenantCapability ListPendingAllyOrganizations =
+        Create("listPendingAllyOrganizations", PlatformAdminMfa);
+    public static readonly TenantCapability DecideAllyOrganization =
+        Create("decideAllyOrganization", PlatformAdminMfa);
+
     /// <summary>
     /// D5-VIEWER-LOCATION-PRECISION-2026-09-27: only an actor holding DISPATCHER or PLATFORM_ADMIN in the selected
     /// organization receives exact coordinates; any other admitted actor (VIEWER) receives them rounded.

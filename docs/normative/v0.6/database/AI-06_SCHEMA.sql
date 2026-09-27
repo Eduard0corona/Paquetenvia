@@ -35,7 +35,9 @@ CREATE TABLE organizations.organizations (
   legal_name text NOT NULL,
   display_name text NOT NULL,
   organization_type text NOT NULL CHECK (organization_type IN ('PLATFORM','ALLY','BUSINESS')),
-  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED','CLOSED')),
+  -- REG-ALLY-APPROVAL-PATH: a self-registered ALLY is PENDING_APPROVAL until a PLATFORM_ADMIN
+  -- approves (ACTIVE) or rejects (CLOSED) it.
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','PENDING_APPROVAL','SUSPENDED','CLOSED')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -46,6 +48,14 @@ CREATE TABLE identity.users (
   status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED','DISABLED')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- REG-ONE-ORGANIZATION-PER-PERSON: the creator of an organization made through self-service
+-- onboarding (NULL for any other organization); at most one such organization not CLOSED per creator.
+ALTER TABLE organizations.organizations
+  ADD COLUMN self_service_creator_user_id uuid REFERENCES identity.users(id);
+CREATE UNIQUE INDEX organizations_one_open_self_service_uq
+  ON organizations.organizations(self_service_creator_user_id)
+  WHERE self_service_creator_user_id IS NOT NULL AND status <> 'CLOSED';
 
 CREATE TABLE organizations.organization_memberships (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -640,6 +650,14 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
   SELECT p_org IS NOT NULL
      AND p_org = ANY(COALESCE(NULLIF(current_setting('app.current_org_ids', true),'')::uuid[], ARRAY[]::uuid[]));
 $$;
+
+-- REG-001 registration functions (AUTH-OPEN-REGISTRATION) are installed by the Organizations
+-- module lane after this baseline, owned by paqueteria_registration_executor (AI-18) and executable
+-- only by paqueteria_app: security.register_identity_subject(text,uuid),
+-- security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text),
+-- security.list_own_organization_applications(uuid),
+-- security.list_pending_ally_organizations(uuid,uuid,integer) and
+-- security.decide_ally_organization(uuid,uuid,uuid,boolean,text).
 
 -- Bootstrap functions. Ownership changes to paqueteria_bootstrap in AI-18.
 CREATE OR REPLACE FUNCTION security.resolve_identity_context(p_identity_subject text)
