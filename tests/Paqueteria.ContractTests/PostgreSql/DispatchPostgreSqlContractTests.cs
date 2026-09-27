@@ -887,7 +887,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
               id,order_id,owner_org_id,aggregate_version,event_type,payload,occurred_at)
             VALUES (
               @event,@order,@org,3,'ORDER_STATUS_CHANGED',
-              '{"previous_status":"IN_TRANSIT","new_status":"DELIVERING"}',@occurred);
+              '{"previous_status":"AT_PICKUP","new_status":"PICKED_UP"}',@occurred);
             """,
             P("event", Guid.NewGuid()),
             P("order", scenario.OrderId),

@@ -114,6 +114,49 @@ Consumers separados lógicamente:
 
 Cada consumer implementa idempotencia, lease/locking, retries, dead-letter/review state, métricas y graceful shutdown. La concurrencia se configura por consumer para permitir scale-out independiente.
 
+### 7.1 Adenda 2026-09-26: cierre de asignaciones (D8)
+
+**Decidido** (`D8-DISPATCH-OUTBOX-CLOSURE`, project owner, 2026-09-26): Dispatch
+cierra sus asignaciones reaccionando por outbox a los cambios de estado de la
+orden, con consistencia eventual. No se agrega un sexto coordinador
+transaccional ni un flujo atómico nuevo entre módulos.
+
+Correspondencia del PR borrador #90 (`AssignmentLifecyclePolicy`), aprobada con
+`D8-OUTBOX-LANE-DISPATCH` (2026-09-27, "Apruebo 2" y "Aprobado todo"):
+`ASSIGNED→READY_FOR_PICKUP` y `RESCHEDULED→READY_FOR_PICKUP` cierran la
+asignación como `CANCELLED`; `*→CANCELLED` la cierra como `CANCELLED`;
+`DELIVERED` o `RETURNED` la cierran como `COMPLETED`. Implementado (PR #90): por
+`D8-REASSIGNMENT-NEW-ASSIGNMENT`, `FAILED_ATTEMPT→RESCHEDULED` también la cierra
+como `CANCELLED`; el reintento `FAILED_ATTEMPT→DELIVERING` y `*→RETURNING` la
+conservan. El mapa cubre las 30 transiciones de AI-04. El cierre es idempotente:
+el evento siempre nombra el `assignment_id` activo bajo el lock de la orden en
+la transacción de ORD-002, y solo se cierra si esa asignación sigue
+`ACCEPTED/ACTIVE`; una asignación nueva nunca coincide.
+
+**Decidido** (`D8-REASSIGNMENT-NEW-ASSIGNMENT`, 2026-09-26/27): al reprogramar,
+la asignación anterior se cierra como `CANCELLED`, y la reasignación siempre
+crea una asignación nueva por DSP-002 o una oferta externa nueva; nunca se
+reutiliza la anterior. Esto incluye `RESCHEDULED→ASSIGNED`.
+
+**Decidido** (`D8-OUTBOX-LANE-DISPATCH`, project owner, 2026-09-27; mecanismo
+propuesto por el PR #90): el consumer
+`AssignmentLifecycleReactor` (Dispatch) consume el topic interno
+`dispatch.order-status-reaction-requested` (payload
+`order-status-reaction-v1`, sin PII) por un lane `DISPATCH`. Orders escribe ese
+topic en la misma transacción de ORD-002, como un INSERT adicional en el
+outbox, solo cuando la transición cierra una asignación. El lane requiere
+funciones `claim_dispatch_outbox` y `requeue_stale_dispatch_outbox` y la rama
+`dispatch.order-status-reaction-requested → DISPATCH` de
+`security.resolve_outbox_consumer`, propiedad de `paqueteria_outbox_executor`, con
+`EXECUTE` solo para `paqueteria_worker`. Traducido (PR #90): AI-18 registra el
+contrato del lane, instalado por la migración del lane Notifications
+`20260927000200_AddDispatchOutboxLane` (AI-06 sin cambios: el outbox no cambia).
+En una sola transacción del Worker el consumer cierra la asignación, escribe
+`AssignmentChanged` y la auditoría, y liquida la fila con su `lease_token`.
+
+`AssignmentChanged` admite los estados `COMPLETED` y `CANCELLED`
+(`AI12-ASSIGNMENT-TERMINAL-STATES`, 2026-09-27; ver AI-12).
+
 ## 8. Frontend
 
 ```text

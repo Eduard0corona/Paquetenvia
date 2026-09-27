@@ -1264,6 +1264,18 @@ class Rel000FocusedTests(unittest.TestCase):
             lambda: rel000.validate_issue_and_audit(issue5, additional, base, branch, clean),
         )
 
+    def test_44b_admitted_dependency_diff_is_accepted_in_normal_mode(self):
+        issue5, additional, base, branch, admitted = self.make_security_inputs()
+        admitted.update(
+            {
+                "dependency_manifest_changed": True,
+                "dependency_lockfile_changed": True,
+                "dependency_diff_against_base": rel000.ADMITTED_DEPENDENCY_DIFF,
+            }
+        )
+        result = rel000.validate_issue_and_audit(issue5, additional, base, branch, admitted)
+        self.assertEqual(0, result["deltas"]["total"])
+
     def test_45_passed_security_still_blocks_on_owner_decision(self):
         report = {
             "owner_approval_status": "PENDING",
@@ -3931,13 +3943,47 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
         changed_lockfiles = sorted(
             path for path in all_changed if Path(path).name == "packages.lock.json"
         )
-        lockfiles = rel000.validate_baseline_package_graph_lockfile_diff(
+        # The permanent MVP-0 freeze is baseline + owner-admitted packages
+        # (GOV-DEPENDENCY-ADMISSION-001). ACTIVE and MERGED admissions both count;
+        # anything else still fails closed.
+        admissions = rel000.load_remediation_policy(
+            REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        )["dependency_admissions"]
+        lockfiles, usage = rel000.package_graph_lockfile_diff(
             REPOSITORY_ROOT,
             self.baseline,
             all_changed,
+            admissions,
         )
         self.assertTrue(changed_lockfiles)
         self.assertEqual(changed_lockfiles, lockfiles)
+        self.assertEqual(
+            lockfiles,
+            rel000.validate_baseline_package_graph_lockfile_diff(
+                REPOSITORY_ROOT, self.baseline, all_changed, admissions
+            ),
+        )
+        catalog = rel000.admitted_package_catalog(admissions)
+        for package, files in usage.items():
+            self.assertIn(package.casefold(), catalog)
+            self.assertTrue(set(files).issubset(changed_lockfiles))
+        central = rel000.validate_admitted_central_packages(
+            REPOSITORY_ROOT, self.baseline, admissions
+        )
+        self.assertEqual(
+            rel000.CENTRAL_PACKAGES_PATH in all_changed, central["changed"]
+        )
+        for package in central["admitted"]:
+            self.assertTrue(catalog[package.casefold()]["direct"])
+        if not usage and not central["changed"]:
+            # Without admitted packages in the tree the historical byte-identical
+            # baseline check must still hold on its own.
+            self.assertEqual(
+                lockfiles,
+                rel000.validate_baseline_package_graph_lockfile_diff(
+                    REPOSITORY_ROOT, self.baseline, all_changed
+                ),
+            )
 
     def existing_lock_repo(self):
         root = Path(self.temp.name) / "repo"
@@ -4171,6 +4217,574 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
         self.assert_reason(
             "NUGET_NEW_PROJECT_SOURCE_OVERRIDE",
             lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
+
+class DependencyAdmissionTests(unittest.TestCase):
+    """GOV-DEPENDENCY-ADMISSION-001: baseline + exactly the admitted packages, nothing else."""
+
+    DIRECT_HASH = "D" * 86 + "=="
+    TRANSITIVE_HASH = "T" * 86 + "=="
+    TODAY = "2026-09-27"
+    PROPS_BASE = (
+        "<Project>\n"
+        "  <PropertyGroup>\n"
+        "    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n"
+        "  </PropertyGroup>\n"
+        "  <ItemGroup>\n"
+        '    <PackageVersion Include="Baseline.Direct" Version="1.2.3" />\n'
+        '    <PackageVersion Include="Zeta.Direct" Version="9.0.0" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n"
+    )
+    ADMITTED_LINE = '    <PackageVersion Include="Admitted.Direct" Version="2.0.0" />\n'
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-admission-tests-")
+        self.root = Path(self.temp.name) / "repo"
+        self.root.mkdir()
+        (self.root / "Directory.Packages.props").write_text(self.PROPS_BASE, encoding="utf-8")
+        (self.root / "app").mkdir()
+        (self.root / "host").mkdir()
+        self.write_project()
+        baseline_direct = {
+            "type": "Direct",
+            "requested": "[1.2.3, )",
+            "resolved": "1.2.3",
+            "contentHash": "baseline-direct-hash",
+            "dependencies": {"Baseline.Transitive": "4.5.6"},
+        }
+        baseline_transitive = {
+            "type": "Transitive",
+            "resolved": "4.5.6",
+            "contentHash": "baseline-transitive-hash",
+        }
+        self.write_lock(
+            "app",
+            {
+                "Baseline.Direct": baseline_direct,
+                "Baseline.Transitive": baseline_transitive,
+            },
+        )
+        self.write_lock(
+            "host",
+            {
+                "Baseline.Transitive": dict(baseline_transitive),
+                "app": {"type": "Project", "dependencies": {"Baseline.Direct": "[1.2.3, )"}},
+            },
+        )
+        self.git("init", "-q")
+        self.git("config", "user.email", "rel000@example.invalid")
+        self.git("config", "user.name", "REL-000 Tests")
+        self.git("config", "commit.gpgsign", "false")
+        self.git("add", ".")
+        self.git("commit", "-qm", "base")
+        self.base = self.git("rev-parse", "HEAD")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def git(self, *arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(self.root), *arguments], text=True
+        ).strip()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def write_project(self, package_body: str = "") -> None:
+        (self.root / "app/App.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+            '<PackageReference Include="Baseline.Direct" />'
+            f"{package_body}"
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+
+    def write_lock(self, directory: str, nodes: dict[str, Any]) -> None:
+        (self.root / directory / "packages.lock.json").write_text(
+            json.dumps({"version": 2, "dependencies": {"net10.0": nodes}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def read_nodes(self, directory: str) -> dict[str, Any]:
+        return json.loads(
+            (self.root / directory / "packages.lock.json").read_text(encoding="utf-8")
+        )["dependencies"]["net10.0"]
+
+    def admission(self, **overrides: Any) -> dict[str, Any]:
+        value = {
+            "id": "DEP-TEST",
+            "mode": rel000.DEPENDENCY_ADMISSION,
+            "status": "ACTIVE",
+            "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+            "authorized_source_branch": "deps/test",
+            "ecosystem": "nuget",
+            "admitted_direct_packages": [
+                {"id": "Admitted.Direct", "version": "2.0.0", "content_hash": self.DIRECT_HASH}
+            ],
+            "admitted_transitive_packages": [
+                {"id": "Admitted.Transitive", "version": "3.1.0", "content_hash": self.TRANSITIVE_HASH}
+            ],
+            "allowed_dependency_files": [
+                "Directory.Packages.props",
+                "app/packages.lock.json",
+                "host/packages.lock.json",
+            ],
+            "required_dependency_files": [
+                "Directory.Packages.props",
+                "app/packages.lock.json",
+                "host/packages.lock.json",
+            ],
+            "allowed_project_files": ["app/App.csproj"],
+        }
+        value.update(overrides)
+        return value
+
+    def direct_node(self, node_type: str = "Direct", version: str = "2.0.0") -> dict[str, Any]:
+        return {
+            "type": node_type,
+            "requested": f"[{version}, )",
+            "resolved": version,
+            "contentHash": self.DIRECT_HASH,
+            "dependencies": {"Admitted.Transitive": "3.1.0"},
+        }
+
+    def transitive_node(self, version: str = "3.1.0") -> dict[str, Any]:
+        return {"type": "Transitive", "resolved": version, "contentHash": self.TRANSITIVE_HASH}
+
+    def apply_admission(self) -> None:
+        (self.root / "Directory.Packages.props").write_text(
+            self.PROPS_BASE.replace(
+                '    <PackageVersion Include="Zeta.Direct"',
+                self.ADMITTED_LINE + '    <PackageVersion Include="Zeta.Direct"',
+            ),
+            encoding="utf-8",
+        )
+        self.write_project('<PackageReference Include="Admitted.Direct" />')
+        app = self.read_nodes("app")
+        app["Admitted.Direct"] = self.direct_node()
+        app["Admitted.Transitive"] = self.transitive_node()
+        self.write_lock("app", app)
+        host = self.read_nodes("host")
+        host["Admitted.Direct"] = self.direct_node("CentralTransitive")
+        host["Admitted.Transitive"] = self.transitive_node()
+        host["app"]["dependencies"]["Admitted.Direct"] = "[2.0.0, )"
+        self.write_lock("host", host)
+
+    def diff(self, admissions=None, branch="deps/test", today=TODAY):
+        return rel000.validate_dependency_diff(
+            self.root,
+            self.base,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            [self.admission()] if admissions is None else admissions,
+            branch,
+            today,
+        )
+
+    def changed(self) -> list[str]:
+        return sorted(
+            set(self.git("diff", "--name-only", self.base).splitlines())
+            | set(self.git("ls-files", "--others", "--exclude-standard").splitlines())
+        )
+
+    def graph(self, admissions=None):
+        return rel000.validate_baseline_package_graph_lockfile_diff(
+            self.root,
+            self.base,
+            self.changed(),
+            [self.admission()] if admissions is None else admissions,
+        )
+
+    # --- accepted graph -------------------------------------------------------
+
+    def test_admitted_packages_pass_from_the_authorized_branch(self):
+        self.apply_admission()
+        result = self.diff()
+        self.assertEqual(rel000.ADMITTED_DEPENDENCY_DIFF, result["dependency_diff_against_base"])
+        self.assertEqual(["DEP-TEST"], result["dependency_admission_ids"])
+        self.assertTrue(result["dependency_manifest_changed"])
+        self.assertEqual(
+            ["Directory.Packages.props", "app/packages.lock.json", "host/packages.lock.json"],
+            result["changed_dependency_files"],
+        )
+        self.assertEqual(
+            ["app/packages.lock.json", "host/packages.lock.json"],
+            result["baseline_package_graph_lockfiles"],
+        )
+
+    def test_merged_admission_is_permanent_in_the_graph_check(self):
+        self.apply_admission()
+        merged = [self.admission(status="MERGED")]
+        self.assertEqual(
+            ["app/packages.lock.json", "host/packages.lock.json"], self.graph(merged)
+        )
+        central = rel000.validate_admitted_central_packages(self.root, self.base, merged)
+        self.assertEqual(["Admitted.Direct"], central["admitted"])
+        self.assertEqual(["DEP-TEST"], central["admission_ids"])
+
+    def test_admissions_without_admitted_changes_stay_clean(self):
+        result = self.diff(branch="feature/unrelated")
+        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
+        self.assertEqual([], result["dependency_admission_ids"])
+        self.assertFalse(result["dependency_manifest_changed"])
+
+    def test_new_project_may_reference_an_admitted_central_package(self):
+        self.apply_admission()
+        (self.root / "new").mkdir()
+        (self.root / "new/New.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+            '<PackageReference Include="Admitted.Direct" />'
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+        self.write_lock(
+            "new",
+            {"Admitted.Direct": self.direct_node(), "Admitted.Transitive": self.transitive_node()},
+        )
+        self.assertIn("new/packages.lock.json", self.graph([self.admission(status="MERGED")]))
+
+    # --- rejected graph -------------------------------------------------------
+
+    def test_extra_unadmitted_transitive_fails(self):
+        self.apply_admission()
+        app = self.read_nodes("app")
+        app["Sneaky.Transitive"] = {"type": "Transitive", "resolved": "1.0.0", "contentHash": "x"}
+        self.write_lock("app", app)
+        failure = self.assert_reason("DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE", self.diff)
+        self.assertEqual("Sneaky.Transitive", failure.details["package"])
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE",
+            lambda: self.graph([self.admission(status="MERGED")]),
+        )
+
+    def test_extra_unadmitted_transitive_in_new_project_fails(self):
+        self.apply_admission()
+        (self.root / "new").mkdir()
+        (self.root / "new/New.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+            '<PackageReference Include="Admitted.Direct" />'
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+        self.write_lock(
+            "new",
+            {
+                "Admitted.Direct": self.direct_node(),
+                "Admitted.Transitive": self.transitive_node(),
+                "Sneaky.Transitive": {"type": "Transitive", "resolved": "1.0.0", "contentHash": "x"},
+            },
+        )
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE",
+            lambda: self.graph([self.admission(status="MERGED")]),
+        )
+
+    def test_version_bump_of_an_admitted_package_fails(self):
+        self.apply_admission()
+        app = self.read_nodes("app")
+        app["Admitted.Transitive"] = self.transitive_node("3.1.1")
+        self.write_lock("app", app)
+        self.assert_reason("DEPENDENCY_ADMISSION_VERSION_MISMATCH", self.diff)
+
+    def test_central_version_bump_of_an_admitted_package_fails(self):
+        self.apply_admission()
+        props = self.root / "Directory.Packages.props"
+        props.write_text(
+            props.read_text(encoding="utf-8").replace('Version="2.0.0"', 'Version="2.0.1"'),
+            encoding="utf-8",
+        )
+        self.assert_reason("DEPENDENCY_ADMISSION_VERSION_MISMATCH", self.diff)
+
+    def test_admitted_package_with_another_content_hash_fails(self):
+        self.apply_admission()
+        host = self.read_nodes("host")
+        host["Admitted.Transitive"]["contentHash"] = "X" * 86 + "=="
+        self.write_lock("host", host)
+        self.assert_reason("DEPENDENCY_ADMISSION_CONTENT_HASH_MISMATCH", self.diff)
+
+    def test_transitive_only_admission_cannot_become_central(self):
+        self.apply_admission()
+        host = self.read_nodes("host")
+        host["Admitted.Transitive"] = {
+            **self.transitive_node(),
+            "type": "CentralTransitive",
+            "requested": "[3.1.0, )",
+        }
+        self.write_lock("host", host)
+        self.assert_reason("DEPENDENCY_ADMISSION_DIRECT_PACKAGE_NOT_ADMITTED", self.diff)
+
+    def test_changed_existing_package_fails(self):
+        self.apply_admission()
+        app = self.read_nodes("app")
+        app["Baseline.Transitive"]["contentHash"] = "tampered-hash"
+        self.write_lock("app", app)
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED", self.diff)
+
+    def test_changed_existing_central_package_fails(self):
+        self.apply_admission()
+        props = self.root / "Directory.Packages.props"
+        props.write_text(
+            props.read_text(encoding="utf-8").replace('Version="1.2.3"', 'Version="1.2.4"'),
+            encoding="utf-8",
+        )
+        self.assert_reason("BASELINE_CENTRAL_PACKAGES_CHANGED", self.diff)
+
+    def test_removal_fails(self):
+        self.apply_admission()
+        host = self.read_nodes("host")
+        del host["Baseline.Transitive"]
+        self.write_lock("host", host)
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED", self.diff)
+
+    def test_central_removal_fails(self):
+        self.apply_admission()
+        props = self.root / "Directory.Packages.props"
+        props.write_text(
+            props.read_text(encoding="utf-8").replace(
+                '    <PackageVersion Include="Zeta.Direct" Version="9.0.0" />\n', ""
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason("BASELINE_CENTRAL_PACKAGES_CHANGED", self.diff)
+
+    def test_props_changed_without_an_admission_fails(self):
+        self.apply_admission()
+        self.assert_reason("UNAUTHORIZED_DEPENDENCY_FILE_CHANGED", lambda: self.diff(admissions=[]))
+        self.assert_reason(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            lambda: rel000.validate_admitted_central_packages(self.root, self.base, []),
+        )
+
+    def test_unregistered_central_package_fails(self):
+        props = self.root / "Directory.Packages.props"
+        props.write_text(
+            self.PROPS_BASE.replace(
+                '    <PackageVersion Include="Zeta.Direct"',
+                '    <PackageVersion Include="Other.Direct" Version="1.0.0" />\n'
+                '    <PackageVersion Include="Zeta.Direct"',
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason("DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE", self.diff)
+
+    def test_props_edit_beyond_admitted_lines_fails(self):
+        self.apply_admission()
+        props = self.root / "Directory.Packages.props"
+        props.write_text(
+            props.read_text(encoding="utf-8").replace(
+                "<PropertyGroup>",
+                "<PropertyGroup>\n    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>",
+            ),
+            encoding="utf-8",
+        )
+        self.assert_reason("BASELINE_CENTRAL_PACKAGES_CHANGED", self.diff)
+
+    # --- branch binding on the tested base -----------------------------------
+
+    def test_admitted_packages_from_another_branch_fail(self):
+        self.apply_admission()
+        for branch in ("development", "feature/other", "deps/test2"):
+            with self.subTest(branch=branch):
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED", lambda: self.diff(branch=branch)
+                )
+
+    def test_merged_admission_cannot_introduce_packages_again(self):
+        self.apply_admission()
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_NOT_ACTIVE",
+            lambda: self.diff(admissions=[self.admission(status="MERGED")]),
+        )
+
+    def test_expired_admission_fails(self):
+        self.apply_admission()
+        expiring = [self.admission(expires="2026-09-26")]
+        self.assert_reason("DEPENDENCY_ADMISSION_EXPIRED", lambda: self.diff(admissions=expiring))
+        self.assertEqual(
+            rel000.ADMITTED_DEPENDENCY_DIFF,
+            self.diff(admissions=expiring, today="2026-09-26")["dependency_diff_against_base"],
+        )
+
+    def test_file_outside_the_admission_allowlist_fails(self):
+        self.apply_admission()
+        (self.root / "app/Program.cs").write_text("// code belongs in development\n", encoding="utf-8")
+        self.assert_reason("DEPENDENCY_ADMISSION_FILE_NOT_ALLOWED", self.diff)
+
+    def test_incomplete_admission_fails(self):
+        self.apply_admission()
+        host = self.read_nodes("host")
+        del host["Admitted.Direct"], host["Admitted.Transitive"]
+        del host["app"]["dependencies"]["Admitted.Direct"]
+        self.write_lock("host", host)
+        failure = self.assert_reason("DEPENDENCY_ADMISSION_INCOMPLETE", self.diff)
+        self.assertEqual(["host/packages.lock.json"], failure.details["missing_files"])
+
+    def test_without_admissions_the_legacy_graph_rejects_admitted_packages(self):
+        self.apply_admission()
+        self.assertEqual(
+            [],
+            rel000.package_graph_lockfile_diff(self.root, self.base, self.changed(), None)[0],
+        )
+
+    # --- policy registry -------------------------------------------------------
+
+    def policy(self, admissions) -> dict[str, Any]:
+        value = json.loads(
+            (REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH).read_text(encoding="utf-8")
+        )
+        value["dependency_admissions"] = admissions
+        return value
+
+    def test_committed_policy_registers_auth_001_oidc(self):
+        policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
+        (entry,) = [
+            item for item in policy["dependency_admissions"] if item["id"] == "AUTH-001-OIDC"
+        ]
+        self.assertEqual("deps/auth-001-oidc", entry["authorized_source_branch"])
+        self.assertEqual("GOV-DEPENDENCY-ADMISSION-001", entry["owner_decision_id"])
+        self.assertEqual(
+            [("Microsoft.AspNetCore.Authentication.OpenIdConnect", "10.0.10")],
+            [(item["id"], item["version"]) for item in entry["admitted_direct_packages"]],
+        )
+        self.assertEqual(
+            {
+                ("Microsoft.Bcl.Cryptography", "10.0.2"),
+                ("Microsoft.IdentityModel.Abstractions", "8.19.2"),
+                ("Microsoft.IdentityModel.JsonWebTokens", "8.19.2"),
+                ("Microsoft.IdentityModel.Logging", "8.19.2"),
+                ("Microsoft.IdentityModel.Protocols", "8.19.2"),
+                ("Microsoft.IdentityModel.Protocols.OpenIdConnect", "8.19.2"),
+                ("Microsoft.IdentityModel.Tokens", "8.19.2"),
+                ("System.IdentityModel.Tokens.Jwt", "8.19.2"),
+            },
+            {(item["id"], item["version"]) for item in entry["admitted_transitive_packages"]},
+        )
+        self.assertEqual(
+            ["src/Modules/Identity/Identity.Endpoints/Identity.Endpoints.csproj"],
+            entry["allowed_project_files"],
+        )
+        self.assertNotIn(
+            "deps/auth-001-oidc",
+            {item["authorized_source_branch"] for item in policy["active_remediations"]},
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "deps/auth-001-oidc"),
+        )
+
+    def test_v2_policy_is_rejected_from_the_tree(self):
+        value = self.policy([])
+        value["format_version"] = "paquetenvia-rel000-security-remediation-policy-v2"
+        self.assert_reason(
+            "REMEDIATION_POLICY_FORMAT_INVALID", lambda: rel000.validate_remediation_policy(value)
+        )
+        del value["dependency_admissions"]
+        value["format_version"] = rel000.REMEDIATION_POLICY_FORMAT
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_POLICY_INVALID", lambda: rel000.validate_remediation_policy(value)
+        )
+
+    def test_invalid_admissions_are_rejected(self):
+        duplicate_package = self.admission(
+            id="DEP-OTHER",
+            authorized_source_branch="deps/other",
+            admitted_transitive_packages=[],
+        )
+        cases = {
+            "missing decision": self.admission(owner_decision_id=""),
+            "bad status": self.admission(status="PENDING"),
+            "bad mode": self.admission(mode=rel000.SECURITY_REMEDIATION),
+            "no direct package": self.admission(admitted_direct_packages=[]),
+            "range version": self.admission(
+                admitted_direct_packages=[
+                    {"id": "Admitted.Direct", "version": "[2.0.0, )", "content_hash": self.DIRECT_HASH}
+                ]
+            ),
+            "prerelease": self.admission(
+                admitted_direct_packages=[
+                    {"id": "Admitted.Direct", "version": "2.0.0-rc.1", "content_hash": self.DIRECT_HASH}
+                ]
+            ),
+            "missing hash": self.admission(
+                admitted_direct_packages=[{"id": "Admitted.Direct", "version": "2.0.0"}]
+            ),
+            "remediation branch": self.admission(
+                authorized_source_branch="fix/security-2026-09-next-critical"
+            ),
+            "development branch": self.admission(authorized_source_branch="development"),
+            "props not allowed": self.admission(
+                allowed_dependency_files=["app/packages.lock.json"],
+                required_dependency_files=["app/packages.lock.json"],
+            ),
+            "required outside allowed": self.admission(
+                required_dependency_files=["Directory.Packages.props", "other/packages.lock.json"]
+            ),
+            "project file is not a csproj": self.admission(allowed_project_files=["app/Program.cs"]),
+            "bad expiry": self.admission(expires="2026-02-30"),
+            "unknown field": self.admission(authorized_base_sha="0" * 40),
+        }
+        for label, entry in cases.items():
+            with self.subTest(label=label):
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_POLICY_INVALID",
+                    lambda: rel000.validate_remediation_policy(self.policy([entry])),
+                )
+        with self.subTest(label="package admitted twice"):
+            self.assert_reason(
+                "DEPENDENCY_ADMISSION_POLICY_INVALID",
+                lambda: rel000.validate_remediation_policy(
+                    self.policy([self.admission(), duplicate_package])
+                ),
+            )
+        with self.subTest(label="duplicate id"):
+            self.assert_reason(
+                "DEPENDENCY_ADMISSION_POLICY_INVALID",
+                lambda: rel000.validate_remediation_policy(
+                    self.policy(
+                        [
+                            self.admission(),
+                            self.admission(
+                                authorized_source_branch="deps/other",
+                                admitted_direct_packages=[
+                                    {"id": "Other.Direct", "version": "1.0.0", "content_hash": self.DIRECT_HASH}
+                                ],
+                                admitted_transitive_packages=[],
+                            ),
+                        ]
+                    )
+                ),
+            )
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_ECOSYSTEM_UNSUPPORTED",
+            lambda: rel000.validate_remediation_policy(self.policy([self.admission(ecosystem="pnpm")])),
+        )
+
+    def test_base_admissions_are_read_from_the_tested_base_only(self):
+        self.assertEqual([], rel000.load_base_dependency_admissions(self.root, self.base))
+        policy_path = self.root / rel000.REMEDIATION_POLICY_PATH
+        policy_path.parent.mkdir(parents=True)
+        legacy = self.policy([])
+        legacy["format_version"] = "paquetenvia-rel000-security-remediation-policy-v2"
+        del legacy["dependency_admissions"]
+        policy_path.write_text(json.dumps(legacy), encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "legacy policy")
+        legacy_base = self.git("rev-parse", "HEAD")
+        self.assertEqual([], rel000.load_base_dependency_admissions(self.root, legacy_base))
+        policy_path.write_text(json.dumps(self.policy([self.admission()])), encoding="utf-8")
+        # Uncommitted: the tree admits, the base does not.
+        self.assertEqual([], rel000.load_base_dependency_admissions(self.root, legacy_base))
+        self.git("add", ".")
+        self.git("commit", "-qm", "admission")
+        admitted_base = self.git("rev-parse", "HEAD")
+        self.assertEqual(
+            ["DEP-TEST"],
+            [item["id"] for item in rel000.load_base_dependency_admissions(self.root, admitted_base)],
         )
 
 

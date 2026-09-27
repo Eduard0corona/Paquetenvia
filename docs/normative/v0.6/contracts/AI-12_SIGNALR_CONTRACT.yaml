@@ -109,6 +109,15 @@ events:
     - driver_id
     - assignment_status
     - occurred_at
+    decided_amendment:
+      status: DECIDED_2026-09-27_IMPLEMENTED_PR_90
+      decision: AI12-ASSIGNMENT-TERMINAL-STATES (project owner, 2026-09-27)
+      source: draft PR 90 (D8 assignment closure)
+      implementation: the Realtime parser accepts ACCEPTED, COMPLETED and CANCELLED; a closed status is proven against
+        the assignment in that status and the ORDER_STATUS_CHANGED event at the event aggregate_version
+      text: assignment_status may be ACCEPTED, COMPLETED or CANCELLED; for a closed assignment the audience is operations
+        plus the affected driver only while that driver's membership is active; until the Realtime parser and evidence
+        rule accept closed statuses, no producer may emit AssignmentChanged for COMPLETED or CANCELLED
   RouteChanged:
     audience:
     - operations

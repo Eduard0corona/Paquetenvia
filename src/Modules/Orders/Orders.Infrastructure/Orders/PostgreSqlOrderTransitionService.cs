@@ -61,6 +61,7 @@ public sealed class PostgreSqlOrderTransitionService(
     IOrderQuoteAcceptanceGuardReader quoteAcceptanceReader,
     IOrderAssignmentGuardReader assignmentReader,
     IOrderProofGuardReader proofReader,
+    IOrderCustodyGuardReader custodyReader,
     IOrderIncidentGuardReader incidentReader,
     IOrderCodGuardReader codReader,
     IOrderTransitionAuthorizer authorizer,
@@ -233,6 +234,13 @@ public sealed class PostgreSqlOrderTransitionService(
         }
 
         await failureInjector.OnStageAsync(OrderTransitionStage.OrderLocked, cancellationToken);
+        occurredAt = await SequenceAfterCommittedIncidentsAsync(
+            connection,
+            transaction,
+            command.OrganizationId,
+            command.OrderId,
+            occurredAt,
+            cancellationToken);
         var version = OrderTransitionMatrix.EvaluateVersion(order.Version, command.ExpectedVersion);
         if (!version.Allowed)
         {
@@ -287,20 +295,25 @@ public sealed class PostgreSqlOrderTransitionService(
                 command.OrganizationId,
                 command.OrderId,
                 order.CityId,
+                occurredAt,
                 cancellationToken);
         }
 
-        var needsCustody = target is OrderStatus.PickedUp or OrderStatus.Delivered or OrderStatus.Returning ||
-            (target == OrderStatus.Cancelled && source == OrderStatus.AtPickup) ||
-            (target == OrderStatus.Delivering && source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled);
-        var proofs = needsCustody
+        var proofs = target is OrderStatus.PickedUp or OrderStatus.Delivered
             ? await proofReader.ReadAsync(
                 connection, transaction, command.OrganizationId, command.OrderId, cancellationToken)
             : new ProofGuardSnapshot(false, false);
 
-        var needsIncidents = target is OrderStatus.FailedAttempt or OrderStatus.Returning or OrderStatus.Closed ||
+        var needsCustody = target == OrderStatus.Returning ||
             (target == OrderStatus.Cancelled && source == OrderStatus.AtPickup) ||
             (target == OrderStatus.Delivering && source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled);
+        var custody = needsCustody
+            ? await custodyReader.ReadAsync(
+                connection, transaction, command.OrganizationId, command.OrderId, cancellationToken)
+            : new CustodyGuardSnapshot(false);
+
+        var needsIncidents = target is OrderStatus.FailedAttempt or OrderStatus.Closed ||
+            source == OrderStatus.FailedAttempt;
         var incidents = needsIncidents
             ? await incidentReader.ReadAsync(
                 connection,
@@ -330,6 +343,7 @@ public sealed class PostgreSqlOrderTransitionService(
             QuoteAcceptance = quoteAcceptance,
             Assignment = assignment,
             Proofs = proofs,
+            Custody = custody,
             Incidents = incidents,
             Cod = cod,
         };
@@ -591,6 +605,44 @@ public sealed class PostgreSqlOrderTransitionService(
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, createdAt));
         command.Parameters.Add(P("expires", NpgsqlDbType.TimestampTz, expiresAt));
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "The transition reservation was not inserted.");
+    }
+
+    /// <summary>
+    /// The transition's time is read from the application clock before the order lock, and
+    /// INC-001 opens incidents under a share lock on the same row. Whichever commits first, the
+    /// later one must carry the later time, or an incident opened during the previous attempt
+    /// could look newer than the status change that starts the next one. This runs after the
+    /// order lock in its own statement (a fresh READ COMMITTED snapshot, so it sees every incident
+    /// committed while the lock was awaited) and moves the transition just past the newest
+    /// incident of the order when the clock alone would have placed it earlier. INC-001 applies
+    /// the mirror rule against the order history. No AI-06 column is needed.
+    /// </summary>
+    private async Task<DateTimeOffset> SequenceAfterCommittedIncidentsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid organizationId,
+        Guid orderId,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            SELECT max(i.created_at)
+            FROM incidents.incidents i
+            WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)
+            """);
+        command.Parameters.Add(P("org", NpgsqlDbType.Uuid, organizationId));
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
+        var latest = await command.ExecuteScalarAsync(cancellationToken);
+        if (latest is not DateTime latestIncident)
+        {
+            return occurredAt;
+        }
+
+        var after = new DateTimeOffset(DateTime.SpecifyKind(latestIncident, DateTimeKind.Utc)).AddTicks(10);
+        return after > occurredAt ? after : occurredAt;
     }
 
     private async Task<OrderRow?> ReadOrderForUpdateAsync(
@@ -948,7 +1000,7 @@ public sealed class PostgreSqlOrderTransitionService(
             JOIN drivers.driver_profiles p
               ON p.id=a.driver_id
              AND p.org_id=a.owner_org_id
-             AND p.driver_type='OWN'
+             AND p.driver_type=a.assignment_type
              AND p.status='ACTIVE'
             JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
             JOIN organizations.organization_memberships m
@@ -958,6 +1010,7 @@ public sealed class PostgreSqlOrderTransitionService(
              AND m.status='ACTIVE'
             WHERE a.order_id=@order
               AND a.owner_org_id=@owner
+              AND a.assignment_type IN ('OWN','EXTERNAL')
               AND a.status IN ('ACCEPTED','ACTIVE')
             """);
         command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
