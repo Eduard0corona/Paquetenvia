@@ -724,7 +724,8 @@ internal static class EmailLookupTestHasher
         CurrentKeyVersion = 1,
         Keys = new Dictionary<int, string>
         {
-            [1] = Convert.ToBase64String(Encoding.UTF8.GetBytes("reg002-contract-test-key-0123456789abcdef")),
+            [1] = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(
+                Encoding.UTF8.GetBytes("paquetenvia reg002 contract tests"))),
         },
     }));
 }

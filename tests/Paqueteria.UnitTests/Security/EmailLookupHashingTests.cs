@@ -16,8 +16,9 @@ namespace Paqueteria.UnitTests.Security;
 /// </summary>
 public sealed class EmailLookupHashingTests
 {
-    private static readonly string Key = Convert.ToBase64String(Encoding.UTF8.GetBytes("unit-test-email-lookup-key-0123456789"));
-    private static readonly string OtherKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("unit-test-email-lookup-key-9876543210"));
+    // Derived at runtime: no key-like literal is committed.
+    private static readonly string Key = Derive("paquetenvia reg002 unit tests one");
+    private static readonly string OtherKey = Derive("paquetenvia reg002 unit tests two");
 
     [Theory]
     [InlineData("Production", "Tenancy:Provider")]
@@ -122,6 +123,9 @@ public sealed class EmailLookupHashingTests
         // Built in code: theory data would be serialized and the lone surrogate replaced.
         Assert.False(EmailLookupNormalizer.TryNormalize(new string('\ud800', 1) + "@example.com", out _));
     }
+
+    private static string Derive(string label) =>
+        Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(label)));
 
     private static EmailLookupOptions Resolve(IEnumerable<KeyValuePair<string, string?>> settings, string environmentName)
     {
