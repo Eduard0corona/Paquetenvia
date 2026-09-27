@@ -263,11 +263,35 @@ de estos valores, si `Authority` no es HTTPS, si el secreto tiene menos de 32 ca
      solicitud aprobada. Sin acceso activo, el login hospedado indica que no hay acceso y no
      regresa; con sesión SSO existente, el callback recibe `error=access_denied`.
 
+### 10.1 Valores por ambiente (decisión del owner, 27-sep-2026)
+
+Dominio de Paquetenvia: `paquetenvia.com`. AuthCenter: `https://authcenter.info`. Dos ambientes,
+cada uno con su propio cliente confidencial y su propio secreto; no hay ambiente staging.
+
+| Dato | Dev (piloto en Azure) | Producción |
+|---|---|---|
+| Host web (`AuthCenter__PublicOrigin`) | `https://dev.paquetenvia.com` | `https://paquetenvia.com` |
+| `AuthCenter__ClientId` | `paquetenvia-web-dev` | `paquetenvia-web-prod` |
+| Redirect URI | `https://dev.paquetenvia.com/signin-authcenter` | `https://paquetenvia.com/signin-authcenter` |
+| Post-logout redirect URI | `https://dev.paquetenvia.com/login` | `https://paquetenvia.com/login` |
+| Back-channel logout URI | `https://dev.paquetenvia.com/auth/backchannel-logout` | `https://paquetenvia.com/auth/backchannel-logout` |
+| `AuthCenter__Authority` | `https://authcenter.info` | `https://authcenter.info` |
+| `LoginUrl` (en AuthCenter) | `https://authcenter.info/login` | `https://authcenter.info/login` |
+| `AuthCenter__Issuer` | valor `issuer` de `https://authcenter.info/.well-known/openid-configuration` | igual |
+
+- Las URIs se registran **exactas**, sin `/` final: AuthCenter las compara de forma ordinal.
+- `AuthCenter__Issuer`: la configuración por defecto del repositorio de AuthCenter usa
+  `Jwt:Issuer = "AuthCenter"`. Si producción no lo sobrescribe, el `issuer` publicado no es una URL.
+  Copiar el valor tal cual aparece en discovery; no suponerlo.
+- El ingress de cada ambiente debe aceptar el `POST` sin `Origin` hacia `/auth/backchannel-logout`
+  (§14.2). AuthCenter lo llama servidor a servidor.
+
 ## 11. Preguntas abiertas para el owner
 
 1. ~~Primer ingreso~~: resuelto por el owner, por invitación previa en un PR aparte.
 2. ~~Sesión multi-instancia~~: resuelto por el owner, tabla PostgreSQL tras el cambio normativo.
-3. ¿Hosts web por ambiente y redirect URIs definitivos (dev/staging/prod)?
+3. ~~Hosts web por ambiente y redirect URIs definitivos~~: resuelto por el owner (§10.1):
+   `dev.paquetenvia.com` para dev y `paquetenvia.com` para producción, sin staging.
 
 ## 12. Pruebas
 
