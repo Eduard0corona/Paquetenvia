@@ -75,7 +75,7 @@ public sealed partial class PostgreSqlIncidentService(
         // The description is protected before the transaction opens. If protection is
         // unavailable the request ends as 503 having written no incident, no evidence, no
         // idempotency reservation and no audit entry.
-        var protectedDescription = ProtectDescription(command.Description);
+        var protectedDescription = await ProtectDescriptionAsync(command.Description, cancellationToken);
 
         try
         {
@@ -184,23 +184,26 @@ public sealed partial class PostgreSqlIncidentService(
     /// silent and never degrades to storing the plaintext: the caller gets an infrastructure
     /// failure, which the endpoint publishes as 503, before anything is written.
     /// </summary>
-    private ProtectedDescription ProtectDescription(string description)
+    private async Task<ProtectedDescription> ProtectDescriptionAsync(
+        string description,
+        CancellationToken cancellationToken)
     {
-        var keyVersion = options.Value.PiiKeyVersion;
         try
         {
-            if (string.IsNullOrWhiteSpace(keyVersion))
+            // ADP-001: the protector selects the key version (Key Vault in production, the
+            // server-configured synthetic label for the mock); a client never supplies it.
+            var protectedValue = await piiProtector.ProtectAsync(description, cancellationToken);
+            if (protectedValue is not { Ciphertext.Length: > 0 } ||
+                string.IsNullOrWhiteSpace(protectedValue.KeyVersion))
             {
                 throw new IncidentPiiProtectionUnavailableException();
             }
 
-            var ciphertext = piiProtector.Protect(description, keyVersion);
-            if (ciphertext is not { Length: > 0 })
-            {
-                throw new IncidentPiiProtectionUnavailableException();
-            }
-
-            return new ProtectedDescription(ciphertext, keyVersion);
+            return new ProtectedDescription(protectedValue.Ciphertext, protectedValue.KeyVersion);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {

@@ -853,7 +853,7 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
             new TenantTransactionContext<IncidentsDbContext>(context, state),
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
-            new DeterministicMockIncidentPiiProtector(),
+            new DeterministicMockIncidentPiiProtector(IncidentsPostgreSqlContractTests.TestKeyVersion),
             Options.Create(new IncidentsOptions
             {
                 PiiProtector = IncidentPiiProtectorKind.Mock,

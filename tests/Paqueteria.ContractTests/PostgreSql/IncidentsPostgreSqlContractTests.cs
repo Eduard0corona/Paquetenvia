@@ -1083,7 +1083,7 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
             new TenantTransactionContext<IncidentsDbContext>(context, state),
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
-            piiProtector ?? new DeterministicMockIncidentPiiProtector(),
+            piiProtector ?? new DeterministicMockIncidentPiiProtector(TestKeyVersion),
             Options.Create(new IncidentsOptions
             {
                 PiiProtector = IncidentPiiProtectorKind.Mock,
