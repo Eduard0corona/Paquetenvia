@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Paqueteria.Application.Security;
 using System.Threading.RateLimiting;
 
 namespace Drivers.Endpoints;
@@ -53,7 +54,7 @@ public static class DependencyInjection
         var subject = context.User.FindFirst("sub")?.Value;
         var material = !string.IsNullOrWhiteSpace(subject)
             ? $"identity:{subject}"
-            : $"network:{context.Connection.RemoteIpAddress}";
+            : ClientNetworkPartition.Describe(context.Connection.RemoteIpAddress);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 }

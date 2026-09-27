@@ -208,7 +208,11 @@ class ImpactModelTests(unittest.TestCase):
                 self.assertIn("FULL:UNMATCHED_PATHS", plan["reasons"])
 
     def test_claude_automation_does_not_alter_control_workflow_semantics(self):
-        for path in (".github/workflows/ci.yml", ".github/workflows/pr-validation.yml"):
+        for path in (
+            ".github/workflows/ci.yml",
+            ".github/workflows/pr-validation.yml",
+            ".github/workflows/development-push.yml",
+        ):
             with self.subTest(path=path):
                 plan = classify([path])
                 self.assertEqual("FULL", plan["classification"])

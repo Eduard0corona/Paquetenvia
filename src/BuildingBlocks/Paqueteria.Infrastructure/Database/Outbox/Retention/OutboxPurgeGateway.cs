@@ -17,6 +17,15 @@ public sealed record OutboxPurgeRequest(
 internal interface IOutboxPurgeGateway
 {
     Task<int> PurgeAsync(OutboxPurgeRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Dry-run probe of the DEAD rows alone: the same approved function with
+    /// <c>p_processed_before='-infinity'</c>, so no PROCESSED row can qualify. The count is bounded
+    /// by <paramref name="limit"/> (the lane's configured <c>BatchSize</c>, so the probe costs no more
+    /// than one batch and fits the same command timeout); a result equal to the limit means
+    /// "at least". It never mutates anything.
+    /// </summary>
+    Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -44,10 +53,45 @@ internal sealed class PostgreSqlOutboxPurgeGateway(
     // The Worker login is NOINHERIT; EXECUTE on the purge functions belongs to this role alone.
     private const string RuntimeRole = "paqueteria_worker";
 
-    public async Task<int> PurgeAsync(OutboxPurgeRequest request, CancellationToken cancellationToken)
+    public Task<int> PurgeAsync(OutboxPurgeRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var function = OutboxRetentionLaneContract.For(request.Lane).PurgeFunction;
+        return ExecuteAsync(
+            request.Lane,
+            "@processed_before",
+            command =>
+            {
+                command.Parameters.Add(new NpgsqlParameter("processed_before", NpgsqlDbType.TimestampTz) { Value = request.ProcessedBefore });
+                command.Parameters.Add(new NpgsqlParameter("dead_before", NpgsqlDbType.TimestampTz) { Value = request.DeadBefore });
+                command.Parameters.Add(new NpgsqlParameter("batch_size", NpgsqlDbType.Integer) { Value = request.BatchSize });
+                command.Parameters.Add(new NpgsqlParameter("dry_run", NpgsqlDbType.Boolean) { Value = request.DryRun });
+            },
+            cancellationToken);
+    }
+
+    public Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, OutboxRetentionLaneContract.For(lane).MaximumBatchSize);
+        return ExecuteAsync(
+            lane,
+            "'-infinity'::timestamptz",
+            command =>
+            {
+                command.Parameters.Add(new NpgsqlParameter("dead_before", NpgsqlDbType.TimestampTz) { Value = deadBefore });
+                command.Parameters.Add(new NpgsqlParameter("batch_size", NpgsqlDbType.Integer) { Value = limit });
+                command.Parameters.Add(new NpgsqlParameter("dry_run", NpgsqlDbType.Boolean) { Value = true });
+            },
+            cancellationToken);
+    }
+
+    private async Task<int> ExecuteAsync(
+        OutboxRetentionLane lane,
+        string processedBefore,
+        Action<NpgsqlCommand> bind,
+        CancellationToken cancellationToken)
+    {
+        var function = OutboxRetentionLaneContract.For(lane).PurgeFunction;
 
         // One short transaction per batch: row locks are released between batches, and a batch
         // interrupted by cancellation or failure rolls back as a unit.
@@ -59,16 +103,13 @@ internal sealed class PostgreSqlOutboxPurgeGateway(
         }
 
         await using var command = new NpgsqlCommand(
-            $"SELECT {function}(@processed_before, @dead_before, @batch_size, @dry_run)",
+            $"SELECT {function}({processedBefore}, @dead_before, @batch_size, @dry_run)",
             connection,
             transaction)
         {
             CommandTimeout = commandTimeoutSeconds,
         };
-        command.Parameters.Add(new NpgsqlParameter("processed_before", NpgsqlDbType.TimestampTz) { Value = request.ProcessedBefore });
-        command.Parameters.Add(new NpgsqlParameter("dead_before", NpgsqlDbType.TimestampTz) { Value = request.DeadBefore });
-        command.Parameters.Add(new NpgsqlParameter("batch_size", NpgsqlDbType.Integer) { Value = request.BatchSize });
-        command.Parameters.Add(new NpgsqlParameter("dry_run", NpgsqlDbType.Boolean) { Value = request.DryRun });
+        bind(command);
         var affected = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), System.Globalization.CultureInfo.InvariantCulture);
 
         // A batch whose statement completed is committed and reported exactly; cancellation is

@@ -60,23 +60,47 @@ jobs:
       - name: Install guard dependencies
         run: python -m pip install PyYAML==6.0.3
 
-      - name: Fetch Foundation run and job records
+      # Dispatch inputs are untrusted text: they reach shells only through env and only after
+      # strict format validation (never interpolated into a script body).
+      - name: Validate dispatch inputs
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
         run: |
           set -euo pipefail
-          gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.foundation_run_id }}" > "${{ runner.temp }}/foundation-run.json"
-          gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.foundation_run_id }}/jobs?per_page=100" > "${{ runner.temp }}/foundation-jobs.json"
+          if [[ ! "${TESTED_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tested_git_sha must match ^[0-9a-f]{40}$ (STOP_FOR_CONTRACT_REVIEW)"
+            exit 1
+          fi
+          if [[ ! "${FOUNDATION_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::foundation_run_id must match ^[0-9]+$ (STOP_FOR_CONTRACT_REVIEW)"
+            exit 1
+          fi
+
+      - name: Fetch Foundation run and job records
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOUNDATION_RUN_ID}" > "${RUNNER_TEMP}/foundation-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOUNDATION_RUN_ID}/jobs?per_page=100" > "${RUNNER_TEMP}/foundation-jobs.json"
 
       - name: Enforce §27 provenance gate (STOP_FOR_CONTRACT_REVIEW on any failure)
+        shell: bash
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
         run: >-
           python ./tools/azr-001/azr001_static_guards.py deploy-gate
-          --tested-git-sha "${{ inputs.tested_git_sha }}"
-          --dispatch-ref "${{ github.ref }}"
-          --dispatch-sha "${{ github.sha }}"
-          --foundation-run-id "${{ inputs.foundation_run_id }}"
-          --foundation-run-json "${{ runner.temp }}/foundation-run.json"
-          --foundation-jobs-json "${{ runner.temp }}/foundation-jobs.json"
+          --tested-git-sha "${TESTED_GIT_SHA}"
+          --dispatch-ref "${GITHUB_REF}"
+          --dispatch-sha "${GITHUB_SHA}"
+          --foundation-run-id "${FOUNDATION_RUN_ID}"
+          --foundation-run-json "${RUNNER_TEMP}/foundation-run.json"
+          --foundation-jobs-json "${RUNNER_TEMP}/foundation-jobs.json"
 
       # Bicep validation and §28 guards run against the tree that will actually be deployed.
       - name: Check out tested_git_sha (deployment source)
@@ -117,6 +141,17 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - name: Validate tested_git_sha
+        shell: bash
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TESTED_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tested_git_sha must match ^[0-9a-f]{40}$ (STOP_FOR_CONTRACT_REVIEW)"
+            exit 1
+          fi
+
       - name: Check out tested_git_sha
         uses: actions/checkout@v5
         with:
@@ -124,7 +159,7 @@ jobs:
           fetch-depth: 0
 
       - name: Azure login (OIDC, no stored credential)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2 (v2.3.1)
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -132,4 +167,7 @@ jobs:
 
       - name: Deploy AZR-001 core infrastructure (deployed_git_sha = tested_git_sha)
         shell: pwsh
-        run: ./deploy/azure/deploy-core.ps1 -SubscriptionId "${{ vars.AZURE_SUBSCRIPTION_ID }}" -TestedGitSha "${{ inputs.tested_git_sha }}"
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: ./deploy/azure/deploy-core.ps1 -SubscriptionId $env:AZURE_SUBSCRIPTION_ID -TestedGitSha $env:TESTED_GIT_SHA

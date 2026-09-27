@@ -327,6 +327,7 @@ function Set-HostConfiguration([string] $Kind) {
     $env:Realtime__Provider = "SignalR"
     $env:Realtime__Backplane = "InProcess"
     $env:Realtime__AllowedOrigins__0 = $webUrl
+    $env:Http__Cors__AllowedOrigins__0 = $webUrl
     $env:Realtime__OutboxDispatcher__Provider = "PostgreSql"
     $env:Realtime__OutboxDispatcher__WorkerId = "local-api"
     $env:ProofStorage__Provider = "S3Compatible"
