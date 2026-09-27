@@ -445,9 +445,9 @@ La primera admisión es `AUTH-001-OIDC` (PR #92, rama `deps/auth-001-oidc`):
 `Microsoft.AspNetCore.Authentication.OpenIdConnect` 10.0.10 directo y sus
 transitivos `Microsoft.IdentityModel.{Abstractions,JsonWebTokens,Logging,Protocols,Protocols.OpenIdConnect,Tokens}`
 8.19.2, `System.IdentityModel.Tokens.Jwt` 8.19.2 y `Microsoft.Bcl.Cryptography`
-10.0.2. Cuando el PR se fusione, un PR posterior hacia `development` cambia su
-`status` a `MERGED`: los paquetes siguen admitidos y la rama deja de abrir PRs a
-`main`.
+10.0.2. El PR #92 se fusionó en `main` el 2026-09-27 y llegó a `development` por
+MAIN_BACKSYNC (#106); desde entonces su `status` es `MERGED`: los paquetes siguen
+admitidos y la rama deja de abrir PRs a `main`.
 
 ## Rollback REL-000
 
