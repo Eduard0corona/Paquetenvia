@@ -12,8 +12,6 @@ public sealed class DriverHub(
     IRealtimeConnectionAuthorizer authorizer,
     IRealtimeTelemetry telemetry) : Hub<IDriverClient>
 {
-    private bool _accepted;
-
     public override async Task OnConnectedAsync()
     {
         var httpContext = Context.GetHttpContext();
@@ -45,14 +43,14 @@ public sealed class DriverHub(
                 Context.ConnectionAborted);
         }
 
-        _accepted = true;
+        RealtimeConnectionState.MarkAccepted(Context);
         telemetry.ConnectionAccepted("driver", "oidc");
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        if (_accepted)
+        if (RealtimeConnectionState.TryCompleteAccepted(Context))
         {
             telemetry.ConnectionClosed("driver");
         }
