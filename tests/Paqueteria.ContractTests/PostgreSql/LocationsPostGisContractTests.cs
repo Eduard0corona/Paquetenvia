@@ -12,6 +12,8 @@ using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.Application.Auditing;
+using Locations.Application.Geocoding;
+using Paqueteria.Infrastructure.Security.Pii;
 
 namespace Paqueteria.ContractTests.PostgreSql;
 
@@ -292,6 +294,111 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
         }
     }
 
+    [PostgreSqlContractFact]
+    public async Task Key_vault_envelopes_persist_under_the_server_version_and_stay_readable_after_rotation()
+    {
+        // ADP-001-PII-KEYVAULT-ENVELOPE: pii_key_version comes from the key-encryption key, rotation
+        // keeps rows written under version N readable, and no plaintext reaches the row, the audit
+        // log or the outbox.
+        var scenario = await SeedAsync(includeExcludedZone: false);
+        try
+        {
+            var vault = new Adp001FakeKeyVault();
+            var envelope = new PiiEnvelopeProtector(vault);
+            var protector = new AzureKeyVaultLocationPiiProtector(envelope);
+            const string addressN = "Calle Sintetica Rotacion N 101";
+            const string addressNext = "Calle Sintetica Rotacion N1 202";
+            const string contact = "Contacto Sintetico ADP";
+            const string phone = "+526140000101";
+
+            Guid first;
+            var versionN = vault.CurrentVersion;
+            await using (var scope = CreateRuntimeScope(piiProtector: protector))
+            {
+                var result = await scope.Service.CreateAsync(
+                    CreateCommand(scenario, $"adp001-n-{Guid.NewGuid():N}") with { AddressText = addressN, ContactName = contact, Phone = phone },
+                    default);
+                first = result.Location!.Id;
+            }
+
+            var versionNext = vault.Rotate();
+            Guid second;
+            await using (var scope = CreateRuntimeScope(piiProtector: protector))
+            {
+                var result = await scope.Service.CreateAsync(
+                    CreateCommand(scenario, $"adp001-n1-{Guid.NewGuid():N}") with { AddressText = addressNext, ContactName = null, Phone = null },
+                    default);
+                second = result.Location!.Id;
+            }
+
+            var rows = new Dictionary<Guid, (byte[] Address, byte[]? Contact, byte[]? Phone, string Version)>();
+            await using (var read = fixture.AdminDataSource.CreateCommand(
+                "SELECT id,address_ciphertext,contact_name_ciphertext,phone_ciphertext,pii_key_version FROM locations.locations WHERE owner_org_id=@org"))
+            {
+                read.Parameters.AddWithValue("org", scenario.OrganizationId);
+                await using var reader = await read.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    rows[reader.GetGuid(0)] = (
+                        (byte[])reader[1],
+                        reader.IsDBNull(2) ? null : (byte[])reader[2],
+                        reader.IsDBNull(3) ? null : (byte[])reader[3],
+                        reader.GetString(4));
+                }
+            }
+
+            Assert.Equal(versionN, rows[first].Version);
+            Assert.Equal(versionNext, rows[second].Version);
+            Assert.Equal(addressN, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.AddressTextPurpose, rows[first].Address, rows[first].Version, default));
+            Assert.Equal(contact, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.ContactNamePurpose, rows[first].Contact!, rows[first].Version, default));
+            Assert.Equal(phone, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.PhonePurpose, rows[first].Phone!, rows[first].Version, default));
+            Assert.Equal(addressNext, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.AddressTextPurpose, rows[second].Address, rows[second].Version, default));
+            Assert.Null(rows[second].Contact);
+            Assert.Null(rows[second].Phone);
+            foreach (var (plaintext, ciphertext) in new[] { (addressN, rows[first].Address), (contact, rows[first].Contact!), (phone, rows[first].Phone!) })
+            {
+                Assert.True(ciphertext.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(plaintext)) < 0);
+            }
+
+            Assert.Equal(0L, await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(
+                fixture.AdminDataSource,
+                scenario.OrganizationId,
+                [addressN, addressNext, contact, phone]));
+        }
+        finally
+        {
+            await CleanupAsync(scenario);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task An_unavailable_key_vault_protector_fails_closed_with_zero_effects()
+    {
+        var scenario = await SeedAsync(includeExcludedZone: false);
+        try
+        {
+            var protector = new AzureKeyVaultLocationPiiProtector(
+                new PiiEnvelopeProtector(new Adp001FakeKeyVault { Unavailable = true }));
+            await using var scope = CreateRuntimeScope(piiProtector: protector);
+
+            await Assert.ThrowsAsync<Locations.Application.Geocoding.LocationPiiProtectionUnavailableException>(() =>
+                scope.Service.CreateAsync(CreateCommand(scenario, $"adp001-down-{Guid.NewGuid():N}"), default));
+
+            await using var count = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT (SELECT count(*) FROM locations.locations WHERE owner_org_id=@org)
+                     + (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org)
+                     + (SELECT count(*) FROM platform.outbox_events WHERE owner_org_id=@org)
+                """);
+            count.Parameters.AddWithValue("org", scenario.OrganizationId);
+            Assert.Equal(0L, await count.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await CleanupAsync(scenario);
+        }
+    }
+
     private async Task<Scenario> SeedAsync(bool includeExcludedZone)
     {
         var scenario = new Scenario(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
@@ -321,7 +428,9 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
         return scenario;
     }
 
-    private RuntimeScope CreateRuntimeScope(IAppendOnlyAuditWriter? auditWriter = null)
+    private RuntimeScope CreateRuntimeScope(
+        IAppendOnlyAuditWriter? auditWriter = null,
+        ILocationPiiProtector? piiProtector = null)
     {
         var dataSource = fixture.CreateAppDataSource(applicationName: "Paqueteria.GEO001.Runtime");
         var state = new TenantDatabaseExecutionState();
@@ -333,7 +442,7 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
         var service = new PostgreSqlLocationService(
             new TenantTransactionContext<LocationsDbContext>(context, state),
             new ManualGeocodingProvider(),
-            new DeterministicMockLocationPiiProtector(),
+            piiProtector ?? new DeterministicMockLocationPiiProtector(),
             auditWriter ?? new PostgreSqlAppendOnlyAuditWriter(state),
             new SystemClock());
         return new RuntimeScope(dataSource, context, service);

@@ -81,13 +81,12 @@ public static class DependencyInjection
         services.AddSingleton<DeterministicMockGeocodingProvider>();
         services.AddSingleton<DisabledLocationPiiProtector>();
         services.AddSingleton<DeterministicMockLocationPiiProtector>();
-        if (configuration.GetValue<LocationPiiProtectorKind?>(
-                $"{LocationsOptions.SectionName}:{nameof(LocationsOptions.PiiProtector)}") ==
-            LocationPiiProtectorKind.AzureKeyVault)
-        {
-            services.AddAzureKeyVaultPiiProtection(configuration);
-            services.AddSingleton<AzureKeyVaultLocationPiiProtector>();
-        }
+        // ADP-001: registered lazily; nothing Azure-related is built unless PiiProtector=AzureKeyVault.
+        services.AddAzureKeyVaultPiiProtection(
+            configuration,
+            serviceProvider => serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector ==
+                LocationPiiProtectorKind.AzureKeyVault);
+        services.AddSingleton<AzureKeyVaultLocationPiiProtector>();
 
         services.AddSingleton<DisabledLocationService>();
         services.AddScoped<PostgreSqlLocationService>();

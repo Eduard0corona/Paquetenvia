@@ -13,15 +13,21 @@ public static class PiiProtectionServiceCollectionExtensions
     public const string HealthCheckName = "pii_key_vault";
 
     /// <summary>
-    /// Registers the Key Vault envelope protector once, however many modules select it. Options are
-    /// validated on start and a <c>ready</c> check fails closed while the key cannot wrap and unwrap.
+    /// Registers the Key Vault envelope protector once, however many modules call it. Each module
+    /// passes <paramref name="isSelected"/>, evaluated against its own bound options at runtime (not
+    /// at registration time, so every configuration source is honoured). When any module selects
+    /// the protector, <c>PiiProtection</c> is validated on start and the <c>ready</c> check probes
+    /// wrap/unwrap and fails closed; otherwise nothing Azure-related is ever constructed.
     /// </summary>
     public static IServiceCollection AddAzureKeyVaultPiiProtection(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        Func<IServiceProvider, bool> isSelected)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(isSelected);
+        services.AddSingleton(serviceProvider => new PiiKeyVaultSelection(() => isSelected(serviceProvider)));
         if (services.Any(descriptor => descriptor.ServiceType == typeof(PiiProtectionRegistrationMarker)))
         {
             return services;
@@ -30,8 +36,9 @@ public static class PiiProtectionServiceCollectionExtensions
         services.AddSingleton<PiiProtectionRegistrationMarker>();
         services.AddOptions<PiiProtectionOptions>()
             .Bind(configuration.GetSection(PiiProtectionOptions.SectionName))
-            .Validate(
-                PiiProtectionOptionsValidator.IsValid,
+            .Validate<IEnumerable<PiiKeyVaultSelection>>(
+                (options, selections) => !selections.Any(selection => selection.IsSelected) ||
+                    PiiProtectionOptionsValidator.IsValid(options),
                 "PiiProtection:AzureKeyVault requires a versionless https Key Vault key URI in KeyId and " +
                 "CurrentVersionRefreshSeconds/HealthCacheSeconds between 30 and 3600.")
             .ValidateOnStart();
@@ -47,13 +54,20 @@ public static class PiiProtectionServiceCollectionExtensions
     private sealed class PiiProtectionRegistrationMarker;
 }
 
+/// <summary>Whether one module selected the Key Vault protector, read from its bound options.</summary>
+public sealed class PiiKeyVaultSelection(Func<bool> isSelected)
+{
+    public bool IsSelected => isSelected();
+}
+
 /// <summary>
 /// Readiness for the PII key: the current version resolves and a random probe key survives a
 /// wrap/unwrap round trip. The result is cached so readiness polling does not multiply Key Vault
 /// operations; any failure reports unhealthy (fail closed) and is retried on the next probe.
 /// </summary>
 public sealed class PiiKeyWrapHealthCheck(
-    IPiiKeyWrapClient client,
+    IServiceProvider services,
+    IEnumerable<PiiKeyVaultSelection> selections,
     IOptions<PiiProtectionOptions> options,
     TimeProvider timeProvider) : IHealthCheck
 {
@@ -64,6 +78,11 @@ public sealed class PiiKeyWrapHealthCheck(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
+        if (!selections.Any(selection => selection.IsSelected))
+        {
+            return HealthCheckResult.Healthy("pii_key_vault_not_selected");
+        }
+
         var cacheFor = TimeSpan.FromSeconds(options.Value.AzureKeyVault.HealthCacheSeconds);
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -92,6 +111,7 @@ public sealed class PiiKeyWrapHealthCheck(
         byte[]? unwrapped = null;
         try
         {
+            var client = services.GetRequiredService<IPiiKeyWrapClient>();
             var version = await client.GetCurrentKeyVersionAsync(cancellationToken).ConfigureAwait(false);
             var wrapped = await client.WrapKeyAsync(version, probe, cancellationToken).ConfigureAwait(false);
             unwrapped = await client.UnwrapKeyAsync(version, wrapped, cancellationToken).ConfigureAwait(false);

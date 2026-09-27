@@ -94,21 +94,17 @@ public static class DependencyInjection
             .ValidateOnStart();
 
         services.TryAddSingleton(TimeProvider.System);
-        var configuredStorage = configuration.GetValue<ProofStorageProvider?>(
-            $"{ProofStorageOptions.SectionName}:{nameof(ProofStorageOptions.Provider)}");
-        if (configuredStorage == ProofStorageProvider.AzureBlob)
-        {
-            // ADP-001-POD-BLOB-DEFENDER: managed identity only. The API signs user-delegation SAS;
-            // the Worker never signs URLs, so it needs no delegation permission.
-            services.AddAzureWorkloadCredential();
-            services.TryAddSingleton<IProofBlobGateway, AzureBlobProofGateway>();
-            services.AddSingleton(serviceProvider => new AzureBlobProofObjectStorage(
-                serviceProvider.GetRequiredService<IProofBlobGateway>(),
-                serviceProvider.GetRequiredService<IOptions<ProofStorageOptions>>(),
-                serviceProvider.GetRequiredService<TimeProvider>(),
-                signsUrls: !addValidationWorker));
-            services.AddSingleton<DefenderForStorageThreatScanner>();
-        }
+        // ADP-001-POD-BLOB-DEFENDER: registered lazily and selected by ProofStorage:Provider and
+        // ProofStorage:ThreatScanner at runtime. Managed identity only; the API signs
+        // user-delegation SAS, the Worker never signs URLs and needs no delegation permission.
+        services.AddAzureWorkloadCredential();
+        services.TryAddSingleton<IProofBlobGateway, AzureBlobProofGateway>();
+        services.AddSingleton(serviceProvider => new AzureBlobProofObjectStorage(
+            serviceProvider.GetRequiredService<IProofBlobGateway>(),
+            serviceProvider.GetRequiredService<IOptions<ProofStorageOptions>>(),
+            serviceProvider.GetRequiredService<TimeProvider>(),
+            signsUrls: !addValidationWorker));
+        services.AddSingleton<DefenderForStorageThreatScanner>();
 
         services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
             serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")

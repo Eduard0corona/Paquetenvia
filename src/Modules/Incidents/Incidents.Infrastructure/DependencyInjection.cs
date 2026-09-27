@@ -77,13 +77,12 @@ public static class DependencyInjection
         services.AddSingleton<DisabledIncidentPiiProtector>();
         services.AddSingleton(serviceProvider => new DeterministicMockIncidentPiiProtector(
             serviceProvider.GetRequiredService<IOptions<IncidentsOptions>>().Value.PiiKeyVersion));
-        if (configuration.GetValue<IncidentPiiProtectorKind?>(
-                $"{IncidentsOptions.SectionName}:{nameof(IncidentsOptions.PiiProtector)}") ==
-            IncidentPiiProtectorKind.AzureKeyVault)
-        {
-            services.AddAzureKeyVaultPiiProtection(configuration);
-            services.AddSingleton<AzureKeyVaultIncidentPiiProtector>();
-        }
+        // ADP-001: registered lazily; nothing Azure-related is built unless PiiProtector=AzureKeyVault.
+        services.AddAzureKeyVaultPiiProtection(
+            configuration,
+            serviceProvider => serviceProvider.GetRequiredService<IOptions<IncidentsOptions>>().Value.PiiProtector ==
+                IncidentPiiProtectorKind.AzureKeyVault);
+        services.AddSingleton<AzureKeyVaultIncidentPiiProtector>();
         // Unconfigured means unprotected, and unprotected means INC-001 refuses to persist a
         // description at all, so the absent setting fails closed instead of leaking plaintext.
         services.AddScoped<IIncidentPiiProtector>(serviceProvider =>

@@ -119,13 +119,60 @@ public sealed class IdentityArchitectureTests
             "FusionAuth",
         ];
 
+        // ADP-001-PII-KEYVAULT-ENVELOPE / ADP-001-POD-BLOB-DEFENDER: Azure.Identity is admitted only
+        // as the workload (managed identity) credential of the building-block infrastructure, never
+        // as a user identity provider. Every other component stays under the full ban.
         var packages = SolutionCatalog.All
-            .SelectMany(component => ProjectMetadataReader.Read(component).PackageReferences)
+            .SelectMany(component => ProjectMetadataReader.Read(component).PackageReferences
+                .Where(package => component != SolutionCatalog.Infrastructure ||
+                    !string.Equals(package, WorkloadCredentialPackage, StringComparison.Ordinal)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         Assert.DoesNotContain(packages, package =>
             forbidden.Any(name => package.Contains(name, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private const string WorkloadCredentialPackage = "Azure.Identity";
+
+    [Fact]
+    public void Azure_Identity_is_only_the_managed_identity_workload_credential()
+    {
+        var owners = SolutionCatalog.All
+            .Where(component => ProjectMetadataReader.Read(component).PackageReferences.Contains(
+                WorkloadCredentialPackage,
+                StringComparer.OrdinalIgnoreCase))
+            .Select(component => component.Name)
+            .ToArray();
+        Assert.Equal(["Paqueteria.Infrastructure"], owners);
+
+        // Only one source file may use the namespace, and it builds a ManagedIdentityCredential and
+        // nothing that signs a user in or reads a secret.
+        var sources = Directory
+            .EnumerateFiles(TestRepository.GetPath("src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                           !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => File.ReadAllText(path).Contains("Azure.Identity", StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(TestRepository.GetPath("."), path).Replace('\\', '/'))
+            .ToArray();
+        Assert.Equal(["src/BuildingBlocks/Paqueteria.Infrastructure/Cloud/AzureWorkloadCredential.cs"], sources);
+        var credential = File.ReadAllText(TestRepository.GetPath(sources[0]));
+        Assert.Contains("new ManagedIdentityCredential(", credential, StringComparison.Ordinal);
+        foreach (var forbiddenCredential in new[]
+                 {
+                     "DefaultAzureCredential", "InteractiveBrowserCredential", "DeviceCodeCredential",
+                     "ClientSecretCredential", "UsernamePasswordCredential", "ClientCertificateCredential",
+                     "AuthorizationCodeCredential", "OnBehalfOfCredential", "EnvironmentCredential",
+                 })
+        {
+            Assert.DoesNotContain(forbiddenCredential, credential, StringComparison.Ordinal);
+        }
+
+        foreach (var component in SolutionCatalog.Identity.Components)
+        {
+            Assert.DoesNotContain(component.Assembly.GetReferencedAssemblies(), reference =>
+                string.Equals(reference.Name, WorkloadCredentialPackage, StringComparison.Ordinal));
+        }
     }
 
     [Fact]

@@ -31,13 +31,37 @@ public sealed class Adp001ConfigurationTests
     private const string DataProtectionKeyId = "https://paquetenvia-test.vault.azure.net/keys/dataprotection-kek";
 
     [Fact]
-    public void Defaults_keep_the_disabled_protectors_and_register_no_key_vault()
+    public async Task Defaults_keep_the_disabled_protectors_and_never_touch_key_vault()
     {
-        using var provider = BuildModules([], "Production");
+        var untouched = new FakePiiKeyVault { FailOn = FakePiiKeyVault.Failure.CurrentVersion };
+        using var provider = BuildModules([], "Production", untouched);
 
         Assert.IsType<DisabledLocationPiiProtector>(provider.GetRequiredService<ILocationPiiProtector>());
         Assert.IsType<DisabledIncidentPiiProtector>(provider.GetRequiredService<IIncidentPiiProtector>());
-        Assert.Null(provider.GetService<IPiiEnvelopeProtector>());
+        // An empty PiiProtection section is valid while no module selects Key Vault.
+        Assert.NotNull(provider.GetRequiredService<IOptions<PiiProtectionOptions>>().Value);
+        var check = provider.GetRequiredService<IOptions<HealthCheckServiceOptions>>().Value.Registrations
+            .Single(registration => registration.Name == PiiProtectionServiceCollectionExtensions.HealthCheckName);
+        Assert.Equal(HealthStatus.Healthy, (await check.Factory(provider).CheckHealthAsync(new HealthCheckContext { Registration = check })).Status);
+        Assert.Empty(untouched.WrappedKeys);
+    }
+
+    [Fact]
+    public void Selection_is_read_at_runtime_from_every_configuration_source()
+    {
+        // Registration never reads the selector, so a value supplied by a later configuration
+        // source (environment variables, test hosts) is honoured.
+        using var provider = BuildModules(
+            new()
+            {
+                ["Locations:PiiProtector"] = "AzureKeyVault",
+                ["PiiProtection:AzureKeyVault:KeyId"] = PiiKeyId,
+            },
+            "Production",
+            new FakePiiKeyVault());
+
+        Assert.IsType<AzureKeyVaultLocationPiiProtector>(provider.GetRequiredService<ILocationPiiProtector>());
+        Assert.IsType<DisabledIncidentPiiProtector>(provider.GetRequiredService<IIncidentPiiProtector>());
     }
 
     [Fact]

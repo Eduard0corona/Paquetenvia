@@ -4,6 +4,7 @@ using Incidents.Application.Incidents;
 using Incidents.Infrastructure.Incidents;
 using Locations.Application.Geocoding;
 using Locations.Infrastructure.Geocoding;
+using Microsoft.Extensions.DependencyInjection;
 using Paqueteria.Infrastructure.Security.Pii;
 
 namespace Paqueteria.UnitTests.Security;
@@ -135,23 +136,32 @@ public sealed class Adp001PiiEnvelopeTests
     }
 
     [Fact]
-    public async Task Health_check_fails_closed_when_the_key_cannot_wrap()
+    public async Task Health_check_fails_closed_when_the_key_cannot_wrap_and_is_neutral_when_not_selected()
     {
-        var vault = new FakePiiKeyVault();
         var options = Microsoft.Extensions.Options.Options.Create(new PiiProtectionOptions());
-        var healthy = new PiiKeyWrapHealthCheck(vault, options, TimeProvider.System);
+        var selected = new[] { new PiiKeyVaultSelection(() => true) };
         Assert.Equal(
             Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Healthy,
-            (await healthy.CheckHealthAsync(new(), default)).Status);
-
-        var failing = new PiiKeyWrapHealthCheck(
-            new FakePiiKeyVault { FailOn = FakePiiKeyVault.Failure.Wrap },
-            options,
-            TimeProvider.System);
+            (await new PiiKeyWrapHealthCheck(Services(new FakePiiKeyVault()), selected, options, TimeProvider.System)
+                .CheckHealthAsync(new(), default)).Status);
         Assert.Equal(
             Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy,
-            (await failing.CheckHealthAsync(new(), default)).Status);
+            (await new PiiKeyWrapHealthCheck(Services(new FakePiiKeyVault { FailOn = FakePiiKeyVault.Failure.Wrap }), selected, options, TimeProvider.System)
+                .CheckHealthAsync(new(), default)).Status);
+
+        // Not selected by any module: the key is never touched.
+        var untouched = new FakePiiKeyVault { FailOn = FakePiiKeyVault.Failure.CurrentVersion };
+        Assert.Equal(
+            Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Healthy,
+            (await new PiiKeyWrapHealthCheck(Services(untouched), [new PiiKeyVaultSelection(() => false)], options, TimeProvider.System)
+                .CheckHealthAsync(new(), default)).Status);
+        Assert.Empty(untouched.WrappedKeys);
     }
+
+    private static IServiceProvider Services(IPiiKeyWrapClient client) =>
+        new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton(client)
+            .BuildServiceProvider();
 
     [Theory]
     [InlineData("https://paquetenvia.vault.azure.net/keys/pii-envelope", true)]
