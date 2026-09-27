@@ -1,9 +1,6 @@
 using System.Security.Cryptography;
 using Identity.Infrastructure.Mock;
-using Incidents.Infrastructure.Persistence;
-using Microsoft.EntityFrameworkCore;
 using Npgsql;
-using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.IntegrationTests.Security;
 
 namespace Paqueteria.IntegrationTests.Incidents;
@@ -35,7 +32,6 @@ public sealed class IncidentResolutionHttpFixture : IAsyncLifetime
         await Api.InitializeAsync();
         try
         {
-            await MigrateIncidentsAsync();
             // The mock active-dispatcher identity, provisioned as a DISPATCHER of the tenant.
             await ExecuteAdminAsync(
                 """
@@ -176,26 +172,6 @@ public sealed class IncidentResolutionHttpFixture : IAsyncLifetime
             reader.GetString(5),
             reader.GetInt64(6),
             reader.GetInt64(7));
-    }
-
-    private async Task MigrateIncidentsAsync()
-    {
-        await using var connection = new NpgsqlConnection(Api.AdminConnectionString);
-        await connection.OpenAsync();
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
-        {
-            await role.ExecuteNonQueryAsync();
-        }
-
-        var options = new DbContextOptionsBuilder<IncidentsDbContext>()
-            .UseNpgsql(connection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(IncidentsDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_incidents", "platform");
-            })
-            .Options;
-        await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
-        await context.Database.MigrateAsync();
     }
 
     private async Task ExecuteAdminAsync(string sql, params NpgsqlParameter[] parameters)

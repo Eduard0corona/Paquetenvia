@@ -2,16 +2,19 @@
 """Main source-branch guard (implemented ahead of enforcement).
 
 For a ``pull_request`` whose base is ``main`` the normal route is ``development``. The
-only other admissible sources are security remediation branches that the REL-000
-policy already authorizes **on the tested base commit** (``tested_git_sha^1``). The
-policy is read with ``git show <base>:<path>``, never from the pull request's own tree,
-so a branch can never authorize itself by editing the policy in the same pull request.
+only other admissible sources are security remediation branches and ACTIVE dependency
+admission branches (GOV-DEPENDENCY-ADMISSION-001) that the REL-000 policy already
+authorizes **on the tested base commit** (``tested_git_sha^1``). The policy is read with
+``git show <base>:<path>``, never from the pull request's own tree, so a branch can never
+authorize itself by editing the policy in the same pull request.
 
 Outcomes (JSON on stdout, exit 0 on PASS, exit 1 on FAIL):
 
 * ``MAIN_SOURCE_BASE_NOT_MAIN``            PASS  base is not main → guard does not apply
 * ``MAIN_SOURCE_DEVELOPMENT``              PASS  head is ``development``
 * ``MAIN_SOURCE_AUTHORIZED_REMEDIATION``   PASS  head is an active authorized remediation branch
+* ``MAIN_SOURCE_AUTHORIZED_DEPENDENCY_ADMISSION``
+                                         PASS  head is an ACTIVE, unexpired dependency admission branch
 * ``MAIN_SOURCE_FORK_FORBIDDEN``           FAIL  head repository differs from the repository
 * ``MAIN_SOURCE_NOT_DEVELOPMENT``          FAIL  any other head
 * ``MAIN_SOURCE_POLICY_UNAVAILABLE``       FAIL  base policy missing/unreadable/malformed
@@ -35,8 +38,11 @@ MAIN_BRANCH = "main"
 DEVELOPMENT_BRANCH = "development"
 DEFAULT_POLICY_PATH = "tools/rel-000/security-remediation-policy.json"
 # Mirrors tools/rel-000/rel000.py REMEDIATION_POLICY_FORMAT / modes (checked by tests).
-REMEDIATION_POLICY_FORMAT = "paquetenvia-rel000-security-remediation-policy-v2"
+REMEDIATION_POLICY_FORMAT = "paquetenvia-rel000-security-remediation-policy-v3"
+# A v2 base (before dependency admissions existed) is still readable; it admits nothing.
+LEGACY_REMEDIATION_POLICY_FORMATS = frozenset({"paquetenvia-rel000-security-remediation-policy-v2"})
 SECURITY_REMEDIATION = "SECURITY_REMEDIATION"
+DEPENDENCY_ADMISSION = "DEPENDENCY_ADMISSION"
 NORMAL_RELEASE_EVIDENCE = "NORMAL_RELEASE_EVIDENCE"
 ACTIVE_STATUSES = {"ACTIVE"}
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -44,6 +50,7 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 REASON_BASE_NOT_MAIN = "MAIN_SOURCE_BASE_NOT_MAIN"
 REASON_DEVELOPMENT = "MAIN_SOURCE_DEVELOPMENT"
 REASON_AUTHORIZED_REMEDIATION = "MAIN_SOURCE_AUTHORIZED_REMEDIATION"
+REASON_AUTHORIZED_DEPENDENCY_ADMISSION = "MAIN_SOURCE_AUTHORIZED_DEPENDENCY_ADMISSION"
 REASON_FORK_FORBIDDEN = "MAIN_SOURCE_FORK_FORBIDDEN"
 REASON_NOT_DEVELOPMENT = "MAIN_SOURCE_NOT_DEVELOPMENT"
 REASON_POLICY_UNAVAILABLE = "MAIN_SOURCE_POLICY_UNAVAILABLE"
@@ -105,8 +112,9 @@ def read_base_policy(repo_root: Path, tested_git_sha: str, policy_path: str) -> 
 def validate_policy(policy: Any) -> dict[str, Any]:
     if not isinstance(policy, dict):
         raise GuardError(REASON_POLICY_UNAVAILABLE, "The policy must be a JSON object.")
-    if policy.get("format_version") != REMEDIATION_POLICY_FORMAT:
-        raise GuardError(REASON_POLICY_UNAVAILABLE, "Unknown policy format.", format_version=policy.get("format_version"))
+    format_version = policy.get("format_version")
+    if format_version != REMEDIATION_POLICY_FORMAT and format_version not in LEGACY_REMEDIATION_POLICY_FORMATS:
+        raise GuardError(REASON_POLICY_UNAVAILABLE, "Unknown policy format.", format_version=format_version)
     if policy.get("default_mode") != NORMAL_RELEASE_EVIDENCE:
         raise GuardError(REASON_POLICY_UNAVAILABLE, "The policy must fail closed to normal mode.")
     active = policy.get("active_remediations")
@@ -124,7 +132,32 @@ def validate_policy(policy: Any) -> dict[str, Any]:
             raise GuardError(REASON_POLICY_UNAVAILABLE, "A remediation status must be a string.", id=entry["id"])
         if "expires" in entry and not isinstance(entry["expires"], str):
             raise GuardError(REASON_POLICY_UNAVAILABLE, "A remediation expiry must be a string.", id=entry["id"])
+    admissions = policy.get("dependency_admissions")
+    if format_version == REMEDIATION_POLICY_FORMAT and not isinstance(admissions, list):
+        raise GuardError(REASON_POLICY_UNAVAILABLE, "dependency_admissions must be an array.")
+    if format_version != REMEDIATION_POLICY_FORMAT and admissions is not None:
+        raise GuardError(REASON_POLICY_UNAVAILABLE, "A v2 policy cannot declare dependency admissions.")
+    for entry in admissions or []:
+        if not isinstance(entry, dict):
+            raise GuardError(REASON_POLICY_UNAVAILABLE, "Each dependency admission must be an object.")
+        if not isinstance(entry.get("id"), str) or not entry["id"].strip():
+            raise GuardError(REASON_POLICY_UNAVAILABLE, "A dependency admission lacks an id.")
+        branch = entry.get("authorized_source_branch")
+        if not isinstance(branch, str) or not branch.strip():
+            raise GuardError(REASON_POLICY_UNAVAILABLE, "A dependency admission lacks an authorized source branch.", id=entry["id"])
+        if not isinstance(entry.get("status"), str):
+            raise GuardError(REASON_POLICY_UNAVAILABLE, "A dependency admission status must be a string.", id=entry["id"])
+        if "expires" in entry and not isinstance(entry["expires"], str):
+            raise GuardError(REASON_POLICY_UNAVAILABLE, "A dependency admission expiry must be a string.", id=entry["id"])
     return policy
+
+
+def _not_expired(entry: dict[str, Any], today: str | None) -> bool:
+    """An entry without ``expires`` never expires; a malformed or past date fails closed."""
+    expires = entry.get("expires")
+    if expires is None:
+        return True
+    return today is not None and re.match(r"^\d{4}-\d{2}-\d{2}$", expires) is not None and expires >= today
 
 
 def authorized_branches(policy: dict[str, Any], today: str | None = None) -> dict[str, str]:
@@ -141,12 +174,27 @@ def authorized_branches(policy: dict[str, Any], today: str | None = None) -> dic
         status = entry.get("status")
         if status is not None and status not in ACTIVE_STATUSES:
             continue
-        expires = entry.get("expires")
-        if expires is not None:
-            if today is None or not re.match(r"^\d{4}-\d{2}-\d{2}$", expires) or expires < today:
-                continue
+        if not _not_expired(entry, today):
+            continue
         authorized[entry["authorized_source_branch"]] = entry["id"]
     return authorized
+
+
+def admitted_branches(policy: dict[str, Any], today: str | None = None) -> dict[str, str]:
+    """Map authorized_source_branch → admission id for dependency admissions that authorize now.
+
+    Only ``mode == DEPENDENCY_ADMISSION`` entries with ``status == "ACTIVE"`` (required,
+    exact) and no past ``expires`` date authorize. ``MERGED`` admissions keep their
+    packages admitted in REL-000 but never open another pull request into main.
+    """
+    admitted: dict[str, str] = {}
+    for entry in policy.get("dependency_admissions") or []:
+        if entry.get("mode") != DEPENDENCY_ADMISSION or entry.get("status") != "ACTIVE":
+            continue
+        if not _not_expired(entry, today):
+            continue
+        admitted[entry["authorized_source_branch"]] = entry["id"]
+    return admitted
 
 
 def evaluate(
@@ -173,6 +221,7 @@ def evaluate(
     try:
         policy = policy_loader()
         authorized = authorized_branches(policy, today)
+        admitted = admitted_branches(policy, today)
     except GuardError as error:
         return _verdict("FAIL", error.reason, error.message, **error.details)
     remediation_id = authorized.get(head_ref)
@@ -184,10 +233,19 @@ def evaluate(
             remediation_id=remediation_id,
             head_ref=head_ref,
         )
+    admission_id = admitted.get(head_ref)
+    if admission_id is not None:
+        return _verdict(
+            "PASS",
+            REASON_AUTHORIZED_DEPENDENCY_ADMISSION,
+            "Head is an ACTIVE dependency admission branch authorized on the tested base.",
+            admission_id=admission_id,
+            head_ref=head_ref,
+        )
     return _verdict(
         "FAIL",
         REASON_NOT_DEVELOPMENT,
-        "Pull requests into main must come from development or from a base-authorized remediation branch.",
+        "Pull requests into main must come from development or from a base-authorized remediation or dependency admission branch.",
         head_ref=head_ref,
     )
 

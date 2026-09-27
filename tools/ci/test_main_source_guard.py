@@ -24,13 +24,27 @@ COMMITTED_POLICY = json.loads((REPOSITORY_ROOT / POLICY_PATH).read_text(encoding
 AUTHORIZED_BRANCH = "fix/security-2026-09-next-critical"
 
 
-def minimal_policy(active=None, historical=None):
+def minimal_policy(active=None, historical=None, admissions=None):
     return {
         "format_version": guard.REMEDIATION_POLICY_FORMAT,
         "default_mode": guard.NORMAL_RELEASE_EVIDENCE,
+        "dependency_admissions": admissions or [],
         "historical_remediations": historical or [],
         "active_remediations": active or [],
     }
+
+
+def admission(branch, admission_id="DEP-TEST", status="ACTIVE", **extra):
+    entry = {
+        "id": admission_id,
+        "mode": guard.DEPENDENCY_ADMISSION,
+        "status": status,
+        "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+        "authorized_source_branch": branch,
+        "ecosystem": "nuget",
+    }
+    entry.update(extra)
+    return entry
 
 
 def remediation(branch, remediation_id="SEC-TEST", **extra):
@@ -204,6 +218,93 @@ class PolicyValidationTests(unittest.TestCase):
         self.assert_invalid(minimal_policy(active=[{"mode": guard.SECURITY_REMEDIATION, "authorized_source_branch": "b"}]))
 
 
+class DependencyAdmissionRouteTests(unittest.TestCase):
+    """GOV-DEPENDENCY-ADMISSION-001: an ACTIVE admission's branch may open a PR into main."""
+
+    def test_admitted_branch_passes(self):
+        policy = minimal_policy(admissions=[admission("deps/x", "DEP-X")])
+        verdict = evaluate("deps/x", policy)
+        self.assertEqual(("PASS", guard.REASON_AUTHORIZED_DEPENDENCY_ADMISSION), (verdict["result"], verdict["reason"]))
+        self.assertEqual("DEP-X", verdict["details"]["admission_id"])
+
+    def test_unknown_branch_fails(self):
+        policy = minimal_policy(admissions=[admission("deps/x")])
+        for head in ("deps/y", "deps/x2", "deps/X", "refs/heads/deps/x", "feature/deps/x"):
+            with self.subTest(head=head):
+                verdict = evaluate(head, policy)
+                self.assertEqual(("FAIL", guard.REASON_NOT_DEVELOPMENT), (verdict["result"], verdict["reason"]))
+
+    def test_merged_or_other_status_does_not_authorize(self):
+        for status in ("MERGED", "REVOKED", "PENDING", "active", ""):
+            with self.subTest(status=status):
+                policy = minimal_policy(admissions=[admission("deps/x", status=status)])
+                self.assertEqual(guard.REASON_NOT_DEVELOPMENT, evaluate("deps/x", policy)["reason"])
+
+    def test_missing_status_does_not_validate(self):
+        entry = admission("deps/x")
+        del entry["status"]
+        verdict = evaluate("deps/x", minimal_policy(admissions=[entry]))
+        self.assertEqual(("FAIL", guard.REASON_POLICY_UNAVAILABLE), (verdict["result"], verdict["reason"]))
+
+    def test_expired_admission_does_not_authorize(self):
+        policy = minimal_policy(admissions=[admission("deps/x", expires="2026-09-20")])
+        self.assertEqual(guard.REASON_NOT_DEVELOPMENT, evaluate("deps/x", policy, today="2026-09-21")["reason"])
+        self.assertEqual(guard.REASON_AUTHORIZED_DEPENDENCY_ADMISSION, evaluate("deps/x", policy, today="2026-09-20")["reason"])
+        malformed = minimal_policy(admissions=[admission("deps/x", expires="soon")])
+        self.assertEqual(guard.REASON_NOT_DEVELOPMENT, evaluate("deps/x", malformed)["reason"])
+        self.assertEqual(guard.REASON_NOT_DEVELOPMENT, evaluate("deps/x", policy, today=None)["reason"])
+
+    def test_wrong_mode_does_not_authorize(self):
+        for mode in (guard.SECURITY_REMEDIATION, guard.NORMAL_RELEASE_EVIDENCE, "dependency_admission"):
+            with self.subTest(mode=mode):
+                policy = minimal_policy(admissions=[admission("deps/x", mode=mode)])
+                self.assertEqual(guard.REASON_NOT_DEVELOPMENT, evaluate("deps/x", policy)["reason"])
+
+    def test_admission_does_not_open_development_or_forks(self):
+        policy = minimal_policy(admissions=[admission("deps/x")])
+        self.assertEqual(guard.REASON_FORK_FORBIDDEN, evaluate("deps/x", policy, head_repo="someone/Paquetenvia")["reason"])
+        self.assertEqual(guard.REASON_BASE_NOT_MAIN, evaluate("deps/x", policy, base_ref="development")["reason"])
+
+    def test_committed_admission_authorizes_its_branch_only(self):
+        policy = guard.validate_policy(copy.deepcopy(COMMITTED_POLICY))
+        admitted = guard.admitted_branches(policy, today="2026-09-27")
+        active = {
+            entry["authorized_source_branch"]: entry["id"]
+            for entry in COMMITTED_POLICY["dependency_admissions"]
+            if entry["status"] == "ACTIVE"
+        }
+        self.assertEqual(active, admitted)
+        for branch, admission_id in active.items():
+            verdict = evaluate(branch, COMMITTED_POLICY, today="2026-09-27")
+            self.assertEqual(guard.REASON_AUTHORIZED_DEPENDENCY_ADMISSION, verdict["reason"])
+            self.assertEqual(admission_id, verdict["details"]["admission_id"])
+
+    def test_legacy_v2_base_is_readable_and_admits_nothing(self):
+        legacy = minimal_policy(active=[remediation("fix/security-x")])
+        legacy["format_version"] = "paquetenvia-rel000-security-remediation-policy-v2"
+        del legacy["dependency_admissions"]
+        self.assertEqual(guard.REASON_AUTHORIZED_REMEDIATION, evaluate("fix/security-x", legacy)["reason"])
+        self.assertEqual(guard.REASON_NOT_DEVELOPMENT, evaluate("deps/x", legacy)["reason"])
+        legacy["dependency_admissions"] = [admission("deps/x")]
+        self.assertEqual(guard.REASON_POLICY_UNAVAILABLE, evaluate("deps/x", legacy)["reason"])
+
+    def test_malformed_admissions_fail_closed(self):
+        for admissions in (
+            {},
+            ["x"],
+            [{"mode": guard.DEPENDENCY_ADMISSION, "status": "ACTIVE", "authorized_source_branch": "deps/x"}],
+            [{"id": "X", "mode": guard.DEPENDENCY_ADMISSION, "status": "ACTIVE"}],
+            [admission("deps/x", expires=20261231)],
+        ):
+            with self.subTest(admissions=admissions):
+                policy = minimal_policy()
+                policy["dependency_admissions"] = admissions
+                self.assertEqual(guard.REASON_POLICY_UNAVAILABLE, evaluate("deps/x", policy)["reason"])
+        policy = minimal_policy()
+        del policy["dependency_admissions"]
+        self.assertEqual(guard.REASON_POLICY_UNAVAILABLE, evaluate("deps/x", policy)["reason"])
+
+
 # --------------------------------------------------------------------------- policy from base (git)
 
 
@@ -227,6 +328,38 @@ class BasePolicyTests(unittest.TestCase):
         pr = minimal_policy(active=[remediation("fix/security-x")])
         repo = make_pr_repo(base, "fix/security-x", pr_policy=pr)
         code, verdict = run_cli(repo, "fix/security-x")
+        self.assertEqual((1, guard.REASON_NOT_DEVELOPMENT), (code, verdict["reason"]))
+
+    def test_admission_on_base_passes(self):
+        repo = make_pr_repo(minimal_policy(admissions=[admission("deps/x")]), "deps/x")
+        code, verdict = run_cli(repo, "deps/x")
+        self.assertEqual((0, guard.REASON_AUTHORIZED_DEPENDENCY_ADMISSION), (code, verdict["reason"]))
+
+    def test_pr_cannot_admit_itself(self):
+        """The PR adds its own dependency admission; the base does not have it."""
+        repo = make_pr_repo(minimal_policy(), "deps/x", pr_policy=minimal_policy(admissions=[admission("deps/x")]))
+        tested_policy = json.loads(git(Path(repo["root"]), "show", f"{repo['tested']}:{POLICY_PATH}"))
+        self.assertEqual("deps/x", tested_policy["dependency_admissions"][0]["authorized_source_branch"])
+        code, verdict = run_cli(repo, "deps/x")
+        self.assertEqual((1, guard.REASON_NOT_DEVELOPMENT), (code, verdict["reason"]))
+
+    def test_pr_cannot_reactivate_or_extend_an_admission(self):
+        for base_entry in (admission("deps/x", status="MERGED"), admission("deps/x", expires="2000-01-01")):
+            with self.subTest(base_entry=base_entry):
+                repo = make_pr_repo(
+                    minimal_policy(admissions=[base_entry]),
+                    "deps/x",
+                    pr_policy=minimal_policy(admissions=[admission("deps/x")]),
+                )
+                code, verdict = run_cli(repo, "deps/x")
+                self.assertEqual((1, guard.REASON_NOT_DEVELOPMENT), (code, verdict["reason"]))
+
+    def test_legacy_v2_base_does_not_admit(self):
+        legacy = minimal_policy()
+        legacy["format_version"] = "paquetenvia-rel000-security-remediation-policy-v2"
+        del legacy["dependency_admissions"]
+        repo = make_pr_repo(legacy, "deps/x", pr_policy=minimal_policy(admissions=[admission("deps/x")]))
+        code, verdict = run_cli(repo, "deps/x")
         self.assertEqual((1, guard.REASON_NOT_DEVELOPMENT), (code, verdict["reason"]))
 
     def test_development_passes_without_reading_policy(self):
@@ -277,6 +410,25 @@ class Rel000SynchronisationTests(unittest.TestCase):
         self.assertEqual(self.rel000.REMEDIATION_POLICY_FORMAT, guard.REMEDIATION_POLICY_FORMAT)
         self.assertEqual(self.rel000.SECURITY_REMEDIATION, guard.SECURITY_REMEDIATION)
         self.assertEqual(self.rel000.NORMAL_RELEASE_EVIDENCE, guard.NORMAL_RELEASE_EVIDENCE)
+        self.assertEqual(self.rel000.DEPENDENCY_ADMISSION, guard.DEPENDENCY_ADMISSION)
+        self.assertEqual(self.rel000.LEGACY_REMEDIATION_POLICY_FORMATS, guard.LEGACY_REMEDIATION_POLICY_FORMATS)
+        self.assertEqual(self.rel000.REMEDIATION_POLICY_PATH, guard.DEFAULT_POLICY_PATH)
+
+    def test_guard_admissions_agree_with_rel000_registry(self):
+        """The guard opens main exactly for the ACTIVE admissions REL-000 validates; branches never overlap remediations."""
+        policy = self.rel000.validate_remediation_policy(copy.deepcopy(COMMITTED_POLICY))
+        expected = {
+            entry["authorized_source_branch"]: entry["id"]
+            for entry in policy["dependency_admissions"]
+            if entry["status"] == "ACTIVE" and entry["mode"] == self.rel000.DEPENDENCY_ADMISSION
+        }
+        self.assertTrue(expected)
+        admitted = guard.admitted_branches(guard.validate_policy(copy.deepcopy(COMMITTED_POLICY)), today="2026-09-27")
+        self.assertEqual(expected, admitted)
+        remediation_branches = guard.authorized_branches(guard.validate_policy(copy.deepcopy(COMMITTED_POLICY)), today="2026-09-27")
+        self.assertFalse(set(admitted) & set(remediation_branches))
+        for branch in admitted:
+            self.assertEqual(self.rel000.NORMAL_RELEASE_EVIDENCE, self.rel000.resolve_rel000_mode(policy, branch))
 
     def test_guard_agrees_with_rel000_mode_resolution_for_committed_policy(self):
         """Every branch the guard authorizes is one REL-000 resolves to SECURITY_REMEDIATION and vice versa."""

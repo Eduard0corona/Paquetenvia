@@ -35,9 +35,9 @@ internal static class SolutionCatalog
         typeof(Orders.Infrastructure.AssemblyReference).Assembly,
         typeof(Orders.Endpoints.AssemblyReference).Assembly,
         additionalApplicationReferences: ["Paqueteria.Contracts"],
-        additionalInfrastructureReferences: ["Paqueteria.Application", "Paqueteria.Contracts"],
+        additionalInfrastructureReferences: ["Paqueteria.Application", "Paqueteria.Contracts", "Drivers.Application"],
         additionalEndpointReferences: ["Organizations.Application", "Organizations.Endpoints", "Paqueteria.Application"],
-        allowedCrossModuleDependencies: ["Organizations"]);
+        allowedCrossModuleDependencies: ["Drivers", "Organizations"]);
 
     internal static readonly ModuleDefinition Pricing = Module(
         "Pricing",
