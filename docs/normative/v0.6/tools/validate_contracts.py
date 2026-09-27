@@ -75,6 +75,7 @@ REGISTRATION_EXECUTOR_GRANTS = [
     "GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;",
     "GRANT SELECT (user_id,organization_id,role,status,is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
     "GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON organizations.organization_memberships TO paqueteria_registration_executor;",
+    "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
     "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;",
 ]
 
@@ -461,8 +462,8 @@ def main() -> int:
             errors.append(f"Missing role-model contract: {fragment}")
     # ADR-034, OPS-003-CLEANUP-ROLE and REG-001: the only column-level UPDATE grants are the lifecycle
     # executor's finalized_at grant, the cleanup executor's upload-session status grant and the
-    # registration executor's organization status grant; any other spelling or grantee is the legacy
-    # direct runtime UPDATE grant returning.
+    # registration executor's organization status and membership is_default grants; any other spelling
+    # or grantee is the legacy direct runtime UPDATE grant returning.
     column_update_grants = [
         " ".join(statement.split())
         for statement in re.findall(r"GRANT[^;]*\bUPDATE\s*\([^;]*;", role_sql)
@@ -471,6 +472,7 @@ def main() -> int:
         "GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;",
         "GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_cleanup_executor;",
         "GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;",
+        "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
     ]:
         errors.append(f"Column UPDATE grants differ from the ADR-034, OPS-003 and REG-001 grants: {column_update_grants}")
     # Exact grant sets for both dedicated executors, including any multi-grantee GRANT that names them.

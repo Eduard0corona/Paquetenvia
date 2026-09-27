@@ -228,7 +228,8 @@ GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_
 --     exactly once per subject (UNIQUE(identity_subject) arbitrates concurrent sign-ins);
 --   security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text): one BUSINESS
 --     (ACTIVE) or ALLY (PENDING_APPROVAL), the creator's admin membership and its audit row;
---     organizations_one_open_self_service_uq enforces one organization not CLOSED per creator;
+--     organizations_one_open_self_service_uq enforces one organization not CLOSED per creator; a default
+--     membership whose organization is not ACTIVE is released first (REG-DEFAULT-MEMBERSHIP-RELEASE);
 --   security.list_own_organization_applications(uuid): the caller's own organizations and status;
 --   security.list_pending_ally_organizations(uuid,uuid,integer) and
 --   security.decide_ally_organization(uuid,uuid,uuid,boolean,text): only for an ACTIVE PLATFORM_ADMIN
@@ -245,6 +246,9 @@ GRANT INSERT (id,organization_type,legal_name,display_name,status,self_service_c
 GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;
 GRANT SELECT (user_id,organization_id,role,status,is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;
 GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON organizations.organization_memberships TO paqueteria_registration_executor;
+-- REG-DEFAULT-MEMBERSHIP-RELEASE: creation releases the caller's default membership in an organization that is
+-- no longer ACTIVE, so the new organization can become the usable default.
+GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;
 GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;
 
 -- Mandatory deployment assertions:

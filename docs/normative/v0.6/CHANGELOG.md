@@ -1,5 +1,17 @@
 # Changelog
 
+## Membresía por defecto liberada al crear (REG-001) — 2026-09-27
+
+- Respuesta literal del project owner: "Liberarla al crear (Recomendado)"
+  (`REG-DEFAULT-MEMBERSHIP-RELEASE`). `create_self_service_organization` pone
+  `is_default=false` en las membresías por defecto del usuario cuya organización ya no está
+  ACTIVE (por ejemplo, un ALLY rechazado) y después hace por defecto la nueva membresía si no
+  queda ninguna por defecto en una organización ACTIVE. Nunca toca una por defecto en una
+  organización ACTIVE.
+- AI-18: `GRANT UPDATE (is_default) ON organizations.organization_memberships TO
+  paqueteria_registration_executor`; `validate_contracts.py` lo agrega a los grants exactos y a
+  la lista de grants `UPDATE` por columna.
+
 ## Registro abierto y onboarding de organizaciones (REG-001) — 2026-09-27
 
 - Respuestas literales del project owner: "El login y el registro de cuentas no será por

@@ -370,6 +370,59 @@ public sealed class SelfServiceRegistrationPostgreSqlContractTests(PostgreSqlCon
         }
     }
 
+    [PostgreSqlContractFact]
+    public async Task A_business_created_after_a_rejected_ally_becomes_the_usable_default()
+    {
+        var (adminId, platformId) = await NewPlatformAdminAsync();
+        var creatorId = await NewUserAsync();
+        var service = RegistrationService();
+        var allyId = (await service.CreateOrganizationAsync(
+            Command(creatorId, "reg001-key-default-ally-1", "ALLY", "Aliado Rechazado", "Aliado Rechazado"),
+            CancellationToken.None)).Organization!.OrganizationId;
+        Assert.Equal("true", await MembershipDefaultAsync(creatorId, allyId));
+        Assert.Equal(AllyDecisionOutcome.Rejected,
+            await service.DecideAllyAsync(adminId, platformId, allyId, false, null, CancellationToken.None));
+
+        var business = await service.CreateOrganizationAsync(
+            Command(creatorId, "reg001-key-default-biz-01", "BUSINESS", "Negocio Nuevo", "Negocio Nuevo"),
+            CancellationToken.None);
+
+        // REG-DEFAULT-MEMBERSHIP-RELEASE: the dead ALLY membership gave up the slot and the business took it.
+        Assert.Equal(SelfServiceOrganizationOutcome.Created, business.Outcome);
+        var businessId = business.Organization!.OrganizationId;
+        Assert.Equal("false", await MembershipDefaultAsync(creatorId, allyId));
+        Assert.Equal("true", await MembershipDefaultAsync(creatorId, businessId));
+        var context = await ResolveContextAsync(creatorId);
+        Assert.Contains($"\"organization_id\": \"{businessId:D}\"", context);
+        Assert.Contains("\"is_default\": true", context);
+        Assert.DoesNotContain(allyId.ToString("D"), context);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task A_default_membership_in_an_active_organization_is_left_untouched()
+    {
+        var userId = await NewUserAsync();
+        var existingId = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type) VALUES (@org,'Existente','Existente','BUSINESS');
+            INSERT INTO organizations.organization_memberships(user_id,organization_id,role,is_default) VALUES (@user,@org,'VIEWER',true);
+            """,
+            ("org", existingId), ("user", userId));
+
+        var created = await RegistrationService().CreateOrganizationAsync(
+            Command(userId, "reg001-key-default-keep-1", "BUSINESS", "Negocio Propio", "Negocio Propio"),
+            CancellationToken.None);
+
+        Assert.Equal(SelfServiceOrganizationOutcome.Created, created.Outcome);
+        Assert.Equal("true", await MembershipDefaultAsync(userId, existingId));
+        Assert.Equal("false", await MembershipDefaultAsync(userId, created.Organization!.OrganizationId));
+    }
+
+    private Task<string> MembershipDefaultAsync(Guid userId, Guid organizationId) => ScalarAsync<string>(
+        "SELECT is_default::text FROM organizations.organization_memberships WHERE user_id=@user AND organization_id=@org",
+        ("user", userId), ("org", organizationId));
+
     private static async Task MigrateOrganizationsAsync(string connectionString, string? target)
     {
         await using var connection = new NpgsqlConnection(connectionString);

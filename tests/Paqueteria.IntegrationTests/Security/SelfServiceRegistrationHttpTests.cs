@@ -126,6 +126,10 @@ public sealed class SelfServiceRegistrationHttpTests(SelfServiceRegistrationHttp
         Assert.Equal("BUSINESS_ADMIN", businessBody.GetProperty("role").GetString());
         var businessId = Guid.Parse(businessBody.GetProperty("organization_id").GetString()!);
         await AssertTenantStatusAsync(client, applicant, businessId, HttpStatusCode.OK);
+        // REG-DEFAULT-MEMBERSHIP-RELEASE: the rejected ALLY released the default, so the business is the usable default.
+        var businessContext = Assert.Single((await GetJsonAsync(client, applicant, "/api/v1/me/organization-contexts")).EnumerateArray());
+        Assert.Equal(businessId.ToString("D"), businessContext.GetProperty("organization_id").GetString());
+        Assert.True(businessContext.GetProperty("is_default").GetBoolean());
         Assert.Equal(1L, await factory.ScalarAsync<long>(
             $"SELECT count(*) FROM platform.audit_logs WHERE org_id='{businessId:D}' AND action='ORGANIZATION_SELF_REGISTERED'"));
     }

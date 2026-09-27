@@ -934,6 +934,7 @@ public sealed class DatabaseBaselineAssertions
               ('organizations','organization_memberships','status','INSERT'),
               ('organizations','organization_memberships','is_default','INSERT'),
               ('organizations','organization_memberships','granted_at','INSERT'),
+              ('organizations','organization_memberships','is_default','UPDATE'),
               ('platform','audit_logs','id','INSERT'),
               ('platform','audit_logs','org_id','INSERT'),
               ('platform','audit_logs','actor_id','INSERT'),

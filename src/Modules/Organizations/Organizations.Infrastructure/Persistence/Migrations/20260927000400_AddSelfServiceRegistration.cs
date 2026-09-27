@@ -193,6 +193,7 @@ public sealed class AddSelfServiceRegistration : Migration
         GRANT UPDATE (status) ON organizations.organizations TO paqueteria_registration_executor;
         GRANT SELECT (user_id,organization_id,role,status,is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;
         GRANT INSERT (id,user_id,organization_id,role,status,is_default,granted_at) ON organizations.organization_memberships TO paqueteria_registration_executor;
+        GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;
         GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_registration_executor;
 
         -- AUTH-OPEN-REGISTRATION: the first sign-in of a verified subject creates its user exactly once.
@@ -310,13 +311,29 @@ public sealed class AddSelfServiceRegistration : Migration
             RETURN;
           END;
 
+          -- REG-DEFAULT-MEMBERSHIP-RELEASE: a default membership whose organization is no longer ACTIVE
+          -- (a rejected ALLY, for example) grants no access and must not keep the one-default slot;
+          -- releasing it lets the new organization become the usable default. A default inside an
+          -- ACTIVE organization is never touched.
+          UPDATE organizations.organization_memberships m
+          SET is_default = false
+          WHERE m.user_id = p_user_id
+            AND m.status = 'ACTIVE'
+            AND m.is_default
+            AND NOT EXISTS (
+              SELECT 1 FROM organizations.organizations o
+              WHERE o.id = m.organization_id AND o.status = 'ACTIVE');
+
           INSERT INTO organizations.organization_memberships(
             id,user_id,organization_id,role,status,is_default,granted_at)
           VALUES (
             p_membership_id,p_user_id,p_organization_id,v_role,'ACTIVE',
             NOT EXISTS (
-              SELECT 1 FROM organizations.organization_memberships m
-              WHERE m.user_id = p_user_id AND m.status = 'ACTIVE' AND m.is_default),
+              SELECT 1
+              FROM organizations.organization_memberships m
+              JOIN organizations.organizations o ON o.id = m.organization_id
+              WHERE m.user_id = p_user_id AND m.status = 'ACTIVE' AND m.is_default
+                AND o.status = 'ACTIVE'),
             v_now);
 
           INSERT INTO platform.audit_logs(
@@ -564,6 +581,7 @@ public sealed class AddSelfServiceRegistration : Migration
                  'organizations.organization_memberships.role:SELECT',
                  'organizations.organization_memberships.status:SELECT',
                  'organizations.organization_memberships.user_id:SELECT',
+                 'organizations.organization_memberships.is_default:UPDATE',
                  'organizations.organizations.created_at:INSERT',
                  'organizations.organizations.display_name:INSERT',
                  'organizations.organizations.id:INSERT',
