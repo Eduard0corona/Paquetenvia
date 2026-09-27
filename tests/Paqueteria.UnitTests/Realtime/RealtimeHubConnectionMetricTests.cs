@@ -78,7 +78,7 @@ public sealed class RealtimeHubConnectionMetricTests
     }
 
     [Fact]
-    public async Task Concurrent_connections_are_counted_independently()
+    public async Task Connections_are_counted_independently_and_disconnect_is_idempotent()
     {
         var telemetry = new CountingTelemetry();
         var first = new FakeHubCallerContext("tracking-a");
