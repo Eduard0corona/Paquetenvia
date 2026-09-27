@@ -114,6 +114,26 @@ public sealed class IncidentsConfigurationTests
         Assert.False(options.OperationalPolicy.IsAllowedEvidenceCount(4));
     }
 
+    [Fact]
+    public void The_registered_occurrence_rule_reads_the_configured_age_and_skew()
+    {
+        using (var defaults = Build([]))
+        {
+            var policy = defaults.GetRequiredService<IncidentOccurrenceAgePolicy>();
+            Assert.Equal(TimeSpan.FromHours(72), policy.MaximumAge);
+            Assert.Equal(TimeSpan.FromMinutes(5), policy.ClockTolerance);
+        }
+
+        using var configured = Build(new Dictionary<string, string?>
+        {
+            ["Incidents:MaximumOccurrenceAgeHours"] = "24",
+            ["Incidents:MaximumOccurrenceSkewMinutes"] = "0",
+        });
+        var tightened = configured.GetRequiredService<IncidentOccurrenceAgePolicy>();
+        Assert.Equal(TimeSpan.FromHours(24), tightened.MaximumAge);
+        Assert.Equal(TimeSpan.Zero, tightened.ClockTolerance);
+    }
+
     private static IncidentsOptions Resolve(
         IEnumerable<KeyValuePair<string, string?>> settings,
         string environmentName = "Testing")

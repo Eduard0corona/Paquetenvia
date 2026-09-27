@@ -72,17 +72,26 @@ public sealed class CustodyOpenApiImplementationTests
     }
 
     [Fact]
-    public void The_offline_age_rule_names_exactly_the_three_driver_replay_operations()
+    public void The_offline_age_rule_names_exactly_the_three_fixed_replay_operations_and_openIncident()
     {
         var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
         var operations = root.Mapping("x-offline-operation-age").Mapping("operations");
         Assert.Equal(
-            ["createProofUploadSession", "finalizeProof", "transitionOrder"],
+            ["createProofUploadSession", "finalizeProof", "openIncident", "transitionOrder"],
             operations.Children.Keys.Select(key => Assert.IsType<YamlScalarNode>(key).Value!).Order(StringComparer.Ordinal));
+        // The three driver replay operations take the fixed shared policy (a plain value); only
+        // openIncident carries its own configurable limits (IncidentsOpenApiImplementationTests).
         Assert.Equal("captured_at (required)", operations.Scalar("finalizeProof"));
         Assert.Equal("client_occurred_at (optional)", operations.Scalar("createProofUploadSession"));
+        Assert.Equal("client_occurred_at (optional)", operations.Scalar("transitionOrder"));
+        Assert.IsType<YamlMappingNode>(operations.Children[new YamlScalarNode("openIncident")]);
         Assert.Equal(
-            ["OPS-003-OFFLINE-72H", "OPS-003-SERVER-72H-REJECTION"],
+            [
+                "OPS-003-OFFLINE-72H",
+                "OPS-003-SERVER-72H-REJECTION",
+                "OPS-003-INCIDENT-72H-UNIFICATION",
+                "OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27",
+            ],
             root.Mapping("x-offline-operation-age").Sequence("decisions").Children
                 .Select(node => Assert.IsType<YamlScalarNode>(node).Value!));
     }

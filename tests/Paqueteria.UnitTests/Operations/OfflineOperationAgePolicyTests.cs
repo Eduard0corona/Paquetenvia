@@ -97,6 +97,45 @@ public sealed class OfflineOperationAgePolicyTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new OfflineOperationAgePolicy(TimeSpan.FromSeconds(seconds)));
 
     [Fact]
+    public void The_shared_policy_always_uses_the_fixed_72_hour_limit()
+    {
+        Assert.Equal(OfflineOperationAgePolicy.MaximumAge, OfflineOperationAgePolicy.Default.AgeLimit);
+        Assert.Equal(OfflineOperationAgePolicy.MaximumAge, new OfflineOperationAgePolicy(TimeSpan.Zero).AgeLimit);
+    }
+
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(24, 60)]
+    [InlineData(96, 3600)]
+    public void Configured_limits_keep_both_inclusive_bounds(int maximumAgeHours, int toleranceSeconds)
+    {
+        var maximumAge = TimeSpan.FromHours(maximumAgeHours);
+        var tolerance = TimeSpan.FromSeconds(toleranceSeconds);
+        var policy = OfflineOperationAgePolicy.WithConfiguredLimits(maximumAge, tolerance);
+
+        Assert.Equal(maximumAge, policy.AgeLimit);
+        Assert.Equal(tolerance, policy.ClockTolerance);
+        var oldest = ServerNow - maximumAge;
+        Assert.Equal(OfflineOperationAge.Accepted, policy.Evaluate(oldest, ServerNow));
+        Assert.Equal(OfflineOperationAge.Expired, policy.Evaluate(oldest.AddTicks(-1), ServerNow));
+        var latest = ServerNow + tolerance;
+        Assert.Equal(OfflineOperationAge.Accepted, policy.Evaluate(latest, ServerNow));
+        Assert.Equal(OfflineOperationAge.AheadOfServerClock, policy.Evaluate(latest.AddTicks(1), ServerNow));
+        Assert.Equal(OfflineOperationAge.NotDeclared, policy.Evaluate(null, ServerNow));
+    }
+
+    [Fact]
+    public void Configured_limits_can_never_disable_the_check()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            OfflineOperationAgePolicy.WithConfiguredLimits(TimeSpan.Zero, TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            OfflineOperationAgePolicy.WithConfiguredLimits(TimeSpan.FromHours(-1), TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            OfflineOperationAgePolicy.WithConfiguredLimits(TimeSpan.FromHours(72), TimeSpan.FromTicks(-1)));
+    }
+
+    [Fact]
     public void Registration_defaults_to_five_minutes_and_binds_the_configured_tolerance()
     {
         using (var defaults = Provider([]))

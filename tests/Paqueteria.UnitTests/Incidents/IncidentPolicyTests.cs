@@ -1,5 +1,6 @@
 using Incidents.Application.Incidents;
 using Incidents.Domain;
+using Paqueteria.Application.Idempotency;
 
 namespace Paqueteria.UnitTests.Incidents;
 
@@ -204,6 +205,77 @@ public sealed class IncidentPolicyTests
         Assert.False(IncidentRequestPolicy.IsValidOccurrence(Now.AddMinutes(6), Now));
     }
 
+    // ------------------------ OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27
+
+    [Fact]
+    public void The_default_occurrence_rule_is_the_shared_offline_rule_at_72_hours_and_5_minutes()
+    {
+        var policy = IncidentOccurrenceAgePolicy.Mvp1;
+
+        Assert.Equal(TimeSpan.FromHours(72), policy.MaximumAge);
+        Assert.Equal(TimeSpan.FromMinutes(5), policy.ClockTolerance);
+        var oldest = Now - policy.MaximumAge;
+        Assert.Equal(OfflineOperationAge.Accepted, policy.Evaluate(oldest, Now));
+        Assert.Equal(OfflineOperationAge.Expired, policy.Evaluate(oldest.AddTicks(-1), Now));
+        var latest = Now + policy.ClockTolerance;
+        Assert.Equal(OfflineOperationAge.Accepted, policy.Evaluate(latest, Now));
+        Assert.Equal(OfflineOperationAge.AheadOfServerClock, policy.Evaluate(latest.AddTicks(1), Now));
+    }
+
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(24, 1)]
+    [InlineData(96, 60)]
+    [InlineData(720, 5)]
+    public void A_configured_occurrence_age_and_skew_move_both_boundaries(int ageHours, int skewMinutes)
+    {
+        var policy = new IncidentOccurrenceAgePolicy(IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceAge = TimeSpan.FromHours(ageHours),
+            MaximumOccurrenceSkew = TimeSpan.FromMinutes(skewMinutes),
+        });
+
+        var oldest = Now.AddHours(-ageHours);
+        Assert.True(policy.IsAccepted(oldest, Now));
+        Assert.Equal(OfflineOperationAge.Expired, policy.Evaluate(oldest.AddTicks(-1), Now));
+        var latest = Now.AddMinutes(skewMinutes);
+        Assert.True(policy.IsAccepted(latest, Now));
+        Assert.Equal(OfflineOperationAge.AheadOfServerClock, policy.Evaluate(latest.AddTicks(1), Now));
+    }
+
+    [Fact]
+    public void The_default_instant_is_never_an_accepted_occurrence()
+    {
+        Assert.False(IncidentOccurrenceAgePolicy.Mvp1.IsAccepted(default, Now));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidOperationalPolicies))]
+    public void An_invalid_operational_policy_never_yields_an_occurrence_rule(IncidentOperationalPolicy policy)
+    {
+        Assert.Throws<ArgumentException>(() => new IncidentOccurrenceAgePolicy(policy));
+    }
+
+    [Fact]
+    public void The_published_occurrence_bounds_are_one_hour_to_thirty_days_and_zero_to_one_hour()
+    {
+        Assert.Equal(TimeSpan.FromDays(30), IncidentOperationalPolicy.LongestConfigurableWindow);
+        Assert.Equal(TimeSpan.FromHours(1), IncidentOperationalPolicy.LongestConfigurableSkew);
+        Assert.True((IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableWindow,
+            MaximumOccurrenceSkew = IncidentOperationalPolicy.LongestConfigurableSkew,
+        }).IsValid);
+        Assert.False((IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceAge = IncidentOperationalPolicy.LongestConfigurableWindow + TimeSpan.FromTicks(1),
+        }).IsValid);
+        Assert.False((IncidentOperationalPolicy.Mvp1 with
+        {
+            MaximumOccurrenceSkew = IncidentOperationalPolicy.LongestConfigurableSkew + TimeSpan.FromTicks(1),
+        }).IsValid);
+    }
+
     [Fact]
     public void A_complete_opening_request_is_accepted()
     {
@@ -326,7 +398,7 @@ public sealed class IncidentPolicyTests
         };
 
         Assert.True(tightened.IsValid);
-        Assert.False(tightened.IsValidOccurrence(Now.AddHours(-25), Now));
+        Assert.False(new IncidentOccurrenceAgePolicy(tightened).IsAccepted(Now.AddHours(-25), Now));
         Assert.True(tightened.IsAllowedEvidenceCount(3));
         Assert.False(tightened.IsAllowedEvidenceCount(4));
         // The semantic floor stays where AI-08 put it.

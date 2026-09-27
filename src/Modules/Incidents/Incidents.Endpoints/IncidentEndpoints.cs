@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Routing;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
@@ -54,6 +55,8 @@ public static class IncidentEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IIncidentService service,
+        IncidentOccurrenceAgePolicy occurrencePolicy,
+        IClock clock,
         CancellationToken cancellationToken)
     {
         OpenIncidentRequest? request;
@@ -80,29 +83,45 @@ public static class IncidentEndpoints
             request is null ||
             request.ExtensionData is { Count: > 0 } ||
             request.OccurredAt is not { } occurredAt ||
+            occurredAt == default ||
             request.EvidenceProofIds is not { } evidenceProofIds)
         {
             return Conflict("INVALID_REQUEST");
         }
 
+        var command = new OpenIncidentCommand(
+            actorId,
+            organizationId,
+            session.MfaSatisfied,
+            idempotencyKey,
+            parsedOrderId,
+            request.Type ?? string.Empty,
+            request.Severity ?? string.Empty,
+            request.Description ?? string.Empty,
+            request.ReasonCode ?? string.Empty,
+            request.NextAction ?? string.Empty,
+            occurredAt,
+            evidenceProofIds,
+            httpContext.TraceIdentifier);
+        if (!IncidentRequestPolicy.IsValidCommandShape(command))
+        {
+            return Conflict("INVALID_REQUEST");
+        }
+
+        // OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27: a report older than the configured
+        // maximum occurrence age never reaches the incident service, whatever its idempotency key; an
+        // occurred_at beyond the configured clock tolerance stays an invalid request.
+        switch (occurrencePolicy.Evaluate(occurredAt, clock.UtcNow))
+        {
+            case OfflineOperationAge.Expired:
+                return Conflict(OfflineOperationAgePolicy.ExpiredCode);
+            case OfflineOperationAge.AheadOfServerClock:
+                return Conflict("INVALID_REQUEST");
+        }
+
         try
         {
-            var result = await service.OpenAsync(
-                new OpenIncidentCommand(
-                    actorId,
-                    organizationId,
-                    session.MfaSatisfied,
-                    idempotencyKey,
-                    parsedOrderId,
-                    request.Type ?? string.Empty,
-                    request.Severity ?? string.Empty,
-                    request.Description ?? string.Empty,
-                    request.ReasonCode ?? string.Empty,
-                    request.NextAction ?? string.Empty,
-                    occurredAt,
-                    evidenceProofIds,
-                    httpContext.TraceIdentifier),
-                cancellationToken);
+            var result = await service.OpenAsync(command, cancellationToken);
             return Results.Created(
                 $"/api/v1/orders/{parsedOrderId:D}/incidents/{result.Id:D}",
                 ToResponse(result));

@@ -105,10 +105,39 @@ El aviso dice, en español, que la acción venció tras 72 horas sin conexión y
 que debe registrarse de nuevo o reportarse a despacho.
 
 La PWA no abre incidentes. La unificación de `openIncident` con
-`OFFLINE_OPERATION_EXPIRED` (OPS-003-INCIDENT-72H-UNIFICATION; el owner eligió
-"Unificar pero configurable": mismo 409 antes del servicio, 72 h configurables
-y tolerancia de reloj de incidentes de hasta 60 min) llega en un PR de backend
-separado.
+`OFFLINE_OPERATION_EXPIRED` está implementada en el backend (ver la sección
+siguiente).
+
+## `openIncident`: misma regla, límites configurables
+
+OPS-003-INCIDENT-72H-UNIFICATION queda implementada por
+OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27 (respuesta literal del
+owner: "Unificar pero configurable"). `openIncident` juzga `occurred_at` con la
+misma comparación que las otras tres operaciones
+(`OfflineOperationAgePolicy.WithConfiguredLimits`, a través de
+`IncidentOccurrenceAgePolicy`), en el endpoint, antes del servicio de
+incidentes y de su replay idempotente, pero con sus propios límites:
+
+| Ajuste | Por defecto | Rango |
+| --- | --- | --- |
+| `Incidents:MaximumOccurrenceAgeHours` | 72 | 1–720 |
+| `Incidents:MaximumOccurrenceSkewMinutes` | 5 | 0–60 |
+
+| `occurred_at` | Resultado |
+| --- | --- |
+| hasta la edad máxima configurada exacta | continúa al servicio |
+| un tick más antiguo | 409 `OFFLINE_OPERATION_EXPIRED`, sin reserva, incidente, evidencia ni auditoría |
+| más adelante que ahora + tolerancia configurada | 409 `INVALID_REQUEST`, como antes |
+| ausente (es obligatorio) o el instante por defecto | 409 `INVALID_REQUEST`, como antes |
+
+Como en las demás operaciones, un replay vencido se rechaza aunque su
+`Idempotency-Key` siga guardada. `transitionOrder`, `createProofUploadSession` y
+`finalizeProof` conservan su política fija (72 h, tolerancia 0–300 s).
+
+Riesgo operativo: si se configura una edad máxima mayor que 72 h, un replay de
+un incidente cuya llave ya purgó el job de limpieza (piso de 72 h) llegaría al
+servicio y abriría un incidente nuevo. Con el valor por defecto (72 h) esto no
+ocurre; subirlo por encima de 72 h exige aceptar ese riesgo.
 
 ## Rollback
 

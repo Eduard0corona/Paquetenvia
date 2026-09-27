@@ -160,7 +160,10 @@ de modo que reintentar la misma apertura reproduce el mismo `sla_due_at`:
 | `LOW` | 72 horas |
 
 `occurred_at` se acepta con hasta 5 minutos de adelanto (desfase de reloj del dispositivo) y hasta
-72 horas de atraso; fuera de ese rango la petición es `INVALID_REQUEST`.
+72 horas de atraso. Un adelanto mayor es `INVALID_REQUEST`; un atraso mayor es 409
+`OFFLINE_OPERATION_EXPIRED`, decidido en el endpoint antes del servicio
+(OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27, ver
+`docs/development/ops-003-operational-cleanup.md`). Ambos límites son configurables (tabla siguiente).
 
 ## Parámetros operativos
 

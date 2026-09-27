@@ -65,9 +65,10 @@ public static class IncidentRequestPolicy
     public const int MaximumIncidentTypeLength = 64;
 
     /// <summary>
-    /// An attempt cannot be reported as having happened in the future, and reports older than
-    /// this are treated as malformed rather than silently backdating the SLA clock. Both bounds
-    /// are operational MVP-1 parameters owned by <see cref="IncidentOperationalPolicy"/>.
+    /// An attempt cannot be reported as having happened in the future, and a report older than
+    /// this is refused as an expired offline operation rather than silently backdating the SLA
+    /// clock. Both bounds are operational MVP-1 parameters owned by
+    /// <see cref="IncidentOperationalPolicy"/> and evaluated by <see cref="IncidentOccurrenceAgePolicy"/>.
     /// </summary>
     public static TimeSpan MaximumOccurrenceAge => IncidentOperationalPolicy.Mvp1.MaximumOccurrenceAge;
     public static TimeSpan MaximumOccurrenceSkew => IncidentOperationalPolicy.Mvp1.MaximumOccurrenceSkew;
@@ -87,7 +88,7 @@ public static class IncidentRequestPolicy
         evidenceProofIds.Distinct().Count() == evidenceProofIds.Count;
 
     public static bool IsValidOccurrence(DateTimeOffset occurredAt, DateTimeOffset now) =>
-        IncidentOperationalPolicy.Mvp1.IsValidOccurrence(occurredAt, now);
+        IncidentOccurrenceAgePolicy.Mvp1.IsAccepted(occurredAt, now);
 
     public static bool IsValidCommandShape(OpenIncidentCommand command) =>
         command.ActorId != Guid.Empty &&

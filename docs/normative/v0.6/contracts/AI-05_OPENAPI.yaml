@@ -698,6 +698,15 @@ paths:
       tags:
       - Incidents
       operationId: openIncident
+      description: >-
+        INC-001 opens an incident for a failed attempt. occurred_at is judged by
+        the offline operation age rule before the incident service runs
+        (x-offline-operation-age, OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27):
+        exactly the configured maximum occurrence age (default 72 hours) is
+        accepted, an older report is 409 OFFLINE_OPERATION_EXPIRED, and one later
+        than server time plus the configured clock tolerance (default 5 minutes)
+        is 409 INVALID_REQUEST. The check precedes the idempotency replay, so an
+        expired report is refused even when its Idempotency-Key is still stored.
       x-shape-validation: invalid-request-without-productive-transaction
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -2014,8 +2023,11 @@ components:
     IncidentConflict:
       description: >-
         INC-001 request, idempotency, order-state, incident-state or evidence
-        conflict. Internal rejection evidence, the current incident status and
-        cross-tenant existence are never exposed.
+        conflict. openIncident also answers OFFLINE_OPERATION_EXPIRED when
+        occurred_at is older than its configured maximum occurrence age
+        (x-offline-operation-age); resolveIncident never does. Internal
+        rejection evidence, the current incident status and cross-tenant
+        existence are never exposed.
       content:
         application/problem+json:
           schema:
@@ -2726,6 +2738,10 @@ components:
         occurred_at:
           type: string
           format: date-time
+          description: >-
+            When the attempt happened on the device. Required; the
+            x-offline-operation-age rule applies with the configurable limits
+            of its openIncident entry.
         evidence_proof_ids:
           type: array
           minItems: 1
@@ -3247,6 +3263,7 @@ components:
           - ORDER_STATE_NOT_ALLOWED
           - EVIDENCE_NOT_AVAILABLE
           - INCIDENT_STATE_CONFLICT
+          - OFFLINE_OPERATION_EXPIRED
           - CONFLICT
     TransitionConflictProblem:
       type: object
@@ -4585,10 +4602,23 @@ x-offline-operation-age:
   decisions:
   - OPS-003-OFFLINE-72H
   - OPS-003-SERVER-72H-REJECTION
+  - OPS-003-INCIDENT-72H-UNIFICATION
+  - OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27
   operations:
     transitionOrder: client_occurred_at (optional)
     createProofUploadSession: client_occurred_at (optional)
     finalizeProof: captured_at (required)
+    openIncident:
+      timestamp: occurred_at (required)
+      maximum_age_default: PT72H
+      maximum_age_configurable: true
+      maximum_age_setting: Incidents:MaximumOccurrenceAgeHours
+      maximum_age_range: PT1H..PT720H
+      clock_tolerance_default: PT5M
+      clock_tolerance_range: PT0S..PT60M
+      clock_tolerance_setting: Incidents:MaximumOccurrenceSkewMinutes
+      clock_ahead: 409 INVALID_REQUEST
+      missing_timestamp: 409 INVALID_REQUEST
   maximum_age: PT72H
   maximum_age_configurable: false
   clock_tolerance_default: PT5M
@@ -4602,6 +4632,11 @@ x-offline-operation-age:
   - an absent optional client_occurred_at is an online operation and is not age-checked; an absent captured_at is
     INVALID_REQUEST as before
   - idempotency keys younger than 72 hours are never purged, so an accepted replay always finds its key
+  - maximum_age, maximum_age_configurable and the clock_tolerance fields above apply to every operation listed with a
+    plain value; an operation listed with its own mapping (openIncident) declares its own limits there and keeps the
+    same comparison, the same inclusive bounds and the same 409 OFFLINE_OPERATION_EXPIRED
+  - openIncident compares occurred_at before the incident service and before its idempotency replay, so a report older
+    than its configured maximum age is refused even when its Idempotency-Key is still stored
 x-runtime-contracts:
   token_hash: SHA-256 over exact UTF-8 bytes of Base64URL-no-padding token; bytea length 32
   money: all cents fields are int64

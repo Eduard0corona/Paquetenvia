@@ -1,5 +1,20 @@
 # Changelog
 
+## `openIncident` unificado con `OFFLINE_OPERATION_EXPIRED`, límites configurables — 2026-09-27
+
+- Respuesta literal del project owner: "Unificar pero configurable"
+  (`OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-2026-09-27`), que implementa
+  `OPS-003-INCIDENT-72H-UNIFICATION`.
+- AI-05: `openIncident` describe la regla; `IncidentConflictProblem` agrega
+  `OFFLINE_OPERATION_EXPIRED` (sólo `openIncident` lo emite);
+  `x-offline-operation-age` agrega las dos decisiones y la entrada
+  `openIncident` con `maximum_age_configurable: true`, sus ajustes
+  (`Incidents:MaximumOccurrenceAgeHours`, `Incidents:MaximumOccurrenceSkewMinutes`),
+  valores por defecto (PT72H, PT5M) y rangos (PT1H..PT720H, PT0S..PT60M); el reloj
+  adelantado y la marca ausente siguen siendo 409 `INVALID_REQUEST`. Las otras
+  tres operaciones conservan su política fija.
+- AI-08 (OPS-003) registra la decisión y la regla de `openIncident`.
+
 ## Deltas del piloto publicados con su implementación — 2026-09-27
 
 - AI-05 publica, junto con su código y sus pruebas: `listSettlements`

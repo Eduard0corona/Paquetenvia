@@ -174,6 +174,33 @@ public sealed class IncidentResolutionHttpFixture : IAsyncLifetime
             reader.GetInt64(7));
     }
 
+    /// <summary>
+    /// Everything an opening writes for <paramref name="orderId"/>: incidents, evidence rows, opening
+    /// audits and, for <paramref name="idempotencyKey"/>, the INC-001 opening reservation.
+    /// </summary>
+    internal async Task<OpeningSnapshot> ReadOpeningsAsync(Guid orderId, string idempotencyKey)
+    {
+        await using var connection = new NpgsqlConnection(Api.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+              (SELECT count(*) FROM incidents.incidents i WHERE i.order_id=@order),
+              (SELECT count(*) FROM incidents.incident_evidence x WHERE x.order_id=@order),
+              (SELECT count(*) FROM platform.audit_logs a
+                 WHERE a.action='incidents.incident.opened'
+                   AND a.entity_id IN (SELECT i.id FROM incidents.incidents i WHERE i.order_id=@order)),
+              (SELECT count(*) FROM platform.idempotency_keys k
+                 WHERE k.scope='INC-001:OPEN_INCIDENT' AND k.idempotency_key=@key)
+            """,
+            connection);
+        command.Parameters.AddWithValue("order", orderId);
+        command.Parameters.AddWithValue("key", idempotencyKey);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return new OpeningSnapshot(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
+    }
+
     private async Task ExecuteAdminAsync(string sql, params NpgsqlParameter[] parameters)
     {
         await using var connection = new NpgsqlConnection(Api.AdminConnectionString);
@@ -185,6 +212,8 @@ public sealed class IncidentResolutionHttpFixture : IAsyncLifetime
 }
 
 internal sealed record SeededIncident(Guid IncidentId, Guid OrderId, Guid ProofId);
+
+internal sealed record OpeningSnapshot(long Incidents, long Evidence, long OpeningAudits, long Reservations);
 
 internal sealed record IncidentSnapshot(
     string Status,
