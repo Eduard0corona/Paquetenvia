@@ -15,6 +15,9 @@ public interface IAuthenticatedSession
 
     bool MfaSatisfied { get; }
 
+    /// <summary>AUTH-EMAIL-VERIFIED-REQUIRED: the provider asserted a verified email for this session.</summary>
+    bool EmailVerified { get; }
+
     IReadOnlyList<IdentityContextMembership> ActiveMemberships { get; }
 
     bool HasOrganizationAccess(Guid organizationId);

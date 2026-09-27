@@ -76,6 +76,7 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, adminConnectionString);
         await ApplyNotificationsMigrationAsync(adminConnectionString);
         await ApplyIncidentsMigrationAsync(adminConnectionString);
+        await ApplyOrganizationsMigrationAsync(adminConnectionString);
 
         await using var admin = NpgsqlDataSource.Create(adminConnectionString);
         await using (var command = admin.CreateCommand($$"""
@@ -1230,6 +1231,32 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
             })
             .Options;
         await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
+        await context.Database.MigrateAsync();
+    }
+
+    /// <summary>
+    /// REG-001 (AUTH-OPEN-REGISTRATION) lives in the Organizations lane: first sign-in registration,
+    /// self-service onboarding and the ALLY decision run through its SECURITY DEFINER functions.
+    /// </summary>
+    private static async Task ApplyOrganizationsMigrationAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
+        {
+            await role.ExecuteNonQueryAsync();
+        }
+
+        var options = new DbContextOptionsBuilder<Organizations.Infrastructure.Persistence.OrganizationsDbContext>()
+            .UseNpgsql(connection, postgres =>
+            {
+                postgres.MigrationsAssembly(
+                    typeof(Organizations.Infrastructure.Persistence.OrganizationsDbContext).Assembly.FullName);
+                postgres.MigrationsHistoryTable("__ef_migrations_history_organizations", "platform");
+            })
+            .Options;
+        await using var context = new Organizations.Infrastructure.Persistence.OrganizationsDbContext(
+            options, new TenantDatabaseExecutionState());
         await context.Database.MigrateAsync();
     }
 

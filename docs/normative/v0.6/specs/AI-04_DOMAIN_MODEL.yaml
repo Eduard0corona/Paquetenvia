@@ -17,6 +17,16 @@ entities:
     - legal_name
     - display_name
     - status
+    statuses:
+    - ACTIVE
+    - PENDING_APPROVAL
+    - SUSPENDED
+    - CLOSED
+    rules:
+    - only ACTIVE organizations grant access (IDENTITY-ORG-ACTIVE-REQUIRED)
+    - a self-registered ALLY is PENDING_APPROVAL until a PLATFORM_ADMIN approves it (ACTIVE) or rejects it (CLOSED); approval creates no ally relationship (REG-ALLY-APPROVAL-ACTIVATE-ONLY)
+    - a self-registered BUSINESS is ACTIVE at creation
+    - at most one self-created organization that is not CLOSED per person (REG-ONE-ORGANIZATION-PER-PERSON)
   User:
     required:
     - id

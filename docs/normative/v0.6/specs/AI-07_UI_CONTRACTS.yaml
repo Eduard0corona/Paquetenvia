@@ -11,20 +11,37 @@ routes:
     - anonymous
     release: MVP-0
     # GATE-002-BFF-001: sign-in entry point, reachable without a session; it starts
-    # GET /auth/login (AI-05). First access is by prior invitation
-    # (AUTH-FIRST-LOGIN-INVITATION); it never provisions users or memberships.
-    # ?error=access_denied shows "Tu cuenta no tiene acceso a Paquetenvia; pídelo a un
-    # administrador"; any other error shows the generic message
+    # GET /auth/login (AI-05). Registration is open (AUTH-OPEN-REGISTRATION): the first
+    # sign-in creates the user with no organization; a signed-in session without
+    # organization contexts is offered /onboarding. ?error=access_denied shows "Tu cuenta
+    # no tiene acceso a Paquetenvia; pídelo a un administrador"; ?error=email_not_verified
+    # shows "Verifica tu correo en AuthCenter y vuelve a iniciar sesión"
+    # (AUTH-EMAIL-VERIFIED-REQUIRED); any other error shows the generic message
     # (AUTH-001-ACCESS-DENIED-MESSAGE). ?mfa=required offers "Verificar identidad"
     # (GET /auth/login?mfa=required) to a signed-in session without MFA
     # (AUTH-001-MFA-STEP-UP). Logout navigates to the AuthCenter end-session URL, which
     # returns here (AUTH-001-RP-INITIATED-LOGOUT).
     decisions:
     - GATE-002-BFF-001
-    - AUTH-FIRST-LOGIN-INVITATION
+    - AUTH-OPEN-REGISTRATION
+    - AUTH-EMAIL-VERIFIED-REQUIRED
     - AUTH-001-RP-INITIATED-LOGOUT
     - AUTH-001-MFA-STEP-UP
     - AUTH-001-ACCESS-DENIED-MESSAGE
+  /onboarding:
+    roles:
+    - authenticated_without_organization
+    release: MVP-0
+    # REG-SELF-SERVICE-ORGANIZATION: a signed-in user creates a business (active at once) or
+    # registers an ally (pending PLATFORM_ADMIN approval) through POST /onboarding/organizations,
+    # and sees its own applications and their status (GET /me/organization-applications,
+    # REG-OWN-APPLICATIONS-ENDPOINT). One self-created organization that is not CLOSED per person
+    # (REG-ONE-ORGANIZATION-PER-PERSON): ORGANIZATION_LIMIT_REACHED explains it. Spanish copy.
+    decisions:
+    - AUTH-OPEN-REGISTRATION
+    - REG-SELF-SERVICE-ORGANIZATION
+    - REG-OWN-APPLICATIONS-ENDPOINT
+    - REG-ONE-ORGANIZATION-PER-PERSON
   /ops/dashboard:
     roles:
     - platform_admin

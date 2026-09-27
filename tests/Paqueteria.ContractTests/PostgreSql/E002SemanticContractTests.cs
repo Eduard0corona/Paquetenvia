@@ -47,9 +47,10 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                 // The coordinator also applied the Orders LIF-001 lane (ADR-034): one more routine, owner + Worker,
                 // plus the D8 DISPATCH lane (D8-OUTBOX-LANE-DISPATCH) and the Custody OPS-003 lane
                 // (OPS-003-CLEANUP-ROLE): two more routines each, owner + Worker.
-                Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1", applied.RoutineMap);
-                Assert.Equal(31, applied.ControlledIdentities);
-                Assert.Equal(60, applied.NormalizedExecuteRows);
+                // REG-001 adds the Organizations lane: five registration routines, owner + paqueteria_app.
+                Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_V1", applied.RoutineMap);
+                Assert.Equal(36, applied.ControlledIdentities);
+                Assert.Equal(70, applied.NormalizedExecuteRows);
             }
 
             Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString,

@@ -14,8 +14,10 @@ public sealed class AuthenticatedSession : IAuthenticatedSession
         Guid? userId,
         IdentityContextStatus? identityStatus,
         bool mfaSatisfied,
-        ImmutableArray<IdentityContextMembership> activeMemberships)
+        ImmutableArray<IdentityContextMembership> activeMemberships,
+        bool emailVerified = false)
     {
+        EmailVerified = emailVerified;
         IsAuthenticated = isAuthenticated;
         Subject = subject;
         UserId = userId;
@@ -29,6 +31,7 @@ public sealed class AuthenticatedSession : IAuthenticatedSession
     public Guid? UserId { get; }
     public IdentityContextStatus? IdentityStatus { get; }
     public bool MfaSatisfied { get; }
+    public bool EmailVerified { get; }
     public IReadOnlyList<IdentityContextMembership> ActiveMemberships { get; }
 
     public bool HasOrganizationAccess(Guid organizationId) =>
@@ -92,7 +95,8 @@ public sealed class AuthenticatedSession : IAuthenticatedSession
             statusValues.Length == 1 ? userId : null,
             statusValues.Length == 1 ? IdentityContextStatus.Active : null,
             mfaSatisfied,
-            memberships.ToImmutable());
+            memberships.ToImmutable(),
+            TrustedValues(identity, IdentityClaimTypes.EmailVerified).SingleOrDefault() == "true");
     }
 
     private static AuthenticatedSession Anonymous() => new(false, null, null, null, false, []);

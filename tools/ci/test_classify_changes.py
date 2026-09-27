@@ -164,6 +164,12 @@ class ImpactModelTests(unittest.TestCase):
         self.assertEqual({"secret-scan", "azr-static", "dotnet", *WEB_ALL}, jobs(plan))
         self.assertEqual([], plan["unmatched_paths"])
 
+    def test_web_onboarding_is_classified_with_web_auth(self):
+        # REG-001: /onboarding calls the BFF onboarding endpoints exactly like /login calls /auth.
+        plan = classify(["apps/web/src/app/onboarding/page.tsx"])
+        self.assertEqual({"secret-scan", "azr-static", "dotnet", *WEB_ALL}, jobs(plan))
+        self.assertEqual([], plan["unmatched_paths"])
+
     def test_next_config_adds_dotnet(self):
         plan = classify(["apps/web/next.config.ts"])
         self.assertEqual({"secret-scan", "azr-static", "dotnet", *WEB_ALL}, jobs(plan))

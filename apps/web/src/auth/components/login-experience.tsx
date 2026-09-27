@@ -153,14 +153,16 @@ function SessionView({
     <>
       <p role="status">Sesión iniciada como {name}.</p>
       {!session.authorized ? (
-        <p>
-          Tu cuenta todavía no tiene acceso a Paquetenvia. Pide a un administrador de tu
-          organización que te registre o te invite.
-        </p>
+        <p>Tu cuenta no tiene acceso a Paquetenvia en este momento.</p>
       ) : shouldOfferStepUp(session, mfaRequested) ? (
         <StepUpPrompt returnUrl={returnUrl} />
       ) : installation.kind === "none" ? (
-        <p>Tu cuenta no tiene organizaciones activas.</p>
+        <>
+          <p>Tu cuenta todavía no tiene una organización activa.</p>
+          <a className="button" href="/onboarding">
+            Crear o registrar tu organización
+          </a>
+        </>
       ) : (
         <>
           <p>Organización activa: {installation.displayName}.</p>

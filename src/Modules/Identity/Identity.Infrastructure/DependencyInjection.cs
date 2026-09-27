@@ -1,7 +1,9 @@
 using Identity.Application.Authentication;
 using Identity.Application.Bootstrap;
+using Identity.Application.Registration;
 using Identity.Infrastructure.Bootstrap;
 using Identity.Infrastructure.Mock;
+using Identity.Infrastructure.Registration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -52,6 +54,18 @@ public static class DependencyInjection
                 IdentityBootstrapProviderKind.Mock => serviceProvider.GetRequiredService<MockIdentityContextResolver>(),
                 IdentityBootstrapProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlIdentityContextResolver>(),
                 _ => serviceProvider.GetRequiredService<DisabledIdentityContextResolver>(),
+            });
+
+        // AUTH-OPEN-REGISTRATION: first sign-in registration follows the bootstrap provider.
+        services.AddSingleton<MockIdentityRegistration>();
+        services.AddSingleton<DisabledIdentityRegistration>();
+        services.AddScoped<PostgreSqlIdentityRegistration>();
+        services.AddScoped<IIdentityRegistration>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<IdentityBootstrapOptions>>().Value.Provider switch
+            {
+                IdentityBootstrapProviderKind.Mock => serviceProvider.GetRequiredService<MockIdentityRegistration>(),
+                IdentityBootstrapProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlIdentityRegistration>(),
+                _ => serviceProvider.GetRequiredService<DisabledIdentityRegistration>(),
             });
 
         if (!string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria")))

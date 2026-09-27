@@ -25,6 +25,12 @@ public static class AuthCenterDefaults
     /// <summary>AuthCenter answered <c>error=access_denied</c>: the account has no access to Paquetenvia.</summary>
     public const string AccessDeniedRedirect = "/login?error=access_denied";
 
+    /// <summary>
+    /// AUTH-EMAIL-VERIFIED-REQUIRED: AuthCenter did not assert <c>email_verified=true</c>; no user is
+    /// created or linked and no session is issued.
+    /// </summary>
+    public const string EmailNotVerifiedRedirect = "/login?error=email_not_verified";
+
     /// <summary>Registered exactly (ordinal) as the post-logout redirect URI, after the public origin.</summary>
     public const string PostLogoutRedirectPath = "/login";
 
@@ -39,6 +45,7 @@ public static class AuthCenterDefaults
     internal const string SubjectClaim = "sub";
     internal const string NameClaim = "name";
     internal const string EmailClaim = "email";
+    internal const string EmailVerifiedClaim = "email_verified";
     internal const string RefreshTokenName = "refresh_token";
     internal const string IdTokenName = "id_token";
     internal const string SessionIdClaim = "sid";

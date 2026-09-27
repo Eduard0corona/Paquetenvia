@@ -24,6 +24,8 @@ tags:
 - name: Drivers
 - name: Finance
 - name: Custody
+- name: Onboarding
+- name: Platform
 paths:
   /quotes:
     post:
@@ -916,6 +918,179 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /onboarding/organizations:
+    post:
+      tags:
+      - Onboarding
+      operationId: createOnboardingOrganization
+      description: >-
+        REG-SELF-SERVICE-ORGANIZATION. An authenticated, active Paquetenvia user whose
+        session carries email_verified=true (AUTH-EMAIL-VERIFIED-REQUIRED) creates its
+        own organization. No X-Organization-Id: the caller may have no organization yet.
+        BUSINESS is created ACTIVE and the creator becomes BUSINESS_ADMIN; ALLY is
+        created PENDING_APPROVAL and the creator becomes ALLY_ADMIN of an organization
+        that grants no access until a PLATFORM_ADMIN approves it (IDENTITY-ORG-ACTIVE-REQUIRED).
+        REG-ONE-ORGANIZATION-PER-PERSON - a user has at most one self-created
+        organization that is not CLOSED (PENDING_APPROVAL or ACTIVE, either type),
+        enforced by the database under concurrency; a second one is 409
+        ORGANIZATION_LIMIT_REACHED; a rejected ALLY is CLOSED and frees the slot;
+        memberships an administrator adds are not creations and do not count.
+        ONBOARDING-IDEMPOTENCY-DERIVED-ID - the organization id is derived from the
+        user and the Idempotency-Key; repeating the key with the same request returns
+        201 with the original organization, and with another request 409
+        IDEMPOTENCY_CONFLICT. The organization, the creator membership and the
+        ORGANIZATION_SELF_REGISTERED audit row are written in one transaction.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOnboardingOrganizationRequest'
+      responses:
+        '201':
+          description: Created, or the original organization for a replayed Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingOrganization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: >-
+            IDEMPOTENCY_CONFLICT for a reused key with another request;
+            ORGANIZATION_LIMIT_REACHED when the caller already has a self-created
+            organization that is not CLOSED.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/OnboardingConflictProblem'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /me/organization-applications:
+    get:
+      tags:
+      - Onboarding
+      operationId: listMyOrganizationApplications
+      description: >-
+        REG-OWN-APPLICATIONS-ENDPOINT. Read-only list of the BUSINESS and ALLY
+        organizations the caller administers (ACTIVE BUSINESS_ADMIN or ALLY_ADMIN
+        membership), whatever the organization status, so a PENDING_APPROVAL or CLOSED
+        ALLY is visible to its creator. It grants no access: /me/organization-contexts
+        and every authorization check are unchanged. No X-Organization-Id.
+      parameters: []
+      responses:
+        '200':
+          description: The caller's organization applications, newest first (at most 50)
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 50
+                items:
+                  $ref: '#/components/schemas/OrganizationApplication'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /platform/ally-applications:
+    get:
+      tags:
+      - Platform
+      operationId: listPendingAllyOrganizations
+      description: >-
+        REG-ALLY-APPROVAL-PATH. The ALLY organizations waiting for approval
+        (PENDING_APPROVAL), oldest first. Only a PLATFORM_ADMIN member with a satisfied
+        MFA challenge, operating from an ACTIVE organization of type PLATFORM selected
+        with X-Organization-Id; anyone else receives 403 (MFA_REQUIRED when only the
+        second factor is missing) and reads nothing.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: Pending ALLY organizations
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 200
+                items:
+                  $ref: '#/components/schemas/PendingAllyOrganization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /platform/ally-applications/{organizationId}/decision:
+    post:
+      tags:
+      - Platform
+      operationId: decideAllyOrganization
+      description: >-
+        REG-ALLY-APPROVAL-PATH. A PLATFORM_ADMIN with MFA, from an ACTIVE PLATFORM
+        organization, approves or rejects a PENDING_APPROVAL ALLY. APPROVE makes it
+        ACTIVE and only that (REG-ALLY-APPROVAL-ACTIVATE-ONLY - no ally relationship is
+        created; relationships belong to ALY-00x). REJECT makes it CLOSED
+        (REG-ALLY-REJECTION-CLOSED); its creator may apply again with a new organization.
+        One audit row (ALLY_ORGANIZATION_APPROVED or ALLY_ORGANIZATION_REJECTED) is written
+        in the platform organization and one in the ALLY organization, in the same
+        transaction. Repeating the decision already taken returns it again without new
+        audit rows; any other state is 409 ALLY_DECISION_CONFLICT.
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: organizationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AllyDecisionRequest'
+      responses:
+        '200':
+          description: The ALLY organization and its resulting status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllyDecision'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          description: The ALLY is in a state this decision cannot change.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/AllyDecisionConflictProblem'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /auth/login:
     servers:
     - url: /
@@ -931,9 +1106,12 @@ paths:
         Starts the AuthCenter authorization code flow with PKCE S256 (GATE-002-BFF-001).
         Anonymous. The redirect URI is always the configured public origin plus
         /signin-authcenter, never derived from Host or X-Forwarded-* headers. A
-        return_url that is not a local absolute path falls back to "/". Nothing is
-        provisioned at sign-in; first access is by prior invitation
-        (AUTH-FIRST-LOGIN-INVITATION). mfa=required starts an MFA step-up
+        return_url that is not a local absolute path falls back to "/". Registration is
+        open (AUTH-OPEN-REGISTRATION, superseding AUTH-FIRST-LOGIN-INVITATION): the first
+        sign-in of an unknown subject whose ID token asserts email_verified=true creates its
+        Paquetenvia user, exactly once and with no memberships; sign-in never creates
+        organizations or memberships (onboarding does, POST /onboarding/organizations).
+        mfa=required starts an MFA step-up
         (AUTH-001-MFA-STEP-UP): the authorization request carries
         acr_values=urn:authcenter:acr:mfa and the callback accepts only an ID token
         whose acr is urn:authcenter:acr:mfa or urn:authcenter:acr:phr and whose amr
@@ -977,7 +1155,12 @@ paths:
         with exact issuer and audience. On success it stores the session ticket
         server-side and sets only an opaque session cookie (BFF-SESSION-STORE-POSTGRESQL).
         After state, correlation and iss validate, error=access_denied redirects to
-        /login?error=access_denied (AUTH-001-ACCESS-DENIED-MESSAGE); every other failure
+        /login?error=access_denied (AUTH-001-ACCESS-DENIED-MESSAGE). A valid ID token
+        without exactly one email_verified claim equal to true redirects to
+        /login?error=email_not_verified without a session, and no user is created or
+        linked (AUTH-EMAIL-VERIFIED-REQUIRED); email_verified is kept in the server-side
+        ticket. Otherwise the first sign-in of an unknown subject registers its user once
+        (AUTH-OPEN-REGISTRATION, security.register_identity_subject). Every other failure
         redirects to the generic /login?error=signin_failed. No protocol detail
         (error_description) is forwarded.
       security: []
@@ -1007,8 +1190,9 @@ paths:
           description: >-
             Success redirects to the validated return_url and sets __Host-Paquetenvia.Session
             (Secure, HttpOnly, SameSite=Lax, Path=/, no Domain, session lifetime);
-            access_denied redirects to /login?error=access_denied and any other failure
-            to /login?error=signin_failed, both without a session.
+            access_denied redirects to /login?error=access_denied, an unverified email to
+            /login?error=email_not_verified and any other failure to
+            /login?error=signin_failed, all without a session.
   /auth/session:
     servers:
     - url: /
@@ -2896,8 +3080,9 @@ components:
       description: >-
         AUTH-001 BFF session view (GATE-002-BFF-001). Property names follow the
         AuthCenter.Client BFF contract. authorized is false for an authenticated
-        subject without an active Paquetenvia identity (no invitation accepted yet,
-        AUTH-FIRST-LOGIN-INVITATION, or suspended).
+        subject without an active Paquetenvia identity (suspended or disabled). A
+        newly registered user is authorized with no organization contexts until it
+        completes onboarding (AUTH-OPEN-REGISTRATION).
       additionalProperties: false
       required:
       - authenticated
@@ -3447,6 +3632,184 @@ components:
       - BUSINESS_200_499
       - BUSINESS_500_PLUS
       - CUSTOM
+    CreateOnboardingOrganizationRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - organization_type
+      - legal_name
+      - display_name
+      properties:
+        organization_type:
+          type: string
+          enum:
+          - BUSINESS
+          - ALLY
+        legal_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: No leading or trailing whitespace and no control characters.
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: No leading or trailing whitespace and no control characters.
+    OnboardingOrganization:
+      type: object
+      required:
+      - organization_id
+      - organization_type
+      - legal_name
+      - display_name
+      - status
+      - role
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        organization_type:
+          type: string
+          enum:
+          - BUSINESS
+          - ALLY
+        legal_name:
+          type: string
+        display_name:
+          type: string
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - PENDING_APPROVAL
+          - SUSPENDED
+          - CLOSED
+        role:
+          type: string
+          enum:
+          - BUSINESS_ADMIN
+          - ALLY_ADMIN
+    OnboardingConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - IDEMPOTENCY_CONFLICT
+          - ORGANIZATION_LIMIT_REACHED
+    OrganizationApplication:
+      type: object
+      required:
+      - organization_id
+      - organization_type
+      - display_name
+      - status
+      - created_at
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        organization_type:
+          type: string
+          enum:
+          - BUSINESS
+          - ALLY
+        display_name:
+          type: string
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - PENDING_APPROVAL
+          - SUSPENDED
+          - CLOSED
+        created_at:
+          type: string
+          format: date-time
+    PendingAllyOrganization:
+      type: object
+      required:
+      - organization_id
+      - legal_name
+      - display_name
+      - created_at
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        legal_name:
+          type: string
+        display_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AllyDecisionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - decision
+      properties:
+        decision:
+          type: string
+          enum:
+          - APPROVE
+          - REJECT
+    AllyDecision:
+      type: object
+      required:
+      - organization_id
+      - status
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - CLOSED
+    AllyDecisionConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - ALLY_DECISION_CONFLICT
     OrganizationContext:
       type: object
       required:
@@ -4707,6 +5070,11 @@ x-capability-matrix:
     getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     getRouteFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
     reconcileCod: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
+  platform_operations_decision: REG-ALLY-APPROVAL-PATH (project owner, 2026-09-27) - PLATFORM_ADMIN members with a
+    satisfied MFA challenge, operating from an ACTIVE organization of type PLATFORM selected with X-Organization-Id
+  platform_operations:
+    listPendingAllyOrganizations: [PLATFORM_ADMIN]
+    decideAllyOrganization: [PLATFORM_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
