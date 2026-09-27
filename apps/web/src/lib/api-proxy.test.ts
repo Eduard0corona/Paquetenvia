@@ -58,7 +58,7 @@ describe("API same-origin proxy", () => {
     const source = readFileSync("next.config.ts", "utf8");
     expect(source).toContain("buildApiProxyRewrites(");
     expect(source).toContain("process.env.PAQUETENVIA_API_PROXY_ORIGIN");
-    expect(source).not.toContain("NEXT_PUBLIC_API_PROXY");
+    expect(source).not.toMatch(/NEXT_PUBLIC_[A-Z_]*PROXY/);
     expect(source).toContain("assertSameOriginApiForBff(");
   });
 });
