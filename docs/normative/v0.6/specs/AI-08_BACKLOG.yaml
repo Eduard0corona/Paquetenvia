@@ -1216,8 +1216,9 @@ items:
       (Incidents:MaximumOccurrenceAgeHours, default 72 h, 1-72 h, only downward; Incidents:MaximumOccurrenceSkewMinutes, default 5
       min, 0-60 min); an older report is 409 OFFLINE_OPERATION_EXPIRED before the incident service, one beyond the
       tolerance stays 409 INVALID_REQUEST
-    extension_point: the BFF session purge joins the cleanup executor with its own migration once identity.bff_sessions
-      exists
+    extension_point: the BFF session purge joins the cleanup executor with its own Custody migration
+      (20260927000400_AddBffSessionPurge, security.purge_bff_sessions(integer)) after the Identity lane creates
+      identity.bff_sessions (BFF-SESSION-TABLE-SHAPE)
   acceptance_criteria:
   - expired idempotency keys are deleted in bounded batches
   - expired upload sessions are marked EXPIRED and quarantined objects follow retention policy

@@ -35,9 +35,13 @@ Ambas devuelven sólo un conteo `integer`: ningún identificador de tenant, llav
 sesión cruza la frontera. AI-06 no cambia (como en ADR-034, la función la instala
 el lane del módulo); AI-18 recoge el rol, los grants y las aserciones 13–16.
 
-Punto de extensión: la purga de sesiones BFF (`BFF-SESSION-STORE-POSTGRESQL`) se
-añadirá al mismo rol con su propia migración cuando exista
-`identity.bff_sessions`; esta migración no cambia una vez aplicada.
+Purga de sesiones BFF (`BFF-SESSION-TABLE-SHAPE`): la migración de Custody
+`20260927000400_AddBffSessionPurge`, posterior a esta y al lane de Identity que crea
+`identity.bff_sessions`, agrega al mismo rol `security.purge_bff_sessions(integer)`
+(lote 1–1000; borra solo filas revocadas o con `expires_at <= now`), `USAGE` sobre
+`identity`, `SELECT (session_key_hash, expires_at, revoked_at)` y `DELETE` sobre la
+tabla. Esta migración no cambió; su verificación exacta sigue describiendo el estado
+previo a la purga BFF. Ver `auth-001-authcenter-bff.md` §4.
 
 ## Jobs del Worker
 
@@ -58,6 +62,10 @@ OperationalCleanup:ProofUploadSessions:Enabled           false
 OperationalCleanup:ProofUploadSessions:PollIntervalSeconds 60 (1–3600)
 OperationalCleanup:ProofUploadSessions:BatchSize         500  (1–1000)
 OperationalCleanup:ProofUploadSessions:MaxBatchesPerCycle 10  (1–100)
+OperationalCleanup:BffSessions:Enabled                   false
+OperationalCleanup:BffSessions:PollIntervalSeconds       300  (1–3600)
+OperationalCleanup:BffSessions:BatchSize                 500  (1–1000)
+OperationalCleanup:BffSessions:MaxBatchesPerCycle        10   (1–100)
 ```
 
 Habilitar cualquiera exige `ConnectionStrings:PaqueteriaWorker`. Un dry-run es una

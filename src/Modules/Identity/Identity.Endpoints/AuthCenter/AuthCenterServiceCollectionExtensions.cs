@@ -30,20 +30,30 @@ internal static class AuthCenterServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<AuthCenterOptions>>(provider => new AuthCenterOptionsValidator(
             environment,
+            configuration,
             provider.GetRequiredService<IOptions<IdentityAuthenticationOptions>>()));
 
-        // Single-instance default. A shared IDistributedCache registered before this call wins.
+        // Logout-token replay protection and the Memory session store use this cache. A shared
+        // IDistributedCache registered before this call wins.
         services.AddDistributedMemoryCache();
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<AuthCenterTicketStore>();
+        services.AddSingleton<PostgreSqlAuthCenterTicketStore>();
         services.AddSingleton<AuthCenterCookieEvents>();
         services.AddSingleton<AuthCenterOpenIdConnectEvents>();
         services.AddSingleton<AuthCenterRevocationClient>();
         services.AddSingleton<AuthCenterEndSession>();
         services.AddSingleton<AuthCenterSessionReplacement>();
         services.AddSingleton<AuthCenterBackchannelLogout>();
-        // Back-channel logout markers share the ticket store's cache; the PostgreSQL session table
-        // (BFF-SESSION-TABLE-SHAPE) replaces this registration without touching the endpoints.
-        services.TryAddSingleton<IAuthCenterSessionTerminationStore, DistributedCacheAuthCenterSessionTerminationStore>();
+        // Back-channel logout follows the session store: the PostgreSQL store revokes rows in
+        // identity.bff_sessions (BFF-SESSION-TABLE-SHAPE); the Memory store keeps cache markers.
+        services.AddSingleton<DistributedCacheAuthCenterSessionTerminationStore>();
+        services.AddSingleton<PostgreSqlAuthCenterSessionTerminationStore>();
+        services.TryAddSingleton<IAuthCenterSessionTerminationStore>(provider =>
+            provider.GetRequiredService<IOptions<AuthCenterOptions>>().Value.SessionStore ==
+                AuthCenterSessionStoreKind.PostgreSql
+                ? provider.GetRequiredService<PostgreSqlAuthCenterSessionTerminationStore>()
+                : provider.GetRequiredService<DistributedCacheAuthCenterSessionTerminationStore>());
 
         services.TryAddTransient<CookieAuthenticationHandler>();
         services.TryAddTransient<OpenIdConnectHandler>();
@@ -86,9 +96,11 @@ internal static class AuthCenterServiceCollectionExtensions
             });
 
         services.AddOptions<CookieAuthenticationOptions>(AuthCenterDefaults.CookieScheme)
-            .Configure<AuthCenterTicketStore, IOptions<AuthCenterOptions>>((cookie, store, options) =>
+            .Configure<IServiceProvider, IOptions<AuthCenterOptions>>((cookie, provider, options) =>
             {
-                cookie.SessionStore = store;
+                cookie.SessionStore = options.Value.SessionStore == AuthCenterSessionStoreKind.PostgreSql
+                    ? provider.GetRequiredService<PostgreSqlAuthCenterTicketStore>()
+                    : provider.GetRequiredService<AuthCenterTicketStore>();
                 cookie.ExpireTimeSpan = TimeSpan.FromMinutes(options.Value.SessionLifetimeMinutes);
             });
 
@@ -155,6 +167,7 @@ internal static class AuthCenterServiceCollectionExtensions
 
     private sealed class AuthCenterOptionsValidator(
         IHostEnvironment environment,
+        IConfiguration configuration,
         IOptions<IdentityAuthenticationOptions> identity) : IValidateOptions<AuthCenterOptions>
     {
         public ValidateOptionsResult Validate(string? name, AuthCenterOptions options)
@@ -164,7 +177,12 @@ internal static class AuthCenterServiceCollectionExtensions
                 return ValidateOptionsResult.Skip;
             }
 
-            var failures = options.Validate(environment).ToArray();
+            var failures = options.Validate(environment)
+                .Concat(options.SessionStore == AuthCenterSessionStoreKind.PostgreSql &&
+                        string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria"))
+                    ? ["AuthCenter:SessionStore=PostgreSql requires ConnectionStrings:Paqueteria."]
+                    : Array.Empty<string>())
+                .ToArray();
             return failures.Length == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
         }
     }

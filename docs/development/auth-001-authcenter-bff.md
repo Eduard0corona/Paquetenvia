@@ -17,8 +17,8 @@ roles privilegiados, CORS cerrado, secretos en secret manager, sin tokens en log
    un back-sync `MAIN_BACKSYNC` certificado las trae a `development`.
 3. La autorización de negocio sigue en Paquetenvia (`organizations.organization_memberships` + RLS).
    AuthCenter solo autentica, y el `sub` validado alimenta `identity.users.identity_subject`.
-4. Las sesiones BFF irán a una tabla PostgreSQL (cambio normativo pendiente, fuera de este PR).
-   Mientras tanto el ticket queda en memoria detrás de `ITicketStore`/`IDistributedCache` (§4).
+4. Las sesiones BFF viven en la tabla PostgreSQL `identity.bff_sessions`
+   (`BFF-SESSION-TABLE-SHAPE`, implementada en `feature/bff-session-table`, §4).
 5. Primer ingreso por invitación previa; se implementa en un PR aparte (§8).
 
 `AuthCenter.Client` no está publicado en NuGet. Por eso se replica su contrato BFF con el handler
@@ -102,8 +102,25 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
   con Data Protection.
 - El ticket (identidad mínima con `sub` y `sid`, secreto CSRF, momento de inicio en milisegundos,
   refresh token e ID token) se protege con el key ring de la plataforma
-  (`DataProtection:Provider=PostgreSql` en ScaleReady) y se guarda en `IDistributedCache`. El ID
-  token solo se usa como `id_token_hint` al cerrar sesión (§14.1); el access token no se guarda.
+  (`DataProtection:Provider=PostgreSql` para varias réplicas) y se guarda en
+  `identity.bff_sessions`. El ID token solo se usa como `id_token_hint` al cerrar sesión (§14.1);
+  el access token no se guarda.
+- Tabla (`AuthCenter:SessionStore=PostgreSql`, valor por defecto; exige
+  `ConnectionStrings:Paqueteria`): clave primaria = SHA-256 de los bytes UTF-8 de la clave opaca
+  (nunca la clave ni la cookie), `identity_subject`, `authcenter_sid`, `ticket_ciphertext`,
+  `created_at` (reloj de la BD), `expires_at` (el del ticket, máximo 24 h) y `revoked_at`. Es
+  previa al tenant: FORCE RLS sin política, sin columnas de organización. `paqueteria_app` no
+  tiene grants sobre ella; la API asume `paqueteria_app` y llama las funciones
+  `security.create_bff_session`, `security.resolve_bff_session(bytea)` y
+  `security.revoke_bff_session` (por clave, por `sid` y por `sub` anterior a un momento), dueñas
+  de `paqueteria_session_executor NOLOGIN BYPASSRLS`. Revocar borra el ticket de inmediato; una
+  clave desconocida, revocada o vencida resuelve `NULL` y la petición es anónima (401). Un fallo
+  técnico de PostgreSQL responde 503, como la resolución de identidad.
+- Migraciones: lane de Identity `20260927000400_AddBffSessionStore` (tabla si falta, rol, grants,
+  funciones; adopta la tabla de AI-06 solo si es exactamente canónica) y lane de Custody
+  `20260927000400_AddBffSessionPurge` (purga por `paqueteria_cleanup_executor`). Ambas fallan
+  cerrado en `Down`. El job del Worker `OperationalCleanup:BffSessions` (desactivado por defecto)
+  borra en lotes las filas revocadas o vencidas.
 - Cada inicio de sesión exitoso reemplaza la sesión previa del navegador: se borra el ticket
   anterior y se emite una clave nueva (§14.3).
 - La vida es fija (`AuthCenter:SessionLifetimeMinutes`, 480 por defecto, máximo 1440), sin
@@ -111,12 +128,11 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
 - Las cookies de correlación y nonce del handler OIDC también usan el prefijo `__Host-`, `Secure`,
   `HttpOnly` y `SameSite=Lax`, porque AuthCenter devuelve el código por query en un GET de nivel
   superior.
-- **Limitación single-instance.** La caché por defecto es `MemoryDistributedCache`. Con más de
-  una réplica, una petición que llega a otra instancia no encuentra el ticket y responde 401
-  (falla cerrado, y el usuario vuelve a iniciar sesión). **Decisión del owner:** las sesiones irán
-  a una tabla PostgreSQL, lo que exige un cambio normativo (AI-06/AI-18) que no forma parte de este
-  PR. El almacenamiento ya está detrás de interfaces (`ITicketStore` → `AuthCenterTicketStore` →
-  `IDistributedCache`), así que el cambio sustituye la implementación sin tocar endpoints ni web.
+- Las sesiones sobreviven reinicios y sirven en cualquier réplica que comparta la BD y el key
+  ring. `AuthCenter:SessionStore=Memory` conserva el almacén anterior (`AuthCenterTicketStore` →
+  `IDistributedCache`, una sola réplica) como interruptor de rollback; endpoints y web no cambian.
+- `RenewAsync` nunca ocurre (vida fija, `ShouldRenew=false` y clave nueva en cada inicio de
+  sesión); si ocurriera, el almacén PostgreSQL revoca la clave y registra EventId 4105.
 
 ## 5. CSRF y mismo origen
 
@@ -335,6 +351,13 @@ Logout, back-channel, step-up y `access_denied` (`AuthCenterLogoutAndStepUpTests
 Unitarias (`AuthCenterLogoutAndStepUpUnitTests.cs`): construcción de la URL de end-session,
 validación de `acr`/`amr`, detección de "solo falta MFA" y el almacén de terminaciones.
 
+Almacén PostgreSQL (`BFF-SESSION-TABLE-SHAPE`): `BffSessionStorePostgreSqlContractTests` (grants
+exactos, sin acceso directo de runtime, resolución por hash, revocación por clave, `sid` y `sub`
+anterior a un momento, purga solo de filas muertas, sin RLS tenant, migraciones up/down y
+upgrade de una instalación previa) y `AuthCenterPostgreSqlSessionStoreTests` (el login crea la
+fila, el logout la revoca, un back-channel en una instancia termina la sesión en otra y la sesión
+sobrevive a un reinicio).
+
 Web (`vitest`): estrategia de credenciales, parser de sesión, `return_url` local, logout
 (`endSessionUrl`, navegación con `window.location.assign`), enlace de step-up, detección de
 `MFA_REQUIRED`, mensajes de `/login`, instalación de sesión y rewrites.
@@ -342,7 +365,9 @@ Web (`vitest`): estrategia de credenciales, parser de sesión, `return_url` loca
 ## 13. Rollback
 
 Poner `Authentication:Provider` en `Disabled` o `Mock` (solo entornos no productivos) y quitar
-`NEXT_PUBLIC_AUTH_MODE`. No hay migraciones. Para retirar el código, revertir el PR. El cliente en
+`NEXT_PUBLIC_AUTH_MODE`. Para volver solo del almacén PostgreSQL, `AuthCenter:SessionStore=Memory`
+(una réplica); las migraciones de sesiones no se revierten (`Down` falla cerrado) y
+`OperationalRollbackSql` revoca el `EXECUTE` de `paqueteria_app`. Para retirar el código, revertir el PR. El cliente en
 AuthCenter y el secreto se conservan durante una ventana de solapamiento; si hubo exposición, se
 revocan las sesiones y se rota el secreto.
 
@@ -386,14 +411,18 @@ código de AuthCenter (discovery, `/oauth/logout`, `GenerateLogoutToken`, `acr_v
   sin `nonce`, `jti` presente y no visto (se recuerda hasta `exp` + 5 min), y `sid` o `sub`. Un
   `kid` desconocido pide refrescar el discovery para el siguiente reintento. El log solo registra
   el tipo de rechazo (EventId 4103/4104), nunca tokens, `sub` ni `sid`.
-- Efecto: `IAuthCenterSessionTerminationStore`. La implementación por defecto
-  (`DistributedCacheAuthCenterSessionTerminationStore`) guarda en `IDistributedCache`, con claves
-  SHA-256, una marca por `sid` durante `SessionLifetimeMinutes`; con solo `sub` guarda el momento
-  (ms) y termina las sesiones iniciadas antes. `ValidatePrincipal` consulta el almacén en cada
-  petición; una sesión terminada se rechaza y se borran ticket y cookie.
-- Tabla PostgreSQL futura (`BFF-SESSION-TABLE-SHAPE`): implementará la misma interfaz con una
-  columna `authcenter_sid` y borrará sus filas en lugar de guardar marcas; endpoints y web no
-  cambian.
+- Efecto: `IAuthCenterSessionTerminationStore`. Con el almacén PostgreSQL
+  (`PostgreSqlAuthCenterSessionTerminationStore`) un `sid` revoca sus filas
+  (`security.revoke_bff_session(text)`) y un token solo con `sub` revoca las filas de ese `sub`
+  creadas hasta el momento de recepción (`security.revoke_bff_session(text,timestamptz)`, acotado
+  al reloj de la BD); todas las réplicas rechazan la sesión en su siguiente petición. Con
+  `SessionStore=Memory`, `DistributedCacheAuthCenterSessionTerminationStore` guarda marcas en
+  `IDistributedCache` como antes.
+- El registro anti-replay del `jti` sigue en `IDistributedCache` (memoria por réplica) hasta
+  `exp` + 5 min en ambos modos: persistirlo en PostgreSQL necesita un objeto que
+  `BFF-SESSION-TABLE-SHAPE` no cubre (pregunta abierta `BFF-LOGOUT-JTI-PERSISTENCE`). Un replay
+  hacia otra réplica dentro de esa ventana revocaría otra vez las sesiones del mismo `sid` (ya
+  revocadas) o, con solo `sub`, las creadas después del primer envío.
 - Ingress del piloto: `/auth` ya va a la API (`PILOT-SAME-ORIGIN-ROUTING`); debe aceptar un POST
   sin `Origin` hacia `/auth/backchannel-logout`.
 

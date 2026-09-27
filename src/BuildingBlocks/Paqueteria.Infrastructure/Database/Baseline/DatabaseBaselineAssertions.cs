@@ -21,6 +21,7 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_maintenance",
         "paqueteria_lifecycle_executor",
         "paqueteria_cleanup_executor",
+        "paqueteria_session_executor",
     ];
 
     private static readonly string[] SensitiveFunctions =
@@ -54,6 +55,7 @@ public sealed class DatabaseBaselineAssertions
         "pilot operational and outbox purge indexes (AI06-PILOT-INDEXES)",
         "lifecycle executor boundary (ADR-034)",
         "cleanup executor boundary (OPS-003-CLEANUP-ROLE)",
+        "BFF session executor boundary (BFF-SESSION-TABLE-SHAPE)",
         "real default-privilege inheritance probes",
     });
 
@@ -159,10 +161,16 @@ public sealed class DatabaseBaselineAssertions
                   SELECT 'paqueteria_cleanup_executor',true
                   WHERE pg_catalog.to_regrole('paqueteria_cleanup_executor') IS NOT NULL
                      OR pg_catalog.to_regprocedure('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)') IS NOT NULL
-                     OR pg_catalog.to_regprocedure('security.expire_proof_upload_sessions(integer)') IS NOT NULL)
+                     OR pg_catalog.to_regprocedure('security.expire_proof_upload_sessions(integer)') IS NOT NULL),
+                -- BFF-SESSION-TABLE-SHAPE: the same rule for installations that predate the session executor.
+                session_store(name,bypass_rls) AS (
+                  SELECT 'paqueteria_session_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_session_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.resolve_bff_session(bytea)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
                 FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
-                      UNION ALL SELECT name,bypass_rls FROM cleanup) expected
+                      UNION ALL SELECT name,bypass_rls FROM cleanup
+                      UNION ALL SELECT name,bypass_rls FROM session_store) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
@@ -215,6 +223,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertCleanupExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertSessionExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -402,7 +413,19 @@ public sealed class DatabaseBaselineAssertions
               SELECT signature,'paqueteria_cleanup_executor'
               FROM (VALUES
                 ('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)'),
-                ('security.expire_proof_upload_sessions(integer)')) cleanup(signature)
+                ('security.expire_proof_upload_sessions(integer)'),
+                -- BFF-SESSION-TABLE-SHAPE: the BFF session purge, installed by the Custody lane after OPS-003.
+                ('security.purge_bff_sessions(integer)')) cleanup(signature)
+              WHERE to_regprocedure(signature) IS NOT NULL
+              UNION ALL
+              -- BFF-SESSION-TABLE-SHAPE: installed by the Identity session-store lane after the baseline.
+              SELECT signature,'paqueteria_session_executor'
+              FROM (VALUES
+                ('security.create_bff_session(bytea,text,text,bytea,timestamp with time zone)'),
+                ('security.resolve_bff_session(bytea)'),
+                ('security.revoke_bff_session(bytea)'),
+                ('security.revoke_bff_session(text)'),
+                ('security.revoke_bff_session(text,timestamp with time zone)')) session_store(signature)
               WHERE to_regprocedure(signature) IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
@@ -416,7 +439,7 @@ public sealed class DatabaseBaselineAssertions
             JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
             JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
-                'paqueteria_lifecycle_executor','paqueteria_cleanup_executor')
+                'paqueteria_lifecycle_executor','paqueteria_cleanup_executor','paqueteria_session_executor')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -695,7 +718,8 @@ public sealed class DatabaseBaselineAssertions
             SELECT 'cleanup function is missing: ' || signature
             FROM (VALUES
               ('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)'),
-              ('security.expire_proof_upload_sessions(integer)')) expected(signature)
+              ('security.expire_proof_upload_sessions(integer)'),
+              ('security.purge_bff_sessions(integer)')) expected(signature)
             WHERE pg_catalog.to_regprocedure(signature) IS NULL
             """,
             cancellationToken).ConfigureAwait(false);
@@ -712,7 +736,10 @@ public sealed class DatabaseBaselineAssertions
     /// <c>platform</c> and <c>custody</c>, SELECT on five key columns plus DELETE on
     /// <c>platform.idempotency_keys</c>, SELECT(id,status,expires_at) plus UPDATE(status,updated_at) on
     /// <c>custody.proof_upload_sessions</c>, inherits nothing, and its two functions are pinned
-    /// SECURITY DEFINERs executable by <c>paqueteria_worker</c> only.
+    /// SECURITY DEFINERs executable by <c>paqueteria_worker</c> only. Once the BFF session purge exists
+    /// (BFF-SESSION-TABLE-SHAPE), the boundary widens by exactly USAGE on <c>identity</c>,
+    /// SELECT(session_key_hash,expires_at,revoked_at) and DELETE on <c>identity.bff_sessions</c> and that
+    /// third function.
     /// </summary>
     private static async Task AssertCleanupExecutorBoundaryAsync(
         NpgsqlConnection connection,
@@ -728,23 +755,35 @@ public sealed class DatabaseBaselineAssertions
             WITH executor AS (
               SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_cleanup_executor'
             ),
-            expected(table_schema,table_name,column_name,privilege_type) AS (VALUES
-              ('platform','idempotency_keys','owner_org_id','SELECT'),
-              ('platform','idempotency_keys','scope','SELECT'),
-              ('platform','idempotency_keys','idempotency_key','SELECT'),
-              ('platform','idempotency_keys','created_at','SELECT'),
-              ('platform','idempotency_keys','expires_at','SELECT'),
-              ('custody','proof_upload_sessions','id','SELECT'),
-              ('custody','proof_upload_sessions','status','SELECT'),
-              ('custody','proof_upload_sessions','expires_at','SELECT'),
-              ('custody','proof_upload_sessions','status','UPDATE'),
-              ('custody','proof_upload_sessions','updated_at','UPDATE')),
+            bff AS (
+              SELECT 1 WHERE pg_catalog.to_regprocedure('security.purge_bff_sessions(integer)') IS NOT NULL
+            ),
+            expected(table_schema,table_name,column_name,privilege_type) AS (
+              SELECT * FROM (VALUES
+                ('platform','idempotency_keys','owner_org_id','SELECT'),
+                ('platform','idempotency_keys','scope','SELECT'),
+                ('platform','idempotency_keys','idempotency_key','SELECT'),
+                ('platform','idempotency_keys','created_at','SELECT'),
+                ('platform','idempotency_keys','expires_at','SELECT'),
+                ('custody','proof_upload_sessions','id','SELECT'),
+                ('custody','proof_upload_sessions','status','SELECT'),
+                ('custody','proof_upload_sessions','expires_at','SELECT'),
+                ('custody','proof_upload_sessions','status','UPDATE'),
+                ('custody','proof_upload_sessions','updated_at','UPDATE')) ops003(a,b,c,d)
+              UNION ALL
+              SELECT * FROM (VALUES
+                ('identity','bff_sessions','session_key_hash','SELECT'),
+                ('identity','bff_sessions','expires_at','SELECT'),
+                ('identity','bff_sessions','revoked_at','SELECT')) bff_purge(a,b,c,d)
+              WHERE EXISTS (SELECT 1 FROM bff)),
             actual AS (
               SELECT table_schema,table_name,column_name,privilege_type
               FROM information_schema.column_privileges
               WHERE grantee='paqueteria_cleanup_executor'),
-            expected_tables(table_schema,table_name,privilege_type) AS (VALUES
-              ('platform','idempotency_keys','DELETE')),
+            expected_tables(table_schema,table_name,privilege_type) AS (
+              SELECT 'platform','idempotency_keys','DELETE'
+              UNION ALL
+              SELECT 'identity','bff_sessions','DELETE' WHERE EXISTS (SELECT 1 FROM bff)),
             actual_tables AS (
               SELECT table_schema,table_name,privilege_type
               FROM information_schema.table_privileges
@@ -753,7 +792,9 @@ public sealed class DatabaseBaselineAssertions
               ('security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)',
                'search_path=pg_catalog, platform, pg_temp'),
               ('security.expire_proof_upload_sessions(integer)',
-               'search_path=pg_catalog, custody, pg_temp')),
+               'search_path=pg_catalog, custody, pg_temp'),
+              ('security.purge_bff_sessions(integer)',
+               'search_path=pg_catalog, identity, pg_temp')),
             installed AS (
               SELECT fn.signature,fn.search_path,p.oid,p.prosecdef,p.proconfig,p.prosrc
               FROM fn JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn.signature))
@@ -779,7 +820,8 @@ public sealed class DatabaseBaselineAssertions
             FROM pg_catalog.pg_namespace n CROSS JOIN executor
             WHERE n.nspname=ANY(@schemas::text[])
               AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
-                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM (n.nspname IN ('platform','custody')))
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM
+                  (n.nspname IN ('platform','custody') OR (n.nspname='identity' AND EXISTS (SELECT 1 FROM bff))))
             UNION ALL
             SELECT 'cleanup executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
             FROM pg_catalog.pg_auth_members m JOIN executor ON m.member=executor.oid
@@ -803,8 +845,171 @@ public sealed class DatabaseBaselineAssertions
             FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
             UNION ALL
             SELECT 'cleanup functions are only partially installed'
-            FROM (SELECT count(*) AS present FROM installed) c
+            FROM (SELECT count(*) AS present FROM installed
+                  WHERE signature<>'security.purge_bff_sessions(integer)') c
             WHERE c.present=1
+            UNION ALL
+            SELECT 'BFF session purge exists without the OPS-003 cleanup functions'
+            FROM bff
+            WHERE (SELECT count(*) FROM installed WHERE signature<>'security.purge_bff_sessions(integer)')<>2
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// BFF-SESSION-TABLE-SHAPE lane contract: after the Identity session-store migration (and after any
+    /// E-002 temporary grant is revoked) the role, the table and the five functions must exist and satisfy
+    /// the exact executor boundary.
+    /// </summary>
+    public static async Task AssertSessionExecutorInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'session executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_session_executor') IS NULL
+            UNION ALL
+            SELECT 'BFF session table is missing'
+            WHERE pg_catalog.to_regclass('identity.bff_sessions') IS NULL
+            UNION ALL
+            SELECT 'BFF session function is missing: ' || signature
+            FROM (VALUES
+              ('security.create_bff_session(bytea,text,text,bytea,timestamp with time zone)'),
+              ('security.resolve_bff_session(bytea)'),
+              ('security.revoke_bff_session(bytea)'),
+              ('security.revoke_bff_session(text)'),
+              ('security.revoke_bff_session(text,timestamp with time zone)')) expected(signature)
+            WHERE pg_catalog.to_regprocedure(signature) IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await AssertSessionExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
+    /// BFF-SESSION-TABLE-SHAPE: once the session executor exists it holds exactly USAGE on
+    /// <c>identity</c>, SELECT on the seven columns, INSERT on the six non-revocation columns and
+    /// UPDATE(ticket_ciphertext,revoked_at) of <c>identity.bff_sessions</c>, inherits nothing, and its five
+    /// functions are pinned SECURITY DEFINERs executable by <c>paqueteria_app</c> only. The table forces
+    /// RLS without any policy and grants nothing to the runtime roles or PUBLIC.
+    /// </summary>
+    private static async Task AssertSessionExecutorBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_session_executor'
+            ),
+            sessions AS (
+              SELECT c.oid,c.relrowsecurity,c.relforcerowsecurity
+              FROM pg_catalog.pg_class c
+              WHERE c.oid=pg_catalog.to_regclass('identity.bff_sessions')
+            ),
+            expected(table_schema,table_name,column_name,privilege_type) AS (VALUES
+              ('identity','bff_sessions','session_key_hash','SELECT'),
+              ('identity','bff_sessions','identity_subject','SELECT'),
+              ('identity','bff_sessions','authcenter_sid','SELECT'),
+              ('identity','bff_sessions','ticket_ciphertext','SELECT'),
+              ('identity','bff_sessions','created_at','SELECT'),
+              ('identity','bff_sessions','expires_at','SELECT'),
+              ('identity','bff_sessions','revoked_at','SELECT'),
+              ('identity','bff_sessions','session_key_hash','INSERT'),
+              ('identity','bff_sessions','identity_subject','INSERT'),
+              ('identity','bff_sessions','authcenter_sid','INSERT'),
+              ('identity','bff_sessions','ticket_ciphertext','INSERT'),
+              ('identity','bff_sessions','created_at','INSERT'),
+              ('identity','bff_sessions','expires_at','INSERT'),
+              ('identity','bff_sessions','ticket_ciphertext','UPDATE'),
+              ('identity','bff_sessions','revoked_at','UPDATE')),
+            actual AS (
+              SELECT table_schema,table_name,column_name,privilege_type
+              FROM information_schema.column_privileges
+              WHERE grantee='paqueteria_session_executor'),
+            fn(signature) AS (VALUES
+              ('security.create_bff_session(bytea,text,text,bytea,timestamp with time zone)'),
+              ('security.resolve_bff_session(bytea)'),
+              ('security.revoke_bff_session(bytea)'),
+              ('security.revoke_bff_session(text)'),
+              ('security.revoke_bff_session(text,timestamp with time zone)')),
+            installed AS (
+              SELECT fn.signature,p.oid,p.prosecdef,p.proconfig,p.prosrc
+              FROM fn JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(fn.signature))
+            SELECT 'missing session executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected session executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected session executor table grant: ' || table_schema || '.' || table_name || ':' || privilege_type
+            FROM information_schema.table_privileges
+            WHERE grantee='paqueteria_session_executor'
+            UNION ALL
+            SELECT 'session executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM (n.nspname='identity'))
+            UNION ALL
+            SELECT 'session executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m JOIN executor ON m.member=executor.oid
+            UNION ALL
+            SELECT 'session executor owns a relation, schema or type'
+            FROM executor
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
+            UNION ALL
+            SELECT 'BFF session function is unsafe: ' || installed.signature
+            FROM installed
+            WHERE NOT installed.prosecdef
+               OR NOT ('search_path=pg_catalog, identity, pg_temp'=ANY(COALESCE(installed.proconfig,ARRAY[]::text[])))
+               OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR has_function_privilege('public',installed.oid,'EXECUTE')
+               OR has_function_privilege('paqueteria_worker',installed.oid,'EXECUTE')
+               OR NOT has_function_privilege('paqueteria_app',installed.oid,'EXECUTE')
+            UNION ALL
+            SELECT 'BFF session function exists without the session executor role: ' || installed.signature
+            FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
+            UNION ALL
+            SELECT 'BFF session functions are only partially installed'
+            FROM (SELECT count(*) AS present FROM installed) c
+            WHERE c.present BETWEEN 1 AND 4
+            UNION ALL
+            SELECT 'session executor exists without identity.bff_sessions'
+            FROM executor WHERE NOT EXISTS (SELECT 1 FROM sessions)
+            UNION ALL
+            SELECT 'identity.bff_sessions must force RLS without any policy'
+            FROM sessions
+            WHERE NOT sessions.relrowsecurity OR NOT sessions.relforcerowsecurity
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid=sessions.oid)
+            UNION ALL
+            SELECT 'identity.bff_sessions is directly reachable by ' || grantee.name
+            FROM sessions CROSS JOIN (VALUES ('paqueteria_app'),('paqueteria_worker'),('public')) grantee(name)
+            WHERE has_table_privilege(grantee.name,sessions.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+               OR has_any_column_privilege(grantee.name,sessions.oid,'SELECT,INSERT,UPDATE,REFERENCES')
             """,
             cancellationToken,
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);

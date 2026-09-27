@@ -9,7 +9,7 @@ using Paqueteria.Application.Scheduling;
 namespace Custody.Infrastructure.Cleanup;
 
 /// <summary>
-/// OPS-003 metrics. Dimensions are limited to <c>job</c> (idempotency_keys|proof_upload_sessions),
+/// OPS-003 metrics. Dimensions are limited to <c>job</c> (idempotency_keys|proof_upload_sessions|bff_sessions),
 /// <c>mode</c> (dry_run|apply), <c>outcome</c> (drained|capped|failed) and a bounded
 /// <c>error_class</c>; no tenant, key, session or user identifier is ever recorded.
 /// </summary>
@@ -57,7 +57,7 @@ public sealed class OperationalCleanupTelemetry : IDisposable
     public void Dispose() => Meter.Dispose();
 }
 
-/// <summary>Shared cycle, telemetry and logging for both OPS-003 <see cref="IScheduledJob"/>s.</summary>
+/// <summary>Shared cycle, telemetry and logging for the OPS-003 <see cref="IScheduledJob"/>s.</summary>
 public abstract class OperationalCleanupJob(
     OperationalCleanupTelemetry telemetry,
     TimeProvider timeProvider,
@@ -178,6 +178,31 @@ public sealed class ProofUploadSessionExpiryJob(
 }
 
 /// <summary>
+/// BFF-SESSION-TABLE-SHAPE purge through the cleanup role: revoked and expired BFF sessions leave
+/// <c>identity.bff_sessions</c>. The database mutation is the idempotency mechanism.
+/// </summary>
+public sealed class BffSessionPurgeJob(
+    IOperationalCleanupGateway gateway,
+    IOptions<OperationalCleanupOptions> options,
+    OperationalCleanupTelemetry telemetry,
+    TimeProvider timeProvider,
+    ILogger<BffSessionPurgeJob> logger) : OperationalCleanupJob(telemetry, timeProvider, logger)
+{
+    public const string JobName = "operations.cleanup.bff-sessions";
+
+    public override string Name => JobName;
+
+    public override TimeSpan Interval => options.Value.BffSessions.PollInterval;
+
+    protected override string Dimension => "bff_sessions";
+
+    protected override OperationalCleanupPolicy Policy => options.Value.BffSessions.ToPolicy();
+
+    protected override Task<int> RunBatchAsync(int batchSize, CancellationToken cancellationToken) =>
+        gateway.PurgeBffSessionsAsync(batchSize, cancellationToken);
+}
+
+/// <summary>
 /// Worker host for OPS-003 (ADR-034 scheduling precedent): each enabled job runs on the shared
 /// <see cref="IJobScheduler"/>; nothing is scheduled unless enabled, and a failed cycle is retried
 /// on the next interval without stopping the Worker.
@@ -186,13 +211,14 @@ public sealed class OperationalCleanupHostedService(
     IJobScheduler scheduler,
     IdempotencyKeyPurgeJob idempotencyKeys,
     ProofUploadSessionExpiryJob proofUploadSessions,
+    BffSessionPurgeJob bffSessions,
     IOptions<OperationalCleanupOptions> options,
     ILogger<OperationalCleanupHostedService> logger) : BackgroundService
 {
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var settings = options.Value;
-        var runs = new List<Task>(2);
+        var runs = new List<Task>(3);
         if (settings.IdempotencyKeys.Enabled)
         {
             logger.LogInformation(
@@ -208,6 +234,14 @@ public sealed class OperationalCleanupHostedService(
                 "Proof upload-session expiry scheduled with poll_interval={PollInterval}.",
                 settings.ProofUploadSessions.PollInterval);
             runs.Add(scheduler.RunAsync(proofUploadSessions, stoppingToken));
+        }
+
+        if (settings.BffSessions.Enabled)
+        {
+            logger.LogInformation(
+                "BFF session purge scheduled with poll_interval={PollInterval}.",
+                settings.BffSessions.PollInterval);
+            runs.Add(scheduler.RunAsync(bffSessions, stoppingToken));
         }
 
         if (runs.Count == 0)

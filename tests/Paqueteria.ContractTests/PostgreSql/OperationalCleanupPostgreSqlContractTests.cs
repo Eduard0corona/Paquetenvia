@@ -24,6 +24,17 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
     private const string ExpireSignature = AddOperationalCleanupExecutor.SessionExpirySignature;
     private const string Scope = "OPS003:CONTRACT";
 
+    /// <summary>
+    /// BFF-SESSION-TABLE-SHAPE widens this executor through a later Custody migration; the OPS-003 lane
+    /// itself is exercised against the state it was written for, before that purge existed.
+    /// </summary>
+    private static readonly string StripBffSessionPurgeSql =
+        $"""
+        DROP FUNCTION security.purge_bff_sessions(integer);
+        REVOKE ALL ON identity.bff_sessions FROM {Executor};
+        REVOKE USAGE ON SCHEMA identity FROM {Executor};
+        """;
+
     [PostgreSqlContractFact]
     public async Task Executor_role_and_functions_match_the_cleanup_role_contract_exactly()
     {
@@ -46,7 +57,8 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
         }
 
         Assert.Equal(
-            "security.expire_proof_upload_sessions(integer),security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)",
+            "security.expire_proof_upload_sessions(integer),security.purge_bff_sessions(integer)," +
+            "security.purge_expired_idempotency_keys(timestamp with time zone,integer,boolean)",
             await ScalarAsync<string>(
                 "SELECT string_agg(oid::regprocedure::text, ',' ORDER BY oid::regprocedure::text) FROM pg_proc WHERE proowner=@executor::regrole",
                 ("executor", Executor)));
@@ -60,7 +72,9 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal(
             "custody.proof_upload_sessions.expires_at:SELECT,custody.proof_upload_sessions.id:SELECT," +
             "custody.proof_upload_sessions.status:SELECT,custody.proof_upload_sessions.status:UPDATE," +
-            "custody.proof_upload_sessions.updated_at:UPDATE,platform.idempotency_keys.created_at:SELECT," +
+            "custody.proof_upload_sessions.updated_at:UPDATE,identity.bff_sessions.expires_at:SELECT," +
+            "identity.bff_sessions.revoked_at:SELECT,identity.bff_sessions.session_key_hash:SELECT," +
+            "platform.idempotency_keys.created_at:SELECT," +
             "platform.idempotency_keys.expires_at:SELECT,platform.idempotency_keys.idempotency_key:SELECT," +
             "platform.idempotency_keys.owner_org_id:SELECT,platform.idempotency_keys.scope:SELECT",
             await ScalarAsync<string>(
@@ -71,10 +85,11 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
                 """,
                 ("executor", Executor)));
         Assert.Equal(
-            "platform.idempotency_keys:DELETE",
+            "identity.bff_sessions:DELETE,platform.idempotency_keys:DELETE",
             await ScalarAsync<string>(
                 """
-                SELECT string_agg(table_schema || '.' || table_name || ':' || privilege_type, ',')
+                SELECT string_agg(table_schema || '.' || table_name || ':' || privilege_type, ','
+                  ORDER BY table_schema, table_name)
                 FROM information_schema.table_privileges WHERE grantee=@executor
                 """,
                 ("executor", Executor)));
@@ -105,7 +120,7 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
                 ("executor", Executor), ("table", table)));
         }
 
-        Assert.Equal("custody,platform", await ScalarAsync<string>(
+        Assert.Equal("custody,identity,platform", await ScalarAsync<string>(
             """
             SELECT string_agg(nspname, ',' ORDER BY nspname) FROM pg_namespace
             WHERE nspname=ANY(@schemas::text[]) AND has_schema_privilege(@executor,oid,'USAGE')
@@ -502,9 +517,20 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
         var definitions = await FunctionDefinitionsAsync(connection, null);
         await using (var reapply = await connection.BeginTransactionAsync())
         {
+            await ExecuteAsync(connection, reapply, StripBffSessionPurgeSql);
             await ExecuteAsync(connection, reapply, AddOperationalCleanupExecutor.UpSql);
+            await ExecuteAsync(connection, reapply, AddBffSessionPurge.UpSql);
             Assert.Equal(definitions, await FunctionDefinitionsAsync(connection, reapply));
             await reapply.RollbackAsync();
+        }
+
+        // Once the BFF session purge is installed, the OPS-003 lane can no longer be replayed on its own.
+        await using (var widened = await connection.BeginTransactionAsync())
+        {
+            var refused = await Assert.ThrowsAsync<PostgresException>(() =>
+                ExecuteAsync(connection, widened, AddOperationalCleanupExecutor.UpSql));
+            Assert.Contains("already owns objects outside the OPS-003-CLEANUP-ROLE contract", refused.MessageText, StringComparison.Ordinal);
+            await widened.RollbackAsync();
         }
 
         foreach (var (violation, message) in new[]
@@ -526,6 +552,7 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
                  })
         {
             await using var transaction = await connection.BeginTransactionAsync();
+            await ExecuteAsync(connection, transaction, StripBffSessionPurgeSql);
             await ExecuteAsync(connection, transaction, violation);
             var refused = await Assert.ThrowsAsync<PostgresException>(() =>
                 ExecuteAsync(connection, transaction, AddOperationalCleanupExecutor.UpSql));
@@ -570,12 +597,13 @@ public sealed class OperationalCleanupPostgreSqlContractTests(PostgreSqlContract
         try
         {
             // Roll this database back to an installation provisioned before AI-18 knew the cleanup
-            // executor: no role, no functions, Custody history at POD-001.
+            // executor: no role, no functions (the BFF session purge included), Custody history at POD-001.
             await ExecuteAdminAsync(
                 $"""
                 DROP OWNED BY {Executor};
                 DROP ROLE {Executor};
-                DELETE FROM platform."__ef_migrations_history_custody" WHERE "MigrationId"='{AddOperationalCleanupExecutor.MigrationId}';
+                DELETE FROM platform."__ef_migrations_history_custody"
+                WHERE "MigrationId" IN ('{AddOperationalCleanupExecutor.MigrationId}','{AddBffSessionPurge.MigrationId}');
                 """);
             await using (var connection = await fixture.AdminDataSource.OpenConnectionAsync())
             {

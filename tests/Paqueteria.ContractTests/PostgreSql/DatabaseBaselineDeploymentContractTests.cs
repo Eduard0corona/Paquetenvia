@@ -72,7 +72,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                     ALTER DATABASE "{{database}}" OWNER TO {{_login}};
                     GRANT paqueteria_migrator, paqueteria_app, paqueteria_worker,
                           paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance,
-                          paqueteria_lifecycle_executor, paqueteria_cleanup_executor
+                          paqueteria_lifecycle_executor, paqueteria_cleanup_executor, paqueteria_session_executor
                     TO {{_login}} WITH ADMIN TRUE, SET TRUE;
                     DO $$ BEGIN CREATE ROLE azure_pg_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                     {{(azureAdmin ? $"GRANT azure_pg_admin TO {_login};" : string.Empty)}}
@@ -186,6 +186,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                AND NOT has_schema_privilege('paqueteria_maintenance', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_lifecycle_executor', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_cleanup_executor', 'security', 'CREATE')
+               AND NOT has_schema_privilege('paqueteria_session_executor', 'security', 'CREATE')
+               AND (SELECT NOT rolcanlogin AND rolbypassrls FROM pg_roles WHERE rolname = 'paqueteria_session_executor')
+               AND has_column_privilege('paqueteria_session_executor', 'identity.bff_sessions', 'revoked_at', 'UPDATE')
+               AND NOT has_table_privilege('paqueteria_app', 'identity.bff_sessions', 'SELECT')
                AND (SELECT NOT rolcanlogin AND rolbypassrls FROM pg_roles WHERE rolname = 'paqueteria_cleanup_executor')
                AND has_column_privilege('paqueteria_cleanup_executor', 'custody.proof_upload_sessions', 'status', 'UPDATE')
                AND NOT has_column_privilege('paqueteria_cleanup_executor', 'custody.proof_upload_sessions', 'order_id', 'UPDATE')
@@ -297,21 +301,28 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
     }
 
     [Fact]
-    public void E002_models_the_lifecycle_and_cleanup_executors_as_seventh_and_eighth_canonical_specialized_roles()
+    public void E002_models_the_lifecycle_cleanup_and_session_executors_as_canonical_specialized_roles()
     {
         Assert.Equal(
             [
                 ("paqueteria_migrator", false), ("paqueteria_app", false), ("paqueteria_worker", false),
                 ("paqueteria_bootstrap", true), ("paqueteria_outbox_executor", true), ("paqueteria_maintenance", true),
                 ("paqueteria_lifecycle_executor", true), ("paqueteria_cleanup_executor", true),
+                ("paqueteria_session_executor", true),
             ],
             E002Guards.CanonicalRoles);
         Assert.Equal(
             [
                 "paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
-                "paqueteria_cleanup_executor",
+                "paqueteria_cleanup_executor", "paqueteria_session_executor",
             ],
             E002Guards.SpecializedOwners);
+        Assert.Equal(
+            Identity.Infrastructure.Persistence.Migrations.AddBffSessionStore.MigrationId,
+            E002BffSessionStateReader.SessionStoreMigrationId);
+        Assert.Equal(
+            Custody.Infrastructure.Persistence.Migrations.AddBffSessionPurge.MigrationId,
+            E002BffSessionStateReader.PurgeMigrationId);
         Assert.Equal(
             Orders.Infrastructure.Persistence.Migrations.AddOrderLifecycleFinalizationExecutor.MigrationId,
             E002LifecycleStateReader.Lif001MigrationId);
@@ -361,6 +372,30 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(12, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: true, ops003Applied: false).Count);
         Assert.Equal(13, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: false, ops003Applied: true).Count);
         Assert.Equal(14, E002RoutineMap.Select(E002RoutineMapState.Pending, lif001Applied: true, ops003Applied: true).Count);
+
+        // BFF-SESSION-TABLE-SHAPE: five session routines for paqueteria_app, one purge for the Worker.
+        var sessions = E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, bffSessionApplied: true)
+            .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true))
+            .ToArray();
+        Assert.Equal(
+            Identity.Infrastructure.Persistence.Migrations.AddBffSessionStore.OwnedFunctions,
+            sessions.Select(entry => entry.Signature));
+        Assert.All(sessions, entry =>
+        {
+            Assert.Equal("paqueteria_session_executor", entry.Owner);
+            Assert.Equal(["paqueteria_app"], entry.Grantees);
+        });
+        var purge = Assert.Single(
+            E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, bffPurgeApplied: true)
+                .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true)));
+        Assert.Equal(
+            new E002RoutineEntry("security.purge_bff_sessions(integer)", "paqueteria_cleanup_executor", purge.Grantees),
+            purge);
+        Assert.Equal(["paqueteria_worker"], purge.Grantees);
+        Assert.Equal(37, E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true).Count);
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true));
     }
 
     [PostgreSqlContractFact]
@@ -394,8 +429,11 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION security.purge_expired_idempotency_keys(timestamptz,integer,boolean);
             DROP FUNCTION security.expire_proof_upload_sessions(integer);
+            DROP FUNCTION security.purge_bff_sessions(integer);
+            REVOKE ALL ON identity.bff_sessions FROM paqueteria_cleanup_executor;
+            REVOKE USAGE ON SCHEMA identity FROM paqueteria_cleanup_executor;
             DELETE FROM platform."__ef_migrations_history_custody"
-              WHERE "MigrationId"='{E002CleanupStateReader.Ops003MigrationId}';
+              WHERE "MigrationId" IN ('{E002CleanupStateReader.Ops003MigrationId}','{E002BffSessionStateReader.PurgeMigrationId}');
             """);
         Assert.Equal("PENDING", await CustodyLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
@@ -430,12 +468,14 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             state => Assert.Equal("APPLIED", state.Status));
         Assert.Equal(
             "paqueteria_cleanup_executor|{paqueteria_cleanup_executor=X/paqueteria_cleanup_executor,paqueteria_worker=X/paqueteria_cleanup_executor}" +
+            ";paqueteria_cleanup_executor|{paqueteria_cleanup_executor=X/paqueteria_cleanup_executor,paqueteria_worker=X/paqueteria_cleanup_executor}" +
             ";paqueteria_cleanup_executor|{paqueteria_cleanup_executor=X/paqueteria_cleanup_executor,paqueteria_worker=X/paqueteria_cleanup_executor}",
             await environment.TextAsync("""
                 SELECT string_agg(pg_get_userbyid(proowner) || '|' || proacl::text, ';' ORDER BY proname)
                 FROM pg_proc
                 WHERE oid IN ('security.purge_expired_idempotency_keys(timestamptz,integer,boolean)'::regprocedure,
-                              'security.expire_proof_upload_sessions(integer)'::regprocedure)
+                              'security.expire_proof_upload_sessions(integer)'::regprocedure,
+                              'security.purge_bff_sessions(integer)'::regprocedure)
                 """));
         Assert.False(await environment.ScalarAsync(
             "SELECT has_schema_privilege('paqueteria_cleanup_executor','security','CREATE')"));
@@ -451,14 +491,99 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         {
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
-            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1", semantic.RoutineMap);
-            Assert.Equal(31, semantic.ControlledIdentities);
-            Assert.Equal(60, semantic.NormalizedExecuteRows);
+            Assert.Equal(
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                semantic.RoutineMap);
+            Assert.Equal(37, semantic.ControlledIdentities);
+            Assert.Equal(72, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> CustodyLaneAsync() =>
             (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
                 .Single(state => state.Module == "Custody").Status;
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_applies_the_bff_session_identity_lane_as_non_superuser()
+    {
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgebffsession");
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+        var coordinator = new ModuleMigrationCoordinator();
+
+        // Every other lane is applied by the privileged fixture principal; this contract is the Identity
+        // BFF step. The canonical table and grants stay (AI-06/AI-18); only the lane's functions are rewound.
+        await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+        await environment.AdminExecuteAsync($"""
+            DROP FUNCTION security.create_bff_session(bytea,text,text,bytea,timestamptz);
+            DROP FUNCTION security.resolve_bff_session(bytea);
+            DROP FUNCTION security.revoke_bff_session(bytea);
+            DROP FUNCTION security.revoke_bff_session(text);
+            DROP FUNCTION security.revoke_bff_session(text,timestamptz);
+            DELETE FROM platform."__ef_migrations_history_identity"
+              WHERE "MigrationId"='{E002BffSessionStateReader.SessionStoreMigrationId}';
+            """);
+        Assert.Equal("PENDING", await IdentityLaneAsync());
+        const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
+        var securityAclBefore = await environment.TextAsync(SecurityAclSql);
+
+        // Without the E-002 bridge the managed-service principal cannot hand the functions to the executor.
+        var denied = FindPostgresException(await Assert.ThrowsAnyAsync<Exception>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None)));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+        Assert.Equal("PENDING", await IdentityLaneAsync());
+
+        await environment.AdminExecuteAsync("GRANT CREATE ON SCHEMA security TO paqueteria_session_executor");
+        var prestate = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_CREATE_PRESTATE_PRESENT role=paqueteria_session_executor", prestate.Message, StringComparison.Ordinal);
+        await environment.AdminExecuteAsync("REVOKE CREATE ON SCHEMA security FROM paqueteria_session_executor");
+
+        await environment.AdminExecuteAsync($"REVOKE SET OPTION FOR paqueteria_session_executor FROM {environment.Login}");
+        var capability = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_session_executor", capability.Message,
+            StringComparison.Ordinal);
+        await environment.AdminExecuteAsync($"GRANT paqueteria_session_executor TO {environment.Login} WITH SET TRUE");
+        Assert.Equal("PENDING", await IdentityLaneAsync());
+        Assert.Equal(securityAclBefore, await environment.TextAsync(SecurityAclSql));
+
+        await coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+
+        Assert.All(await coordinator.AssertAsync(environment.DeploymentConnectionString, CancellationToken.None),
+            state => Assert.Equal("APPLIED", state.Status));
+        Assert.Equal(
+            string.Join(';', Enumerable.Repeat(
+                "paqueteria_session_executor|{paqueteria_session_executor=X/paqueteria_session_executor,paqueteria_app=X/paqueteria_session_executor}",
+                5)),
+            await environment.TextAsync("""
+                SELECT string_agg(pg_get_userbyid(proowner) || '|' || proacl::text, ';' ORDER BY oid::regprocedure::text)
+                FROM pg_proc WHERE proname IN ('create_bff_session','resolve_bff_session','revoke_bff_session')
+                """));
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_session_executor','security','CREATE')"));
+        Assert.Equal(securityAclBefore, await environment.TextAsync(SecurityAclSql));
+
+        await using (var admin = new NpgsqlConnection(environment.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await new DatabaseBaselineAssertions().AssertAsync(admin);
+        }
+
+        await using (var deployment = new NpgsqlConnection(environment.DeploymentConnectionString))
+        {
+            await deployment.OpenAsync();
+            var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
+            Assert.Equal(
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                semantic.RoutineMap);
+            Assert.Equal(37, semantic.ControlledIdentities);
+            Assert.Equal(72, semantic.NormalizedExecuteRows);
+        }
+
+        async Task<string> IdentityLaneAsync() =>
+            (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
+                .Single(state => state.Module == "Identity").Status;
     }
 
     [Fact]
@@ -598,9 +723,11 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             // The Notifications lane also installed the D8 DISPATCH lane and the Custody OPS-003 lane is applied
             // too: two routines each, owner + Worker.
-            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_V1", semantic.RoutineMap);
-            Assert.Equal(31, semantic.ControlledIdentities);
-            Assert.Equal(60, semantic.NormalizedExecuteRows);
+            Assert.Equal(
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_BFFSESSION_PLUS_BFFPURGE_V1",
+                semantic.RoutineMap);
+            Assert.Equal(37, semantic.ControlledIdentities);
+            Assert.Equal(72, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>

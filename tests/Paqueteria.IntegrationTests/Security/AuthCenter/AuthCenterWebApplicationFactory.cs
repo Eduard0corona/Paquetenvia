@@ -15,13 +15,27 @@ namespace Paqueteria.IntegrationTests.Security.AuthCenter;
 internal sealed class AuthCenterWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly IReadOnlyDictionary<string, string?> _overrides;
+    private readonly bool _ownsAuthCenter;
 
     public AuthCenterWebApplicationFactory(IReadOnlyDictionary<string, string?>? overrides = null)
+        : this(overrides, sharedAuthCenter: null)
     {
-        _overrides = overrides ?? new Dictionary<string, string?>();
     }
 
-    public FakeAuthCenterServer AuthCenter { get; } = new();
+    /// <summary>
+    /// A shared <paramref name="sharedAuthCenter"/> lets several API instances trust the same fake IdP,
+    /// as replicas behind one ingress do; the factory that created it disposes it.
+    /// </summary>
+    public AuthCenterWebApplicationFactory(
+        IReadOnlyDictionary<string, string?>? overrides,
+        FakeAuthCenterServer? sharedAuthCenter)
+    {
+        _overrides = overrides ?? new Dictionary<string, string?>();
+        _ownsAuthCenter = sharedAuthCenter is null;
+        AuthCenter = sharedAuthCenter ?? new FakeAuthCenterServer();
+    }
+
+    public FakeAuthCenterServer AuthCenter { get; }
 
     public SwitchableIdentityContextResolver Resolver { get; } = new();
 
@@ -46,6 +60,8 @@ internal sealed class AuthCenterWebApplicationFactory : WebApplicationFactory<Pr
                 ["AuthCenter:ClientId"] = FakeAuthCenterServer.ClientId,
                 ["AuthCenter:ClientSecret"] = FakeAuthCenterServer.ClientSecret,
                 ["AuthCenter:PublicOrigin"] = FakeAuthCenterServer.PublicOrigin,
+                // These tests run without PostgreSQL; the PostgreSQL store has its own suite.
+                ["AuthCenter:SessionStore"] = "Memory",
             };
             foreach (var (key, value) in _overrides)
             {
@@ -67,7 +83,7 @@ internal sealed class AuthCenterWebApplicationFactory : WebApplicationFactory<Pr
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        if (disposing)
+        if (disposing && _ownsAuthCenter)
         {
             AuthCenter.Dispose();
         }

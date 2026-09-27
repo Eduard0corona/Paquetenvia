@@ -66,6 +66,38 @@ CREATE UNIQUE INDEX organization_memberships_one_default_uq
 CREATE INDEX organization_memberships_user_idx ON organizations.organization_memberships(user_id,status);
 CREATE INDEX organization_memberships_org_idx ON organizations.organization_memberships(organization_id,status);
 
+-- BFF-SESSION-TABLE-SHAPE: server-side AuthCenter BFF sessions. Pre-tenant: no tenant policy and no
+-- tenant column. Only the SHA-256 of the opaque session key is stored, never the key or the cookie;
+-- the ticket (AuthCenter tokens included) is an ASP.NET Data Protection ciphertext that revocation
+-- erases. authcenter_sid and identity_subject serve back-channel logout (AUTH-001-BACKCHANNEL-LOGOUT).
+-- Runtime roles hold no grant: access is only through the security.*_bff_session functions owned by
+-- paqueteria_session_executor (AI-18). FORCE RLS without any policy denies every other role.
+CREATE TABLE identity.bff_sessions (
+  session_key_hash bytea NOT NULL,
+  identity_subject text NOT NULL,
+  authcenter_sid text,
+  ticket_ciphertext bytea,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  CONSTRAINT bff_sessions_pkey PRIMARY KEY (session_key_hash),
+  CONSTRAINT bff_sessions_key_hash_ck CHECK (octet_length(session_key_hash)=32),
+  CONSTRAINT bff_sessions_subject_ck CHECK (char_length(identity_subject) BETWEEN 1 AND 256),
+  CONSTRAINT bff_sessions_sid_ck CHECK (authcenter_sid IS NULL OR char_length(authcenter_sid) BETWEEN 1 AND 256),
+  CONSTRAINT bff_sessions_ticket_ck CHECK (ticket_ciphertext IS NULL OR octet_length(ticket_ciphertext) BETWEEN 1 AND 65536),
+  CONSTRAINT bff_sessions_lifetime_ck CHECK (expires_at > created_at),
+  CONSTRAINT bff_sessions_revocation_ck CHECK ((revoked_at IS NULL) = (ticket_ciphertext IS NOT NULL))
+);
+CREATE INDEX bff_sessions_sid_idx ON identity.bff_sessions(authcenter_sid)
+  WHERE authcenter_sid IS NOT NULL AND revoked_at IS NULL;
+CREATE INDEX bff_sessions_subject_idx ON identity.bff_sessions(identity_subject,created_at)
+  WHERE revoked_at IS NULL;
+CREATE INDEX bff_sessions_expiry_idx ON identity.bff_sessions(expires_at);
+CREATE INDEX bff_sessions_revoked_idx ON identity.bff_sessions(revoked_at)
+  WHERE revoked_at IS NOT NULL;
+ALTER TABLE identity.bff_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity.bff_sessions FORCE ROW LEVEL SECURITY;
+
 -- Geographic model -------------------------------------------------------------
 CREATE TABLE locations.cities (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

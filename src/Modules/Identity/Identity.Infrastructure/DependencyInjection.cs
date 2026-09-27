@@ -1,6 +1,8 @@
 using Identity.Application.Authentication;
 using Identity.Application.Bootstrap;
+using Identity.Application.Session;
 using Identity.Infrastructure.Bootstrap;
+using Identity.Infrastructure.Session;
 using Identity.Infrastructure.Mock;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,6 +48,8 @@ public static class DependencyInjection
             serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
             ?? throw new InvalidOperationException(
                 "A PostgreSQL identity bootstrap provider requires a configured connection string.")));
+        // BFF-SESSION-TABLE-SHAPE: resolved only when AuthCenter:SessionStore=PostgreSql.
+        services.AddSingleton<IBffSessionStore, PostgreSqlBffSessionStore>();
         services.AddScoped<IIdentityContextResolver>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<IdentityBootstrapOptions>>().Value.Provider switch
             {
