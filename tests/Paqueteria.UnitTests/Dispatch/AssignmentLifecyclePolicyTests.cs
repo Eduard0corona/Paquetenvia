@@ -7,7 +7,7 @@ namespace Paqueteria.UnitTests.Dispatch;
 public sealed class AssignmentLifecyclePolicyTests
 {
     /// <summary>
-    /// Every AI-04 <c>order_state_machine.transitions</c> edge (30) with its D8 closure. A contract test
+    /// Every AI-04 <c>order_state_machine.transitions</c> edge (29 since D8-RESCHEDULED-NO-DIRECT-DELIVERY) with its D8 closure. A contract test
     /// (<c>AssignmentLifecycleAi04CoverageTests</c>) proves this table equals AI-04 exactly.
     /// </summary>
     public static TheoryData<string, string, AssignmentClosure> Ai04Transitions => new()
@@ -39,7 +39,6 @@ public sealed class AssignmentLifecyclePolicyTests
         { "RESCHEDULED", "READY_FOR_PICKUP", AssignmentClosure.Cancelled },
         // Reassignment after a reschedule always creates a new assignment; nothing to close.
         { "RESCHEDULED", "ASSIGNED", AssignmentClosure.None },
-        { "RESCHEDULED", "DELIVERING", AssignmentClosure.None },
         { "RETURNING", "RETURNED", AssignmentClosure.Completed },
         { "DELIVERED", "CLOSED", AssignmentClosure.None },
         { "DELIVERED", "CLAIM_OPEN", AssignmentClosure.None },
@@ -59,12 +58,13 @@ public sealed class AssignmentLifecyclePolicyTests
     public void Policy_map_has_exactly_the_ai04_transitions_listed_here()
     {
         var listed = Ai04Transitions.Select(row => ((string)row[0], (string)row[1])).ToHashSet();
-        Assert.Equal(30, listed.Count);
+        Assert.Equal(29, listed.Count);
         Assert.True(listed.SetEquals(AssignmentLifecyclePolicy.Transitions));
     }
 
     [Theory]
     [InlineData("DELIVERED", "RESCHEDULED")]
+    [InlineData("RESCHEDULED", "DELIVERING")]
     [InlineData("UNKNOWN", "CANCELLED")]
     [InlineData("ASSIGNED", "UNKNOWN")]
     public void Unknown_transitions_never_close(string previous, string next) =>

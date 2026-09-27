@@ -128,7 +128,9 @@ asignación como `CANCELLED`; `*→CANCELLED` la cierra como `CANCELLED`;
 `DELIVERED` o `RETURNED` la cierran como `COMPLETED`. Implementado (PR #90): por
 `D8-REASSIGNMENT-NEW-ASSIGNMENT`, `FAILED_ATTEMPT→RESCHEDULED` también la cierra
 como `CANCELLED`; el reintento `FAILED_ATTEMPT→DELIVERING` y `*→RETURNING` la
-conservan. El mapa cubre las 30 transiciones de AI-04. El cierre es idempotente:
+conservan. El mapa cubre las 29 transiciones de AI-04 (`D8-RESCHEDULED-NO-DIRECT-DELIVERY`
+quitó `RESCHEDULED→DELIVERING`: una orden reprogramada pasa por una asignación
+nueva; el reintento inmediato `FAILED_ATTEMPT→DELIVERING` conserva la asignación). El cierre es idempotente:
 el evento siempre nombra el `assignment_id` activo bajo el lock de la orden en
 la transacción de ORD-002, y solo se cierra si esa asignación sigue
 `ACCEPTED/ACTIVE`; una asignación nueva nunca coincide.

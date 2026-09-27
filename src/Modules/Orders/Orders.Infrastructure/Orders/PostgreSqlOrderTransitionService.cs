@@ -287,7 +287,7 @@ public sealed class PostgreSqlOrderTransitionService(
 
         var assignment = new AssignmentGuardSnapshot(false, false, false, false);
         if (target == OrderStatus.Assigned ||
-            (target == OrderStatus.Delivering && source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled))
+            (target == OrderStatus.Delivering && source == OrderStatus.FailedAttempt))
         {
             assignment = await assignmentReader.ReadAsync(
                 connection,
@@ -306,7 +306,7 @@ public sealed class PostgreSqlOrderTransitionService(
 
         var needsCustody = target == OrderStatus.Returning ||
             (target == OrderStatus.Cancelled && source == OrderStatus.AtPickup) ||
-            (target == OrderStatus.Delivering && source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled);
+            (target == OrderStatus.Delivering && source == OrderStatus.FailedAttempt);
         var custody = needsCustody
             ? await custodyReader.ReadAsync(
                 connection, transaction, command.OrganizationId, command.OrderId, cancellationToken)

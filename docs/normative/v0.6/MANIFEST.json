@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "2e71f34468e72d879595b0b5b0a9722bfd69f2993130715c2f8f709f849d8986"
+      "sha256": "cadcfd7a8db8e9e97adc82abbaca64825ed9cc0ff771d30332cfa1ae8e4994a0"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -59,8 +59,8 @@
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
-      "bytes": 6551,
-      "sha256": "e43649345d57840ac200f38c8fcce950a607cbe22f29907cca8de2f4a36ebd3e"
+      "bytes": 6674,
+      "sha256": "d88c7406c2a4b0c3690c4c7e2810274545d68ea89344a49cbb5a5250736bd022"
     },
     {
       "path": "database/AI-06_SCHEMA.sql",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 37023,
-      "sha256": "58487a2a818d8ab5374f4ad91fdfd1d386f52748661cfeb28ad53067a7ddbae2"
+      "bytes": 37588,
+      "sha256": "e7ff473e63411631f0f000b6184e84ed3d8e81c709725f8ed7ff5b73e65d82f5"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -329,8 +329,8 @@
     },
     {
       "path": "specs/AI-04_DOMAIN_MODEL.yaml",
-      "bytes": 14901,
-      "sha256": "9e5d660def849e5e1cbb4582547ba4f905ca3a1f028a102aad5a7bf1f8d50736"
+      "bytes": 15170,
+      "sha256": "c59d704b0acc371e954a803d7c02b3c65134d3e179420ea7be43ef8fc950f79e"
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
@@ -339,8 +339,8 @@
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 44855,
-      "sha256": "b38c4776e4a45a4efdd2c06fc80a651b80efa8889c8610af129f328a300ff508"
+      "bytes": 44934,
+      "sha256": "5edce4fecd40d7a73f6422823de4f51c41cf932551edf1861475311711e9da6a"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
@@ -349,8 +349,8 @@
     },
     {
       "path": "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",
-      "bytes": 11969,
-      "sha256": "5c7ecf1e8aa9742a2f0450f6de38c7bbfb8e5ffbd09ffc03605bc0fa44a01e55"
+      "bytes": 12174,
+      "sha256": "ecb3feeff3e08a90e44ace092fdcf09977595211394d759a375d80aba9f697d3"
     },
     {
       "path": "specs/AI-15_SCALABILITY_CONTRACT.yaml",
@@ -369,8 +369,8 @@
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",
-      "bytes": 23634,
-      "sha256": "b3e6ae9442a1a11cff74b1c26fc0f5bc6bb77577efbd5abd85784dad62d33ad9"
+      "bytes": 23935,
+      "sha256": "0ef23259c9621e5bc3a002cb4752c37f6d2470159a2743f0e08a2cbca1872bf7"
     },
     {
       "path": "tools/validate_contracts.py",

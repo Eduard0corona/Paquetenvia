@@ -230,7 +230,7 @@ ORD-002 ya define:
    otro `FAILED_ATTEMPT`: una incidencia justifica un solo intento fallido.
 6. `no_unresolved_incident` sigue bloqueando `CLOSED` mientras la incidencia siga abierta.
 7. Al salir de `FAILED_ATTEMPT`, ORD-002 respeta `next_action`: `RETURNING` solo permite
-   `RETURNING`; `RESCHEDULED` permite `RESCHEDULED` o el reintento `DELIVERING`. Una incidencia
+   `RETURNING`; `RESCHEDULED` permite `RESCHEDULED` o el reintento `DELIVERING` desde `FAILED_ATTEMPT` (D8-RESCHEDULED-NO-DIRECT-DELIVERY: no existe `RESCHEDULED → DELIVERING`). Una incidencia
    adoptada de una instalación previa (sin evidencia; su `next_action` lo rellenó el backfill) no
    restringe el sucesor.
 8. La evidencia de una incidencia nunca completa una recolección ni una entrega en ORD-002.

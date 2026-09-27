@@ -21,7 +21,9 @@ public sealed class AssignmentLifecycleAi04CoverageTests
                 .Select(target => (((YamlScalarNode)pair.Key).Value!, target.Value!)))
             .ToHashSet();
 
-        Assert.Equal(30, ai04.Count);
+        // 29 since D8-RESCHEDULED-NO-DIRECT-DELIVERY removed RESCHEDULED -> DELIVERING.
+        Assert.Equal(29, ai04.Count);
+        Assert.DoesNotContain(("RESCHEDULED", "DELIVERING"), ai04);
         Assert.True(
             ai04.SetEquals(AssignmentLifecyclePolicy.Transitions),
             $"AI-04 only: {string.Join(", ", ai04.Except(AssignmentLifecyclePolicy.Transitions))}; " +

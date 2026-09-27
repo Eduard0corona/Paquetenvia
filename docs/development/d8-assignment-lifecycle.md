@@ -29,7 +29,7 @@ adicional `dispatch.order-status-reaction-requested` (payload
 
 `orders.status-changed` no cambia: mismo payload, mismo topic, lane `REALTIME`.
 
-## Mapa de cierre (las 30 transiciones de AI-04)
+## Mapa de cierre (las 29 transiciones de AI-04)
 
 | Transición | Asignación |
 | --- | --- |
@@ -74,8 +74,16 @@ filas `dispatch.order-status-reaction-requested` activas.
 
 ## Riesgos abiertos
 
-- `RESCHEDULED→DELIVERING` exige una asignación válida (guard de ORD-002), pero
-  entrar a `RESCHEDULED` la cancela; con D8 esa arista sólo pasa si la reacción
-  aún no corrió. Las guardas de AI-04 son de PR #91.
 - Hasta que la reacción corre, DSP-002 responde `ActiveAssignmentExists`
-  (consistencia eventual).
+  (consistencia eventual, aceptada por diseño en D8).
+- El puente de propiedad Azure (E-002) sólo aplica el lane Notifications desde
+  un historial vacío; una instalación Azure con NTF-001/EXT-001/RTE-001 no recibe
+  esta migración por el puente (limitación anotada para el trabajo de Azure).
+
+## Decisión posterior
+
+`D8-RESCHEDULED-NO-DIRECT-DELIVERY` (2026-09-27): se quita
+`RESCHEDULED→DELIVERING`. Una orden reprogramada siempre pasa por una asignación
+nueva (`RESCHEDULED → ASSIGNED → … → DELIVERING`); el reintento inmediato sigue
+siendo `FAILED_ATTEMPT → DELIVERING` y conserva la asignación. AI-04 queda con 29
+transiciones.

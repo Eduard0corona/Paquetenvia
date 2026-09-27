@@ -22,7 +22,8 @@ public enum AssignmentClosure
 /// <item><c>*→CANCELLED</c> and the ORD-002 unassign <c>ASSIGNED→READY_FOR_PICKUP</c> cancel.</item>
 /// <item><c>FAILED_ATTEMPT→RESCHEDULED</c> cancels (<c>D8-REASSIGNMENT-NEW-ASSIGNMENT</c>): a reschedule
 /// never keeps the previous assignment, so <c>RESCHEDULED→ASSIGNED</c> always needs a new assignment
-/// created by DSP-002 or a new external offer. <c>RESCHEDULED→READY_FOR_PICKUP</c> also cancels, as a
+/// created by DSP-002 or a new external offer, and <c>RESCHEDULED→DELIVERING</c> no longer exists
+/// (<c>D8-RESCHEDULED-NO-DIRECT-DELIVERY</c>). <c>RESCHEDULED→READY_FOR_PICKUP</c> also cancels, as a
 /// backstop for an assignment that survived the reschedule.</item>
 /// <item><c>DELIVERING→DELIVERED</c> and <c>RETURNING→RETURNED</c> complete.</item>
 /// <item>A retry (<c>FAILED_ATTEMPT→DELIVERING</c>) and a return (<c>*→RETURNING</c>) keep the active
@@ -57,7 +58,6 @@ public static class AssignmentLifecyclePolicy
         [("FAILED_ATTEMPT", "DELIVERING")] = AssignmentClosure.None,
         [("RESCHEDULED", "READY_FOR_PICKUP")] = AssignmentClosure.Cancelled,
         [("RESCHEDULED", "ASSIGNED")] = AssignmentClosure.None,
-        [("RESCHEDULED", "DELIVERING")] = AssignmentClosure.None,
         [("RETURNING", "RETURNED")] = AssignmentClosure.Completed,
         [("DELIVERED", "CLOSED")] = AssignmentClosure.None,
         [("DELIVERED", "CLAIM_OPEN")] = AssignmentClosure.None,

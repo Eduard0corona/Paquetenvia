@@ -116,8 +116,9 @@ events:
       implementation: the Realtime parser accepts ACCEPTED, COMPLETED and CANCELLED; a closed status is proven against
         the assignment in that status and the ORDER_STATUS_CHANGED event at the event aggregate_version
       text: assignment_status may be ACCEPTED, COMPLETED or CANCELLED; for a closed assignment the audience is operations
-        plus the affected driver only while that driver's membership is active; until the Realtime parser and evidence
-        rule accept closed statuses, no producer may emit AssignmentChanged for COMPLETED or CANCELLED
+        plus the affected driver only while that driver's profile, user and DRIVER membership are active; the Realtime
+        parser and evidence rule accept closed statuses (PR 90), and the D8 Dispatch assignment-lifecycle consumer emits
+        AssignmentChanged with COMPLETED or CANCELLED in the same transaction that closes the assignment
   RouteChanged:
     audience:
     - operations

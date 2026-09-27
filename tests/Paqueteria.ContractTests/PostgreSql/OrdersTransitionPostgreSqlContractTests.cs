@@ -917,8 +917,7 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         }
 
         if (target == OrderStatus.Assigned ||
-            (target == OrderStatus.Delivering &&
-             source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled))
+            (target == OrderStatus.Delivering && source == OrderStatus.FailedAttempt))
         {
             await InsertAssignmentAsync(scenario);
         }

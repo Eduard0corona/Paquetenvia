@@ -92,9 +92,11 @@ public sealed class OrderTransitionGuardRegistry
         static bool Cancel(OrderTransitionGuardContext c) => c.Target == OrderStatus.Cancelled;
         static bool Fail(OrderTransitionGuardContext c) => c.Target == OrderStatus.FailedAttempt;
         static bool Return(OrderTransitionGuardContext c) => c.Target == OrderStatus.Returning;
+        // D8-RESCHEDULED-NO-DIRECT-DELIVERY: the only retry into DELIVERING is the immediate
+        // FAILED_ATTEMPT -> DELIVERING, which keeps the active assignment.
         static bool RetryDelivery(OrderTransitionGuardContext c) =>
             c.Target == OrderStatus.Delivering &&
-            c.Source is OrderStatus.FailedAttempt or OrderStatus.Rescheduled;
+            c.Source == OrderStatus.FailedAttempt;
         static bool LeaveFailedAttempt(OrderTransitionGuardContext c) =>
             c.Source == OrderStatus.FailedAttempt;
 

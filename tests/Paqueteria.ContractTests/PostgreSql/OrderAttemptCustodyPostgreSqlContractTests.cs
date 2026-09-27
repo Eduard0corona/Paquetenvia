@@ -43,7 +43,7 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
         var evidence = await InsertProofAsync(world, "DELIVERY_PHOTO");
         var incident = await OpenIncidentAsync(world, [evidence], IncidentContract.Rescheduled);
         await TransitionAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(incident));
-        await TransitionAsync(world, OrderStatus.Rescheduled);
+        // The immediate retry (D8-RESCHEDULED-NO-DIRECT-DELIVERY removed RESCHEDULED -> DELIVERING).
         await TransitionAsync(world, OrderStatus.Delivering);
 
         var stale = await RefusedAsync(world, OrderStatus.Delivered);
@@ -123,9 +123,15 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
         var redelivery = await RefusedAsync(world, OrderStatus.Delivering);
         Assert.Equal("retry_custody_acquired_true", redelivery.GuardCode);
 
+        // D8-RESCHEDULED-NO-DIRECT-DELIVERY: RESCHEDULED -> DELIVERING is not an edge at all, so it is
+        // refused before any guard, with or without custody.
         await TransitionAsync(world, OrderStatus.Rescheduled);
-        var fromRescheduled = await RefusedAsync(world, OrderStatus.Delivering);
-        Assert.Equal("retry_custody_acquired_true", fromRescheduled.GuardCode);
+        await using var scope = CreateTransitionScope();
+        var fromRescheduled = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+            scope.Service.TransitionAsync(
+                TransitionCommand(world, OrderStatus.Delivering, null),
+                CancellationToken.None));
+        Assert.Equal(OrderTransitionConflictCode.InvalidState, fromRescheduled.Code);
     }
 
     [PostgreSqlContractFact]
