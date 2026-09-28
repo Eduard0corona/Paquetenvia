@@ -38,9 +38,17 @@ The ENV-001 acceptance criterion "no pilot deployment without GATE-007 and GATE-
 explicitly scoped by the project owner" is enforced by the workflow. The environment variables
 `PILOT_GATE_007_DECISION` and `PILOT_GATE_012_DECISION` (for example `GATE-012-PILOT-SCOPE`:
 Mexico Central only, 14-day PITR, no geo-redundant backup, Log Analytics 30 days with a daily cap)
-must each name a `decision-log.md` row, in
-the deployed tree, that mentions that gate. Otherwise the deploy job stops before logging in to
-Azure.
+must each equal the ID of **exactly one** row in the `decision-log.md` table of the deployed tree.
+That row's ID must start with `GATE-007-` / `GATE-012-` and its Type must be exactly
+`Gate resolution` or `Gate scoping`. `env001_pilot_guards.py gate-decision` parses the table,
+splitting only on unescaped `|`.
+
+Rows that mention a gate without resolving it are rejected, for example:
+- `GATE-007-PRIVACY-DRAFT` (a legal process decision);
+- `PILOT-REAL-PEOPLE`;
+- `NTF-001-OWNER-001`.
+
+Otherwise the deploy job stops before logging in to Azure.
 
 ## 2. Architecture
 
@@ -393,8 +401,10 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
   directly with a signed URL, so phones must reach it from the internet.
   - Anonymous access and shared-key access are disabled. Every request needs Entra ID or a
     user-delegation SAS, which carries no `t`/tags permission.
-  - The Container Apps subnet is still listed as a virtual-network rule with the free service
-    endpoint, so switching `defaultAction` to `Deny` later only cuts off browsers.
+  - The Container Apps subnet is listed as a virtual-network rule with the free service endpoint.
+    With `defaultAction: Allow` this rule is **inert by design**: it grants nothing extra. It is kept
+    so that switching `defaultAction` to `Deny` later keeps the workloads' access and cuts off only
+    browsers.
   - A private endpoint (about 7.30 USD per month) would not help: phones are not in the VNet.
 - **Key Vault and ACR:** public endpoints with Entra RBAC only. The GitHub-hosted runner must write
   secrets and push images; ACR Basic has no network rules.
@@ -445,7 +455,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 19/19 pilot guards and 31/31 AZR-001 guards pass, along with the guard unit tests, the CI tooling
+- 20/20 pilot guards (P00–P19) and 31/31 AZR-001 guards pass, along with the guard unit tests, the CI tooling
   tests and the gitleaks scan.
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.

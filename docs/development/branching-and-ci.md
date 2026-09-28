@@ -81,8 +81,11 @@ Anything unregistered still fails closed: an extra transitive package, another v
   - Needs the `azure-pilot` GitHub Environment, owner-recorded GATE-007/GATE-012 decision ids, and
     `deploy/azure/pilot/apps.settings.json` without `OWNER_DECISION_REQUIRED`.
   - Runbook: `docs/operations/env-001-pilot/README.md`.
-  - Its templates and workflow belong to the `AZURE` / `DEPLOY_WORKFLOW` domains, so `azr-static`
-    runs the pilot guard tests (`tools/azr-001/test_env001_pilot_guards.py`).
+  - Its templates and workflow belong to the `AZURE` / `DEPLOY_WORKFLOW` domains, so `azr-static` checks
+    them. The Bicep build/lint step covers both `deploy/azure/*.bicep` and `deploy/azure/pilot/*.bicep`.
+    Pilot templates are built into their own directory, and any pilot lint diagnostic, warning
+    included, fails the step. `azr-static` also runs the pilot guard tests
+    (`tools/azr-001/test_env001_pilot_guards.py`). The same step is in Foundation's `normative` job.
 - **Locally:** `python3 -m unittest discover -s tools/ci -p "test_*.py"`, `python3 -m unittest discover -s tools/azr-001 -p "test_*.py"`, `python3 docs/normative/v0.6/tools/validate_contracts.py`.
 
 ## Workflow conventions

@@ -80,6 +80,8 @@ class SettingsTests(unittest.TestCase):
             "Realtime__Backplane": "Redis",
             "Pricing__ApiKey": "abc",
             "Pricing__Mode": "Mock",
+            "Pricing__Engine": "mock",
+            "Pricing__Source": " SYNTHETIC ",
         }
         for name, value in cases.items():
             with self.subTest(name=name):
@@ -87,6 +89,69 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "v1", "extra": 1}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "A__B", "value": "1"}, {"name": "A__B", "value": "2"}], allow_sentinel=False))
         self.assertEqual([], guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "PRC-PILOT-v1"}], allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "owner_decision_required"}], allow_sentinel=False))
+
+
+SAMPLE_LOG = """# Decision log
+
+| Date | ID | Type | Decision | Impacted files | Approved by |
+|---|---|---|---|---|---|
+| 2026-09-27 | GATE-007-PRIVACY-DRAFT | Legal process decision | Claude drafts the notice; resolves nothing (GATE-007 stays open) | GATE-007 | Owner |
+| 2026-09-27 | PILOT-REAL-PEOPLE | Release decision | Real PII still waits for GATE-007 approval; resolves no gate | ENV-001 | Owner |
+| 2026-08-04 | NTF-001-OWNER-001 | Product decision | Mentions GATE-004 and GATE-007 in passing | NTF-001 | Owner |
+| 2026-09-28 | GATE-012-PILOT-SCOPE | Gate scoping | Mexico Central only \\| 14-day PITR | GATE-012 | Owner |
+| 2026-09-29 | GATE-007-DUPLICATED | Gate resolution | first | GATE-007 | Owner |
+| 2026-09-29 | GATE-007-DUPLICATED | Gate resolution | second | GATE-007 | Owner |
+| 2026-09-29 | GATE-007-WRONG-TYPE | Gate decision | not a resolution type | GATE-007 | Owner |
+| 2026-09-30 | GATE-007-APPROVED | Gate resolution | Approved with an unescaped | pipe later in the text | GATE-007 | Owner |
+"""
+
+
+class GateDecisionTests(unittest.TestCase):
+    def check(self, gate, decision_id, text=SAMPLE_LOG):
+        return guards.validate_gate_decision(text, gate, decision_id)
+
+    def test_scoping_and_resolution_rows_are_accepted(self):
+        self.assertEqual([], self.check("012", "GATE-012-PILOT-SCOPE"))
+        self.assertEqual([], self.check("007", "GATE-007-APPROVED"))
+
+    def test_rows_that_do_not_resolve_or_scope_the_gate_are_rejected(self):
+        cases = {
+            "GATE-007-PRIVACY-DRAFT": "Type 'Legal process decision'",
+            "PILOT-REAL-PEOPLE": "not a GATE-007 decision",
+            "NTF-001-OWNER-001": "not a GATE-007 decision",
+            "": "missing or malformed",
+            "GATE-007-UNKNOWN": "not recorded",
+            "GATE-007-DUPLICATED": "appears 2 times",
+            "GATE-007-WRONG-TYPE": "Type 'Gate decision'",
+            "GATE-012-PILOT-SCOPE": "not a GATE-007 decision",
+            "gate-007-approved": "missing or malformed",
+        }
+        for decision_id, fragment in cases.items():
+            with self.subTest(decision_id=decision_id):
+                failures = self.check("007", decision_id)
+                self.assertEqual(1, len(failures), failures)
+                self.assertIn(fragment, failures[0])
+
+    def test_escaped_pipes_and_foreign_tables_do_not_shift_columns(self):
+        self.assertEqual(["| a", "b |"], [c for c in guards.split_markdown_row("| \\| a | b \\| |")])
+        other_table = "| ID | Type |\n|---|---|\n| GATE-012-PILOT-SCOPE | Gate scoping |\n"
+        self.assertIn("table not found", self.check("012", "GATE-012-PILOT-SCOPE", other_table)[0])
+
+    def test_real_decision_log_scopes_gate_012_for_the_pilot(self):
+        text = (REPO_ROOT / guards.DECISION_LOG).read_text(encoding="utf-8")
+        self.assertEqual([], guards.validate_gate_decision(text, "012", "GATE-012-PILOT-SCOPE"))
+        self.assertTrue(guards.validate_gate_decision(text, "007", "GATE-007-PRIVACY-DRAFT"))
+        self.assertTrue(guards.validate_gate_decision(text, "007", "PILOT-REAL-PEOPLE"))
+
+    def test_cli_exit_codes(self):
+        ok = subprocess.run([sys.executable, guards.__file__, "gate-decision", "--gate", "012", "--decision-id", "GATE-012-PILOT-SCOPE",
+                             "--decision-log", str(REPO_ROOT / guards.DECISION_LOG)], capture_output=True, text=True)
+        self.assertEqual(0, ok.returncode, ok.stdout)
+        bad = subprocess.run([sys.executable, guards.__file__, "gate-decision", "--gate", "007", "--decision-id", "GATE-007-PRIVACY-DRAFT",
+                              "--decision-log", str(REPO_ROOT / guards.DECISION_LOG)], capture_output=True, text=True)
+        self.assertEqual(1, bad.returncode)
+        self.assertIn("STOP_FOR_OWNER_DECISION", bad.stdout)
 
 
 @unittest.skipUnless(_bicep(), "pinned Bicep CLI not available (set BICEP_BIN); the azr-static CI job installs it")
@@ -161,9 +226,11 @@ class TemplateGuardTests(unittest.TestCase):
         self.assert_fails(10, self.context(external_api), "must be internal")
 
     def test_mock_or_synthetic_value_fails(self):
-        def mutate(t):
-            t["apps"]["variables"]["productionEnv"].append({"name": "Notifications__Channel", "value": "Mock"})
-        self.assert_fails(7, self.context(mutate), "Mock")
+        for value in ("Mock", "mock", "Synthetic"):
+            def mutate(t, value=value):
+                t["apps"]["variables"]["productionEnv"].append({"name": "Notifications__Channel", "value": value})
+            with self.subTest(value=value):
+                self.assert_fails(7, self.context(mutate), value)
 
     def test_inline_or_foreign_secret_fails(self):
         def inline(t):

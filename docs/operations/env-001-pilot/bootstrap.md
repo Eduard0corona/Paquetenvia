@@ -152,8 +152,8 @@ In the GitHub UI: *Settings → Environments → New environment* `azure-pilot`.
 | `PILOT_BUDGET_START_DATE` | first day of the current or next month, e.g. `2026-10-01` (keep it unchanged afterwards) |
 | `PILOT_BUDGET_EMAILS` | optional, comma-separated extra recipients (resource-group Owners are always notified) |
 | `PILOT_TRACKING_SUPPORT_URL` | optional `https://` support link for public tracking (default `https://paquetenvia.com`) |
-| `PILOT_GATE_007_DECISION` | decision-log id that resolves or scopes GATE-007 (privacy) |
-| `PILOT_GATE_012_DECISION` | decision-log id that resolves or scopes GATE-012 (cloud and data residency): `GATE-012-PILOT-SCOPE` |
+| `PILOT_GATE_007_DECISION` | ID of the decision-log row `GATE-007-...` whose Type is `Gate resolution` or `Gate scoping` (privacy). Not set until the owner records it; `GATE-007-PRIVACY-DRAFT` is rejected. |
+| `PILOT_GATE_012_DECISION` | `GATE-012-PILOT-SCOPE` (Type `Gate scoping`, cloud and data residency) |
 
 Or with the GitHub CLI (`gh auth login` first):
 

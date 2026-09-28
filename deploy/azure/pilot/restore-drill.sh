@@ -56,16 +56,22 @@ printf 'Host=%s;Database=paqueteria;Username=%s;Password=%s;Maximum Pool Size=2;
 unset admin
 az keyvault secret set --vault-name "${VAULT}" --name "${SECRET}" --file "${tmp}" --encoding utf-8 --only-show-errors --output none
 secret_id="$(az keyvault secret show --vault-name "${VAULT}" --name "${SECRET}" --query id -o tsv | sed 's#/[^/]*$##')"
+SECRET_SCOPE="$(az keyvault show -n "${VAULT}" --query id -o tsv)/secrets/${SECRET}"
 az role assignment create --assignee-object-id "${MIGRATE_PRINCIPAL}" --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" --scope "$(az keyvault show -n "${VAULT}" --query id -o tsv)/secrets/${SECRET}" \
+  --role "Key Vault Secrets User" --scope "${SECRET_SCOPE}" \
   --only-show-errors --output none
 sleep 60
 
-restore_job_secret() {
+# Cleanup on every exit: point the verify job back at the pilot database, revoke the temporary
+# Key Vault Secrets User assignment on the drill secret, and wipe the local temporary file.
+cleanup() {
   az containerapp job secret set -g "${RG}" -n "${JOB}" --only-show-errors --output none \
-    --secrets "pg-verify-conn=keyvaultref:${VAULT_URI}secrets/pg-migrate-connection,identityref:${MIGRATE_IDENTITY_ID}"
+    --secrets "pg-verify-conn=keyvaultref:${VAULT_URI}secrets/pg-migrate-connection,identityref:${MIGRATE_IDENTITY_ID}" || true
+  az role assignment delete --assignee "${MIGRATE_PRINCIPAL}" --role "Key Vault Secrets User" \
+    --scope "${SECRET_SCOPE}" --only-show-errors --output none || true
+  shred -u "${tmp}" 2>/dev/null || true
 }
-trap 'restore_job_secret; shred -u "${tmp}" 2>/dev/null || true' EXIT
+trap cleanup EXIT
 
 # 3. Point the read-only verify job at the restored server and run `assert` (baseline + every module lane).
 az containerapp job secret set -g "${RG}" -n "${JOB}" --only-show-errors --output none \

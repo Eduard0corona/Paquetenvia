@@ -11,6 +11,7 @@ Commands:
   check            evaluate every pilot guard (P00..P19)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   scram-verifier   read a password on stdin, print its PostgreSQL SCRAM-SHA-256 verifier
+  gate-decision    require a decision-log row that resolves or scopes GATE-007 / GATE-012
 """
 
 from __future__ import annotations
@@ -103,7 +104,16 @@ ALLOWED_ROLE_IDS = {
 }
 
 # Values that must never reach a pilot workload.
-FORBIDDEN_ENV_VALUES = frozenset({"Mock", "Synthetic", "DevSynthetic", "DEV_SYNTHETIC", "Development", "Testing", "S3Compatible", "Memory"})
+FORBIDDEN_ENV_VALUES = frozenset({"mock", "synthetic", "devsynthetic", "dev_synthetic", "development", "testing", "s3compatible", "memory"})
+
+
+def is_forbidden_value(value: str) -> bool:
+    """Case-insensitive: .NET binds enum settings ignoring case, so `mock` selects the Mock provider."""
+    return value.strip().casefold() in FORBIDDEN_ENV_VALUES
+
+
+def is_owner_sentinel(value: str) -> bool:
+    return value.strip().casefold() == OWNER_SENTINEL.casefold()
 PLATFORM_MANAGED_PREFIXES = (
     "ASPNETCORE_",
     "DOTNET_",
@@ -362,7 +372,8 @@ def guard_03_environment(ctx: Context) -> GuardResult:
 def guard_04_provenance(ctx: Context) -> GuardResult:
     failures = []
     for needle in ("azr001_static_guards.py deploy-gate", "--foundation-jobs-json", "^[0-9a-f]{40}$", "^[0-9]+$", DIGEST_REGEX_LITERAL,
-                   "PILOT_GATE_007_DECISION", "PILOT_GATE_012_DECISION"):
+                   "PILOT_GATE_007_DECISION", "PILOT_GATE_012_DECISION",
+                   "gate-decision --gate 007", "gate-decision --gate 012"):
         if needle not in ctx.workflow_text:
             failures.append(f"workflow lacks provenance/digest control: {needle}")
     for name, job in (ctx.workflow.get("jobs", {}) or {}).items():
@@ -415,7 +426,7 @@ def guard_07_production_classification(ctx: Context) -> GuardResult:
     failures = []
     for workload in ctx.workloads:
         for key, (kind, value) in workload.env.items():
-            if kind == "value" and value in FORBIDDEN_ENV_VALUES:
+            if kind == "value" and is_forbidden_value(value):
                 failures.append(f"{workload.name} sets {key}={value}")
             if "TESTING" in key.upper():
                 failures.append(f"{workload.name} declares testing variable {key}")
@@ -798,13 +809,92 @@ def validate_settings(entries: list[Any], *, allow_sentinel: bool) -> list[str]:
         if name in seen:
             failures.append(f"setting {name} declared twice")
         seen.add(name)
-        if value in FORBIDDEN_ENV_VALUES:
+        if is_forbidden_value(value):
             failures.append(f"setting {name}={value} is a mock/synthetic value")
-        if value == OWNER_SENTINEL and not allow_sentinel:
+        if is_owner_sentinel(value) and not allow_sentinel:
             failures.append(f"setting {name} still awaits an owner decision ({OWNER_SENTINEL})")
         if re.search(r"(?i)(password|secret|token|key)", name):
             failures.append(f"setting {name} looks like a secret; secrets belong in Key Vault")
     return failures
+
+
+# ---------------------------------------------------------------------------------------------- gate decisions
+DECISION_LOG = Path("docs/normative/v0.6/decision-log.md")
+DECISION_LOG_HEADER = ["Date", "ID", "Type", "Decision", "Impacted files", "Approved by"]
+GATE_DECISION_TYPES = frozenset({"Gate resolution", "Gate scoping"})
+DECISION_ID = re.compile(r"^[A-Z0-9][A-Z0-9-]{2,80}$")
+
+
+def split_markdown_row(line: str) -> list[str] | None:
+    """Cells of a `| a | b |` table row, splitting only on unescaped `|` (`\\|` is a literal pipe)."""
+    stripped = line.strip()
+    if len(stripped) < 2 or not stripped.startswith("|") or not stripped.endswith("|") or stripped.endswith("\\|"):
+        return None
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in stripped[1:-1]:
+        if escaped:
+            if char != "|":
+                current.append("\\")
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
+
+
+def decision_log_rows(text: str) -> list[list[str]]:
+    """Rows of the decision table: every table row after the exact DECISION_LOG_HEADER, across blank lines,
+    until the first non-blank line that is not a table row (a heading or prose ends the table)."""
+    rows: list[list[str]] = []
+    in_table = False
+    for line in text.splitlines():
+        cells = split_markdown_row(line)
+        if cells == DECISION_LOG_HEADER:
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if cells is None:
+            if line.strip():
+                in_table = False
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def validate_gate_decision(text: str, gate: str, decision_id: str) -> list[str]:
+    """ENV-001: the id must name exactly one row `GATE-<gate>-...` whose Type is a gate resolution or scoping."""
+    if gate not in ("007", "012"):
+        return [f"unsupported gate GATE-{gate}"]
+    if not decision_id or not DECISION_ID.match(decision_id):
+        return [f"GATE-{gate} decision id is missing or malformed"]
+    if not decision_id.startswith(f"GATE-{gate}-"):
+        return [f"decision {decision_id} is not a GATE-{gate} decision (id must start with GATE-{gate}-)"]
+    rows = decision_log_rows(text)
+    if not rows:
+        return ["decision-log table not found"]
+    # Date, ID and Type come first, so an unescaped `|` later in the Decision text cannot shift them.
+    matches = [r for r in rows if len(r) >= len(DECISION_LOG_HEADER) and r[1] == decision_id]
+    if not matches:
+        return [f"decision {decision_id} is not recorded in the decision-log table"]
+    if len(matches) > 1:
+        return [f"decision {decision_id} appears {len(matches)} times in the decision-log table"]
+    row_type = matches[0][2]
+    if row_type not in GATE_DECISION_TYPES:
+        return [f"decision {decision_id} has Type '{row_type}', not one of {sorted(GATE_DECISION_TYPES)}"]
+    return []
 
 
 # ---------------------------------------------------------------------------------------------- SCRAM
@@ -847,6 +937,19 @@ def command_settings_check(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def command_gate_decision(args: argparse.Namespace) -> int:
+    try:
+        text = Path(args.decision_log).read_text(encoding="utf-8")
+    except OSError as error:
+        print(f"STOP_FOR_OWNER_DECISION: {error}")
+        return 1
+    failures = validate_gate_decision(text, args.gate, (args.decision_id or "").strip())
+    for failure in failures:
+        print(f"STOP_FOR_OWNER_DECISION: {failure}")
+    print(f"ENV001_GATE_{args.gate}=" + ("FAIL" if failures else f"PASS {args.decision_id}"))
+    return 1 if failures else 0
+
+
 def command_scram_verifier(_: argparse.Namespace) -> int:
     password = sys.stdin.read().rstrip("\n")
     if len(password) < 32:
@@ -867,6 +970,11 @@ def build_parser() -> argparse.ArgumentParser:
     settings.add_argument("--file", default=str(SETTINGS_FILE))
     settings.add_argument("--allow-owner-sentinel", action="store_true")
     settings.set_defaults(func=command_settings_check)
+    gate = sub.add_parser("gate-decision", help="require a GATE-007/012 resolution or scoping row")
+    gate.add_argument("--gate", required=True, choices=("007", "012"))
+    gate.add_argument("--decision-id", default="", help="decision-log ID (from the environment variable)")
+    gate.add_argument("--decision-log", default=str(DECISION_LOG))
+    gate.set_defaults(func=command_gate_decision)
     scram = sub.add_parser("scram-verifier", help="password on stdin -> SCRAM-SHA-256 verifier on stdout")
     scram.set_defaults(func=command_scram_verifier)
     return parser

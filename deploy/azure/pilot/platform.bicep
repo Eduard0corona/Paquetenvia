@@ -217,6 +217,9 @@ resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
     networkAcls: {
       bypass: 'AzureServices'
       defaultAction: 'Allow'
+      // Inert by design (PILOT-BLOB-PUBLIC-ENDPOINT): with defaultAction Allow this rule grants nothing
+      // extra. It is kept so that switching defaultAction to Deny later keeps the workloads' access over
+      // the free Microsoft.Storage service endpoint, while cutting off only the browsers.
       virtualNetworkRules: [
         {
           id: containerAppsSubnet.id

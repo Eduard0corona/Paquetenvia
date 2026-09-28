@@ -185,23 +185,15 @@ jobs:
           fetch-depth: 1
 
       # ENV-001 acceptance: no pilot deployment without GATE-007 (privacy) and GATE-012 (cloud and data
-      # residency) resolved or explicitly scoped by the owner. Each variable names the decision-log row
-      # (in the deployed tree) that resolves or scopes the gate; a missing or unknown id stops here.
+      # residency) resolved or explicitly scoped by the owner. Each variable must equal the ID of exactly one
+      # decision-log table row (at tested_git_sha) whose ID starts with GATE-007- / GATE-012- and whose Type
+      # is `Gate resolution` or `Gate scoping`; anything else (a draft, an unrelated row) stops here.
       - name: Require owner decisions for GATE-007 and GATE-012 (STOP_FOR_OWNER_DECISION)
         shell: bash
         run: |
           set -euo pipefail
-          log=docs/normative/v0.6/decision-log.md
-          for gate in 007 012; do
-            var="PILOT_GATE_${gate}_DECISION"
-            id="${!var:-}"
-            if [[ ! "${id}" =~ ^[A-Z0-9][A-Z0-9-]{2,80}$ ]]; then
-              echo "::error::${var} must name the decision-log row that resolves or scopes GATE-${gate} (STOP_FOR_OWNER_DECISION)"; exit 1
-            fi
-            if ! grep -Fq "| ${id} |" "${log}" || ! grep -F "| ${id} |" "${log}" | grep -Fq "GATE-${gate}"; then
-              echo "::error::decision ${id} is not recorded for GATE-${gate} in ${log} at tested_git_sha (STOP_FOR_OWNER_DECISION)"; exit 1
-            fi
-          done
+          python3 ./tools/azr-001/env001_pilot_guards.py gate-decision --gate 007 --decision-id "${PILOT_GATE_007_DECISION:-}"
+          python3 ./tools/azr-001/env001_pilot_guards.py gate-decision --gate 012 --decision-id "${PILOT_GATE_012_DECISION:-}"
 
       - name: Install pinned Bicep CLI
         shell: bash
