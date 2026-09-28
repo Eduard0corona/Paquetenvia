@@ -138,8 +138,17 @@ public interface IIncidentPiiProtector
     /// never the client). An implementation that cannot protect the value throws
     /// <see cref="IncidentPiiProtectionUnavailableException"/> instead of returning plaintext.
     /// </summary>
-    Task<ProtectedIncidentDescription> ProtectAsync(string plaintext, CancellationToken cancellationToken);
+    Task<ProtectedIncidentDescription> ProtectAsync(
+        IncidentPiiBinding binding,
+        string plaintext,
+        CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// The incident row a protected description belongs to: the order owner organization (the
+/// incident's <c>owner_org_id</c>) and the incident id. Production protectors authenticate both.
+/// </summary>
+public readonly record struct IncidentPiiBinding(Guid OwnerOrganizationId, Guid IncidentId);
 
 public sealed record ProtectedIncidentDescription(byte[] Ciphertext, string KeyVersion);
 

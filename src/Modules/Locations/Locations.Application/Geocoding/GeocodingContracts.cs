@@ -14,8 +14,16 @@ public interface IGeocodingProvider
     Task<GeocodingResult> GeocodeAsync(GeocodingRequest request, CancellationToken cancellationToken);
 }
 
-/// <summary>The personal values of one location, before protection.</summary>
-public sealed record LocationPiiValues(string AddressText, string? ContactName, string? Phone);
+/// <summary>
+/// The personal values of one location, before protection, with the owning organization and the
+/// location row the ciphertexts are bound to.
+/// </summary>
+public sealed record LocationPiiValues(
+    Guid OwnerOrganizationId,
+    Guid LocationId,
+    string AddressText,
+    string? ContactName,
+    string? Phone);
 
 /// <summary>
 /// The protected values of one location, all under <see cref="KeyVersion"/>, which the row

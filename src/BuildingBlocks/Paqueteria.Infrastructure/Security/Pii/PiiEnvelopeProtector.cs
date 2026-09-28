@@ -9,6 +9,16 @@ namespace Paqueteria.Infrastructure.Security.Pii;
 public sealed record PiiPlaintext(string Purpose, string Value);
 
 /// <summary>
+/// The row every ciphertext of a batch belongs to: the owning organization (tenant) and the row id.
+/// Both are authenticated, so a ciphertext copied into another tenant's row, or into another row of
+/// the same tenant, fails to decrypt.
+/// </summary>
+public readonly record struct PiiBinding(Guid OwnerOrganizationId, Guid EntityId)
+{
+    public bool IsValid => OwnerOrganizationId != Guid.Empty && EntityId != Guid.Empty;
+}
+
+/// <summary>
 /// Ciphertexts in the same order as the request, all under <see cref="KeyVersion"/>: the single
 /// value the row stores in <c>pii_key_version</c>. The protector chose it; no caller supplies it.
 /// </summary>
@@ -21,9 +31,13 @@ public sealed record PiiProtectedBatch(string KeyVersion, IReadOnlyList<byte[]> 
 /// </summary>
 public interface IPiiEnvelopeProtector
 {
-    Task<PiiProtectedBatch> ProtectAsync(IReadOnlyList<PiiPlaintext> values, CancellationToken cancellationToken);
+    Task<PiiProtectedBatch> ProtectAsync(
+        PiiBinding binding,
+        IReadOnlyList<PiiPlaintext> values,
+        CancellationToken cancellationToken);
 
     Task<string> UnprotectAsync(
+        PiiBinding binding,
         string purpose,
         byte[] ciphertext,
         string keyVersion,
@@ -67,10 +81,16 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
     private const int MaximumKeyVersionLength = 200;
 
     public async Task<PiiProtectedBatch> ProtectAsync(
+        PiiBinding binding,
         IReadOnlyList<PiiPlaintext> values,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(values);
+        if (!binding.IsValid)
+        {
+            throw new ArgumentException("The owning organization and row are required.", nameof(binding));
+        }
+
         if (values.Count == 0)
         {
             throw new ArgumentException("At least one value is required.", nameof(values));
@@ -88,7 +108,7 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
             var keyVersion = await keyWrapClient.GetCurrentKeyVersionAsync(cancellationToken).ConfigureAwait(false);
             ValidateKeyVersion(keyVersion);
             var ciphertexts = await Task.WhenAll(values.Select(value =>
-                ProtectOneAsync(value, keyVersion, cancellationToken))).ConfigureAwait(false);
+                ProtectOneAsync(binding, value, keyVersion, cancellationToken))).ConfigureAwait(false);
             return new PiiProtectedBatch(keyVersion, ciphertexts);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -106,12 +126,18 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
     }
 
     public async Task<string> UnprotectAsync(
+        PiiBinding binding,
         string purpose,
         byte[] ciphertext,
         string keyVersion,
         CancellationToken cancellationToken)
     {
         ValidatePurpose(purpose);
+        if (!binding.IsValid)
+        {
+            throw new PiiCiphertextRejectedException();
+        }
+
         ArgumentNullException.ThrowIfNull(ciphertext);
         if (!IsValidKeyVersion(keyVersion) || !TryParse(ciphertext, out var envelope))
         {
@@ -147,7 +173,7 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
                 envelope.Ciphertext,
                 envelope.Tag,
                 plaintext,
-                AssociatedData(purpose, keyVersion));
+                AssociatedData(binding, purpose, keyVersion));
             return Encoding.UTF8.GetString(plaintext);
         }
         catch (CryptographicException)
@@ -162,6 +188,7 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
     }
 
     private async Task<byte[]> ProtectOneAsync(
+        PiiBinding binding,
         PiiPlaintext value,
         string keyVersion,
         CancellationToken cancellationToken)
@@ -190,7 +217,7 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
             var tag = span.Slice(offset, TagBytes);
             offset += TagBytes;
             using var aes = new AesGcm(dataKey, TagBytes);
-            aes.Encrypt(nonce, plaintext, span[offset..], tag, AssociatedData(value.Purpose, keyVersion));
+            aes.Encrypt(nonce, plaintext, span[offset..], tag, AssociatedData(binding, value.Purpose, keyVersion));
             return envelope;
         }
         finally
@@ -201,17 +228,22 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
     }
 
     /// <summary>
-    /// Binds each ciphertext to its column and key version, so a value cannot be moved to another
-    /// column or relabelled with another version without failing authentication.
+    /// Binds each ciphertext to its owning organization, its row, its column and its key version,
+    /// so a value cannot be moved to another tenant, row or column, or relabelled with another
+    /// version, without failing authentication.
     /// </summary>
-    private static byte[] AssociatedData(string purpose, string keyVersion)
+    private static byte[] AssociatedData(PiiBinding binding, string purpose, string keyVersion)
     {
         var purposeBytes = Encoding.UTF8.GetBytes(purpose);
         var versionBytes = Encoding.UTF8.GetBytes(keyVersion);
-        var data = new byte[Magic.Length + (2 * sizeof(ushort)) + purposeBytes.Length + versionBytes.Length];
+        var data = new byte[Magic.Length + 32 + (2 * sizeof(ushort)) + purposeBytes.Length + versionBytes.Length];
         var span = data.AsSpan();
         Magic.CopyTo(span);
         var offset = Magic.Length;
+        _ = binding.OwnerOrganizationId.TryWriteBytes(span.Slice(offset, 16), bigEndian: true, out _);
+        offset += 16;
+        _ = binding.EntityId.TryWriteBytes(span.Slice(offset, 16), bigEndian: true, out _);
+        offset += 16;
         BinaryPrimitives.WriteUInt16BigEndian(span[offset..], (ushort)purposeBytes.Length);
         offset += sizeof(ushort);
         purposeBytes.CopyTo(span[offset..]);

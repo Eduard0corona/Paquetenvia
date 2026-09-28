@@ -172,6 +172,8 @@ public sealed class PostgreSqlLocationService(
         // (it previously pinned a synthetic label) and protects before the transaction opens.
         var protectedPii = await ProtectBeforeTransactionAsync(
             new LocationPiiValues(
+                command.OrganizationId,
+                locationId,
                 string.IsNullOrWhiteSpace(command.References)
                     ? command.AddressText
                     : $"{command.AddressText}\nReferences: {command.References}",
@@ -326,7 +328,7 @@ public sealed class PostgreSqlLocationService(
         // while a database transaction is held. AI05-REMOVE-PII-KEY-VERSION: the protector, never
         // the client, selects the key version.
         var protectedPii = await ProtectBeforeTransactionAsync(
-            new LocationPiiValues(command.AddressText, command.ContactName, command.Phone),
+            new LocationPiiValues(command.OrganizationId, locationId, command.AddressText, command.ContactName, command.Phone),
             cancellationToken);
 
         try

@@ -44,7 +44,7 @@ public sealed class IncidentsConfigurationTests
         var protector = provider.GetRequiredService<IIncidentPiiProtector>();
         Assert.IsType<DisabledIncidentPiiProtector>(protector);
         await Assert.ThrowsAsync<IncidentPiiProtectionUnavailableException>(
-            () => protector.ProtectAsync("una descripcion", CancellationToken.None));
+            () => protector.ProtectAsync(new IncidentPiiBinding(Guid.NewGuid(), Guid.NewGuid()), "una descripcion", CancellationToken.None));
     }
 
     [Fact]

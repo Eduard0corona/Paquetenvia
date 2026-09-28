@@ -19,6 +19,9 @@ namespace Paqueteria.UnitTests.Security;
 public sealed class Adp001KeyVaultWrapClientHttpTests
 {
     private const string KeyId = "https://paquetenvia-test.vault.azure.net/keys/pii-envelope";
+    private static readonly PiiBinding Row = new(
+        Guid.Parse("11111111-1111-1111-1111-111111111111"),
+        Guid.Parse("44444444-4444-4444-4444-444444444444"));
 
     [Fact]
     public async Task The_server_reads_the_current_version_from_key_vault_and_rotation_keeps_old_rows_readable()
@@ -28,23 +31,23 @@ public sealed class Adp001KeyVaultWrapClientHttpTests
         var client = CreateClient(vault, time);
         var protector = new PiiEnvelopeProtector(client);
 
-        var before = await protector.ProtectAsync([new PiiPlaintext("incidents.description", "Descripcion sintetica N")], default);
+        var before = await protector.ProtectAsync(Row, [new PiiPlaintext("incidents.description", "Descripcion sintetica N")], default);
         Assert.Equal($"akv:pii-envelope/{vault.CurrentVersion}", before.KeyVersion);
 
         var previous = vault.CurrentVersion;
         vault.Rotate();
         time.Advance(TimeSpan.FromSeconds(301));
-        var after = await protector.ProtectAsync([new PiiPlaintext("incidents.description", "Descripcion sintetica N+1")], default);
+        var after = await protector.ProtectAsync(Row, [new PiiPlaintext("incidents.description", "Descripcion sintetica N+1")], default);
 
         Assert.Equal($"akv:pii-envelope/{vault.CurrentVersion}", after.KeyVersion);
         Assert.NotEqual(before.KeyVersion, after.KeyVersion);
         Assert.Equal(
             "Descripcion sintetica N",
-            await protector.UnprotectAsync("incidents.description", before.Ciphertexts[0], before.KeyVersion, default));
+            await protector.UnprotectAsync(Row, "incidents.description", before.Ciphertexts[0], before.KeyVersion, default));
         Assert.Contains(vault.UnwrapPaths, path => path.Contains($"/keys/pii-envelope/{previous}/unwrapkey", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(
             "Descripcion sintetica N+1",
-            await protector.UnprotectAsync("incidents.description", after.Ciphertexts[0], after.KeyVersion, default));
+            await protector.UnprotectAsync(Row, "incidents.description", after.Ciphertexts[0], after.KeyVersion, default));
     }
 
     [Fact]
@@ -71,7 +74,7 @@ public sealed class Adp001KeyVaultWrapClientHttpTests
         var protector = new PiiEnvelopeProtector(CreateClient(vault, new ManualTimeProvider(DateTimeOffset.UtcNow)));
 
         await Assert.ThrowsAsync<PiiProtectionUnavailableException>(() =>
-            protector.ProtectAsync([new PiiPlaintext("locations.address_text", "Calle Sintetica 1")], default));
+            protector.ProtectAsync(Row, [new PiiPlaintext("locations.address_text", "Calle Sintetica 1")], default));
     }
 
     [Fact]

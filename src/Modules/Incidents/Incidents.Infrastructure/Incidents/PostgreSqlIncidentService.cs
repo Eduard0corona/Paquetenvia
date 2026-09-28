@@ -72,13 +72,31 @@ public sealed partial class PostgreSqlIncidentService(
         var slaDueAt = UtcMicrosecondPrecision.Normalize(policy.DueAt(occurredAt, severity));
         var requestHash = ComputeRequestHash(command, occurredAt);
 
-        // The description is protected before the transaction opens. If protection is
-        // unavailable the request ends as 503 having written no incident, no evidence, no
-        // idempotency reservation and no audit entry.
-        var protectedDescription = await ProtectDescriptionAsync(command.Description, cancellationToken);
-
         try
         {
+            // ADP-001: the ciphertext is bound to the incident row and the order owner organization,
+            // so the owner is read (and authorized) in a read-only transaction first. The order's
+            // owner never changes; the writing transaction below re-checks it.
+            var incidentId = Guid.NewGuid();
+            var ownerOrganizationId = await transactionContext.ExecuteAsync(
+                new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
+                async (dbContext, token) => (await IncidentsSql.ReadAuthorizedOrderAsync(
+                    dbContext,
+                    command.OrderId,
+                    command.ActorId,
+                    command.OrganizationId,
+                    command.MfaSatisfied,
+                    token) ?? throw new IncidentNotFoundException()).OwnerOrganizationId,
+                cancellationToken);
+
+            // The description is protected before the writing transaction opens. If protection is
+            // unavailable the request ends as 503 having written no incident, no evidence, no
+            // idempotency reservation and no audit entry.
+            var protectedDescription = await ProtectDescriptionAsync(
+                new IncidentPiiBinding(ownerOrganizationId, incidentId),
+                command.Description,
+                cancellationToken);
+
             return await transactionContext.ExecuteAsync(
                 new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
                 async (dbContext, token) =>
@@ -90,6 +108,10 @@ public sealed partial class PostgreSqlIncidentService(
                         command.OrganizationId,
                         command.MfaSatisfied,
                         token) ?? throw new IncidentNotFoundException();
+                    if (order.OwnerOrganizationId != ownerOrganizationId)
+                    {
+                        throw new IncidentConflictException("CONFLICT");
+                    }
 
                     await IncidentsSql.AcquireIdempotencyLockAsync(
                         dbContext,
@@ -129,7 +151,6 @@ public sealed partial class PostgreSqlIncidentService(
 
                     var recordedAt = order.RecordedAt(now);
 
-                    var incidentId = Guid.NewGuid();
                     var result = new IncidentResult(
                         incidentId,
                         command.OrderId,
@@ -185,6 +206,7 @@ public sealed partial class PostgreSqlIncidentService(
     /// failure, which the endpoint publishes as 503, before anything is written.
     /// </summary>
     private async Task<ProtectedDescription> ProtectDescriptionAsync(
+        IncidentPiiBinding binding,
         string description,
         CancellationToken cancellationToken)
     {
@@ -192,7 +214,7 @@ public sealed partial class PostgreSqlIncidentService(
         {
             // ADP-001: the protector selects the key version (Key Vault in production, the
             // server-configured synthetic label for the mock); a client never supplies it.
-            var protectedValue = await piiProtector.ProtectAsync(description, cancellationToken);
+            var protectedValue = await piiProtector.ProtectAsync(binding, description, cancellationToken);
             if (protectedValue is not { Ciphertext.Length: > 0 } ||
                 string.IsNullOrWhiteSpace(protectedValue.KeyVersion))
             {

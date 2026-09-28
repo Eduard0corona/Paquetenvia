@@ -122,7 +122,11 @@ public sealed class AzureKeyVaultLocationPiiProtector(IPiiEnvelopeProtector enve
         PiiProtectedBatch batch;
         try
         {
-            batch = await envelope.ProtectAsync(inputs, cancellationToken).ConfigureAwait(false);
+            batch = await envelope.ProtectAsync(
+                    new PiiBinding(values.OwnerOrganizationId, values.LocationId),
+                    inputs,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

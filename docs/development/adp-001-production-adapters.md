@@ -123,9 +123,10 @@ PII key.
    allowed to wrap and unwrap, and caches it for `CurrentVersionRefreshSeconds`. Configuration and
    clients never supply a version.
 2. A fresh 256-bit data key per value encrypts it with AES-256-GCM. The associated data binds the
-   ciphertext to its column (`locations.address_text`, `locations.contact_name`,
-   `locations.phone`, `incidents.description`) and to the key version, so a value cannot be moved
-   to another column or relabelled with another version.
+   ciphertext to the owning organization (tenant), the row id (location or incident id), the column
+   (`locations.address_text`, `locations.contact_name`, `locations.phone`,
+   `incidents.description`) and the key version, so a value cannot be moved to another tenant,
+   another row or another column, or relabelled with another version.
 3. The data key is wrapped with `RSA-OAEP-256` under that exact version
    (`CryptographyClient.WrapKey`) and zeroed from memory.
 
@@ -139,8 +140,12 @@ Unwrapping always addresses the recorded version (`/keys/{name}/{version}/unwrap
 rotation keeps earlier rows readable while their version stays enabled. A stored version naming
 another key is refused before any call to Key Vault.
 
-`ILocationPiiProtector` and `IIncidentPiiProtector` became asynchronous and return the key
-version they chose. Both services now protect **before** opening the database transaction:
+`ILocationPiiProtector` and `IIncidentPiiProtector` became asynchronous, receive the row binding
+(owner organization and row id) and return the key version they chose. The location id is derived
+from the idempotency key before protection; for incidents, the service reads and authorizes the
+order in a short read-only transaction to learn its owner organization (the incident's
+`owner_org_id`), generates the incident id, protects, and re-checks the owner inside the writing
+transaction. Both services now protect **before** opening the database transaction:
 an unavailable vault ends in `503` with no row, idempotency reservation, audit entry or outbox
 event, and no Key Vault call is made while a transaction is held. The quote-location path
 (PRC-001) no longer pins the synthetic label `PRC-001-SYNTHETIC-V1`; it uses the protector's
@@ -157,8 +162,11 @@ No read path of PII exists yet; `UnprotectAsync` is used by tests and is the fut
 - **Upload grant**: a user-delegation SAS for the single blob
   `quarantine/{owner}/{order}/{session}`, permissions `cw` only (never `t`, `r`, `d` or list),
   resource `b`, HTTPS only, expiry = the POD-001 upload lifetime (a longer expiry is refused).
-  The delegation key is cached and always outlives the SAS it signs. Only the API signs; the
-  Worker is built with signing disabled.
+  The delegation key is cached and always outlives the SAS it signs. It is obtained by
+  `PrepareUploadGrantAsync` **before** the session service opens the tenant transaction and takes
+  the idempotency lock; the grant itself, created inside the transaction, never calls the storage
+  service and fails closed (`503`, nothing written) without a prepared key. Only the API signs;
+  the Worker is built with signing disabled.
 - **Required headers**: `Content-Type`, `x-ms-blob-type: BlockBlob` and the POD-001 metadata as
   `x-ms-meta-sessionid`, `orderid`, `ownerorgid`, `requestedby`, `prooftype`, `sizebytes`
   (and `sha256` when supplied). Azure metadata names must be C# identifiers, so hyphens are

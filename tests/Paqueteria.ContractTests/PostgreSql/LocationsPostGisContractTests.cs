@@ -349,10 +349,17 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
 
             Assert.Equal(versionN, rows[first].Version);
             Assert.Equal(versionNext, rows[second].Version);
-            Assert.Equal(addressN, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.AddressTextPurpose, rows[first].Address, rows[first].Version, default));
-            Assert.Equal(contact, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.ContactNamePurpose, rows[first].Contact!, rows[first].Version, default));
-            Assert.Equal(phone, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.PhonePurpose, rows[first].Phone!, rows[first].Version, default));
-            Assert.Equal(addressNext, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.AddressTextPurpose, rows[second].Address, rows[second].Version, default));
+            Assert.Equal(addressN, await envelope.UnprotectAsync(new PiiBinding(scenario.OrganizationId, first), AzureKeyVaultLocationPiiProtector.AddressTextPurpose, rows[first].Address, rows[first].Version, default));
+            Assert.Equal(contact, await envelope.UnprotectAsync(new PiiBinding(scenario.OrganizationId, first), AzureKeyVaultLocationPiiProtector.ContactNamePurpose, rows[first].Contact!, rows[first].Version, default));
+            Assert.Equal(phone, await envelope.UnprotectAsync(new PiiBinding(scenario.OrganizationId, first), AzureKeyVaultLocationPiiProtector.PhonePurpose, rows[first].Phone!, rows[first].Version, default));
+            Assert.Equal(addressNext, await envelope.UnprotectAsync(new PiiBinding(scenario.OrganizationId, second), AzureKeyVaultLocationPiiProtector.AddressTextPurpose, rows[second].Address, rows[second].Version, default));
+            // Relocating the first row's address into the second row (same tenant) fails authentication.
+            await Assert.ThrowsAsync<PiiCiphertextRejectedException>(() => envelope.UnprotectAsync(
+                new PiiBinding(scenario.OrganizationId, second),
+                AzureKeyVaultLocationPiiProtector.AddressTextPurpose,
+                rows[first].Address,
+                rows[first].Version,
+                default));
             Assert.Null(rows[second].Contact);
             Assert.Null(rows[second].Phone);
             foreach (var (plaintext, ciphertext) in new[] { (addressN, rows[first].Address), (contact, rows[first].Contact!), (phone, rows[first].Phone!) })

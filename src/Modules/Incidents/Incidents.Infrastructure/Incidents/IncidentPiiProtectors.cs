@@ -14,7 +14,10 @@ public sealed class DisabledIncidentPiiProtector : IIncidentPiiProtector
     public byte[] Protect(string plaintext, string keyVersion) =>
         throw new IncidentPiiProtectionUnavailableException();
 
-    public Task<ProtectedIncidentDescription> ProtectAsync(string plaintext, CancellationToken cancellationToken) =>
+    public Task<ProtectedIncidentDescription> ProtectAsync(
+        IncidentPiiBinding binding,
+        string plaintext,
+        CancellationToken cancellationToken) =>
         Task.FromException<ProtectedIncidentDescription>(new IncidentPiiProtectionUnavailableException());
 }
 
@@ -39,7 +42,10 @@ public sealed class DeterministicMockIncidentPiiProtector(string keyVersion = De
         return SHA256.HashData(Encoding.UTF8.GetBytes($"INC-001-MOCK\0{keyVersion}\0{plaintext}"));
     }
 
-    public Task<ProtectedIncidentDescription> ProtectAsync(string plaintext, CancellationToken cancellationToken)
+    public Task<ProtectedIncidentDescription> ProtectAsync(
+        IncidentPiiBinding binding,
+        string plaintext,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(new ProtectedIncidentDescription(Protect(plaintext, KeyVersion), KeyVersion));
@@ -56,13 +62,19 @@ public sealed class AzureKeyVaultIncidentPiiProtector(IPiiEnvelopeProtector enve
 {
     public const string DescriptionPurpose = "incidents.description";
 
-    public async Task<ProtectedIncidentDescription> ProtectAsync(string plaintext, CancellationToken cancellationToken)
+    public async Task<ProtectedIncidentDescription> ProtectAsync(
+        IncidentPiiBinding binding,
+        string plaintext,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(plaintext);
         PiiProtectedBatch batch;
         try
         {
-            batch = await envelope.ProtectAsync([new PiiPlaintext(DescriptionPurpose, plaintext)], cancellationToken)
+            batch = await envelope.ProtectAsync(
+                    new PiiBinding(binding.OwnerOrganizationId, binding.IncidentId),
+                    [new PiiPlaintext(DescriptionPurpose, plaintext)],
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

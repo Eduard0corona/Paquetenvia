@@ -656,10 +656,11 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
             openedUnderNext = await scope.Service.OpenAsync(OpenCommand(after, [afterProof]), CancellationToken.None);
         }
 
+        var stored = new Dictionary<Guid, (Guid Owner, byte[] Ciphertext, string Version)>();
         foreach (var (incident, expectedVersion) in new[] { (openedUnderN.Id, versionN), (openedUnderNext.Id, versionNext) })
         {
             await using var read = fixture.AdminDataSource.CreateCommand(
-                "SELECT description_ciphertext,pii_key_version FROM incidents.incidents WHERE id=@incident");
+                "SELECT description_ciphertext,pii_key_version,owner_org_id FROM incidents.incidents WHERE id=@incident");
             read.Parameters.AddWithValue("incident", incident);
             await using var reader = await read.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
@@ -667,10 +668,29 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
             Assert.Equal(expectedVersion, reader.GetString(1));
             Assert.NotEqual(TestKeyVersion, reader.GetString(1));
             Assert.True(ciphertext.AsSpan().IndexOf(Encoding.UTF8.GetBytes(TestDescription)) < 0);
+            var owner = reader.GetGuid(2);
+            stored[incident] = (owner, ciphertext, reader.GetString(1));
             Assert.Equal(
                 TestDescription,
-                await envelope.UnprotectAsync(AzureKeyVaultIncidentPiiProtector.DescriptionPurpose, ciphertext, reader.GetString(1), default));
+                await envelope.UnprotectAsync(
+                    new Paqueteria.Infrastructure.Security.Pii.PiiBinding(owner, incident),
+                    AzureKeyVaultIncidentPiiProtector.DescriptionPurpose,
+                    ciphertext,
+                    reader.GetString(1),
+                    default));
         }
+
+        // ADP-001 review: a description copied into another tenant's incident row does not decrypt.
+        var source = stored[openedUnderN.Id];
+        var target = stored[openedUnderNext.Id];
+        Assert.NotEqual(source.Owner, target.Owner);
+        await Assert.ThrowsAsync<Paqueteria.Infrastructure.Security.Pii.PiiCiphertextRejectedException>(() =>
+            envelope.UnprotectAsync(
+                new Paqueteria.Infrastructure.Security.Pii.PiiBinding(target.Owner, openedUnderNext.Id),
+                AzureKeyVaultIncidentPiiProtector.DescriptionPurpose,
+                source.Ciphertext,
+                source.Version,
+                default));
 
         Assert.Equal(0L, await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(fixture.AdminDataSource, before.OrganizationId, [TestDescription]));
         Assert.Equal(0L, await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(fixture.AdminDataSource, after.OrganizationId, [TestDescription]));

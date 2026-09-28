@@ -19,6 +19,29 @@ public sealed class Adp001PiiEnvelopeTests
     private const string Address = "Calle Sintetica 123, Colonia Prueba, Chihuahua";
     private const string Phone = "+52 614 000 0000";
     private const string Contact = "Persona Sintetica";
+    private static readonly Guid Tenant = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static readonly Guid OtherTenant = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    private static readonly Guid RowId = Guid.Parse("44444444-4444-4444-4444-444444444444");
+    private static readonly Guid LocationId = Guid.Parse("55555555-5555-5555-5555-555555555555");
+    private static readonly Guid IncidentId = Guid.Parse("66666666-6666-6666-6666-666666666666");
+    private static readonly PiiBinding Row = new(Tenant, RowId);
+    private static readonly PiiBinding LocationRow = new(Tenant, LocationId);
+    private static readonly PiiBinding IncidentRow = new(Tenant, IncidentId);
+
+    [Fact]
+    public async Task A_ciphertext_relocated_to_another_tenant_or_row_fails_authentication()
+    {
+        var protector = new PiiEnvelopeProtector(new FakePiiKeyVault());
+        var batch = await protector.ProtectAsync(Row, [new PiiPlaintext("incidents.description", Address)], default);
+
+        Assert.Equal(Address, await protector.UnprotectAsync(Row, "incidents.description", batch.Ciphertexts[0], batch.KeyVersion, default));
+        await Assert.ThrowsAsync<PiiCiphertextRejectedException>(() =>
+            protector.UnprotectAsync(new PiiBinding(OtherTenant, RowId), "incidents.description", batch.Ciphertexts[0], batch.KeyVersion, default));
+        await Assert.ThrowsAsync<PiiCiphertextRejectedException>(() =>
+            protector.UnprotectAsync(new PiiBinding(Tenant, Guid.NewGuid()), "incidents.description", batch.Ciphertexts[0], batch.KeyVersion, default));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            protector.ProtectAsync(new PiiBinding(Guid.Empty, RowId), [new PiiPlaintext("incidents.description", Address)], default));
+    }
 
     [Fact]
     public async Task Each_value_gets_a_fresh_data_key_and_round_trips_under_the_server_chosen_version()
@@ -26,13 +49,13 @@ public sealed class Adp001PiiEnvelopeTests
         var vault = new FakePiiKeyVault();
         var protector = new PiiEnvelopeProtector(vault);
 
-        var first = await protector.ProtectAsync([new PiiPlaintext("locations.address_text", Address)], default);
-        var second = await protector.ProtectAsync([new PiiPlaintext("locations.address_text", Address)], default);
+        var first = await protector.ProtectAsync(Row, [new PiiPlaintext("locations.address_text", Address)], default);
+        var second = await protector.ProtectAsync(Row, [new PiiPlaintext("locations.address_text", Address)], default);
 
         Assert.Equal(vault.CurrentVersion, first.KeyVersion);
         Assert.NotEqual(first.Ciphertexts[0], second.Ciphertexts[0]);
         Assert.Equal(2, vault.WrappedKeys.Distinct(ByteArrayComparer.Instance).Count());
-        Assert.Equal(Address, await protector.UnprotectAsync("locations.address_text", first.Ciphertexts[0], first.KeyVersion, default));
+        Assert.Equal(Address, await protector.UnprotectAsync(Row, "locations.address_text", first.Ciphertexts[0], first.KeyVersion, default));
         AssertNoPlaintext(first.Ciphertexts[0], Address);
     }
 
@@ -41,19 +64,19 @@ public sealed class Adp001PiiEnvelopeTests
     {
         var vault = new FakePiiKeyVault();
         var protector = new PiiEnvelopeProtector(vault);
-        var versionN = await protector.ProtectAsync([new PiiPlaintext("incidents.description", Address)], default);
+        var versionN = await protector.ProtectAsync(Row, [new PiiPlaintext("incidents.description", Address)], default);
 
         var rotatedTo = vault.Rotate();
-        var versionNPlusOne = await protector.ProtectAsync([new PiiPlaintext("incidents.description", Phone)], default);
+        var versionNPlusOne = await protector.ProtectAsync(Row, [new PiiPlaintext("incidents.description", Phone)], default);
 
         Assert.NotEqual(versionN.KeyVersion, versionNPlusOne.KeyVersion);
         Assert.Equal(rotatedTo, versionNPlusOne.KeyVersion);
-        Assert.Equal(Address, await protector.UnprotectAsync("incidents.description", versionN.Ciphertexts[0], versionN.KeyVersion, default));
-        Assert.Equal(Phone, await protector.UnprotectAsync("incidents.description", versionNPlusOne.Ciphertexts[0], versionNPlusOne.KeyVersion, default));
+        Assert.Equal(Address, await protector.UnprotectAsync(Row, "incidents.description", versionN.Ciphertexts[0], versionN.KeyVersion, default));
+        Assert.Equal(Phone, await protector.UnprotectAsync(Row, "incidents.description", versionNPlusOne.Ciphertexts[0], versionNPlusOne.KeyVersion, default));
 
         // A row cannot be relabelled with the newer version: the version is authenticated data.
         var relabelled = await Record.ExceptionAsync(() =>
-            protector.UnprotectAsync("incidents.description", versionN.Ciphertexts[0], versionNPlusOne.KeyVersion, default));
+            protector.UnprotectAsync(Row, "incidents.description", versionN.Ciphertexts[0], versionNPlusOne.KeyVersion, default));
         Assert.True(relabelled is PiiCiphertextRejectedException or PiiProtectionUnavailableException);
     }
 
@@ -62,17 +85,17 @@ public sealed class Adp001PiiEnvelopeTests
     {
         var vault = new FakePiiKeyVault();
         var protector = new PiiEnvelopeProtector(vault);
-        var batch = await protector.ProtectAsync([new PiiPlaintext("locations.phone", Phone)], default);
+        var batch = await protector.ProtectAsync(Row, [new PiiPlaintext("locations.phone", Phone)], default);
         var ciphertext = batch.Ciphertexts[0];
 
         await Assert.ThrowsAsync<PiiCiphertextRejectedException>(() =>
-            protector.UnprotectAsync("locations.contact_name", ciphertext, batch.KeyVersion, default));
+            protector.UnprotectAsync(Row, "locations.contact_name", ciphertext, batch.KeyVersion, default));
         var tampered = (byte[])ciphertext.Clone();
         tampered[^1] ^= 0x01;
         await Assert.ThrowsAsync<PiiCiphertextRejectedException>(() =>
-            protector.UnprotectAsync("locations.phone", tampered, batch.KeyVersion, default));
+            protector.UnprotectAsync(Row, "locations.phone", tampered, batch.KeyVersion, default));
         await Assert.ThrowsAsync<PiiCiphertextRejectedException>(() =>
-            protector.UnprotectAsync("locations.phone", [1, 2, 3], batch.KeyVersion, default));
+            protector.UnprotectAsync(Row, "locations.phone", [1, 2, 3], batch.KeyVersion, default));
     }
 
     [Theory]
@@ -84,7 +107,7 @@ public sealed class Adp001PiiEnvelopeTests
         var protector = new PiiEnvelopeProtector(vault);
 
         var exception = await Assert.ThrowsAsync<PiiProtectionUnavailableException>(() =>
-            protector.ProtectAsync([new PiiPlaintext("locations.address_text", Address)], default));
+            protector.ProtectAsync(Row, [new PiiPlaintext("locations.address_text", Address)], default));
 
         Assert.DoesNotContain(Address, exception.ToString(), StringComparison.Ordinal);
     }
@@ -96,18 +119,18 @@ public sealed class Adp001PiiEnvelopeTests
         var envelope = new PiiEnvelopeProtector(vault);
         var protector = new AzureKeyVaultLocationPiiProtector(envelope);
 
-        var all = await protector.ProtectAsync(new LocationPiiValues(Address, Contact, Phone), default);
-        var addressOnly = await protector.ProtectAsync(new LocationPiiValues(Address, null, " "), default);
-        var phoneOnly = await protector.ProtectAsync(new LocationPiiValues(Address, null, Phone), default);
+        var all = await protector.ProtectAsync(new LocationPiiValues(Tenant, LocationId, Address, Contact, Phone), default);
+        var addressOnly = await protector.ProtectAsync(new LocationPiiValues(Tenant, LocationId, Address, null, " "), default);
+        var phoneOnly = await protector.ProtectAsync(new LocationPiiValues(Tenant, LocationId, Address, null, Phone), default);
 
         Assert.Equal(vault.CurrentVersion, all.KeyVersion);
-        Assert.Equal(Address, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.AddressTextPurpose, all.AddressTextCiphertext, all.KeyVersion, default));
-        Assert.Equal(Contact, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.ContactNamePurpose, all.ContactNameCiphertext!, all.KeyVersion, default));
-        Assert.Equal(Phone, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.PhonePurpose, all.PhoneCiphertext!, all.KeyVersion, default));
+        Assert.Equal(Address, await envelope.UnprotectAsync(LocationRow, AzureKeyVaultLocationPiiProtector.AddressTextPurpose, all.AddressTextCiphertext, all.KeyVersion, default));
+        Assert.Equal(Contact, await envelope.UnprotectAsync(LocationRow, AzureKeyVaultLocationPiiProtector.ContactNamePurpose, all.ContactNameCiphertext!, all.KeyVersion, default));
+        Assert.Equal(Phone, await envelope.UnprotectAsync(LocationRow, AzureKeyVaultLocationPiiProtector.PhonePurpose, all.PhoneCiphertext!, all.KeyVersion, default));
         Assert.Null(addressOnly.ContactNameCiphertext);
         Assert.Null(addressOnly.PhoneCiphertext);
         Assert.Null(phoneOnly.ContactNameCiphertext);
-        Assert.Equal(Phone, await envelope.UnprotectAsync(AzureKeyVaultLocationPiiProtector.PhonePurpose, phoneOnly.PhoneCiphertext!, phoneOnly.KeyVersion, default));
+        Assert.Equal(Phone, await envelope.UnprotectAsync(LocationRow, AzureKeyVaultLocationPiiProtector.PhonePurpose, phoneOnly.PhoneCiphertext!, phoneOnly.KeyVersion, default));
     }
 
     [Fact]
@@ -116,9 +139,9 @@ public sealed class Adp001PiiEnvelopeTests
         var envelope = new PiiEnvelopeProtector(new FakePiiKeyVault { FailOn = FakePiiKeyVault.Failure.CurrentVersion });
 
         await Assert.ThrowsAsync<LocationPiiProtectionUnavailableException>(() =>
-            new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(new LocationPiiValues(Address, Contact, Phone), default));
+            new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(new LocationPiiValues(Tenant, LocationId, Address, Contact, Phone), default));
         await Assert.ThrowsAsync<IncidentPiiProtectionUnavailableException>(() =>
-            new AzureKeyVaultIncidentPiiProtector(envelope).ProtectAsync(Address, default));
+            new AzureKeyVaultIncidentPiiProtector(envelope).ProtectAsync(new IncidentPiiBinding(Tenant, IncidentId), Address, default));
     }
 
     [Fact]
@@ -127,11 +150,11 @@ public sealed class Adp001PiiEnvelopeTests
         var vault = new FakePiiKeyVault();
         var envelope = new PiiEnvelopeProtector(vault);
 
-        var result = await new AzureKeyVaultIncidentPiiProtector(envelope).ProtectAsync(Address, default);
+        var result = await new AzureKeyVaultIncidentPiiProtector(envelope).ProtectAsync(new IncidentPiiBinding(Tenant, IncidentId), Address, default);
 
         Assert.Equal(vault.CurrentVersion, result.KeyVersion);
         Assert.NotEqual("inc001-v1", result.KeyVersion);
-        Assert.Equal(Address, await envelope.UnprotectAsync(AzureKeyVaultIncidentPiiProtector.DescriptionPurpose, result.Ciphertext, result.KeyVersion, default));
+        Assert.Equal(Address, await envelope.UnprotectAsync(IncidentRow, AzureKeyVaultIncidentPiiProtector.DescriptionPurpose, result.Ciphertext, result.KeyVersion, default));
         AssertNoPlaintext(result.Ciphertext, Address);
     }
 
