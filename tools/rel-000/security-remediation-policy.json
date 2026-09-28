@@ -43,6 +43,123 @@
       "allowed_project_files": [
         "src/Modules/Identity/Identity.Endpoints/Identity.Endpoints.csproj"
       ]
+    },
+    {
+      "id": "ADP-001-AZURE",
+      "mode": "DEPENDENCY_ADMISSION",
+      "status": "ACTIVE",
+      "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+      "authorized_source_branch": "deps/adp-001-azure",
+      "tracked_pull_request": 124,
+      "ecosystem": "nuget",
+      "description": "Azure SDK for the ADP-001 production adapters (ADP-001-PII-KEYVAULT-ENVELOPE, ADP-001-POD-BLOB-DEFENDER): managed identity, Key Vault envelope and Data Protection KEK, Blob proof storage. Declares the exact baseline amendments the restore produces: MSAL's Microsoft.IdentityModel.Abstractions 8.14.0 where AUTH-001-OIDC's 8.19.2 is absent, the IntegrationTests Microsoft.Bcl.AsyncInterfaces upgrade, and the framework-pruned Microsoft.Extensions nodes of Paqueteria.Infrastructure and Pricing.Infrastructure.",
+      "admitted_direct_packages": [
+        {"id": "Azure.Extensions.AspNetCore.DataProtection.Keys", "version": "1.6.4", "content_hash": "7uKgk1WzELt5Pbp09liae8HBL3XOe0x/+DGYYC5DCiCKGRxrGi0BfmVCqzvzXGMOxITL4THEYf1GklzmAuJRTQ=="},
+        {"id": "Azure.Identity", "version": "1.21.0", "content_hash": "GeFv8sGwRKvDKwI2WFy8r0mhmlxEVZg24Sit2NogTjiSO8RVjllWM65OT6e1sKjOvG8V74y7hAbaELUUPjZQSw=="},
+        {"id": "Azure.Security.KeyVault.Keys", "version": "4.10.1", "content_hash": "RAFXuB5dWDTrfU5kw/uLH9IMeW7wL2ZgpR6sBcZZ/jJ0LOuKQ+ScEy2S8KeTr+BWnDIyIHtLLDPzEAPtbBZf5w=="},
+        {"id": "Azure.Storage.Blobs", "version": "12.29.2", "content_hash": "NeZmk7bphspT2BYn8XaNCTV4/9vQG+ea79F85MBTi2o2WiXIIJNsRBtFyeBrzK2HIk476rfSqLNwPt4vXgOEkQ=="}
+      ],
+      "admitted_transitive_packages": [
+        {"id": "Azure.Core", "version": "1.61.0", "content_hash": "sns4J9zz7NCpfNYz9rMIly5/TjDkNsTnPAr4nNr0BUBzn6tn6RNOEHOKb7A7DhJj/dEFMSevp3Ye36cUiNmsfg=="},
+        {"id": "Azure.Storage.Common", "version": "12.28.0", "content_hash": "5l8YhNrks38zKLGFW2BBFLwieyamH/xauABSASsdpZv79G0f+n2n22IjkRmUqCmALSupkwRHh2LOhbW3yj5Qgw=="},
+        {"id": "Microsoft.AspNetCore.Cryptography.Internal", "version": "10.0.10", "content_hash": "T/kOT3kAVZU1B0QlpRxASpdbAJ/o5DLFW7bWS6vyE44uMqPmojEcaFENt6ww1xaLH++ZNwsEJ1YUOwPK050lNQ=="},
+        {"id": "Microsoft.AspNetCore.DataProtection", "version": "10.0.10", "content_hash": "5sfrNrBShTlJeXvWNxjPS7ilLY4H6MICZPMZr/2vjoDoBH5Z8sQYJwbhulqfXh4yIpxIto0TcmOQHOElvpq+iQ=="},
+        {"id": "Microsoft.AspNetCore.DataProtection.Abstractions", "version": "10.0.10", "content_hash": "q2RNx0N/qrsU+JgbPE78I9pu5ekwguitAFVoeE1NCgxtkUTguvf7oTzBnn42zSQxuugJ4fmj0RSarob8Rvorrg=="},
+        {"id": "Microsoft.Bcl.AsyncInterfaces", "version": "10.0.9", "content_hash": "Aq7M8lG6BrHeatqKqncVm9m55ec34k6nnfPRLe/PvGg+b/pAsRM2ejofeKmCLjTXMa+5NGXm382f8CG/D5WDow=="},
+        {"id": "Microsoft.Extensions.Diagnostics.Abstractions", "version": "10.0.10", "content_hash": "9uWiKpeOVac355STyChWR/pliFX/5CeLqChW9kKsaxyDH4EUTZxMkT4Jwp/J/peLm0GBFmSX5c0WCse3yCnq1Q=="},
+        {"id": "Microsoft.Extensions.FileProviders.Abstractions", "version": "10.0.10", "content_hash": "c5zqFCY9DiIpMovLd7/d/CTiEtrMOuQ639dhv3PABtKQIKNQikSHwQt8+N679uii9q+B55lgK28Uv64FOwEu8w=="},
+        {"id": "Microsoft.Extensions.Hosting.Abstractions", "version": "10.0.10", "content_hash": "5LugpYGHk+mkn0a8IZgcyfBca8PCTAU9RQFoMrTdtOOidq88M2SI5f3px6ugnzgxC+eTkvYYJi8pzlUnG5xdAQ=="},
+        {"id": "Microsoft.Identity.Client", "version": "4.84.2", "content_hash": "Va9FjmABSgj/lcUfHH0pBNQkmS7SNyepz2ERV7Yynp6QgEYpFdSqR6Vzy1WWipN8GS5pBHuXoZbqaDWuARCrHQ=="},
+        {"id": "Microsoft.Identity.Client.Extensions.Msal", "version": "4.84.2", "content_hash": "+D98LaU3dOu/Nzs6kgbBJapMvH7iwYcAeC99XwSkpmEadsPv6rozecOl9P6m4A3RfpOuPt9e6J6TwwUUp3+M4w=="},
+        {"id": "System.ClientModel", "version": "1.15.0", "content_hash": "y6zQLInrpX+oGL1gXM04DrUSu1O1esWxt4rD/zrujTnzIFChn/noD1OiVVpTrU8ZvglwqO2Uw038svUR3SiAOg=="},
+        {"id": "System.IO.Hashing", "version": "10.0.3", "content_hash": "La6ICwsdTKhVX+LKN+pvFjQRR3LhLwq3uKdi2knjLzRyPYBSydF4cjXidYxIiTcDD6XVYdsBWQEI8ZxiZ/OdIg=="},
+        {"id": "System.Memory.Data", "version": "10.0.9", "content_hash": "YweovHiLUoEdbr2Xv8eRqCSkTu1vMms4a6xBHaQiMSFVy32PL+hXv6Vhol2NWOmLHjaVgTyhJ3R52U6JxS6w3Q=="},
+        {"id": "System.Security.Cryptography.Pkcs", "version": "10.0.10", "content_hash": "KG8t5RHczdgB3IWvRndpI0nE1DSo7ikDYSDbITxfgRFyIvnYiKzuPjaZOsPnwFQ1aOGUl9sEulJul9wlHLEUoA=="},
+        {"id": "System.Security.Cryptography.ProtectedData", "version": "4.5.0", "content_hash": "wLBKzFnDCxP12VL9ANydSYhk59fC4cvOr9ypYQLPnAj48NQIhqnjdD2yhP8yEKyBJEjERWS9DisKL7rX5eU25Q=="},
+        {"id": "System.Security.Cryptography.Xml", "version": "10.0.10", "content_hash": "Mz6Y+s+uMQKj1H2BUF0OhlmaOQkLgSG34/IrUaBDirYBQ6bgwcFvO/XtXWcoDlBLFoFB0uKqDNhybHOd+fQK1A=="}
+      ],
+      "additional_package_versions": [
+        {"id": "Microsoft.IdentityModel.Abstractions", "version": "8.14.0", "content_hash": "iwbCpSjD3ehfTwBhtSNEtKPK0ICun6ov7Ibx6ISNA9bfwIyzI2Siwyi9eJFCJBwxowK9xcA1mj+jBWiigeqgcQ==", "lock_files": ["src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "src/Modules/Custody/Custody.Infrastructure/packages.lock.json", "src/Modules/Dispatch/Dispatch.Infrastructure/packages.lock.json", "src/Modules/Drivers/Drivers.Infrastructure/packages.lock.json", "src/Modules/Finance/Finance.Infrastructure/packages.lock.json", "src/Modules/Identity/Identity.Infrastructure/packages.lock.json", "src/Modules/Incidents/Incidents.Infrastructure/packages.lock.json", "src/Modules/Locations/Locations.Infrastructure/packages.lock.json", "src/Modules/Notifications/Notifications.Infrastructure/packages.lock.json", "src/Modules/Orders/Orders.Infrastructure/packages.lock.json", "src/Modules/Organizations/Organizations.Infrastructure/packages.lock.json", "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "src/Modules/Realtime/Realtime.Infrastructure/packages.lock.json", "src/Modules/Reporting/Reporting.Infrastructure/packages.lock.json", "src/Modules/Routing/Routing.Infrastructure/packages.lock.json", "src/Paqueteria.Worker/packages.lock.json", "tests/Paqueteria.ArchitectureFixtures/packages.lock.json", "tests/Paqueteria.ContractTests/packages.lock.json", "tools/Paqueteria.DatabaseMigrator/packages.lock.json"]}
+      ],
+      "baseline_package_upgrades": [
+        {"lock_file": "tests/Paqueteria.IntegrationTests/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Bcl.AsyncInterfaces", "from_version": "6.0.0", "from_content_hash": "UcSjPsst+DfAdJGVDsu346FX0ci0ah+lw3WRtn18NUwEqRt70HaOQ7lI72vy3+1LxtqI3T5GWwV39rQSrCzAeg==", "to_version": "10.0.9", "to_content_hash": "Aq7M8lG6BrHeatqKqncVm9m55ec34k6nnfPRLe/PvGg+b/pAsRM2ejofeKmCLjTXMa+5NGXm382f8CG/D5WDow=="}
+      ],
+      "baseline_package_removals": [
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Caching.Abstractions", "version": "10.0.10", "content_hash": "4ZFBNE+jzR+CrWWlhOesnmywCW7pYKT0dxyAQRdL11yJwxe4jvcAu31eorFtEkoFeCDcUTeNssgPv2yaRRptaQ=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Caching.Memory", "version": "10.0.10", "content_hash": "N1w5H7uK6gCTnCBZAWzE0/EQYSPysij/uYwDqntqBVvBa6bjMmBKitsnEFd6yh/SX3wLm67nO6+OnZ84K+gZWg=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Configuration.Abstractions", "version": "10.0.10", "content_hash": "5Vnd2I75DmZCVEjSynIdJ/0EGafgnLQwgR3t2C2/fkjx/nRG+cLwxLLdInoHeCEpkD5K4Ov/g9ZCRYrl4TRsaA=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.DependencyInjection", "version": "10.0.10", "content_hash": "ANyvsgkNBRvcJh2XLgn8veGmajf+8m0AbKK+HPWdRL1yraSNVVSmQhFntLtdz/C795jxqqup+k05cs/3jZQPOA=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.DependencyInjection.Abstractions", "version": "10.0.10", "content_hash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Logging", "version": "10.0.10", "content_hash": "Tf6z5HsL0VDYRTfvsoNrTGHGheCwkTsZBA2FFh5ATJUbkAwug+FFNISJK2gjpUNemlAOoWllAK52HOWCjto3EQ=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Logging.Abstractions", "version": "10.0.10", "content_hash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Options", "version": "10.0.10", "content_hash": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA=="},
+        {"lock_file": "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Primitives", "version": "10.0.10", "content_hash": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Caching.Abstractions", "version": "10.0.10", "content_hash": "4ZFBNE+jzR+CrWWlhOesnmywCW7pYKT0dxyAQRdL11yJwxe4jvcAu31eorFtEkoFeCDcUTeNssgPv2yaRRptaQ=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Caching.Memory", "version": "10.0.10", "content_hash": "N1w5H7uK6gCTnCBZAWzE0/EQYSPysij/uYwDqntqBVvBa6bjMmBKitsnEFd6yh/SX3wLm67nO6+OnZ84K+gZWg=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Configuration.Abstractions", "version": "10.0.10", "content_hash": "5Vnd2I75DmZCVEjSynIdJ/0EGafgnLQwgR3t2C2/fkjx/nRG+cLwxLLdInoHeCEpkD5K4Ov/g9ZCRYrl4TRsaA=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.DependencyInjection", "version": "10.0.10", "content_hash": "ANyvsgkNBRvcJh2XLgn8veGmajf+8m0AbKK+HPWdRL1yraSNVVSmQhFntLtdz/C795jxqqup+k05cs/3jZQPOA=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.DependencyInjection.Abstractions", "version": "10.0.10", "content_hash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Logging", "version": "10.0.10", "content_hash": "Tf6z5HsL0VDYRTfvsoNrTGHGheCwkTsZBA2FFh5ATJUbkAwug+FFNISJK2gjpUNemlAOoWllAK52HOWCjto3EQ=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Logging.Abstractions", "version": "10.0.10", "content_hash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Options", "version": "10.0.10", "content_hash": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA=="},
+        {"lock_file": "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json", "framework": "net10.0", "id": "Microsoft.Extensions.Primitives", "version": "10.0.10", "content_hash": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ=="}
+      ],
+      "allowed_dependency_files": [
+        "Directory.Packages.props",
+        "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json",
+        "src/Modules/Custody/Custody.Infrastructure/packages.lock.json",
+        "src/Modules/Dispatch/Dispatch.Infrastructure/packages.lock.json",
+        "src/Modules/Drivers/Drivers.Infrastructure/packages.lock.json",
+        "src/Modules/Finance/Finance.Infrastructure/packages.lock.json",
+        "src/Modules/Identity/Identity.Infrastructure/packages.lock.json",
+        "src/Modules/Incidents/Incidents.Infrastructure/packages.lock.json",
+        "src/Modules/Locations/Locations.Infrastructure/packages.lock.json",
+        "src/Modules/Notifications/Notifications.Infrastructure/packages.lock.json",
+        "src/Modules/Orders/Orders.Infrastructure/packages.lock.json",
+        "src/Modules/Organizations/Organizations.Infrastructure/packages.lock.json",
+        "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json",
+        "src/Modules/Realtime/Realtime.Infrastructure/packages.lock.json",
+        "src/Modules/Reporting/Reporting.Infrastructure/packages.lock.json",
+        "src/Modules/Routing/Routing.Infrastructure/packages.lock.json",
+        "src/Paqueteria.Api/packages.lock.json",
+        "src/Paqueteria.Worker/packages.lock.json",
+        "tests/Paqueteria.ArchitectureFixtures/packages.lock.json",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        "tests/Paqueteria.UnitTests/packages.lock.json",
+        "tools/Paqueteria.DatabaseMigrator/packages.lock.json"
+      ],
+      "required_dependency_files": [
+        "Directory.Packages.props",
+        "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json",
+        "src/Modules/Custody/Custody.Infrastructure/packages.lock.json",
+        "src/Modules/Dispatch/Dispatch.Infrastructure/packages.lock.json",
+        "src/Modules/Drivers/Drivers.Infrastructure/packages.lock.json",
+        "src/Modules/Finance/Finance.Infrastructure/packages.lock.json",
+        "src/Modules/Identity/Identity.Infrastructure/packages.lock.json",
+        "src/Modules/Incidents/Incidents.Infrastructure/packages.lock.json",
+        "src/Modules/Locations/Locations.Infrastructure/packages.lock.json",
+        "src/Modules/Notifications/Notifications.Infrastructure/packages.lock.json",
+        "src/Modules/Orders/Orders.Infrastructure/packages.lock.json",
+        "src/Modules/Organizations/Organizations.Infrastructure/packages.lock.json",
+        "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json",
+        "src/Modules/Realtime/Realtime.Infrastructure/packages.lock.json",
+        "src/Modules/Reporting/Reporting.Infrastructure/packages.lock.json",
+        "src/Modules/Routing/Routing.Infrastructure/packages.lock.json",
+        "src/Paqueteria.Api/packages.lock.json",
+        "src/Paqueteria.Worker/packages.lock.json",
+        "tests/Paqueteria.ArchitectureFixtures/packages.lock.json",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        "tests/Paqueteria.UnitTests/packages.lock.json",
+        "tools/Paqueteria.DatabaseMigrator/packages.lock.json"
+      ],
+      "allowed_project_files": [
+        "src/BuildingBlocks/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj",
+        "src/Modules/Custody/Custody.Infrastructure/Custody.Infrastructure.csproj"
+      ]
     }
   ],
   "historical_remediations": [
