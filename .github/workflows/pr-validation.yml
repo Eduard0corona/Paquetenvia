@@ -314,6 +314,19 @@ jobs:
             "${RUNNER_TEMP}/bicep" build "${template}" --outdir "${RUNNER_TEMP}/azr001-arm"
             "${RUNNER_TEMP}/bicep" lint "${template}"
           done
+          # ENV-001 pilot templates (deploy/azure/pilot): built into their own directory so the AZR-001
+          # guards never see them; any lint diagnostic, warning included, fails the step.
+          rm -rf "${RUNNER_TEMP}/env001-arm"
+          mkdir -p "${RUNNER_TEMP}/env001-arm"
+          for template in deploy/azure/pilot/*.bicep; do
+            "${RUNNER_TEMP}/bicep" build "${template}" --outdir "${RUNNER_TEMP}/env001-arm"
+            diagnostics="$("${RUNNER_TEMP}/bicep" lint "${template}" 2>&1)" || { echo "${diagnostics}"; exit 1; }
+            if [ -n "${diagnostics}" ]; then
+              echo "${diagnostics}"
+              echo "::error::bicep lint reported diagnostics for ${template}"
+              exit 1
+            fi
+          done
 
       - name: Test AZR-001 static guard tooling
         run: python -m unittest discover -s ./tools/azr-001 -p "test_*.py" -v

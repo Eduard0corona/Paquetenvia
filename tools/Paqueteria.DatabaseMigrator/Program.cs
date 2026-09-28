@@ -47,6 +47,14 @@ internal static partial class DatabaseMigratorProgram
                     Console.WriteLine($"bypassrls_role_created={preflight.BypassRlsRoleCreated}");
                     return 0;
 
+                case "runtime-logins":
+                    // ENV-001: least-privilege runtime LOGIN roles for the pilot API and Worker (SCRAM verifiers only).
+                    await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                    await RuntimeLoginProvisioner.RunAsync(connectionString, ReadSetting, cancellation.Token)
+                        .ConfigureAwait(false);
+                    Console.WriteLine($"RUNTIME_LOGINS_OK api={RuntimeLoginProvisioner.ApiLogin} worker={RuntimeLoginProvisioner.WorkerLogin}");
+                    return 0;
+
                 case "ownership-diagnostic":
                     var diagnosticSelection = ReadAzureOwnershipBridgeSelection(connectionString);
                     await AzureRolePreflight.RunAsync(connectionString, cancellation.Token).ConfigureAwait(false);
@@ -140,6 +148,11 @@ internal static partial class DatabaseMigratorProgram
         {
             Console.Error.WriteLine(exception.Message);
             return 4;
+        }
+        catch (RuntimeLoginException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return 7;
         }
         catch (AzureRolePreflightException exception)
         {
@@ -317,7 +330,7 @@ internal static partial class DatabaseMigratorProgram
     }
 
     private static void PrintUsage() => Console.Error.WriteLine(
-        "Usage: Paqueteria.DatabaseMigrator <verify|preflight|ownership-diagnostic|plan|apply|assert> [--connection-env NAME] [--confirm-initial-baseline] [--azure-ownership-bridge]");
+        "Usage: Paqueteria.DatabaseMigrator <verify|preflight|ownership-diagnostic|plan|apply|assert|runtime-logins> [--connection-env NAME] [--confirm-initial-baseline] [--azure-ownership-bridge]");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
@@ -334,7 +347,7 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         }
 
         var command = arguments[0].ToLowerInvariant();
-        if (command is not ("verify" or "preflight" or "ownership-diagnostic" or "plan" or "apply" or "assert"))
+        if (command is not ("verify" or "preflight" or "ownership-diagnostic" or "plan" or "apply" or "assert" or "runtime-logins"))
         {
             throw new CommandLineException($"Unknown command '{arguments[0]}'.");
         }

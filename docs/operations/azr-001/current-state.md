@@ -65,3 +65,23 @@ update_2026_09_26:
 ```
 
 The later module lanes (INC-001, SCL-001 Data Protection, SET-001 Finance, LIF-001 Orders) were added after the retained-database run; the 9/9 figure is not current for `development`.
+
+## Update recorded on 2026-09-27 (ENV-001)
+
+The 2026-09-26 entry `later_lanes_not_covered_by_bridge` is superseded by the code. Commit `5218068`
+("fix(lif-001): align lifecycle executor with Azure bridge") added `paqueteria_lifecycle_executor` to
+the E-002 bridge. The bridge now also covers the cleanup, registration and session executors
+(`E002Guards.CanonicalRoles` and `SpecializedOwners`). ENV-001 adds a contract test that fails if
+any privileged `NOLOGIN` role declared by AI-18, or re-declared by a module adoption lane, is left
+out of the bridge (`PilotAzureOwnershipBridgeContractTests`).
+
+The bridge is still exercised only by the canonical migrator. It still has no Azure evidence for the
+Clean path.
+
+```yaml
+update_2026_09_27:
+  later_lanes_not_covered_by_bridge: []
+  bridge_role_coverage_test: tests/Paqueteria.ContractTests/PostgreSql/PilotRuntimeLoginContractTests.cs
+  azure_clean_path: NOT_YET_EXERCISED_ON_AZURE
+  note: ENV-001 (PILOT-REAL-PEOPLE) is a separate environment documented in docs/operations/env-001-pilot/; nothing here authorizes it.
+```

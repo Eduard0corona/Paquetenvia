@@ -4679,6 +4679,43 @@ class DependencyAdmissionTests(unittest.TestCase):
             rel000.resolve_rel000_mode(policy, "deps/auth-001-oidc"),
         )
 
+    def test_committed_policy_registers_adp_001_azure_with_exact_amendments(self):
+        policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
+        (entry,) = [item for item in policy["dependency_admissions"] if item["id"] == "ADP-001-AZURE"]
+        self.assertEqual("deps/adp-001-azure", entry["authorized_source_branch"])
+        self.assertEqual(124, entry["tracked_pull_request"])
+        self.assertEqual(
+            [
+                ("Azure.Extensions.AspNetCore.DataProtection.Keys", "1.6.4"),
+                ("Azure.Identity", "1.21.0"),
+                ("Azure.Security.KeyVault.Keys", "4.10.1"),
+                ("Azure.Security.KeyVault.Secrets", "4.11.1"),
+                ("Azure.Storage.Blobs", "12.29.2"),
+            ],
+            [(item["id"], item["version"]) for item in entry["admitted_direct_packages"]],
+        )
+        self.assertEqual(
+            [("Microsoft.IdentityModel.Abstractions", "8.14.0")],
+            [(item["id"], item["version"]) for item in entry["additional_package_versions"]],
+        )
+        self.assertEqual(
+            [("tests/Paqueteria.IntegrationTests/packages.lock.json", "Microsoft.Bcl.AsyncInterfaces", "6.0.0", "10.0.9")],
+            [
+                (item["lock_file"], item["id"], item["from_version"], item["to_version"])
+                for item in entry["baseline_package_upgrades"]
+            ],
+        )
+        self.assertEqual(
+            {
+                "src/BuildingBlocks/Paqueteria.Infrastructure/packages.lock.json",
+                "src/Modules/Pricing/Pricing.Infrastructure/packages.lock.json",
+            },
+            {item["lock_file"] for item in entry["baseline_package_removals"]},
+        )
+        self.assertTrue(
+            all(item["id"].startswith("Microsoft.Extensions.") for item in entry["baseline_package_removals"])
+        )
+
     def test_v2_policy_is_rejected_from_the_tree(self):
         value = self.policy([])
         value["format_version"] = "paquetenvia-rel000-security-remediation-policy-v2"
