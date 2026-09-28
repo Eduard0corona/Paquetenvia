@@ -32,7 +32,7 @@ storage account key or SAS in configuration.
 
 The pilot Key Vault uses `defaultAction=Deny`, so Container Apps platform Key Vault references are
 not used. API, Worker and the DatabaseMigrator job read their own secrets at startup, from inside
-the VNet (Key Vault private endpoint), with `ManagedIdentityCredential` (`AZURE_CLIENT_ID`). The
+the VNet (Microsoft.KeyVault service endpoint and VNet rule on the Container Apps subnet, `defaultAction=Deny`; see #123 `security.bicep`), with `ManagedIdentityCredential` (`AZURE_CLIENT_ID`). The
 source is **off unless `KeyVaultSecrets__VaultUri` is set**; local and synthetic runs are unchanged.
 
 | Variable | Value | Required |
