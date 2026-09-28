@@ -90,6 +90,46 @@ SESSION_EXECUTOR_GRANTS = [
     "GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paqueteria_session_executor;",
 ]
 
+MASTER_DATA_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA identity,organizations,locations,pricing,drivers,platform TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,status) ON identity.users TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,organization_type,status) ON organizations.organizations TO paqueteria_master_data_executor;",
+    "GRANT SELECT (user_id,organization_id,role,status) ON organizations.organization_memberships TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;",
+    "GRANT INSERT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,owner_org_id,city_id,name,polygon,status) ON locations.service_areas TO paqueteria_master_data_executor;",
+    "GRANT INSERT (id,owner_org_id,city_id,name,polygon,status) ON locations.service_areas TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (polygon,status) ON locations.service_areas TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,owner_org_id,service_area_id,name,zone_type,polygon,status) ON locations.operating_zones TO paqueteria_master_data_executor;",
+    "GRANT INSERT (id,owner_org_id,service_area_id,name,zone_type,polygon,status) ON locations.operating_zones TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (zone_type,polygon,status) ON locations.operating_zones TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,amount_cents,tax_mode,active_from,active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;",
+    "GRANT INSERT (id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,amount_cents,tax_mode,active_from,active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,user_id,org_id,home_city_id,driver_type,vehicle_type,status) ON drivers.driver_profiles TO paqueteria_master_data_executor;",
+    "GRANT INSERT (id,user_id,org_id,home_city_id,driver_type,vehicle_type,status) ON drivers.driver_profiles TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (home_city_id,driver_type,vehicle_type,status) ON drivers.driver_profiles TO paqueteria_master_data_executor;",
+    "GRANT SELECT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
+    "GRANT INSERT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
+    "GRANT SELECT (deployment_class,gate_007_closed) ON platform.master_data_deployment_gate TO paqueteria_master_data_executor;",
+    "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_master_data_executor;",
+]
+
+# MDM-001-OPERATOR-LOADER: the operator grantee holds USAGE on schema security and nothing else in the
+# baseline; its only EXECUTE is granted by the Pricing lane on the loader function.
+MASTER_DATA_LOADER_GRANTS = [
+    "GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;",
+]
+
+MASTER_DATA_UPDATE_GRANTS = [
+    "GRANT UPDATE (polygon,status) ON locations.service_areas TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (zone_type,polygon,status) ON locations.operating_zones TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (home_city_id,driver_type,vehicle_type,status) ON drivers.driver_profiles TO paqueteria_master_data_executor;",
+    "GRANT UPDATE (status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
+]
+
 BFF_TABLES = ["identity.bff_sessions", "identity.bff_logout_jtis"]
 
 BFF_SESSION_FUNCTIONS = [
@@ -103,7 +143,7 @@ BFF_SESSION_FUNCTIONS = [
 
 
 def executor_grant_errors(role_sql: str) -> list[str]:
-    """ADR-034, OPS-003-CLEANUP-ROLE, REG-001 and BFF-SESSION-TABLE-SHAPE exact grant sets for the dedicated executors."""
+    """ADR-034, OPS-003-CLEANUP-ROLE, REG-001, BFF-SESSION-TABLE-SHAPE and MDM-001 exact grant sets for the dedicated executors."""
     return (
         role_grant_errors(
             role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
@@ -122,6 +162,18 @@ def executor_grant_errors(role_sql: str) -> list[str]:
             "paqueteria_session_executor",
             SESSION_EXECUTOR_GRANTS,
             "Session executor (BFF-SESSION-TABLE-SHAPE)",
+        )
+        + role_grant_errors(
+            role_sql,
+            "paqueteria_master_data_executor",
+            MASTER_DATA_EXECUTOR_GRANTS,
+            "Master data executor (MDM-001-OPERATOR-LOADER)",
+        )
+        + role_grant_errors(
+            role_sql,
+            "paqueteria_master_data_loader",
+            MASTER_DATA_LOADER_GRANTS,
+            "Master data loader (MDM-001-OPERATOR-LOADER)",
         )
     )
 
@@ -551,7 +603,7 @@ def main() -> int:
         "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
         "GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
         "GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
-    ]:
+    ] + MASTER_DATA_UPDATE_GRANTS:
         errors.append(
             f"Column UPDATE grants differ from the ADR-034, OPS-003, REG-001 and BFF session grants: {column_update_grants}"
         )
@@ -612,6 +664,37 @@ def main() -> int:
             errors.append(f"Missing REG-001 schema contract: {fragment}")
     checks.append("Registration executor: dedicated NOLOGIN role, exact column grants, one open self-service organization per creator")
     errors.extend(bff_session_errors(sql, role_sql))
+    # MDM-001-OPERATOR-LOADER: master data is written only through the executor-owned loader function,
+    # executable only by the operator grantee; neither role is ever granted to a runtime role.
+    for fragment in [
+        "CREATE ROLE paqueteria_master_data_executor NOLOGIN BYPASSRLS;",
+        "CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS;",
+        "REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;",
+        "MDM-001-OPERATOR-LOADER",
+        "security.load_master_data(uuid,uuid,json,bytea,boolean)",
+        "search_path=pg_catalog, pg_temp",
+        "REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;",
+        "CREATE POLICY master_data_deployment_gate_migrator ON platform.master_data_deployment_gate\n  TO paqueteria_migrator USING (true) WITH CHECK (true);",
+        "platform-operator capability, not a tenant boundary",
+        "REVOKE INSERT,UPDATE,DELETE ON locations.cities FROM paqueteria_app,paqueteria_worker;",
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing master data loader contract: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_master_data_(executor|loader)\s+TO", role_sql):
+        errors.append("Master data role membership granted contrary to MDM-001-OPERATOR-LOADER")
+    if re.search(r"GRANT[^;]*load_master_data[^;]*;", SQL_LINE_COMMENT.sub("", role_sql)):
+        errors.append("The master data loader function is granted by its lane, not by AI-18")
+    for fragment in [
+        "CREATE TABLE platform.master_data_deployment_gate (",
+        "ALTER TABLE platform.master_data_deployment_gate ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE platform.master_data_deployment_gate FORCE ROW LEVEL SECURITY;",
+    ]:
+        if fragment not in sql:
+            errors.append(f"Missing master data deployment gate (GATE-007) contract in AI-06: {fragment}")
+    if re.search(r"CREATE\s+POLICY[^;]*ON\s+platform\.master_data_deployment_gate\b", SQL_LINE_COMMENT.sub("", sql)):
+        errors.append("The deployment gate policy belongs to AI-18 (it names paqueteria_migrator), not AI-06")
+    checks.append("Master data loader: executor-owned function, operator-only EXECUTE, exact column grants, GATE-007 marker")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.

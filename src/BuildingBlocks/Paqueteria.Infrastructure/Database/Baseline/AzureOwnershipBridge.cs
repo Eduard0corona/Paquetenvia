@@ -205,6 +205,7 @@ internal static class AzureOwnershipBridge
                 OR pg_catalog.has_schema_privilege('paqueteria_cleanup_executor', 'security', 'CREATE')
                 OR pg_catalog.has_schema_privilege('paqueteria_registration_executor', 'security', 'CREATE')
                 OR pg_catalog.has_schema_privilege('paqueteria_session_executor', 'security', 'CREATE')
+                OR pg_catalog.has_schema_privilege('paqueteria_master_data_executor', 'security', 'CREATE')
             """, cancellationToken).ConfigureAwait(false);
         if (prestate)
         {
@@ -223,7 +224,7 @@ internal static class AzureOwnershipBridge
             GRANT CREATE ON SCHEMA security
             TO paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance, paqueteria_lifecycle_executor,
                paqueteria_cleanup_executor, paqueteria_registration_executor,
-               paqueteria_session_executor;
+               paqueteria_session_executor, paqueteria_master_data_executor;
             """, cancellationToken).ConfigureAwait(false);
         return databaseAcl;
     }
@@ -254,7 +255,7 @@ internal static class AzureOwnershipBridge
                 REVOKE CREATE ON SCHEMA security
                 FROM paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance, paqueteria_lifecycle_executor,
                      paqueteria_cleanup_executor, paqueteria_registration_executor,
-                     paqueteria_session_executor;
+                     paqueteria_session_executor, paqueteria_master_data_executor;
                 """, cancellationToken).ConfigureAwait(false);
             stage = "reset-schema-owner-role";
             stageObserver?.Invoke("e002-reset-role");
@@ -279,6 +280,7 @@ internal static class AzureOwnershipBridge
                AND NOT has_schema_privilege('paqueteria_cleanup_executor', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_registration_executor', 'security', 'CREATE')
                AND NOT has_schema_privilege('paqueteria_session_executor', 'security', 'CREATE')
+               AND NOT has_schema_privilege('paqueteria_master_data_executor', 'security', 'CREATE')
                AND NOT has_database_privilege('paqueteria_migrator', current_database(), 'CREATE')
             """, connection, transaction);
         if (await assertion.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
