@@ -184,8 +184,8 @@ public sealed class AuditPayloadRedactorTests
 
     [Theory]
     [InlineData("request_id", "trk002-contract-issue-0001")]
-    [InlineData("order_ids", "20260928001")]
-    [InlineData("entityId", "12345678")]
+    [InlineData("order_ids", "1234567")]
+    [InlineData("entityId", "CLN-7FK3")]
     public void Identifier_fields_keep_values_that_are_not_phone_shaped(string fieldName, string value)
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
@@ -351,16 +351,16 @@ public sealed class AuditPayloadRedactorTests
 
     [Theory]
     [InlineData("2026-09-28")]
+    [InlineData("2026-09-28T10:59:40Z")]
     [InlineData("2026-09-28T10:15:30.1234567+00:00")]
+    [InlineData("2026-09-28T10:15:30,5-06:00")]
+    [InlineData("2026-09-28T10:15-0600")]
     [InlineData("2026-09-28 10:15:30")]
-    [InlineData("12345678")]
-    [InlineData("123456789")]
-    [InlineData("12345678901")]
-    [InlineData("1234-5678-9012-3456")]
-    [InlineData("3f2a1b4c55124345866766712345678a")]
+    [InlineData("desde 2026-09-28T10:59:40Z hasta 2026-09-29T08:00:00Z")]
+    [InlineData("1234567")]
     [InlineData("trk002-contract-issue-0001")]
     [InlineData("CLN-7FK3")]
-    public void Non_phone_digit_runs_are_preserved(string value)
+    public void Iso_dates_timestamps_and_short_values_are_preserved(string value)
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { value }));
 
@@ -369,6 +369,88 @@ public sealed class AuditPayloadRedactorTests
         using var output = JsonDocument.Parse(result.Json);
         Assert.Equal(value, output.RootElement.GetProperty("value").GetString());
     }
+
+    [Theory]
+    [InlineData("66712345675512345678")]
+    [InlineData("12346671234567")]
+    [InlineData("66712345671234")]
+    [InlineData("pedido 1234 6671234567")]
+    [InlineData("12345678")]
+    [InlineData("123456789")]
+    [InlineData("12345678901")]
+    [InlineData("1234-5678-9012-3456")]
+    [InlineData("3f2a1b4c55124345866766712345678a")]
+    [InlineData("2026-09-286671234567")]
+    [InlineData("2026-13-45")]
+    public void Digit_runs_the_previous_rule_redacted_are_still_redacted(string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { value }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("value").GetString());
+    }
+
+    [Fact]
+    public void New_rule_redacts_everything_the_previous_rule_redacted_except_uuids_and_iso_dates()
+    {
+        // Property-style check with a fixed seed: random strings over digits, phone separators, letters and "+".
+        // Whenever the previous generic rule matched, the new redactor must redact too, unless the only match came
+        // from a UUID or an ISO-8601 date/timestamp, which are excluded from the generated corpus.
+        const string alphabet = "0123456789012345678901234567890123456789 ()-+.:TZabcxyz_";
+        var random = new Random(149);
+        var checkedMatches = 0;
+        for (var i = 0; i < 50_000; i++)
+        {
+            var length = random.Next(8, 32);
+            var chars = new char[length];
+            for (var j = 0; j < length; j++)
+            {
+                chars[j] = alphabet[random.Next(alphabet.Length)];
+            }
+
+            var text = new string(chars);
+            if (!PreviousPhonePattern.IsMatch(text) || UuidOrIsoDate.IsMatch(text))
+            {
+                continue;
+            }
+
+            checkedMatches++;
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(new[] { text }));
+            var result = redactor.Redact(document.RootElement);
+            using var output = JsonDocument.Parse(result.Json);
+            Assert.True(
+                output.RootElement[0].GetString() == AuditPayloadRedactor.Replacement,
+                $"Previously redacted value was kept: {text}");
+        }
+
+        Assert.True(checkedMatches > 1_000, $"Only {checkedMatches} generated values matched the previous rule.");
+    }
+
+    [Theory]
+    [InlineData("+52 667 000 0000")]
+    [InlineData("hidden@example.test +52 667 123 4567 Avenida Universidad 1234 token=super-secret ciphertext=deadbeef")]
+    [InlineData("12345678-1234-4123-8123-123456789012 y 667 123 4567")]
+    [InlineData("2026-09-28T10:59:40Z llamar 6671234567")]
+    public void Previous_redaction_corpus_is_still_redacted(string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { reason = value }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("reason").GetString());
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex PreviousPhonePattern = new(
+        @"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Deliberately broad: anything that looks like a UUID or a yyyy-MM-dd date is left out of the property corpus.
+    private static readonly System.Text.RegularExpressions.Regex UuidOrIsoDate = new(
+        @"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-|[0-9]{4}-[0-9]{2}-[0-9]{2}",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     [Fact]
     public void Empty_payload_scalars_and_unicode_remain_valid_json()

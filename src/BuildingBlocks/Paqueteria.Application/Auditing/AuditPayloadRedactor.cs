@@ -204,13 +204,12 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         CiphertextPattern().IsMatch(value);
 
     /// <summary>
-    /// Phone detection by shape. Well-formed UUIDs (8-4-4-4-12 hex) are removed from the text first, so a digit run
-    /// inside an identifier never looks like a phone. What remains is redacted when it holds an E.164 number (a
-    /// <c>+</c> followed by 8 to 15 digits with optional separators) or a Mexican 10-digit number with an optional
-    /// <c>+52</c>/<c>52</c> and mobile <c>1</c> prefix and optional spaces, dashes, dots or parentheses. This applies
-    /// under every key, identifier keys included. Boundaries are digits only, so a phone glued to letters is still
-    /// found; as a result a non-UUID token that is mostly digits (a hex hash, base64) can be over-redacted, which is
-    /// intentional. A bare run of digits of any other length is not a phone.
+    /// Phone detection is the pre-existing generic rule minus two known-safe token kinds. Well-formed UUIDs
+    /// (8-4-4-4-12 hex) and ISO-8601 dates/timestamps are removed from the text first; what remains is redacted when
+    /// it matches the legacy generic digit-run rule (8 or more characters of digits, spaces, dashes or parentheses,
+    /// optional leading <c>+</c>), an E.164 number or a Mexican 10-digit number (which also cover dotted groupings).
+    /// Every string the previous rule redacted is still redacted, except UUIDs and ISO dates. Numeric runs of 8 or
+    /// more digits that are not phones are still over-redacted, as before.
     /// </summary>
     private static bool ContainsPhoneNumber(string value)
     {
@@ -219,8 +218,10 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
             return false;
         }
 
-        var text = UuidPattern().Replace(value, " ");
-        return E164PhonePattern().IsMatch(text) || MexicanPhonePattern().IsMatch(text);
+        var text = IsoDateTimePattern().Replace(UuidPattern().Replace(value, " "), " ");
+        return LegacyDigitRunPattern().IsMatch(text) ||
+            E164PhonePattern().IsMatch(text) ||
+            MexicanPhonePattern().IsMatch(text);
     }
 
     [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+", RegexOptions.CultureInvariant)]
@@ -231,8 +232,20 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         RegexOptions.CultureInvariant)]
     private static partial Regex UuidPattern();
 
+    // yyyy-MM-dd with an optional time (T or space), seconds, fraction and Z / +hh:mm / -hhmm offset.
+    [GeneratedRegex(
+        @"(?<![0-9])[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])" +
+        @"(?:[T ](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:[.,][0-9]{1,9})?)?(?:Z|[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9])?)?" +
+        @"(?![0-9])",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex IsoDateTimePattern();
+
+    // The original generic rule, kept so the new rule is a superset of it (minus UUIDs and ISO dates).
+    [GeneratedRegex(@"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])", RegexOptions.CultureInvariant)]
+    private static partial Regex LegacyDigitRunPattern();
+
     // Boundaries are digits only (and "+" before a number): a phone glued to a word ("llamar667-123-4567",
-    // "6671234567antes") is still a phone. Only UUIDs are exempt; they are stripped before these patterns run.
+    // "6671234567antes") is still a phone.
     // "+" then 8 to 15 digits; between digits at most one separator (space, dot, dash) and optional parentheses.
     [GeneratedRegex(
         @"(?<![0-9+])\+[ ]?\(?[0-9](?:[ .\-]?\)?[ .\-]?\(?[0-9]){7,14}(?![0-9])",

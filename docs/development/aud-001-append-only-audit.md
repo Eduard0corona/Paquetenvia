@@ -43,23 +43,31 @@ email, phone, bearer/JWT, private-key and connection-string shapes inside
 arrays. Sensitive values become `[REDACTED]`; the original value is never
 returned, persisted, logged or included in an exception.
 
-Phone detection is by field name and by shape, never by digit count alone.
-Field names covering phone, telephone, `tel`, `telefono*`, `*celular`, `movil`,
+Phone detection is the previous behavior minus UUIDs and ISO dates. Field
+names covering phone, telephone, `tel`, `telefono*`, `*celular`, `movil`,
 `mobile`, `mobileNumber`, `whatsapp`, `whatsapp_number` and `msisdn` are
-always redacted. Inside string values, well-formed UUIDs (8-4-4-4-12 hex) are
-ignored first, so a digit run inside an order, token or request id never
-triggers redaction. What remains is redacted when it contains an E.164 number
-(`+` then 8 to 15 digits, with optional spaces, dots, dashes or parentheses)
-or a Mexican 10-digit number with an optional `+52`/`52` and mobile `1`
-prefix in the usual groupings (`6671234567`, `667 123 4567`,
-`(55) 1234-5678`, `667.123.45.67`, `66 71 23 45 67`). These shapes apply
-under every key, identifier keys included: a bare 10-digit value under
-`*_id` is redacted, failing toward privacy. The shapes are bounded by digits
-only, so a phone glued to a word (`llamar667-123-4567`, `whatsapp6671234567`,
-`6671234567antes`) is still redacted. As a consequence, a non-UUID token that
-is mostly digits (a hex hash or base64 value with a 10-digit run between
-letters) can be redacted too; that over-redaction is intentional. Dates,
-timestamps and digit runs of other lengths are preserved.
+always redacted. Inside string values, well-formed UUIDs (8-4-4-4-12 hex) and
+ISO-8601 dates and timestamps (`2026-09-28`, `2026-09-28T10:59:40Z`, with
+optional fractional seconds and offsets) are removed first, so a digit run
+inside an order, token or request id, or inside a timestamp, never triggers
+redaction. What remains is redacted when it matches any of:
+
+- the original generic rule: 8 or more characters of digits, spaces, dashes
+  or parentheses, starting and ending with a digit, with an optional leading
+  `+` (`(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])`);
+- an E.164 number (`+` then 8 to 15 digits, with optional spaces, dots, dashes
+  or parentheses);
+- a Mexican 10-digit number with an optional `+52`/`52` and mobile `1` prefix
+  in the usual groupings (`6671234567`, `667 123 4567`, `(55) 1234-5678`,
+  `667.123.45.67`, `66 71 23 45 67`).
+
+All three are bounded by digits only, so a phone glued to a word
+(`llamar667-123-4567`, `6671234567antes`) or to more digits
+(`66712345675512345678`) is redacted, under every key, identifier keys
+included. Every string the previous rule redacted is still redacted, except
+UUIDs and ISO dates. Numeric runs of 8 or more digits that are not phones
+(and hex or base64 tokens that contain such a run) are still over-redacted,
+as before; that is intentional.
 
 The default limits are eight nested levels and 16 KiB of UTF-8 JSON. Invalid,
 unsupported, over-depth or over-size input throws the generic
