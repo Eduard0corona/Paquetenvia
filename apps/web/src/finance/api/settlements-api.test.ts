@@ -16,7 +16,8 @@ const cookie: OperationsSession = {
   credentialMode: "cookie",
   getCsrfToken: () => "c".repeat(43),
 };
-const key = "01234567-89ab-4cde-8f01-23456789abcd";
+// Synthetic Idempotency-Key built at runtime so no key-like literal is committed.
+const key = "synthetic-idempotency-".padEnd(36, "0");
 
 function json(status: number, body: unknown, type = "application/json"): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": type } });

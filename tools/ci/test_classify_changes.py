@@ -144,6 +144,11 @@ class ImpactModelTests(unittest.TestCase):
         plan = classify(["apps/web/src/operations/board.tsx", "apps/web/src/app/ops/page.tsx"])
         self.assertEqual({"secret-scan", "web", "operations-dashboard", "azr-static"}, jobs(plan))
 
+    def test_finance_ui_is_operations_ui(self):
+        plan = classify(["apps/web/src/finance/state/settlements.ts", "apps/web/src/app/finance/settlements/page.tsx"])
+        self.assertEqual({"secret-scan", "web", "operations-dashboard", "azr-static"}, jobs(plan))
+        self.assertEqual(["WEB_OPS"], plan["domains"])
+
     def test_realtime_shared_fans_out_to_realtime_dependents_only(self):
         plan = classify(["apps/web/src/realtime/hub.ts"])
         self.assertEqual({"secret-scan", "azr-static", *WEB_ALL}, jobs(plan))

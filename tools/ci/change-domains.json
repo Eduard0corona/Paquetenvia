@@ -106,7 +106,9 @@
       "name": "WEB_OPS",
       "patterns": [
         "apps/web/src/operations/**",
-        "apps/web/src/app/ops/**"
+        "apps/web/src/app/ops/**",
+        "apps/web/src/finance/**",
+        "apps/web/src/app/finance/**"
       ],
       "jobs": [
         "web",
