@@ -4,13 +4,17 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Orders.Endpoints;
+using Paqueteria.Application.Security;
 using Paqueteria.ArchitectureTests.Architecture;
+using Paqueteria.Infrastructure.Security;
+using Realtime.Endpoints.Connection;
 
 namespace Paqueteria.ArchitectureTests;
 
 /// <summary>
-/// Invariant 5: the public tracking token travels in the URL path, so the request path must be redacted before
-/// ASP.NET Core hosting diagnostics read it. These guards keep that true whatever log sink is added later.
+/// Invariant 5: the public tracking token travels in the URL path and hub tokens in the access_token query, so the
+/// request target must be redacted before ASP.NET Core hosting diagnostics read it. These guards keep that true
+/// whatever log sink is added later.
 /// </summary>
 public sealed class TrackingTokenLogRedactionArchitectureTests
 {
@@ -58,16 +62,60 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
         Assert.Null(token);
     }
 
-    [Fact]
-    public void Orders_endpoints_replace_the_host_http_context_factory_with_the_redacting_one()
+    [Theory]
+    [InlineData("?access_token=secret-value", "?access_token=redacted", new[] { "secret-value" })]
+    [InlineData("?id=abc&access_token=a%2Bb%3D&organization_id=o1", "?id=abc&access_token=redacted&organization_id=o1",
+        new[] { "a+b=" })]
+    [InlineData("?Access_Token=one&x=1&ACCESS_TOKEN=two", "?Access_Token=redacted&x=1&ACCESS_TOKEN=redacted",
+        new[] { "one", "two" })]
+    [InlineData("?access%5Ftoken=encoded-key", "?access%5Ftoken=redacted", new[] { "encoded-key" })]
+    [InlineData("?access_token=", "?access_token=redacted", new[] { "" })]
+    [InlineData("?id=abc", "?id=abc", new string[0])]
+    [InlineData("", "", new string[0])]
+    public void Hub_access_token_values_are_redacted_and_the_rest_of_the_query_is_kept(
+        string query,
+        string expectedQuery,
+        string[] expectedTokens)
     {
-        var services = new ServiceCollection();
+        Assert.Equal(expectedQuery, RealtimeAccessTokenRedaction.RedactQuery(query, out var tokens));
+        Assert.Equal(expectedTokens, tokens.ToArray());
+    }
+
+    [Theory]
+    [InlineData("/hubs/tracking", "?access_token=t1&id=2", "?access_token=redacted&id=2")]
+    [InlineData("/HUBS/Tracking/negotiate", "?negotiateVersion=1&access_token=t1", "?negotiateVersion=1&access_token=redacted")]
+    [InlineData("/hubs/operations", "?id=x", "?id=x")]
+    public void Hub_requests_always_get_the_access_token_feature(string path, string query, string expectedQuery)
+    {
+        using var provider = RedactorServices().BuildServiceProvider();
+        var redactor = Assert.Single(
+            provider.GetServices<IRequestTargetRedactor>(),
+            item => item.GetType().Name == "RealtimeAccessTokenRedactor");
+        var redaction = redactor.Redact(path, query);
+        Assert.NotNull(redaction);
+        Assert.Equal(path, redaction.Path);
+        Assert.Equal(expectedQuery, redaction.QueryString);
+        Assert.Equal(typeof(IRealtimeAccessTokenFeature), redaction.FeatureType);
+        Assert.DoesNotContain("t1", redaction.Feature.ToString() ?? string.Empty, StringComparison.Ordinal);
+        Assert.Null(redactor.Redact("/api/v1/orders", query));
+    }
+
+    [Fact]
+    public void Host_registers_one_request_target_redacting_factory_composing_both_module_redactors()
+    {
+        var services = RedactorServices();
         services.AddSingleton<IHttpContextFactory, DefaultHttpContextFactory>();
-        services.AddOrdersEndpoints(new ConfigurationBuilder().Build());
+        services.AddRequestTargetRedaction();
 
         var descriptor = Assert.Single(services, item => item.ServiceType == typeof(IHttpContextFactory));
-        Assert.Equal("PublicTrackingRedactingHttpContextFactory", descriptor.ImplementationType?.Name);
+        Assert.Equal(typeof(RequestTargetRedactingHttpContextFactory), descriptor.ImplementationType);
         Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        Assert.Equal(
+            ["PublicTrackingPathRedactor", "RealtimeAccessTokenRedactor"],
+            services.Where(item => item.ServiceType == typeof(IRequestTargetRedactor))
+                .Select(item => item.ImplementationType!.Name)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
 
         // HostingApplication reuses a connection's pooled HttpContext (Kestrel IHostContextContainer) through
         // DefaultHttpContextFactory.Initialize, bypassing Create, only when the registered factory IS a
@@ -77,23 +125,33 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
     }
 
     [Theory]
-    [InlineData("/hubs/driver", "/hubs/driver")]
-    [InlineData("/api/v1/tracking/token-value", "/api/v1/tracking/redacted")]
-    public void Redacting_factory_keeps_the_default_context_lifecycle(string path, string expectedPath)
+    [InlineData("/hubs/driver", "?access_token=t1&id=2", "/hubs/driver", "?access_token=redacted&id=2")]
+    [InlineData("/api/v1/tracking/token-value", "", "/api/v1/tracking/redacted", "")]
+    [InlineData("/health/live", "?a=1", "/health/live", "?a=1")]
+    public void Redacting_factory_keeps_the_default_context_lifecycle(
+        string path,
+        string query,
+        string expectedPath,
+        string expectedQuery)
     {
         // Same contract as DefaultHttpContextFactory: a fresh context over the server features, the accessor set
         // on Create and cleared on Dispose, and a lazily created request services scope from the root provider.
-        var services = new ServiceCollection();
+        var services = RedactorServices();
         services.AddOptions();
         services.AddHttpContextAccessor();
-        services.AddPublicTrackingPathRedaction();
+        services.AddRequestTargetRedaction();
         using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<IHttpContextFactory>();
         var accessor = provider.GetRequiredService<IHttpContextAccessor>();
 
+        var request = new Microsoft.AspNetCore.Http.Features.HttpRequestFeature
+        {
+            Path = path,
+            QueryString = query,
+            RawTarget = path + query,
+        };
         var features = new Microsoft.AspNetCore.Http.Features.FeatureCollection();
-        features.Set<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>(
-            new Microsoft.AspNetCore.Http.Features.HttpRequestFeature { Path = path });
+        features.Set<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>(request);
         features.Set<Microsoft.AspNetCore.Http.Features.IHttpResponseFeature>(
             new Microsoft.AspNetCore.Http.Features.HttpResponseFeature());
         features.Set<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>(
@@ -104,6 +162,8 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
         Assert.Same(features, context.Features);
         Assert.Same(context, accessor.HttpContext);
         Assert.Equal(expectedPath, context.Request.Path.Value);
+        Assert.Equal(expectedQuery, context.Request.QueryString.Value ?? string.Empty);
+        Assert.Equal(expectedPath + expectedQuery, request.RawTarget);
         Assert.NotNull(context.RequestServices);
 
         var second = factory.Create(new Microsoft.AspNetCore.Http.Features.FeatureCollection(features));
@@ -112,6 +172,28 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
 
         factory.Dispose(context);
         Assert.Null(accessor.HttpContext);
+    }
+
+    [Fact]
+    public void Realtime_middlewares_read_access_tokens_only_from_the_redaction_feature()
+    {
+        foreach (var file in new[]
+                 {
+                     "src/Modules/Realtime/Realtime.Endpoints/Connection/RealtimeConnectionGateMiddleware.cs",
+                     "src/Modules/Realtime/Realtime.Endpoints/Connection/RealtimePrivateAccessTokenMiddleware.cs",
+                 })
+        {
+            var source = File.ReadAllText(TestRepository.GetPath(file));
+            Assert.Contains("GetOriginalAccessTokens()", source, StringComparison.Ordinal);
+            // Hub paths are matched case-insensitively, like routing.
+            Assert.DoesNotContain("StringComparison.Ordinal)", source, StringComparison.Ordinal);
+        }
+
+        var queryReads = SourceFiles()
+            .Where(file => CodeWithoutComments(file).Contains("Query[\"access_token\"]", StringComparison.Ordinal))
+            .Select(Relative)
+            .ToArray();
+        Assert.Empty(queryReads);
     }
 
     [Fact]
@@ -127,7 +209,7 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
 
     [Fact]
     public void Api_host_registers_the_redaction_and_nothing_else_replaces_the_http_context_factory() =>
-        AssertRedactionIsTheOnlyHttpContextFactory("the API host serves the public tracking lookup");
+        AssertRedactionIsTheOnlyHttpContextFactory("the API host serves the tracking lookup and the hubs");
 
     [Fact]
     public void Request_path_log_sinks_are_reviewed_and_behind_the_tracking_redaction()
@@ -180,26 +262,55 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
     private static void AssertRedactionIsTheOnlyHttpContextFactory(string because)
     {
         var program = File.ReadAllText(TestRepository.GetPath("src/Paqueteria.Api/Program.cs"));
-        Assert.True(
-            program.Contains("builder.Services.AddOrdersEndpoints(", StringComparison.Ordinal),
-            $"The API host must register the Orders endpoints and with them the tracking redaction; {because}.");
-        var dependencyInjection = File.ReadAllText(TestRepository.GetPath(
-            "src/Modules/Orders/Orders.Endpoints/DependencyInjection.cs"));
-        Assert.True(
-            dependencyInjection.Contains("services.AddPublicTrackingPathRedaction();", StringComparison.Ordinal),
-            $"AddOrdersEndpoints must register the tracking path redaction; {because}.");
+        foreach (var registration in new[]
+                 {
+                     "builder.Services.AddRequestTargetRedaction();",
+                     "builder.Services.AddOrdersEndpoints(",
+                     "builder.Services.AddRealtimeEndpoints(",
+                 })
+        {
+            Assert.True(
+                program.Contains(registration, StringComparison.Ordinal),
+                $"The API host must call {registration}; {because}.");
+        }
 
-        var redactionFile = TestRepository.Normalize(
-            TestRepository.GetPath("src/Modules/Orders/Orders.Endpoints/PublicTrackingPathRedaction.cs"));
+        foreach (var (file, registration) in new[]
+                 {
+                     ("src/Modules/Orders/Orders.Endpoints/DependencyInjection.cs",
+                         "services.AddPublicTrackingPathRedaction();"),
+                     ("src/Modules/Realtime/Realtime.Endpoints/DependencyInjection.cs",
+                         "services.AddRealtimeAccessTokenRedaction();"),
+                 })
+        {
+            Assert.True(
+                File.ReadAllText(TestRepository.GetPath(file)).Contains(registration, StringComparison.Ordinal),
+                $"{file} must call {registration}; {because}.");
+        }
+
+        var redactionFile = TestRepository.Normalize(TestRepository.GetPath(
+            "src/BuildingBlocks/Paqueteria.Infrastructure/Security/RequestTargetRedactingHttpContextFactory.cs"));
         var others = SourceFiles()
             .Where(file => TestRepository.Normalize(file) != redactionFile)
-            .Where(file => File.ReadAllText(file).Contains("IHttpContextFactory", StringComparison.Ordinal))
+            .Where(file => CodeWithoutComments(file).Contains("IHttpContextFactory", StringComparison.Ordinal))
             .Select(Relative)
             .ToArray();
         Assert.True(
             others.Length == 0,
-            $"Only the tracking redaction may replace IHttpContextFactory ({because}); also found in: "
+            $"Only the request target redaction may replace IHttpContextFactory ({because}); also found in: "
             + string.Join(", ", others));
+    }
+
+    // Source lines that are not // or /// comments: documentation may name the types, code may not use them.
+    private static string CodeWithoutComments(string file) => string.Join(
+        '\n',
+        File.ReadLines(file).Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+    private static ServiceCollection RedactorServices()
+    {
+        var services = new ServiceCollection();
+        services.AddPublicTrackingPathRedaction();
+        services.AddRealtimeAccessTokenRedaction();
+        return services;
     }
 
     private static IEnumerable<string> SourceFiles() =>

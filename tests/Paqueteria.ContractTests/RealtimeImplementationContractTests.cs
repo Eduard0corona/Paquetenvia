@@ -125,7 +125,14 @@ public sealed class RealtimeImplementationContractTests
 
         Assert.Contains("InProcess", optionsSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Redis", optionsSource, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("\"access_token\"", privateTokenSource, StringComparison.Ordinal);
+        // The access_token query value is redacted before hosting logs the query; the middleware reads the original
+        // value from the redaction feature.
+        var redactionSource = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Realtime", "Realtime.Endpoints", "Connection",
+            "RealtimeAccessTokenRedaction.cs"));
+        Assert.Contains("\"access_token\"", redactionSource, StringComparison.Ordinal);
+        Assert.Contains("GetOriginalAccessTokens()", privateTokenSource, StringComparison.Ordinal);
         Assert.Contains("RealtimeEndpointDefaults.OperationsPath", privateTokenSource, StringComparison.Ordinal);
         Assert.Contains("RealtimeEndpointDefaults.DriverPath", privateTokenSource, StringComparison.Ordinal);
         Assert.DoesNotContain("RealtimeEndpointDefaults.TrackingPath", privateTokenSource, StringComparison.Ordinal);

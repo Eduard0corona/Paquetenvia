@@ -1,6 +1,6 @@
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Paqueteria.Application.Security;
 
 namespace Orders.Endpoints;
 
@@ -12,10 +12,11 @@ namespace Orders.Endpoints;
 /// ASP.NET Core hosting reads <see cref="HttpRequest.Path"/> in <c>HostingApplication.CreateContext</c>, before
 /// any middleware runs: it captures it eagerly in the <c>RequestPath</c> log scope, the "Request starting" and
 /// "Request finished" messages and the <c>Microsoft.AspNetCore.Hosting.HttpRequestIn</c> activity (tags and
-/// sampling input). Middleware is therefore too late. The only hook that runs before hosting diagnostics is the
-/// <see cref="IHttpContextFactory"/>, so this factory rewrites the request target of a lookup to a redacted path
-/// with the same segment count (routing still matches exactly what it matched before) and keeps the original
-/// token in a request feature that only the lookup endpoint reads. Whatever provider, formatter, exporter,
+/// sampling input). Middleware is therefore too late. The host's request target redacting
+/// HttpContext factory (Paqueteria.Infrastructure.Security) runs before hosting diagnostics and applies this module's
+/// <see cref="IRequestTargetRedactor"/>: it rewrites the target of a lookup to a redacted path with the same segment
+/// count (routing still matches exactly what it matched before) and keeps the original token in a request feature
+/// that only the lookup endpoint reads. Whatever provider, formatter, exporter,
 /// HTTP logging or routing diagnostics is configured, the only path they can observe is the redacted one.
 /// </remarks>
 public static class PublicTrackingPathRedaction
@@ -24,13 +25,13 @@ public static class PublicTrackingPathRedaction
     public const string RedactedSegment = "redacted";
 
     /// <summary>
-    /// Replaces the host <see cref="IHttpContextFactory"/> with the tracking path redacting factory.
+    /// Registers the tracking path redactor applied by the host's request target redacting factory.
     /// </summary>
     public static IServiceCollection AddPublicTrackingPathRedaction(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.RemoveAll<IHttpContextFactory>();
-        services.AddSingleton<IHttpContextFactory, PublicTrackingRedactingHttpContextFactory>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IRequestTargetRedactor, PublicTrackingPathRedactor>());
         return services;
     }
 
@@ -85,21 +86,6 @@ public static class PublicTrackingPathRedaction
         redactedPath = matchedPrefix.Add(new PathString("/" + string.Join('/', segments)));
         return true;
     }
-
-    internal static void Redact(IFeatureCollection features)
-    {
-        var request = features.Get<IHttpRequestFeature>();
-        if (request is null ||
-            !TryRedact(new PathString(request.Path), out var redactedPath, out var token))
-        {
-            return;
-        }
-
-        features.Set<IPublicTrackingTokenFeature>(new PublicTrackingTokenFeature(token));
-        request.Path = redactedPath.Value!;
-        request.RawTarget = new PathString(request.PathBase).Add(redactedPath).ToUriComponent()
-            + request.QueryString;
-    }
 }
 
 /// <summary>The original public tracking token of a redacted lookup request.</summary>
@@ -116,17 +102,14 @@ internal sealed class PublicTrackingTokenFeature(string? token) : IPublicTrackin
     public override string ToString() => nameof(PublicTrackingTokenFeature);
 }
 
-internal sealed class PublicTrackingRedactingHttpContextFactory(IServiceProvider services)
-    : IHttpContextFactory
+internal sealed class PublicTrackingPathRedactor : IRequestTargetRedactor
 {
-    private readonly DefaultHttpContextFactory inner = new(services);
-
-    public HttpContext Create(IFeatureCollection featureCollection)
-    {
-        ArgumentNullException.ThrowIfNull(featureCollection);
-        PublicTrackingPathRedaction.Redact(featureCollection);
-        return inner.Create(featureCollection);
-    }
-
-    public void Dispose(HttpContext httpContext) => inner.Dispose(httpContext);
+    public RequestTargetRedaction? Redact(string path, string queryString) =>
+        PublicTrackingPathRedaction.TryRedact(new PathString(path), out var redactedPath, out var token)
+            ? new RequestTargetRedaction(
+                redactedPath.Value!,
+                queryString,
+                typeof(IPublicTrackingTokenFeature),
+                new PublicTrackingTokenFeature(token))
+            : null;
 }
