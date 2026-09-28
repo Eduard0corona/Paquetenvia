@@ -190,6 +190,14 @@ class ImpactModelTests(unittest.TestCase):
         self.assertEqual(["DEPLOY_WORKFLOW"], plan["domains"])
         self.assertEqual("SELECTIVE", plan["classification"])
 
+    def test_pilot_deploy_workflow_and_templates(self):
+        # ENV-001: the pilot workflow and deploy/azure/pilot/** are validated by the same azr-static job.
+        for paths in ([".github/workflows/deploy-azure-pilot.yml"], ["deploy/azure/pilot/apps.bicep", "deploy/azure/pilot/Dockerfile.db-ops"]):
+            with self.subTest(paths=paths):
+                plan = classify(paths)
+                self.assertEqual({"secret-scan", "azr-static"}, jobs(plan))
+                self.assertEqual("SELECTIVE", plan["classification"])
+
     def test_claude_automation_workflows_need_only_universal_controls(self):
         for path in (".github/workflows/claude.yml", ".github/workflows/claude-code-review.yml"):
             with self.subTest(path=path):
