@@ -262,7 +262,7 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          trap 'shred -u "${RUNNER_TEMP}/s" 2>/dev/null || true' EXIT
+          trap 'rc=$?; shred -u "${RUNNER_TEMP}/s" 2>/dev/null || true; exit ${rc}' EXIT
           has_secret() { [[ "$(az keyvault secret list --vault-name "${VAULT}" --query "length([?name=='$1'])" -o tsv)" == "1" ]]; }
           put_secret() { az keyvault secret set --vault-name "${VAULT}" --name "$1" --file "$2" --encoding utf-8 --only-show-errors --output none; shred -u "$2"; }
           if ! has_secret pg-admin-password; then
@@ -342,7 +342,7 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          trap 'shred -u "${RUNNER_TEMP}/s" 2>/dev/null || true' EXIT
+          trap 'rc=$?; shred -u "${RUNNER_TEMP}/s" 2>/dev/null || true; exit ${rc}' EXIT
           [[ "${PGHOST_FQDN}" =~ ^[a-z0-9-]+\.postgres\.database\.azure\.com$ ]] || { echo "::error::unexpected PostgreSQL host"; exit 1; }
           has_secret() { [[ "$(az keyvault secret list --vault-name "${VAULT}" --query "length([?name=='$1'])" -o tsv)" == "1" ]]; }
           put_secret() { az keyvault secret set --vault-name "${VAULT}" --name "$1" --file "$2" --encoding utf-8 --only-show-errors --output none; shred -u "$2"; }
