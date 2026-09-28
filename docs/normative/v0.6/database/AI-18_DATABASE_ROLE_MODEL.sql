@@ -316,9 +316,10 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- paqueteria_master_data_loader is a platform-operator capability, not a tenant boundary: its caller names
 -- the organization and also sets it as app.current_org_ids (the function refuses any other context), so a
 -- mistyped organization fails instead of loading elsewhere; the audit row names the operator by a
--- pseudonymous operator_ref (SHA-256 of 'paquetenvia.mdm-001.operator:' || login), never the login itself,
--- because tenants can read their audit rows. It is NOLOGIN NOBYPASSRLS with USAGE on schema security and
--- that EXECUTE only, and its only members are named operator LOGINs (NOINHERIT, SET ROLE per transaction)
+-- pseudonymous operator_ref, never the login itself or anything derived from it, because tenants can read
+-- their audit rows (a random uuid per login since the MDM-001 hardening step below; rows written before it
+-- keep the former SHA-256 of 'paquetenvia.mdm-001.operator:' || login, as audit rows are append-only).
+-- It is NOLOGIN NOBYPASSRLS with USAGE on schema security and that EXECUTE only, and its only members are named operator LOGINs (NOINHERIT, SET ROLE per transaction)
 -- that the owner creates and removes; it is never granted to paqueteria_app, paqueteria_worker or
 -- paqueteria_bootstrap, no member that can use it (INHERIT or SET) may also be a member of
 -- paqueteria_migrator, and only deployment principals (members of paqueteria_migrator) may hold
@@ -341,6 +342,18 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- UPDATE) and makes the function store each rule's policy_version and refuse to change a stored one. Those two
 -- grants are owned by that lane, not declared here, because the MDM-001 lane step, which runs first on every
 -- installation, verifies exactly the grants below; the lane's rollback revokes them.
+-- MDM-001-LOADER-HARDENING: the Pricing lane step 20260928000400_HardenMasterDataLoaderOperatorBoundary makes
+-- the function refuse, at every call, a session whose login is a member of paqueteria_migrator
+-- (MDM001_DEPLOYMENT_PRINCIPAL_REFUSED; a member holding only ADMIN on the loader could otherwise grant itself
+-- SET), and replaces the hashed operator_ref with a random uuid per login kept in
+-- platform.master_data_operator_refs (operator_login text PRIMARY KEY, operator_ref uuid UNIQUE, created_at):
+-- owned by paqueteria_migrator, ENABLE and FORCE ROW LEVEL SECURITY with the single policy
+-- master_data_operator_refs_migrator for paqueteria_migrator, nothing for PUBLIC or the runtime roles, and
+-- SELECT and INSERT on (operator_login, operator_ref) for the executor only (no UPDATE, no DELETE). The table
+-- and those four grants are owned by that lane step for the same reason as the policy_version grants; its
+-- rollback revokes the grants and keeps the table, which resolves the pseudonyms of append-only audit rows.
+-- master-data-gate records the deployment login's reference from the same table as paqueteria_migrator and
+-- serializes its runs on pg_advisory_xact_lock(2026092803) before reading the deployment marker.
 REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;
 REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;
 REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;
@@ -398,5 +411,5 @@ GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
 -- 24. once the Custody BFF purge lane is recorded, paqueteria_cleanup_executor additionally owns security.purge_bff_sessions(integer) and holds USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on identity.bff_sessions and SELECT(jti_hash,expires_at) and DELETE on identity.bff_logout_jtis, and nothing else there; only paqueteria_worker may EXECUTE the purge.
 -- 25. once REG-002 is recorded, the four REG-002 functions are SECURITY DEFINER with a pinned search_path, owned by paqueteria_registration_executor, and only paqueteria_app may EXECUTE them; organizations.pending_memberships has ENABLE and FORCE ROW LEVEL SECURITY with the tenant policy, paqueteria_app holds only SELECT on it and paqueteria_worker holds nothing.
 -- 26. paqueteria_master_data_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and only to deployment principals (members of paqueteria_migrator) and, once the Pricing MDM-001 lane is recorded, owns only security.load_master_data(uuid,uuid,json,bytea,boolean) (the first published jsonb overload is dropped by that lane's Up and Down). Both master data roles and their grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
--- 27. paqueteria_master_data_executor holds only USAGE on schemas identity, organizations, locations, pricing, drivers and platform and exactly the column grants above (including SELECT(deployment_class,gate_007_closed) on platform.master_data_deployment_gate), plus SELECT and INSERT on pricing.tariff_rules.policy_version once the PRC-POLICY-VERSION-PER-ORG loader step is recorded: no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration or session privilege.
--- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role and to no member that can use it while also being a member of paqueteria_migrator, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,json,bytea,boolean); that function's ACL is exactly its owner and the loader, it is SECURITY DEFINER with search_path=pg_catalog, pg_temp, and platform.master_data_deployment_gate forces RLS with only the master_data_deployment_gate_migrator policy and grants nothing to PUBLIC or the runtime roles.
+-- 27. paqueteria_master_data_executor holds only USAGE on schemas identity, organizations, locations, pricing, drivers and platform and exactly the column grants above (including SELECT(deployment_class,gate_007_closed) on platform.master_data_deployment_gate), plus SELECT and INSERT on pricing.tariff_rules.policy_version once the PRC-POLICY-VERSION-PER-ORG loader step is recorded and SELECT and INSERT on platform.master_data_operator_refs(operator_login, operator_ref) once the MDM-001-LOADER-HARDENING step is recorded: no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration or session privilege.
+-- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role and to no member that can use it while also being a member of paqueteria_migrator, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,json,bytea,boolean); that function's ACL is exactly its owner and the loader, it is SECURITY DEFINER with search_path=pg_catalog, pg_temp, and platform.master_data_deployment_gate forces RLS with only the master_data_deployment_gate_migrator policy and grants nothing to PUBLIC or the runtime roles; once the MDM-001-LOADER-HARDENING step is recorded, the function refuses any session whose login is a member of paqueteria_migrator, and platform.master_data_operator_refs forces RLS with only the master_data_operator_refs_migrator policy, is owned by paqueteria_migrator and grants nothing to PUBLIC, the runtime roles or the loader.

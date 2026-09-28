@@ -43,13 +43,15 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             ORDER BY h."MigrationId";
             """);
         await using var reader = await command.ExecuteReaderAsync();
-        // The adoption, MDM-001-OPERATOR-LOADER, the policy_version column and the loader storing it.
+        // The adoption, MDM-001-OPERATOR-LOADER, the policy_version column, the loader storing it and the
+        // MDM-001 loader hardening.
         foreach (var migrationId in new[]
                  {
                      AdoptCanonicalPricingBaseline.MigrationId,
                      AddMasterDataLoader.MigrationId,
                      VersionPricingPolicyPerOrganization.MigrationId,
                      StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+                     HardenMasterDataLoaderOperatorBoundary.MigrationId,
                  })
         {
             Assert.True(await reader.ReadAsync());

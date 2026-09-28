@@ -514,8 +514,9 @@ When the gates are closed, the manual run is:
    Cities come first, in a load for the PLATFORM organization; each organization's load can only
    reference existing ACTIVE cities.
 5. The load leaves one `MASTER_DATA_LOADED` row in `platform.audit_logs` with a pseudonymous `operator_ref`
-   (SHA-256 of `paquetenvia.mdm-001.operator:` + login, never the login itself, since tenants can read
-   their audit rows), the file's SHA-256 and PostgreSQL's own SHA-256 of the document; keep the reviewed
+   (a random UUID per operator login, kept in the platform-only `platform.master_data_operator_refs` and
+   readable only as `paqueteria_migrator`; never the login itself or a hash of it, since tenants can read
+   their audit rows; rows written before the MDM-001 hardening keep the former SHA-256 format), the file's SHA-256 and PostgreSQL's own SHA-256 of the document; keep the reviewed
    file, its hash and the login with the change record. A re-run of the same file changes no master data.
 6. Remove the operator login (`DROP ROLE pv_pilot_mdm_ec`) or rotate its secret when the load is done.
 

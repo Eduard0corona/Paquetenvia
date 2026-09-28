@@ -25,12 +25,18 @@ pero **no** es una frontera de seguridad entre tenants: la frontera es quién re
   ejemplo `pv_pilot_mdm_<iniciales>`), nunca `paqueteria_app`, `paqueteria_worker` ni `paqueteria_bootstrap`;
   ningún miembro que pueda usarlo (`INHERIT` o `SET`) puede ser a la vez miembro de `paqueteria_migrator`
   (lo verifican la lane y `DatabaseBaselineAssertions`): quien carga no es quien despliega;
+- además, la función rechaza **en cada llamada** a cualquier sesión cuyo login sea miembro de
+  `paqueteria_migrator` (`MDM001_DEPLOYMENT_PRINCIPAL_REFUSED`, SQLSTATE `42501`; un superusuario cuenta
+  como miembro de todo rol y también se rechaza). Las verificaciones anteriores sólo corren al migrar o
+  al afirmar la línea base: un miembro del migrador con sólo `ADMIN` sobre el rol de carga (lo que recibe
+  un creador `CREATEROLE`) puede concederse `SET` a sí mismo y llamar la función directamente; la
+  comprobación en la función cierra esa ventana (hallazgo de revisión X1);
 - cada carga deja en `platform.audit_logs` al operador como actor registrado, con un **seudónimo**:
-  `operator_ref` = SHA-256 hex de `paquetenvia.mdm-001.operator:` + login. Los tenants pueden leer sus
-  filas de auditoría, así que el nombre del login nunca se guarda; el personal de plataforma identifica al
-  operador recalculando `operator_ref` para los logins que creó. `actor_id` queda `NULL`: ningún usuario de
-  la aplicación hace la carga. El seudónimo es un hash sin sal de un nombre corto: identifica, pero no
-  oculta el login a quien pueda adivinarlo; no uses nombres de persona completos.
+  `operator_ref` = un UUID **aleatorio por login de operador**, guardado en
+  `platform.master_data_operator_refs` (login → UUID). Los tenants pueden leer sus filas de auditoría, así
+  que ni el nombre del login ni nada derivado de él se guarda en ellas; el personal de plataforma resuelve
+  el seudónimo leyendo esa tabla como `paqueteria_migrator`. `actor_id` queda `NULL`: ningún usuario de la
+  aplicación hace la carga. Ver "Seudónimo del operador" abajo.
 
 ## Compuerta de despliegue (GATE-007) en la base
 
@@ -38,8 +44,13 @@ pero **no** es una frontera de seguridad entre tenants: la frontera es quién re
 (`master-data-gate`, como `paqueteria_migrator`) y sólo lee el ejecutor. Como toda tabla de aplicación
 salvo `locations.cities`, fuerza RLS; su única política (AI-18) admite a `paqueteria_migrator`, su dueño.
 Cada cambio queda como fila de auditoría append-only (`MASTER_DATA_GATE_CHANGED`) de la organización
-`PLATFORM`, con el estado anterior, el nuevo y el `operator_ref` del login de despliegue. El comando nunca
-vuelve `SYNTHETIC` una base marcada `REAL` (`MDM001_GATE_REAL_TO_SYNTHETIC_REFUSED`). La función aplica la
+`PLATFORM`, con el estado anterior, el nuevo y el `operator_ref` (UUID aleatorio) del login de despliegue.
+El comando nunca vuelve `SYNTHETIC` una base marcada `REAL` (`MDM001_GATE_REAL_TO_SYNTHETIC_REFUSED`).
+Antes de leer la marca toma `pg_advisory_xact_lock(2026092803)` (llave fija de este comando; la función de
+carga usa `2026092802` para escrituras globales y `(2026092801, organización)` por organización): sin fila,
+`SELECT ... FOR UPDATE` no bloquea nada, y dos primeras ejecuciones concurrentes podían ver ambas la marca
+vacía y dejar `SYNTHETIC` sobre un `REAL` ya confirmado (hallazgo de revisión X3). Con la llave, sólo una
+ve la marca vacía y la otra lee lo que la primera confirmó. La función aplica la
 marca en cada llamada, con independencia de las variables de entorno de la máquina del operador:
 
 | Marca | Archivos `SYNTHETIC` | Archivos `REVIEWED` | `driver_profiles` |
@@ -59,6 +70,31 @@ Paqueteria.DatabaseMigrator master-data-gate --connection-env PAQUETERIA_MIGRATI
 base legal, retención y ARCO de datos de repartidores). El comando se niega a marcar `SYNTHETIC` si
 `PAQUETERIA_DEPLOYMENT_CLASS=PILOT_REAL_PEOPLE`. El job mantiene además su propia verificación de entorno
 como defensa en profundidad (ver Ejecución).
+
+## Seudónimo del operador (`platform.master_data_operator_refs`)
+
+Hasta la lane `20260928000400_HardenMasterDataLoaderOperatorBoundary`, `operator_ref` era el SHA-256 hex,
+sin sal, de `paquetenvia.mdm-001.operator:` + login: un login corto y adivinable se recuperaba probando
+candidatos (hallazgo de revisión X2). Ahora cada login recibe, en su primera carga real (o su primer
+cambio de marca), un UUID aleatorio (`gen_random_uuid()`) que se reutiliza en adelante:
+
+- `platform.master_data_operator_refs(operator_login text PK, operator_ref uuid UNIQUE, created_at)`,
+  de `paqueteria_migrator`, con `FORCE ROW LEVEL SECURITY` y una sola política
+  (`master_data_operator_refs_migrator`, para el migrador, su único administrador);
+- sin permisos para `PUBLIC`, `paqueteria_app`, `paqueteria_worker` ni el rol de carga; el ejecutor
+  (`BYPASSRLS`) tiene sólo `SELECT` e `INSERT` sobre `(operator_login, operator_ref)`, así que la tabla sólo
+  se lee y se escribe a través de la función `SECURITY DEFINER`; nunca `UPDATE` ni `DELETE`: un
+  seudónimo es permanente;
+- `master-data-gate` usa la misma tabla como `paqueteria_migrator` para el login de despliegue.
+
+Se eligió un identificador aleatorio en una tabla de plataforma y no un HMAC con clave porque no introduce
+ningún secreto nuevo que custodiar, rotar o filtrar: el seudónimo no depende del login, así que no hay nada
+que adivinar desde una fila de auditoría, y resolverlo exige leer la tabla como migrador.
+
+**Filas anteriores.** `platform.audit_logs` es append-only: la lane no reescribe ninguna fila. Las filas
+escritas antes conservan el formato anterior (64 caracteres hex, SHA-256 del prefijo + login) y se
+resuelven como antes, recalculando el hash para los logins conocidos; las nuevas llevan un UUID
+(36 caracteres con guiones). La forma distingue ambos formatos.
 
 ## Formato: JSON `paquetenvia.master-data.v1`
 
@@ -190,8 +226,18 @@ dejar la base distinta de la línea base con que se construyó, y sin la funció
 es dueño de nada y ningún login lo alcanza). Los datos cargados y las filas de auditoría (append-only)
 también se quedan. Volver a aplicar el carril restaura la función.
 
-Mantienen el contrato: `DatabaseBaselineAssertions` (límite exacto del ejecutor, del beneficiario y de la
-marca), el mapa E-002 (`_PLUS_MDM001`, por historial del carril Pricing), la ACL de `security`, el puente
+La lane `20260928000400_HardenMasterDataLoaderOperatorBoundary` (hallazgos X1 y X2) crea o adopta
+`platform.master_data_operator_refs` (como `paqueteria_migrator`, con forma exacta verificada), le quita todo
+permiso a `PUBLIC` y a los roles de runtime, concede al ejecutor los cuatro permisos de columna (el total
+exacto pasa de 118 a 122) y reemplaza la función con el cuerpo del paso anterior más cuatro ediciones
+revisadas, cada una de coincidencia única (`FunctionEdits`): declarar `v_operator_ref`, el rechazo de
+principales de despliegue y el seudónimo aleatorio. Como el paso de `policy_version`, la tabla y los cuatro
+permisos son de la lane y no de AI-06/AI-18: los pasos publicados verifican conteos exactos (116 y 118)
+antes, en toda instalación. Su `Down` revoca los cuatro permisos y restaura la función anterior; la tabla y
+sus filas se quedan (resuelven los seudónimos de filas de auditoría append-only) y sin permisos son inertes.
+
+Mantienen el contrato: `DatabaseBaselineAssertions` (límite exacto del ejecutor, del beneficiario, de la
+marca y de la tabla de seudónimos), el mapa E-002 (`_PLUS_MDM001`, por historial del carril Pricing), la ACL de `security`, el puente
 de propiedad de Azure del carril Pricing y `validate_contracts.py` (permisos exactos y la tabla de AI-06).
 
 ## Auditoría y salida sin PII
@@ -259,5 +305,11 @@ Primero se cargan las ciudades con una organización `PLATFORM` (`synthetic-plat
   entre tenants, auditoría con el login de operador y ambos hashes, dry-run, los mismos centavos y llaves
   repetidas rechazados por el job y por PostgreSQL, límites de la base, rechazos sin escrituras parciales,
   membresía de repartidor, rechazo de logins privilegiados o de runtime, y el carril Pricing `Down`/`Up` en
-  una base aislada (incluida la recreación de la marca).
+  una base aislada (incluida la recreación de la marca). Para el endurecimiento: la función instalada es la
+  anterior más las cuatro ediciones y deshacerlas la devuelve byte a byte; un miembro del migrador con sólo
+  `ADMIN` que se concede `SET` y llama la función es rechazado (también un superusuario) sin escribir nada;
+  el seudónimo es un UUID aleatorio estable por login y la tabla es inaccesible para runtime, operador y
+  rol de carga; dos primeras ejecuciones concurrentes de `master-data-gate` (retenidas en la llave y luego
+  en carrera libre) terminan siempre en `REAL` y sólo una ve la marca vacía; y el paso baja y sube en una
+  base aislada conservando la tabla, sus filas y una fila de auditoría en el formato anterior.
 - `tools/ci/test_validate_contracts_grants.py`: permisos exactos del ejecutor y del beneficiario.

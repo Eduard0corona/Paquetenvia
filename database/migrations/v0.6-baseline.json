@@ -14,7 +14,7 @@
       "id": "0002-role-model",
       "order": 2,
       "path": "docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "sha256": "ad009587bb11c46fb3af9a6d10c596e0dbca322b0dd8bc97d8453aa716d15195",
+      "sha256": "53c486c12178a470aa35764be2b117105f3ac077f384f7f3d0b7cca01a2b810f",
       "credential": "privileged-deployment",
       "description": "Normalize ownership and install the canonical least-privilege role model.",
       "required": true

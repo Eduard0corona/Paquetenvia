@@ -14,7 +14,7 @@ role model. Their mandatory hashes and order are declared in
 
 ```text
 AI-06 a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4
-AI-18 ad009587bb11c46fb3af9a6d10c596e0dbca322b0dd8bc97d8453aa716d15195
+AI-18 53c486c12178a470aa35764be2b117105f3ac077f384f7f3d0b7cca01a2b810f
 ```
 
 ## Migrator and commands

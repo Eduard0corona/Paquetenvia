@@ -11,7 +11,10 @@ internal sealed record MasterDataGateOptions(string DeploymentClass, bool Gate00
 /// machine says, takes only SYNTHETIC files in a SYNTHETIC database, never takes them in a REAL one, and loads
 /// driver profiles only in a SYNTHETIC database or once GATE-007 is recorded as closed. A REAL database is
 /// never turned back into a SYNTHETIC one. The operator login cannot write the marker: it is not a member of
-/// the migrator.
+/// the migrator. Concurrent runs serialize on a fixed transaction-scoped advisory lock
+/// (<see cref="AdvisoryLockKey"/>) taken before the marker is read, so two first runs (no row yet, nothing
+/// for <c>FOR UPDATE</c> to lock) cannot both see an empty marker and let SYNTHETIC overwrite REAL. The audit
+/// row names the deployment login by its random reference in <c>platform.master_data_operator_refs</c>.
 /// </summary>
 internal static class MasterDataGate
 {
@@ -74,7 +77,27 @@ internal static class MasterDataGate
             }
         }
 
-        // Serialize gate changes and read the current state under the row lock.
+        // MDM-001 X3: serialize gate changes before reading the current state. FOR UPDATE locks nothing while
+        // the marker has no row, so two concurrent first runs would both see "no row" and the later one could
+        // write SYNTHETIC over a committed REAL. The fixed advisory key serializes every run of this command.
+        await using (var serialize = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@key)", connection, transaction))
+        {
+            serialize.Parameters.Add(new NpgsqlParameter<long>("key", AdvisoryLockKey));
+            await serialize.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // MDM-001 X2: the audit row carries the deployment login's random reference, never its name or a hash.
+        await using (var references = new NpgsqlCommand(
+            "SELECT to_regclass('platform.master_data_operator_refs') IS NOT NULL", connection, transaction))
+        {
+            if (await references.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            {
+                throw new MasterDataLoadException(
+                    "MDM001_GATE_OPERATOR_REFS_MISSING: apply the Pricing migration lane before master-data-gate.",
+                    RefusedExitCode);
+            }
+        }
+
         string? previousClass = null;
         bool? previousGate = null;
         await using (var current = new NpgsqlCommand(
@@ -100,6 +123,9 @@ internal static class MasterDataGate
 
         await using (var upsert = new NpgsqlCommand(
             """
+            INSERT INTO platform.master_data_operator_refs(operator_login,operator_ref)
+            VALUES (session_user, gen_random_uuid())
+            ON CONFLICT (operator_login) DO NOTHING;
             INSERT INTO platform.master_data_deployment_gate(singleton,deployment_class,gate_007_closed,updated_at,updated_by)
             VALUES (true,@class,@closed,now(),session_user)
             ON CONFLICT (singleton) DO UPDATE
@@ -113,7 +139,8 @@ internal static class MasterDataGate
                 'from', CASE WHEN @previous_class::text IS NULL THEN NULL
                         ELSE jsonb_build_object('deployment_class', @previous_class::text, 'gate_007_closed', @previous_gate::boolean) END,
                 'to', jsonb_build_object('deployment_class', @class::text, 'gate_007_closed', @closed::boolean),
-                'operator_ref', encode(sha256(convert_to(@prefix || session_user, 'UTF8')), 'hex')),
+                'operator_ref', (SELECT r.operator_ref::text FROM platform.master_data_operator_refs r
+                                 WHERE r.operator_login = session_user)),
               clock_timestamp());
             """, connection, transaction))
         {
@@ -122,7 +149,6 @@ internal static class MasterDataGate
             upsert.Parameters.AddWithValue("platform", options.PlatformOrganizationId);
             upsert.Parameters.Add(new NpgsqlParameter<string?>("previous_class", previousClass) { NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text });
             upsert.Parameters.Add(new NpgsqlParameter<bool?>("previous_gate", previousGate) { NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Boolean });
-            upsert.Parameters.AddWithValue("prefix", OperatorReferencePrefix);
             await upsert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -131,6 +157,10 @@ internal static class MasterDataGate
             $"MDM001_GATE_SET deployment_class={options.DeploymentClass} gate_007_closed={(options.Gate007Closed ? "true" : "false")} (audited)");
     }
 
-    /// <summary>The domain-separation prefix of <c>operator_ref</c>; the loader function uses the same one.</summary>
-    internal const string OperatorReferencePrefix = "paquetenvia.mdm-001.operator:";
+    /// <summary>
+    /// MDM-001 X3: the fixed <c>pg_advisory_xact_lock(bigint)</c> key that serializes master-data-gate runs
+    /// (2026092803; the loader function uses 2026092802 for global writes and (2026092801, organization) per
+    /// organization).
+    /// </summary>
+    internal const long AdvisoryLockKey = 2026092803L;
 }
