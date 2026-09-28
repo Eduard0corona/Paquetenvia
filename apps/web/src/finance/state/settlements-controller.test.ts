@@ -216,6 +216,82 @@ describe("authoritative writes", () => {
   });
 });
 
+describe("selection sequencing", () => {
+  const idA = "5e7e1e00-0000-4000-8000-00000000000a";
+  const idB = "5e7e1e00-0000-4000-8000-00000000000b";
+
+  function deferredGet() {
+    const releases = new Map<string, (value: unknown) => void>();
+    const get = vi.fn(
+      (id: string) => new Promise((resolve) => { releases.set(id, resolve); }),
+    ) as unknown as SettlementsApi["get"];
+    const release = (id: string, status = "CALCULATED") =>
+      releases.get(id)!(parseSettlement(settlementResponse({ id, status })));
+    return { get, release };
+  }
+
+  it("keeps the latest selection when an older GET resolves last", async () => {
+    const { get, release } = deferredGet();
+    const { controller } = setup({ [orgA]: "FINANCE" }, { get });
+    await controller.start();
+    const first = controller.select(idA);
+    const second = controller.select(idB);
+    release(idB);
+    await second;
+    release(idA);
+    await first;
+    expect(controller.getSnapshot()).toMatchObject({ selected: { id: idB }, selecting: null, loading: false });
+  });
+
+  it("never lets an action target a settlement while another selection is in flight", async () => {
+    const { get, release } = deferredGet();
+    const { controller, api } = setup({ [orgA]: "FINANCE" }, { get });
+    await controller.start();
+    const first = controller.select(idA);
+    release(idA);
+    await first;
+    const second = controller.select(idB);
+    expect(controller.getSnapshot()).toMatchObject({ selected: { id: idA }, selecting: idB });
+    await controller.approve();
+    await controller.voidSettlement("Motivo");
+    await controller.addAdjustment("1.00", "Motivo");
+    await controller.exportCsv();
+    expect(api.approve).not.toHaveBeenCalled();
+    expect(api.void).not.toHaveBeenCalled();
+    expect(api.addAdjustment).not.toHaveBeenCalled();
+    expect(api.exportCsv).not.toHaveBeenCalled();
+    release(idB);
+    await second;
+    await controller.approve();
+    expect(api.approve).toHaveBeenCalledWith(idB, expect.any(String), expect.any(AbortSignal));
+  });
+
+  it("drops a late GET after the selection is closed", async () => {
+    const { get, release } = deferredGet();
+    const { controller } = setup({ [orgA]: "FINANCE" }, { get });
+    await controller.start();
+    const pending = controller.select(idA);
+    controller.clearSelection();
+    release(idA);
+    await pending;
+    expect(controller.getSnapshot()).toMatchObject({ selected: null, selecting: null });
+  });
+
+  it("does not let a write result replace a selection made meanwhile", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    const approve = vi.fn(() => new Promise((resolve) => { finish = resolve; })) as unknown as SettlementsApi["approve"];
+    const get = vi.fn(async (id: string) => parseSettlement(settlementResponse({ id }))) as unknown as SettlementsApi["get"];
+    const { controller } = setup({ [orgA]: "FINANCE" }, { approve, get });
+    await controller.start();
+    await controller.select(idA);
+    const writing = controller.approve();
+    await controller.select(idB);
+    finish(parseSettlement(settlementResponse({ id: idA, status: "APPROVED" })));
+    await writing;
+    expect(controller.getSnapshot().selected?.id).toBe(idB);
+  });
+});
+
 describe("tenant switch", () => {
   it("clears list, selection, messages and keys, and ignores the previous tenant's late answers", async () => {
     let release: (value: unknown) => void = () => undefined;

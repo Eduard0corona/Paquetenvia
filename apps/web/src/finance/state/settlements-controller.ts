@@ -66,6 +66,8 @@ export interface SettlementsState {
   readonly items: readonly Settlement[];
   readonly nextCursor: string | null;
   readonly selected: Settlement | null;
+  /** Settlement whose GET is in flight; actions stay disabled until it is loaded. */
+  readonly selecting: string | null;
   readonly loading: boolean;
   readonly busy: boolean;
   readonly errors: readonly string[];
@@ -92,6 +94,7 @@ const initialState: SettlementsState = {
   items: [],
   nextCursor: null,
   selected: null,
+  selecting: null,
   loading: false,
   busy: false,
   errors: [],
@@ -109,6 +112,8 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
   private api: SettlementsApi | null = null;
   private session: OperationsSession | null = null;
   private generation = 0;
+  /** Monotonic selection token: only the latest select() may write `selected`. */
+  private selection = 0;
   private controller: AbortController | null = null;
   private readonly refreshes = new AuthoritativeRefreshCoordinator<SettlementPage>();
   private readonly pending: PendingSubmissions;
@@ -221,22 +226,33 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
     const api = this.api;
     if (api === null) return;
     const generation = this.generation;
-    this.update({ loading: true, errors: [], message: null, stepUpHref: null });
+    const token = ++this.selection;
+    const isLatest = () => generation === this.generation && token === this.selection;
+    // Until the requested settlement is loaded no action may target the previous one.
+    this.update({ selecting: settlementId, loading: true, errors: [], message: null, stepUpHref: null });
     try {
       const settlement = await api.get(settlementId, this.controller?.signal);
-      if (generation !== this.generation) return;
+      if (!isLatest()) return;
+      if (settlement.id !== settlementId) throw new TenantApiError("invalid");
       this.update({ selected: settlement });
     } catch (error) {
-      if (generation !== this.generation) return;
-      if (error instanceof TenantApiError && error.category === "not_found") this.update({ selected: null });
+      if (!isLatest()) return;
+      this.update({ selected: null });
       this.fail(error, settlementId);
     } finally {
-      if (generation === this.generation) this.update({ loading: false });
+      if (isLatest()) this.update({ selecting: null, loading: false });
     }
   }
 
   public clearSelection(): void {
-    this.update({ selected: null, errors: [], message: null, stepUpHref: null });
+    this.selection += 1;
+    this.update({ selected: null, selecting: null, errors: [], message: null, stepUpHref: null });
+  }
+
+  /** The loaded settlement an action may target; none while another selection is in flight. */
+  private actionTarget(): Settlement | null {
+    const state = this.getSnapshot();
+    return state.selecting === null ? state.selected : null;
   }
 
   public async create(body: CreateSettlementBody): Promise<void> {
@@ -251,7 +267,7 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
   }
 
   public async addAdjustment(amountText: string, reason: string): Promise<void> {
-    const selected = this.getSnapshot().selected;
+    const selected = this.actionTarget();
     if (selected === null) return;
     const errors: string[] = [];
     const amount = parseMxnToCents(amountText, { allowNegative: true, allowZero: false });
@@ -269,21 +285,21 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
   }
 
   public async approve(): Promise<void> {
-    const selected = this.getSnapshot().selected;
+    const selected = this.actionTarget();
     if (selected === null) return;
     await this.write(`approve:${selected.id}`, "", undefined, (api, key, _payload, signal) =>
       api.approve(selected.id, key, signal), selected.id);
   }
 
   public async markPaid(): Promise<void> {
-    const selected = this.getSnapshot().selected;
+    const selected = this.actionTarget();
     if (selected === null) return;
     await this.write(`pay:${selected.id}`, "", undefined, (api, key, _payload, signal) =>
       api.markPaid(selected.id, key, signal), selected.id);
   }
 
   public async voidSettlement(reason: string): Promise<void> {
-    const selected = this.getSnapshot().selected;
+    const selected = this.actionTarget();
     if (selected === null) return;
     if (!isValidReason(reason)) {
       this.update({
@@ -299,7 +315,7 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
 
   public async exportCsv(): Promise<void> {
     const api = this.api;
-    const selected = this.getSnapshot().selected;
+    const selected = this.actionTarget();
     if (api === null || selected === null || this.getSnapshot().busy) return;
     const generation = this.generation;
     this.update({ busy: true, errors: [], message: null, stepUpHref: null });
@@ -329,21 +345,24 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
     const api = this.api;
     if (api === null || this.getSnapshot().busy) return;
     const generation = this.generation;
+    const token = this.selection;
     const submission = this.pending.prepare(scope, fingerprint, () => payload);
     this.update({ busy: true, errors: [], message: null, stepUpHref: null });
     try {
       const settlement = await action(api, submission.key, submission.payload, this.controller?.signal);
       if (generation !== this.generation) return;
       this.pending.settle(scope);
-      this.update({ selected: settlement, message: "Cambio confirmado por el servidor.", formKey: this.getSnapshot().formKey + 1 });
+      // A selection made while the write was in flight wins over the write's result.
+      if (token === this.selection) this.update({ selected: settlement, formKey: this.getSnapshot().formKey + 1 });
+      this.update({ message: "Cambio confirmado por el servidor." });
     } catch (error) {
       if (generation !== this.generation) return;
       if (!(error instanceof TenantApiError) || !error.retryable) this.pending.settle(scope);
       this.fail(error, settlementId);
       // A conflict or a missing settlement discards local assumptions: reload from REST.
       if (error instanceof TenantApiError && settlementId !== null) {
-        if (error.category === "conflict") await this.reloadSelected(settlementId, generation);
-        if (error.category === "not_found") this.update({ selected: null });
+        if (error.category === "conflict") await this.reloadSelected(settlementId, generation, token);
+        if (error.category === "not_found" && token === this.selection) this.update({ selected: null });
       }
     } finally {
       if (generation === this.generation) this.update({ busy: false });
@@ -351,14 +370,15 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
     await this.refresh();
   }
 
-  private async reloadSelected(settlementId: string, generation: number): Promise<void> {
+  private async reloadSelected(settlementId: string, generation: number, token: number): Promise<void> {
     const api = this.api;
-    if (api === null) return;
+    if (api === null || token !== this.selection) return;
+    const isLatest = () => generation === this.generation && token === this.selection;
     try {
       const settlement = await api.get(settlementId, this.controller?.signal);
-      if (generation === this.generation) this.update({ selected: settlement });
+      if (isLatest() && settlement.id === settlementId) this.update({ selected: settlement });
     } catch (error) {
-      if (generation === this.generation && error instanceof TenantApiError && error.category === "not_found")
+      if (isLatest() && error instanceof TenantApiError && error.category === "not_found")
         this.update({ selected: null });
     }
   }

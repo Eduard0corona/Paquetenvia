@@ -164,6 +164,8 @@ function Detail({
 }) {
   const actions = visibleSettlementActions(state.role, settlement.status);
   const mfaHint = actions.some((action) => actionNeedsMfa(state.role, action));
+  // While another settlement is loading, no action may target the one still shown.
+  const locked = state.busy || state.selecting !== null;
   return (
     <>
       <header>
@@ -196,15 +198,15 @@ function Detail({
 
       <div className="opsFormActions">
         {actions.includes("approve") && (
-          <button type="button" className="opsPrimary" disabled={state.busy}
+          <button type="button" className="opsPrimary" disabled={locked}
             onClick={() => void controller.approve()}>Aprobar</button>
         )}
         {actions.includes("pay") && (
-          <button type="button" className="opsPrimary" disabled={state.busy}
+          <button type="button" className="opsPrimary" disabled={locked}
             onClick={() => void controller.markPaid()}>Marcar pagada</button>
         )}
         {actions.includes("export") && (
-          <button type="button" className="opsSecondary" disabled={state.busy}
+          <button type="button" className="opsSecondary" disabled={locked}
             onClick={() => void controller.exportCsv()}>Exportar CSV</button>
         )}
         <button type="button" className="opsSecondary" onClick={() => controller.clearSelection()}>Cerrar</button>
@@ -221,7 +223,7 @@ function Detail({
             <input name="amount" inputMode="decimal" pattern="-?[0-9]+(\.[0-9]{1,2})?" required />
           </label>
           <label>Motivo<textarea name="reason" maxLength={500} required /></label>
-          <button className="opsPrimary" type="submit" disabled={state.busy}>Agregar ajuste</button>
+          <button className="opsPrimary" type="submit" disabled={locked}>Agregar ajuste</button>
         </form>
       )}
 
@@ -233,7 +235,7 @@ function Detail({
           <h3>Anular liquidación</h3>
           <p>Las líneas y el total se conservan; anular solo libera sus fuentes para otra liquidación.</p>
           <label>Motivo<textarea name="reason" maxLength={500} required /></label>
-          <button className="opsSecondary" type="submit" disabled={state.busy}>Anular</button>
+          <button className="opsSecondary" type="submit" disabled={locked}>Anular</button>
         </form>
       )}
     </>
