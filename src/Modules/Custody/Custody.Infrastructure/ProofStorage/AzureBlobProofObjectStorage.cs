@@ -135,7 +135,19 @@ public sealed class AzureBlobProofObjectStorage : IProofObjectStorage, IProofUpl
         return headers;
     }
 
-    public async Task<ProofUploadGrant> CreateUploadGrantAsync(
+    /// <summary>Fetches or refreshes the delegation key before the caller opens its transaction.</summary>
+    public async Task PrepareUploadGrantAsync(CancellationToken cancellationToken)
+    {
+        if (!_signsUrls)
+        {
+            throw new ProofStorageUnavailableException();
+        }
+
+        _ = await DelegationKeyAsync(TimeSpan.FromMinutes(_options.UploadUrlLifetimeMinutes), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public Task<ProofUploadGrant> CreateUploadGrantAsync(
         Guid ownerOrganizationId,
         Guid orderId,
         Guid sessionId,
@@ -161,8 +173,10 @@ public sealed class AzureBlobProofObjectStorage : IProofObjectStorage, IProofUpl
             Resource = "b",
             Protocol = SasProtocol.Https,
         };
-        var url = await SignAsync(sas, objectKey, expiresAt - now, cancellationToken).ConfigureAwait(false);
-        return new ProofUploadGrant(
+        // No network here: the grant is created inside the tenant transaction, so it only uses the
+        // key PrepareUploadGrantAsync cached. A missing or too-short key fails closed.
+        var url = Sign(sas, objectKey, CachedDelegationKey(expiresAt - now));
+        return Task.FromResult(new ProofUploadGrant(
             objectKey,
             url,
             RequiredUploadHeaders(
@@ -174,7 +188,7 @@ public sealed class AzureBlobProofObjectStorage : IProofObjectStorage, IProofUpl
                 contentType,
                 sizeBytes,
                 sha256),
-            expiresAt);
+            expiresAt));
     }
 
     public async IAsyncEnumerable<ProofObjectDescriptor> ListQuarantineAsync(
@@ -244,23 +258,32 @@ public sealed class AzureBlobProofObjectStorage : IProofObjectStorage, IProofUpl
             Resource = "b",
             Protocol = SasProtocol.Https,
         };
-        return await SignAsync(sas, objectKey, lifetime, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<string> SignAsync(
-        BlobSasBuilder sas,
-        string objectKey,
-        TimeSpan lifetime,
-        CancellationToken cancellationToken)
-    {
         if (!_signsUrls)
         {
             throw new ProofStorageUnavailableException();
         }
 
+        // The internal download is issued between transactions, so it may refresh the key.
         var key = await DelegationKeyAsync(lifetime, cancellationToken).ConfigureAwait(false);
+        return Sign(sas, objectKey, key);
+    }
+
+    private string Sign(BlobSasBuilder sas, string objectKey, UserDelegationKey key)
+    {
         var parameters = sas.ToSasQueryParameters(key, _gateway.AccountName);
         return new UriBuilder(_gateway.BlobUri(objectKey)) { Query = parameters.ToString() }.Uri.AbsoluteUri;
+    }
+
+    private UserDelegationKey CachedDelegationKey(TimeSpan lifetime)
+    {
+        if (!_signsUrls ||
+            _delegationKey is not { } cached ||
+            cached.SignedExpiresOn - _time.GetUtcNow() <= lifetime)
+        {
+            throw new ProofStorageUnavailableException();
+        }
+
+        return cached;
     }
 
     /// <summary>

@@ -140,6 +140,14 @@ public interface IProofObjectStorage
 {
     bool IsEnabled { get; }
 
+    /// <summary>
+    /// ADP-001: obtains whatever signing material <see cref="CreateUploadGrantAsync"/> needs over the
+    /// network (for Azure Blob, the user delegation key). Called before the tenant transaction and
+    /// the idempotency lock are taken, so granting inside the transaction never waits on the
+    /// storage service. Providers that sign locally (S3) need nothing.
+    /// </summary>
+    Task PrepareUploadGrantAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     Task<bool> CheckHealthAsync(CancellationToken cancellationToken);
 
     Task<ProofUploadGrant> CreateUploadGrantAsync(

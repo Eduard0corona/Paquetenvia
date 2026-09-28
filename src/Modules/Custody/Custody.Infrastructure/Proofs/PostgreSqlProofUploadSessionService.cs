@@ -54,6 +54,25 @@ public sealed class PostgreSqlProofUploadSessionService(
             command.ContentType,
             command.SizeBytes,
             command.Sha256 is null ? string.Empty : Convert.ToHexString(command.Sha256));
+        // ADP-001: network signing material (the Azure user delegation key) is obtained before the
+        // tenant transaction and the idempotency lock; an unavailable storage service ends in 503
+        // with no session, reservation or audit written.
+        if (storage.IsEnabled && threatScanner.IsEnabled)
+        {
+            try
+            {
+                await storage.PrepareUploadGrantAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                throw new ProofStorageUnavailableException();
+            }
+        }
+
         var result = await transactionContext.ExecuteAsync(
             new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
             async (dbContext, token) =>

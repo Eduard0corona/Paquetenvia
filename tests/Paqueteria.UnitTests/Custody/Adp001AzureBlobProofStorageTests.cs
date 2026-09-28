@@ -33,6 +33,7 @@ public sealed class Adp001AzureBlobProofStorageTests
     {
         var gateway = new InMemoryProofBlobGateway();
         var storage = CreateStorage(gateway);
+        await storage.PrepareUploadGrantAsync(default);
         var expiresAt = Now.AddMinutes(15);
 
         var grant = await storage.CreateUploadGrantAsync(
@@ -57,6 +58,7 @@ public sealed class Adp001AzureBlobProofStorageTests
     public async Task Required_headers_are_accepted_by_the_pwa_and_name_blob_metadata_without_hyphens()
     {
         var storage = CreateStorage(new InMemoryProofBlobGateway());
+        await storage.PrepareUploadGrantAsync(default);
         var grant = await storage.CreateUploadGrantAsync(
             Owner, Order, Session, Actor, ProofType.DeliveryPhoto, "image/png", 8, SHA256.HashData([1]), Now.AddMinutes(10), default);
 
@@ -86,6 +88,29 @@ public sealed class Adp001AzureBlobProofStorageTests
     }
 
     [Fact]
+    public async Task The_grant_never_calls_storage_and_fails_closed_without_a_prepared_key()
+    {
+        // ADP-001 review: the grant runs inside the tenant transaction, so only
+        // PrepareUploadGrantAsync (called before it) may reach the storage service.
+        var gateway = new InMemoryProofBlobGateway();
+        var storage = CreateStorage(gateway);
+
+        await Assert.ThrowsAsync<ProofStorageUnavailableException>(() => storage.CreateUploadGrantAsync(
+            Owner, Order, Session, Actor, ProofType.DeliveryPhoto, "image/png", 8, null, Now.AddMinutes(10), default));
+        Assert.Equal(0, gateway.DelegationKeyRequests);
+
+        await storage.PrepareUploadGrantAsync(default);
+        Assert.Equal(1, gateway.DelegationKeyRequests);
+        gateway.DelegationKeyFails = true;
+        _ = await storage.CreateUploadGrantAsync(
+            Owner, Order, Session, Actor, ProofType.DeliveryPhoto, "image/png", 8, null, Now.AddMinutes(10), default);
+        Assert.Equal(1, gateway.DelegationKeyRequests);
+
+        await Assert.ThrowsAsync<ProofStorageUnavailableException>(() =>
+            CreateStorage(gateway, signsUrls: false).PrepareUploadGrantAsync(default));
+    }
+
+    [Fact]
     public async Task Internal_download_is_a_short_read_only_sas()
     {
         var storage = CreateStorage(new InMemoryProofBlobGateway());
@@ -103,6 +128,7 @@ public sealed class Adp001AzureBlobProofStorageTests
     {
         var gateway = new InMemoryProofBlobGateway();
         var storage = CreateStorage(gateway);
+        await storage.PrepareUploadGrantAsync(default);
         var grant = await storage.CreateUploadGrantAsync(
             Owner, Order, Session, Actor, ProofType.DeliveryPhoto, "image/png", 8, SHA256.HashData([1]), Now.AddMinutes(10), default);
         gateway.ClientPut(grant, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], Now);
@@ -123,6 +149,7 @@ public sealed class Adp001AzureBlobProofStorageTests
     {
         var gateway = new InMemoryProofBlobGateway();
         var storage = CreateStorage(gateway);
+        await storage.PrepareUploadGrantAsync(default);
         var grant = await storage.CreateUploadGrantAsync(
             Owner, Order, Session, Actor, ProofType.DeliveryPhoto, "image/png", 8, null, Now.AddMinutes(10), default);
         var etag = gateway.ClientPut(grant, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], Now);
@@ -170,6 +197,7 @@ public sealed class Adp001AzureBlobProofStorageTests
         var gateway = new InMemoryProofBlobGateway();
         var scanner = new DefenderForStorageThreatScanner(gateway, Options.Create(DefaultOptions()));
         var storage = CreateStorage(gateway);
+        await storage.PrepareUploadGrantAsync(default);
         var grant = await storage.CreateUploadGrantAsync(
             Owner, Order, Session, Actor, ProofType.DeliveryPhoto, "image/png", 8, null, Now.AddMinutes(10), default);
         gateway.ClientPut(grant, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], Now);

@@ -122,6 +122,40 @@ public sealed class Adp001AzureBlobDefenderPipelineTests :
         }
     }
 
+    [Fact]
+    public async Task Unavailable_storage_signing_fails_closed_before_the_transaction_with_no_effects()
+    {
+        var (gateway, api, worker) = await PrepareAsync();
+        await using (api)
+        await using (worker)
+        {
+            gateway.DelegationKeyFails = true;
+            var before = await CountSessionArtifactsAsync();
+
+            await Assert.ThrowsAsync<ProofStorageUnavailableException>(() =>
+                CreateSessionAsync(api, $"adp001-signing-down-{Guid.NewGuid():N}"));
+
+            Assert.Equal(before, await CountSessionArtifactsAsync());
+            Assert.Empty(gateway.Names);
+        }
+    }
+
+    private async Task<long> CountSessionArtifactsAsync()
+    {
+        await using var connection = new NpgsqlConnection(postgres.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT (SELECT count(*) FROM custody.proof_upload_sessions WHERE order_id=@order)
+                 + (SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@organization)
+                 + (SELECT count(*) FROM platform.audit_logs WHERE org_id=@organization AND entity_type='proof_upload_session');
+            """,
+            connection);
+        command.Parameters.AddWithValue("order", OrderId);
+        command.Parameters.AddWithValue("organization", OrganizationId);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
     private async Task<(InMemoryBlobGateway Gateway, ServiceProvider Api, ServiceProvider Worker)> PrepareAsync()
     {
         await ExecuteAdminAsync(
@@ -272,6 +306,8 @@ public sealed class Adp001AzureBlobDefenderPipelineTests :
 
         public string AccountName => "paquetenviatest";
 
+        public bool DelegationKeyFails { get; set; }
+
         public IEnumerable<string> Names => _blobs.Keys.ToArray();
 
         public Uri BlobUri(string name) => new($"https://paquetenviatest.blob.core.windows.net/proofs/{name}");
@@ -300,7 +336,9 @@ public sealed class Adp001AzureBlobDefenderPipelineTests :
             Task.FromResult(new ProofBlobContainerState(true, true));
 
         public Task<UserDelegationKey> GetUserDelegationKeyAsync(DateTimeOffset startsOn, DateTimeOffset expiresOn, CancellationToken cancellationToken) =>
-            Task.FromResult(BlobsModelFactory.UserDelegationKey(
+            DelegationKeyFails
+                ? Task.FromException<UserDelegationKey>(new InvalidOperationException("Storage is unreachable."))
+                : Task.FromResult(BlobsModelFactory.UserDelegationKey(
                 "00000000-0000-0000-0000-00000000aaaa",
                 "00000000-0000-0000-0000-00000000bbbb",
                 startsOn,
