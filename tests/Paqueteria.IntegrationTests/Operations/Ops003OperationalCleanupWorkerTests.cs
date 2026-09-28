@@ -5,7 +5,6 @@ using System.Security.Cryptography;
 using Custody.Infrastructure.Cleanup;
 using Custody.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -18,6 +17,7 @@ using Npgsql;
 using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Paqueteria.Infrastructure.Tenancy;
+using Paqueteria.IntegrationTests.Hosting;
 using Testcontainers.PostgreSql;
 using WorkerProgram = WorkerHost::WorkerProgram;
 
@@ -151,9 +151,9 @@ public sealed class Ops003OperationalCleanupWorkerTests
 
     internal sealed class CleanupWorkerFactory(
         Dictionary<string, string?> settings,
-        IJobScheduler? scheduler = null) : WebApplicationFactory<WorkerProgram>
+        IJobScheduler? scheduler = null) : StartupFailureSurfacingWebApplicationFactory<WorkerProgram>
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
