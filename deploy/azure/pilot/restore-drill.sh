@@ -37,7 +37,6 @@ FIREWALL="$(dirname "$0")/kv-firewall.sh"
 SECRET_SCOPE=""
 tmp=""
 drill_requested=0
-firewall_opened=0
 
 # Cleanup on every exit, success or failure, each step best-effort:
 # - point the verify job's Key Vault mapping back at the pilot migration connection;
@@ -54,11 +53,10 @@ cleanup() {
     az role assignment delete --assignee "${MIGRATE_PRINCIPAL}" --role "Key Vault Secrets User" \
       --scope "${SECRET_SCOPE}" --only-show-errors --output none || true
   fi
-  if [[ "${firewall_opened}" == 1 ]]; then
-    az keyvault secret set-attributes --vault-name "${VAULT}" --name "${SECRET}" --enabled false \
-      --only-show-errors --output none || true
-    bash "${FIREWALL}" close "${VAULT}" || true
-  fi
+  # Unconditional: `kv-firewall.sh open` can fail after adding the rule, and `close` is idempotent.
+  az keyvault secret set-attributes --vault-name "${VAULT}" --name "${SECRET}" --enabled false \
+    --only-show-errors --output none 2>/dev/null || true
+  bash "${FIREWALL}" close "${VAULT}" || true
   if [[ -n "${tmp}" ]]; then shred -u "${tmp}" 2>/dev/null || true; fi
   if [[ "${drill_requested}" == 1 && "${KEEP}" == 0 ]]; then
     if az postgres flexible-server delete -g "${RG}" -n "${DRILL}" --yes --only-show-errors --output none; then
@@ -92,7 +90,6 @@ tmp="$(mktemp)"
 SECRET_SCOPE="$(az keyvault show -n "${VAULT}" --query id -o tsv)/secrets/${SECRET}"
 
 bash "${FIREWALL}" open "${VAULT}"
-firewall_opened=1
 admin="$(az keyvault secret show --vault-name "${VAULT}" --name pg-admin-password --query value -o tsv)"
 printf 'Host=%s;Database=paqueteria;Username=%s;Password=%s;Maximum Pool Size=2;Minimum Pool Size=0;SSL Mode=VerifyFull;Timeout=15;Command Timeout=120' \
   "${DRILL_HOST}" "${ADMIN_LOGIN}" "${admin}" > "${tmp}"
