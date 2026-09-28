@@ -168,6 +168,19 @@ public sealed class PostgreSqlLocationService(
         var point = GeometryFactory.CreatePoint(new Coordinate(geocoded.Longitude, geocoded.Latitude));
         var locationId = CreateIdempotentId(command.OrganizationId, command.IdempotencySubkey);
 
+        // ADP-001: the quote path uses the same server-selected key version as location creation
+        // (it previously pinned a synthetic label) and protects before the transaction opens.
+        var protectedPii = await ProtectBeforeTransactionAsync(
+            new LocationPiiValues(
+                command.OrganizationId,
+                locationId,
+                string.IsNullOrWhiteSpace(command.References)
+                    ? command.AddressText
+                    : $"{command.AddressText}\nReferences: {command.References}",
+                command.ContactName,
+                command.Phone),
+            cancellationToken);
+
         try
         {
             return await transactionContext.ExecuteAsync(
@@ -222,10 +235,6 @@ public sealed class PostgreSqlLocationService(
                         return new ResolveQuoteLocationResult(QuoteLocationResolutionStatus.AmbiguousCoverage, null);
                     }
 
-                    const string keyVersion = "PRC-001-SYNTHETIC-V1";
-                    var protectedAddress = string.IsNullOrWhiteSpace(command.References)
-                        ? command.AddressText
-                        : $"{command.AddressText}\nReferences: {command.References}";
                     var entity = new DomainLocation(
                         locationId,
                         command.OrganizationId,
@@ -233,11 +242,11 @@ public sealed class PostgreSqlLocationService(
                         area.Id,
                         applicableZones.FirstOrDefault()?.Id,
                         point,
-                        piiProtector.Protect(protectedAddress, keyVersion),
+                        protectedPii.AddressTextCiphertext,
                         safeSummary,
-                        piiProtector.Protect(command.ContactName, keyVersion),
-                        piiProtector.Protect(command.Phone, keyVersion),
-                        keyVersion,
+                        protectedPii.ContactNameCiphertext,
+                        protectedPii.PhoneCiphertext,
+                        protectedPii.KeyVersion,
                         clock.UtcNow);
 
                     dbContext.Locations.Add(entity);
@@ -314,6 +323,14 @@ public sealed class PostgreSqlLocationService(
         var point = GeometryFactory.CreatePoint(new Coordinate(geocoded.Longitude, geocoded.Latitude));
         var locationId = CreateIdempotentId(command.OrganizationId, command.IdempotencyKey);
 
+        // ADP-001: protection runs before the transaction opens, so an unavailable protector ends
+        // in 503 with no location, idempotency lock or audit written, and no Key Vault call is made
+        // while a database transaction is held. AI05-REMOVE-PII-KEY-VERSION: the protector, never
+        // the client, selects the key version.
+        var protectedPii = await ProtectBeforeTransactionAsync(
+            new LocationPiiValues(command.OrganizationId, locationId, command.AddressText, command.ContactName, command.Phone),
+            cancellationToken);
+
         try
         {
             return await transactionContext.ExecuteAsync(
@@ -342,8 +359,6 @@ public sealed class PostgreSqlLocationService(
                         return new CreateLocationResult(serviceability.Status, null);
                     }
 
-                    // AI05-REMOVE-PII-KEY-VERSION: the protector, never the client, selects the key version.
-                    var keyVersion = piiProtector.CurrentKeyVersion;
                     var entity = new DomainLocation(
                         locationId,
                         command.OrganizationId,
@@ -351,11 +366,11 @@ public sealed class PostgreSqlLocationService(
                         serviceability.ServiceAreaId,
                         serviceability.OperatingZoneId,
                         point,
-                        piiProtector.Protect(command.AddressText, keyVersion),
+                        protectedPii.AddressTextCiphertext,
                         geocoded.AddressSummary,
-                        ProtectOptional(command.ContactName, keyVersion),
-                        ProtectOptional(command.Phone, keyVersion),
-                        keyVersion,
+                        protectedPii.ContactNameCiphertext,
+                        protectedPii.PhoneCiphertext,
+                        protectedPii.KeyVersion,
                         clock.UtcNow);
 
                     dbContext.Locations.Add(entity);
@@ -545,8 +560,36 @@ public sealed class PostgreSqlLocationService(
         return (ServiceabilityStatus.Serviceable, zones.FirstOrDefault()?.Id);
     }
 
-    private byte[]? ProtectOptional(string? value, string keyVersion) =>
-        string.IsNullOrWhiteSpace(value) ? null : piiProtector.Protect(value, keyVersion);
+    private async Task<ProtectedLocationPii> ProtectBeforeTransactionAsync(
+        LocationPiiValues values,
+        CancellationToken cancellationToken)
+    {
+        ProtectedLocationPii protectedPii;
+        try
+        {
+            protectedPii = await piiProtector.ProtectAsync(values, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LocationPiiProtectionUnavailableException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new LocationPiiProtectionUnavailableException(exception);
+        }
+
+        if (protectedPii is not { AddressTextCiphertext.Length: > 0 } ||
+            string.IsNullOrWhiteSpace(protectedPii.KeyVersion))
+        {
+            throw new LocationPiiProtectionUnavailableException();
+        }
+
+        return protectedPii;
+    }
 
     private static LocationResult ToResult(DomainLocation location) => new(
         location.Id,

@@ -136,6 +136,85 @@ public sealed class IdentityArchitectureTests
     private const string WorkloadCredentialPackage = "Azure.Identity";
 
     [Fact]
+    public void Key_Vault_secrets_are_allowlisted_and_read_with_the_workload_credential_by_every_host()
+    {
+        // PILOT-KEYVAULT-PRIVATE-APP-READ: one confined configuration source, no "load every
+        // secret" mode, the managed-identity credential only, wired into API, Worker and migrator.
+        var source = File.ReadAllText(TestRepository.GetPath(
+            "src/BuildingBlocks/Paqueteria.Infrastructure/Cloud/KeyVaultSecretsConfiguration.cs"));
+        Assert.Contains("AzureWorkloadCredential.Create(", source, StringComparison.Ordinal);
+        foreach (var forbidden in new[] { "GetPropertiesOfSecrets", "AddAzureKeyVault", "KeyVaultSecretManager", "Logger", "Console." })
+        {
+            Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+        }
+
+        var readers = Directory
+            .EnumerateFiles(TestRepository.GetPath("src"), "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(TestRepository.GetPath("tools"), "*.cs", SearchOption.AllDirectories))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                           !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => File.ReadAllText(path).Contains("new SecretClient(", StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(TestRepository.GetPath("."), path).Replace('\\', '/'))
+            .ToArray();
+        Assert.Equal(["src/BuildingBlocks/Paqueteria.Infrastructure/Cloud/KeyVaultSecretsConfiguration.cs"], readers);
+
+        foreach (var host in new[] { "src/Paqueteria.Api/Program.cs", "src/Paqueteria.Worker/Program.cs" })
+        {
+            var program = File.ReadAllText(TestRepository.GetPath(host));
+            var secrets = program.IndexOf("builder.Configuration.AddPaqueteriaKeyVaultSecrets();", StringComparison.Ordinal);
+            Assert.True(secrets > 0, host);
+            Assert.True(
+                secrets < program.IndexOf("builder.Services.", StringComparison.Ordinal),
+                $"{host} must load Key Vault secrets before registering services.");
+        }
+
+        Assert.Contains(
+            "KeyVaultSecretsConfiguration.LoadMappedSecrets(",
+            File.ReadAllText(TestRepository.GetPath("tools/Paqueteria.DatabaseMigrator/Program.cs")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Azure_Identity_is_only_the_managed_identity_workload_credential()
+    {
+        var owners = SolutionCatalog.All
+            .Where(component => ProjectMetadataReader.Read(component).PackageReferences.Contains(
+                WorkloadCredentialPackage,
+                StringComparer.OrdinalIgnoreCase))
+            .Select(component => component.Name)
+            .ToArray();
+        Assert.Equal(["Paqueteria.Infrastructure"], owners);
+
+        // Only one source file may use the namespace, and it builds a ManagedIdentityCredential and
+        // nothing that signs a user in or reads a secret.
+        var sources = Directory
+            .EnumerateFiles(TestRepository.GetPath("src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                           !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => File.ReadAllText(path).Contains("Azure.Identity", StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(TestRepository.GetPath("."), path).Replace('\\', '/'))
+            .ToArray();
+        Assert.Equal(["src/BuildingBlocks/Paqueteria.Infrastructure/Cloud/AzureWorkloadCredential.cs"], sources);
+        var credential = File.ReadAllText(TestRepository.GetPath(sources[0]));
+        Assert.Contains("new ManagedIdentityCredential(", credential, StringComparison.Ordinal);
+        foreach (var forbiddenCredential in new[]
+                 {
+                     "DefaultAzureCredential", "InteractiveBrowserCredential", "DeviceCodeCredential",
+                     "ClientSecretCredential", "UsernamePasswordCredential", "ClientCertificateCredential",
+                     "AuthorizationCodeCredential", "OnBehalfOfCredential", "EnvironmentCredential",
+                 })
+        {
+            Assert.DoesNotContain(forbiddenCredential, credential, StringComparison.Ordinal);
+        }
+
+        foreach (var component in SolutionCatalog.Identity.Components)
+        {
+            Assert.DoesNotContain(component.Assembly.GetReferencedAssemblies(), reference =>
+                string.Equals(reference.Name, WorkloadCredentialPackage, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void Only_Identity_Endpoints_references_the_standard_OpenIdConnect_handler()
     {
         var owners = SolutionCatalog.All

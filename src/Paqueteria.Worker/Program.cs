@@ -7,9 +7,13 @@ using Notifications.Infrastructure;
 using Orders.Infrastructure;
 using Organizations.Infrastructure.Notifications;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
+using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
+// PILOT-KEYVAULT-PRIVATE-APP-READ: allowlisted Key Vault secrets, read with the managed identity
+// before anything reads configuration. Off unless KeyVaultSecrets:VaultUri is set.
+builder.Configuration.AddPaqueteriaKeyVaultSecrets();
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();

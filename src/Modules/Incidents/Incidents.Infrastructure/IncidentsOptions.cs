@@ -10,6 +10,9 @@ public enum IncidentPiiProtectorKind
 {
     Disabled,
     Mock,
+
+    /// <summary>ADP-001 production envelope protector backed by Azure Key Vault.</summary>
+    AzureKeyVault,
 }
 
 /// <summary>
@@ -23,7 +26,10 @@ public sealed class IncidentsOptions
 
     public IncidentPiiProtectorKind PiiProtector { get; set; }
 
-    /// <summary>The key version recorded alongside the ciphertext in <c>incidents.pii_key_version</c>.</summary>
+    /// <summary>
+    /// The synthetic key version the <c>Mock</c> protector records in <c>incidents.pii_key_version</c>.
+    /// The <c>AzureKeyVault</c> protector ignores it: Key Vault supplies the version.
+    /// </summary>
     public string PiiKeyVersion { get; set; } = "inc001-v1";
 
     public int CommandTimeoutSeconds { get; set; } = 30;

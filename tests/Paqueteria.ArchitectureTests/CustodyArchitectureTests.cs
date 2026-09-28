@@ -35,6 +35,26 @@ public sealed class CustodyArchitectureTests
     }
 
     [Fact]
+    public void Azure_storage_SDK_is_confined_to_custody_infrastructure()
+    {
+        // ADP-001-POD-BLOB-DEFENDER: Blob Storage is an infrastructure adapter like S3.
+        foreach (var component in SolutionCatalog.All.Where(component => component != SolutionCatalog.Custody.Infrastructure))
+        {
+            Assert.DoesNotContain(ProjectMetadataReader.Read(component).PackageReferences, package =>
+                package.StartsWith("Azure.Storage", StringComparison.OrdinalIgnoreCase));
+        }
+
+        Assert.Contains(
+            ProjectMetadataReader.Read(SolutionCatalog.Custody.Infrastructure).PackageReferences,
+            package => package == "Azure.Storage.Blobs");
+        foreach (var assembly in new[] { SolutionCatalog.Custody.Domain.Assembly, SolutionCatalog.Custody.Application.Assembly })
+        {
+            Assert.DoesNotContain(assembly.GetReferencedAssemblies(), reference =>
+                reference.Name?.StartsWith("Azure", StringComparison.OrdinalIgnoreCase) == true);
+        }
+    }
+
+    [Fact]
     public void Domain_and_application_are_free_of_technical_storage_dependencies()
     {
         var forbidden = new[] { "Amazon", "Npgsql", "EntityFrameworkCore", "AspNetCore", "Minio" };

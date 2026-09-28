@@ -13,6 +13,7 @@ using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Incidents.Infrastructure;
@@ -74,7 +75,14 @@ public static class DependencyInjection
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
 
         services.AddSingleton<DisabledIncidentPiiProtector>();
-        services.AddSingleton<DeterministicMockIncidentPiiProtector>();
+        services.AddSingleton(serviceProvider => new DeterministicMockIncidentPiiProtector(
+            serviceProvider.GetRequiredService<IOptions<IncidentsOptions>>().Value.PiiKeyVersion));
+        // ADP-001: registered lazily; nothing Azure-related is built unless PiiProtector=AzureKeyVault.
+        services.AddAzureKeyVaultPiiProtection(
+            configuration,
+            serviceProvider => serviceProvider.GetRequiredService<IOptions<IncidentsOptions>>().Value.PiiProtector ==
+                IncidentPiiProtectorKind.AzureKeyVault);
+        services.AddSingleton<AzureKeyVaultIncidentPiiProtector>();
         // Unconfigured means unprotected, and unprotected means INC-001 refuses to persist a
         // description at all, so the absent setting fails closed instead of leaking plaintext.
         services.AddScoped<IIncidentPiiProtector>(serviceProvider =>
@@ -82,6 +90,8 @@ public static class DependencyInjection
             {
                 IncidentPiiProtectorKind.Mock =>
                     serviceProvider.GetRequiredService<DeterministicMockIncidentPiiProtector>(),
+                IncidentPiiProtectorKind.AzureKeyVault =>
+                    serviceProvider.GetRequiredService<AzureKeyVaultIncidentPiiProtector>(),
                 _ => serviceProvider.GetRequiredService<DisabledIncidentPiiProtector>(),
             });
         services.AddScoped<IIncidentService, PostgreSqlIncidentService>();

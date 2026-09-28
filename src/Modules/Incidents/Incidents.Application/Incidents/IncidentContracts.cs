@@ -133,12 +133,24 @@ public sealed class IncidentInfrastructureException(string message, Exception? i
 public interface IIncidentPiiProtector
 {
     /// <summary>
-    /// Returns the ciphertext AI-06 persists in <c>description_ciphertext</c> under
-    /// <paramref name="keyVersion"/>. An implementation that cannot protect the value throws
+    /// Returns the ciphertext AI-06 persists in <c>description_ciphertext</c> together with the key
+    /// version the protector selected for <c>pii_key_version</c> (ADP-001: the server chooses it,
+    /// never the client). An implementation that cannot protect the value throws
     /// <see cref="IncidentPiiProtectionUnavailableException"/> instead of returning plaintext.
     /// </summary>
-    byte[] Protect(string plaintext, string keyVersion);
+    Task<ProtectedIncidentDescription> ProtectAsync(
+        IncidentPiiBinding binding,
+        string plaintext,
+        CancellationToken cancellationToken);
 }
 
-public sealed class IncidentPiiProtectionUnavailableException()
-    : Exception("Incident PII protection is unavailable.");
+/// <summary>
+/// The incident row a protected description belongs to: the order owner organization (the
+/// incident's <c>owner_org_id</c>) and the incident id. Production protectors authenticate both.
+/// </summary>
+public readonly record struct IncidentPiiBinding(Guid OwnerOrganizationId, Guid IncidentId);
+
+public sealed record ProtectedIncidentDescription(byte[] Ciphertext, string KeyVersion);
+
+public sealed class IncidentPiiProtectionUnavailableException(Exception? innerException = null)
+    : Exception("Incident PII protection is unavailable.", innerException);

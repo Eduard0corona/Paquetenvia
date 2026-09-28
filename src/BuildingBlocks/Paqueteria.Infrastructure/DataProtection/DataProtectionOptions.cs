@@ -7,6 +7,29 @@ public enum DataProtectionProviderKind
 }
 
 /// <summary>
+/// ENV-001/SCL-001: the external key-encryption protector of the shared key ring. <c>None</c> keeps
+/// the SCL-001 behaviour (ring protected only by database grants and RLS).
+/// </summary>
+public enum DataProtectionKeyEncryptionKind
+{
+    None,
+    AzureKeyVault,
+}
+
+public sealed class DataProtectionKeyEncryptionOptions
+{
+    public DataProtectionKeyEncryptionKind Provider { get; set; } = DataProtectionKeyEncryptionKind.None;
+
+    public DataProtectionAzureKeyVaultOptions AzureKeyVault { get; set; } = new();
+}
+
+public sealed class DataProtectionAzureKeyVaultOptions
+{
+    /// <summary>Versionless key URI, <c>https://{vault}.vault.azure.net/keys/{name}</c>.</summary>
+    public string KeyId { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// SCL-001 names one reproducible profile that actually turns the shared PostgreSQL key ring on.
 /// It is a hosting environment name, so it is only selected when the deployment explicitly asks
 /// for it; Production keeps the <c>Disabled</c> default from <c>appsettings.json</c> and never
@@ -48,6 +71,12 @@ public sealed class DataProtectionOptions
     public int KeyLifetimeDays { get; set; } = 90;
 
     public int CommandTimeoutSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Optional key-encryption key for the XML key ring (ADP-001, required by ENV-001 before a
+    /// productive distributed activation). Accepted only with <c>Provider=PostgreSql</c>.
+    /// </summary>
+    public DataProtectionKeyEncryptionOptions KeyEncryption { get; set; } = new();
 }
 
 public static class DataProtectionRuntimeRoles
@@ -69,5 +98,13 @@ public static class DataProtectionOptionsValidator
         !string.IsNullOrWhiteSpace(options.ConnectionStringName) &&
         DataProtectionRuntimeRoles.IsCanonical(options.RuntimeRole) &&
         options.KeyLifetimeDays is >= 7 and <= 3_650 &&
-        options.CommandTimeoutSeconds is >= 1 and <= 60;
+        options.CommandTimeoutSeconds is >= 1 and <= 60 &&
+        options.KeyEncryption is not null &&
+        Enum.IsDefined(options.KeyEncryption.Provider) &&
+        (options.KeyEncryption.Provider == DataProtectionKeyEncryptionKind.None ||
+         (options.Provider == DataProtectionProviderKind.PostgreSql &&
+          Cloud.KeyVaultKeyIds.TryParseVersionless(
+              options.KeyEncryption.AzureKeyVault?.KeyId,
+              out _,
+              out _)));
 }
