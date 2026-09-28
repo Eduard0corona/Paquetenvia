@@ -10,9 +10,11 @@
   y nunca se persiste ni se registra; solo se guarda su SHA-256. Emitir cuando ya hay un enlace
   lo rota y revoca los anteriores. Auditoría `TRACKING_TOKEN_ISSUED`, `TRACKING_TOKEN_ROTATED` y
   `TRACKING_TOKEN_REVOKED`. 404 uniforme para una orden ajena o inexistente.
-- `x-capability-matrix.tracking_link_operations`: DISPATCHER y PLATFORM_ADMIN sin MFA, como
-  `createOrder`; D5 no cubría estas operaciones y la elección queda pendiente de confirmación
-  del owner.
+- `x-capability-matrix.tracking_link_operations`: DISPATCHER sin MFA y PLATFORM_ADMIN con un reto
+  MFA satisfecho (403 `MFA_REQUIRED` cuando solo falta el segundo factor), como `assignDriver`,
+  `createRoute` y `createExternalOffer`: emitir o revocar un enlace crea o retira una credencial
+  pública al portador. D5 no cubría estas operaciones; es el valor por defecto más seguro según
+  AI-01 §7 y queda pendiente de confirmación del owner.
 - El envío del enlace a clientes por WhatsApp o correo sigue bloqueado por GATE-004 y GATE-007.
 
 ## Endurecimiento del cargador de datos maestros (MDM-001-LOADER-HARDENING) — 2026-09-28

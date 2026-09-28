@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OperationsSession } from "../session/operations-session";
-import { OperationsApiError } from "./operations-api";
 import {
   canManageTrackingLink,
   createTrackingLinkApi,
@@ -11,6 +10,7 @@ import {
   publicTrackingUrl,
   trackingLinkRoles,
 } from "./tracking-link-api";
+import { TenantApiError } from "./tenant-request";
 
 const organizationId = "11111111-1111-1111-1111-111111111111";
 const otherOrganizationId = "22222222-2222-2222-2222-222222222222";
@@ -168,11 +168,36 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
     );
     const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
     await expect(api.issue(orderId, "k")).rejects.toEqual(
-      new OperationsApiError(category),
+      new TenantApiError(category),
     );
     await expect(api.revoke(orderId, "k")).rejects.toEqual(
-      new OperationsApiError(category),
+      new TenantApiError(category),
     );
+  });
+
+  it("marks a 403 MFA_REQUIRED problem for the step-up and keeps other 403s generic", async () => {
+    const problem = (body: Record<string, unknown>) =>
+      new Response(JSON.stringify(body), {
+        status: 403,
+        headers: { "Content-Type": "application/problem+json" },
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(problem({ status: 403, code: "MFA_REQUIRED" }))
+      .mockResolvedValueOnce(problem({ status: 403, code: "MFA_REQUIRED" }))
+      .mockResolvedValueOnce(problem({ status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
+
+    for (const attempt of [api.issue(orderId, "k"), api.revoke(orderId, "k")]) {
+      const error = await attempt.catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(TenantApiError);
+      expect((error as TenantApiError).category).toBe("forbidden");
+      expect((error as TenantApiError).mfaRequired).toBe(true);
+    }
+    const generic = await api.issue(orderId, "k").catch((caught: unknown) => caught);
+    expect((generic as TenantApiError).category).toBe("forbidden");
+    expect((generic as TenantApiError).mfaRequired).toBe(false);
   });
 
   it("rejects malformed responses and never echoes the token in the error", async () => {
@@ -187,21 +212,21 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
       const error = await createTrackingLinkApi("https://api.synthetic.test", bearer)
         .issue(orderId, "k")
         .catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(OperationsApiError);
-      expect((error as OperationsApiError).category).toBe("invalid");
+      expect(error).toBeInstanceOf(TenantApiError);
+      expect((error as TenantApiError).category).toBe("invalid");
       expect(String((error as Error).message)).not.toContain(token);
     }
-    expect(() => parsePublicTrackingLink(null)).toThrow(OperationsApiError);
+    expect(() => parsePublicTrackingLink(null)).toThrow(TenantApiError);
   });
 
   it("refuses an invalid order id before any request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
-    await expect(api.issue("not-a-uuid", "k")).rejects.toBeInstanceOf(OperationsApiError);
+    await expect(api.issue("not-a-uuid", "k")).rejects.toBeInstanceOf(TenantApiError);
     await expect(
       api.revoke("00000000-0000-0000-0000-000000000000", "k"),
-    ).rejects.toBeInstanceOf(OperationsApiError);
+    ).rejects.toBeInstanceOf(TenantApiError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -210,10 +235,10 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
       `https://ops.synthetic.test/track/${token}`,
     );
     expect(() => publicTrackingUrl("https://ops.synthetic.test", "../x")).toThrow(
-      OperationsApiError,
+      TenantApiError,
     );
     expect(() => publicTrackingUrl("javascript:alert(1)", token)).toThrow(
-      OperationsApiError,
+      TenantApiError,
     );
     expect(createTrackingLinkIdempotencyKey(() => "uuid-1")).toBe(
       "tracking-link-uuid-1",

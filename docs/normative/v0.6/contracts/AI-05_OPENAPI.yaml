@@ -835,9 +835,13 @@ paths:
         request_id; because no plaintext is stored, a replay never returns an
         earlier token: it rotates again and only the newest response holds a
         valid link. An order that is missing, of another organization or only
-        operated by it is the uniform 404. Nothing is sent to customers;
-        delivering the link over WhatsApp or email waits on GATE-004 and
-        GATE-007.
+        operated by it is the uniform 404. DISPATCHER members may issue;
+        PLATFORM_ADMIN members need a satisfied MFA challenge (403 MFA_REQUIRED
+        when only the second factor is missing), the safer default per AI-01
+        section 7 pending owner confirmation (x-capability-matrix
+        tracking_link_operations). Capability is decided before order
+        existence. Nothing is sent to customers; delivering the link over
+        WhatsApp or email waits on GATE-004 and GATE-007.
       x-authorization-precedence: shape-validation-then-capability-before-persisted-state
       x-shape-validation: invalid-request-without-productive-transaction
       x-capability-protected-state:
@@ -882,7 +886,9 @@ paths:
         TRACKING_TOKEN_REVOKED with the Idempotency-Key as request_id; an order
         without an active link is a success without a new audit row, so a
         replay is harmless. Same capability and uniform 404 as
-        issueTrackingLink.
+        issueTrackingLink: DISPATCHER members, and PLATFORM_ADMIN members with
+        a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor
+        is missing).
       x-authorization-precedence: shape-validation-then-capability-before-persisted-state
       x-shape-validation: invalid-request-without-productive-transaction
       x-capability-protected-state:
@@ -5494,9 +5500,11 @@ x-capability-matrix:
     renewPendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
     revokePendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
   tracking_link_operations_decision: TRK-002-ISSUE-ENDPOINT (project owner, 2026-09-28) scoped issueTrackingLink and
-    revokeTrackingLink; D5-CAPABILITY-MATRIX predates them, so they take the least-privilege order-management roles of
-    createOrder (DISPATCHER and PLATFORM_ADMIN, no MFA), an implementer choice pending owner confirmation; only the
-    organization that owns the order may issue or revoke its link
+    revokeTrackingLink; D5-CAPABILITY-MATRIX predates them and they mint or revoke a public bearer credential, so they
+    follow the operations outside the matrix that create or reassign operational state (assignDriver, createRoute,
+    createExternalOffer) - DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge (403
+    MFA_REQUIRED when only the second factor is missing), the safer default per AI-01 section 7 pending owner
+    confirmation; only the organization that owns the order may issue or revoke its link
   tracking_link_operations:
     issueTrackingLink: [DISPATCHER, PLATFORM_ADMIN]
     revokeTrackingLink: [DISPATCHER, PLATFORM_ADMIN]

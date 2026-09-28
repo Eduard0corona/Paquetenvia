@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { OperationsApiError } from "../api/operations-api";
+import { TenantApiError } from "../api/tenant-request";
 import type { PublicTrackingLink, TrackingLinkApi } from "../api/tracking-link-api";
 import {
   TrackingLinkController,
@@ -92,12 +92,13 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
     expect(controller.current).toEqual({
       kind: "idle",
       message: "Enlace revocado. El enlace anterior ya no muestra la orden.",
+      stepUpHref: null,
     });
 
     await controller.issue();
     const notifications = states.length;
     controller.dispose();
-    expect(controller.current).toEqual({ kind: "idle", message: null });
+    expect(controller.current).toEqual({ kind: "idle", message: null, stepUpHref: null });
     expect(states.length).toBe(notifications);
     await controller.issue();
     expect(states.length).toBe(notifications);
@@ -122,10 +123,35 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
     ["unavailable", "No fue posible generar el enlace. Intenta de nuevo."],
   ] as const)("maps %s to a message without the token", async (category, message) => {
     const { controller } = setup({
-      issue: vi.fn().mockRejectedValue(new OperationsApiError(category)),
+      issue: vi.fn().mockRejectedValue(new TenantApiError(category)),
     });
     await controller.issue();
-    expect(controller.current).toEqual({ kind: "idle", message });
+    expect(controller.current).toEqual({ kind: "idle", message, stepUpHref: null });
+  });
+
+  it.each(["issue", "revoke"] as const)(
+    "offers the MFA step-up back to the order when %s answers 403 MFA_REQUIRED",
+    async (action) => {
+      const mfa = new TenantApiError("forbidden", "MFA_REQUIRED", true);
+      const { controller } = setup({
+        issue: vi.fn().mockRejectedValue(mfa),
+        revoke: vi.fn().mockRejectedValue(mfa),
+      });
+      await controller[action]();
+      expect(controller.current).toEqual({
+        kind: "idle",
+        message: "Esta acción requiere verificar tu identidad (MFA).",
+        stepUpHref: `/login?mfa=required&return_url=${encodeURIComponent(`/ops/orders/${orderId}`)}`,
+      });
+    },
+  );
+
+  it("keeps a generic 403 without the step-up", async () => {
+    const { controller } = setup({
+      issue: vi.fn().mockRejectedValue(new TenantApiError("forbidden")),
+    });
+    await controller.issue();
+    expect(controller.current).toMatchObject({ stepUpHref: null });
   });
 
   it("ignores a second action while one is in flight", async () => {
@@ -161,6 +187,7 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
     );
     expect(component).toContain('autoComplete="off"');
     expect(component).toContain("canManageTrackingLink(");
+    expect(component).toContain("href={state.stepUpHref}");
     expect(component).toContain("no se volverá a mostrar");
     expect(component).toContain("todavía no está disponible");
   });

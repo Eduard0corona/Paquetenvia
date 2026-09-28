@@ -15,16 +15,25 @@ const openApi = readFileSync(
   "utf8",
 );
 
-function publishedMatrix(): Record<string, string[]> {
+function publishedSection(section: string, next: string): Record<string, string[]> {
   const start = openApi.indexOf("x-capability-matrix:");
-  const operations = openApi.indexOf("  operations:", start);
-  const end = openApi.indexOf("  driver_scope:", operations);
+  const from = openApi.indexOf(`\n  ${section}:\n`, start);
+  const end = openApi.indexOf(next, from);
+  expect(from, section).toBeGreaterThan(start);
+  expect(end, section).toBeGreaterThan(from);
   const rows: Record<string, string[]> = {};
-  for (const line of openApi.slice(operations, end).split("\n")) {
+  for (const line of openApi.slice(from, end).split("\n")) {
     const match = /^ {4}(\w+): \[([A-Z_, ]+)\]$/.exec(line);
     if (match) rows[match[1]] = match[2].split(",").map((role) => role.trim());
   }
   return rows;
+}
+
+function publishedMatrix(): Record<string, string[]> {
+  return {
+    ...publishedSection("operations", "  driver_scope:"),
+    ...publishedSection("tracking_link_operations", "\nx-pilot-contract-deltas:"),
+  };
 }
 
 describe("D5-CAPABILITY-MATRIX client mirror", () => {
@@ -58,6 +67,10 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     ["DISPATCHER", "listSettlements", false],
     ["VIEWER", "exportSettlementCsv", false],
     ["DRIVER", "getSettlement", false],
+    ["DISPATCHER", "issueTrackingLink", true],
+    ["PLATFORM_ADMIN", "revokeTrackingLink", true],
+    ["VIEWER", "issueTrackingLink", false],
+    ["FINANCE", "revokeTrackingLink", false],
   ])("%s may %s: %s", (role, operation, expected) => {
     expect(canPerform(role, operation)).toBe(expected);
   });
@@ -75,6 +88,18 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(requiresMfa("PLATFORM_ADMIN", "listSettlements")).toBe(true);
     expect(requiresMfa("DISPATCHER", "createOrder")).toBe(false);
     expect(requiresMfa(null, "approveSettlement")).toBe(false);
+  });
+
+  it("hints MFA for PLATFORM_ADMIN, never DISPATCHER, on the tracking link (TRK-002)", () => {
+    for (const operation of ["issueTrackingLink", "revokeTrackingLink"] as const) {
+      expect(requiresMfa("PLATFORM_ADMIN", operation)).toBe(true);
+      expect(requiresMfa("DISPATCHER", operation)).toBe(false);
+    }
+    const start = openApi.indexOf("  tracking_link_operations_decision:");
+    const decision = openApi.slice(start, openApi.indexOf("  tracking_link_operations:", start));
+    expect(decision.replace(/\s+/g, " ")).toContain(
+      "DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge",
+    );
   });
 
   it("resolves the role of the selected organization only", () => {

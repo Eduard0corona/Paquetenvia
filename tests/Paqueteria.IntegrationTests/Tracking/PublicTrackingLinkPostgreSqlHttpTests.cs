@@ -23,7 +23,7 @@ namespace Paqueteria.IntegrationTests.Tracking;
 public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebApplicationFactory factory)
 {
     private const string UniformNotFound = """{"type":"about:blank","title":"Not Found","status":404}""";
-    private static readonly Guid PlatformAdminNoMfaId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3");
+    private static readonly Guid PlatformAdminMfaId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2");
 
     [Fact]
     public async Task Issue_rotate_and_revoke_over_HTTP_return_the_token_once_audit_and_close_the_public_link()
@@ -39,7 +39,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         var orderId = await CreateOrderAsync();
 
         var issueKey = Key();
-        using var issued = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminNoMfa, IssuePath(orderId), issueKey);
+        using var issued = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), issueKey);
         Assert.Equal(HttpStatusCode.Created, issued.StatusCode);
         Assert.Equal("no-store", issued.Headers.CacheControl?.ToString());
         var first = await ReadLinkAsync(issued);
@@ -48,7 +48,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         await AssertLookupAsync(lookup, first.Token, HttpStatusCode.OK);
 
         var rotateKey = Key();
-        using var rotated = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminNoMfa, IssuePath(orderId), rotateKey);
+        using var rotated = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), rotateKey);
         Assert.Equal(HttpStatusCode.Created, rotated.StatusCode);
         var second = await ReadLinkAsync(rotated);
         Assert.NotEqual(first.Token, second.Token);
@@ -56,7 +56,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         await AssertLookupAsync(lookup, second.Token, HttpStatusCode.OK);
 
         var revokeKey = Key();
-        using var revoked = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminNoMfa, RevokePath(orderId), revokeKey);
+        using var revoked = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, RevokePath(orderId), revokeKey);
         Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
         await AssertLookupAsync(lookup, second.Token, HttpStatusCode.NotFound);
 
@@ -72,7 +72,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
                 ("TRACKING_TOKEN_ROTATED", rotateKey),
                 ("TRACKING_TOKEN_REVOKED", revokeKey),
             ],
-            await ReadAuditsAsync(orderId, PlatformAdminNoMfaId));
+            await ReadAuditsAsync(orderId, PlatformAdminMfaId));
         foreach (var token in new[] { first.Token, second.Token })
         {
             Assert.Equal(0L, await CountPlaintextAsync(token));
@@ -84,9 +84,9 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         }
 
         // Replaying the revocation succeeds without another audit row.
-        using var replay = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminNoMfa, RevokePath(orderId), revokeKey);
+        using var replay = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, RevokePath(orderId), revokeKey);
         Assert.Equal(HttpStatusCode.NoContent, replay.StatusCode);
-        Assert.Equal(3, (await ReadAuditsAsync(orderId, PlatformAdminNoMfaId)).Count);
+        Assert.Equal(3, (await ReadAuditsAsync(orderId, PlatformAdminMfaId)).Count);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
     {
         using var client = factory.CreateClient();
         var orderId = await CreateOrderAsync();
-        using var issued = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminNoMfa, IssuePath(orderId), Key());
+        using var issued = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), Key());
         var link = await ReadLinkAsync(issued);
         var before = await ReadTokenStateAsync(orderId);
 
@@ -117,7 +117,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         // The same 404 as an order that does not exist at all.
         using var missing = await PostAsync(
             client,
-            MockIdentityProfiles.ActivePlatformAdminNoMfa,
+            MockIdentityProfiles.ActivePlatformAdminMfa,
             IssuePath(Guid.NewGuid()),
             Key());
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
@@ -127,7 +127,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         Assert.Equal(before.Hashes.Count, after.Hashes.Count);
         Assert.Equal(1, after.Active);
         await AssertLookupAsync(client, link.Token, HttpStatusCode.OK);
-        Assert.Single(await ReadAuditsAsync(orderId, PlatformAdminNoMfaId));
+        Assert.Single(await ReadAuditsAsync(orderId, PlatformAdminMfaId));
         Assert.Equal(0L, await CountForeignAuditsAsync(orderId));
     }
 

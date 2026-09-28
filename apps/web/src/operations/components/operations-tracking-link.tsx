@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { createOperationsApi } from "../api/operations-api";
 import {
@@ -19,7 +20,8 @@ import {
 /**
  * TRK-002-ISSUE-ENDPOINT: issue (or rotate) and revoke the order's public
  * tracking link. Offered only to DISPATCHER and PLATFORM_ADMIN members of the
- * organization that owns the order; the backend is still the barrier. The link
+ * organization that owns the order; the backend is still the barrier, and a
+ * PLATFORM_ADMIN without a second factor is offered the MFA step-up. The link
  * is shown once, kept only in component memory and never persisted or logged.
  * Sending it to the customer is not available (GATE-004, GATE-007).
  */
@@ -37,6 +39,7 @@ export function OperationsTrackingLink({
   const [state, setState] = useState<TrackingLinkState>({
     kind: "idle",
     message: null,
+    stepUpHref: null,
   });
   const controllerRef = useRef<TrackingLinkController | null>(null);
 
@@ -48,7 +51,7 @@ export function OperationsTrackingLink({
       controllerRef.current?.dispose();
       controllerRef.current = null;
       setAllowed(false);
-      setState({ kind: "idle", message: null });
+      setState({ kind: "idle", message: null, stepUpHref: null });
       const session = readOperationsSession();
       if (session === null) return;
       let contexts;
@@ -173,8 +176,17 @@ export function OperationsTrackingLink({
         </div>
       )}
       {state.kind === "idle" && state.message !== null && (
-        <p role="status" aria-live="polite">
-          {state.message}
+        <p
+          className={state.stepUpHref === null ? undefined : "opsAlert"}
+          role="status"
+          aria-live="polite"
+        >
+          {state.message}{" "}
+          {state.stepUpHref !== null && (
+            <Link className="opsPrimary" href={state.stepUpHref}>
+              Verificar identidad
+            </Link>
+          )}
         </p>
       )}
     </section>

@@ -3,17 +3,25 @@ import {
   publicTrackingUrl,
   type TrackingLinkApi,
 } from "../api/tracking-link-api";
-import { OperationsApiError } from "../api/operations-api";
+import { TenantApiError } from "../api/tenant-request";
+import { describeFailure } from "./tenant-error-messages";
 
 /**
  * TRK-002-ISSUE-ENDPOINT: the order detail's tracking link actions.
  *
  * The link lives only in this controller's memory, for as long as it is shown:
  * hiding it, revoking it, issuing another one or disposing the controller drops
- * it. Nothing is written to browser storage and nothing is logged.
+ * it. Nothing is written to browser storage and nothing is logged. A 403
+ * MFA_REQUIRED (PLATFORM_ADMIN without a second factor) offers the step-up
+ * `/login?mfa=required&return_url=/ops/orders/{orderId}`.
  */
 export type TrackingLinkState =
-  | { readonly kind: "idle"; readonly message: string | null }
+  | {
+      readonly kind: "idle";
+      readonly message: string | null;
+      /** `/login?mfa=required&return_url=…` when the only missing requirement is MFA. */
+      readonly stepUpHref: string | null;
+    }
   | { readonly kind: "busy"; readonly action: "issue" | "revoke" }
   | {
       readonly kind: "shown";
@@ -27,7 +35,7 @@ export interface ClipboardWriter {
 }
 
 export class TrackingLinkController {
-  private state: TrackingLinkState = { kind: "idle", message: null };
+  private state: TrackingLinkState = idle(null);
   private disposed = false;
   private generation = 0;
 
@@ -61,7 +69,7 @@ export class TrackingLinkController {
       });
     } catch (error: unknown) {
       if (!this.isCurrent(generation)) return;
-      this.set({ kind: "idle", message: failureMessage(error, "issue") });
+      this.set(this.failure(error, "issue"));
     }
   }
 
@@ -75,13 +83,10 @@ export class TrackingLinkController {
         createTrackingLinkIdempotencyKey(this.randomUuid),
       );
       if (!this.isCurrent(generation)) return;
-      this.set({
-        kind: "idle",
-        message: "Enlace revocado. El enlace anterior ya no muestra la orden.",
-      });
+      this.set(idle("Enlace revocado. El enlace anterior ya no muestra la orden."));
     } catch (error: unknown) {
       if (!this.isCurrent(generation)) return;
-      this.set({ kind: "idle", message: failureMessage(error, "revoke") });
+      this.set(this.failure(error, "revoke"));
     }
   }
 
@@ -104,16 +109,25 @@ export class TrackingLinkController {
   public hide(): void {
     if (this.disposed || this.state.kind !== "shown") return;
     this.generation += 1;
-    this.set({
-      kind: "idle",
-      message: "El enlace se ocultó y no se puede volver a mostrar. Genera uno nuevo si lo necesitas.",
-    });
+    this.set(
+      idle(
+        "El enlace se ocultó y no se puede volver a mostrar. Genera uno nuevo si lo necesitas.",
+      ),
+    );
   }
 
   public dispose(): void {
     this.disposed = true;
     this.generation += 1;
-    this.state = { kind: "idle", message: null };
+    this.state = idle(null);
+  }
+
+  private failure(error: unknown, action: "issue" | "revoke"): TrackingLinkState {
+    if (error instanceof TenantApiError && error.mfaRequired) {
+      const view = describeFailure(error, trackingLinkReturnUrl(this.orderId));
+      return { kind: "idle", message: view.message, stepUpHref: view.stepUpHref };
+    }
+    return idle(failureMessage(error, action));
   }
 
   private isCurrent(generation: number): boolean {
@@ -126,9 +140,18 @@ export class TrackingLinkController {
   }
 }
 
+/** The order detail page the step-up returns to. */
+export function trackingLinkReturnUrl(orderId: string): string {
+  return `/ops/orders/${encodeURIComponent(orderId)}`;
+}
+
+function idle(message: string | null): TrackingLinkState {
+  return { kind: "idle", message, stepUpHref: null };
+}
+
 function failureMessage(error: unknown, action: "issue" | "revoke"): string {
   const category =
-    error instanceof OperationsApiError ? error.category : "unavailable";
+    error instanceof TenantApiError ? error.category : "unavailable";
   if (category === "forbidden" || category === "unauthorized")
     return "No tienes permiso para gestionar el enlace de seguimiento.";
   if (category === "not_found") return "La orden no está disponible.";

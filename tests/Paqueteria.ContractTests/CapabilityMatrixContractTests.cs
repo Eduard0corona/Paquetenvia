@@ -136,25 +136,39 @@ public sealed class CapabilityMatrixContractTests
 
     /// <summary>
     /// TRK-002-ISSUE-ENDPOINT: D5 predates the tracking link operations, so AI-05 publishes their roles in their own
-    /// section, names the owner decision that scoped them and states the roles are pending owner confirmation; the
-    /// server grants exactly createOrder's roles, without MFA.
+    /// section, names the owner decision that scoped them and states the roles are the AI-01 section 7 safer default
+    /// pending owner confirmation. They mint or revoke a public bearer credential, so the server grants exactly the
+    /// roles of assignDriver, createRoute and createExternalOffer: DISPATCHER without MFA and PLATFORM_ADMIN with MFA.
     /// </summary>
     [Fact]
-    public void Tracking_link_operations_take_the_createOrder_roles_without_MFA()
+    public void Tracking_link_operations_take_DISPATCHER_and_PLATFORM_ADMIN_with_MFA()
     {
         var decision = Matrix.Scalar("tracking_link_operations_decision");
         Assert.StartsWith("TRK-002-ISSUE-ENDPOINT", decision, StringComparison.Ordinal);
         Assert.Contains("pending owner confirmation", decision, StringComparison.Ordinal);
+        Assert.Contains("safer default per AI-01 section 7", decision, StringComparison.Ordinal);
+        Assert.Contains("DISPATCHER members without MFA", decision, StringComparison.Ordinal);
+        Assert.Contains("PLATFORM_ADMIN members with a satisfied MFA challenge", decision, StringComparison.Ordinal);
         var section = Matrix.Mapping("tracking_link_operations");
         Assert.Equal(
             ["issueTrackingLink", "revokeTrackingLink"],
             OperationIds(section).Order(StringComparer.Ordinal));
         foreach (var capability in new[] { TenantCapabilities.IssueTrackingLink, TenantCapabilities.RevokeTrackingLink })
         {
+            foreach (var reference in new[]
+                     {
+                         TenantCapabilities.AssignDriver, TenantCapabilities.CreateRoute,
+                         TenantCapabilities.CreateExternalOffer,
+                     })
+            {
+                Assert.Equal(
+                    reference.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                    capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+            }
+
             Assert.Equal(
-                TenantCapabilities.CreateOrder.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true)],
                 capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
-            Assert.All(capability.Grants, grant => Assert.False(grant.RequiresMfa));
         }
     }
 
@@ -187,9 +201,8 @@ public sealed class CapabilityMatrixContractTests
     }
 
     private static bool IsMatrixOperationWithoutMfa(string operationId) =>
-        (OperationIds(Matrix.Mapping("operations")).Contains(operationId) &&
-         !operationId.Contains("Settlement", StringComparison.Ordinal)) ||
-        OperationIds(Matrix.Mapping("tracking_link_operations")).Contains(operationId);
+        OperationIds(Matrix.Mapping("operations")).Contains(operationId) &&
+        !operationId.Contains("Settlement", StringComparison.Ordinal);
 
     private static Dictionary<string, HashSet<string>> Published()
     {

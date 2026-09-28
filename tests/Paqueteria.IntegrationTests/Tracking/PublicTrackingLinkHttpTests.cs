@@ -17,8 +17,9 @@ namespace Paqueteria.IntegrationTests.Tracking;
 
 /// <summary>
 /// TRK-002-ISSUE-ENDPOINT over HTTP with the token service replaced by a recording stub: request shape, then
-/// capability, then the service; the uniform 404, 409 and 503 mappings; the no-store 201 that carries the only
-/// plaintext copy; and no plaintext in any log line, scope or problem body.
+/// capability (DISPATCHER without MFA, PLATFORM_ADMIN only with MFA), then the service; the uniform 404, 409 and 503
+/// mappings; the no-store 201 that carries the only plaintext copy; and no plaintext in any log line, scope or
+/// problem body.
 /// </summary>
 public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLinkHttpTests.Factory>
 {
@@ -57,6 +58,26 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         Assert.Equal(0, factory.Service.CallsFor(orderId));
     }
 
+    /// <summary>
+    /// A PLATFORM_ADMIN whose only unmet requirement is the second factor receives 403 MFA_REQUIRED on both
+    /// operations before the token service is called (x-capability-matrix tracking_link_operations).
+    /// </summary>
+    [Fact]
+    public async Task Platform_admin_without_MFA_gets_MFA_REQUIRED_before_the_service()
+    {
+        var orderId = Guid.NewGuid();
+        foreach (var path in new[] { IssuePath(orderId), RevokePath(orderId) })
+        {
+            using var response = await SendAsync(MockIdentityProfiles.ActivePlatformAdminNoMfa, path, Key());
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("MFA_REQUIRED", json.RootElement.GetProperty("code").GetString());
+        }
+
+        Assert.Equal(0, factory.Service.CallsFor(orderId));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("short")]
@@ -76,8 +97,10 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
 
     [Theory]
     [InlineData(MockIdentityProfiles.ActiveDispatcher, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10")]
-    [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3")]
-    public async Task Dispatcher_and_platform_admin_receive_the_token_once_with_no_store(string profile, string actor)
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")]
+    public async Task Dispatcher_and_platform_admin_with_MFA_receive_the_token_once_with_no_store(
+        string profile,
+        string actor)
     {
         var orderId = Guid.NewGuid();
         var key = Key();
@@ -123,12 +146,14 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         Assert.Equal(secondToken, factory.Service.LastGrant(orderId).Token);
     }
 
-    [Fact]
-    public async Task Revoke_is_204_without_a_body_and_passes_the_key_as_the_audit_request_id()
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveDispatcher)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa)]
+    public async Task Revoke_is_204_without_a_body_and_passes_the_key_as_the_audit_request_id(string profile)
     {
         var orderId = Guid.NewGuid();
         var key = Key();
-        using var response = await SendAsync(MockIdentityProfiles.ActiveDispatcher, RevokePath(orderId), key);
+        using var response = await SendAsync(profile, RevokePath(orderId), key);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         Assert.Empty(await response.Content.ReadAsByteArrayAsync());
