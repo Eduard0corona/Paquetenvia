@@ -1,5 +1,20 @@
 # Changelog
 
+## Emisión y revocación de enlaces de tracking (TRK-002) — 2026-09-28
+
+- Implementa `TRK-002-ISSUE-ENDPOINT` (respuesta literal del project owner: "Sí, con botón en UI
+  (Recommended)").
+- AI-05: `issueTrackingLink` (`POST /orders/{orderId}/tracking-link`, 201 con `Cache-Control:
+  no-store` y el esquema `PublicTrackingLink`) y `revokeTrackingLink`
+  (`POST /orders/{orderId}/tracking-link/revoke`, 204). El token en claro se devuelve una sola vez
+  y nunca se persiste ni se registra; solo se guarda su SHA-256. Emitir cuando ya hay un enlace
+  lo rota y revoca los anteriores. Auditoría `TRACKING_TOKEN_ISSUED`, `TRACKING_TOKEN_ROTATED` y
+  `TRACKING_TOKEN_REVOKED`. 404 uniforme para una orden ajena o inexistente.
+- `x-capability-matrix.tracking_link_operations`: DISPATCHER y PLATFORM_ADMIN sin MFA, como
+  `createOrder`; D5 no cubría estas operaciones y la elección queda pendiente de confirmación
+  del owner.
+- El envío del enlace a clientes por WhatsApp o correo sigue bloqueado por GATE-004 y GATE-007.
+
 ## Unirse a una organización existente por correo (REG-002) — 2026-09-27
 
 - Respuestas literales del project owner: "El admin la agrega por correo (Recomendado)",

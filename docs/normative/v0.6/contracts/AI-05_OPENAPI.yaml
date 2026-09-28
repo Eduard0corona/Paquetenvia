@@ -814,6 +814,97 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/tracking-link:
+    post:
+      tags:
+      - Tracking
+      operationId: issueTrackingLink
+      description: >-
+        TRK-002-ISSUE-ENDPOINT. Issues a public tracking link for an order owned
+        by the organization selected with X-Organization-Id. The first link of
+        the order is audited TRACKING_TOKEN_ISSUED; when a link already exists
+        the request rotates it: every earlier link of the order is revoked in
+        the same transaction and the new one is audited TRACKING_TOKEN_ROTATED.
+        The token is 32 random bytes as Base64URL without padding; only its
+        SHA-256 (x-runtime-contracts token_hash) is stored, so the plaintext is
+        returned exactly once, in this 201 body, and is never persisted, logged
+        or placed in a problem response. The public link is /track/{token} on
+        the tracking origin and resolves through publicTracking until it
+        expires (PublicTracking:TokenLifetimeHours, default 168 hours) or is
+        revoked. The Idempotency-Key is required and recorded as the audit
+        request_id; because no plaintext is stored, a replay never returns an
+        earlier token: it rotates again and only the newest response holds a
+        valid link. An order that is missing, of another organization or only
+        operated by it is the uniform 404. Nothing is sent to customers;
+        delivering the link over WhatsApp or email waits on GATE-004 and
+        GATE-007.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - order
+      - public_tracking_tokens
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: The new public tracking link, shown once
+          headers:
+            Cache-Control:
+              description: TRK-002-ISSUE-ENDPOINT; no cache may keep the plaintext token.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicTrackingLink'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/tracking-link/revoke:
+    post:
+      tags:
+      - Tracking
+      operationId: revokeTrackingLink
+      description: >-
+        TRK-002-ISSUE-ENDPOINT. Revokes every active public tracking link of an
+        order owned by the selected organization; publicTracking then answers
+        the uniform 404 for each of them. The revocation is audited
+        TRACKING_TOKEN_REVOKED with the Idempotency-Key as request_id; an order
+        without an active link is a success without a new audit row, so a
+        replay is harmless. Same capability and uniform 404 as
+        issueTrackingLink.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - order
+      - public_tracking_tokens
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: No active public tracking link remains for the order
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /organizations/{organizationId}/audit:
     get:
       tags:
@@ -5230,6 +5321,32 @@ components:
         evidence_hash:
           type: string
           description: Base64 representation of 32-byte SHA-256 evidence hash
+    PublicTrackingLink:
+      type: object
+      additionalProperties: false
+      description: >-
+        TRK-002-ISSUE-ENDPOINT. The only response that ever carries a plaintext
+        public tracking token. It is never persisted or logged.
+      required:
+      - token_id
+      - order_id
+      - token
+      - expires_at
+      properties:
+        token_id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        token:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: ^[A-Za-z0-9_-]{43}$
+        expires_at:
+          type: string
+          format: date-time
     PublicTrackingProjection:
       type: object
       required:
@@ -5374,6 +5491,13 @@ x-capability-matrix:
     listPendingMemberships: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
     renewPendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
     revokePendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
+  tracking_link_operations_decision: TRK-002-ISSUE-ENDPOINT (project owner, 2026-09-28) scoped issueTrackingLink and
+    revokeTrackingLink; D5-CAPABILITY-MATRIX predates them, so they take the least-privilege order-management roles of
+    createOrder (DISPATCHER and PLATFORM_ADMIN, no MFA), an implementer choice pending owner confirmation; only the
+    organization that owns the order may issue or revoke its link
+  tracking_link_operations:
+    issueTrackingLink: [DISPATCHER, PLATFORM_ADMIN]
+    revokeTrackingLink: [DISPATCHER, PLATFORM_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).

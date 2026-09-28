@@ -9,6 +9,7 @@ import {
   timelineLabel,
 } from "../contracts/operations-formatters";
 import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
+import { OperationsTrackingLink } from "./operations-tracking-link";
 
 export function OperationsOrderDetailShell({
   orderId,
@@ -143,6 +144,11 @@ export function OperationsOrderDetailShell({
         text="Disponible después de INC-001."
       />
       <Unavailable title="Ruta" text="Disponible después de RTE-001." />
+
+      <OperationsTrackingLink
+        orderId={order.id}
+        ownerOrganizationId={order.owner_org_id}
+      />
 
       <section aria-labelledby="actions-title">
         <h2 id="actions-title">Acciones futuras</h2>

@@ -40,6 +40,12 @@ public static class TenantCapabilities
 
     public static readonly TenantCapability CreateLocation = Create("createLocation", Dispatcher, PlatformAdmin);
 
+    // x-capability-matrix tracking_link_operations (TRK-002-ISSUE-ENDPOINT): D5 predates these operations, so they
+    // take the least-privilege order-management set of createOrder, DISPATCHER and PLATFORM_ADMIN without MFA,
+    // pending owner confirmation.
+    public static readonly TenantCapability IssueTrackingLink = Create("issueTrackingLink", Dispatcher, PlatformAdmin);
+    public static readonly TenantCapability RevokeTrackingLink = Create("revokeTrackingLink", Dispatcher, PlatformAdmin);
+
     // D5-CAPABILITY-MATRIX: a DRIVER (OWN or EXTERNAL) sees only its own stops and offers.
     public static readonly TenantCapability ListMyStops = Create("listMyStops", Driver);
     public static readonly TenantCapability ListMyEligibleExternalOffers =

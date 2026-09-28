@@ -134,6 +134,30 @@ public sealed class CapabilityMatrixContractTests
         }
     }
 
+    /// <summary>
+    /// TRK-002-ISSUE-ENDPOINT: D5 predates the tracking link operations, so AI-05 publishes their roles in their own
+    /// section, names the owner decision that scoped them and states the roles are pending owner confirmation; the
+    /// server grants exactly createOrder's roles, without MFA.
+    /// </summary>
+    [Fact]
+    public void Tracking_link_operations_take_the_createOrder_roles_without_MFA()
+    {
+        var decision = Matrix.Scalar("tracking_link_operations_decision");
+        Assert.StartsWith("TRK-002-ISSUE-ENDPOINT", decision, StringComparison.Ordinal);
+        Assert.Contains("pending owner confirmation", decision, StringComparison.Ordinal);
+        var section = Matrix.Mapping("tracking_link_operations");
+        Assert.Equal(
+            ["issueTrackingLink", "revokeTrackingLink"],
+            OperationIds(section).Order(StringComparer.Ordinal));
+        foreach (var capability in new[] { TenantCapabilities.IssueTrackingLink, TenantCapabilities.RevokeTrackingLink })
+        {
+            Assert.Equal(
+                TenantCapabilities.CreateOrder.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+            Assert.All(capability.Grants, grant => Assert.False(grant.RequiresMfa));
+        }
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -163,13 +187,18 @@ public sealed class CapabilityMatrixContractTests
     }
 
     private static bool IsMatrixOperationWithoutMfa(string operationId) =>
-        OperationIds(Matrix.Mapping("operations")).Contains(operationId) &&
-        !operationId.Contains("Settlement", StringComparison.Ordinal);
+        (OperationIds(Matrix.Mapping("operations")).Contains(operationId) &&
+         !operationId.Contains("Settlement", StringComparison.Ordinal)) ||
+        OperationIds(Matrix.Mapping("tracking_link_operations")).Contains(operationId);
 
     private static Dictionary<string, HashSet<string>> Published()
     {
         var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var section in new[] { "operations", "finance_operations", "platform_operations", "membership_operations" })
+        foreach (var section in new[]
+                 {
+                     "operations", "finance_operations", "platform_operations", "membership_operations",
+                     "tracking_link_operations",
+                 })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)
             {
