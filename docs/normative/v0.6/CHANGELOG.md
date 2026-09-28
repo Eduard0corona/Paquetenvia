@@ -1,5 +1,21 @@
 # Changelog
 
+## Endurecimiento del cargador de datos maestros (MDM-001-LOADER-HARDENING) — 2026-09-28
+
+- Seguimiento de tres hallazgos MINOR de la revisión de MDM-001, diferidos del PR de MDM-001; sin API,
+  estados, eventos ni UI nuevos.
+- X1: `security.load_master_data` rechaza en cada llamada una sesión cuyo login sea miembro de
+  `paqueteria_migrator` (`MDM001_DEPLOYMENT_PRINCIPAL_REFUSED`): un miembro con sólo `ADMIN` sobre
+  `paqueteria_master_data_loader` podía concederse `SET` y llamar la función directamente.
+- X2: `operator_ref` deja de ser un SHA-256 sin sal de un login adivinable y pasa a ser un UUID aleatorio
+  por login, en `platform.master_data_operator_refs` (sólo plataforma: FORCE RLS con una única política para
+  `paqueteria_migrator`, sin permisos de runtime; el ejecutor sólo `SELECT`/`INSERT` de dos columnas). Sin
+  secreto nuevo. Las filas de auditoría anteriores (append-only) conservan el formato SHA-256.
+- X3: `master-data-gate` toma `pg_advisory_xact_lock(2026092803)` antes de leer la marca de despliegue, para
+  que dos primeras ejecuciones concurrentes no puedan dejar `SYNTHETIC` sobre un `REAL`.
+- Lane de Pricing `20260928000400_HardenMasterDataLoaderOperatorBoundary` (dueña de la tabla y de los cuatro
+  grants, como el paso de `policy_version`); AI-18 lo documenta en comentarios y en las aserciones 27 y 28.
+
 ## Versión de política de precios por organización (PRC-POLICY-VERSION-PER-ORG) — 2026-09-28
 
 - Respuesta literal del project owner: "Versión por organización" ("Cada organización tiene su

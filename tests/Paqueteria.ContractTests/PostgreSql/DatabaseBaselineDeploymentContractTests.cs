@@ -672,16 +672,20 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         var coordinator = new ModuleMigrationCoordinator();
 
         // Every other lane is applied by the privileged fixture principal; this contract is the MDM-001 step
-        // and the Pricing steps after it (PRC-POLICY-VERSION-PER-ORG). Rewinding them leaves a populated
-        // installation whose master data roles were pre-provisioned per E-002.
+        // and the Pricing steps after it (PRC-POLICY-VERSION-PER-ORG, MDM-001 loader hardening). Rewinding them
+        // leaves a populated installation whose master data roles were pre-provisioned per E-002 (the operator
+        // reference table stays, as after the lane's rollback, and is adopted again).
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION security.load_master_data(uuid,uuid,json,bytea,boolean);
             REVOKE SELECT (policy_version), INSERT (policy_version) ON pricing.tariff_rules FROM paqueteria_master_data_executor;
+            REVOKE SELECT (operator_login,operator_ref), INSERT (operator_login,operator_ref)
+              ON platform.master_data_operator_refs FROM paqueteria_master_data_executor;
             DELETE FROM platform."__ef_migrations_history_pricing"
               WHERE "MigrationId" IN ('{E002MasterDataStateReader.MigrationId}',
                 '{VersionPricingPolicyPerOrganization.MigrationId}',
-                '{StoreTariffPolicyVersionInMasterDataLoader.MigrationId}');
+                '{StoreTariffPolicyVersionInMasterDataLoader.MigrationId}',
+                '{HardenMasterDataLoaderOperatorBoundary.MigrationId}');
             """);
         Assert.Equal("PENDING", await PricingLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";

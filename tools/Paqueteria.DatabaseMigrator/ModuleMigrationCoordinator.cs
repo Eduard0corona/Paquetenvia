@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
-        ("Pricing", "__ef_migrations_history_pricing", StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000300_StoreTariffPolicyVersionInMasterDataLoader.cs"),
+        ("Pricing", "__ef_migrations_history_pricing", HardenMasterDataLoaderOperatorBoundary.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000400_HardenMasterDataLoaderOperatorBoundary.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
@@ -99,10 +99,11 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // PRC-POLICY-VERSION-PER-ORG x MDM-001: the lane's latest migration only grants the executor
-                // SELECT/INSERT on policy_version and replaces the loader function with the published body plus
-                // reviewed edits; its rollback restores the published function. No table, role or row changes.
-                "Pricing" => IsPricingLoaderPolicyVersionSource(source),
+                // MDM-001 loader hardening: the lane's latest migration adds the platform-only operator reference
+                // table, four executor column grants and the loader function derived from the previous one by
+                // reviewed edits; its rollback revokes the grants and restores the previous function. No table,
+                // role or row is dropped, deleted or rewritten.
+                "Pricing" => IsMasterDataLoaderHardeningSource(source),
                 "Notifications" =>
                     source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
@@ -221,6 +222,11 @@ internal sealed class ModuleMigrationCoordinator
             VersionPricingPolicyPerOrganization.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000200_VersionPricingPolicyPerOrganization.cs",
             IsPolicyVersionColumnSource);
+        VerifyPricingSource(
+            root,
+            StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000300_StoreTariffPolicyVersionInMasterDataLoader.cs",
+            IsPricingLoaderPolicyVersionSource);
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -450,6 +456,7 @@ internal sealed class ModuleMigrationCoordinator
                     AddMasterDataLoader.MigrationId,
                     VersionPricingPolicyPerOrganization.MigrationId,
                     StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+                    HardenMasterDataLoaderOperatorBoundary.MigrationId,
                 ],
             "Orders" =>
                 [
@@ -536,6 +543,29 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>MDM-001 loader hardening (X1/X2): the platform-only operator reference table, its four
+    /// executor column grants and the loader function derived from the previous one; nothing dropped (except
+    /// the ungated legacy jsonb overload, as the published step does), truncated, deleted or rewritten.</summary>
+    private static bool IsMasterDataLoaderHardeningSource(string source) =>
+        IsMasterDataLoaderHardeningSourceWithoutLegacyDrop(
+            source.Replace(StoreTariffPolicyVersionInMasterDataLoader.LegacyOverloadDrop, string.Empty, StringComparison.Ordinal));
+
+    private static bool IsMasterDataLoaderHardeningSourceWithoutLegacyDrop(string source) =>
+        source.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, StringComparison.Ordinal) &&
+        source.Contains("StoreTariffPolicyVersionInMasterDataLoader.FunctionSql", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&

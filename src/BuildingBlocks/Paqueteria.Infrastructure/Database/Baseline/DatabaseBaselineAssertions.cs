@@ -163,6 +163,20 @@ public sealed class DatabaseBaselineAssertions
         "pricing.tariff_rules.policy_version:SELECT",
     });
 
+    /// <summary>
+    /// MDM-001 loader hardening (X2): the column grants the Pricing lane adds once the loader keeps a random
+    /// per-operator reference in <c>platform.master_data_operator_refs</c>
+    /// (<see cref="MasterDataLoaderHardeningStateReader"/>). Owned by that lane step, not by AI-18, for the
+    /// same reason as the policy_version grants.
+    /// </summary>
+    public static IReadOnlyList<string> MasterDataExecutorOperatorRefGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "platform.master_data_operator_refs.operator_login:INSERT",
+        "platform.master_data_operator_refs.operator_login:SELECT",
+        "platform.master_data_operator_refs.operator_ref:INSERT",
+        "platform.master_data_operator_refs.operator_ref:SELECT",
+    });
+
     private static readonly string[] SensitiveFunctions =
     [
         "security.resolve_identity_context(text)",
@@ -1103,10 +1117,21 @@ public sealed class DatabaseBaselineAssertions
     {
         // Recorded history, not the catalog, decides whether the two policy_version grants belong to the set, so
         // a recorded step whose grants are missing (or grants without the step) is reported, never absorbed.
-        var grants = await PricingPolicyVersionStateReader.IsLoaderStoringAsync(connection, transaction, cancellationToken)
-            .ConfigureAwait(false)
-            ? MasterDataExecutorColumnGrants.Concat(MasterDataExecutorPolicyVersionGrants).ToArray()
-            : MasterDataExecutorColumnGrants;
+        IEnumerable<string> expectedGrants = MasterDataExecutorColumnGrants;
+        if (await PricingPolicyVersionStateReader.IsLoaderStoringAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            expectedGrants = expectedGrants.Concat(MasterDataExecutorPolicyVersionGrants);
+        }
+
+        var hardened = await MasterDataLoaderHardeningStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
+        if (hardened)
+        {
+            expectedGrants = expectedGrants.Concat(MasterDataExecutorOperatorRefGrants);
+        }
+
+        var grants = expectedGrants.ToArray();
         await AddRowsAsync(
             violations,
             connection,
@@ -1152,7 +1177,10 @@ public sealed class DatabaseBaselineAssertions
               WHERE p.oid=pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,json,bytea,boolean)')),
             gate AS (
               SELECT c.oid, c.relowner FROM pg_catalog.pg_class c
-              WHERE c.oid=pg_catalog.to_regclass('platform.master_data_deployment_gate'))
+              WHERE c.oid=pg_catalog.to_regclass('platform.master_data_deployment_gate')),
+            operator_refs AS (
+              SELECT c.oid, c.relowner, c.relrowsecurity, c.relforcerowsecurity FROM pg_catalog.pg_class c
+              WHERE c.oid=pg_catalog.to_regclass('platform.master_data_operator_refs'))
             SELECT 'missing master data executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
             FROM expected e CROSS JOIN executor
             LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
@@ -1266,8 +1294,46 @@ public sealed class DatabaseBaselineAssertions
             WHERE m.roleid IN (SELECT oid FROM loader)
               AND (m.inherit_option OR m.set_option)
               AND pg_catalog.pg_has_role(m.member,'paqueteria_migrator','MEMBER')
+            UNION ALL
+            -- MDM-001 loader hardening (X1/X2): once recorded, the operator reference table exists and the
+            -- function refuses deployment principals and no longer hashes the login.
+            SELECT 'platform.master_data_operator_refs is missing'
+            WHERE @hardened AND NOT EXISTS (SELECT 1 FROM operator_refs)
+            UNION ALL
+            SELECT 'master data loader function lacks the MDM-001 hardening'
+            FROM installed
+            WHERE @hardened
+              AND (position('MDM001_DEPLOYMENT_PRINCIPAL_REFUSED' IN installed.prosrc)=0
+                OR position('platform.master_data_operator_refs' IN installed.prosrc)=0
+                OR position('paquetenvia.mdm-001.operator:' IN installed.prosrc)<>0)
+            UNION ALL
+            SELECT 'platform.master_data_operator_refs grants ' || t.privilege_type || ' to ' ||
+                   CASE WHEN t.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(t.grantee) END
+            FROM table_acl t JOIN operator_refs r ON r.oid=t.oid
+            WHERE t.grantee<>r.relowner
+            UNION ALL
+            SELECT 'platform.master_data_operator_refs column grant to ' ||
+                   CASE WHEN c.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(c.grantee) END
+            FROM column_acl c
+            WHERE c.table_schema='platform' AND c.table_name='master_data_operator_refs'
+              AND c.grantee NOT IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'platform.master_data_operator_refs must be owned by paqueteria_migrator'
+            FROM operator_refs WHERE pg_catalog.pg_get_userbyid(operator_refs.relowner)<>'paqueteria_migrator'
+            UNION ALL
+            SELECT 'platform.master_data_operator_refs must force RLS with only the migrator policy'
+            FROM operator_refs r
+            WHERE NOT r.relrowsecurity OR NOT r.relforcerowsecurity
+               OR (SELECT string_agg(pol.polname || ':' || pol.polcmd::text || ':' || pol.polpermissive::text || ':'
+                     || (SELECT string_agg(CASE WHEN x=0 THEN 'public' ELSE pg_catalog.pg_get_userbyid(x) END, '+')
+                         FROM unnest(pol.polroles) x)
+                     || ':' || COALESCE(pg_catalog.pg_get_expr(pol.polqual, pol.polrelid), '') || ':'
+                     || COALESCE(pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid), ''), ',')
+                   FROM pg_catalog.pg_policy pol WHERE pol.polrelid=r.oid)
+                  IS DISTINCT FROM 'master_data_operator_refs_migrator:*:true:paqueteria_migrator:true:true'
             """,
             cancellationToken,
+            new NpgsqlParameter<bool>("hardened", hardened),
             new NpgsqlParameter<string[]>("grants", grants),
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }

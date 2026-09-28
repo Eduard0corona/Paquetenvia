@@ -75,9 +75,11 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 ("function", AddMasterDataLoader.FunctionSignature)));
 
         // Exactly the AI-18 column grants plus the two policy_version grants of the Pricing lane
-        // (PRC-POLICY-VERSION-PER-ORG), from pg_attribute.attacl; no table-level ACL entry for either role.
+        // (PRC-POLICY-VERSION-PER-ORG) and the four operator reference grants of the MDM-001 hardening step,
+        // from pg_attribute.attacl; no table-level ACL entry for either role.
         var expectedGrants = AddMasterDataLoader.ExecutorColumnGrants
             .Concat(StoreTariffPolicyVersionInMasterDataLoader.AddedExecutorColumnGrants)
+            .Concat(HardenMasterDataLoaderOperatorBoundary.AddedExecutorColumnGrants)
             .Order(StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(
@@ -95,13 +97,20 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             string.Join(',', AddMasterDataLoader.ExecutorColumnGrants.Order(StringComparer.Ordinal)),
             string.Join(',', DatabaseBaselineAssertions.MasterDataExecutorGrants.Order(StringComparer.Ordinal)));
         Assert.Equal(116, AddMasterDataLoader.ExecutorColumnGrants.Count);
-        Assert.Equal(StoreTariffPolicyVersionInMasterDataLoader.ExecutorColumnGrantCount, expectedGrants.Length);
+        Assert.Equal(118, StoreTariffPolicyVersionInMasterDataLoader.ExecutorColumnGrantCount);
+        Assert.Equal(HardenMasterDataLoaderOperatorBoundary.ExecutorColumnGrantCount, expectedGrants.Length);
         Assert.Equal(
             StoreTariffPolicyVersionInMasterDataLoader.AddedExecutorColumnGrants.Order(StringComparer.Ordinal),
             DatabaseBaselineAssertions.MasterDataExecutorPolicyVersionGrants.Order(StringComparer.Ordinal));
         Assert.Equal(
+            HardenMasterDataLoaderOperatorBoundary.AddedExecutorColumnGrants.Order(StringComparer.Ordinal),
+            DatabaseBaselineAssertions.MasterDataExecutorOperatorRefGrants.Order(StringComparer.Ordinal));
+        Assert.Equal(
             StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
             PricingPolicyVersionStateReader.MigrationId);
+        Assert.Equal(
+            HardenMasterDataLoaderOperatorBoundary.MigrationId,
+            MasterDataLoaderHardeningStateReader.MigrationId);
         Assert.Equal(0, await ScalarAsync<long>(
             """
             SELECT (SELECT count(*) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
@@ -188,6 +197,8 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                     OR has_table_privilege(@runtime,'locations.cities','UPDATE')
                     OR has_table_privilege(@runtime,'locations.cities','DELETE')
                     OR has_table_privilege(@runtime,'platform.master_data_deployment_gate','SELECT,INSERT,UPDATE,DELETE')
+                    OR has_table_privilege(@runtime,'platform.master_data_operator_refs','SELECT,INSERT,UPDATE,DELETE')
+                    OR has_any_column_privilege(@runtime,'platform.master_data_operator_refs','SELECT,INSERT,UPDATE')
                 """,
                 ("runtime", runtime)));
         }
@@ -274,8 +285,10 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Contains("\"from\": {\"gate_007_closed\": false, \"deployment_class\": \"SYNTHETIC\"}", audit);
         Assert.Contains("\"to\": {\"gate_007_closed\": true, \"deployment_class\": \"REAL\"}", audit);
         var deploymentLogin = new NpgsqlConnectionStringBuilder(fixture.DeploymentConnectionString).Username!;
-        Assert.Contains($"\"operator_ref\": \"{OperatorReference(deploymentLogin)}\"", audit);
+        var deploymentReference = await OperatorReferenceAsync(deploymentLogin);
+        Assert.Contains($"\"operator_ref\": \"{deploymentReference}\"", audit);
         Assert.DoesNotContain(deploymentLogin, audit);
+        Assert.DoesNotContain(LegacyOperatorReference(deploymentLogin), audit);
         Assert.Equal(0, await ScalarAsync<long>(
             "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_GATE_CHANGED'", ("org", tenant)));
         await SetGateAsync(Synthetic, false);
@@ -368,8 +381,9 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             ("org", organization));
         Assert.Contains(Convert.ToHexStringLower(first.Sha256), payloads);
         Assert.Contains("document_sha256_computed", payloads);
-        Assert.Contains($"\"operator_ref\": \"{OperatorReference(OperatorLogin)}\"", payloads);
+        Assert.Contains($"\"operator_ref\": \"{await OperatorReferenceAsync(OperatorLogin)}\"", payloads);
         Assert.DoesNotContain(OperatorLogin, payloads);
+        Assert.DoesNotContain(LegacyOperatorReference(OperatorLogin), payloads);
         Assert.DoesNotContain("Synthetic", payloads);
         Assert.DoesNotContain("-107.", payloads);
         Assert.Equal(1, await ScalarAsync<long>(
@@ -872,12 +886,18 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
     [PostgreSqlContractFact]
     public async Task The_loader_function_differs_from_the_published_one_only_by_the_reviewed_policy_version_edits()
     {
+        // The installed function is the hardening step's (see the next test), which keeps every policy-version
+        // edit: they are checked on the installed body and on the policy-version step's own definition.
         var installed = await ScalarAsync<string>(
             "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
             ("function", AddMasterDataLoader.FunctionSignature));
         var expected = StoreTariffPolicyVersionInMasterDataLoader.FunctionSql;
-        var body = expected[(expected.IndexOf("AS $function$", StringComparison.Ordinal) + "AS $function$".Length)..expected.LastIndexOf("$function$;", StringComparison.Ordinal)];
-        Assert.Equal(body, installed);
+        foreach (var edit in StoreTariffPolicyVersionInMasterDataLoader.FunctionEdits.Where(edit => edit.Replacement.Length > 0))
+        {
+            Assert.Contains(edit.Replacement, installed, StringComparison.Ordinal);
+            Assert.Contains(edit.Replacement, expected, StringComparison.Ordinal);
+        }
+
         Assert.Contains(StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError, installed, StringComparison.Ordinal);
         Assert.DoesNotContain("policy_version_persisted", installed, StringComparison.Ordinal);
         Assert.DoesNotContain("TODO", installed, StringComparison.Ordinal);
@@ -892,6 +912,346 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             StoreTariffPolicyVersionInMasterDataLoader.PublishedFunctionSql.Replace(removed.Published, string.Empty, StringComparison.Ordinal),
             undone);
         Assert.Equal(8, StoreTariffPolicyVersionInMasterDataLoader.FunctionEdits.Count);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task The_loader_function_differs_from_the_previous_one_only_by_the_reviewed_hardening_edits()
+    {
+        var installed = await ScalarAsync<string>(
+            "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
+            ("function", AddMasterDataLoader.FunctionSignature));
+        var expected = HardenMasterDataLoaderOperatorBoundary.FunctionSql;
+        Assert.Equal(FunctionBody(expected), installed);
+        Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
+        Assert.Contains(HardenMasterDataLoaderOperatorBoundary.OperatorRefTable, installed, StringComparison.Ordinal);
+        Assert.DoesNotContain(AddMasterDataLoader.OperatorReferencePrefix, installed, StringComparison.Ordinal);
+        Assert.DoesNotContain("sha256(pg_catalog.convert_to('paquetenvia", installed, StringComparison.Ordinal);
+
+        // Undoing the four edits gives back the policy-version step's function byte for byte: the GATE-007 gate,
+        // PLATFORM-only cities, overlap, limits, tenant context and policy versions are intact.
+        var undone = HardenMasterDataLoaderOperatorBoundary.FunctionEdits
+            .Aggregate(expected, (sql, edit) => sql.Replace(edit.Replacement, edit.Published, StringComparison.Ordinal));
+        Assert.Equal(StoreTariffPolicyVersionInMasterDataLoader.FunctionSql, undone);
+        Assert.Equal(4, HardenMasterDataLoaderOperatorBoundary.FunctionEdits.Count);
+
+        // Still exactly one audit insert, the published one: the edits add none.
+        Assert.Equal(1, Occurrences(expected, "INSERT INTO platform.audit_logs"));
+        Assert.All(HardenMasterDataLoaderOperatorBoundary.FunctionEdits, edit =>
+            Assert.DoesNotContain("platform.audit_logs", edit.Replacement, StringComparison.Ordinal));
+        Assert.All(HardenMasterDataLoaderOperatorBoundary.FunctionEdits, edit =>
+            Assert.Equal(1, Occurrences(expected, edit.Replacement)));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task A_deployment_principal_that_grants_itself_the_loader_is_refused_at_call_time()
+    {
+        // MDM-001 X1: a member of paqueteria_migrator may hold ADMIN (only) on the loader, as a CREATEROLE
+        // creator does; the boundary assertions accept that, because ADMIN alone cannot load. With ADMIN it
+        // can grant itself SET and call the function directly: the function refuses it.
+        const string Deployer = "paqueteria_mdm_x1_deployer_test";
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        var organization = await NewOrganizationAsync();
+        var document = Document(organization, Suffix()).ToJsonString();
+        await ExecuteAdminAsync($$"""
+            DROP ROLE IF EXISTS {{Deployer}};
+            CREATE ROLE {{Deployer}} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+              PASSWORD '{{password}}';
+            GRANT paqueteria_migrator TO {{Deployer}};
+            GRANT {{Loader}} TO {{Deployer}} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+            """);
+        try
+        {
+            await using (var connection = await fixture.AdminDataSource.OpenConnectionAsync())
+            await using (var transaction = await connection.BeginTransactionAsync())
+            {
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+
+            await using var deployer = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(fixture.DeploymentConnectionString)
+            {
+                Username = Deployer,
+                Password = password,
+                Pooling = false,
+                ApplicationName = "Paqueteria.MDM001.ContractTests",
+            }.ConnectionString);
+            await deployer.OpenAsync();
+            await using (var check = new NpgsqlCommand(
+                $"SELECT pg_has_role(session_user,'{Loader}','SET')::text || '|' || pg_has_role(session_user,'paqueteria_migrator','MEMBER')::text",
+                deployer))
+            {
+                Assert.Equal("false|true", await check.ExecuteScalarAsync());
+            }
+
+            await using (var selfGrant = new NpgsqlCommand($"GRANT {Loader} TO {Deployer} WITH SET TRUE", deployer))
+            {
+                await selfGrant.ExecuteNonQueryAsync();
+            }
+
+            foreach (var dryRun in new[] { false, true })
+            {
+                var refused = await Assert.ThrowsAsync<PostgresException>(
+                    () => CallFunctionOnAsync(deployer, organization, document, dryRun));
+                Assert.Equal(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, refused.MessageText);
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, refused.SqlState);
+            }
+
+            // A superuser counts as a member of every role and is refused as well.
+            await using (var admin = await fixture.AdminDataSource.OpenConnectionAsync())
+            {
+                var superuser = await Assert.ThrowsAsync<PostgresException>(
+                    () => CallFunctionOnAsync(admin, organization, document, dryRun: true));
+                Assert.Equal(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, superuser.MessageText);
+            }
+
+            Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
+            Assert.Equal(0L, await ScalarAsync<long>(
+                "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org", ("org", organization)));
+            Assert.Equal(0L, await ScalarAsync<long>(
+                "SELECT count(*) FROM platform.master_data_operator_refs WHERE operator_login=@login", ("login", Deployer)));
+        }
+        finally
+        {
+            await ExecuteAdminAsync($"DROP ROLE IF EXISTS {Deployer}");
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Operator_references_are_random_platform_only_and_stable_per_login()
+    {
+        // MDM-001 X2: the reference is a random uuid per login, created on the first real load and reused.
+        var organization = await NewOrganizationAsync();
+        var suffix = Suffix();
+        await EnsureCityAsync(suffix);
+        await LoadAsync(Document(organization, suffix), organization, dryRun: true);
+        await LoadAsync(Document(organization, suffix), organization);
+        await LoadAsync(Document(organization, suffix), organization);
+        var reference = await OperatorReferenceAsync(OperatorLogin);
+        Assert.True(Guid.TryParseExact(reference, "D", out _));
+        Assert.Equal(
+            $"{reference}|{reference}",
+            await ScalarAsync<string>(
+                """
+                SELECT string_agg(payload_redacted->>'operator_ref', '|' ORDER BY occurred_at)
+                FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'
+                """,
+                ("org", organization)));
+        Assert.Equal(1L, await ScalarAsync<long>(
+            "SELECT count(*) FROM platform.master_data_operator_refs WHERE operator_login=@login", ("login", OperatorLogin)));
+
+        // Platform-only: FORCE RLS with the migrator policy alone, owned by the migrator, nothing for PUBLIC,
+        // the runtime roles or the loader, and column SELECT/INSERT for the executor only.
+        Assert.Equal("t|t|master_data_operator_refs_migrator|paqueteria_migrator", await ScalarAsync<string>(
+            """
+            SELECT concat_ws('|',c.relrowsecurity,c.relforcerowsecurity,
+              (SELECT string_agg(polname,',') FROM pg_policy WHERE polrelid=c.oid), pg_get_userbyid(c.relowner))
+            FROM pg_class c WHERE c.oid='platform.master_data_operator_refs'::regclass
+            """));
+        Assert.Equal(0L, await ScalarAsync<long>(
+            """
+            SELECT (SELECT count(*) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+                    WHERE c.oid='platform.master_data_operator_refs'::regclass AND a.grantee<>c.relowner)
+                 + (SELECT count(*) FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a
+                    WHERE att.attrelid='platform.master_data_operator_refs'::regclass AND a.grantee<>@executor::regrole)
+            """,
+            ("executor", Executor)));
+        await using var connection = new NpgsqlConnection(OperatorConnectionString());
+        await connection.OpenAsync();
+        foreach (var sql in new[]
+                 {
+                     "SELECT operator_ref FROM platform.master_data_operator_refs",
+                     $"SET ROLE {Loader}; SELECT operator_ref FROM platform.master_data_operator_refs",
+                     $"SET ROLE {Loader}; INSERT INTO platform.master_data_operator_refs(operator_login,operator_ref) VALUES ('x',gen_random_uuid())",
+                 })
+        {
+            await using var command = new NpgsqlCommand(sql, connection);
+            var denied = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+            Assert.Equal("42501", denied.SqlState);
+            await using var reset = new NpgsqlCommand("RESET ROLE", connection);
+            await reset.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Concurrent_first_runs_of_master_data_gate_never_turn_REAL_back_into_SYNTHETIC()
+    {
+        // MDM-001 X3: with no marker row, FOR UPDATE locks nothing. Every run takes the fixed advisory lock
+        // before reading the marker, so exactly one of two concurrent first runs sees the empty marker and a
+        // committed REAL is never overwritten with SYNTHETIC, whichever run goes first.
+        var platform = await NewOrganizationAsync("PLATFORM");
+        try
+        {
+            // Deterministic: both runs are held at the lock, then released together.
+            await ExecuteAdminAsync("DELETE FROM platform.master_data_deployment_gate");
+            await using (var holder = await fixture.AdminDataSource.OpenConnectionAsync())
+            {
+                await using var hold = await holder.BeginTransactionAsync();
+                await using (var take = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@key)", holder, hold))
+                {
+                    take.Parameters.AddWithValue("key", MasterDataGate.AdvisoryLockKey);
+                    await take.ExecuteNonQueryAsync();
+                }
+
+                var runs = StartConcurrentFirstRuns(platform);
+                await WaitForGateLockWaitersAsync(2);
+                await hold.CommitAsync();
+                await AssertConcurrentFirstRunsAsync(platform, runs);
+            }
+
+            // Unscripted: the two runs race freely, several times.
+            for (var round = 0; round < 5; round++)
+            {
+                await ExecuteAdminAsync("DELETE FROM platform.master_data_deployment_gate");
+                await AssertConcurrentFirstRunsAsync(platform, StartConcurrentFirstRuns(platform));
+            }
+        }
+        finally
+        {
+            await SetGateAsync(Synthetic, false);
+        }
+    }
+
+    private Task<Exception?>[] StartConcurrentFirstRuns(Guid platform) =>
+        new[] { Real, Synthetic }
+            .Select(deploymentClass => Task.Run(async () =>
+            {
+                try
+                {
+                    await MasterDataGate.SetAsync(
+                        fixture.DeploymentConnectionString, new MasterDataGateOptions(deploymentClass, false, platform),
+                        null, TextWriter.Null, CancellationToken.None);
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            }))
+            .ToArray();
+
+    private async Task AssertConcurrentFirstRunsAsync(Guid platform, Task<Exception?>[] runs)
+    {
+        var outcomes = await Task.WhenAll(runs);
+        Assert.Null(outcomes[0]);
+        if (outcomes[1] is not null)
+        {
+            var refused = Assert.IsType<MasterDataLoadException>(outcomes[1]);
+            Assert.Contains("MDM001_GATE_REAL_TO_SYNTHETIC_REFUSED", refused.Message);
+        }
+
+        Assert.Equal("REAL|f", await ScalarAsync<string>(
+            "SELECT concat_ws('|',deployment_class,gate_007_closed) FROM platform.master_data_deployment_gate"));
+
+        // The audit trail of the round: one run saw the empty marker, and REAL was never followed by SYNTHETIC.
+        var trail = await ScalarAsync<string>(
+            """
+            SELECT string_agg(COALESCE(payload_redacted->'from'->>'deployment_class','NONE') || '>' ||
+                              (payload_redacted->'to'->>'deployment_class'), ',' ORDER BY occurred_at)
+            FROM (SELECT payload_redacted, occurred_at FROM platform.audit_logs
+                  WHERE org_id=@org AND action='MASTER_DATA_GATE_CHANGED'
+                  ORDER BY occurred_at DESC LIMIT @rows) round
+            """,
+            ("org", platform), ("rows", (long)outcomes.Count(outcome => outcome is null)));
+        Assert.Contains(trail, new[] { "NONE>REAL", "NONE>SYNTHETIC,SYNTHETIC>REAL" });
+    }
+
+    private async Task WaitForGateLockWaitersAsync(int waiters)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (await ScalarAsync<long>(
+                   """
+                   SELECT count(*) FROM pg_locks
+                   WHERE locktype='advisory' AND NOT granted AND classid=0 AND objid=@key::oid AND objsubid=1
+                     AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+                   """,
+                   ("key", MasterDataGate.AdvisoryLockKey)) < waiters)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the master-data-gate runs never waited on the advisory lock");
+            await Task.Delay(50);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Hardening_step_rolls_back_and_reapplies_on_real_postgresql_keeping_references_and_audit()
+    {
+        var connectionString = await fixture.CreateIsolatedDatabaseAsync("mdmharden");
+        try
+        {
+            var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+            await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+            await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(HardenMasterDataLoaderOperatorBoundary.FunctionSql), await LoaderSourceAsync(connectionString));
+
+            // A reference and an audit row in the former hash format (append-only): neither is touched by the lane.
+            var organization = Guid.NewGuid();
+            var reference = Guid.NewGuid();
+            var legacy = LegacyOperatorReference("paqueteria_mdm_legacy_login");
+            await ExecuteAsync(connectionString, $"""
+                INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
+                  VALUES ('{organization}','MDM Sintética','MDM Sintética','ALLY');
+                INSERT INTO platform.master_data_operator_refs(operator_login,operator_ref)
+                  VALUES ('paqueteria_mdm_x2_login','{reference}');
+                INSERT INTO platform.audit_logs(id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at)
+                  VALUES (gen_random_uuid(),'{organization}',NULL,'MASTER_DATA_LOADED','MASTER_DATA_LOAD',gen_random_uuid(),'mdm-001',
+                    jsonb_build_object('operator_ref','{legacy}'),now());
+                """);
+
+            // Down to the policy-version step: its function, ACL and 118 grants; the table and rows stay.
+            await MigratePricingAsync(connectionString, StoreTariffPolicyVersionInMasterDataLoader.MigrationId);
+            Assert.Equal(118L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(StoreTariffPolicyVersionInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(reference, await ScalarAsync<Guid>(connectionString,
+                "SELECT operator_ref FROM platform.master_data_operator_refs WHERE operator_login='paqueteria_mdm_x2_login'"));
+            Assert.Equal("PENDING", (await new ModuleMigrationCoordinator().PlanAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+
+            // Up again adopts the existing table and reinstalls the hardened function and the four grants.
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(HardenMasterDataLoaderOperatorBoundary.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(reference, await ScalarAsync<Guid>(connectionString,
+                "SELECT operator_ref FROM platform.master_data_operator_refs WHERE operator_login='paqueteria_mdm_x2_login'"));
+            Assert.Equal(legacy, await ScalarAsync<string>(connectionString,
+                $"SELECT payload_redacted->>'operator_ref' FROM platform.audit_logs WHERE org_id='{organization}'"));
+            Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+
+            // A recorded hardening step without its table or its grants is reported, never absorbed.
+            await ExecuteAsync(connectionString,
+                "REVOKE INSERT (operator_ref) ON platform.master_data_operator_refs FROM paqueteria_master_data_executor");
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                var violations = await Assert.ThrowsAsync<DatabaseAssertionException>(
+                    () => DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction));
+                Assert.Contains(
+                    "missing master data executor column grant: platform.master_data_operator_refs.operator_ref:INSERT",
+                    violations.Violations);
+                await transaction.RollbackAsync();
+            }
+        }
+        finally
+        {
+            await fixture.DropIsolatedDatabaseAsync(connectionString);
+        }
     }
 
     [PostgreSqlContractFact]
@@ -991,9 +1351,35 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         ALTER FUNCTION {{AddMasterDataLoader.LegacyFunctionSignature}} OWNER TO {{Executor}};
         """;
 
-    /// <summary>MDM-001 N3: the audit pseudonym of a login, as platform staff recompute it.</summary>
-    private static string OperatorReference(string login) => Convert.ToHexStringLower(
+    /// <summary>MDM-001 X2: a login's random audit reference, as platform staff read it.</summary>
+    private Task<string> OperatorReferenceAsync(string login) => ScalarAsync<string>(
+        "SELECT operator_ref::text FROM platform.master_data_operator_refs WHERE operator_login=@login",
+        ("login", login));
+
+    /// <summary>MDM-001 N3: the former, guessable pseudonym (SHA-256 of prefix + login); never written again.</summary>
+    private static string LegacyOperatorReference(string login) => Convert.ToHexStringLower(
         SHA256.HashData(Encoding.UTF8.GetBytes(AddMasterDataLoader.OperatorReferencePrefix + login)));
+
+    /// <summary>The body of a CREATE FUNCTION ... AS $function$ ... $function$; definition, as pg_proc.prosrc holds it.</summary>
+    private static string FunctionBody(string definition) =>
+        definition[(definition.IndexOf("AS $function$", StringComparison.Ordinal) + "AS $function$".Length)..definition.LastIndexOf("$function$;", StringComparison.Ordinal)];
+
+    private static int Occurrences(string text, string value)
+    {
+        var count = 0;
+        for (var at = text.IndexOf(value, StringComparison.Ordinal); at >= 0; at = text.IndexOf(value, at + value.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    private static Task<long> ExecutorGrantCountAsync(string connectionString) => ScalarAsync<long>(connectionString,
+        $"SELECT count(*) FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a WHERE a.grantee='{AddMasterDataLoader.ExecutorRole}'::regrole");
+
+    private static Task<string> LoaderSourceAsync(string connectionString) => ScalarAsync<string>(connectionString,
+        $"SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure('{AddMasterDataLoader.FunctionSignature}')");
 
     private static string CityName(string suffix) => $"MDM City {suffix}";
 
@@ -1205,6 +1591,13 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         await EnsureOperatorLoginAsync();
         await using var connection = new NpgsqlConnection(OperatorConnectionString());
         await connection.OpenAsync();
+        return await CallFunctionOnAsync(connection, organization, documentText, dryRun);
+    }
+
+    /// <summary>Calls the function on <paramref name="connection"/> in one transaction as the loader role.</summary>
+    private static async Task<JsonDocument> CallFunctionOnAsync(
+        NpgsqlConnection connection, Guid organization, string documentText, bool dryRun)
+    {
         await using var transaction = await connection.BeginTransactionAsync();
         await using (var context = new NpgsqlCommand(
             $"SET LOCAL ROLE {Loader}; SELECT set_config('app.current_org_ids', @orgs::uuid[]::text, true);",
