@@ -14,7 +14,7 @@ The mandatory order is:
 The migrator verifies the canonical SHA-256 values before it opens PostgreSQL:
 
 ```text
-AI-06 35f1c6e839b2efbe441bfc6e5acd7a3a291534822a1de7067dddd5f7530f88bc
+AI-06 0bb166dcbcf90bd8755d4cfedf839bd214695fbe745ee3ce4b500cc6fb0b4228
 AI-18 b3b4d51607e0ce95d38da2a9ea252466efba5804fdb5dc38937fd45292bab5bf
 ```
 

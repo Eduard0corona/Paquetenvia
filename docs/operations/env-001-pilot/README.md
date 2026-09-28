@@ -234,9 +234,13 @@ API and Worker settings. It cannot override any platform-managed prefix, and it 
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
 value is still `OWNER_DECISION_REQUIRED`:
 
-- `Pricing__PricingPolicyVersion`
 - `Dispatch__AssignmentPolicyVersion`
 - `Drivers__Eligibility__PolicyVersion`
+
+There is no pricing policy version setting (PRC-POLICY-VERSION-PER-ORG, owner 2026-09-28): each
+organization versions its own pricing policy in `pricing.tariff_rules.policy_version`, loaded with its
+tariffs (MDM-001), and every quote freezes the version of the rule it selected. The API refuses to
+start if `Pricing__PricingPolicyVersion` is still set.
 
 Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.

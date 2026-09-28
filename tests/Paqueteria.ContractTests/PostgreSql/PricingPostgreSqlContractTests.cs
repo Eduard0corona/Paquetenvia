@@ -10,6 +10,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
+using Orders.Application.Orders;
+using Orders.Infrastructure;
+using Orders.Infrastructure.Orders;
+using Orders.Infrastructure.Persistence;
 using Paqueteria.Application.Auditing;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure;
@@ -35,11 +39,15 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             SELECT h."MigrationId", pg_get_userbyid(c.relowner)
             FROM platform.__ef_migrations_history_pricing h
             JOIN pg_class c ON c.relname='__ef_migrations_history_pricing'
-            JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='platform';
+            JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='platform'
+            ORDER BY h."MigrationId";
             """);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(AdoptCanonicalPricingBaseline.MigrationId, reader.GetString(0));
+        Assert.Equal("paqueteria_migrator", reader.GetString(1));
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(VersionPricingPolicyPerOrganization.MigrationId, reader.GetString(0));
         Assert.Equal("paqueteria_migrator", reader.GetString(1));
         Assert.False(await reader.ReadAsync());
 
@@ -71,7 +79,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             Assert.Equal(0, created.Tax.AmountCents);
             Assert.Equal(34_567, created.Total.AmountCents);
             Assert.Equal("OCCASIONAL", created.PricingTier);
-            Assert.Equal("PRC-001-v1", created.PricingPolicyVersion);
+            Assert.Equal(data.PolicyVersion, created.PricingPolicyVersion);
             Assert.Equal([data.ZoneRuleId], created.RuleIds);
             Assert.NotEqual(created.OriginLocationId, created.DestinationLocationId);
             Assert.Equal(data.CityId, created.CityId);
@@ -482,8 +490,8 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             """
             INSERT INTO pricing.tariff_rules(
               id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
-              amount_cents,tax_mode,active_from,active_to,status)
-              VALUES (@rule,@org,@city,@area,@zone,'CUSTOM','SAME_DAY',45678,'EXEMPT',@active_from,NULL,'ACTIVE');
+              amount_cents,tax_mode,active_from,active_to,status,policy_version)
+              VALUES (@rule,@org,@city,@area,@zone,'CUSTOM','SAME_DAY',45678,'EXEMPT',@active_from,NULL,'ACTIVE','PRC-001-private.v7');
             INSERT INTO clients.client_accounts(id,owner_org_id,name,status,private_tariff_id,created_at)
               VALUES (@account,@org,'Synthetic private account','ACTIVE',@rule,@created);
             INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
@@ -515,6 +523,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             Assert.Equal("CUSTOM", created.PricingTier);
             Assert.Equal(45_678, created.Total.AmountCents);
             Assert.Equal([privateRuleId], created.RuleIds);
+            Assert.Equal("PRC-001-private.v7", created.PricingPolicyVersion);
 
             var crossTenant = CreateCommand(data, "prc001-private-cross-tenant") with { ClientAccountId = foreignAccountId };
             var rejected = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(crossTenant, default));
@@ -638,8 +647,8 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                 """
                 INSERT INTO pricing.tariff_rules(
                   id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
-                  amount_cents,tax_mode,active_from,active_to,status)
-                VALUES (@id,@owner,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',1,'EXEMPT',@now,NULL,'ACTIVE')
+                  amount_cents,tax_mode,active_from,active_to,status,policy_version)
+                VALUES (@id,@owner,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',1,'EXEMPT',@now,NULL,'ACTIVE','PRC-001-v1')
                 """,
                 P("id", Guid.NewGuid()), P("owner", data.OrganizationId), P("city", data.CityId),
                 new NpgsqlParameter<DateTimeOffset>("now", NpgsqlDbType.TimestampTz) { TypedValue = DateTimeOffset.UtcNow });
@@ -791,6 +800,296 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         Assert.DoesNotContain("RETURNING", insert, StringComparison.OrdinalIgnoreCase);
     }
 
+    [PostgreSqlContractFact]
+    public async Task Quote_freezes_the_policy_version_of_the_selected_rule_and_the_order_keeps_it()
+    {
+        // PRC-POLICY-VERSION-PER-ORG: the version comes from the rule the engine selected, not from
+        // configuration, and it is frozen: raising the organization's version later changes neither
+        // the quote nor the order created from it.
+        var data = SyntheticPricingData.Create("ORG-PRC-zone.v3");
+        await SeedAsync(data);
+        await ExecuteAdminAsync(
+            """
+            UPDATE pricing.tariff_rules SET policy_version='ORG-PRC-city.v1' WHERE id=@city_rule;
+            UPDATE pricing.tariff_rules SET policy_version='ORG-PRC-area.v2' WHERE id=@area_rule;
+            """,
+            P("city_rule", data.CityRuleId), P("area_rule", data.AreaRuleId));
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 6, applicationName: "PRC.PolicyVersion.Selected");
+        try
+        {
+            QuoteResult zoneQuote;
+            QuoteResult areaQuote;
+            await using (var scope = CreateScope(appDataSource))
+            {
+                zoneQuote = await scope.Service.CreateAsync(CreateCommand(data, "prc-policy-selected-zone-01"), default);
+                Assert.Equal([data.ZoneRuleId], zoneQuote.RuleIds);
+                Assert.Equal("ORG-PRC-zone.v3", zoneQuote.PricingPolicyVersion);
+
+                await ExecuteAdminAsync(
+                    "UPDATE pricing.tariff_rules SET status='INACTIVE' WHERE id=@rule", P("rule", data.ZoneRuleId));
+                areaQuote = await scope.Service.CreateAsync(CreateCommand(data, "prc-policy-selected-area-01"), default);
+                Assert.Equal([data.AreaRuleId], areaQuote.RuleIds);
+                Assert.Equal("ORG-PRC-area.v2", areaQuote.PricingPolicyVersion);
+            }
+
+            Assert.Equal("ORG-PRC-zone.v3", await ScalarAdminAsync<string>(
+                "SELECT pricing_policy_version FROM pricing.quotes WHERE id=@id", P("id", zoneQuote.Id)));
+            Assert.Equal("ORG-PRC-area.v2", await ScalarAdminAsync<string>(
+                "SELECT pricing_policy_version FROM pricing.quotes WHERE id=@id", P("id", areaQuote.Id)));
+
+            // The organization raises its policy version after quoting.
+            await ExecuteAdminAsync(
+                "UPDATE pricing.tariff_rules SET policy_version='ORG-PRC-zone.v4',status='ACTIVE' WHERE id=@rule",
+                P("rule", data.ZoneRuleId));
+
+            var order = await CreateOrderAsync(data, zoneQuote.Id, "prc-policy-selected-order-1");
+            Assert.Equal(zoneQuote.Id, order.QuoteId);
+            await using var frozen = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT o.pricing_policy_version, q.pricing_policy_version, q.status
+                FROM orders.orders o JOIN pricing.quotes q ON q.id=o.quote_id
+                WHERE o.id=@order;
+                """);
+            frozen.Parameters.Add(P("order", order.Id));
+            await using var reader = await frozen.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("ORG-PRC-zone.v3", reader.GetString(0));
+            Assert.Equal("ORG-PRC-zone.v3", reader.GetString(1));
+            Assert.Equal("USED", reader.GetString(2));
+        }
+        finally
+        {
+            await CleanupOrdersAsync(data);
+            await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Two_organizations_quote_with_their_own_policy_versions_and_stay_isolated()
+    {
+        var first = SyntheticPricingData.Create("ORG-A-2026.09");
+        var second = SyntheticPricingData.Create("ORG-B-7");
+        await SeedAsync(first);
+        await SeedAsync(second);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 1, applicationName: "PRC.PolicyVersion.Tenants");
+        try
+        {
+            QuoteResult firstQuote;
+            QuoteResult secondQuote;
+            await using (var scope = CreateScope(appDataSource))
+            {
+                firstQuote = await scope.Service.CreateAsync(CreateCommand(first, "prc-policy-tenant-shared-1"), default);
+            }
+
+            await using (var scope = CreateScope(appDataSource))
+            {
+                secondQuote = await scope.Service.CreateAsync(CreateCommand(second, "prc-policy-tenant-shared-1"), default);
+            }
+
+            Assert.Equal("ORG-A-2026.09", firstQuote.PricingPolicyVersion);
+            Assert.Equal("ORG-B-7", secondQuote.PricingPolicyVersion);
+
+            // The first organization neither sees nor changes the second one's policy versions.
+            await using (var tenant = await TenantTransaction.BeginAsync(
+                appDataSource, "paqueteria_app", first.ActorId, [first.OrganizationId]))
+            {
+                await using var visible = new NpgsqlCommand(
+                    """
+                    SELECT count(*) FILTER (WHERE policy_version='ORG-B-7'),
+                           count(*) FILTER (WHERE owner_org_id=@first AND policy_version='ORG-A-2026.09')
+                    FROM pricing.tariff_rules;
+                    """,
+                    tenant.Connection,
+                    tenant.Transaction);
+                visible.Parameters.Add(P("first", first.OrganizationId));
+                await using (var reader = await visible.ExecuteReaderAsync())
+                {
+                    Assert.True(await reader.ReadAsync());
+                    Assert.Equal(0L, reader.GetInt64(0));
+                    Assert.Equal(3L, reader.GetInt64(1));
+                }
+
+                await using var hijack = new NpgsqlCommand(
+                    "UPDATE pricing.tariff_rules SET policy_version='HIJACKED' WHERE owner_org_id=@second",
+                    tenant.Connection,
+                    tenant.Transaction);
+                hijack.Parameters.Add(P("second", second.OrganizationId));
+                Assert.Equal(0, await hijack.ExecuteNonQueryAsync());
+
+                await using var foreignQuote = new NpgsqlCommand(
+                    "SELECT count(*) FROM pricing.quotes WHERE pricing_policy_version='ORG-B-7'",
+                    tenant.Connection,
+                    tenant.Transaction);
+                Assert.Equal(0L, await foreignQuote.ExecuteScalarAsync());
+                await tenant.CommitAsync();
+            }
+
+            Assert.Equal(3L, await ScalarAdminAsync<long>(
+                "SELECT count(*) FROM pricing.tariff_rules WHERE owner_org_id=@org AND policy_version='ORG-B-7'",
+                P("org", second.OrganizationId)));
+
+            // A tenant cannot plant a rule, with any version, in another organization.
+            await AssertCrossTenantInsertRejectedAsync(
+                appDataSource,
+                first.ActorId,
+                first.OrganizationId,
+                """
+                INSERT INTO pricing.tariff_rules(
+                  id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
+                  amount_cents,tax_mode,active_from,active_to,status,policy_version)
+                VALUES (@id,@owner,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',1,'EXEMPT',@now,NULL,'ACTIVE','ORG-A-2026.09')
+                """,
+                P("id", Guid.NewGuid()), P("owner", second.OrganizationId), P("city", second.CityId),
+                new NpgsqlParameter<DateTimeOffset>("now", NpgsqlDbType.TimestampTz) { TypedValue = DateTimeOffset.UtcNow });
+        }
+        finally
+        {
+            await CleanupAsync(first);
+            await CleanupAsync(second);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Canonical_policy_version_is_required_and_rejects_unsafe_labels()
+    {
+        await using (var shape = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT data_type,is_nullable,
+              (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+               WHERE conrelid='pricing.tariff_rules'::regclass AND conname='tariff_rules_policy_version_check'),
+              (SELECT count(*) FROM pg_constraint
+               WHERE conrelid='pricing.tariff_rules'::regclass AND conname='tariff_rules_policy_version_required')
+            FROM information_schema.columns
+            WHERE table_schema='pricing' AND table_name='tariff_rules' AND column_name='policy_version';
+            """))
+        await using (var reader = await shape.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("text", reader.GetString(0));
+            Assert.Equal("NO", reader.GetString(1));
+            Assert.Equal(VersionPricingPolicyPerOrganization.FormatConstraintDefinition, reader.GetString(2));
+            Assert.Equal(0L, reader.GetInt64(3));
+        }
+
+        var data = SyntheticPricingData.Create();
+        await SeedAsync(data);
+        try
+        {
+            string?[] rejected = [null, "", "has space", "v1\n", "versión", "v1;DROP", new string('v', 65)];
+            foreach (var version in rejected)
+            {
+                var exception = await Assert.ThrowsAsync<PostgresException>(() => InsertRuleAsync(data, version));
+                Assert.Equal(
+                    version is null ? PostgresErrorCodes.NotNullViolation : PostgresErrorCodes.CheckViolation,
+                    exception.SqlState);
+            }
+
+            await InsertRuleAsync(data, new string('v', 64));
+            await InsertRuleAsync(data, "PRC-2026.09_org-A");
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    private async Task InsertRuleAsync(SyntheticPricingData data, string? version)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            """
+            INSERT INTO pricing.tariff_rules(
+              id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
+              amount_cents,tax_mode,active_from,active_to,status,policy_version)
+            VALUES (@id,@org,@city,NULL,NULL,'OCCASIONAL','URGENT',1,'EXEMPT',now(),NULL,'INACTIVE',@version)
+            """);
+        command.Parameters.Add(P("id", Guid.NewGuid()));
+        command.Parameters.Add(P("org", data.OrganizationId));
+        command.Parameters.Add(P("city", data.CityId));
+        command.Parameters.Add(new NpgsqlParameter("version", NpgsqlDbType.Text) { Value = (object?)version ?? DBNull.Value });
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<OrderResult> CreateOrderAsync(SyntheticPricingData data, Guid quoteId, string key)
+    {
+        var state = new TenantDatabaseExecutionState();
+        var options = new DbContextOptionsBuilder<OrdersDbContext>()
+            .UseNpgsql(fixture.AppDataSource, postgres => postgres.EnableRetryOnFailure())
+            .AddInterceptors(new TenantTransactionGuardInterceptor(state), new TenantSaveChangesGuardInterceptor(state))
+            .Options;
+        await using var context = new OrdersDbContext(options, state);
+        var coordinator = new QuoteSnapshotToOrderCoordinator(
+            new TenantTransactionContext<OrdersDbContext>(context, state),
+            new CryptographicOrderPublicIdGenerator(),
+            new NoOpOrderCreationFailureInjector(),
+            new PostgreSqlAppendOnlyAuditWriter(state),
+            new AuditPayloadRedactor(),
+            Options.Create(new OrdersOptions
+            {
+                Provider = OrdersProviderKind.PostgreSql,
+                CommandTimeoutSeconds = 30,
+                PageSize = 2,
+                IdempotencyLifetimeMinutes = 60,
+                PublicIdCollisionRetryCount = 2,
+            }),
+            new SystemClock());
+        var acceptedAt = new DateTimeOffset(
+            DateTimeOffset.UtcNow.AddHours(-1).UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond,
+            TimeSpan.Zero);
+        return await coordinator.CreateAsync(
+            new CreateOrderCommand(
+                data.ActorId,
+                data.OrganizationId,
+                key,
+                quoteId,
+                "SENDER",
+                new OrderAcceptanceInput("terms-synthetic-v1", "privacy-synthetic-v1", acceptedAt, "WEB"),
+                "prc-policy-version-order"),
+            CancellationToken.None);
+    }
+
+    private async Task CleanupOrdersAsync(SyntheticPricingData data)
+    {
+        await using (var migrator = await TenantTransaction.BeginAsync(
+            fixture.AdminDataSource,
+            "paqueteria_migrator",
+            data.ActorId,
+            [data.OrganizationId]))
+        {
+            await using var appendOnly = new NpgsqlCommand(
+                """
+                DELETE FROM orders.order_acceptances WHERE owner_org_id=@org;
+                DELETE FROM orders.order_events WHERE owner_org_id=@org;
+                """,
+                migrator.Connection,
+                migrator.Transaction);
+            appendOnly.Parameters.Add(P("org", data.OrganizationId));
+            await appendOnly.ExecuteNonQueryAsync();
+            await migrator.CommitAsync();
+        }
+
+        await ExecuteAdminAsync(
+            """
+            DELETE FROM platform.outbox_events WHERE owner_org_id=@org;
+            DELETE FROM orders.package_items WHERE owner_org_id=@org;
+            DELETE FROM orders.orders WHERE owner_org_id=@org;
+            """,
+            P("org", data.OrganizationId));
+    }
+
+    private async Task ExecuteAdminAsync(string sql, params NpgsqlParameter[] parameters)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(sql);
+        command.Parameters.AddRange(parameters);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<T> ScalarAdminAsync<T>(string sql, params NpgsqlParameter[] parameters)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(sql);
+        command.Parameters.AddRange(parameters);
+        return (T)(await command.ExecuteScalarAsync())!;
+    }
+
     private QuoteRuntimeScope CreateScope(
         NpgsqlDataSource dataSource,
         IQuoteLocationResolver? resolverOverride = null,
@@ -829,7 +1128,6 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                 Provider = PricingProviderKind.PostgreSql,
                 QuoteLifetimeMinutes = 30,
                 CommandTimeoutSeconds = 30,
-                PricingPolicyVersion = "PRC-001-v1",
             }),
             new SystemClock(),
             NullLogger<PostgreSqlQuoteService>.Instance);
@@ -856,12 +1154,13 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                 'ACTIVE',@created);
             INSERT INTO pricing.tariff_rules(
               id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
-              amount_cents,tax_mode,active_from,active_to,status)
+              amount_cents,tax_mode,active_from,active_to,status,policy_version)
               VALUES
-                (@city_rule,@org,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',12345,'EXEMPT',@active_from,NULL,'ACTIVE'),
-                (@area_rule,@org,@city,@area,NULL,'OCCASIONAL','SAME_DAY',23456,'EXEMPT',@active_from,NULL,'ACTIVE'),
-                (@zone_rule,@org,@city,@area,@zone,'OCCASIONAL','SAME_DAY',34567,'EXEMPT',@active_from,NULL,'ACTIVE');
+                (@city_rule,@org,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',12345,'EXEMPT',@active_from,NULL,'ACTIVE',@version),
+                (@area_rule,@org,@city,@area,NULL,'OCCASIONAL','SAME_DAY',23456,'EXEMPT',@active_from,NULL,'ACTIVE',@version),
+                (@zone_rule,@org,@city,@area,@zone,'OCCASIONAL','SAME_DAY',34567,'EXEMPT',@active_from,NULL,'ACTIVE',@version);
             """);
+        command.Parameters.Add(new NpgsqlParameter<string>("version", NpgsqlDbType.Text) { TypedValue = data.PolicyVersion });
         command.Parameters.Add(P("org", data.OrganizationId));
         command.Parameters.Add(P("actor", data.ActorId));
         command.Parameters.Add(new NpgsqlParameter<string>("subject", NpgsqlDbType.Text) { TypedValue = $"prc001|{data.ActorId:N}" });
@@ -1018,9 +1317,10 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         Guid ZoneId,
         Guid CityRuleId,
         Guid AreaRuleId,
-        Guid ZoneRuleId)
+        Guid ZoneRuleId,
+        string PolicyVersion)
     {
-        internal static SyntheticPricingData Create() => new(
+        internal static SyntheticPricingData Create(string policyVersion = "PRC-001-v1") => new(
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid(),
@@ -1028,7 +1328,8 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid(),
-            Guid.NewGuid());
+            Guid.NewGuid(),
+            policyVersion);
     }
 
     private sealed class QuoteRuntimeScope(

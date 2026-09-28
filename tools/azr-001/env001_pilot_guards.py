@@ -165,6 +165,12 @@ PLATFORM_MANAGED_PREFIXES = (
     "OperationalCleanup__",
     "Urls",
 )
+# Settings that no longer exist. The API refuses to start while one is configured, so the pilot refuses
+# them before deploying. PRC-POLICY-VERSION-PER-ORG: each organization versions its own pricing policy on
+# its tariff rules; there is no global pricing policy version.
+REMOVED_SETTINGS = {
+    "Pricing__PricingPolicyVersion": "PRC-POLICY-VERSION-PER-ORG (the version comes from each organization's tariff rules)",
+}
 SETTING_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]*(__[A-Za-z0-9]+)+$")
 DIGEST_REGEX_LITERAL = r"^sha256:[0-9a-f]{64}$"
 USES_PINNED = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
@@ -933,6 +939,8 @@ def validate_settings(entries: list[Any], *, allow_sentinel: bool) -> list[str]:
             failures.append(f"setting name {name!r} is not a .NET double-underscore key")
         if name.startswith(PLATFORM_MANAGED_PREFIXES):
             failures.append(f"setting {name} is platform-managed by apps.bicep and cannot be overridden")
+        if name in REMOVED_SETTINGS:
+            failures.append(f"setting {name} was removed by {REMOVED_SETTINGS[name]}")
         if name in seen:
             failures.append(f"setting {name} declared twice")
         seen.add(name)

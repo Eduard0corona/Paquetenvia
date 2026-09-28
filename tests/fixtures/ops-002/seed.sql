@@ -52,14 +52,14 @@ VALUES
 
 INSERT INTO pricing.tariff_rules(
   id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,
-  service_type,amount_cents,tax_mode,active_from,status)
+  service_type,amount_cents,tax_mode,active_from,status,policy_version)
 VALUES (
   '10000000-0000-4000-8000-000000000008',
   '10000000-0000-4000-8000-000000000001',
   '30000000-0000-4000-8000-000000000001',
   '10000000-0000-4000-8000-000000000004',
   '10000000-0000-4000-8000-000000000005',
-  'OCCASIONAL','SAME_DAY',12000,'EXEMPT','2025-12-31T00:00:00Z','ACTIVE');
+  'OCCASIONAL','SAME_DAY',12000,'EXEMPT','2025-12-31T00:00:00Z','ACTIVE','ops002-synthetic-v1');
 
 INSERT INTO pricing.quotes(
   id,owner_org_id,city_id,service_area_id,origin_location_id,destination_location_id,

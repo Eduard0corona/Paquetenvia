@@ -2723,6 +2723,8 @@ components:
           format: int64
         pricing_policy_version:
           type: string
+          description: Version of the owning organization's pricing policy, frozen from the tariff rule the quote selected
+            (PRC-POLICY-VERSION-PER-ORG). The order created from the quote copies it unchanged.
         status:
           type: string
           enum:

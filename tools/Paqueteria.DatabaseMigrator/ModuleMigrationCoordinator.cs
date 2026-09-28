@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
-        ("Pricing", "__ef_migrations_history_pricing", AdoptCanonicalPricingBaseline.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs"),
+        ("Pricing", "__ef_migrations_history_pricing", VersionPricingPolicyPerOrganization.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000100_VersionPricingPolicyPerOrganization.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
@@ -96,6 +96,19 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // PRC-POLICY-VERSION-PER-ORG: the lane only adds policy_version and its checks to the
+                // canonical tariff rules, never rewrites a row, and its rollback refuses while any
+                // rule carries a version.
+                "Pricing" =>
+                    source.Contains(VersionPricingPolicyPerOrganization.DowngradeBlocked, StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
@@ -202,6 +215,11 @@ internal sealed class ModuleMigrationCoordinator
             "Organizations",
             AdoptCanonicalOrganizationsBaseline.MigrationId,
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrganizationsBaseline.cs");
+        VerifyAdoptionSource(
+            root,
+            "Pricing",
+            AdoptCanonicalPricingBaseline.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs");
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -425,6 +443,8 @@ internal sealed class ModuleMigrationCoordinator
         {
             "Drivers" =>
                 [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
+            "Pricing" =>
+                [AdoptCanonicalPricingBaseline.MigrationId, VersionPricingPolicyPerOrganization.MigrationId],
             "Orders" =>
                 [
                     AdoptCanonicalOrdersBaseline.MigrationId,

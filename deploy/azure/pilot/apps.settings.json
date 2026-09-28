@@ -1,9 +1,5 @@
 [
   {
-    "name": "Pricing__PricingPolicyVersion",
-    "value": "OWNER_DECISION_REQUIRED"
-  },
-  {
     "name": "Dispatch__AssignmentPolicyVersion",
     "value": "OWNER_DECISION_REQUIRED"
   },

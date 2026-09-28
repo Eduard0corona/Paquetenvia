@@ -86,10 +86,17 @@ class SettingsTests(unittest.TestCase):
         for name, value in cases.items():
             with self.subTest(name=name):
                 self.assertTrue(guards.validate_settings([{"name": name, "value": value}], allow_sentinel=False))
-        self.assertTrue(guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "v1", "extra": 1}], allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "v1", "extra": 1}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "A__B", "value": "1"}, {"name": "A__B", "value": "2"}], allow_sentinel=False))
-        self.assertEqual([], guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "PRC-PILOT-v1"}], allow_sentinel=False))
-        self.assertTrue(guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "owner_decision_required"}], allow_sentinel=False))
+        self.assertEqual([], guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "DSP-PILOT-v1"}], allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "owner_decision_required"}], allow_sentinel=False))
+
+    def test_removed_global_pricing_policy_version_is_rejected(self):
+        # PRC-POLICY-VERSION-PER-ORG: the version comes from each organization's tariff rules.
+        failures = guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "PRC-PILOT-v1"}], allow_sentinel=False)
+        self.assertTrue(any("PRC-POLICY-VERSION-PER-ORG" in failure for failure in failures))
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertNotIn("Pricing__PricingPolicyVersion", {entry["name"] for entry in entries})
 
 
 SAMPLE_LOG = """# Decision log
