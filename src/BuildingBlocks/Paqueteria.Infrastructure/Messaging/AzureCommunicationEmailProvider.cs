@@ -102,11 +102,15 @@ internal sealed class AzureCommunicationEmailProvider(
         string token;
         try
         {
-            token = await GetTokenAsync(cancellationToken).ConfigureAwait(false);
+            // The token wait (lock and managed-identity endpoint, including the SDK's own retries) is
+            // bounded by the same per-attempt timeout as the HTTP send.
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            attempt.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            token = await GetTokenAsync(attempt.Token).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            // The managed identity endpoint failed before anything was sent.
+            // The managed identity endpoint failed or timed out before anything was sent.
             return (new(MessagingOutcome.TransientFailure, MessagingResultCodes.AuthenticationFailed), null);
         }
 

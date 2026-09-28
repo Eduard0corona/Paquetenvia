@@ -359,6 +359,22 @@ public sealed class Gate004MessagingProviderTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provider.SendAsync(WhatsAppRequest(), again.Token).AsTask());
     }
 
+    [Fact]
+    public async Task Email_token_acquisition_is_bounded_by_the_attempt_timeout()
+    {
+        var handler = new FakeHandler(_ => throw new InvalidOperationException("must not be called"));
+        var credential = new FakeCredential { Hang = true };
+        var options = ProductionOptions();
+        options.Email.AzureCommunicationServices.TimeoutSeconds = 1;
+        using var provider = new AzureCommunicationEmailProvider(
+            new HandlerClientFactory(handler), credential, Options.Create(options), TimeProvider.System, new RecordingLogger<AzureCommunicationEmailProvider>());
+
+        var result = await provider.SendAsync(EmailRequest(), default).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(new MessagingResult(MessagingOutcome.TransientFailure, MessagingResultCodes.AuthenticationFailed), result);
+        Assert.Empty(handler.Requests);
+    }
+
     [Theory]
     [InlineData(0, 30, 8)]
     [InlineData(5, 0, 8)]
@@ -738,11 +754,19 @@ public sealed class Gate004MessagingProviderTests
 
         public Exception? Failure { get; init; }
 
+        /// <summary>Simulates a managed-identity endpoint that never answers until cancelled.</summary>
+        public bool Hang { get; init; }
+
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
             GetTokenAsync(requestContext, cancellationToken).AsTask().GetAwaiter().GetResult();
 
-        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+        public override async ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
         {
+            if (Hang)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
             if (Failure is not null)
             {
                 throw Failure;
@@ -750,7 +774,7 @@ public sealed class Gate004MessagingProviderTests
 
             Calls++;
             Scopes.Add(requestContext.Scopes);
-            return ValueTask.FromResult(new AccessToken($"synthetic-entra-token-{Calls}", DateTimeOffset.UtcNow.AddHours(1)));
+            return new AccessToken($"synthetic-entra-token-{Calls}", DateTimeOffset.UtcNow.AddHours(1));
         }
     }
 
