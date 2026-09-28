@@ -449,6 +449,14 @@ transitivos `Microsoft.IdentityModel.{Abstractions,JsonWebTokens,Logging,Protoco
 MAIN_BACKSYNC (#106); desde entonces su `status` es `MERGED`: los paquetes siguen
 admitidos y la rama deja de abrir PRs a `main`.
 
+La segunda admisión es `ADP-001-AZURE` (PR #124, rama `deps/adp-001-azure`):
+`Azure.Extensions.AspNetCore.DataProtection.Keys` 1.6.4, `Azure.Identity` 1.21.0,
+`Azure.Security.KeyVault.Keys` 4.10.1, `Azure.Security.KeyVault.Secrets` 4.11.1 y
+`Azure.Storage.Blobs` 12.29.2 directos, sus transitivos exactos y las enmiendas del baseline
+descritas abajo. El PR #124 se fusionó en `main` el 2026-09-27 y llegó a `development` por
+MAIN_BACKSYNC (#134); desde entonces su `status` es `MERGED`: los paquetes y las enmiendas
+siguen admitidos y la rama deja de abrir PRs a `main`.
+
 ### Enmiendas exactas del baseline (GOV-DEPENDENCY-ADMISSION-001, ADP-001)
 
 Algunas restauraciones cambian nodos del baseline de forma inevitable. Una admisión puede
