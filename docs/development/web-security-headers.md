@@ -9,7 +9,7 @@ that keep pages working under them.
 | --- | --- | --- |
 | `Content-Security-Policy` (nonce-based) | `apps/web/src/proxy.ts` via `src/security/security-headers.ts` | Every page response; fresh nonce per request |
 | `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Cross-Origin-Opener-Policy`, `Permissions-Policy` | `apps/web/next.config.ts` `headers()` | Every route |
-| `Cache-Control: no-store, private`, `Pragma`, `X-Robots-Tag` | Proxy and `next.config.ts` | `/track` and `/ops` only |
+| `Cache-Control: no-store, private`, `Pragma`, `X-Robots-Tag` | Proxy and `next.config.ts` | `/track`, `/ops` and `/finance` only |
 
 `next.config.ts` must never emit a second CSP: browsers enforce every CSP they
 receive. Every page is rendered per request (`await connection()` in the root
