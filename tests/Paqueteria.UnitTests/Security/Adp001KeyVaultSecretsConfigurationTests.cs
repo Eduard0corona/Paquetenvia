@@ -97,11 +97,23 @@ public sealed class Adp001KeyVaultSecretsConfigurationTests
     }
 
     [Fact]
-    public void Duplicated_secrets_or_configuration_keys_fail()
+    public void One_secret_may_feed_several_explicit_configuration_keys_and_is_read_once()
     {
-        Assert.Throws<KeyVaultSecretsStartupException>(() => Build(
-            Settings(("a", "ConnectionStrings:Paqueteria"), ("A", "ConnectionStrings:PaqueteriaWorker")),
-            (_, _) => new FakeReader { ["a"] = SecretValue }));
+        var reader = new FakeReader { ["pg-worker-connection"] = SecretValue };
+        var configuration = Build(
+            Settings(
+                ("pg-worker-connection", "ConnectionStrings:PaqueteriaWorker"),
+                ("pg-worker-connection", "ConnectionStrings:Paqueteria")),
+            (_, _) => reader);
+
+        Assert.Equal(SecretValue, configuration["ConnectionStrings:PaqueteriaWorker"]);
+        Assert.Equal(SecretValue, configuration["ConnectionStrings:Paqueteria"]);
+        Assert.Equal(["pg-worker-connection"], reader.Requested);
+    }
+
+    [Fact]
+    public void Duplicated_configuration_keys_fail()
+    {
         Assert.Throws<KeyVaultSecretsStartupException>(() => Build(
             Settings(("a", "ConnectionStrings:Paqueteria"), ("b", "connectionstrings:paqueteria")),
             (_, _) => new FakeReader { ["a"] = SecretValue, ["b"] = SecretValue }));

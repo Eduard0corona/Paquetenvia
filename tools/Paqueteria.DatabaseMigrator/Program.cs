@@ -164,9 +164,7 @@ internal static partial class DatabaseMigratorProgram
             throw new CommandLineException("--connection-env must be a valid environment variable name.");
         }
 
-        // PILOT-KEYVAULT-PRIVATE-APP-READ: the name resolves from environment variables overlaid
-        // by the allowlisted Key Vault secrets (off unless KeyVaultSecrets__VaultUri is set).
-        var value = KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration()[environmentName];
+        var value = ReadSetting(environmentName);
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new CommandLineException(
@@ -175,6 +173,22 @@ internal static partial class DatabaseMigratorProgram
 
         return value;
     }
+
+    private static readonly Lazy<Func<string, string?>> Settings = new(() =>
+        CreateSettingReader(KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration()));
+
+    /// <summary>
+    /// The single lookup for named settings (the <c>--connection-env</c> connection and the runtime-login
+    /// verifiers <c>PAQUETERIA_API_LOGIN_VERIFIER</c> / <c>PAQUETERIA_WORKER_LOGIN_VERIFIER</c>).
+    /// PILOT-KEYVAULT-PRIVATE-APP-READ: environment variables overlaid by the allowlisted Key Vault secrets
+    /// (off unless <c>KeyVaultSecrets__VaultUri</c> is set). Built on first use, so <c>verify</c> never
+    /// reaches Key Vault.
+    /// </summary>
+    internal static string? ReadSetting(string name) => Settings.Value(name);
+
+    /// <summary>Test seam: the same lookup over a given configuration.</summary>
+    internal static Func<string, string?> CreateSettingReader(Microsoft.Extensions.Configuration.IConfiguration settings) =>
+        name => settings[name];
 
     private static async Task<E002NotificationState> AssertE002SemanticAsync(
         string connectionString, CancellationToken cancellationToken)

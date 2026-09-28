@@ -44,8 +44,10 @@ source is **off unless `KeyVaultSecrets__VaultUri` is set**; local and synthetic
 
 Rules: only the listed secrets are read (there is no "load every secret" mode); the latest
 enabled version is read once at startup; a missing, disabled or unreadable secret, a duplicated
-secret name or configuration key, or an empty mapping list **stops the host before it starts**;
-values are never logged. Key Vault values override the same key from environment variables and
+configuration key, or an empty mapping list **stops the host before it starts**; values are never
+logged. One secret may feed several configuration keys: list one mapping per key with the same
+`SecretName` (the secret is read once), so one secret serves both Worker connection keys without
+a duplicated secret that could drift on rotation. Key Vault values override the same key from environment variables and
 appsettings. A secret rotation takes effect on the next restart/revision.
 
 Suggested mappings (the secret names are the ENV-001 agent's choice; the configuration keys are
@@ -57,8 +59,19 @@ fixed by the application):
 | API | `EmailLookup:Keys:1` | REG-002 email lookup HMAC key (Base64) |
 | API | any other secret setting (for example the AuthCenter client secret, maps API key) | same mechanism |
 | Worker | `ConnectionStrings:PaqueteriaWorker` | PostgreSQL connection of the worker login |
-| Worker | `ConnectionStrings:Paqueteria` | when the Worker hosts components that read it |
-| DatabaseMigrator job | `PAQUETERIA_MIGRATION_CONNECTION` | the value `--connection-env PAQUETERIA_MIGRATION_CONNECTION` reads; with the source on, the migrator resolves that name from its configuration (environment variables overlaid by the mapped Key Vault secret), so the job no longer needs the connection string in an environment variable |
+| Worker | `ConnectionStrings:Paqueteria` | the Custody/Worker components read it; map the **same** secret as `ConnectionStrings:PaqueteriaWorker` (two mappings, one `SecretName`) |
+| DatabaseMigrator job | `PAQUETERIA_MIGRATION_CONNECTION` | the value `--connection-env PAQUETERIA_MIGRATION_CONNECTION` reads |
+| DatabaseMigrator job | `PAQUETERIA_API_LOGIN_VERIFIER`, `PAQUETERIA_WORKER_LOGIN_VERIFIER` | SCRAM verifiers read by `runtime-logins` (ENV-001, #123) |
+
+The migrator resolves every named setting through one lookup, `DatabaseMigratorProgram.ReadSetting`:
+environment variables overlaid by the mapped Key Vault secrets, built on first use (so `verify` never
+reaches Key Vault). With the source on, the job needs none of these values as environment variables.
+
+Worker example (one secret, two keys):
+`KeyVaultSecrets__Mappings__0__SecretName=pg-worker-connection`,
+`KeyVaultSecrets__Mappings__0__ConfigurationKey=ConnectionStrings:PaqueteriaWorker`,
+`KeyVaultSecrets__Mappings__1__SecretName=pg-worker-connection`,
+`KeyVaultSecrets__Mappings__1__ConfigurationKey=ConnectionStrings:Paqueteria`.
 
 Example (API): `KeyVaultSecrets__VaultUri=https://kv-paquetenvia.vault.azure.net/`,
 `KeyVaultSecrets__Mappings__0__SecretName=paqueteria-app-connection`,

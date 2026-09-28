@@ -119,7 +119,6 @@ public static partial class KeyVaultSecretsConfiguration
                 "KeyVaultSecrets:VaultUri is set but KeyVaultSecrets:Mappings lists no secret; nothing is loaded implicitly.");
         }
 
-        var secretNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var configurationKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mapping in options.Mappings)
         {
@@ -132,10 +131,13 @@ public static partial class KeyVaultSecretsConfiguration
                     "Each KeyVaultSecrets:Mappings entry needs an exact SecretName ([0-9A-Za-z-], 1-127) and a ConfigurationKey outside KeyVaultSecrets.");
             }
 
-            if (!secretNames.Add(secretName) || !configurationKeys.Add(configurationKey))
+            // One secret may feed several configuration keys (for example the Worker connection under
+            // ConnectionStrings:PaqueteriaWorker and ConnectionStrings:Paqueteria), each listed
+            // explicitly; a configuration key may be fed by one secret only.
+            if (!configurationKeys.Add(configurationKey))
             {
                 throw new KeyVaultSecretsStartupException(
-                    $"KeyVaultSecrets:Mappings repeats the secret '{secretName}' or the configuration key '{configurationKey}'.");
+                    $"KeyVaultSecrets:Mappings repeats the configuration key '{configurationKey}'.");
             }
         }
 
@@ -149,12 +151,20 @@ public static partial class KeyVaultSecretsConfiguration
     {
         using var cancellation = new CancellationTokenSource(timeout);
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var read = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mapping in mappings)
         {
             string value;
             try
             {
-                value = await reader.GetSecretValueAsync(mapping.SecretName, cancellation.Token).ConfigureAwait(false);
+                // Each distinct secret is read once, however many configuration keys it feeds.
+                if (!read.TryGetValue(mapping.SecretName, out var cached))
+                {
+                    cached = await reader.GetSecretValueAsync(mapping.SecretName, cancellation.Token).ConfigureAwait(false);
+                    read[mapping.SecretName] = cached;
+                }
+
+                value = cached;
             }
             catch (Exception exception)
             {
