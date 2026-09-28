@@ -84,15 +84,31 @@ public static partial class KeyVaultSecretsConfiguration
     }
 
     /// <summary>
-    /// Environment variables overlaid by the allowlisted Key Vault secrets: the DatabaseMigrator
-    /// resolves <c>--connection-env</c> names from this.
+    /// Only the mapped values (configuration key → secret value), read with the source configured in
+    /// <paramref name="settings"/>; empty when the source is off. The DatabaseMigrator overlays them
+    /// on its live environment variables, so an unmapped name always reads the current environment.
     /// </summary>
-    public static IConfiguration BuildEnvironmentConfiguration(
-        Func<Uri, TimeSpan, IKeyVaultSecretReader>? readerFactory = null) =>
-        new ConfigurationBuilder()
-            .AddEnvironmentVariables()
+    public static IReadOnlyDictionary<string, string> LoadMappedSecrets(
+        IConfiguration settings,
+        Func<Uri, TimeSpan, IKeyVaultSecretReader>? readerFactory = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var options = new KeyVaultSecretsOptions();
+        settings.GetSection(KeyVaultSecretsOptions.SectionName).Bind(options);
+        if (string.IsNullOrWhiteSpace(options.VaultUri))
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var loaded = new ConfigurationBuilder()
+            .AddConfiguration(settings)
             .AddPaqueteriaKeyVaultSecrets(readerFactory)
             .Build();
+        return options.Mappings.ToDictionary(
+            mapping => mapping.ConfigurationKey,
+            mapping => loaded[mapping.ConfigurationKey]!,
+            StringComparer.OrdinalIgnoreCase);
+    }
 
     private static Uri Validate(KeyVaultSecretsOptions options)
     {

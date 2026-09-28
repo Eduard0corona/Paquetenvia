@@ -169,7 +169,7 @@ public sealed class IdentityArchitectureTests
         }
 
         Assert.Contains(
-            "KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration()",
+            "KeyVaultSecretsConfiguration.LoadMappedSecrets(",
             File.ReadAllText(TestRepository.GetPath("tools/Paqueteria.DatabaseMigrator/Program.cs")),
             StringComparison.Ordinal);
     }

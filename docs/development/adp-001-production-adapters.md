@@ -79,7 +79,8 @@ Example (API): `KeyVaultSecrets__VaultUri=https://kv-paquetenvia.vault.azure.net
 
 Implementation: `Paqueteria.Infrastructure.Cloud.KeyVaultSecretsConfiguration`
 (`builder.Configuration.AddPaqueteriaKeyVaultSecrets()` in API and Worker before any service
-registration; `KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration()` in the migrator),
+registration; in the migrator, `KeyVaultSecretsConfiguration.LoadMappedSecrets(...)` read once and
+consulted before the live environment, so unmapped names always read the environment at call time),
 `Azure.Security.KeyVault.Secrets` `SecretClient.GetSecret` per mapped name with
 `ManagedIdentityCredential`. Decision: PILOT-KEYVAULT-PRIVATE-APP-READ (decision-log, PR #129).
 Tests: `Adp001KeyVaultSecretsConfigurationTests` (fake readers and the real SDK over a fake REST

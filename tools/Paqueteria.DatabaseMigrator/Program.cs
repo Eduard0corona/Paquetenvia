@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
 using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.Database.Baseline;
 
@@ -174,21 +175,46 @@ internal static partial class DatabaseMigratorProgram
         return value;
     }
 
-    private static readonly Lazy<Func<string, string?>> Settings = new(() =>
-        CreateSettingReader(KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration()));
+    private static readonly object KeyVaultSettingsLock = new();
+    private static IReadOnlyDictionary<string, string>? keyVaultSettings;
 
     /// <summary>
     /// The single lookup for named settings (the <c>--connection-env</c> connection and the runtime-login
     /// verifiers <c>PAQUETERIA_API_LOGIN_VERIFIER</c> / <c>PAQUETERIA_WORKER_LOGIN_VERIFIER</c>).
-    /// PILOT-KEYVAULT-PRIVATE-APP-READ: environment variables overlaid by the allowlisted Key Vault secrets
-    /// (off unless <c>KeyVaultSecrets__VaultUri</c> is set). Built on first use, so <c>verify</c> never
-    /// reaches Key Vault.
+    /// PILOT-KEYVAULT-PRIVATE-APP-READ: a name mapped to a Key Vault secret returns the secret; any other
+    /// name reads the environment <b>at call time</b> (never a snapshot). Key Vault is read on first use
+    /// only when <c>KeyVaultSecrets__VaultUri</c> is set, so <c>verify</c> never reaches it.
     /// </summary>
-    internal static string? ReadSetting(string name) => Settings.Value(name);
+    internal static string? ReadSetting(string name) =>
+        ResolveSetting(name, KeyVaultSettings(), Environment.GetEnvironmentVariable);
 
-    /// <summary>Test seam: the same lookup over a given configuration.</summary>
-    internal static Func<string, string?> CreateSettingReader(Microsoft.Extensions.Configuration.IConfiguration settings) =>
-        name => settings[name];
+    /// <summary>Mapped Key Vault value first, then the live environment.</summary>
+    internal static string? ResolveSetting(
+        string name,
+        IReadOnlyDictionary<string, string> keyVault,
+        Func<string, string?> environment) =>
+        keyVault.TryGetValue(name, out var value) ? value : environment(name);
+
+    private static IReadOnlyDictionary<string, string> KeyVaultSettings()
+    {
+        lock (KeyVaultSettingsLock)
+        {
+            if (keyVaultSettings is not null)
+            {
+                return keyVaultSettings;
+            }
+
+            var loaded = KeyVaultSecretsConfiguration.LoadMappedSecrets(
+                new ConfigurationBuilder().AddEnvironmentVariables().Build());
+            if (loaded.Count > 0)
+            {
+                // Only an enabled source is cached (its secrets are read once per process).
+                keyVaultSettings = loaded;
+            }
+
+            return loaded;
+        }
+    }
 
     private static async Task<E002NotificationState> AssertE002SemanticAsync(
         string connectionString, CancellationToken cancellationToken)

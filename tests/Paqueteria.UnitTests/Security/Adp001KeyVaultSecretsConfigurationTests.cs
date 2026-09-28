@@ -120,24 +120,19 @@ public sealed class Adp001KeyVaultSecretsConfigurationTests
     }
 
     [Fact]
-    public void The_migrator_resolves_its_connection_name_from_the_environment_overlaid_by_key_vault()
+    public void Mapped_secrets_are_returned_alone_and_nothing_when_the_source_is_off()
     {
-        const string name = "ADP001_TEST_MIGRATION_CONNECTION";
-        Environment.SetEnvironmentVariable("KeyVaultSecrets__VaultUri", Vault);
-        Environment.SetEnvironmentVariable("KeyVaultSecrets__Mappings__0__SecretName", "paqueteria-migration-connection");
-        Environment.SetEnvironmentVariable("KeyVaultSecrets__Mappings__0__ConfigurationKey", name);
-        try
-        {
-            var configuration = KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration(
-                (_, _) => new FakeReader { ["paqueteria-migration-connection"] = SecretValue });
-            Assert.Equal(SecretValue, configuration[name]);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("KeyVaultSecrets__VaultUri", null);
-            Environment.SetEnvironmentVariable("KeyVaultSecrets__Mappings__0__SecretName", null);
-            Environment.SetEnvironmentVariable("KeyVaultSecrets__Mappings__0__ConfigurationKey", null);
-        }
+        var mapped = KeyVaultSecretsConfiguration.LoadMappedSecrets(
+            new ConfigurationBuilder().AddInMemoryCollection(Settings(
+                ("paqueteria-migration-connection", "PAQUETERIA_MIGRATION_CONNECTION"))).Build(),
+            (_, _) => new FakeReader { ["paqueteria-migration-connection"] = SecretValue });
+        Assert.Equal(SecretValue, Assert.Single(mapped).Value);
+        Assert.True(mapped.ContainsKey("PAQUETERIA_MIGRATION_CONNECTION"));
+
+        var off = KeyVaultSecretsConfiguration.LoadMappedSecrets(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["X"] = "y" }).Build(),
+            (_, _) => throw new InvalidOperationException("must not be built"));
+        Assert.Empty(off);
     }
 
     [Fact]

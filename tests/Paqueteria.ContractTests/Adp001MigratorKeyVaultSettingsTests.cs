@@ -6,7 +6,7 @@ namespace Paqueteria.ContractTests;
 /// <summary>
 /// PILOT-KEYVAULT-PRIVATE-APP-READ for the DatabaseMigrator: every named setting it reads through
 /// <c>DatabaseMigratorProgram.ReadSetting</c> (the connection and the ENV-001 runtime-login verifiers)
-/// resolves from environment variables overlaid by the mapped Key Vault secrets. Fake reader, no Azure.
+/// resolves to the mapped Key Vault secret first and otherwise to the live environment. Fake reader, no Azure.
 /// </summary>
 public sealed class Adp001MigratorKeyVaultSettingsTests
 {
@@ -18,43 +18,53 @@ public sealed class Adp001MigratorKeyVaultSettingsTests
     [Fact]
     public void Mapped_connection_and_runtime_login_verifiers_are_visible_to_the_migrator_lookup()
     {
-        var read = DatabaseMigratorProgram.CreateSettingReader(Settings(
+        var keyVault = Mapped(
             ("pg-migration-connection", "PAQUETERIA_MIGRATION_CONNECTION", Connection),
             ("pg-api-login-verifier", "PAQUETERIA_API_LOGIN_VERIFIER", ApiVerifier),
-            ("pg-worker-login-verifier", "PAQUETERIA_WORKER_LOGIN_VERIFIER", WorkerVerifier)));
+            ("pg-worker-login-verifier", "PAQUETERIA_WORKER_LOGIN_VERIFIER", WorkerVerifier));
 
-        Assert.Equal(Connection, read("PAQUETERIA_MIGRATION_CONNECTION"));
-        Assert.Equal(ApiVerifier, read("PAQUETERIA_API_LOGIN_VERIFIER"));
-        Assert.Equal(WorkerVerifier, read("PAQUETERIA_WORKER_LOGIN_VERIFIER"));
-        Assert.Null(read("PAQUETERIA_UNMAPPED_SETTING"));
+        Assert.Equal(Connection, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_MIGRATION_CONNECTION", keyVault, _ => null));
+        Assert.Equal(ApiVerifier, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_API_LOGIN_VERIFIER", keyVault, _ => null));
+        Assert.Equal(WorkerVerifier, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_WORKER_LOGIN_VERIFIER", keyVault, _ => null));
+        Assert.Null(DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_UNMAPPED_SETTING", keyVault, _ => null));
     }
 
     [Fact]
-    public void A_mapped_secret_overrides_the_same_environment_name()
+    public void A_mapped_secret_overrides_the_environment_and_unmapped_names_read_the_environment()
     {
-        var read = DatabaseMigratorProgram.CreateSettingReader(Settings(
-            [("pg-api-login-verifier", "PAQUETERIA_API_LOGIN_VERIFIER", ApiVerifier)],
-            ("PAQUETERIA_API_LOGIN_VERIFIER", "from-environment")));
+        var keyVault = Mapped(("pg-api-login-verifier", "PAQUETERIA_API_LOGIN_VERIFIER", ApiVerifier));
+        Func<string, string?> environment = name => name switch
+        {
+            "PAQUETERIA_API_LOGIN_VERIFIER" => "from-environment",
+            "PAQUETERIA_MIGRATION_CONNECTION" => "env-connection",
+            _ => null,
+        };
 
-        Assert.Equal(ApiVerifier, read("PAQUETERIA_API_LOGIN_VERIFIER"));
+        Assert.Equal(ApiVerifier, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_API_LOGIN_VERIFIER", keyVault, environment));
+        Assert.Equal("env-connection", DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_MIGRATION_CONNECTION", keyVault, environment));
     }
 
     [Fact]
-    public void Without_the_source_the_lookup_is_the_environment_only()
+    public void The_real_lookup_reads_the_environment_at_call_time_while_the_source_is_off()
     {
-        var configuration = new ConfigurationManager();
-        configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["PAQUETERIA_MIGRATION_CONNECTION"] = "env" });
-        configuration.AddPaqueteriaKeyVaultSecrets((_, _) => throw new InvalidOperationException("must not be built"));
-
-        Assert.Equal("env", DatabaseMigratorProgram.CreateSettingReader(configuration)("PAQUETERIA_MIGRATION_CONNECTION"));
+        // Regression: a process-wide snapshot of the environment hid variables set after the first
+        // lookup (E002SemanticContractTests drives the migrator in-process with fresh variables).
+        var name = $"PAQUETERIA_ADP001_LIVE_{Guid.NewGuid():N}";
+        Assert.Null(DatabaseMigratorProgram.ReadSetting(name));
+        Environment.SetEnvironmentVariable(name, "first");
+        try
+        {
+            Assert.Equal("first", DatabaseMigratorProgram.ReadSetting(name));
+            Environment.SetEnvironmentVariable(name, "second");
+            Assert.Equal("second", DatabaseMigratorProgram.ReadSetting(name));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
     }
 
-    private static IConfiguration Settings(params (string Secret, string Key, string Value)[] mappings) =>
-        Settings(mappings, []);
-
-    private static IConfiguration Settings(
-        (string Secret, string Key, string Value)[] mappings,
-        params (string Key, string Value)[] environment)
+    private static IReadOnlyDictionary<string, string> Mapped(params (string Secret, string Key, string Value)[] mappings)
     {
         var settings = new Dictionary<string, string?> { ["KeyVaultSecrets:VaultUri"] = Vault };
         for (var index = 0; index < mappings.Length; index++)
@@ -63,11 +73,9 @@ public sealed class Adp001MigratorKeyVaultSettingsTests
             settings[$"KeyVaultSecrets:Mappings:{index}:ConfigurationKey"] = mappings[index].Key;
         }
 
-        var configuration = new ConfigurationManager();
-        configuration.AddInMemoryCollection(environment.ToDictionary(item => item.Key, item => (string?)item.Value));
-        configuration.AddInMemoryCollection(settings);
-        configuration.AddPaqueteriaKeyVaultSecrets((_, _) => new Reader(mappings.ToDictionary(item => item.Secret, item => item.Value)));
-        return configuration;
+        return KeyVaultSecretsConfiguration.LoadMappedSecrets(
+            new ConfigurationBuilder().AddInMemoryCollection(settings).Build(),
+            (_, _) => new Reader(mappings.ToDictionary(item => item.Secret, item => item.Value)));
     }
 
     private sealed class Reader(Dictionary<string, string> values) : IKeyVaultSecretReader
