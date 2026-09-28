@@ -1,4 +1,4 @@
-// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 4 of 4: Web, API and Worker Container Apps and the
+// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 4 of 5: Web, API and Worker Container Apps and the
 // PILOT-SAME-ORIGIN-ROUTING rule-based route on the apex domain.
 targetScope = 'resourceGroup'
 

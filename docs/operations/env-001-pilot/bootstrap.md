@@ -26,13 +26,15 @@ RG_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}"
 ```bash
 for ns in Microsoft.App Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL Microsoft.KeyVault \
           Microsoft.Network Microsoft.OperationalInsights Microsoft.Storage Microsoft.Security \
-          Microsoft.ManagedIdentity Microsoft.Consumption Microsoft.EventGrid; do
+          Microsoft.ManagedIdentity Microsoft.Consumption Microsoft.EventGrid Microsoft.Insights; do
   az provider register --namespace "$ns" --wait
 done
 ```
 
 Defender for Storage malware scanning creates an Event Grid system topic in the resource group. That
-is why `Microsoft.EventGrid` is registered.
+is why `Microsoft.EventGrid` is registered. `Microsoft.Insights` holds the OBS-002 alert rules, action
+group and workbook (`observability.bicep`); on an existing subscription register it once before the
+first deployment that includes stage 5.
 
 ## 2. Create the resource group (the region is fixed)
 

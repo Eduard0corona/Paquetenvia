@@ -78,10 +78,19 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         {
             await operations.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
             Assert.True(await recorder.WaitForNextOperationsAcceptedAsync(TimeSpan.FromSeconds(5)));
+            // StartAsync completes at the handshake, before DriverHub.OnConnectedAsync has
+            // joined the driver/assignment groups; wait for the server-side acceptance of
+            // each driver (one at a time, so the recorder's authorization-to-acceptance
+            // mapping stays unambiguous) before the outbox rows become available.
             await authorizedDriver.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(await recorder.WaitForDriverAcceptedAsync(
+                PostgreSqlSecurityWebApplicationFactory.ActiveDriverId,
+                TimeSpan.FromSeconds(5)));
             await otherDriver.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(await recorder.WaitForDriverAcceptedAsync(
+                PostgreSqlSecurityWebApplicationFactory.SecondaryDriverId,
+                TimeSpan.FromSeconds(5)));
             await AssertConnectionRejectedAsync(viewerOnly);
-            await Task.Delay(100);
 
             await database.MakeBusinessOutboxAvailableAsync(scenario.StatusOutboxId);
             await database.MakeBusinessOutboxAvailableAsync(scenario.AssignmentOutboxId);
@@ -208,9 +217,13 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         await foreignOperations.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
         Assert.True(await recorder.WaitForNextOperationsAcceptedAsync(TimeSpan.FromSeconds(5)));
         await driver.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        // The driver connection is a leak probe: wait until DriverHub joined its groups so
+        // the "no delivery" assertion below is not satisfied vacuously.
+        Assert.True(await recorder.WaitForDriverAcceptedAsync(
+            PostgreSqlSecurityWebApplicationFactory.ActiveDriverId,
+            TimeSpan.FromSeconds(5)));
         await tracking.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
         Assert.True(await recorder.WaitForNextTrackingAcceptedAsync(TimeSpan.FromSeconds(5)));
-        await Task.Delay(100);
 
         var clientEventId = Guid.NewGuid();
         var body =

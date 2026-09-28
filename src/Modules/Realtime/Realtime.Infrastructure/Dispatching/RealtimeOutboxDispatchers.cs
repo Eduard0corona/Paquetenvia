@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Paqueteria.Infrastructure.Observability;
 using Realtime.Application.Configuration;
 using Realtime.Application.Dispatching;
 
@@ -11,6 +12,7 @@ internal sealed class BusinessOutboxDispatcher(
     RealtimeOutboxProcessor processor,
     RealtimeOutboxTelemetry telemetry,
     IOptions<OutboxDispatcherOptions> options,
+    OutboxLaneMonitor lanes,
     ILogger<BusinessOutboxDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -38,6 +40,7 @@ internal sealed class BusinessOutboxDispatcher(
         {
             while (!stoppingToken.IsCancellationRequested)
             {
+                lanes.ReportIfDue(RealtimeOutboxLanes.Monitored("business"));
                 using var batch = telemetry.MeasureBatch("business");
                 try
                 {
@@ -69,6 +72,10 @@ internal sealed class BusinessOutboxDispatcher(
                         "business",
                         messages.Count,
                         messages.Count == 0 ? null : messages.Min(static message => message.CreatedAt));
+                    lanes.Claimed(
+                        RealtimeOutboxLanes.Monitored("business"),
+                        messages.Count,
+                        messages.Count == 0 ? null : messages.Min(static message => message.AvailableAt));
                     if (messages.Count == 0)
                     {
                         await Task.Delay(lane.PollIntervalMilliseconds, stoppingToken);
@@ -91,6 +98,7 @@ internal sealed class BusinessOutboxDispatcher(
                 }
                 catch (Exception)
                 {
+                    lanes.LoopFailed(RealtimeOutboxLanes.Monitored("business"));
                     logger.LogError(
                         "realtime_outbox_message_failed lane={Lane} error_class={ErrorClass}",
                         "business",
@@ -114,6 +122,7 @@ internal sealed class LocationOutboxDispatcher(
     RealtimeOutboxProcessor processor,
     RealtimeOutboxTelemetry telemetry,
     IOptions<OutboxDispatcherOptions> options,
+    OutboxLaneMonitor lanes,
     ILogger<LocationOutboxDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -141,6 +150,7 @@ internal sealed class LocationOutboxDispatcher(
         {
             while (!stoppingToken.IsCancellationRequested)
             {
+                lanes.ReportIfDue(RealtimeOutboxLanes.Monitored("location"));
                 using var batch = telemetry.MeasureBatch("location");
                 try
                 {
@@ -172,6 +182,10 @@ internal sealed class LocationOutboxDispatcher(
                         "location",
                         messages.Count,
                         messages.Count == 0 ? null : messages.Min(static message => message.CreatedAt));
+                    lanes.Claimed(
+                        RealtimeOutboxLanes.Monitored("location"),
+                        messages.Count,
+                        messages.Count == 0 ? null : messages.Min(static message => message.AvailableAt));
                     if (messages.Count == 0)
                     {
                         await Task.Delay(lane.PollIntervalMilliseconds, stoppingToken);
@@ -194,6 +208,7 @@ internal sealed class LocationOutboxDispatcher(
                 }
                 catch (Exception)
                 {
+                    lanes.LoopFailed(RealtimeOutboxLanes.Monitored("location"));
                     logger.LogError(
                         "realtime_outbox_message_failed lane={Lane} error_class={ErrorClass}",
                         "location",
@@ -210,6 +225,17 @@ internal sealed class LocationOutboxDispatcher(
                 "postgresql");
         }
     }
+}
+
+/// <summary>OBS-002 lane names of the two Realtime lanes in <see cref="OutboxLaneMonitor"/>.</summary>
+internal static class RealtimeOutboxLanes
+{
+    public static string Monitored(string lane) => lane switch
+    {
+        "business" => OutboxLanes.RealtimeBusiness,
+        "location" => OutboxLanes.RealtimeLocation,
+        _ => throw new ArgumentOutOfRangeException(nameof(lane), lane, "Unknown Realtime outbox lane."),
+    };
 }
 
 internal static class RealtimeOutboxClaiming

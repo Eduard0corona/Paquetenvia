@@ -6,7 +6,7 @@ Valida únicamente este bundle: `v0.6-full-canonical-sync-7-fin001-mvp1`.
 
 1. Ejecutar `python3 tools/validate_contracts.py`.
 2. Ejecutar `sha256sum -c CHECKSUMS_SHA256.txt`.
-3. Confirmar que `database/AI-06_SCHEMA.sql` tiene SHA-256 `0bb166dcbcf90bd8755d4cfedf839bd214695fbe745ee3ce4b500cc6fb0b4228`.
+3. Confirmar que `database/AI-06_SCHEMA.sql` tiene SHA-256 `a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4`.
 4. Confirmar que las firmas de `requeue_stale_*` tienen tres parámetros tanto en AI-06 como en AI-18.
 5. Confirmar promoción a `DEAD`, pisos de purga, backoff de settle y ausencia de privilegios directos SELECT/UPDATE/DELETE para runtime sobre ambos outbox.
 6. No sustituir archivos por adjuntos sueltos con el mismo nombre.

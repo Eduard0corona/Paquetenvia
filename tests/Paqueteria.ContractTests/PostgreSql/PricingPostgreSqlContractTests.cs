@@ -43,12 +43,20 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             ORDER BY h."MigrationId";
             """);
         await using var reader = await command.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
-        Assert.Equal(AdoptCanonicalPricingBaseline.MigrationId, reader.GetString(0));
-        Assert.Equal("paqueteria_migrator", reader.GetString(1));
-        Assert.True(await reader.ReadAsync());
-        Assert.Equal(VersionPricingPolicyPerOrganization.MigrationId, reader.GetString(0));
-        Assert.Equal("paqueteria_migrator", reader.GetString(1));
+        // The adoption, MDM-001-OPERATOR-LOADER, the policy_version column and the loader storing it.
+        foreach (var migrationId in new[]
+                 {
+                     AdoptCanonicalPricingBaseline.MigrationId,
+                     AddMasterDataLoader.MigrationId,
+                     VersionPricingPolicyPerOrganization.MigrationId,
+                     StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+                 })
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(migrationId, reader.GetString(0));
+            Assert.Equal("paqueteria_migrator", reader.GetString(1));
+        }
+
         Assert.False(await reader.ReadAsync());
 
         var options = new DbContextOptionsBuilder<PricingDbContext>()

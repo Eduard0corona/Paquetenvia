@@ -25,10 +25,10 @@ public sealed class PricingPolicyVersionMigrationPostgreSqlContractTests(Postgre
     private const string LegacyRuleId = "0c0c0c0c-0000-4000-8000-000000000003";
 
     [PostgreSqlContractFact]
-    public async Task The_shared_fixture_carries_the_policy_version_migration_as_the_latest_pricing_migration()
+    public async Task The_shared_fixture_carries_the_policy_version_migrations_as_the_latest_pricing_migrations()
     {
         var verified = Assert.Single(ModuleMigrationCoordinator.VerifySources(), state => state.Module == Module);
-        Assert.Equal(VersionPricingPolicyPerOrganization.MigrationId, verified.MigrationId);
+        Assert.Equal(StoreTariffPolicyVersionInMasterDataLoader.MigrationId, verified.MigrationId);
 
         var applied = Assert.Single(
             await new ModuleMigrationCoordinator().AssertAsync(fixture.DeploymentConnectionString, CancellationToken.None),
@@ -50,7 +50,12 @@ public sealed class PricingPolicyVersionMigrationPostgreSqlContractTests(Postgre
 
             // Fresh installation: AI-06 already carries the column, the lane adopts it.
             Assert.Equal(
-                [AdoptCanonicalPricingBaseline.MigrationId, VersionPricingPolicyPerOrganization.MigrationId],
+                [
+                    AdoptCanonicalPricingBaseline.MigrationId,
+                    AddMasterDataLoader.MigrationId,
+                    VersionPricingPolicyPerOrganization.MigrationId,
+                    StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+                ],
                 await HistoryAsync(connectionString));
             Assert.Equal(("NO", 0L), await ShapeAsync(connectionString));
 
@@ -105,13 +110,31 @@ public sealed class PricingPolicyVersionMigrationPostgreSqlContractTests(Postgre
                 await transaction.RollbackAsync();
             }
 
-            // Rules carry versions: the rollback refuses and changes nothing.
+            // The loader step rolls back on its own (EF runs each migration in its own transaction) and gives
+            // back the published loader function; the column step then refuses and changes nothing, because
+            // rules carry versions.
+            await MigratePricingAsync(connectionString, VersionPricingPolicyPerOrganization.MigrationId);
+            Assert.False(await ScalarAsync<bool>(connectionString,
+                $"SELECT position('{StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError}' IN prosrc) > 0 FROM pg_proc WHERE oid=to_regprocedure('{AddMasterDataLoader.FunctionSignature}')"));
             var blocked = await Assert.ThrowsAsync<PostgresException>(
-                () => MigratePricingAsync(connectionString, Migration.InitialDatabase));
+                () => MigratePricingAsync(connectionString, AddMasterDataLoader.MigrationId));
             Assert.Equal(VersionPricingPolicyPerOrganization.DowngradeBlocked, blocked.MessageText);
             Assert.True(await ColumnExistsAsync(connectionString));
             Assert.Equal(
-                [AdoptCanonicalPricingBaseline.MigrationId, VersionPricingPolicyPerOrganization.MigrationId],
+                [
+                    AdoptCanonicalPricingBaseline.MigrationId,
+                    AddMasterDataLoader.MigrationId,
+                    VersionPricingPolicyPerOrganization.MigrationId,
+                ],
+                await HistoryAsync(connectionString));
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(
+                [
+                    AdoptCanonicalPricingBaseline.MigrationId,
+                    AddMasterDataLoader.MigrationId,
+                    VersionPricingPolicyPerOrganization.MigrationId,
+                    StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+                ],
                 await HistoryAsync(connectionString));
 
             // Second step: once every rule is versioned, the (idempotent) lane SQL makes the column

@@ -16,8 +16,16 @@ public sealed class RealtimeHubIntegrationTests(
     RealtimeWebApplicationFactory factory)
     : IClassFixture<RealtimeWebApplicationFactory>
 {
+    private const string OperationsHub = "operations";
+    private const string DriverHub = "driver";
+    private const string TrackingHub = "tracking";
+
     private static readonly DateTimeOffset OccurredAt =
         new(2026, 7, 24, 12, 0, 0, TimeSpan.Zero);
+
+    // Budget for the server to finish OnConnectedAsync (authorization + group joins);
+    // separate from, and not a replacement for, the 3 s delivery timeouts below.
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
     public async Task Operations_rejects_missing_invalid_suspended_selector_and_unauthorized_roles()
@@ -60,8 +68,10 @@ public sealed class RealtimeHubIntegrationTests(
             "/hubs/operations",
             MockIdentityProfiles.ActiveDispatcher,
             RealtimeWebApplicationFactory.OrganizationA);
+        var dispatcherAccepted = ExpectAccepted((OperationsHub, 1));
         await dispatcher.StartAsync();
         Assert.Equal(HubConnectionState.Connected, dispatcher.State);
+        await dispatcherAccepted.WaitAsync(ReadinessTimeout);
 
         var state = factory.Services.GetRequiredService<
             RealtimeWebApplicationFactory.SyntheticRealtimeAuthorizationState>();
@@ -70,9 +80,10 @@ public sealed class RealtimeHubIntegrationTests(
             "/hubs/operations",
             MockIdentityProfiles.ActivePlatformAdminMfa,
             RealtimeWebApplicationFactory.OrganizationA);
+        var adminAccepted = ExpectAccepted((OperationsHub, 1));
         await admin.StartAsync();
         Assert.Equal(HubConnectionState.Connected, admin.State);
-        await Task.Delay(50);
+        await adminAccepted.WaitAsync(ReadinessTimeout);
         Assert.Equal(auditCount + 1, state.PlatformAdminActivations);
     }
 
@@ -93,9 +104,10 @@ public sealed class RealtimeHubIntegrationTests(
             receivedA.TrySetResult(value));
         organizationB.On("OrderStatusChanged", (RealtimeEnvelope<OrderStatusChangedPayload> value) =>
             receivedB.TrySetResult(value));
+        var accepted = ExpectAccepted((OperationsHub, 2));
         await organizationA.StartAsync();
         await organizationB.StartAsync();
-        await Task.Delay(50);
+        await accepted.WaitAsync(ReadinessTimeout);
 
         var message = OrderStatusMessage();
         await Publisher().PublishOperationsOrderStatusChangedAsync(
@@ -117,8 +129,9 @@ public sealed class RealtimeHubIntegrationTests(
         var received = NewCompletion<RealtimeEnvelope<AssignmentChangedPayload>>();
         driver.On("AssignmentChanged", (RealtimeEnvelope<AssignmentChangedPayload> value) =>
             received.TrySetResult(value));
+        var accepted = ExpectAccepted((DriverHub, 1));
         await driver.StartAsync();
-        await Task.Delay(50);
+        await accepted.WaitAsync(ReadinessTimeout);
 
         var message = AssignmentMessage();
         await Publisher().PublishDriverAssignmentChangedAsync(
@@ -152,9 +165,10 @@ public sealed class RealtimeHubIntegrationTests(
             operationsReceived.TrySetResult(value));
         driver.On("ExternalOfferChanged", (RealtimeEnvelope<ExternalOfferChangedPayload> value) =>
             driverReceived.TrySetResult(value));
+        var accepted = ExpectAccepted((OperationsHub, 1), (DriverHub, 1));
         await operations.StartAsync();
         await driver.StartAsync();
-        await Task.Delay(50);
+        await accepted.WaitAsync(ReadinessTimeout);
 
         var message = ExternalOfferMessage();
         await Publisher().PublishOperationsExternalOfferChangedAsync(
@@ -187,9 +201,10 @@ public sealed class RealtimeHubIntegrationTests(
             operationsReceived.TrySetResult(value));
         driver.On("RouteChanged", (RealtimeEnvelope<RouteChangedPayload> value) =>
             driverReceived.TrySetResult(value));
+        var accepted = ExpectAccepted((OperationsHub, 1), (DriverHub, 1));
         await operations.StartAsync();
         await driver.StartAsync();
-        await Task.Delay(50);
+        await accepted.WaitAsync(ReadinessTimeout);
 
         var message = RouteMessage();
         await Publisher().PublishOperationsRouteChangedAsync(
@@ -257,9 +272,10 @@ public sealed class RealtimeHubIntegrationTests(
             receivedA.TrySetResult(value));
         driverB.On("AssignmentChanged", (RealtimeEnvelope<AssignmentChangedPayload> value) =>
             receivedB.TrySetResult(value));
+        var accepted = ExpectAccepted((DriverHub, 2));
         await driverA.StartAsync();
         await driverB.StartAsync();
-        await Task.Delay(50);
+        await accepted.WaitAsync(ReadinessTimeout);
 
         var message = AssignmentMessage();
         await Publisher().PublishDriverAssignmentChangedAsync(
@@ -292,9 +308,10 @@ public sealed class RealtimeHubIntegrationTests(
             "PublicOrderStatusChanged",
             (PublicRealtimeEnvelope<PublicOrderStatusChangedPayload> value) =>
                 receivedB.TrySetResult(value));
+        var accepted = ExpectAccepted((TrackingHub, 2));
         await trackingA.StartAsync();
         await trackingB.StartAsync();
-        await Task.Delay(50);
+        await accepted.WaitAsync(ReadinessTimeout);
 
         var message = PublicStatusMessage();
         await Publisher().PublishTrackingPublicOrderStatusChangedAsync(
@@ -437,6 +454,14 @@ public sealed class RealtimeHubIntegrationTests(
             })
             .Build();
     }
+
+    /// <summary>
+    /// Registers, before the clients start, a wait for the hubs' ConnectionAccepted signal,
+    /// which each hub emits only after its Groups.AddToGroupAsync calls completed. The
+    /// client's StartAsync alone completes at the handshake, before OnConnectedAsync runs.
+    /// </summary>
+    private Task ExpectAccepted(params (string Hub, int Count)[] expectations) =>
+        factory.ConnectionAcceptances.ExpectAsync(expectations);
 
     private IRealtimePublisher Publisher() =>
         factory.Services.GetRequiredService<IRealtimePublisher>();
