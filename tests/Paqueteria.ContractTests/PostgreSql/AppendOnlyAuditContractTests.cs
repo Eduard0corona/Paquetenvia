@@ -79,6 +79,62 @@ public sealed class AppendOnlyAuditContractTests(PostgreSqlContractFixture fixtu
     }
 
     [PostgreSqlContractFact]
+    public async Task Stored_payload_keeps_uuids_with_digit_runs_and_redacts_phones()
+    {
+        var organizationId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+        var auditId = Guid.NewGuid();
+        var digitRunTokenId = Guid.Parse("12345678-1234-4123-8123-667123456789");
+        var allDigitsId = Guid.Parse("99999999-9999-9999-9999-999999999999");
+        await SeedAsync(organizationId, actorId);
+        try
+        {
+            var payload = new AuditPayloadRedactor().Redact(JsonSerializer.SerializeToElement(new
+            {
+                token_id = digitRunTokenId,
+                order_ids = new[] { allDigitsId },
+                note = $"token {digitRunTokenId} revocado; contacto 667 123 4567",
+                contact_phone = "+52 55 1234 5678",
+            }));
+
+            await WriteWithRoleAsync(
+                fixture.AppDataSource,
+                "paqueteria_app",
+                actorId,
+                organizationId,
+                new AuditEntry(
+                    auditId,
+                    organizationId,
+                    actorId,
+                    "SYNTHETIC_AUDIT_ACTION",
+                    "SYNTHETIC_ENTITY",
+                    digitRunTokenId,
+                    "synthetic-uuid-digit-runs",
+                    payload,
+                    DateTimeOffset.UtcNow));
+
+            await using var command = fixture.AdminDataSource.CreateCommand(
+                "SELECT payload_redacted->>'token_id', payload_redacted->'order_ids'->>0, payload_redacted->>'note', " +
+                "payload_redacted->>'contact_phone', payload_redacted::text FROM platform.audit_logs WHERE id=@id");
+            command.Parameters.Add(P("id", auditId));
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(digitRunTokenId.ToString("D"), reader.GetString(0));
+            Assert.Equal(allDigitsId.ToString("D"), reader.GetString(1));
+            Assert.Equal(AuditPayloadRedactor.Replacement, reader.GetString(2));
+            Assert.Equal(AuditPayloadRedactor.Replacement, reader.GetString(3));
+            var stored = reader.GetString(4);
+            Assert.DoesNotContain("667 123 4567", stored, StringComparison.Ordinal);
+            Assert.DoesNotContain("1234 5678", stored, StringComparison.Ordinal);
+            Assert.False(await reader.ReadAsync());
+        }
+        finally
+        {
+            await CleanupAsync([organizationId], [actorId]);
+        }
+    }
+
+    [PostgreSqlContractFact]
     public async Task App_and_worker_can_insert_and_select_but_cannot_update_delete_or_bypass_RLS()
     {
         var organizationA = Guid.NewGuid();

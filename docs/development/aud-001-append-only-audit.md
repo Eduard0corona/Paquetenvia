@@ -43,6 +43,20 @@ email, phone, bearer/JWT, private-key and connection-string shapes inside
 arrays. Sensitive values become `[REDACTED]`; the original value is never
 returned, persisted, logged or included in an exception.
 
+Phone detection is by field name and by shape, never by digit count alone.
+Field names covering phone, telephone, `tel`, `telefono*`, `*celular`, `movil`,
+`mobile`, `mobileNumber`, `whatsapp`, `whatsapp_number` and `msisdn` are
+always redacted. Inside string values, well-formed UUIDs (8-4-4-4-12 hex) are
+ignored first, so a digit run inside an order, token or request id never
+triggers redaction. What remains is redacted when it contains an E.164 number
+(`+` then 8 to 15 digits, with optional spaces, dots, dashes or parentheses)
+or a Mexican 10-digit number with an optional `+52`/`52` and mobile `1`
+prefix in the usual groupings (`6671234567`, `667 123 4567`,
+`(55) 1234-5678`, `667.123.45.67`, `66 71 23 45 67`). Values under identifier
+keys (`id`, `*_id`, `*Id`, `*_ids`, `*Ids`) are exempt from the bare
+10-digit Mexican shape only; the explicit `+` E.164 shape and every other rule
+still apply to them. Dates, timestamps and other digit runs are preserved.
+
 The default limits are eight nested levels and 16 KiB of UTF-8 JSON. Invalid,
 unsupported, over-depth or over-size input throws the generic
 `AuditRedactionException` without an inner exception or original payload. This

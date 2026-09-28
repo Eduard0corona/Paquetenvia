@@ -60,6 +60,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         "legalname",
         "lastname",
         "mobile",
+        "msisdn",
         "name",
         "password",
         "passwd",
@@ -70,7 +71,12 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         "secret",
         "subject",
         "streetaddress",
+        "tel",
         "telephone",
+        "telefono",
+        "celular",
+        "movil",
+        "whatsapp",
         "token",
         "accesstoken",
     };
@@ -95,7 +101,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
                 SkipValidation = false,
             }))
             {
-                WriteElement(writer, payload, 0);
+                WriteElement(writer, payload, 0, identifierContext: false);
             }
 
             if (buffer.WrittenCount > options.MaximumUtf8Bytes)
@@ -115,7 +121,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         }
     }
 
-    private void WriteElement(Utf8JsonWriter writer, JsonElement element, int depth)
+    private void WriteElement(Utf8JsonWriter writer, JsonElement element, int depth, bool identifierContext)
     {
         if (depth > options.MaximumDepth)
         {
@@ -135,7 +141,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
                     }
                     else
                     {
-                        WriteElement(writer, property.Value, depth + 1);
+                        WriteElement(writer, property.Value, depth + 1, IsIdentifierName(property.Name));
                     }
                 }
 
@@ -145,14 +151,14 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
                 writer.WriteStartArray();
                 foreach (var item in element.EnumerateArray())
                 {
-                    WriteElement(writer, item, depth + 1);
+                    WriteElement(writer, item, depth + 1, identifierContext);
                 }
 
                 writer.WriteEndArray();
                 break;
             case JsonValueKind.String:
                 var value = element.GetString() ?? string.Empty;
-                writer.WriteStringValue(IsSensitiveValue(value) ? Replacement : value);
+                writer.WriteStringValue(IsSensitiveValue(value, identifierContext) ? Replacement : value);
                 break;
             case JsonValueKind.Number:
             case JsonValueKind.True:
@@ -175,13 +181,58 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
             normalized.EndsWith("cookie", StringComparison.Ordinal) ||
             normalized.EndsWith("email", StringComparison.Ordinal) ||
             normalized.EndsWith("phone", StringComparison.Ordinal) ||
+            normalized.EndsWith("phonenumber", StringComparison.Ordinal) ||
+            normalized.EndsWith("mobilenumber", StringComparison.Ordinal) ||
+            normalized.StartsWith("telefono", StringComparison.Ordinal) ||
+            normalized.EndsWith("telefono", StringComparison.Ordinal) ||
+            normalized.EndsWith("celular", StringComparison.Ordinal) ||
+            normalized.EndsWith("whatsappnumber", StringComparison.Ordinal) ||
             normalized.EndsWith("address", StringComparison.Ordinal) ||
             normalized.EndsWith("fullname", StringComparison.Ordinal);
     }
 
-    private static bool IsSensitiveValue(string value) =>
+    /// <summary>
+    /// Keys that name identifiers: <c>id</c>, <c>request_id</c>, <c>orderId</c>, <c>token_ids</c> and so on. Their
+    /// values (and the items of an array under them) are exempt from the bare-digit Mexican phone shape, because
+    /// generated identifiers can carry any digit run. Every other value rule, including the explicit <c>+</c>
+    /// E.164 shape, still applies to them.
+    /// </summary>
+    private static bool IsIdentifierName(string name)
+    {
+        foreach (var suffix in IdentifierSuffixes)
+        {
+            if (name.Equals(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (name.Length <= suffix.Length || !name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var before = name[name.Length - suffix.Length - 1];
+            if (before is '_' or '-' or '.')
+            {
+                // snake_case, kebab-case, dotted: request_id, entity-id, order.ids.
+                return true;
+            }
+
+            // camelCase / PascalCase: orderId, OrderIds, requestID. "paid" or "valid" do not qualify.
+            if (char.IsUpper(name[name.Length - suffix.Length]) && (char.IsLower(before) || char.IsDigit(before)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static readonly string[] IdentifierSuffixes = ["id", "ids"];
+
+    private static bool IsSensitiveValue(string value, bool identifierContext) =>
         EmailPattern().IsMatch(value) ||
-        PhonePattern().IsMatch(value) ||
+        ContainsPhoneNumber(value, identifierContext) ||
         JwtPattern().IsMatch(value) ||
         value.Contains("Bearer ", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("PRIVATE KEY", StringComparison.OrdinalIgnoreCase) ||
@@ -191,11 +242,55 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         CredentialPattern().IsMatch(value) ||
         CiphertextPattern().IsMatch(value);
 
+    /// <summary>
+    /// Phone detection by shape. Well-formed UUIDs (8-4-4-4-12 hex) are removed from the text first, so a digit run
+    /// inside an identifier never looks like a phone. What remains is redacted when it holds an E.164 number (a
+    /// <c>+</c> followed by 8 to 15 digits with optional separators) or, outside identifier keys, a Mexican
+    /// 10-digit number with an optional <c>+52</c>/<c>52</c> and mobile <c>1</c> prefix and optional spaces,
+    /// dashes, dots or parentheses. A bare run of digits of any other length is not a phone.
+    /// </summary>
+    private static bool ContainsPhoneNumber(string value, bool identifierContext)
+    {
+        if (value.Length < 8)
+        {
+            return false;
+        }
+
+        var text = UuidPattern().Replace(value, " ");
+        if (E164PhonePattern().IsMatch(text))
+        {
+            return true;
+        }
+
+        return !identifierContext && MexicanPhonePattern().IsMatch(text);
+    }
+
     [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+", RegexOptions.CultureInvariant)]
     private static partial Regex EmailPattern();
 
-    [GeneratedRegex(@"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])", RegexOptions.CultureInvariant)]
-    private static partial Regex PhonePattern();
+    [GeneratedRegex(
+        @"(?<![0-9A-Za-z])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Za-z])",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex UuidPattern();
+
+    // "+" then 8 to 15 digits; between digits at most one separator (space, dot, dash) and optional parentheses.
+    [GeneratedRegex(
+        @"(?<![\p{L}\p{N}_+])\+[ ]?\(?[0-9](?:[ .\-]?\)?[ .\-]?\(?[0-9]){7,14}(?![0-9])",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex E164PhonePattern();
+
+    // Optional +52 / 52 and mobile 1, then exactly ten digits in the usual Mexican groupings:
+    // 6671234567, 55 1234 5678, (667) 123-4567, 667.123.45.67, 66 71 23 45 67.
+    [GeneratedRegex(
+        @"(?<![\p{L}\p{N}_+])(?:\+?52[ .\-]?(?:1[ .\-]?)?)?" +
+        @"(?:[0-9]{10}" +
+        @"|(?:\([0-9]{2}\)|[0-9]{2})[ .\-]?[0-9]{4}[ .\-]?[0-9]{4}" +
+        @"|(?:\([0-9]{3}\)|[0-9]{3})[ .\-]?[0-9]{3}[ .\-]?[0-9]{4}" +
+        @"|(?:\([0-9]{3}\)|[0-9]{3})[ .\-]?[0-9]{3}([ .\-]?)[0-9]{2}\1[0-9]{2}" +
+        @"|[0-9]{2}([ .\-]?)[0-9]{2}\2[0-9]{2}\2[0-9]{2}\2[0-9]{2})" +
+        @"(?![\p{L}\p{N}_])",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex MexicanPhonePattern();
 
     [GeneratedRegex(@"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", RegexOptions.CultureInvariant)]
     private static partial Regex JwtPattern();
