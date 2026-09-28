@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   canPerform,
   capabilityMatrix,
+  financeOperationsMatrix,
+  screenOperationsMatrix,
   mayHandleExactCoordinates,
   requiresMfa,
   resolveActiveRole,
@@ -15,10 +17,18 @@ const openApi = readFileSync(
   "utf8",
 );
 
-function publishedMatrix(): Record<string, string[]> {
+const tenantCapabilities = readFileSync(
+  resolve(
+    process.cwd(),
+    "../../src/Modules/Organizations/Organizations.Endpoints/Authorization/TenantCapabilities.cs",
+  ),
+  "utf8",
+);
+
+function publishedMatrix(block = "  operations:", next = "  driver_scope:"): Record<string, string[]> {
   const start = openApi.indexOf("x-capability-matrix:");
-  const operations = openApi.indexOf("  operations:", start);
-  const end = openApi.indexOf("  driver_scope:", operations);
+  const operations = openApi.indexOf(block, start);
+  const end = openApi.indexOf(next, operations);
   const rows: Record<string, string[]> = {};
   for (const line of openApi.slice(operations, end).split("\n")) {
     const match = /^ {4}(\w+): \[([A-Z_, ]+)\]$/.exec(line);
@@ -37,8 +47,36 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     }
   });
 
+  it("matches every AI-05 finance_operations row it mirrors", () => {
+    const published = publishedMatrix("  finance_operations:", "  platform_operations_decision:");
+    expect(Object.keys(published).length).toBeGreaterThan(0);
+    for (const [operation, roles] of Object.entries(financeOperationsMatrix)) {
+      expect(published[operation], operation).toEqual([...roles]);
+    }
+  });
+
+  it("admits on the UI-001 screens no role the API refuses for operations outside the matrix", () => {
+    // DRIVER is admitted by the API only for its own assignment, from /driver; these screens exclude it.
+    const grants: Record<string, string> = {
+      DISPATCHER: "Dispatcher",
+      PLATFORM_ADMIN: "PlatformAdminMfa",
+    };
+    for (const [operation, roles] of Object.entries(screenOperationsMatrix)) {
+      const line = new RegExp(`Create\\("${operation}", ([^)]*)\\)`).exec(tenantCapabilities.replace(/\s+/g, " "));
+      expect(line, operation).not.toBeNull();
+      const enforced = line![1].split(",").map((grant) => grant.trim());
+      for (const role of roles) expect(enforced, `${operation} ${role}`).toContain(grants[role]);
+      expect(roles).not.toContain("DRIVER");
+      expect(roles).not.toContain("FINANCE");
+    }
+  });
+
   it("each mirrored operation exists in AI-05", () => {
-    for (const operation of Object.keys(capabilityMatrix)) {
+    for (const operation of [
+      ...Object.keys(capabilityMatrix),
+      ...Object.keys(financeOperationsMatrix),
+      ...Object.keys(screenOperationsMatrix),
+    ]) {
       expect(openApi).toContain(`operationId: ${operation}`);
     }
   });
@@ -58,6 +96,20 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     ["DISPATCHER", "listSettlements", false],
     ["VIEWER", "exportSettlementCsv", false],
     ["DRIVER", "getSettlement", false],
+    ["DISPATCHER", "previewOrderCsv", true],
+    ["PLATFORM_ADMIN", "commitOrderCsv", true],
+    ["VIEWER", "previewOrderCsv", false],
+    ["FINANCE", "commitOrderCsv", false],
+    ["DISPATCHER", "openIncident", true],
+    ["PLATFORM_ADMIN", "resolveIncident", true],
+    ["DRIVER", "openIncident", false],
+    ["VIEWER", "resolveIncident", false],
+    ["FINANCE", "getOrderFinancials", true],
+    ["FINANCE", "reconcileCod", true],
+    ["FINANCE", "recordCodCollection", false],
+    ["DISPATCHER", "recordCodCollection", true],
+    ["DRIVER", "reconcileCod", false],
+    ["VIEWER", "getOrderFinancials", false],
   ])("%s may %s: %s", (role, operation, expected) => {
     expect(canPerform(role, operation)).toBe(expected);
   });
@@ -75,6 +127,16 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(requiresMfa("PLATFORM_ADMIN", "listSettlements")).toBe(true);
     expect(requiresMfa("DISPATCHER", "createOrder")).toBe(false);
     expect(requiresMfa(null, "approveSettlement")).toBe(false);
+  });
+
+  it("hints MFA for FINANCE financials and reconciliation and PLATFORM_ADMIN incidents and COD", () => {
+    expect(requiresMfa("FINANCE", "getOrderFinancials")).toBe(true);
+    expect(requiresMfa("FINANCE", "reconcileCod")).toBe(true);
+    expect(requiresMfa("DISPATCHER", "reconcileCod")).toBe(false);
+    expect(requiresMfa("DISPATCHER", "openIncident")).toBe(false);
+    for (const operation of ["openIncident", "resolveIncident", "recordCodCollection", "getOrderFinancials", "reconcileCod"] as const)
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+    expect(requiresMfa("PLATFORM_ADMIN", "previewOrderCsv")).toBe(false);
   });
 
   it("resolves the role of the selected organization only", () => {

@@ -41,6 +41,13 @@ export interface TenantRequest {
   readonly path: string;
   readonly search?: URLSearchParams;
   readonly body?: unknown;
+  /**
+   * multipart/form-data body, only for operations AI-05 declares as multipart
+   * (previewOrderCsv, commitOrderCsv). The browser sets the boundary header.
+   */
+  readonly form?: FormData;
+  /** Non-2xx statuses whose body the operation contract defines; returned, not thrown. */
+  readonly passThroughStatuses?: readonly number[];
   readonly idempotencyKey?: string;
   readonly accept?: string;
   readonly signal?: AbortSignal;
@@ -70,6 +77,9 @@ export function createTenantRequester(
       "X-Organization-Id": session.organizationId,
       Accept: request.accept ?? "application/json",
     };
+    if (request.body !== undefined && request.form !== undefined) {
+      throw new TenantApiError("invalid");
+    }
     if (request.body !== undefined) headers["Content-Type"] = "application/json";
     if (request.idempotencyKey !== undefined)
       headers["Idempotency-Key"] = request.idempotencyKey;
@@ -90,7 +100,9 @@ export function createTenantRequester(
       response = await fetch(url, {
         method: request.method,
         headers,
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
+        body:
+          request.form ??
+          (request.body === undefined ? undefined : JSON.stringify(request.body)),
         cache: "no-store",
         credentials: authorization.credentials,
         referrerPolicy: "no-referrer",
@@ -102,7 +114,8 @@ export function createTenantRequester(
     } finally {
       clearTimeout(timer);
     }
-    if (!response.ok) throw await classifyFailure(response);
+    if (!response.ok && !(request.passThroughStatuses ?? []).includes(response.status))
+      throw await classifyFailure(response);
     return response;
   };
 }

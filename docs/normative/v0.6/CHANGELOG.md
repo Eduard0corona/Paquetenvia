@@ -1,5 +1,16 @@
 # Changelog
 
+## Pantallas UI-001 de importación CSV, incidencias y COD (UI-001-SCREENS-CSV-INC-COD) — 2026-09-28
+
+- Respuesta literal del project owner: "Sí, agrégalas (Recommended)".
+- AI-07 agrega las rutas `/ops/orders/import`, `/ops/incidents` y `/finance/cod` y sus contratos de pantalla
+  `csv_order_import`, `incident_desk` y `cod_control`: roles, fuentes, estados y validaciones, limitados a las
+  operaciones AI-05 existentes (`previewOrderCsv`, `commitOrderCsv`, `openIncident`, `resolveIncident`,
+  `getOrderFinancials`, `recordCodCollection`, `reconcileCod`). D5-CAPABILITY-MATRIX y el step-up MFA de
+  PLATFORM_ADMIN y FINANCE siguen aplicando; el backend sigue siendo la barrera de autorización.
+- Sin API, estados, eventos ni migraciones nuevos. Cada contrato declara en `not_supported` lo que AI-05 no
+  permite hoy (leer o listar incidencias y pruebas, leer registros COD, filtrar órdenes con COD pendiente).
+
 ## Endurecimiento del cargador de datos maestros (MDM-001-LOADER-HARDENING) — 2026-09-28
 
 - Seguimiento de tres hallazgos MINOR de la revisión de MDM-001, diferidos del PR de MDM-001; sin API,

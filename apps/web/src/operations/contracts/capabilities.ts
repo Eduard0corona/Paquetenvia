@@ -10,6 +10,8 @@ export const capabilityMatrix = {
   createQuote: ["DISPATCHER", "PLATFORM_ADMIN"],
   getQuote: ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER"],
   createOrder: ["DISPATCHER", "PLATFORM_ADMIN"],
+  previewOrderCsv: ["DISPATCHER", "PLATFORM_ADMIN"],
+  commitOrderCsv: ["DISPATCHER", "PLATFORM_ADMIN"],
   createSettlement: ["FINANCE", "PLATFORM_ADMIN"],
   // AI05-LIST-SETTLEMENTS: same capability as getSettlement.
   listSettlements: ["FINANCE", "PLATFORM_ADMIN"],
@@ -21,7 +23,38 @@ export const capabilityMatrix = {
   exportSettlementCsv: ["FINANCE", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
-export type CapabilityOperation = keyof typeof capabilityMatrix;
+/**
+ * AI-05 `x-capability-matrix.finance_operations` (FINANCE-COD-RECONCILIATION,
+ * FINANCE-COD-MFA-2026-09-27): DISPATCHER, and PLATFORM_ADMIN or FINANCE with MFA.
+ */
+export const financeOperationsMatrix = {
+  getOrderFinancials: ["DISPATCHER", "PLATFORM_ADMIN", "FINANCE"],
+  reconcileCod: ["DISPATCHER", "PLATFORM_ADMIN", "FINANCE"],
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
+/**
+ * Operations outside the matrix keep their enforced rules (AI-05 operation
+ * descriptions; openIncident follows the rule the API enforces). These rows are
+ * the roles the UI-001 screens admit (AI-07 incident_desk, cod_control): DRIVER
+ * opens incidents and records COD only from its own assignment in /driver, never
+ * from these screens, and FINANCE never records a COD collection.
+ */
+export const screenOperationsMatrix = {
+  openIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
+  resolveIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
+  recordCodCollection: ["DISPATCHER", "PLATFORM_ADMIN"],
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
+const allOperations: Readonly<Record<string, readonly string[]>> = {
+  ...capabilityMatrix,
+  ...financeOperationsMatrix,
+  ...screenOperationsMatrix,
+};
+
+export type CapabilityOperation =
+  | keyof typeof capabilityMatrix
+  | keyof typeof financeOperationsMatrix
+  | keyof typeof screenOperationsMatrix;
 
 /**
  * Operations that need a satisfied MFA challenge for a given role. D7-SETTLEMENT-MFA:
@@ -30,8 +63,15 @@ export type CapabilityOperation = keyof typeof capabilityMatrix;
  * this only drives an explanatory hint; the API answers `403 MFA_REQUIRED`.
  */
 const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperation[]>>> = {
-  FINANCE: ["approveSettlement", "markSettlementPaid"],
+  // FINANCE-COD-MFA-2026-09-27: FINANCE needs MFA for financials and COD reconciliation.
+  FINANCE: ["approveSettlement", "markSettlementPaid", "getOrderFinancials", "reconcileCod"],
   PLATFORM_ADMIN: [
+    // PLATFORM_ADMIN keeps MFA wherever the operation already demanded it.
+    "openIncident",
+    "resolveIncident",
+    "recordCodCollection",
+    "getOrderFinancials",
+    "reconcileCod",
     "createSettlement",
     "listSettlements",
     "getSettlement",
@@ -48,7 +88,7 @@ export function canPerform(
   operation: CapabilityOperation,
 ): boolean {
   if (role === null) return false;
-  return (capabilityMatrix[operation] as readonly string[]).includes(role);
+  return allOperations[operation]?.includes(role) ?? false;
 }
 
 export function requiresMfa(
