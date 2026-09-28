@@ -43,14 +43,20 @@ email, phone, bearer/JWT, private-key and connection-string shapes inside
 arrays. Sensitive values become `[REDACTED]`; the original value is never
 returned, persisted, logged or included in an exception.
 
-Phone detection is the previous behavior minus UUIDs and ISO dates. Field
-names covering phone, telephone, `tel`, `telefono*`, `*celular`, `movil`,
-`mobile`, `mobileNumber`, `whatsapp`, `whatsapp_number` and `msisdn` are
-always redacted. Inside string values, well-formed UUIDs (8-4-4-4-12 hex) and
-ISO-8601 dates and timestamps (`2026-09-28`, `2026-09-28T10:59:40Z`, with
-optional fractional seconds and offsets) are removed first, so a digit run
-inside an order, token or request id, or inside a timestamp, never triggers
-redaction. What remains is redacted when it matches any of:
+Phone detection is the previous behavior minus UUIDs and whole-value ISO
+dates. Field names covering phone, telephone, `tel`, `telefono*`, `*celular`,
+`movil`, `mobile`, `mobileNumber`, `whatsapp`, `whatsapp_number` and `msisdn`
+are always redacted. A string value that is, as a whole, exactly one ISO-8601
+date or timestamp (`2026-09-28`, `2026-09-28T10:59:40Z`, with optional
+seconds, fractional seconds and `Z`/`+hh:mm` offset) is kept when it parses
+strictly with the invariant culture to a real calendar date with a year from
+1900 to 2199; `2026-02-30`, `5512-12-31` or `2026-13-45` are not dates and are
+redacted. Dates inside free text are not exempt: `llamar 5512-12-31` or
+`entrega 2026-09-28 tel 6671234567` go through the full rule, so a date in a
+note may be over-redacted, which is accepted. Well-formed UUIDs
+(8-4-4-4-12 hex) are removed from the text first, so a digit run inside an
+order, token or request id never triggers redaction. What remains is
+redacted when it matches any of:
 
 - the original generic rule: 8 or more characters of digits, spaces, dashes
   or parentheses, starting and ending with a digit, with an optional leading
@@ -65,9 +71,9 @@ All three are bounded by digits only, so a phone glued to a word
 (`llamar667-123-4567`, `6671234567antes`) or to more digits
 (`66712345675512345678`) is redacted, under every key, identifier keys
 included. Every string the previous rule redacted is still redacted, except
-UUIDs and ISO dates. Numeric runs of 8 or more digits that are not phones
-(and hex or base64 tokens that contain such a run) are still over-redacted,
-as before; that is intentional.
+UUIDs and whole-value ISO dates and timestamps. Numeric runs of 8 or more
+digits that are not phones (and hex or base64 tokens that contain such a run)
+are still over-redacted, as before; that is intentional.
 
 The default limits are eight nested levels and 16 KiB of UTF-8 JSON. Invalid,
 unsupported, over-depth or over-size input throws the generic

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -204,24 +205,67 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         CiphertextPattern().IsMatch(value);
 
     /// <summary>
-    /// Phone detection is the pre-existing generic rule minus two known-safe token kinds. Well-formed UUIDs
-    /// (8-4-4-4-12 hex) and ISO-8601 dates/timestamps are removed from the text first; what remains is redacted when
-    /// it matches the legacy generic digit-run rule (8 or more characters of digits, spaces, dashes or parentheses,
+    /// Phone detection is the pre-existing generic rule minus two known-safe token kinds. A value that is, as a whole,
+    /// exactly one ISO-8601 date or timestamp (strictly parsed, real calendar date, year 1900-2199) is not a phone.
+    /// Otherwise well-formed UUIDs (8-4-4-4-12 hex) are removed from the text, and what remains is redacted when it
+    /// matches the legacy generic digit-run rule (8 or more characters of digits, spaces, dashes or parentheses,
     /// optional leading <c>+</c>), an E.164 number or a Mexican 10-digit number (which also cover dotted groupings).
-    /// Every string the previous rule redacted is still redacted, except UUIDs and ISO dates. Numeric runs of 8 or
-    /// more digits that are not phones are still over-redacted, as before.
+    /// Dates inside free text are not exempt and may be over-redacted. Every string the previous rule redacted is
+    /// still redacted, except UUIDs and whole-value ISO dates/timestamps.
     /// </summary>
     private static bool ContainsPhoneNumber(string value)
     {
-        if (value.Length < 8)
+        if (value.Length < 8 || IsWholeIsoDateOrTimestamp(value))
         {
             return false;
         }
 
-        var text = IsoDateTimePattern().Replace(UuidPattern().Replace(value, " "), " ");
+        var text = UuidPattern().Replace(value, " ");
         return LegacyDigitRunPattern().IsMatch(text) ||
             E164PhonePattern().IsMatch(text) ||
             MexicanPhonePattern().IsMatch(text);
+    }
+
+    private static readonly string[] IsoTimestampFormats =
+    [
+        "yyyy-MM-dd'T'HH:mm",
+        "yyyy-MM-dd'T'HH:mmK",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd'T'HH:mm:ssK",
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF",
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK",
+        "yyyy-MM-dd HH:mm",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ssK",
+        "yyyy-MM-dd HH:mm:ss.FFFFFFF",
+        "yyyy-MM-dd HH:mm:ss.FFFFFFFK",
+    ];
+
+    private static bool IsWholeIsoDateOrTimestamp(string value)
+    {
+        if (value.Length is < 10 or > 40 || value[4] != '-' || value[7] != '-')
+        {
+            return false;
+        }
+
+        if (value.Length == 10)
+        {
+            return DateOnly.TryParseExact(
+                    value,
+                    "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var date) &&
+                date.Year is >= 1900 and <= 2199;
+        }
+
+        return DateTimeOffset.TryParseExact(
+                value,
+                IsoTimestampFormats,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out var timestamp) &&
+            timestamp.Year is >= 1900 and <= 2199;
     }
 
     [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+", RegexOptions.CultureInvariant)]
@@ -232,15 +276,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         RegexOptions.CultureInvariant)]
     private static partial Regex UuidPattern();
 
-    // yyyy-MM-dd with an optional time (T or space), seconds, fraction and Z / +hh:mm / -hhmm offset.
-    [GeneratedRegex(
-        @"(?<![0-9])[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])" +
-        @"(?:[T ](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:[.,][0-9]{1,9})?)?(?:Z|[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9])?)?" +
-        @"(?![0-9])",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex IsoDateTimePattern();
-
-    // The original generic rule, kept so the new rule is a superset of it (minus UUIDs and ISO dates).
+    // The original generic rule, kept so the new rule is a superset of it (minus UUIDs and whole-value ISO dates).
     [GeneratedRegex(@"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])", RegexOptions.CultureInvariant)]
     private static partial Regex LegacyDigitRunPattern();
 

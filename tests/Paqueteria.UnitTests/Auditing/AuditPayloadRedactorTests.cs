@@ -351,12 +351,17 @@ public sealed class AuditPayloadRedactorTests
 
     [Theory]
     [InlineData("2026-09-28")]
+    [InlineData("1900-01-01")]
+    [InlineData("2199-12-31")]
+    [InlineData("2024-02-29")]
+    [InlineData("2026-09-28T10:59")]
+    [InlineData("2026-09-28T10:59:40")]
     [InlineData("2026-09-28T10:59:40Z")]
+    [InlineData("2026-09-28T10:59:40.123Z")]
     [InlineData("2026-09-28T10:15:30.1234567+00:00")]
-    [InlineData("2026-09-28T10:15:30,5-06:00")]
-    [InlineData("2026-09-28T10:15-0600")]
+    [InlineData("2026-09-28T10:59:40-06:00")]
+    [InlineData("2199-12-31T23:59:59.9999999+14:00")]
     [InlineData("2026-09-28 10:15:30")]
-    [InlineData("desde 2026-09-28T10:59:40Z hasta 2026-09-29T08:00:00Z")]
     [InlineData("1234567")]
     [InlineData("trk002-contract-issue-0001")]
     [InlineData("CLN-7FK3")]
@@ -382,6 +387,17 @@ public sealed class AuditPayloadRedactorTests
     [InlineData("3f2a1b4c55124345866766712345678a")]
     [InlineData("2026-09-286671234567")]
     [InlineData("2026-13-45")]
+    [InlineData("2026-02-30")]
+    [InlineData("2025-02-29")]
+    [InlineData("5512-12-31")]
+    [InlineData("1899-12-31")]
+    [InlineData("2200-01-01")]
+    [InlineData("2026-09-28T25:00:00Z")]
+    [InlineData("2026-09-28T10:59:40Z6671234567")]
+    [InlineData(" 2026-09-28")]
+    [InlineData("llamar 5512-12-31")]
+    [InlineData("entrega 2026-09-28 tel 6671234567")]
+    [InlineData("desde 2026-09-28T10:59:40Z hasta 2026-09-29T08:00:00Z")]
     public void Digit_runs_the_previous_rule_redacted_are_still_redacted(string value)
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { value }));
@@ -396,8 +412,8 @@ public sealed class AuditPayloadRedactorTests
     public void New_rule_redacts_everything_the_previous_rule_redacted_except_uuids_and_iso_dates()
     {
         // Property-style check with a fixed seed: random strings over digits, phone separators, letters and "+".
-        // Whenever the previous generic rule matched, the new redactor must redact too, unless the only match came
-        // from a UUID or an ISO-8601 date/timestamp, which are excluded from the generated corpus.
+        // Whenever the previous generic rule matched, the new redactor must redact too. Only strings holding a UUID
+        // or that are, as a whole, an ISO-8601 date/timestamp shape are excluded from the generated corpus.
         const string alphabet = "0123456789012345678901234567890123456789 ()-+.:TZabcxyz_";
         var random = new Random(149);
         var checkedMatches = 0;
@@ -411,7 +427,7 @@ public sealed class AuditPayloadRedactorTests
             }
 
             var text = new string(chars);
-            if (!PreviousPhonePattern.IsMatch(text) || UuidOrIsoDate.IsMatch(text))
+            if (!PreviousPhonePattern.IsMatch(text) || UuidLike.IsMatch(text) || WholeValueIsoDate.IsMatch(text))
             {
                 continue;
             }
@@ -447,9 +463,13 @@ public sealed class AuditPayloadRedactorTests
         @"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
-    // Deliberately broad: anything that looks like a UUID or a yyyy-MM-dd date is left out of the property corpus.
-    private static readonly System.Text.RegularExpressions.Regex UuidOrIsoDate = new(
-        @"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-|[0-9]{4}-[0-9]{2}-[0-9]{2}",
+    private static readonly System.Text.RegularExpressions.Regex UuidLike = new(
+        @"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Only whole values shaped like a date or timestamp are excluded; dates inside free text stay in the corpus.
+    private static readonly System.Text.RegularExpressions.Regex WholeValueIsoDate = new(
+        @"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.+Z-]*)?$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     [Fact]
