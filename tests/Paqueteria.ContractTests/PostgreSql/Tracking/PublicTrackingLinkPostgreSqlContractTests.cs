@@ -151,18 +151,16 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
     }
 
     /// <summary>
-    /// The audit names the token row it created. The shared audit redactor masks any value with a run of eight
-    /// or more digits as a possible phone number, which a random UUID sometimes has, so the value is either the
-    /// id itself or the redaction marker, never anything else.
+    /// The audit names the token row it created. The audit redactor keeps well-formed UUIDs (AUD-001), so the
+    /// stored value is exactly the id.
     /// </summary>
     private static void AssertAuditTokenId(Guid tokenId, string payload)
     {
         using var document = System.Text.Json.JsonDocument.Parse(payload);
-        var value = document.RootElement.GetProperty("token_id").GetString();
-        Assert.True(
-            string.Equals(value, tokenId.ToString("D"), StringComparison.OrdinalIgnoreCase) ||
-            value == AuditPayloadRedactor.Replacement,
-            $"Unexpected audit token_id value {value}.");
+        Assert.Equal(
+            tokenId.ToString("D"),
+            document.RootElement.GetProperty("token_id").GetString(),
+            ignoreCase: true);
     }
 
     private async Task<T> WithServiceAsync<T>(Func<IPublicTrackingTokenService, Task<T>> operation)
