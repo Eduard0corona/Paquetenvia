@@ -64,6 +64,16 @@ Example (API): `KeyVaultSecrets__VaultUri=https://kv-paquetenvia.vault.azure.net
 `KeyVaultSecrets__Mappings__0__SecretName=paqueteria-app-connection`,
 `KeyVaultSecrets__Mappings__0__ConfigurationKey=ConnectionStrings:Paqueteria`.
 
+Implementation: `Paqueteria.Infrastructure.Cloud.KeyVaultSecretsConfiguration`
+(`builder.Configuration.AddPaqueteriaKeyVaultSecrets()` in API and Worker before any service
+registration; `KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration()` in the migrator),
+`Azure.Security.KeyVault.Secrets` `SecretClient.GetSecret` per mapped name with
+`ManagedIdentityCredential`. Decision: PILOT-KEYVAULT-PRIVATE-APP-READ (decision-log, PR #129).
+Tests: `Adp001KeyVaultSecretsConfigurationTests` (fake readers and the real SDK over a fake REST
+surface: off by default, allowlist only, override order, missing/empty/disabled/denied secret stops
+the host with no value in the message, invalid configuration, migrator resolution) and
+`IdentityArchitectureTests.Key_Vault_secrets_are_allowlisted_and_read_with_the_workload_credential_by_every_host`.
+
 RBAC: **Key Vault Secrets User** for each workload identity, scoped to each secret it maps
 (`/secrets/<name>`), never the whole vault. The Worker gets no access to API-only secrets, and the
 migrator job only to its migration connection.

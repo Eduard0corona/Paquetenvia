@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.Database.Baseline;
 
 return await DatabaseMigratorProgram.RunAsync(args).ConfigureAwait(false);
@@ -163,10 +164,13 @@ internal static partial class DatabaseMigratorProgram
             throw new CommandLineException("--connection-env must be a valid environment variable name.");
         }
 
-        var value = Environment.GetEnvironmentVariable(environmentName);
+        // PILOT-KEYVAULT-PRIVATE-APP-READ: the name resolves from environment variables overlaid
+        // by the allowlisted Key Vault secrets (off unless KeyVaultSecrets__VaultUri is set).
+        var value = KeyVaultSecretsConfiguration.BuildEnvironmentConfiguration()[environmentName];
         if (string.IsNullOrWhiteSpace(value))
         {
-            throw new CommandLineException($"Environment variable '{environmentName}' is not set.");
+            throw new CommandLineException(
+                $"'{environmentName}' is set neither as an environment variable nor as a mapped Key Vault secret.");
         }
 
         return value;
