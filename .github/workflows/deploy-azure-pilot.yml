@@ -262,6 +262,7 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          trap 'shred -u "${RUNNER_TEMP}/s" 2>/dev/null || true' EXIT
           has_secret() { [[ "$(az keyvault secret list --vault-name "${VAULT}" --query "length([?name=='$1'])" -o tsv)" == "1" ]]; }
           put_secret() { az keyvault secret set --vault-name "${VAULT}" --name "$1" --file "$2" --encoding utf-8 --only-show-errors --output none; shred -u "$2"; }
           if ! has_secret pg-admin-password; then
@@ -282,6 +283,9 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          # The parameters file holds the administrator password; Stage 2 consumes and shreds it.
+          # If this step fails, shred it here so it never outlives a failed run.
+          trap 'rc=$?; if [[ ${rc} -ne 0 ]]; then shred -u "${RUNNER_TEMP}/platform.parameters.json" 2>/dev/null || true; fi; exit ${rc}' EXIT
           scope="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${PILOT_RESOURCE_GROUP}"
           tag_reader="$(az role definition list --custom-role-only true --name "${BLOB_TAG_READER_ROLE}" --scope "${scope}" --query "[0].id" -o tsv)"
           [[ -n "${tag_reader}" ]] || { echo "::error::custom role '${BLOB_TAG_READER_ROLE}' is missing (bootstrap.md step 4)"; exit 1; }
@@ -338,6 +342,7 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          trap 'shred -u "${RUNNER_TEMP}/s" 2>/dev/null || true' EXIT
           [[ "${PGHOST_FQDN}" =~ ^[a-z0-9-]+\.postgres\.database\.azure\.com$ ]] || { echo "::error::unexpected PostgreSQL host"; exit 1; }
           has_secret() { [[ "$(az keyvault secret list --vault-name "${VAULT}" --query "length([?name=='$1'])" -o tsv)" == "1" ]]; }
           put_secret() { az keyvault secret set --vault-name "${VAULT}" --name "$1" --file "$2" --encoding utf-8 --only-show-errors --output none; shred -u "$2"; }
