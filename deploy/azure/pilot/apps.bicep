@@ -52,6 +52,7 @@ var apiSecretNames = [
   'pg-api-runtime-connection'
   'authcenter-paquetenvia-client-secret'
   'paquetenvia-email-lookup-key-1'
+  'google-maps-api-key'
 ]
 var workerSecretNames = [
   'pg-worker-runtime-connection'
@@ -194,6 +195,15 @@ var apiKeyVaultEnv = [
     name: 'KeyVaultSecrets__Mappings__2__ConfigurationKey'
     value: 'EmailLookup:Keys:1'
   }
+  // GATE-003-PROVIDER-GOOGLE: the Google Maps Platform key (owner-written, restricted in Google Cloud).
+  {
+    name: 'KeyVaultSecrets__Mappings__3__SecretName'
+    value: 'google-maps-api-key'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__3__ConfigurationKey'
+    value: 'Locations:GoogleMaps:ApiKey'
+  }
 ]
 
 var workerKeyVaultEnv = [
@@ -264,7 +274,9 @@ var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, apiKeyVau
     name: 'Locations__Provider'
     value: 'PostgreSql'
   }
-  // GATE-003 (Google Maps Platform) is not implemented yet: operators enter coordinates manually.
+  // GATE-003-PROVIDER-GOOGLE: the GoogleMaps adapter exists and its key is mapped above, but GATE-003
+  // stays open until the owner records the Google spending cap; until then the pilot keeps the manual
+  // pin. Switching this value to 'GoogleMaps' is the only change needed once that row exists.
   {
     name: 'Locations__GeocodingProvider'
     value: 'Manual'

@@ -9,6 +9,7 @@ using Organizations.Infrastructure.Notifications;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
 using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.DataProtection;
+using Paqueteria.Infrastructure.Messaging;
 
 var builder = WebApplication.CreateBuilder(args);
 // PILOT-KEYVAULT-PRIVATE-APP-READ: allowlisted Key Vault secrets, read with the managed identity
@@ -26,6 +27,8 @@ builder.Services.AddCustodyInfrastructure(
 builder.Services.AddOrganizationsNotificationAudienceReader(builder.Configuration);
 builder.Services.AddIdentityNotificationAudienceReader(builder.Configuration);
 builder.Services.AddNotificationsInfrastructure(builder.Configuration);
+// GATE-004-CHANNELS: WhatsApp (Meta Cloud API) and email (ACS) adapters; every channel Disabled by default.
+builder.Services.AddPaqueteriaMessaging(builder.Configuration, builder.Environment);
 builder.Services.AddOrdersClaimWindowFinalization(builder.Configuration);
 builder.Services.AddDispatchAssignmentLifecycleWorker(builder.Configuration);
 builder.Services.AddCustodyOperationalCleanup(builder.Configuration);

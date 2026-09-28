@@ -371,6 +371,10 @@ jobs:
             echo "::error::Key Vault ${VAULT} lacks authcenter-paquetenvia-client-secret. Store the AuthCenter client secret (README 'Secrets the owner writes') and re-run."
             exit 1
           fi
+          if ! has_secret google-maps-api-key; then
+            echo "::error::Key Vault ${VAULT} lacks google-maps-api-key. Store the restricted Google Maps Platform key (README 'Secrets the owner writes') and re-run."
+            exit 1
+          fi
 
       - name: Close Key Vault firewall for this runner (window 2)
         if: always()
