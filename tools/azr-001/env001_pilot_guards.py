@@ -8,7 +8,7 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P19)
+  check            evaluate every pilot guard (P00..P20)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   scram-verifier   read a password on stdin, print its PostgreSQL SCRAM-SHA-256 verifier
   gate-decision    require a decision-log row that resolves or scopes GATE-007 / GATE-012
@@ -839,6 +839,38 @@ def guard_18_bff_web_image(ctx: Context) -> GuardResult:
     return _result(18, "AUTH-001 BFF web image (same origin)", failures, "API base URL unset, auth mode bff, manifest complete")
 
 
+GUARD_TOOLS = ("env001_pilot_guards.py", "azr001_static_guards.py")
+PYYAML_INSTALL = re.compile(r"pip install\s+PyYAML==6\.0\.3\b")
+
+
+def guard_20_guard_tool_dependencies(ctx: Context) -> GuardResult:
+    """Every job that runs a guard tool (both import PyYAML at module scope) installs the pinned PyYAML
+    with actions/setup-python first, in the same job."""
+    failures = []
+    invoking_jobs = 0
+    for name, job in (ctx.workflow.get("jobs", {}) or {}).items():
+        steps = [s for s in job.get("steps", []) or [] if isinstance(s, dict)]
+        python_ready = False
+        yaml_ready = False
+        uses_tool = False
+        for step in steps:
+            uses = str(step.get("uses", ""))
+            run = str(step.get("run", ""))
+            if uses.startswith("actions/setup-python@"):
+                python_ready = True
+            if PYYAML_INSTALL.search(run):
+                yaml_ready = python_ready
+            if any(tool in run for tool in GUARD_TOOLS):
+                uses_tool = True
+                if not yaml_ready:
+                    failures.append(f"job {name} step '{step.get('name')}' runs a guard tool before actions/setup-python + pip install PyYAML==6.0.3")
+                    break
+        invoking_jobs += uses_tool
+    if invoking_jobs == 0:
+        failures.append("no job runs the pilot guard tooling")
+    return _result(20, "guard tooling dependencies installed per job", failures, f"{invoking_jobs} job(s) install PyYAML before running guard tools")
+
+
 GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_00_templates,
     guard_01_resource_set,
@@ -860,6 +892,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_17_business_settings,
     guard_18_bff_web_image,
     guard_19_cleanups_enabled,
+    guard_20_guard_tool_dependencies,
 )
 
 

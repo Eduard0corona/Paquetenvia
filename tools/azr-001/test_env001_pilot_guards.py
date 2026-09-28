@@ -375,6 +375,9 @@ class TemplateGuardTests(unittest.TestCase):
         self.assert_fails(3, self.context(workflow_text=text.replace("environment: azure-pilot", "environment: azure-dev", 1)), "azure-pilot")
         self.assert_fails(4, self.context(workflow_text=text.replace("azr001_static_guards.py deploy-gate", "true", 1)), "deploy-gate")
         self.assert_fails(18, self.context(workflow_text=text.replace("deploy/azure/pilot/Dockerfile.web", "deploy/azure/Dockerfile.web")), "pilot/Dockerfile.web")
+        without_yaml = text.replace("      - name: Install guard dependencies\n        run: python -m pip install PyYAML==6.0.3\n\n      # ENV-001 acceptance", "      # ENV-001 acceptance", 1)
+        self.assertNotEqual(text, without_yaml)
+        self.assert_fails(20, self.context(workflow_text=without_yaml), "job deploy step")
         pinned = "azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6"
         self.assertIn(pinned, text)
         self.assert_fails(3, self.context(workflow_text=text.replace(pinned, "azure/login@v2", 1)), "pinned")

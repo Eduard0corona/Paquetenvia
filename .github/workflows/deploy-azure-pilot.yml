@@ -184,6 +184,16 @@ jobs:
           ref: ${{ inputs.tested_git_sha }}
           fetch-depth: 1
 
+      # tools/azr-001/env001_pilot_guards.py (gate-decision, scram-verifier, settings-check) imports PyYAML
+      # at module scope: same interpreter and pin as the provenance job.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install guard dependencies
+        run: python -m pip install PyYAML==6.0.3
+
       # ENV-001 acceptance: no pilot deployment without GATE-007 (privacy) and GATE-012 (cloud and data
       # residency) resolved or explicitly scoped by the owner. Each variable must equal the ID of exactly one
       # decision-log table row (at tested_git_sha) whose ID starts with GATE-007- / GATE-012- and whose Type

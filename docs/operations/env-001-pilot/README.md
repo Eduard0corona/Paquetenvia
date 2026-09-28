@@ -12,7 +12,7 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared, unchanged) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (20 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (21 guards) and `test_env001_pilot_guards.py` |
 | Restore drill | `deploy/azure/pilot/restore-drill.sh` |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -462,7 +462,7 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 20 guards (P00–P19) run on the compiled ARM output and the workflow:
+The 21 guards (P00–P20) run on the compiled ARM output and the workflow:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -471,6 +471,7 @@ The 20 guards (P00–P19) run on the compiled ARM output and the workflow:
     every third-party action pinned by SHA.
   - No `${{ }}` inside `run:`.
   - The 13/13 `deploy-gate`, image digests and the GATE-007/GATE-012 checks are present.
+  - Every job that runs a guard tool first sets up Python and installs `PyYAML==6.0.3` (P20).
 - **Secrets and settings:**
   - Secrets come only from Key Vault, read by the application. The per-workload mappings equal the per-secret RBAC, and there are no Container Apps secrets or `secretRef`.
   - Workloads run as `Production`/`PILOT_REAL_PEOPLE`, with no Mock or Synthetic values.
@@ -500,7 +501,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 20/20 pilot guards (P00–P19) and 31/31 AZR-001 guards pass, along with the guard unit tests, the CI tooling
+- 21/21 pilot guards (P00–P20) and 31/31 AZR-001 guards pass, along with the guard unit tests, the CI tooling
   tests and the gitleaks scan.
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.
