@@ -247,6 +247,21 @@ start if `Pricing__PricingPolicyVersion` is still set.
 Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
 
+**Accepted terms and privacy versions (UI-001, owner decision pending, not wired yet).** The
+operator-assisted order screen (`/ops/orders/new`) reads two server-only runtime settings on the
+web container: `PAQUETERIA_TERMS_VERSION` and `PAQUETERIA_PRIVACY_VERSION`. Each must match the
+AI-05 `terms_version`/`privacy_version` format `^[A-Za-z0-9._-]+$` (1 to 64 characters). If
+either is missing, malformed or `OWNER_DECISION_REQUIRED`, order confirmation is disabled.
+There is no default. They are not in `apps.settings.json`, because that file only reaches the
+API and Worker, only takes `.NET` `Section__Key` names, and treats the `PAQUETERIA_` prefix as
+platform-managed. Before the first pilot deployment that must create orders, the owner chooses
+both values. The pilot deploy then needs:
+
+- the two values as literal env entries on `ca-pv-pilot-web` in `apps.bicep`, or a new web-only
+  settings file/parameter;
+- a pilot guard (`tools/azr-001/env001_pilot_guards.py`) that refuses to deploy while either one
+  is missing or still `OWNER_DECISION_REQUIRED`.
+
 **Cleanups (PILOT-CLEANUPS-ENABLED, owner 2026-09-28).** The Worker runs:
 
 - **OPS-004 outbox retention:** `OutboxRetention__Enabled=true`, `DryRun=false`. It purges only old
