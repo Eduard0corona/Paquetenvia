@@ -126,6 +126,41 @@ routes:
     - finance
     - platform_admin
     release: MVP-1
+  # UI-001-SCREENS-CSV-INC-COD (project owner, 2026-09-28): CSV import, incident and COD
+  # screens built only on existing AI-05 operations; D5-CAPABILITY-MATRIX and the MFA
+  # step-up still apply and the backend remains the authorization barrier.
+  /ops/orders/import:
+    roles:
+    - platform_admin
+    - dispatcher
+    release: MVP-1
+    screen_contract: csv_order_import
+    decisions:
+    - UI-001-SCREENS-CSV-INC-COD
+  /ops/incidents:
+    roles:
+    - platform_admin
+    - dispatcher
+    mutation_requirements:
+      platform_admin: existing MFA policy applies
+    release: MVP-1
+    screen_contract: incident_desk
+    decisions:
+    - UI-001-SCREENS-CSV-INC-COD
+  /finance/cod:
+    roles:
+    - dispatcher
+    - platform_admin
+    - finance
+    mutation_requirements:
+      platform_admin: existing MFA policy applies
+      finance: FINANCE-COD-MFA-2026-09-27 applies to every read and reconciliation
+    release: MVP-1
+    screen_contract: cod_control
+    decisions:
+    - UI-001-SCREENS-CSV-INC-COD
+    - FINANCE-COD-RECONCILIATION
+    - FINANCE-COD-MFA-2026-09-27
 screen_contracts:
   dispatch_dashboard:
     must_show:
@@ -296,6 +331,126 @@ screen_contracts:
     - CANCELLED
     fail_closed: invalid/expired/revoked token, cross-tenant reference or unmapped internal state all render the same not-found
       experience
+  csv_order_import:
+    release: MVP-1
+    route: /ops/orders/import
+    decision: UI-001-SCREENS-CSV-INC-COD
+    authority: REST API + PostgreSQL
+    sources:
+      preview: POST /orders/csv/preview (previewOrderCsv)
+      commit: POST /orders/csv/commit (commitOrderCsv)
+    roles:
+      preview: [DISPATCHER, PLATFORM_ADMIN]
+      commit: [DISPATCHER, PLATFORM_ADMIN]
+    upload:
+    - the file is sent only as the AI-05 multipart/form-data part file; the client never parses rows
+    - the client refuses an empty file or one larger than 1 MiB before any request
+    - the bytes previewed are kept in memory only and are the exact bytes committed
+    - the multipart filename is a fixed neutral name, never the local file name
+    - content_digest is echoed from the preview response, never computed or edited by the client
+    states:
+    - no_session
+    - access_unavailable
+    - file_selected
+    - previewing
+    - previewed_with_errors
+    - previewed_valid
+    - committing
+    - committed
+    validations:
+    - commit is offered only when file_errors is empty, invalid_rows is 0 and valid_rows is at least 1
+    - file_errors and per-row errors are shown by row_number, column and code in Spanish
+    - a commit 422 replaces the preview with the returned per-row report and creates nothing
+    - a commit response whose content_digest differs from the previewed one fails closed
+    - per-row outcomes show CREATED with public_id or FAILED with error_code
+    idempotency:
+    - Idempotency-Key names the batch and is reused for a retry of the same content_digest after a network or 5xx failure
+    - a new file or a definitive server answer drops the key
+    - 409 IDEMPOTENCY_CONFLICT is explained; the client never generates a key for other content under the same batch
+    privacy:
+    - no browser persistence of the file, report or keys; a tenant switch clears all of them
+    - no client logging of file contents or row values
+  incident_desk:
+    release: MVP-1
+    route: /ops/incidents
+    decision: UI-001-SCREENS-CSV-INC-COD
+    authority: REST API + PostgreSQL
+    sources:
+      open: POST /orders/{orderId}/incidents (openIncident)
+      resolve: POST /incidents/{incidentId}/resolution (resolveIncident)
+    roles:
+      open: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      resolve: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      note: DRIVER opens incidents from /driver/stops/:id and never resolves; this screen does not admit DRIVER
+    states:
+    - no_session
+    - access_unavailable
+    - ready
+    - submitting
+    - opened
+    - resolved
+    validations:
+    - order id and incident id are canonical UUIDs
+    - type matches ^[A-Z_]+$ with 1 to 64 characters
+    - severity, reason_code and next_action come from the AI-05 enums
+    - description has 1 to 2000 characters
+    - occurred_at is captured in America/Mazatlan and sent as UTC; later than now plus 5 minutes or older than 72 hours
+      is refused client-side, and the server remains authoritative for its configured window
+    - evidence_proof_ids are 1 to 10 unique canonical UUIDs
+    - resolution outcome is RESOLVED or REJECTED and reason follows the AI-05 ResolveIncidentRequest pattern, sent
+      exactly as typed
+    display:
+    - only the Incident returned by openIncident or resolveIncident in the current tenant session is shown
+    - status, severity, reason_code, next_action, custody_acquired, occurred_at and sla_due_at
+    - description and resolution reason are never echoed back after submission
+    idempotency:
+    - each open and each resolution reuses its Idempotency-Key for a retry of the same payload after a network or 5xx
+      failure
+    not_supported:
+    - listing incidents or reading one incident; AI-05 exposes no incident read operation
+    - discovering proof ids for evidence; AI-05 exposes no proof read operation
+  cod_control:
+    release: MVP-1
+    route: /finance/cod
+    decision: UI-001-SCREENS-CSV-INC-COD
+    authority: REST API + PostgreSQL
+    sources:
+      read: GET /orders/{orderId}/financials (getOrderFinancials)
+      record: POST /orders/{orderId}/cod-records (recordCodCollection)
+      reconcile: POST /cod-records/{codId}/reconcile (reconcileCod)
+    roles:
+      read: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
+      record: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      reconcile: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
+      note: FINANCE never records a COD collection; DRIVER records from its own assignment, not from this screen
+    states:
+    - no_session
+    - access_unavailable
+    - ready
+    - loading_order
+    - order_loaded
+    - submitting
+    money:
+    - every amount is integer MXN cents from the API and typed amounts are parsed to integer cents without floating point
+    - revenue, cost by modality, margin, margin basis points and the COD position are shown exactly as returned
+    validations:
+    - order id and COD record id are canonical UUIDs
+    - record is offered only when the COD position expects a positive amount and no collection is recorded
+    - the recorded amount must equal expected_cents exactly; reference has 1 to 200 characters without surrounding
+      whitespace
+    - reconcile is offered for a RECORDED collection whose id the screen received from recordCodCollection, or for a
+      COD record id typed by the operator
+    recovery:
+    - load and refresh fetch getOrderFinancials
+    - every successful or conflicting write refetches getOrderFinancials; optimistic UI is never authoritative
+    idempotency:
+    - record and reconcile reuse their Idempotency-Key for a retry of the same payload after a network or 5xx failure
+    privacy:
+    - no browser persistence; a tenant switch clears the loaded order, COD records and keys
+    - the COD reference is never echoed back after submission nor logged
+    not_supported:
+    - reading or listing COD records; AI-05 CodPosition carries no COD record id
+    - listing orders with pending COD; AI-05 listOrders has no COD filter
 prototype_file: prototype/index.html
 meta:
   version: '0.6'
