@@ -348,6 +348,34 @@ var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, [
     name: 'Orders__ClaimWindowFinalization__Enabled'
     value: 'true'
   }
+  // PILOT-CLEANUPS-ENABLED. OPS-004: purge only old PROCESSED/DEAD outbox rows through the maintenance
+  // functions, with the contract retention defaults (business 7 d / 30 d, location 1 d / 7 d; not overridden).
+  {
+    name: 'OutboxRetention__Enabled'
+    value: 'true'
+  }
+  {
+    name: 'OutboxRetention__DryRun'
+    value: 'false'
+  }
+  // OPS-003: idempotency keys are purged only after the fixed 72 h floor; expired proof upload
+  // sessions and revoked/expired BFF sessions are purged by their security functions.
+  {
+    name: 'OperationalCleanup__IdempotencyKeys__Enabled'
+    value: 'true'
+  }
+  {
+    name: 'OperationalCleanup__IdempotencyKeys__DryRun'
+    value: 'false'
+  }
+  {
+    name: 'OperationalCleanup__ProofUploadSessions__Enabled'
+    value: 'true'
+  }
+  {
+    name: 'OperationalCleanup__BffSessions__Enabled'
+    value: 'true'
+  }
 ], businessSettings)
 
 var dotnetProbes = [

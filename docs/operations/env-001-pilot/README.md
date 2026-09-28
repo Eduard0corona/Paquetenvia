@@ -12,7 +12,7 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared, unchanged) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (19 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (20 guards) and `test_env001_pilot_guards.py` |
 | Restore drill | `deploy/azure/pilot/restore-drill.sh` |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -36,7 +36,9 @@ lists what could only be checked statically.
 
 The ENV-001 acceptance criterion "no pilot deployment without GATE-007 and GATE-012 resolved or
 explicitly scoped by the project owner" is enforced by the workflow. The environment variables
-`PILOT_GATE_007_DECISION` and `PILOT_GATE_012_DECISION` must each name a `decision-log.md` row, in
+`PILOT_GATE_007_DECISION` and `PILOT_GATE_012_DECISION` (for example `GATE-012-PILOT-SCOPE`:
+Mexico Central only, 14-day PITR, no geo-redundant backup, Log Analytics 30 days with a daily cap)
+must each name a `decision-log.md` row, in
 the deployed tree, that mentions that gate. Otherwise the deploy job stops before logging in to
 Azure.
 
@@ -190,8 +192,18 @@ value is still `OWNER_DECISION_REQUIRED`:
 Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
 
-Left at their code defaults (disabled) until the owner decides: `OutboxRetention__*` (OPS-004) and
-`OperationalCleanup__*` (OPS-003).
+**Cleanups (PILOT-CLEANUPS-ENABLED, owner 2026-09-28).** The Worker runs:
+
+- **OPS-004 outbox retention:** `OutboxRetention__Enabled=true`, `DryRun=false`. It purges only old
+  `PROCESSED`/`DEAD` rows through the maintenance functions. The contract retention defaults are kept:
+  business 7 d / 30 d, location 1 d / 7 d.
+- **OPS-003 operational cleanup:**
+  - Idempotency keys: `Enabled=true`, `DryRun=false`, with the fixed 72 h floor.
+  - Expired proof upload sessions and revoked/expired BFF sessions: `Enabled=true`.
+
+These are platform-managed. `apps.settings.json` cannot override them, and guard P19 rejects any
+retention or batch override, so the contract defaults hold. To pause a job, set its `Enabled` to
+`false` in `apps.bicep` and redeploy. The ops-003/ops-004 runbooks describe dry-run measurement.
 
 ## 5. Cost estimate (PILOT-BUDGET-100USD)
 
@@ -218,8 +230,9 @@ hours a month. Sized for 50–100 real deliveries.
 | VNet, route, managed certificate, budget | free | 0.00 |
 | **Total** | | **≈ 98 typical, ≈ 108 if the log cap is hit every day** |
 
-**This design sits at the budget line and does not fit ~100 USD with margin.** The largest item is the
-always-on API at 0.5 vCPU. The levers, in order of impact:
+**This design sits at the budget line and does not fit ~100 USD with margin.** The owner accepted this
+sizing (PILOT-BUDGET-ACCEPT-98-108, 2026-09-28) without applying any lever. The largest item is the
+always-on API at 0.5 vCPU. For the record, the levers in order of impact:
 
 1. API at 0.25 vCPU / 0.5 GiB saves about 21 USD, at the risk of memory pressure in a 15-module .NET
    host. Measure it first.
@@ -243,6 +256,7 @@ Two further caveats:
    and the `azure-pilot` GitHub Environment with its variables.
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
+   `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
 3. The owner replaces every `OWNER_DECISION_REQUIRED` in `deploy/azure/pilot/apps.settings.json`
    (PR → `development` → `main`).
 4. Promote to `main` and wait for the Foundation CI push run on `main` (13/13 green). Note its run id
@@ -375,7 +389,7 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 
 - **PostgreSQL:** no public endpoint. Only the VNet reaches it, and every database action runs as a
   Container Apps Job inside the VNet. The runner never connects to it.
-- **Blob Storage:** the endpoint stays **public**. AI-01 §4.16 requires drivers to upload proof bytes
+- **Blob Storage:** the endpoint stays **public** (owner-accepted: PILOT-BLOB-PUBLIC-ENDPOINT, 2026-09-28). AI-01 §4.16 requires drivers to upload proof bytes
   directly with a signed URL, so phones must reach it from the internet.
   - Anonymous access and shared-key access are disabled. Every request needs Entra ID or a
     user-delegation SAS, which carries no `t`/tags permission.
@@ -393,7 +407,7 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 19 guards (P00–P18) run on the compiled ARM output and the workflow:
+The 20 guards (P00–P19) run on the compiled ARM output and the workflow:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.

@@ -219,6 +219,21 @@ class TemplateGuardTests(unittest.TestCase):
             t["platform"]["parameters"]["budgetAmount"]["maxValue"] = 500
         self.assert_fails(15, self.context(raise_budget), "100 USD")
 
+    def test_cleanups_must_stay_enabled_with_contract_values(self):
+        def disable(t):
+            raw = json.dumps(t["apps"])
+            raw = raw.replace("createObject('name', 'OutboxRetention__DryRun', 'value', 'false')", "createObject('name', 'OutboxRetention__DryRun', 'value', 'true')")
+            t["apps"] = json.loads(raw)
+        self.assert_fails(19, self.context(disable), "OutboxRetention__DryRun=false")
+
+        def shorten(t):
+            raw = json.dumps(t["apps"])
+            raw = raw.replace("createObject('name', 'OutboxRetention__Enabled', 'value', 'true')",
+                              "createObject('name', 'OutboxRetention__Enabled', 'value', 'true'), createObject('name', 'OutboxRetention__Business__DeadRetention', 'value', '1.00:00:00')")
+            t["apps"] = json.loads(raw)
+        self.assert_fails(19, self.context(shorten), "OutboxRetention__Business__DeadRetention")
+        self.assertTrue(guards.validate_settings([{"name": "OutboxRetention__DryRun", "value": "true"}], allow_sentinel=False))
+
     def test_adp_contract_is_wired(self):
         def drop(t):
             t["apps"]["variables"]["proofStorageEnv"] = [e for e in t["apps"]["variables"]["proofStorageEnv"] if e["name"] != "ProofStorage__ThreatScanner"]

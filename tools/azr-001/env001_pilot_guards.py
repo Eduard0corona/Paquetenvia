@@ -8,7 +8,7 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P18)
+  check            evaluate every pilot guard (P00..P19)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   scram-verifier   read a password on stdin, print its PostgreSQL SCRAM-SHA-256 verifier
 """
@@ -122,6 +122,8 @@ PLATFORM_MANAGED_PREFIXES = (
     "PiiProtection__",
     "Locations__",
     "Incidents__",
+    "OutboxRetention__",
+    "OperationalCleanup__",
     "Urls",
 )
 SETTING_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]*(__[A-Za-z0-9]+)+$")
@@ -673,6 +675,30 @@ def guard_16_adp_contract(ctx: Context) -> GuardResult:
     return _result(16, "ADP-001 configuration contract wired", failures, "PII, proof storage and Data Protection KEK settings present")
 
 
+def guard_19_cleanups_enabled(ctx: Context) -> GuardResult:
+    """PILOT-CLEANUPS-ENABLED: OPS-004 retention and OPS-003 cleanup run on the Worker with the contract values."""
+    failures = []
+    worker = ctx.workload(WORKER_APP)
+    expected = {
+        "OutboxRetention__Enabled": "true",
+        "OutboxRetention__DryRun": "false",
+        "OperationalCleanup__IdempotencyKeys__Enabled": "true",
+        "OperationalCleanup__IdempotencyKeys__DryRun": "false",
+        "OperationalCleanup__ProofUploadSessions__Enabled": "true",
+        "OperationalCleanup__BffSessions__Enabled": "true",
+    }
+    for key, value in expected.items():
+        if worker.value(key) != value:
+            failures.append(f"worker must set {key}={value} (found {worker.value(key)})")
+    for workload in ctx.workloads:
+        for key in workload.env:
+            if key.startswith(("OutboxRetention__", "OperationalCleanup__")) and key not in expected:
+                failures.append(f"{workload.name} overrides contract cleanup value {key}; keep the OPS-003/OPS-004 defaults")
+            if workload.name != WORKER_APP and key in expected:
+                failures.append(f"{workload.name} must not run cleanup jobs ({key}); they belong to the Worker")
+    return _result(19, "PILOT-CLEANUPS-ENABLED with contract values", failures, "OPS-004 retention and OPS-003 cleanup enabled on the Worker")
+
+
 def guard_17_business_settings(ctx: Context) -> GuardResult:
     failures = []
     for name in (API_APP, WORKER_APP):
@@ -730,6 +756,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_16_adp_contract,
     guard_17_business_settings,
     guard_18_bff_web_image,
+    guard_19_cleanups_enabled,
 )
 
 
