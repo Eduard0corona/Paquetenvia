@@ -3964,8 +3964,10 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
             ),
         )
         catalog = rel000.admitted_package_catalog(admissions)
+        amendments = rel000.admission_amendments(admissions)
         for package, files in usage.items():
-            self.assertIn(package.casefold(), catalog)
+            # A package id or a declared, exact amendment of an admission.
+            self.assertTrue(rel000.usage_admission_id(package, catalog, amendments))
             self.assertTrue(set(files).issubset(changed_lockfiles))
         central = rel000.validate_admitted_central_packages(
             REPOSITORY_ROOT, self.baseline, admissions
@@ -4786,6 +4788,417 @@ class DependencyAdmissionTests(unittest.TestCase):
             ["DEP-TEST"],
             [item["id"] for item in rel000.load_base_dependency_admissions(self.root, admitted_base)],
         )
+
+
+class DependencyAdmissionAmendmentTests(unittest.TestCase):
+    """GOV-DEPENDENCY-ADMISSION-001 amendments: exact upgrades, removals and extra versions only."""
+
+    H = {name: (name[0] * 86 + "==") for name in ("Direct", "Transitive", "New", "Shared", "Other", "Xtra")}
+    TODAY = "2026-09-28"
+    PROPS_BASE = (
+        "<Project>\n"
+        "  <PropertyGroup>\n"
+        "    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n"
+        "  </PropertyGroup>\n"
+        "  <ItemGroup>\n"
+        '    <PackageVersion Include="Baseline.Direct" Version="1.2.3" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n"
+    )
+    OLD_HASH = "O" * 86 + "=="
+    PRUNED_HASH = "P" * 86 + "=="
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-amendment-tests-")
+        self.root = Path(self.temp.name) / "repo"
+        self.root.mkdir()
+        (self.root / "Directory.Packages.props").write_text(self.PROPS_BASE, encoding="utf-8")
+        for directory in ("app", "host"):
+            (self.root / directory).mkdir()
+        self.write_project()
+        self.write_lock(
+            "app",
+            {
+                "Baseline.Direct": {
+                    "type": "Direct",
+                    "requested": "[1.2.3, )",
+                    "resolved": "1.2.3",
+                    "contentHash": "baseline-direct-hash",
+                    "dependencies": {"Baseline.Transitive": "4.5.6", "Pruned.Transitive": "1.0.0"},
+                },
+                "Baseline.Transitive": {"type": "Transitive", "resolved": "4.5.6", "contentHash": "bt"},
+                "Pruned.Transitive": {"type": "Transitive", "resolved": "1.0.0", "contentHash": self.PRUNED_HASH},
+                "Old.Async": {"type": "Transitive", "resolved": "6.0.0", "contentHash": self.OLD_HASH},
+            },
+        )
+        self.write_lock(
+            "host",
+            {
+                "Baseline.Transitive": {"type": "Transitive", "resolved": "4.5.6", "contentHash": "bt"},
+                "Old.Async": {"type": "Transitive", "resolved": "6.0.0", "contentHash": self.OLD_HASH},
+            },
+        )
+        self.git("init", "-q")
+        self.git("config", "user.email", "rel000@example.invalid")
+        self.git("config", "user.name", "REL-000 Tests")
+        self.git("config", "commit.gpgsign", "false")
+        self.git("add", ".")
+        self.git("commit", "-qm", "base")
+        self.base = self.git("rev-parse", "HEAD")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def git(self, *arguments: str) -> str:
+        return subprocess.check_output(["git", "-C", str(self.root), *arguments], text=True).strip()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def write_project(self, package_body: str = "") -> None:
+        (self.root / "app/App.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+            '<PackageReference Include="Baseline.Direct" />'
+            f"{package_body}"
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+
+    def write_lock(self, directory: str, nodes: dict[str, Any]) -> None:
+        (self.root / directory / "packages.lock.json").write_text(
+            json.dumps({"version": 2, "dependencies": {"net10.0": nodes}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def read_nodes(self, directory: str) -> dict[str, Any]:
+        return json.loads((self.root / directory / "packages.lock.json").read_text(encoding="utf-8"))[
+            "dependencies"
+        ]["net10.0"]
+
+    def other(self) -> dict[str, Any]:
+        """A merged admission that already admits Shared.Abstractions 8.19.2."""
+        return {
+            "id": "DEP-OTHER",
+            "mode": rel000.DEPENDENCY_ADMISSION,
+            "status": "MERGED",
+            "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+            "authorized_source_branch": "deps/other",
+            "ecosystem": "nuget",
+            "admitted_direct_packages": [
+                {"id": "Other.Direct", "version": "1.0.0", "content_hash": self.H["Other"]}
+            ],
+            "admitted_transitive_packages": [
+                {"id": "Shared.Abstractions", "version": "8.19.2", "content_hash": self.H["Shared"]}
+            ],
+            "allowed_dependency_files": ["Directory.Packages.props"],
+            "required_dependency_files": ["Directory.Packages.props"],
+            "allowed_project_files": [],
+        }
+
+    def admission(self, **overrides: Any) -> dict[str, Any]:
+        value = {
+            "id": "DEP-AMEND",
+            "mode": rel000.DEPENDENCY_ADMISSION,
+            "status": "ACTIVE",
+            "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+            "authorized_source_branch": "deps/amend",
+            "ecosystem": "nuget",
+            "admitted_direct_packages": [
+                {"id": "Admitted.Direct", "version": "2.0.0", "content_hash": self.H["Direct"]}
+            ],
+            "admitted_transitive_packages": [
+                {"id": "Admitted.Transitive", "version": "3.1.0", "content_hash": self.H["Transitive"]},
+                {"id": "Old.Async", "version": "10.0.9", "content_hash": self.H["New"]},
+            ],
+            "additional_package_versions": [
+                {
+                    "id": "Shared.Abstractions",
+                    "version": "8.14.0",
+                    "content_hash": self.H["Xtra"],
+                    "lock_files": ["host/packages.lock.json"],
+                }
+            ],
+            "baseline_package_upgrades": [
+                {
+                    "lock_file": "app/packages.lock.json",
+                    "framework": "net10.0",
+                    "id": "Old.Async",
+                    "from_version": "6.0.0",
+                    "from_content_hash": self.OLD_HASH,
+                    "to_version": "10.0.9",
+                    "to_content_hash": self.H["New"],
+                }
+            ],
+            "baseline_package_removals": [
+                {
+                    "lock_file": "app/packages.lock.json",
+                    "framework": "net10.0",
+                    "id": "Pruned.Transitive",
+                    "version": "1.0.0",
+                    "content_hash": self.PRUNED_HASH,
+                }
+            ],
+            "allowed_dependency_files": [
+                "Directory.Packages.props",
+                "app/packages.lock.json",
+                "host/packages.lock.json",
+            ],
+            "required_dependency_files": [
+                "Directory.Packages.props",
+                "app/packages.lock.json",
+                "host/packages.lock.json",
+            ],
+            "allowed_project_files": ["app/App.csproj"],
+        }
+        value.update(overrides)
+        return value
+
+    def admissions(self, **overrides: Any) -> list[dict[str, Any]]:
+        return [self.other(), self.admission(**overrides)]
+
+    def apply(self) -> None:
+        (self.root / "Directory.Packages.props").write_text(
+            self.PROPS_BASE.replace(
+                '    <PackageVersion Include="Baseline.Direct" Version="1.2.3" />\n',
+                '    <PackageVersion Include="Admitted.Direct" Version="2.0.0" />\n'
+                '    <PackageVersion Include="Baseline.Direct" Version="1.2.3" />\n',
+            ),
+            encoding="utf-8",
+        )
+        self.write_project('<PackageReference Include="Admitted.Direct" />')
+        app = self.read_nodes("app")
+        app["Admitted.Direct"] = {
+            "type": "Direct",
+            "requested": "[2.0.0, )",
+            "resolved": "2.0.0",
+            "contentHash": self.H["Direct"],
+            "dependencies": {"Admitted.Transitive": "3.1.0"},
+        }
+        app["Admitted.Transitive"] = {"type": "Transitive", "resolved": "3.1.0", "contentHash": self.H["Transitive"]}
+        app["Old.Async"] = {"type": "Transitive", "resolved": "10.0.9", "contentHash": self.H["New"]}
+        del app["Pruned.Transitive"]
+        del app["Baseline.Direct"]["dependencies"]["Pruned.Transitive"]
+        self.write_lock("app", app)
+        host = self.read_nodes("host")
+        host["Admitted.Transitive"] = {"type": "Transitive", "resolved": "3.1.0", "contentHash": self.H["Transitive"]}
+        host["Shared.Abstractions"] = {"type": "Transitive", "resolved": "8.14.0", "contentHash": self.H["Xtra"]}
+        self.write_lock("host", host)
+
+    def diff(self, admissions=None, branch="deps/amend"):
+        return rel000.validate_dependency_diff(
+            self.root,
+            self.base,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            self.admissions() if admissions is None else admissions,
+            branch,
+            self.TODAY,
+        )
+
+    def changed(self) -> list[str]:
+        return sorted(
+            set(self.git("diff", "--name-only", self.base).splitlines())
+            | set(self.git("ls-files", "--others", "--exclude-standard").splitlines())
+        )
+
+    def graph(self, admissions=None):
+        return rel000.package_graph_lockfile_diff(
+            self.root, self.base, self.changed(), self.admissions() if admissions is None else admissions
+        )
+
+    def edit(self, directory: str, change) -> None:
+        nodes = self.read_nodes(directory)
+        change(nodes)
+        self.write_lock(directory, nodes)
+
+    # --- accepted -------------------------------------------------------------
+
+    def test_declared_amendments_pass_and_belong_to_their_own_admission(self):
+        self.apply()
+        result = self.diff()
+        self.assertEqual(["DEP-AMEND"], result["dependency_admission_ids"])
+        self.assertEqual(
+            ["app/packages.lock.json", "host/packages.lock.json"],
+            result["baseline_package_graph_lockfiles"],
+        )
+        lockfiles, usage = self.graph(
+            [self.other(), self.admission(status="MERGED")]
+        )
+        self.assertEqual(["app/packages.lock.json", "host/packages.lock.json"], lockfiles)
+        self.assertEqual(["host/packages.lock.json"], usage["Shared.Abstractions@8.14.0"])
+        self.assertEqual(
+            ["app/packages.lock.json"], usage["upgrade:app/packages.lock.json:net10.0:Old.Async"]
+        )
+        self.assertEqual(
+            ["app/packages.lock.json"], usage["removal:app/packages.lock.json:net10.0:Pruned.Transitive"]
+        )
+
+    # --- anything undeclared still fails ---------------------------------------
+
+    def test_undeclared_removal_fails(self):
+        self.apply()
+        self.edit("host", lambda nodes: nodes.pop("Baseline.Transitive"))
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED", self.diff)
+
+    def test_removal_of_a_different_version_than_declared_fails(self):
+        self.apply()
+        removal = dict(self.admission()["baseline_package_removals"][0], version="1.0.1")
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED",
+            lambda: self.diff(self.admissions(baseline_package_removals=[removal])),
+        )
+
+    def test_upgrade_to_an_undeclared_version_fails(self):
+        self.apply()
+        self.edit("app", lambda nodes: nodes["Old.Async"].update(resolved="10.0.8"))
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED", self.diff)
+
+    def test_upgrade_in_an_undeclared_lockfile_fails(self):
+        self.apply()
+        self.edit(
+            "host",
+            lambda nodes: nodes.__setitem__(
+                "Old.Async", {"type": "Transitive", "resolved": "10.0.9", "contentHash": self.H["New"]}
+            ),
+        )
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED", self.diff)
+
+    def test_upgrade_that_also_changes_the_node_type_fails(self):
+        self.apply()
+        self.edit(
+            "app",
+            lambda nodes: nodes["Old.Async"].update(type="CentralTransitive", requested="[10.0.9, )"),
+        )
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED", self.diff)
+
+    def test_dropping_an_edge_to_a_node_that_was_not_removed_fails(self):
+        self.apply()
+        self.edit("app", lambda nodes: nodes["Baseline.Direct"]["dependencies"].pop("Baseline.Transitive"))
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED", self.diff)
+
+    def test_pruned_edges_do_not_excuse_any_other_change(self):
+        self.apply()
+        self.edit("app", lambda nodes: nodes["Baseline.Direct"].update(contentHash="tampered"))
+        self.assert_reason("DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED", self.diff)
+
+    def test_edge_pruning_without_the_declared_removal_fails(self):
+        self.apply()
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED",
+            lambda: self.diff(self.admissions(baseline_package_removals=[])),
+        )
+
+    def test_additional_version_outside_its_lockfiles_fails(self):
+        self.apply()
+        self.edit(
+            "app",
+            lambda nodes: nodes.__setitem__(
+                "Shared.Abstractions", {"type": "Transitive", "resolved": "8.14.0", "contentHash": self.H["Xtra"]}
+            ),
+        )
+        self.assert_reason("DEPENDENCY_ADMISSION_VERSION_MISMATCH", self.diff)
+
+    def test_additional_version_with_another_hash_fails(self):
+        self.apply()
+        self.edit("host", lambda nodes: nodes["Shared.Abstractions"].update(contentHash="Z" * 86 + "=="))
+        self.assert_reason("DEPENDENCY_ADMISSION_CONTENT_HASH_MISMATCH", self.diff)
+
+    def test_additional_version_cannot_be_central(self):
+        self.apply()
+        self.edit(
+            "host",
+            lambda nodes: nodes["Shared.Abstractions"].update(type="CentralTransitive", requested="[8.14.0, )"),
+        )
+        self.assert_reason("DEPENDENCY_ADMISSION_DIRECT_PACKAGE_NOT_ADMITTED", self.diff)
+
+    def test_a_third_version_of_the_shared_package_fails(self):
+        self.apply()
+        self.edit("host", lambda nodes: nodes["Shared.Abstractions"].update(resolved="8.15.0"))
+        self.assert_reason("DEPENDENCY_ADMISSION_VERSION_MISMATCH", self.diff)
+
+    def test_every_declared_amendment_must_be_delivered(self):
+        self.apply()
+        self.edit(
+            "app",
+            lambda nodes: (
+                nodes.__setitem__(
+                    "Pruned.Transitive", {"type": "Transitive", "resolved": "1.0.0", "contentHash": self.PRUNED_HASH}
+                ),
+                nodes["Baseline.Direct"]["dependencies"].__setitem__("Pruned.Transitive", "1.0.0"),
+            ),
+        )
+        failure = self.assert_reason("DEPENDENCY_ADMISSION_INCOMPLETE", self.diff)
+        self.assertEqual(
+            ["removal:app/packages.lock.json:net10.0:Pruned.Transitive"],
+            failure.details["missing_lock_packages"],
+        )
+
+    def test_amendments_of_other_branches_or_merged_admissions_cannot_be_introduced(self):
+        self.apply()
+        self.assert_reason("DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED", lambda: self.diff(branch="deps/other"))
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_NOT_ACTIVE",
+            lambda: self.diff([self.other(), self.admission(status="MERGED")]),
+        )
+
+    def test_without_the_admission_the_amendments_are_not_applied(self):
+        self.apply()
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            self.diff([self.other()])
+        self.assertIn(
+            raised.exception.reason_code,
+            {"DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE", "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED"},
+        )
+        with self.assertRaises(rel000.ValidationFailure):
+            self.graph([self.other()])
+
+    # --- registry ---------------------------------------------------------------
+
+    def policy(self, admissions) -> dict[str, Any]:
+        value = json.loads((REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH).read_text(encoding="utf-8"))
+        value["dependency_admissions"] = admissions
+        return value
+
+    def test_registry_accepts_the_exact_amendments(self):
+        rel000.validate_remediation_policy(self.policy(self.admissions()))
+
+    def test_registry_rejects_inexact_or_unscoped_amendments(self):
+        extra = self.admission()["additional_package_versions"][0]
+        upgrade = self.admission()["baseline_package_upgrades"][0]
+        removal = self.admission()["baseline_package_removals"][0]
+        cases = {
+            "wildcard version": {"additional_package_versions": [dict(extra, version="8.*")]},
+            "range version": {"baseline_package_upgrades": [dict(upgrade, to_version="[10.0.9, )")]},
+            "missing hash": {"baseline_package_removals": [{k: v for k, v in removal.items() if k != "content_hash"}]},
+            "unknown key": {"baseline_package_removals": [dict(removal, reason="stale")]},
+            "lockfile not allowed": {"baseline_package_removals": [dict(removal, lock_file="other/packages.lock.json")]},
+            "not a lockfile": {"baseline_package_removals": [dict(removal, lock_file="Directory.Packages.props")]},
+            "wildcard framework": {"baseline_package_removals": [dict(removal, framework="*")]},
+            "wildcard package": {"baseline_package_removals": [dict(removal, id="Microsoft.*")]},
+            "empty lockfile scope": {"additional_package_versions": [dict(extra, lock_files=[])]},
+            "extra of an unadmitted package": {"additional_package_versions": [dict(extra, id="Nobody.Admits")]},
+            "extra of a package admitted here": {"additional_package_versions": [dict(extra, id="Admitted.Transitive")]},
+            "extra equal to the admitted version": {"additional_package_versions": [dict(extra, version="8.19.2")]},
+            "duplicate extra": {"additional_package_versions": [extra, dict(extra)]},
+            "upgrade to an unadmitted version": {"baseline_package_upgrades": [dict(upgrade, to_version="10.0.8")]},
+            "upgrade without a version change": {"baseline_package_upgrades": [dict(upgrade, from_version="10.0.9")]},
+            "node amended twice": {
+                "baseline_package_removals": [removal, dict(removal)],
+            },
+            "upgrade and removal of the same node": {
+                "baseline_package_removals": [dict(removal, id="Old.Async", version="6.0.0", content_hash=self.OLD_HASH)],
+            },
+            "amendments not an array": {"baseline_package_removals": {"app": removal}},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(label=label):
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_POLICY_INVALID",
+                    lambda: rel000.validate_remediation_policy(self.policy(self.admissions(**overrides))),
+                )
 
 
 class WebTransitiveRemediationPolicyTests(unittest.TestCase):
