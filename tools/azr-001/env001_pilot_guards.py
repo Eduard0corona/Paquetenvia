@@ -58,6 +58,8 @@ REQUIRED_SECRET_MAPPINGS = {
         "ConnectionStrings:Paqueteria": "pg-api-runtime-connection",
         "AuthCenter:ClientSecret": "authcenter-paquetenvia-client-secret",
         "EmailLookup:Keys:1": "paquetenvia-email-lookup-key-1",
+        # GATE-003-PROVIDER-GOOGLE: owner-written Google Maps Platform key for the Locations adapter.
+        "Locations:GoogleMaps:ApiKey": "google-maps-api-key",
     },
     WORKER_APP: {
         "ConnectionStrings:PaqueteriaWorker": "pg-worker-runtime-connection",

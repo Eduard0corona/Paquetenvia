@@ -1,6 +1,7 @@
 using Locations.Application.Geocoding;
 using Locations.Application.Locations;
 using Locations.Infrastructure.Geocoding;
+using Locations.Infrastructure.Geocoding.GoogleMaps;
 using Locations.Infrastructure.Locations;
 using Locations.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +39,9 @@ public static class DependencyInjection
                 "Locations:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
             .Validate(options => options.GeocodingProvider != GeocodingProviderKind.Mock || IsMockProviderAllowed(environment),
                 "The mock geocoding provider is allowed only in Development, Testing, or authorized DevSynthetic.")
+            .Validate(options => options.GeocodingProvider != GeocodingProviderKind.GoogleMaps ||
+                    GoogleMapsGeocodingOptions.IsValid(options.GoogleMaps),
+                "Locations:GeocodingProvider=GoogleMaps requires Locations:GoogleMaps (ApiKey from Key Vault, https BaseUri, bounded resilience settings).")
             .Validate(options => options.PiiProtector != LocationPiiProtectorKind.Mock || IsMockProviderAllowed(environment),
                 "The mock PII protector is DEV_SYNTHETIC_ONLY outside Development and Testing; it is not a Staging or Production pattern.")
             .Validate(options => options.Provider != LocationsProviderKind.PostgreSql ||
@@ -79,6 +83,19 @@ public static class DependencyInjection
         services.AddSingleton<DisabledGeocodingProvider>();
         services.AddSingleton<ManualGeocodingProvider>();
         services.AddSingleton<DeterministicMockGeocodingProvider>();
+        // GATE-003-PROVIDER-GOOGLE: built lazily, only when GeocodingProvider=GoogleMaps. The named
+        // client has no default loggers (the request URI carries the address and the key), no
+        // redirects and no client-wide timeout: the provider bounds every attempt itself.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddHttpClient(GoogleMapsGeocodingProvider.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            })
+            .RemoveAllLoggers();
+        services.AddSingleton<GoogleMapsGeocodingProvider>();
         services.AddSingleton<DisabledLocationPiiProtector>();
         services.AddSingleton<DeterministicMockLocationPiiProtector>();
         // ADP-001: registered lazily; nothing Azure-related is built unless PiiProtector=AzureKeyVault.
@@ -95,6 +112,7 @@ public static class DependencyInjection
             {
                 GeocodingProviderKind.Manual => serviceProvider.GetRequiredService<ManualGeocodingProvider>(),
                 GeocodingProviderKind.Mock => serviceProvider.GetRequiredService<DeterministicMockGeocodingProvider>(),
+                GeocodingProviderKind.GoogleMaps => serviceProvider.GetRequiredService<GoogleMapsGeocodingProvider>(),
                 _ => serviceProvider.GetRequiredService<DisabledGeocodingProvider>(),
             });
         services.AddScoped<ILocationPiiProtector>(serviceProvider =>

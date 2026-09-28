@@ -158,7 +158,7 @@ Guard P06 checks three things:
 
 | Workload (identity) | Secret → configuration key |
 |---|---|
-| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1` |
+| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey` |
 | Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys) |
 | Migrate and verify jobs (`id-pv-pilot-migrate`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION` |
 | Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER` |
@@ -180,13 +180,13 @@ the app restarts or starts a new revision; the workflow restarts the API and Wor
 | `pg-api-login-verifier` / `pg-worker-login-verifier` | workflow (SCRAM of the above) | logins job (its own identity) |
 | `paquetenvia-email-lookup-key-1` | workflow (generated once: 32 random bytes, base64) | API (`EmailLookup__Keys__1`) |
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |
+| `google-maps-api-key` | **owner** (Google Cloud Console, GATE-003-PROVIDER-GOOGLE) | API (`Locations__GoogleMaps__ApiKey`) |
 | `pg-restore-drill-connection` | `restore-drill.sh` | verify job, during a drill only |
 
 **Reserved names (not created, for later work):**
 
 | Secret | For |
 |---|---|
-| `google-maps-api-key` | GATE-003-PROVIDER-GOOGLE (Locations geocoding/routing adapter) |
 | `whatsapp-cloud-api-token` | GATE-004-CHANNELS (Meta Cloud API access token) |
 | `whatsapp-app-secret` | GATE-004-CHANNELS (webhook signature verification) |
 
@@ -208,7 +208,9 @@ App settings wired by `apps.bicep`:
     `AzureKeyVault`, `PiiProtection__AzureKeyVault__KeyId`, `ProofStorage__Provider=AzureBlob`,
     `ProofStorage__ThreatScanner=DefenderForStorage`, `ProofStorage__AzureBlob__ServiceUri`,
     `DataProtection__Provider=PostgreSql` plus the `DataProtection__KeyEncryption__*` settings.
-  - `Locations__GeocodingProvider=Manual` until the GATE-003 Google adapter exists.
+  - `Locations__GeocodingProvider=Manual`. The `GoogleMaps` adapter exists and its key is mapped, but
+    GATE-003 stays open until the owner records the Google spending cap; switching the value to
+    `GoogleMaps` in `apps.bicep` is then the only change (see `docs/development/gate-003-google-maps-geocoding.md`).
 - **Worker:** `ConnectionStrings__Paqueteria` and `ConnectionStrings__PaqueteriaWorker`, the same
   ADP-001 proof-storage and Data Protection settings, `Dispatch__AssignmentLifecycle`,
   `Notifications`, `Orders__ClaimWindowFinalization__Enabled=true`, and `Urls=http://+:8080` for the
@@ -401,8 +403,16 @@ bash deploy/azure/pilot/kv-firewall.sh open <kv>
 read -rs AUTHCENTER_SECRET && printf '%s' "$AUTHCENTER_SECRET" > /tmp/ac && \
 az keyvault secret set --vault-name <kv> --name authcenter-paquetenvia-client-secret --file /tmp/ac --encoding utf-8 --output none; \
 shred -u /tmp/ac; unset AUTHCENTER_SECRET
+read -rs GOOGLE_MAPS_KEY && printf '%s' "$GOOGLE_MAPS_KEY" > /tmp/gm && \
+az keyvault secret set --vault-name <kv> --name google-maps-api-key --file /tmp/gm --encoding utf-8 --output none; \
+shred -u /tmp/gm; unset GOOGLE_MAPS_KEY
 bash deploy/azure/pilot/kv-firewall.sh close <kv>
 ```
+
+The workflow stops before deploying while either owner secret is missing. The API reads
+`google-maps-api-key` at startup even while `Locations__GeocodingProvider=Manual`, so the key must exist
+before the next deploy. Restrict it in Google Cloud Console to the Geocoding API and set the quota and
+budget there; those values are owner decisions still open under GATE-003.
 
 The workflow identity has *Key Vault Secrets Officer* on the vault. The owner needs a data-plane role
 too, for example a temporary *Key Vault Secrets Officer* on the vault.
