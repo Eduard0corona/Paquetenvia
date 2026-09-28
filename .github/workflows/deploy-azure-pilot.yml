@@ -341,18 +341,11 @@ jobs:
           put_secret pg-migrate-connection "${RUNNER_TEMP}/s"
           # Runtime LOGIN passwords are generated once; the job receives only their SCRAM verifiers.
           for role in api worker; do
-            if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier" \
-               && { [[ "${role}" != "worker" ]] || has_secret pg-worker-custody-connection; }; then continue; fi
+            if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then continue; fi
             password="$(openssl rand -hex 32)"
             echo "::add-mask::${password}"
             printf 'Host=%s;Database=paqueteria;Username=pv_pilot_%s;Password=%s;Maximum Pool Size=5;Minimum Pool Size=0;%s' \
               "${PGHOST_FQDN}" "${role}" "${password}" "${common}" > "${RUNNER_TEMP}/s"
-            if [[ "${role}" == "worker" ]]; then
-              # The Worker maps the same login twice (ConnectionStrings:PaqueteriaWorker and :Paqueteria);
-              # the ADP-001 source refuses a duplicated secret name, so the value is stored under two names.
-              cp "${RUNNER_TEMP}/s" "${RUNNER_TEMP}/s2"
-              put_secret pg-worker-custody-connection "${RUNNER_TEMP}/s2"
-            fi
             put_secret "pg-${role}-runtime-connection" "${RUNNER_TEMP}/s"
             printf '%s' "${password}" | python3 ./tools/azr-001/env001_pilot_guards.py scram-verifier | tr -d '\n' > "${RUNNER_TEMP}/s"
             put_secret "pg-${role}-login-verifier" "${RUNNER_TEMP}/s"

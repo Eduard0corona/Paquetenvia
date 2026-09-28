@@ -55,7 +55,6 @@ var apiSecretNames = [
 ]
 var workerSecretNames = [
   'pg-worker-runtime-connection'
-  'pg-worker-custody-connection'
 ]
 
 resource containerEnvironment 'Microsoft.App/managedEnvironments@2025-07-01' existing = {
@@ -212,7 +211,7 @@ var workerKeyVaultEnv = [
   }
   {
     name: 'KeyVaultSecrets__Mappings__1__SecretName'
-    value: 'pg-worker-custody-connection'
+    value: 'pg-worker-runtime-connection'
   }
   {
     name: 'KeyVaultSecrets__Mappings__1__ConfigurationKey'

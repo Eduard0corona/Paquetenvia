@@ -52,26 +52,27 @@ API_EXACT_PATHS = ("/signin-authcenter",)
 # Key Vault secrets each workload may reference (least privilege, §17-style classes).
 # PILOT-KEYVAULT-PRIVATE-APP-READ: each workload reads exactly these Key Vault secrets itself (ADP-001
 # `KeyVaultSecrets__Mappings__<n>__SecretName` -> `__ConfigurationKey`), never through Container Apps.
+# ConfigurationKey -> SecretName. One secret may feed several keys (read once); a key appears only once.
 REQUIRED_SECRET_MAPPINGS = {
     API_APP: {
-        "pg-api-runtime-connection": "ConnectionStrings:Paqueteria",
-        "authcenter-paquetenvia-client-secret": "AuthCenter:ClientSecret",
-        "paquetenvia-email-lookup-key-1": "EmailLookup:Keys:1",
+        "ConnectionStrings:Paqueteria": "pg-api-runtime-connection",
+        "AuthCenter:ClientSecret": "authcenter-paquetenvia-client-secret",
+        "EmailLookup:Keys:1": "paquetenvia-email-lookup-key-1",
     },
     WORKER_APP: {
-        "pg-worker-runtime-connection": "ConnectionStrings:PaqueteriaWorker",
-        "pg-worker-custody-connection": "ConnectionStrings:Paqueteria",
+        "ConnectionStrings:PaqueteriaWorker": "pg-worker-runtime-connection",
+        "ConnectionStrings:Paqueteria": "pg-worker-runtime-connection",
     },
     WEB_APP: {},
-    MIGRATE_JOB: {"pg-migrate-connection": "PAQUETERIA_MIGRATION_CONNECTION"},
+    MIGRATE_JOB: {"PAQUETERIA_MIGRATION_CONNECTION": "pg-migrate-connection"},
     LOGINS_JOB: {
-        "pg-migrate-connection": "PAQUETERIA_MIGRATION_CONNECTION",
-        "pg-api-login-verifier": "PAQUETERIA_API_LOGIN_VERIFIER",
-        "pg-worker-login-verifier": "PAQUETERIA_WORKER_LOGIN_VERIFIER",
+        "PAQUETERIA_MIGRATION_CONNECTION": "pg-migrate-connection",
+        "PAQUETERIA_API_LOGIN_VERIFIER": "pg-api-login-verifier",
+        "PAQUETERIA_WORKER_LOGIN_VERIFIER": "pg-worker-login-verifier",
     },
-    VERIFY_JOB: {"pg-migrate-connection": "PAQUETERIA_MIGRATION_CONNECTION"},
+    VERIFY_JOB: {"PAQUETERIA_MIGRATION_CONNECTION": "pg-migrate-connection"},
 }
-ALLOWED_SECRETS = {name: set(mapping) for name, mapping in REQUIRED_SECRET_MAPPINGS.items()}
+ALLOWED_SECRETS = {name: set(mapping.values()) for name, mapping in REQUIRED_SECRET_MAPPINGS.items()}
 # Template variable holding the secrets that get a per-secret Key Vault Secrets User assignment for the
 # identity of each workload; it must equal the workload's mapped secret set.
 SECRET_RBAC_VARIABLE = {
@@ -432,7 +433,8 @@ def guard_05_images(ctx: Context) -> GuardResult:
 
 
 def secret_mappings(workload: Workload) -> dict[str, str] | str:
-    """`SecretName -> ConfigurationKey` from the workload's ADP-001 mapping env, or an error text."""
+    """`ConfigurationKey -> SecretName` from the workload's ADP-001 mapping env, or an error text.
+    A secret may feed several configuration keys; a configuration key may appear only once."""
     indexed: dict[int, dict[str, str]] = {}
     for key, (kind, value) in workload.env.items():
         match = MAPPING_KEY.match(key)
@@ -444,15 +446,13 @@ def secret_mappings(workload: Workload) -> dict[str, str] | str:
     if sorted(indexed) != list(range(len(indexed))):
         return f"mapping indexes must be 0..n-1, found {sorted(indexed)}"
     mappings: dict[str, str] = {}
-    keys: set[str] = set()
     for index in sorted(indexed):
         pair = indexed[index]
         if set(pair) != {"SecretName", "ConfigurationKey"}:
             return f"mapping {index} must have SecretName and ConfigurationKey"
-        if pair["SecretName"] in mappings or pair["ConfigurationKey"] in keys:
-            return f"mapping {index} duplicates a secret name or configuration key"
-        mappings[pair["SecretName"]] = pair["ConfigurationKey"]
-        keys.add(pair["ConfigurationKey"])
+        if pair["ConfigurationKey"] in mappings:
+            return f"mapping {index} duplicates configuration key {pair['ConfigurationKey']}"
+        mappings[pair["ConfigurationKey"]] = pair["SecretName"]
     return mappings
 
 
@@ -489,8 +489,8 @@ def guard_06_secrets(ctx: Context) -> GuardResult:
                 failures.append(f"{workload.name} must name its user-assigned identity in AZURE_CLIENT_ID")
             template, variable = SECRET_RBAC_VARIABLE[workload.name]
             granted = ctx.templates[template].get("variables", {}).get(variable)
-            if not isinstance(granted, list) or set(granted) != set(expected):
-                failures.append(f"{workload.name}: {template}.{variable} (per-secret Key Vault Secrets User) is {granted}, expected {sorted(expected)}")
+            if not isinstance(granted, list) or len(granted) != len(set(granted)) or set(granted) != set(expected.values()):
+                failures.append(f"{workload.name}: {template}.{variable} (per-secret Key Vault Secrets User) is {granted}, expected {sorted(set(expected.values()))}")
             assignments = [r for _, r in ctx.resources("Microsoft.Authorization/roleAssignments")
                            if _copy_count_variable(r) == variable and reader_role in json.dumps(ctx.templates[template].get("variables", {}))]
             if not assignments:

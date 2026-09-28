@@ -159,7 +159,7 @@ Guard P06 checks three things:
 | Workload (identity) | Secret → configuration key |
 |---|---|
 | API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1` |
-| Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker`; `pg-worker-custody-connection` → `ConnectionStrings:Paqueteria` (same login, stored under a second name because the source refuses a duplicated secret name) |
+| Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys) |
 | Migrate and verify jobs (`id-pv-pilot-migrate`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION` |
 | Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER` |
 
@@ -176,7 +176,7 @@ the app restarts or starts a new revision; the workflow restarts the API and Wor
 |---|---|---|
 | `pg-admin-password` | workflow (generated once, never printed) | workflow only |
 | `pg-migrate-connection` | workflow (every run, derived from the admin password) | migrate, logins and verify jobs |
-| `pg-api-runtime-connection` / `pg-worker-runtime-connection` (+ `pg-worker-custody-connection`, same value) | workflow (generated once, 64 hex chars) | API / Worker |
+| `pg-api-runtime-connection` / `pg-worker-runtime-connection` | workflow (generated once, 64 hex chars) | API / Worker |
 | `pg-api-login-verifier` / `pg-worker-login-verifier` | workflow (SCRAM of the above) | logins job (its own identity) |
 | `paquetenvia-email-lookup-key-1` | workflow (generated once: 32 random bytes, base64) | API (`EmailLookup__Keys__1`) |
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |

@@ -273,6 +273,15 @@ class TemplateGuardTests(unittest.TestCase):
                       "'KeyVaultSecrets__Mappings__1__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaWorker')")
         self.assert_fails(6, self.context(duplicate_key), "duplicates")
 
+        def worker_second_secret(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__1__SecretName', 'value', 'pg-worker-runtime-connection')",
+                      "'KeyVaultSecrets__Mappings__1__SecretName', 'value', 'pg-worker-custody-connection')")
+        self.assert_fails(6, self.context(worker_second_secret), "differ from the least-privilege set")
+
+        def duplicated_grant(t):
+            t["apps"]["variables"]["workerSecretNames"] = ["pg-worker-runtime-connection", "pg-worker-runtime-connection"]
+        self.assert_fails(6, self.context(duplicated_grant), "apps.workerSecretNames")
+
         def no_vault_uri(t):
             raw = json.dumps(t["jobs"])
             start = raw.index("createObject('name', 'KeyVaultSecrets__VaultUri'")
