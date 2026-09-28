@@ -21,6 +21,9 @@ export const capabilityMatrix = {
   markSettlementPaid: ["FINANCE", "PLATFORM_ADMIN"],
   voidSettlement: ["FINANCE", "PLATFORM_ADMIN"],
   exportSettlementCsv: ["FINANCE", "PLATFORM_ADMIN"],
+  // x-capability-matrix tracking_link_operations (TRK-002-ISSUE-ENDPOINT).
+  issueTrackingLink: ["DISPATCHER", "PLATFORM_ADMIN"],
+  revokeTrackingLink: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 /**
@@ -59,7 +62,9 @@ export type CapabilityOperation =
 /**
  * Operations that need a satisfied MFA challenge for a given role. D7-SETTLEMENT-MFA:
  * approve and pay need MFA for every permitted role; SET-001: PLATFORM_ADMIN needs
- * MFA for every settlement operation. The client cannot see the MFA evidence, so
+ * MFA for every settlement operation; TRK-002-ISSUE-ENDPOINT: PLATFORM_ADMIN needs
+ * MFA to issue or revoke a tracking link (AI-01 section 7 safer default, pending
+ * owner confirmation). DISPATCHER never needs MFA. The client cannot see the MFA evidence, so
  * this only drives an explanatory hint; the API answers `403 MFA_REQUIRED`.
  */
 const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperation[]>>> = {
@@ -80,6 +85,8 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "markSettlementPaid",
     "voidSettlement",
     "exportSettlementCsv",
+    "issueTrackingLink",
+    "revokeTrackingLink",
   ],
 };
 
