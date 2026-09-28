@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Paqueteria.Application;
+using Paqueteria.Application.Messaging;
 
 namespace Notifications.Application.Dispatching;
 
@@ -265,4 +266,46 @@ public static class NotificationRetryPolicy
         var exponent = Math.Min(attempts - 1, 30);
         return TimeSpan.FromSeconds(Math.Min(maximumSeconds, baseSeconds * Math.Pow(2, exponent)));
     }
+
+    /// <summary>
+    /// The exponential delay, raised to a provider <c>Retry-After</c> hint when that is longer, and
+    /// always capped at <paramref name="maximumSeconds"/> so a provider cannot park a message beyond
+    /// the configured retry window.
+    /// </summary>
+    public static TimeSpan CalculateDelay(int attempts, int baseSeconds, int maximumSeconds, TimeSpan? providerRetryAfter)
+    {
+        var delay = CalculateDelay(attempts, baseSeconds, maximumSeconds);
+        if (providerRetryAfter is { } hint && hint > delay)
+        {
+            delay = hint;
+        }
+
+        var maximum = TimeSpan.FromSeconds(maximumSeconds);
+        return delay > maximum ? maximum : delay;
+    }
+}
+
+/// <summary>
+/// GATE-004-CHANNELS: the one mapping from an external <see cref="MessagingOutcome"/> to the outcome
+/// vocabulary of <c>notifications.apply_notification_outcome</c>, which settles the send request under
+/// its <c>lease_token</c>: SUCCESS → SENT/PROCESSED, PERMANENT → FAILED/DEAD, TRANSIENT and AMBIGUOUS →
+/// PENDING/RETRY with backoff until <c>MaximumAttempts</c>, then FAILED through the finalization lease.
+/// </summary>
+public static class NotificationDeliveryOutcome
+{
+    public const string Success = "SUCCESS";
+    public const string Transient = "TRANSIENT";
+    public const string Permanent = "PERMANENT";
+    public const string Ambiguous = "AMBIGUOUS";
+
+    public static string From(MessagingOutcome outcome) => outcome switch
+    {
+        MessagingOutcome.Accepted => Success,
+        MessagingOutcome.TransientFailure => Transient,
+        MessagingOutcome.PermanentFailure => Permanent,
+        MessagingOutcome.AmbiguousTimeout => Ambiguous,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped messaging outcome."),
+    };
+
+    public static bool IsRetried(string outcome) => outcome is Transient or Ambiguous;
 }
