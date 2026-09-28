@@ -10,12 +10,13 @@ public sealed class ProofScannerHealthCheck(
     IProofObjectStorage storage,
     IHostEnvironment environment) : IHealthCheck
 {
-    public Task<HealthCheckResult> CheckHealthAsync(
+    public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default) =>
-        Task.FromResult(
             scanner.IsEnabled
-                ? HealthCheckResult.Healthy("Proof threat scanner is configured.")
+                ? await scanner.CheckHealthAsync(cancellationToken)
+                    ? HealthCheckResult.Healthy("Proof threat scanner is configured.")
+                    : HealthCheckResult.Unhealthy("Proof threat scanner is unavailable; proof operations fail closed.")
                 : !storage.IsEnabled &&
                   (environment.IsDevelopment() ||
                    environment.IsEnvironment("Testing") ||
@@ -23,5 +24,5 @@ public sealed class ProofScannerHealthCheck(
                     ? HealthCheckResult.Healthy(
                         "Proof scanner is intentionally disabled with proof storage; proof operations fail closed.")
                     : HealthCheckResult.Unhealthy(
-                        "Proof threat scanner is disabled; proof operations fail closed."));
+                        "Proof threat scanner is disabled; proof operations fail closed.");
 }

@@ -1,10 +1,14 @@
+using Azure.Core;
+using Azure.Security.KeyVault.Keys.Cryptography;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Paqueteria.Infrastructure.Cloud;
 
 namespace Paqueteria.Infrastructure.DataProtection;
 
@@ -70,9 +74,25 @@ public static class DependencyInjection
         services.AddSingleton(_ => new DataProtectionDataSource(
             configuration.GetConnectionString(options.ConnectionStringName) ?? string.Empty));
 
-        services.AddDataProtection()
+        var dataProtection = services.AddDataProtection()
             .SetApplicationName(options.ApplicationName)
             .SetDefaultKeyLifetime(TimeSpan.FromDays(options.KeyLifetimeDays));
+
+        if (options.KeyEncryption?.Provider == DataProtectionKeyEncryptionKind.AzureKeyVault &&
+            Uri.TryCreate(options.KeyEncryption.AzureKeyVault?.KeyId, UriKind.Absolute, out var keyEncryptionKeyId))
+        {
+            // ADP-001 / ENV-001: every key written to the shared ring is wrapped by the Key Vault key
+            // (managed identity). Existing unwrapped entries stay readable; new ones are encrypted.
+            services.AddAzureWorkloadCredential();
+            services.TryAddSingleton(serviceProvider => new DataProtectionKeyEncryptionKeyResolver(
+                new KeyResolver(serviceProvider.GetRequiredService<TokenCredential>())));
+            dataProtection.ProtectKeysWithAzureKeyVault(
+                keyEncryptionKeyId,
+                serviceProvider => serviceProvider.GetRequiredService<DataProtectionKeyEncryptionKeyResolver>().Resolver);
+            services.AddSingleton(new DataProtectionKeyEncryptionKeyId(keyEncryptionKeyId));
+            services.AddHealthChecks()
+                .AddCheck<DataProtectionKeyEncryptionHealthCheck>("data_protection_key_encryption", tags: ["ready"]);
+        }
 
         // Registered after AddDataProtection so it replaces the framework's local key repository.
         services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(serviceProvider =>

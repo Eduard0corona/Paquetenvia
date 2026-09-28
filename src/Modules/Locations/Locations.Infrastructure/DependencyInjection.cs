@@ -15,6 +15,7 @@ using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Locations.Infrastructure;
@@ -80,6 +81,13 @@ public static class DependencyInjection
         services.AddSingleton<DeterministicMockGeocodingProvider>();
         services.AddSingleton<DisabledLocationPiiProtector>();
         services.AddSingleton<DeterministicMockLocationPiiProtector>();
+        // ADP-001: registered lazily; nothing Azure-related is built unless PiiProtector=AzureKeyVault.
+        services.AddAzureKeyVaultPiiProtection(
+            configuration,
+            serviceProvider => serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector ==
+                LocationPiiProtectorKind.AzureKeyVault);
+        services.AddSingleton<AzureKeyVaultLocationPiiProtector>();
+
         services.AddSingleton<DisabledLocationService>();
         services.AddScoped<PostgreSqlLocationService>();
         services.AddScoped<IGeocodingProvider>(serviceProvider =>
@@ -93,6 +101,7 @@ public static class DependencyInjection
             serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector switch
             {
                 LocationPiiProtectorKind.Mock => serviceProvider.GetRequiredService<DeterministicMockLocationPiiProtector>(),
+                LocationPiiProtectorKind.AzureKeyVault => serviceProvider.GetRequiredService<AzureKeyVaultLocationPiiProtector>(),
                 _ => serviceProvider.GetRequiredService<DisabledLocationPiiProtector>(),
             });
         services.AddScoped<ILocationService>(serviceProvider =>

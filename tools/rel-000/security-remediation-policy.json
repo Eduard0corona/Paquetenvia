@@ -47,7 +47,7 @@
     {
       "id": "ADP-001-AZURE",
       "mode": "DEPENDENCY_ADMISSION",
-      "status": "ACTIVE",
+      "status": "MERGED",
       "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
       "authorized_source_branch": "deps/adp-001-azure",
       "tracked_pull_request": 124,

@@ -18,6 +18,7 @@ using Organizations.Infrastructure;
 using Organizations.Endpoints.Testing;
 using Paqueteria.Api.Http;
 using Paqueteria.Api.Tenancy;
+using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.DataProtection;
 using Paqueteria.Infrastructure.Security;
 using Locations.Endpoints;
@@ -38,6 +39,9 @@ using Routing.Endpoints;
 using Routing.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+// PILOT-KEYVAULT-PRIVATE-APP-READ: allowlisted Key Vault secrets, read with the managed identity
+// before anything reads configuration. Off unless KeyVaultSecrets:VaultUri is set.
+builder.Configuration.AddPaqueteriaKeyVaultSecrets();
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();

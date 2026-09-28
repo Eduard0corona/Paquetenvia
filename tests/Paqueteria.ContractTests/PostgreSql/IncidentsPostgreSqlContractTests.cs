@@ -627,6 +627,98 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
 
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
+    public async Task Key_vault_descriptions_use_the_server_version_and_survive_a_key_rotation()
+    {
+        // ADP-001-PII-KEYVAULT-ENVELOPE: the Key Vault protector (fake key-encryption key) chooses
+        // pii_key_version; rows written under version N stay readable once N+1 is current; the
+        // plaintext never reaches the row, the audit log or the outbox.
+        var vault = new Adp001FakeKeyVault();
+        var envelope = new Paqueteria.Infrastructure.Security.Pii.PiiEnvelopeProtector(vault);
+        var protector = new AzureKeyVaultIncidentPiiProtector(envelope);
+
+        await using var before = new SyntheticOrderScenario(fixture);
+        await before.InitializeAsync(orderStatus: "DELIVERING");
+        var beforeProof = await InsertProofAsync(before);
+        var versionN = vault.CurrentVersion;
+        IncidentResult openedUnderN;
+        await using (var scope = CreateIncidentScope(piiProtector: protector))
+        {
+            openedUnderN = await scope.Service.OpenAsync(OpenCommand(before, [beforeProof]), CancellationToken.None);
+        }
+
+        var versionNext = vault.Rotate();
+        await using var after = new SyntheticOrderScenario(fixture);
+        await after.InitializeAsync(orderStatus: "DELIVERING");
+        var afterProof = await InsertProofAsync(after);
+        IncidentResult openedUnderNext;
+        await using (var scope = CreateIncidentScope(piiProtector: protector))
+        {
+            openedUnderNext = await scope.Service.OpenAsync(OpenCommand(after, [afterProof]), CancellationToken.None);
+        }
+
+        var stored = new Dictionary<Guid, (Guid Owner, byte[] Ciphertext, string Version)>();
+        foreach (var (incident, expectedVersion) in new[] { (openedUnderN.Id, versionN), (openedUnderNext.Id, versionNext) })
+        {
+            await using var read = fixture.AdminDataSource.CreateCommand(
+                "SELECT description_ciphertext,pii_key_version,owner_org_id FROM incidents.incidents WHERE id=@incident");
+            read.Parameters.AddWithValue("incident", incident);
+            await using var reader = await read.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            var ciphertext = reader.GetFieldValue<byte[]>(0);
+            Assert.Equal(expectedVersion, reader.GetString(1));
+            Assert.NotEqual(TestKeyVersion, reader.GetString(1));
+            Assert.True(ciphertext.AsSpan().IndexOf(Encoding.UTF8.GetBytes(TestDescription)) < 0);
+            var owner = reader.GetGuid(2);
+            stored[incident] = (owner, ciphertext, reader.GetString(1));
+            Assert.Equal(
+                TestDescription,
+                await envelope.UnprotectAsync(
+                    new Paqueteria.Infrastructure.Security.Pii.PiiBinding(owner, incident),
+                    AzureKeyVaultIncidentPiiProtector.DescriptionPurpose,
+                    ciphertext,
+                    reader.GetString(1),
+                    default));
+        }
+
+        // ADP-001 review: a description copied into another tenant's incident row does not decrypt.
+        var source = stored[openedUnderN.Id];
+        var target = stored[openedUnderNext.Id];
+        Assert.NotEqual(source.Owner, target.Owner);
+        await Assert.ThrowsAsync<Paqueteria.Infrastructure.Security.Pii.PiiCiphertextRejectedException>(() =>
+            envelope.UnprotectAsync(
+                new Paqueteria.Infrastructure.Security.Pii.PiiBinding(target.Owner, openedUnderNext.Id),
+                AzureKeyVaultIncidentPiiProtector.DescriptionPurpose,
+                source.Ciphertext,
+                source.Version,
+                default));
+
+        Assert.Equal(0L, await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(fixture.AdminDataSource, before.OrganizationId, [TestDescription]));
+        Assert.Equal(0L, await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(fixture.AdminDataSource, after.OrganizationId, [TestDescription]));
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task An_unavailable_key_vault_fails_closed_with_zero_effects()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(orderStatus: "DELIVERING");
+        var proofId = await InsertProofAsync(scenario);
+        var protector = new AzureKeyVaultIncidentPiiProtector(
+            new Paqueteria.Infrastructure.Security.Pii.PiiEnvelopeProtector(new Adp001FakeKeyVault { Unavailable = true }));
+        await using var scope = CreateIncidentScope(piiProtector: protector);
+
+        await Assert.ThrowsAsync<IncidentInfrastructureException>(() =>
+            scope.Service.OpenAsync(OpenCommand(scenario, [proofId]), CancellationToken.None));
+
+        await AssertNoIncidentArtifactsAsync(scenario);
+        await using var reservations = fixture.AdminDataSource.CreateCommand(
+            "SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@org;");
+        reservations.Parameters.AddWithValue("org", scenario.OrganizationId);
+        Assert.Equal(0L, await reservations.ExecuteScalarAsync());
+    }
+
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
     public async Task An_unavailable_description_protector_fails_closed_with_zero_effects()
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
@@ -1083,7 +1175,7 @@ public sealed class IncidentsPostgreSqlContractTests(PostgreSqlContractFixture f
             new TenantTransactionContext<IncidentsDbContext>(context, state),
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
-            piiProtector ?? new DeterministicMockIncidentPiiProtector(),
+            piiProtector ?? new DeterministicMockIncidentPiiProtector(TestKeyVersion),
             Options.Create(new IncidentsOptions
             {
                 PiiProtector = IncidentPiiProtectorKind.Mock,

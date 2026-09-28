@@ -56,7 +56,9 @@ Configuracion:
 ```
 
 `Provider` admite `Disabled` o `PostgreSql`; `GeocodingProvider` admite
-`Disabled`, `Manual` o `Mock`; `PiiProtector` admite `Disabled` o `Mock`. Los
+`Disabled`, `Manual` o `Mock`; `PiiProtector` admite `Disabled`, `Mock` o
+`AzureKeyVault` (protector productivo de ADP-001, cifrado envolvente con llave en Key Vault;
+ver `docs/development/adp-001-production-adapters.md`). Los
 mocks son deterministas, no usan red y solo arrancan en Development o Testing.
 No son cifrado productivo. Staging y Production los rechazan al inicio.
 El resultado de geocodificacion registra el modo `MANUAL` o `MOCK` y si las

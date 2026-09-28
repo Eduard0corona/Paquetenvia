@@ -17,6 +17,9 @@ public enum LocationPiiProtectorKind
 {
     Disabled,
     Mock,
+
+    /// <summary>ADP-001 production envelope protector backed by Azure Key Vault.</summary>
+    AzureKeyVault,
 }
 
 public sealed class LocationsOptions

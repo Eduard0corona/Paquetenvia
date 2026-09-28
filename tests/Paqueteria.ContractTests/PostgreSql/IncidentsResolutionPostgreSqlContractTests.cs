@@ -915,7 +915,7 @@ public sealed class IncidentsResolutionPostgreSqlContractTests(PostgreSqlContrac
             new TenantTransactionContext<IncidentsDbContext>(context, state),
             auditWriter,
             new AuditPayloadRedactor(),
-            new DeterministicMockIncidentPiiProtector(),
+            new DeterministicMockIncidentPiiProtector(IncidentsPostgreSqlContractTests.TestKeyVersion),
             Options.Create(new IncidentsOptions
             {
                 PiiProtector = IncidentPiiProtectorKind.Mock,

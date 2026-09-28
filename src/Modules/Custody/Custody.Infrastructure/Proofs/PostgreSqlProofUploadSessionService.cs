@@ -54,6 +54,25 @@ public sealed class PostgreSqlProofUploadSessionService(
             command.ContentType,
             command.SizeBytes,
             command.Sha256 is null ? string.Empty : Convert.ToHexString(command.Sha256));
+        // ADP-001: network signing material (the Azure user delegation key) is obtained before the
+        // tenant transaction and the idempotency lock; an unavailable storage service ends in 503
+        // with no session, reservation or audit written.
+        if (storage.IsEnabled && threatScanner.IsEnabled)
+        {
+            try
+            {
+                await storage.PrepareUploadGrantAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                throw new ProofStorageUnavailableException();
+            }
+        }
+
         var result = await transactionContext.ExecuteAsync(
             new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
             async (dbContext, token) =>
@@ -149,7 +168,7 @@ public sealed class PostgreSqlProofUploadSessionService(
     private static byte[] ComputeHash(params object[] values) =>
         SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', values)));
 
-    private static async Task<ProofUploadSessionResult?> ReadReplayAsync(
+    private async Task<ProofUploadSessionResult?> ReadReplayAsync(
         CustodyDbContext context,
         CreateProofUploadSessionCommand create,
         Guid ownerOrganizationId,
@@ -285,8 +304,42 @@ public sealed class PostgreSqlProofUploadSessionService(
             properties.All(expected.Contains);
     }
 
-    private static bool HasExactRequiredHeaders(
+    private bool HasExactRequiredHeaders(
         IReadOnlyDictionary<string, string> headers,
+        CreateProofUploadSessionCommand create,
+        Guid ownerOrganizationId,
+        Guid sessionId,
+        Guid requestedBy)
+    {
+        // ADP-001: a provider with its own header shape (Azure Blob) recomputes it; S3 keeps the
+        // POD-001 shape below unchanged.
+        var expected = storage is IProofUploadHeaderShape shape
+            ? new Dictionary<string, string>(
+                shape.RequiredUploadHeaders(
+                    ownerOrganizationId,
+                    create.OrderId,
+                    sessionId,
+                    requestedBy,
+                    create.ProofType,
+                    create.ContentType,
+                    create.SizeBytes,
+                    create.Sha256),
+                StringComparer.OrdinalIgnoreCase)
+            : S3RequiredHeaders(create, ownerOrganizationId, sessionId, requestedBy);
+        return headers.Count == expected.Count &&
+            expected.All(expectedHeader =>
+                headers.Count(header =>
+                    string.Equals(
+                        header.Key,
+                        expectedHeader.Key,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        header.Value,
+                        expectedHeader.Value,
+                        StringComparison.Ordinal)) == 1);
+    }
+
+    private static Dictionary<string, string> S3RequiredHeaders(
         CreateProofUploadSessionCommand create,
         Guid ownerOrganizationId,
         Guid sessionId,
@@ -314,17 +367,7 @@ public sealed class PostgreSqlProofUploadSessionService(
                 Convert.ToHexString(create.Sha256).ToLowerInvariant();
         }
 
-        return headers.Count == expected.Count &&
-            expected.All(expectedHeader =>
-                headers.Count(header =>
-                    string.Equals(
-                        header.Key,
-                        expectedHeader.Key,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(
-                        header.Value,
-                        expectedHeader.Value,
-                        StringComparison.Ordinal)) == 1);
+        return expected;
     }
 
     private static async Task InsertReservationAsync(

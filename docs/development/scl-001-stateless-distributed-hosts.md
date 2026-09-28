@@ -71,6 +71,12 @@ reporta ready, porque atendería con material de clave propio.
 
 > **An external key-encryption protector is required before productive distributed Data Protection activation.**
 
+ADP-001 provee ese protector de forma opcional: `DataProtection:KeyEncryption:Provider=AzureKeyVault`
+(con `Provider=PostgreSql`) envuelve cada llave nueva del ring con una llave de Key Vault
+(`ProtectKeysWithAzureKeyVault`, identidad administrada) y agrega el check `ready`
+`data_protection_key_encryption`. El valor por defecto sigue siendo `None`; activarlo es una
+decisión de despliegue de ENV-001. Ver `docs/development/adp-001-production-adapters.md`.
+
 El ring XML en PostgreSQL todavía no tiene un `IXmlEncryptor` / KEK externo: el
 material queda protegido sólo por los grants y RLS de la base. `ScaleReady` es
 un perfil de validación de escalado, no una autorización de producción, y no

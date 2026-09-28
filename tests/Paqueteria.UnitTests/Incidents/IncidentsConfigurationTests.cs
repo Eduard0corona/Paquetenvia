@@ -35,7 +35,7 @@ public sealed class IncidentsConfigurationTests
     }
 
     [Fact]
-    public void An_unconfigured_deployment_protects_nothing_and_therefore_persists_nothing()
+    public async Task An_unconfigured_deployment_protects_nothing_and_therefore_persists_nothing()
     {
         var options = Resolve([]);
         Assert.Equal(IncidentPiiProtectorKind.Disabled, options.PiiProtector);
@@ -43,8 +43,8 @@ public sealed class IncidentsConfigurationTests
         using var provider = Build([]);
         var protector = provider.GetRequiredService<IIncidentPiiProtector>();
         Assert.IsType<DisabledIncidentPiiProtector>(protector);
-        Assert.Throws<IncidentPiiProtectionUnavailableException>(
-            () => protector.Protect("una descripcion", "inc001-v1"));
+        await Assert.ThrowsAsync<IncidentPiiProtectionUnavailableException>(
+            () => protector.ProtectAsync(new IncidentPiiBinding(Guid.NewGuid(), Guid.NewGuid()), "una descripcion", CancellationToken.None));
     }
 
     [Fact]
