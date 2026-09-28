@@ -371,7 +371,7 @@ The recovery target is any point in the last 14 days (PITR, locally redundant, n
   3. Put the restored server in place. There are two options.
      - **Swap names (preferred):** delete the old server, then restore again under the original
        name `pg-pv-pilot-<suffix>`. This keeps every connection secret valid.
-     - **Point secrets at the new host:** update the four `pg-*-connection` secrets to the restored
+     - **Point secrets at the new host:** update the three connection secrets (`pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection`) to the restored
        host, then restart the API and Worker revisions.
   4. Re-run the workflow for the current SHA. This restores the replica counts and re-applies the
      runtime logins.
