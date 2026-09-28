@@ -33,11 +33,51 @@ JOB="job-pv-pilot-verify"
 SECRET="pg-restore-drill-connection"
 MIGRATE_PRINCIPAL="$(az identity show -g "${RG}" -n id-pv-pilot-migrate --query principalId -o tsv)"
 
+FIREWALL="$(dirname "$0")/kv-firewall.sh"
+SECRET_SCOPE=""
+tmp=""
+drill_requested=0
+firewall_opened=0
+
+# Cleanup on every exit, success or failure, each step best-effort:
+# - point the verify job's Key Vault mapping back at the pilot migration connection;
+# - revoke the temporary Key Vault Secrets User assignment on the drill secret and disable the secret
+#   (the vault has purge protection, so it is disabled rather than deleted; the next drill adds a version);
+# - close this machine's temporary Key Vault firewall rule and wipe the local temporary file;
+# - unless --keep, delete the restored server. It is a full copy of the pilot database with real data and
+#   lives outside the Bicep-managed resource set, so it must never outlive a failed run.
+cleanup() {
+  local rc=$?
+  az containerapp job update -g "${RG}" -n "${JOB}" --only-show-errors --output none \
+    --set-env-vars "KeyVaultSecrets__Mappings__0__SecretName=pg-migrate-connection" || true
+  if [[ -n "${SECRET_SCOPE}" ]]; then
+    az role assignment delete --assignee "${MIGRATE_PRINCIPAL}" --role "Key Vault Secrets User" \
+      --scope "${SECRET_SCOPE}" --only-show-errors --output none || true
+  fi
+  if [[ "${firewall_opened}" == 1 ]]; then
+    az keyvault secret set-attributes --vault-name "${VAULT}" --name "${SECRET}" --enabled false \
+      --only-show-errors --output none || true
+    bash "${FIREWALL}" close "${VAULT}" || true
+  fi
+  if [[ -n "${tmp}" ]]; then shred -u "${tmp}" 2>/dev/null || true; fi
+  if [[ "${drill_requested}" == 1 && "${KEEP}" == 0 ]]; then
+    if az postgres flexible-server delete -g "${RG}" -n "${DRILL}" --yes --only-show-errors --output none; then
+      echo "drill_server_deleted=${DRILL}"
+    else
+      echo "WARNING drill_server_not_deleted=${DRILL} delete it manually: it holds a copy of the pilot data" >&2
+    fi
+  fi
+  exit "${rc}"
+}
+trap cleanup EXIT
+
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "restore_drill_started=${started} source=${SOURCE} target=${DRILL} restore_point=${RESTORE_TIME}"
 
 # 1. Point-in-time restore into a new server. A restore of a private-access server keeps the source's
-#    delegated subnet and private DNS zone, so it stays unreachable from the internet.
+#    delegated subnet and private DNS zone, so it stays unreachable from the internet. From here on the
+#    cleanup deletes the server (unless --keep), even if the restore itself fails half-way.
+drill_requested=1
 az postgres flexible-server restore --resource-group "${RG}" --name "${DRILL}" \
   --source-server "${SOURCE}" --restore-time "${RESTORE_TIME}" --only-show-errors --output none
 restored="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -47,25 +87,12 @@ echo "restore_completed=${restored} host=${DRILL_HOST}"
 # 2. Connection to the restored server (same administrator credential as at the restore point).
 #    PILOT-KEYVAULT-PRIVATE-APP-READ: the vault denies public traffic, so this machine opens a temporary
 #    /32 rule for itself (kv-firewall.sh) and the cleanup always closes it.
-FIREWALL="$(dirname "$0")/kv-firewall.sh"
 umask 077
 tmp="$(mktemp)"
 SECRET_SCOPE="$(az keyvault show -n "${VAULT}" --query id -o tsv)/secrets/${SECRET}"
 
-# Cleanup on every exit: point the verify job's Key Vault mapping back at the pilot migration connection,
-# revoke the temporary Key Vault Secrets User assignment on the drill secret, close this machine's
-# temporary Key Vault firewall rule and wipe the local temporary file.
-cleanup() {
-  az containerapp job update -g "${RG}" -n "${JOB}" --only-show-errors --output none \
-    --set-env-vars "KeyVaultSecrets__Mappings__0__SecretName=pg-migrate-connection" || true
-  az role assignment delete --assignee "${MIGRATE_PRINCIPAL}" --role "Key Vault Secrets User" \
-    --scope "${SECRET_SCOPE}" --only-show-errors --output none || true
-  bash "${FIREWALL}" close "${VAULT}" || true
-  shred -u "${tmp}" 2>/dev/null || true
-}
-trap cleanup EXIT
-
 bash "${FIREWALL}" open "${VAULT}"
+firewall_opened=1
 admin="$(az keyvault secret show --vault-name "${VAULT}" --name pg-admin-password --query value -o tsv)"
 printf 'Host=%s;Database=paqueteria;Username=%s;Password=%s;Maximum Pool Size=2;Minimum Pool Size=0;SSL Mode=VerifyFull;Timeout=15;Command Timeout=120' \
   "${DRILL_HOST}" "${ADMIN_LOGIN}" "${admin}" > "${tmp}"
@@ -90,14 +117,7 @@ done
 finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "verify_execution=${execution} status=${status} finished=${finished}"
 
-# 4. Clean up: the job points back at the pilot database (trap), the drill secret is disabled (the vault has
-#    purge protection, so it is disabled rather than deleted and the next drill adds a new version) and,
-#    unless --keep, the restored server is deleted.
-az keyvault secret set-attributes --vault-name "${VAULT}" --name "${SECRET}" --enabled false --only-show-errors --output none || true
-if [[ "${KEEP}" == 0 ]]; then
-  az postgres flexible-server delete -g "${RG}" -n "${DRILL}" --yes --only-show-errors --output none
-  echo "drill_server_deleted=${DRILL}"
-fi
-
+# 4. The cleanup trap points the job back at the pilot database, disables the drill secret, closes the
+#    firewall and, unless --keep, deletes the restored server.
 echo "EVIDENCE restore_point=${RESTORE_TIME} started=${started} restored=${restored} verified=${finished} verify_status=${status} execution=${execution}"
 [[ "${status}" == "Succeeded" ]]
