@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Paqueteria.Application;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Dispatch.Infrastructure.Lifecycle;
 
@@ -25,6 +26,7 @@ public sealed class AssignmentLifecycleProcessor(
     IServiceScopeFactory scopes,
     IOptions<AssignmentLifecycleOptions> options,
     IClock clock,
+    OutboxLaneMonitor lanes,
     ILogger<AssignmentLifecycleProcessor> logger)
 {
     public async Task<AssignmentReactionOutcome?> ProcessAsync(
@@ -42,13 +44,17 @@ public sealed class AssignmentLifecycleProcessor(
                 message.Payload,
                 out var fact))
         {
-            await store.SettleAsync(
-                message.Id,
-                message.LeaseToken,
-                "DEAD",
-                AssignmentLifecycleErrorCodes.InvalidPayload,
-                null,
-                cancellationToken);
+            if (await store.SettleAsync(
+                    message.Id,
+                    message.LeaseToken,
+                    "DEAD",
+                    AssignmentLifecycleErrorCodes.InvalidPayload,
+                    null,
+                    cancellationToken))
+            {
+                lanes.Settled(OutboxLanes.Dispatch, OutboxSettlement.Dead);
+            }
+
             logger.LogWarning("Dispatch lifecycle message rejected with outcome {Outcome}.", "INVALID_PAYLOAD");
             return null;
         }
@@ -56,8 +62,15 @@ public sealed class AssignmentLifecycleProcessor(
         try
         {
             await using var scope = scopes.CreateAsyncScope();
-            return await scope.ServiceProvider.GetRequiredService<IAssignmentLifecycleReactor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IAssignmentLifecycleReactor>()
                 .ReactAsync(message, fact!, cancellationToken);
+            if (outcome != AssignmentReactionOutcome.LeaseLost)
+            {
+                // The reaction settled the row PROCESSED inside its own transaction.
+                lanes.Settled(OutboxLanes.Dispatch, OutboxSettlement.Processed);
+            }
+
+            return outcome;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -67,13 +80,17 @@ public sealed class AssignmentLifecycleProcessor(
         {
             logger.LogWarning("Dispatch lifecycle reaction failed with outcome {Outcome}.", "REACTION_FAILED");
             var exhausted = message.Attempts >= options.Value.MaximumAttempts;
-            await store.SettleAsync(
-                message.Id,
-                message.LeaseToken,
-                exhausted ? "DEAD" : "RETRY",
-                exhausted ? AssignmentLifecycleErrorCodes.MaxAttemptsExhausted : AssignmentLifecycleErrorCodes.ReactionFailed,
-                exhausted ? null : clock.UtcNow.Add(Backoff(message.Attempts)),
-                cancellationToken);
+            if (await store.SettleAsync(
+                    message.Id,
+                    message.LeaseToken,
+                    exhausted ? "DEAD" : "RETRY",
+                    exhausted ? AssignmentLifecycleErrorCodes.MaxAttemptsExhausted : AssignmentLifecycleErrorCodes.ReactionFailed,
+                    exhausted ? null : clock.UtcNow.Add(Backoff(message.Attempts)),
+                    cancellationToken))
+            {
+                lanes.Settled(OutboxLanes.Dispatch, exhausted ? OutboxSettlement.Dead : OutboxSettlement.Retry);
+            }
+
             return null;
         }
     }
@@ -92,6 +109,7 @@ public sealed class AssignmentLifecycleDispatcher(
     IDispatchOutboxStore store,
     AssignmentLifecycleProcessor processor,
     IOptions<AssignmentLifecycleOptions> options,
+    OutboxLaneMonitor lanes,
     ILogger<AssignmentLifecycleDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -104,6 +122,7 @@ public sealed class AssignmentLifecycleDispatcher(
         var nextRecovery = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
+            lanes.ReportIfDue(OutboxLanes.Dispatch);
             try
             {
                 if (DateTimeOffset.UtcNow >= nextRecovery)
@@ -120,6 +139,10 @@ public sealed class AssignmentLifecycleDispatcher(
                     options.Value.BatchSize,
                     TimeSpan.FromSeconds(options.Value.LeaseSeconds),
                     stoppingToken);
+                lanes.Claimed(
+                    OutboxLanes.Dispatch,
+                    claimed.Count,
+                    claimed.Count == 0 ? null : claimed.Min(static message => message.AvailableAt));
                 await Parallel.ForEachAsync(
                     claimed,
                     new ParallelOptions
@@ -155,6 +178,7 @@ public sealed class AssignmentLifecycleDispatcher(
             }
             catch (Exception)
             {
+                lanes.LoopFailed(OutboxLanes.Dispatch);
                 logger.LogError("Dispatch lifecycle loop failed with outcome {Outcome}.", "LOOP_FAILURE");
                 await Task.Delay(options.Value.PollIntervalMilliseconds, stoppingToken);
             }

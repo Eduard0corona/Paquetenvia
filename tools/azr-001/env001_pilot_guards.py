@@ -8,8 +8,9 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P20)
+  check            evaluate every pilot guard (P00..P21)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
+  observability-check  validate deploy/azure/pilot/observability.parameters.json (OBS-002 alert e-mail)
   scram-verifier   read a password on stdin, print its PostgreSQL SCRAM-SHA-256 verifier
   gate-decision    require a decision-log row that resolves or scopes GATE-007 / GATE-012
 """
@@ -35,6 +36,7 @@ PILOT_WORKFLOW = ".github/workflows/deploy-azure-pilot.yml"
 PILOT_ENVIRONMENT = "azure-pilot"
 PILOT_REGION = "mexicocentral"
 SETTINGS_FILE = PILOT_DIR / "apps.settings.json"
+OBSERVABILITY_PARAMETERS_FILE = PILOT_DIR / "observability.parameters.json"
 OWNER_SENTINEL = "OWNER_DECISION_REQUIRED"
 FORBIDDEN_TRIGGERS = ("push", "pull_request", "pull_request_target", "schedule", "repository_dispatch", "workflow_run")
 
@@ -112,6 +114,10 @@ AUTHORIZED_RESOURCE_TYPES = frozenset(
         "Microsoft.App/jobs",
         "Microsoft.Consumption/budgets",
         "Microsoft.Authorization/roleAssignments",
+        # OBS-002 (observability.bicep): log search alerts, one e-mail action group and a workbook.
+        "Microsoft.Insights/scheduledQueryRules",
+        "Microsoft.Insights/actionGroups",
+        "Microsoft.Insights/workbooks",
     }
 )
 PROHIBITED_TYPE_PREFIXES = (
@@ -330,7 +336,7 @@ def _result(number: int, title: str, failures: list[str], ok: str) -> GuardResul
 
 # ---------------------------------------------------------------------------------------------- guards
 def guard_00_templates(ctx: Context) -> GuardResult:
-    expected = {"security", "platform", "jobs", "apps"}
+    expected = {"security", "platform", "jobs", "apps", "observability"}
     failures = [] if set(ctx.templates) == expected else [f"pilot templates must be exactly {sorted(expected)}, found {sorted(ctx.templates)}"]
     return _result(0, "pilot templates compiled", failures, f"{len(ctx.templates)} templates")
 
@@ -841,6 +847,117 @@ def guard_18_bff_web_image(ctx: Context) -> GuardResult:
     return _result(18, "AUTH-001 BFF web image (same origin)", failures, "API base URL unset, auth mode bff, manifest complete")
 
 
+# ---------------------------------------------------------------------------------------------- OBS-002
+# Log search alert price per rule and month by evaluation frequency (Azure Retail Prices API,
+# mexicocentral, 2026-09-28). Frequencies outside 5-15 minutes are not allowed for the pilot.
+ALERT_MONTHLY_USD = {"PT5M": 1.65, "PT10M": 1.10, "PT15M": 0.55}
+ALERT_BUDGET_USD = 5.0
+REQUIRED_ALERTS = {
+    "sqr-pv-pilot-outbox-lag",
+    "sqr-pv-pilot-outbox-dead",
+    "sqr-pv-pilot-job-failure",
+    "sqr-pv-pilot-readiness",
+    "sqr-pv-pilot-api-5xx",
+}
+# Tables and structured-log properties the OBS-002 queries may read. The properties mirror
+# Paqueteria.Infrastructure.Observability.TelemetryDimensions.Allowed (ObservabilityArchitectureTests).
+OBSERVABILITY_TABLES = {"ContainerAppConsoleLogs_CL", "ContainerAppSystemLogs_CL"}
+OBSERVABILITY_STATE_PROPERTIES = {
+    "Lane", "Claimed", "Processed", "Retry", "Dead", "LoopFailures", "MaxClaimAgeMs", "WindowSeconds",
+    "Job", "Outcome", "DurationMs", "Total", "Status2xx", "Status3xx", "Status4xx", "Status5xx",
+}
+ACTION_GROUP_RECEIVER_KINDS = (
+    "smsReceivers", "webhookReceivers", "itsmReceivers", "azureAppPushReceivers", "automationRunbookReceivers",
+    "voiceReceivers", "logicAppReceivers", "azureFunctionReceivers", "armRoleReceivers", "eventHubReceivers",
+    "incidentReceivers",
+)
+EMAIL_ADDRESS = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63})+$")
+ISO_MINUTES = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?$")
+
+
+def _iso_minutes(value: Any) -> int | None:
+    match = ISO_MINUTES.match(str(value))
+    if not match or not any(match.groups()):
+        return None
+    return int(match.group(1) or 0) * 60 + int(match.group(2) or 0)
+
+
+def _alert_rules(template: dict[str, Any], resource: dict[str, Any]) -> list[dict[str, Any]] | str:
+    """The rule list behind the scheduledQueryRules copy loop (`for rule in rules`), kept literal."""
+    variable = _copy_count_variable(resource)
+    rules = (template.get("variables", {}) or {}).get(variable) if variable else None
+    if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
+        return "scheduledQueryRules must loop over a literal `rules` variable so every rule can be verified"
+    return rules
+
+
+def guard_21_observability(ctx: Context) -> GuardResult:
+    """OBS-002: the pilot alerts exist, run every 5-15 minutes within their cost bound, notify only the
+    owner's e-mail (a parameter without default) and read only the PII-free structured events."""
+    failures: list[str] = []
+    template = ctx.templates.get("observability", {})
+    parameter = (template.get("parameters", {}) or {}).get("alertEmailAddress")
+    if not isinstance(parameter, dict) or parameter.get("type") != "string" or "defaultValue" in parameter:
+        failures.append("observability.bicep must take alertEmailAddress as a string parameter without a default")
+
+    groups = ctx.resources("Microsoft.Insights/actionGroups")
+    if len(groups) != 1:
+        failures.append(f"expected exactly one action group, found {len(groups)}")
+    else:
+        properties = groups[0][1].get("properties", {}) or {}
+        emails = properties.get("emailReceivers", []) or []
+        if properties.get("enabled") is not True:
+            failures.append("the action group must be enabled")
+        if len(emails) != 1 or emails[0].get("emailAddress") != "[parameters('alertEmailAddress')]":
+            failures.append("the action group must have exactly one e-mail receiver bound to parameters('alertEmailAddress')")
+        extra = [kind for kind in ACTION_GROUP_RECEIVER_KINDS if properties.get(kind)]
+        if extra:
+            failures.append(f"the action group may notify only by e-mail, found {extra}")
+
+    rules: list[dict[str, Any]] = []
+    for _, resource in ctx.resources("Microsoft.Insights/scheduledQueryRules"):
+        found = _alert_rules(template, resource) if resource.get("copy") else [resource]
+        if isinstance(found, str):
+            failures.append(found)
+            continue
+        properties = resource.get("properties", {}) or {}
+        if properties.get("enabled") is not True or properties.get("autoMitigate") is not True:
+            failures.append("alert rules must be enabled and stateful (autoMitigate)")
+        if "Microsoft.Insights/actionGroups" not in json.dumps((properties.get("actions", {}) or {}).get("actionGroups", [])):
+            failures.append("alert rules must notify through the pilot action group")
+        if "Microsoft.OperationalInsights/workspaces" not in json.dumps(properties.get("scopes", [])):
+            failures.append("alert rules must query the pilot Log Analytics workspace")
+        rules.extend(found)
+
+    names = sorted(str(r.get("name")) for r in rules)
+    if set(names) != REQUIRED_ALERTS or len(names) != len(REQUIRED_ALERTS):
+        failures.append(f"alert rules must be exactly {sorted(REQUIRED_ALERTS)}, found {names}")
+    monthly = 0.0
+    for rule in rules:
+        frequency, window = rule.get("frequency"), rule.get("window")
+        if frequency not in ALERT_MONTHLY_USD:
+            failures.append(f"{rule.get('name')} evaluationFrequency {frequency} must be one of {sorted(ALERT_MONTHLY_USD)}")
+            continue
+        monthly += ALERT_MONTHLY_USD[frequency]
+        window_minutes = _iso_minutes(window)
+        if window_minutes is None or window_minutes < (_iso_minutes(frequency) or 0) or window_minutes > 24 * 60:
+            failures.append(f"{rule.get('name')} windowSize {window} must be at least its frequency and at most one day")
+    if monthly > ALERT_BUDGET_USD:
+        failures.append(f"alert rules cost {monthly:.2f} USD per month, above the {ALERT_BUDGET_USD:.2f} USD OBS-002 bound (PILOT-BUDGET-100USD)")
+
+    text = json.dumps(template.get("variables", {}))
+    tables = set(re.findall(r"\b([A-Za-z]+_CL)\b", text))
+    if not tables or not tables <= OBSERVABILITY_TABLES:
+        failures.append(f"queries may read only {sorted(OBSERVABILITY_TABLES)}, found {sorted(tables)}")
+    properties_read = set(re.findall(r"\be\.State\.([A-Za-z0-9_]+)", text))
+    if not properties_read or not properties_read <= OBSERVABILITY_STATE_PROPERTIES:
+        failures.append(f"queries read structured-log properties outside the OBS-002 allowlist: {sorted(properties_read - OBSERVABILITY_STATE_PROPERTIES)}")
+    if "observability-check" not in ctx.workflow_text or "observability.parameters.json" not in ctx.workflow_text:
+        failures.append("workflow must check and deploy observability.parameters.json")
+    return _result(21, "OBS-002 alerts, e-mail action group and cost bound", failures,
+                   f"{len(rules)} alert rules at {monthly:.2f} USD/month, e-mail only")
+
+
 GUARD_TOOLS = ("env001_pilot_guards.py", "azr001_static_guards.py")
 PYYAML_INSTALL = re.compile(r"pip install\s+PyYAML==6\.0\.3\b")
 
@@ -895,6 +1012,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_18_bff_web_image,
     guard_19_cleanups_enabled,
     guard_20_guard_tool_dependencies,
+    guard_21_observability,
 )
 
 
@@ -942,6 +1060,40 @@ def validate_settings(entries: list[Any], *, allow_sentinel: bool) -> list[str]:
             failures.append(f"setting {name} still awaits an owner decision ({OWNER_SENTINEL})")
         if re.search(r"(?i)(password|secret|token|key)", name):
             failures.append(f"setting {name} looks like a secret; secrets belong in Key Vault")
+    return failures
+
+
+OBSERVABILITY_PARAMETERS = {
+    "alertEmailAddress": str,
+    "outboxLagThresholdSeconds": int,
+    "http5xxMinimumCount": int,
+    "http5xxPercentThreshold": int,
+    "readinessEventThreshold": int,
+}
+
+
+def validate_observability_parameters(document: Any, *, allow_sentinel: bool) -> list[str]:
+    """observability.parameters.json: an ARM parameters file with the owner's alert e-mail and, optionally,
+    the documented thresholds; nothing else."""
+    if not isinstance(document, dict) or not isinstance(document.get("parameters"), dict):
+        return ["observability parameters must be an ARM parameters file with a `parameters` object"]
+    failures = []
+    parameters = document["parameters"]
+    for name, entry in parameters.items():
+        expected = OBSERVABILITY_PARAMETERS.get(name)
+        if expected is None:
+            failures.append(f"parameter {name} is not an OBS-002 parameter")
+        elif not isinstance(entry, dict) or set(entry) != {"value"} or type(entry["value"]) is not expected:
+            failures.append(f"parameter {name} must be {{\"value\": <{expected.__name__}>}}")
+    entry = parameters.get("alertEmailAddress")
+    email = entry.get("value") if isinstance(entry, dict) else None
+    if not isinstance(email, str):
+        failures.append("alertEmailAddress is required")
+    elif is_owner_sentinel(email):
+        if not allow_sentinel:
+            failures.append(f"alertEmailAddress still awaits an owner decision ({OWNER_SENTINEL})")
+    elif not EMAIL_ADDRESS.match(email):
+        failures.append("alertEmailAddress is not a single e-mail address")
     return failures
 
 
@@ -1064,6 +1216,18 @@ def command_settings_check(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def command_observability_check(args: argparse.Namespace) -> int:
+    try:
+        document = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        failures = validate_observability_parameters(document, allow_sentinel=args.allow_owner_sentinel)
+    except (OSError, ValueError) as error:
+        failures = [f"{args.file}: {error}"]
+    for failure in failures:
+        print(f"STOP_FOR_OWNER_DECISION: {failure}")
+    print("ENV001_OBSERVABILITY=" + ("FAIL" if failures else "PASS"))
+    return 1 if failures else 0
+
+
 def command_gate_decision(args: argparse.Namespace) -> int:
     try:
         text = Path(args.decision_log).read_text(encoding="utf-8")
@@ -1097,6 +1261,10 @@ def build_parser() -> argparse.ArgumentParser:
     settings.add_argument("--file", default=str(SETTINGS_FILE))
     settings.add_argument("--allow-owner-sentinel", action="store_true")
     settings.set_defaults(func=command_settings_check)
+    observability = sub.add_parser("observability-check", help="validate the OBS-002 alert parameters (owner e-mail)")
+    observability.add_argument("--file", default=str(OBSERVABILITY_PARAMETERS_FILE))
+    observability.add_argument("--allow-owner-sentinel", action="store_true")
+    observability.set_defaults(func=command_observability_check)
     gate = sub.add_parser("gate-decision", help="require a GATE-007/012 resolution or scoping row")
     gate.add_argument("--gate", required=True, choices=("007", "012"))
     gate.add_argument("--decision-id", default="", help="decision-log ID (from the environment variable)")
