@@ -699,8 +699,15 @@ def validate_dependency_admission_registry(
         "required_dependency_files",
         "allowed_project_files",
     }
-    optional = {"expires", "tracked_pull_request", "description"}
+    optional = {
+        "expires",
+        "tracked_pull_request",
+        "description",
+        *ADMISSION_AMENDMENT_FIELDS,
+    }
     admitted_packages: dict[str, str] = {}
+    admitted_versions: dict[str, str] = {}
+    additional_versions: list[tuple[str, dict[str, Any]]] = []
     for admission in admissions:
         if not isinstance(admission, dict) or not required.issubset(admission):
             _admission_invalid("A dependency admission is incomplete.")
@@ -788,6 +795,7 @@ def validate_dependency_admission_registry(
                     admitted_by=admitted_packages[key],
                 )
             admitted_packages[key] = identifier
+            admitted_versions[key] = package["version"]
         allowed = admission["allowed_dependency_files"]
         required_files = admission["required_dependency_files"]
         projects = admission["allowed_project_files"]
@@ -822,9 +830,212 @@ def validate_dependency_admission_registry(
             _admission_invalid(
                 "A NuGet dependency admission file scope is invalid.", id=identifier
             )
+        additional_versions.extend(
+            (identifier, entry) for entry in _validate_admission_amendments(admission, identifier)
+        )
         identifiers.add(identifier)
         branches.add(branch)
+    seen_additional: set[tuple[str, str]] = set()
+    for identifier, entry in additional_versions:
+        key = entry["id"].casefold()
+        owner = admitted_packages.get(key)
+        if owner is None or owner == identifier:
+            _admission_invalid(
+                "An additional version must extend a package another admission already admits.",
+                id=identifier,
+                package=entry["id"],
+            )
+        if admitted_versions[key] == entry["version"] or (key, entry["version"]) in seen_additional:
+            _admission_invalid(
+                "An additional version must be a distinct version admitted only once.",
+                id=identifier,
+                package=entry["id"],
+                version=entry["version"],
+            )
+        seen_additional.add((key, entry["version"]))
     return admissions
+
+
+ADMISSION_AMENDMENT_FIELDS = (
+    "additional_package_versions",
+    "baseline_package_upgrades",
+    "baseline_package_removals",
+)
+_ADMISSION_FRAMEWORK_PATTERN = re.compile(r"net[0-9]+\.[0-9]+")
+_ADMISSION_PACKAGE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _validate_admission_amendments(
+    admission: dict[str, Any],
+    identifier: str,
+) -> list[dict[str, Any]]:
+    """Validate the exact baseline amendments an admission may declare.
+
+    Each amendment names one lockfile, framework, package, version and content hash; no
+    wildcard, range or pattern is accepted, and every lockfile must already be in the
+    admission's allowed dependency files:
+
+    * ``additional_package_versions``: one more exact version of a package another
+      admission already admits, only in the named lockfiles, only as a transitive node;
+    * ``baseline_package_upgrades``: one baseline node replaced by an exact version that
+      this admission itself admits (directly, transitively or as an additional version);
+    * ``baseline_package_removals``: one exact baseline node removed from one lockfile
+      (a node the SDK prunes); nodes may then drop dependency edges to removed nodes only.
+    """
+
+    allowed = set(admission["allowed_dependency_files"])
+
+    def lock_file_ok(value: Any) -> bool:
+        return (
+            isinstance(value, str)
+            and value in allowed
+            and Path(value).name == "packages.lock.json"
+        )
+
+    def package_ok(value: Any) -> bool:
+        return isinstance(value, str) and _ADMISSION_PACKAGE_ID_PATTERN.fullmatch(value) is not None
+
+    def version_ok(value: Any) -> bool:
+        return isinstance(value, str) and _ADMISSION_VERSION_PATTERN.fullmatch(value) is not None
+
+    def hash_ok(value: Any) -> bool:
+        return isinstance(value, str) and _ADMISSION_CONTENT_HASH_PATTERN.fullmatch(value) is not None
+
+    def framework_ok(value: Any) -> bool:
+        return isinstance(value, str) and _ADMISSION_FRAMEWORK_PATTERN.fullmatch(value) is not None
+
+    for field in ADMISSION_AMENDMENT_FIELDS:
+        if field in admission and not isinstance(admission[field], list):
+            _admission_invalid(f"{field} must be an array.", id=identifier)
+
+    primary = {
+        package["id"].casefold(): package
+        for package in [*admission["admitted_direct_packages"], *admission["admitted_transitive_packages"]]
+    }
+    additional = admission.get("additional_package_versions", [])
+    additional_keys: set[tuple[str, str]] = set()
+    for entry in additional:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"id", "version", "content_hash", "lock_files"}
+            or not package_ok(entry["id"])
+            or not version_ok(entry["version"])
+            or not hash_ok(entry["content_hash"])
+            or not isinstance(entry["lock_files"], list)
+            or not entry["lock_files"]
+            or len(set(entry["lock_files"])) != len(entry["lock_files"])
+            or not all(lock_file_ok(value) for value in entry["lock_files"])
+        ):
+            _admission_invalid("An additional package version must be exact and scoped.", id=identifier)
+        key = (entry["id"].casefold(), entry["version"])
+        if key in additional_keys or entry["id"].casefold() in primary:
+            _admission_invalid(
+                "An additional package version is duplicated or also admitted here.",
+                id=identifier,
+                package=entry["id"],
+            )
+        additional_keys.add(key)
+
+    targets: set[tuple[str, str]] = set()
+    for field, keys in (
+        ("baseline_package_upgrades", {
+            "lock_file", "framework", "id", "from_version", "from_content_hash", "to_version", "to_content_hash",
+        }),
+        ("baseline_package_removals", {"lock_file", "framework", "id", "version", "content_hash"}),
+    ):
+        for entry in admission.get(field, []):
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != keys
+                or not lock_file_ok(entry["lock_file"])
+                or not framework_ok(entry["framework"])
+                or not package_ok(entry["id"])
+                or not all(version_ok(entry[name]) for name in keys if name.endswith("version"))
+                or not all(hash_ok(entry[name]) for name in keys if name.endswith("content_hash"))
+            ):
+                _admission_invalid(f"An entry of {field} must be exact.", id=identifier)
+            target = (entry["lock_file"], entry["framework"], entry["id"].casefold())
+            if target in targets:
+                _admission_invalid(
+                    "A baseline lockfile node may be amended only once.",
+                    id=identifier,
+                    lock_file=entry["lock_file"],
+                    package=entry["id"],
+                )
+            targets.add(target)
+            if field != "baseline_package_upgrades":
+                continue
+            if entry["from_version"] == entry["to_version"]:
+                _admission_invalid("A baseline upgrade must change the version.", id=identifier)
+            admitted = primary.get(entry["id"].casefold())
+            as_primary = (
+                admitted is not None
+                and admitted["id"] == entry["id"]
+                and admitted["version"] == entry["to_version"]
+                and admitted["content_hash"] == entry["to_content_hash"]
+            )
+            as_additional = any(
+                item["id"] == entry["id"]
+                and item["version"] == entry["to_version"]
+                and item["content_hash"] == entry["to_content_hash"]
+                and entry["lock_file"] in item["lock_files"]
+                for item in additional
+            )
+            if not (as_primary or as_additional):
+                _admission_invalid(
+                    "A baseline upgrade must land on a version this admission admits.",
+                    id=identifier,
+                    package=entry["id"],
+                )
+    return list(additional)
+
+
+def admission_amendments(
+    admissions: Iterable[dict[str, Any]] | None,
+) -> dict[str, dict[Any, dict[str, Any]]]:
+    """Index the declared baseline amendments of ACTIVE and MERGED admissions."""
+
+    extras: dict[tuple[str, str], dict[str, Any]] = {}
+    upgrades: dict[tuple[str, str, str], dict[str, Any]] = {}
+    removals: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for admission in admissions or ():
+        if admission.get("status") not in DEPENDENCY_ADMISSION_STATUSES:
+            continue
+        for entry in admission.get("additional_package_versions", []):
+            extras[(entry["id"].casefold(), entry["version"])] = {
+                **entry,
+                "admission_id": admission["id"],
+                "usage_key": additional_version_usage_key(entry["id"], entry["version"]),
+            }
+        for field, index, prefix in (
+            ("baseline_package_upgrades", upgrades, "upgrade"),
+            ("baseline_package_removals", removals, "removal"),
+        ):
+            for entry in admission.get(field, []):
+                index[(entry["lock_file"], entry["framework"], entry["id"].casefold())] = {
+                    **entry,
+                    "admission_id": admission["id"],
+                    "usage_key": f"{prefix}:{entry['lock_file']}:{entry['framework']}:{entry['id']}",
+                }
+    return {"extras": extras, "upgrades": upgrades, "removals": removals}
+
+
+def additional_version_usage_key(package: str, version: str) -> str:
+    return f"{package}@{version}"
+
+
+def usage_admission_id(
+    key: str,
+    catalog: dict[str, dict[str, Any]],
+    amendments: dict[str, dict[Any, dict[str, Any]]],
+) -> str:
+    """The admission a lockfile usage key belongs to (package id or declared amendment)."""
+
+    for index in amendments.values():
+        for entry in index.values():
+            if entry["usage_key"] == key:
+                return entry["admission_id"]
+    return catalog[key.casefold()]["admission_id"]
 
 
 def admitted_package_catalog(
@@ -4864,8 +5075,49 @@ def _check_admitted_node(
     package: str,
     node: dict[str, Any],
     catalog: dict[str, dict[str, Any]],
+    amendments: dict[str, dict[Any, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    """Fail unless a lockfile node is exactly an admitted package."""
+    """Fail unless a lockfile node is exactly an admitted package.
+
+    Returns the admitted entry; its ``usage_key`` is the package id, or
+    ``id@version`` for a declared additional version.
+    """
+
+    extra = (amendments or {}).get("extras", {}).get((package.casefold(), node.get("resolved")))
+    if extra is not None and extra["id"] == package and relative in extra["lock_files"]:
+        if node.get("contentHash") != extra["content_hash"]:
+            fail(
+                "DEPENDENCY_ADMISSION_CONTENT_HASH_MISMATCH",
+                "A lockfile package does not match its admitted additional version hash.",
+                file=relative,
+                framework=framework,
+                package=package,
+                admission_id=extra["admission_id"],
+            )
+        dependencies = node.get("dependencies", {})
+        if (
+            node.get("type") != "Transitive"
+            or "requested" in node
+            or not set(node).issubset({"type", "resolved", "contentHash", "dependencies"})
+            or not isinstance(dependencies, dict)
+            or any(not isinstance(name, str) or not isinstance(value, str) for name, value in dependencies.items())
+        ):
+            fail(
+                "DEPENDENCY_ADMISSION_DIRECT_PACKAGE_NOT_ADMITTED",
+                "An additional admitted version may only appear as a transitive node.",
+                file=relative,
+                framework=framework,
+                package=package,
+                admission_id=extra["admission_id"],
+            )
+        return {
+            "id": package,
+            "version": extra["version"],
+            "content_hash": extra["content_hash"],
+            "direct": False,
+            "admission_id": extra["admission_id"],
+            "usage_key": extra["usage_key"],
+        }
 
     admitted = catalog.get(package.casefold())
     if admitted is None:
@@ -4935,7 +5187,7 @@ def _check_admitted_node(
                 package=package,
                 admission_id=admitted["admission_id"],
             )
-    return admitted
+    return {**admitted, "usage_key": admitted["id"]}
 
 
 def _existing_lock_admitted_diff(
@@ -4943,15 +5195,22 @@ def _existing_lock_admitted_diff(
     base_packages: dict[tuple[str, str], dict[str, Any]],
     current_packages: dict[tuple[str, str], dict[str, Any]],
     catalog: dict[str, dict[str, Any]],
+    amendments: dict[str, dict[Any, dict[str, Any]]] | None = None,
 ) -> list[str] | None:
     """Validate an existing lockfile whose graph changed.
 
-    Returns ``None`` when no admitted package is involved (the caller keeps the
-    legacy fail-closed path). Otherwise the diff must be exactly baseline + admitted
-    nodes: no removal, no change to any baseline node (content hash included), and
-    every added node an exact admitted package. Returns the admitted package ids.
+    Returns ``None`` when no admitted package or declared amendment is involved (the
+    caller keeps the legacy fail-closed path). Otherwise the diff must be exactly
+    baseline + admitted nodes, where the only other differences are the declared,
+    exact amendments of an admission: a removed baseline node, an upgraded baseline
+    node, and baseline nodes that dropped dependency edges to removed nodes and
+    nothing else. Returns the usage keys (package ids and amendment keys).
     """
 
+    amendments = amendments or {"extras": {}, "upgrades": {}, "removals": {}}
+    upgrades = amendments["upgrades"]
+    removals = amendments["removals"]
+    extras = amendments["extras"]
     added = sorted(set(current_packages) - set(base_packages))
     removed = sorted(set(base_packages) - set(current_packages))
     changed = sorted(
@@ -4959,19 +5218,81 @@ def _existing_lock_admitted_diff(
         for key in set(base_packages) & set(current_packages)
         if base_packages[key] != current_packages[key]
     )
-    if not any(package.casefold() in catalog for _, package in [*added, *removed, *changed]):
+
+    def amended(framework: str, package: str) -> bool:
+        return (relative, framework, package.casefold()) in upgrades or (
+            relative, framework, package.casefold()
+        ) in removals
+
+    involved = any(
+        package.casefold() in catalog or amended(framework, package)
+        for framework, package in [*added, *removed, *changed]
+    ) or any(
+        (package.casefold(), current_packages[(framework, package)].get("resolved")) in extras
+        for framework, package in added
+    )
+    if not involved:
         return None
+    usage: set[str] = set()
+    removed_by_framework: dict[str, set[str]] = {}
     for framework, package in removed:
-        fail(
-            "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED",
-            "A lockfile with admitted packages removed a baseline package.",
-            file=relative,
-            framework=framework,
-            package=package,
-        )
+        declaration = removals.get((relative, framework, package.casefold()))
+        base_node = base_packages[(framework, package)]
+        if (
+            declaration is None
+            or declaration["id"] != package
+            or base_node.get("resolved") != declaration["version"]
+            or base_node.get("contentHash") != declaration["content_hash"]
+        ):
+            fail(
+                "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_REMOVED",
+                "A lockfile with admitted packages removed a baseline package.",
+                file=relative,
+                framework=framework,
+                package=package,
+            )
+        removed_by_framework.setdefault(framework, set()).add(package)
+        usage.add(declaration["usage_key"])
     for framework, package in changed:
+        base_node = base_packages[(framework, package)]
+        current_node = current_packages[(framework, package)]
+        declaration = upgrades.get((relative, framework, package.casefold()))
+        if declaration is not None:
+            if (
+                declaration["id"] != package
+                or base_node.get("resolved") != declaration["from_version"]
+                or base_node.get("contentHash") != declaration["from_content_hash"]
+                or current_node.get("resolved") != declaration["to_version"]
+                or current_node.get("contentHash") != declaration["to_content_hash"]
+                or current_node.get("type") != base_node.get("type")
+                or current_node.get("type") != "Transitive"
+                or "requested" in current_node
+                or not set(current_node).issubset({"type", "resolved", "contentHash", "dependencies"})
+                or not isinstance(current_node.get("dependencies", {}), dict)
+            ):
+                fail(
+                    "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED",
+                    "A baseline package changed differently from its declared upgrade.",
+                    file=relative,
+                    framework=framework,
+                    package=package,
+                    admission_id=declaration["admission_id"],
+                )
+            usage.add(declaration["usage_key"])
+            primary = catalog.get(package.casefold())
+            if (
+                primary is not None
+                and primary["id"] == package
+                and primary["version"] == declaration["to_version"]
+                and primary["content_hash"] == declaration["to_content_hash"]
+            ):
+                # The upgraded node also delivers the admitted package itself.
+                usage.add(primary["id"])
+            continue
+        if _only_pruned_edges(base_node, current_node, removed_by_framework.get(framework, set())):
+            continue
         if package.casefold() in catalog:
-            _check_admitted_node(relative, framework, package, current_packages[(framework, package)], catalog)
+            _check_admitted_node(relative, framework, package, current_node, catalog, amendments)
         fail(
             "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED",
             "A lockfile with admitted packages changed a baseline package node.",
@@ -4979,11 +5300,40 @@ def _existing_lock_admitted_diff(
             framework=framework,
             package=package,
         )
-    return sorted(
-        {
-            _check_admitted_node(relative, framework, package, current_packages[(framework, package)], catalog)["id"]
-            for framework, package in added
-        }
+    for framework, package in added:
+        usage.add(
+            _check_admitted_node(
+                relative, framework, package, current_packages[(framework, package)], catalog, amendments
+            )["usage_key"]
+        )
+    return sorted(usage)
+
+
+def _only_pruned_edges(
+    base_node: dict[str, Any],
+    current_node: dict[str, Any],
+    removed_packages: set[str],
+) -> bool:
+    """True when a node only lost dependency edges to nodes removed from the same lockfile."""
+
+    if not removed_packages:
+        return False
+    base_rest = {key: value for key, value in base_node.items() if key != "dependencies"}
+    current_rest = {key: value for key, value in current_node.items() if key != "dependencies"}
+    base_dependencies = base_node.get("dependencies", {})
+    current_dependencies = current_node.get("dependencies", {})
+    if (
+        base_rest != current_rest
+        or not isinstance(base_dependencies, dict)
+        or not isinstance(current_dependencies, dict)
+        or "dependencies" in current_node and not current_dependencies
+    ):
+        return False
+    dropped = set(base_dependencies) - set(current_dependencies)
+    return (
+        bool(dropped)
+        and dropped <= removed_packages
+        and all(base_dependencies.get(name) == value for name, value in current_dependencies.items())
     )
 
 
@@ -5021,6 +5371,7 @@ def package_graph_lockfile_diff(
     if not lockfiles:
         return [], {}
     catalog = admitted_package_catalog(admissions)
+    amendments = admission_amendments(admissions)
     base_catalog: dict[tuple[str, str], list[dict[str, Any]]] | None = None
     baseline_graph_only: list[str] = []
     usage: dict[str, set[str]] = {}
@@ -5051,7 +5402,7 @@ def package_graph_lockfile_diff(
                 continue
             if current_packages != base_packages:
                 admitted = _existing_lock_admitted_diff(
-                    relative, base_packages, current_packages, catalog
+                    relative, base_packages, current_packages, catalog, amendments
                 )
                 if admitted is None:
                     continue
@@ -5118,16 +5469,21 @@ def package_graph_lockfile_diff(
         unknown = [
             key for key, node in current_packages.items() if node not in base_catalog.get(key, [])
         ]
-        admitted_nodes = [key for key in unknown if key[1].casefold() in catalog]
+        admitted_nodes = [
+            key
+            for key in unknown
+            if key[1].casefold() in catalog
+            or (key[1].casefold(), current_packages[key].get("resolved")) in amendments["extras"]
+        ]
         if not admitted_nodes:
             if not unknown:
                 baseline_graph_only.append(relative)
             continue
         for framework, package in unknown:
             admitted = _check_admitted_node(
-                relative, framework, package, current_packages[(framework, package)], catalog
+                relative, framework, package, current_packages[(framework, package)], catalog, amendments
             )
-            usage.setdefault(admitted["id"], set()).add(relative)
+            usage.setdefault(admitted["usage_key"], set()).add(relative)
         baseline_graph_only.append(relative)
     return baseline_graph_only, {package: sorted(files) for package, files in usage.items()}
 
@@ -5361,6 +5717,18 @@ def validate_dependency_admission_source(
         ]
         if package["id"] not in usage
     )
+    # Declared amendments are exact: every additional version in every named lockfile,
+    # and every upgrade and removal, must be delivered by the introducing pull request.
+    for entry in admission.get("additional_package_versions", []):
+        key = additional_version_usage_key(entry["id"], entry["version"])
+        if not set(entry["lock_files"]).issubset(usage.get(key, [])):
+            missing_packages.append(key)
+    for prefix, field in (("upgrade", "baseline_package_upgrades"), ("removal", "baseline_package_removals")):
+        for entry in admission.get(field, []):
+            key = f"{prefix}:{entry['lock_file']}:{entry['framework']}:{entry['id']}"
+            if entry["lock_file"] not in usage.get(key, []):
+                missing_packages.append(key)
+    missing_packages = sorted(missing_packages)
     if missing_files or missing_direct or missing_packages:
         fail(
             "DEPENDENCY_ADMISSION_INCOMPLETE",
@@ -5436,8 +5804,9 @@ def validate_dependency_diff(
                 files=changed,
             )
         catalog = admitted_package_catalog(normal_admissions)
+        amendments = admission_amendments(normal_admissions)
         admission_ids = sorted(
-            {catalog[package.casefold()]["admission_id"] for package in admitted_usage}
+            {usage_admission_id(key, catalog, amendments) for key in admitted_usage}
             | set((central or {}).get("admission_ids", []))
         )
         if admission_ids:
