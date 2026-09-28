@@ -52,6 +52,30 @@ export function actionNeedsMfa(role: string | null, action: SettlementAction): b
   return requiresMfa(role, actionOperations[action]);
 }
 
+/** Every settlement operation this screen can call, reads included. */
+const settlementOperations: readonly CapabilityOperation[] = [
+  "listSettlements",
+  "getSettlement",
+  "createSettlement",
+  ...Object.values(actionOperations),
+];
+
+/**
+ * Role-accurate MFA hint derived from the capability data: a role that needs MFA
+ * for every settlement operation (PLATFORM_ADMIN) is told so; otherwise the hint
+ * appears only when a visible action (FINANCE approve/pay) needs MFA.
+ */
+export function settlementMfaHint(
+  role: string | null,
+  actions: readonly SettlementAction[],
+): string | null {
+  if (settlementOperations.every((operation) => requiresMfa(role, operation)))
+    return "Operar liquidaciones requiere verificar tu identidad (MFA).";
+  if (actions.some((action) => actionNeedsMfa(role, action)))
+    return "Aprobar y marcar pagada requieren verificar tu identidad (MFA).";
+  return null;
+}
+
 export function settlementReturnUrl(settlementId: string | null): string {
   return settlementId !== null && isCanonicalUuid(settlementId)
     ? `${settlementsPath}?settlement=${settlementId}`

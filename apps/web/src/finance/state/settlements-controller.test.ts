@@ -8,6 +8,7 @@ import { settlementId, settlementResponse } from "../contracts/settlement.fixtur
 import {
   actionNeedsMfa,
   SettlementsController,
+  settlementMfaHint,
   visibleSettlementActions,
 } from "./settlements-controller";
 
@@ -94,6 +95,18 @@ describe("settlement capability gating (D5-CAPABILITY-MATRIX)", () => {
     expect(actionNeedsMfa("FINANCE", "pay")).toBe(true);
     expect(actionNeedsMfa("FINANCE", "adjust")).toBe(false);
     expect(actionNeedsMfa("PLATFORM_ADMIN", "export")).toBe(true);
+  });
+
+  it("words the MFA hint for the role's actual MFA scope", () => {
+    const approveAndPay = "Aprobar y marcar pagada requieren verificar tu identidad (MFA).";
+    const everyOperation = "Operar liquidaciones requiere verificar tu identidad (MFA).";
+    expect(settlementMfaHint("FINANCE", visibleSettlementActions("FINANCE", "CALCULATED"))).toBe(approveAndPay);
+    expect(settlementMfaHint("FINANCE", ["adjust", "export"])).toBeNull();
+    expect(settlementMfaHint("PLATFORM_ADMIN", visibleSettlementActions("PLATFORM_ADMIN", "CALCULATED")))
+      .toBe(everyOperation);
+    expect(settlementMfaHint("PLATFORM_ADMIN", [])).toBe(everyOperation);
+    expect(settlementMfaHint("VIEWER", [])).toBeNull();
+    expect(settlementMfaHint(null, [])).toBeNull();
   });
 });
 

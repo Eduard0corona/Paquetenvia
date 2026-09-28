@@ -10,7 +10,7 @@ import {
   type Settlement,
 } from "../contracts/settlement";
 import {
-  actionNeedsMfa,
+  settlementMfaHint,
   visibleSettlementActions,
   type SettlementsController,
   type SettlementsState,
@@ -163,7 +163,7 @@ function Detail({
   readonly controller: SettlementsController;
 }) {
   const actions = visibleSettlementActions(state.role, settlement.status);
-  const mfaHint = actions.some((action) => actionNeedsMfa(state.role, action));
+  const mfaHint = settlementMfaHint(state.role, actions);
   // While another settlement is loading, no action may target the one still shown.
   const locked = state.busy || state.selecting !== null;
   return (
@@ -194,7 +194,7 @@ function Detail({
         </tbody>
       </table>
 
-      {mfaHint && <p className="opsTimezone">Aprobar y marcar pagada requieren verificar tu identidad (MFA).</p>}
+      {mfaHint !== null && <p className="opsTimezone">{mfaHint}</p>}
 
       <div className="opsFormActions">
         {actions.includes("approve") && (
