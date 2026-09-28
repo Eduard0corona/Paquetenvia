@@ -50,12 +50,14 @@ public sealed class LocationsArchitectureTests
     }
 
     [Fact]
-    public void Locations_contains_no_real_map_provider_generic_repository_or_product_crypto()
+    public void Locations_contains_no_unapproved_map_provider_generic_repository_or_product_crypto()
     {
         var root = TestRepository.GetPath("src/Modules/Locations");
-        var source = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText));
-        Assert.DoesNotContain("GoogleMaps", source, StringComparison.OrdinalIgnoreCase);
+        var files = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(root, path))
+            .ToArray();
+        var source = string.Join('\n', files.Select(File.ReadAllText));
+        // GATE-003-PROVIDER-GOOGLE approves Google Maps Platform only; other map providers stay out.
         Assert.DoesNotContain("Mapbox", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("HereMaps", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("here.com", source, StringComparison.OrdinalIgnoreCase);
@@ -63,5 +65,39 @@ public sealed class LocationsArchitectureTests
         Assert.DoesNotContain("Aes", source, StringComparison.Ordinal);
         Assert.Contains("DisabledLocationPiiProtector", source, StringComparison.Ordinal);
         Assert.Contains("DeterministicMockLocationPiiProtector", source, StringComparison.Ordinal);
+        Assert.Contains("DeterministicMockGeocodingProvider", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Google_Maps_lives_only_behind_the_geocoding_port_in_infrastructure()
+    {
+        var root = TestRepository.GetPath("src/Modules/Locations");
+        var allowed = new[]
+        {
+            "Locations.Infrastructure/Geocoding/GoogleMaps/",
+            "Locations.Infrastructure/LocationsOptions.cs",
+            "Locations.Infrastructure/DependencyInjection.cs",
+        };
+        var offenders = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(root, path))
+            .Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .Where(relative => !allowed.Any(prefix => relative.StartsWith(prefix, StringComparison.Ordinal)))
+            .Where(relative =>
+            {
+                var text = File.ReadAllText(Path.Combine(root, relative));
+                return text.Contains("Google", StringComparison.OrdinalIgnoreCase) ||
+                    text.Contains("googleapis", StringComparison.OrdinalIgnoreCase);
+            })
+            .ToArray();
+        Assert.Empty(offenders);
+        Assert.Contains(
+            typeof(IGeocodingProvider),
+            typeof(Locations.Infrastructure.Geocoding.GoogleMaps.GoogleMapsGeocodingProvider).GetInterfaces());
+    }
+
+    private static bool IsBuildOutput(string root, string path)
+    {
+        var segments = Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar);
+        return segments.Contains("bin") || segments.Contains("obj");
     }
 }
