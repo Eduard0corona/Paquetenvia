@@ -13,8 +13,9 @@ public static class PublicTrackingEndpointDefaults
     public const string CorsPolicy = "PublicTracking";
     public const string RateLimitPolicy = "PublicTrackingLookup";
 
+    // Case-insensitive like routing: every path routing can send to the lookup gets the privacy headers.
     public static bool IsLookupPath(PathString path) =>
-        path.StartsWithSegments(PathPrefix, StringComparison.Ordinal);
+        path.StartsWithSegments(PathPrefix, StringComparison.OrdinalIgnoreCase);
 }
 
 public static class PublicTrackingEndpoints
@@ -46,11 +47,19 @@ public static class PublicTrackingEndpoints
     }
 
     private static async Task<IResult> FindAsync(
-        string token,
+        HttpContext httpContext,
         IPublicTrackingProjectionReader reader,
         CancellationToken cancellationToken)
     {
-        var result = await reader.FindAsync(token, cancellationToken);
+        // The route value is the redacted placeholder: the token is read only from the feature set by
+        // PublicTrackingPathRedaction before hosting diagnostics ran. Without it the host is misconfigured
+        // and the token may already be in logs, so the lookup fails loudly instead of serving.
+        var feature = httpContext.Features.Get<IPublicTrackingTokenFeature>()
+            ?? throw new InvalidOperationException(
+                "Public tracking path redaction is not registered; refusing to serve the lookup.");
+        var result = feature.Token is { } token
+            ? await reader.FindAsync(token, cancellationToken)
+            : PublicTrackingLookupResult.NotFound;
         if (!result.IsFound || result.Projection is null)
         {
             return Results.Json(
