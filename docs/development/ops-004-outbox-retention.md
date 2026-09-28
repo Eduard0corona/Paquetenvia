@@ -88,7 +88,8 @@ El `IJobScheduler` compartido es dueño del tiempo, la repetición y la
 cancelación: ejecuta el primer ciclo al arrancar el Worker y luego uno por
 `PollInterval`. Cada invocación del job es exactamente un ciclo acotado sobre
 ambos lanes. Un ciclo que falla fuera de los lanes queda registrado por el
-scheduler (`Scheduled job outbox.retention ... CYCLE_FAILURE`) y se reintenta en
+scheduler (evento `ScheduledJobCycle` 4602 con `Job=outbox.retention`, `Outcome=failure`;
+OBS-002) y se reintenta en
 el siguiente intervalo.
 
 Cada réplica del Worker ejecuta su propio ciclo. La purga concurrente es segura

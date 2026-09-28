@@ -173,13 +173,14 @@ static async Task SeedPrerequisitesAsync(NpgsqlConnection connection)
 
         INSERT INTO pricing.tariff_rules(
           id,owner_org_id,city_id,service_area_id,operating_zone_id,
-          pricing_tier,service_type,amount_cents,tax_mode,active_from,status)
+          pricing_tier,service_type,amount_cents,tax_mode,active_from,status,policy_version)
         VALUES (
           '44444444-4444-4444-4444-444444444444','11111111-1111-1111-1111-111111111111',
           '44444444-4444-4444-4444-444444444441','44444444-4444-4444-4444-444444444442',
           '44444444-4444-4444-4444-444444444443','OCCASIONAL','SAME_DAY',12000,'EXEMPT',
-          '2026-01-01T00:00:00Z','ACTIVE')
-        ON CONFLICT (id) DO UPDATE SET status='ACTIVE',amount_cents=EXCLUDED.amount_cents;
+          '2026-01-01T00:00:00Z','ACTIVE','LOCAL-SYNTHETIC-v1')
+        ON CONFLICT (id) DO UPDATE SET status='ACTIVE',amount_cents=EXCLUDED.amount_cents,
+          policy_version=EXCLUDED.policy_version;
 
         INSERT INTO drivers.driver_profiles(id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
         VALUES (

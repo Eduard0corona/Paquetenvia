@@ -225,6 +225,7 @@ items:
   - quote guarda service/consolidated_route/package snapshot
   - cálculos usan centavos
   - quote contains pricing_tier, minimum_total_cents_snapshot and redacted snapshot
+  - quote freezes pricing_policy_version from the policy_version of the selected tariff rule of its organization (PRC-POLICY-VERSION-PER-ORG)
   - GET quote is contracted
   required_tests:
   - table-driven unit

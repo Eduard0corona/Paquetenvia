@@ -29,7 +29,7 @@ public sealed class NormativeBaselineTests
         using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(normativeRoot, "MANIFEST.json")));
         var root = document.RootElement;
         Assert.Equal(74, root.GetProperty("file_count").GetInt32());
-        Assert.Equal("35f1c6e839b2efbe441bfc6e5acd7a3a291534822a1de7067dddd5f7530f88bc", root.GetProperty("canonical_sql_sha256").GetString());
+        Assert.Equal("a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4", root.GetProperty("canonical_sql_sha256").GetString());
 
         var declaredPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in root.GetProperty("files").EnumerateArray())

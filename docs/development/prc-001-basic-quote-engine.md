@@ -45,6 +45,12 @@ total = subtotal
 minimum_total_cents_snapshot = amount_cents
 ```
 
+## Version de politica de precios (PRC-POLICY-VERSION-PER-ORG)
+
+Decision del owner (2026-09-28, literal: "Version por organizacion"): cada organizacion versiona su propia politica de precios en sus reglas, `pricing.tariff_rules.policy_version` (`text`, formato `^[A-Za-z0-9._-]{1,64}$`), y la sube cuando cambia sus tarifas. La cotizacion congela en `pricing.quotes.pricing_policy_version` la version de la regla que selecciono; la orden la copia sin cambios. No existe version global: la configuracion `Pricing:PricingPolicyVersion` se elimino y la API se niega a arrancar si sigue configurada.
+
+La comprobacion ocurre despues de la seleccion por especificidad: una regla seleccionada sin version (solo posible en una instalacion actualizada cuyas reglas anteriores aun no se versionan) falla cerrado con 422 `NO_TARIFF_RULE` y una senal tecnica sin PII; nunca se sustituye por una regla menos especifica.
+
 El flujo ejecutable solo acepta `EXEMPT`. `PLUS_VAT` y `VAT_INCLUDED` fallan cerrados. No se supone tasa, redondeo ni presentacion fiscal; GATE-011 sigue sin resolverse.
 
 ## Paquetes, snapshots y redaccion
@@ -84,7 +90,11 @@ Concurrencia del mismo hash genera una quote, dos ubicaciones y una fila. Con ha
 
 `PricingDbContext` mapea de forma explicita `pricing.tariff_rules`, `pricing.quotes`, la proyeccion read-only de clientes y `platform.idempotency_keys`. Usa `bigint`, `uuid[]`, `jsonb`, `bytea`, timestamps UTC, filtros tenant y `ValueGeneratedNever`. El INSERT de quote envia todos los campos, incluido UUID y timestamps generados por la aplicacion, y no usa `RETURNING`.
 
-La migracion no destructiva `20260722_AdoptCanonicalPricingBaseline` usa `platform.__ef_migrations_history_pricing`. Solo comprueba objetos, columnas, tipos, constraints e indices canonicos; no crea, altera ni elimina objetos. Pricing se ejecuta despues de Locations en el migrador. API y Worker no migran al arrancar, y Worker sigue sin conexion PostgreSQL.
+La migracion no destructiva `20260722_AdoptCanonicalPricingBaseline` usa `platform.__ef_migrations_history_pricing`. Solo comprueba objetos, columnas, tipos, constraints e indices canonicos; no crea, altera ni elimina objetos.
+
+`20260928000200_VersionPricingPolicyPerOrganization` (PRC-POLICY-VERSION-PER-ORG) adopta `policy_version` y su CHECK de formato en instalaciones nuevas (AI-06 ya los trae) y los crea en las existentes sin reescribir filas. Si ninguna regla carece de version, la columna queda `NOT NULL`; si no, queda nullable con `tariff_rules_policy_version_required CHECK (policy_version IS NOT NULL) NOT VALID`, que exige version en toda regla nueva o actualizada, y las reglas previas no se cotizan hasta que su organizacion les asigne version (segundo paso, `VALIDATE` y `SET NOT NULL`, en una migracion posterior). No se inventa una version legacy porque quedaria congelada en cotizaciones y ordenes como si fuera un hecho. El `Down` elimina la columna y sus constraints, y se niega (`PRC_POLICY_VERSION_DOWNGRADE_BLOCKED`) mientras alguna regla tenga version.
+
+`20260928000300_StoreTariffPolicyVersionInMasterDataLoader` conecta el cargador de operador MDM-001: `security.load_master_data` guarda el `policy_version` de cada regla del archivo revisado y rechaza cambiar el de una regla guardada (`MDM001_TARIFF_POLICY_VERSION_IMMUTABLE`). El ejecutor recibe `SELECT` e `INSERT` sobre la columna (nunca `UPDATE`); la funcion se deriva del cuerpo publicado con ediciones revisadas que deben coincidir exactamente una vez. Su `Down` revoca los dos grants y restaura la funcion publicada. Pricing se ejecuta despues de Locations en el migrador. API y Worker no migran al arrancar, y Worker sigue sin conexion PostgreSQL.
 
 Las tablas canonicas mantienen `ENABLE/FORCE RLS`; `paqueteria_app` y `paqueteria_worker` son `NOBYPASSRLS`. El contexto transaccional aplica actor, organizaciones y rol en cada intento, falla cerrado sin contexto y limpia conexiones pooled. Las pruebas Testcontainers cubren visibilidad y mutaciones cross-tenant; la capa transaccional compartida prueba rollback, cancelacion, retry y pooling sobre PostgreSQL 18/PostGIS.
 
@@ -95,13 +105,12 @@ Las tablas canonicas mantienen `ENABLE/FORCE RLS`; `paqueteria_app` y `paqueteri
   "Pricing": {
     "Provider": "Disabled",
     "QuoteLifetimeMinutes": 30,
-    "CommandTimeoutSeconds": 30,
-    "PricingPolicyVersion": "PRC-001-v1"
+    "CommandTimeoutSeconds": 30
   }
 }
 ```
 
-`Disabled` es el valor predeterminado y falla cerrado. `PostgreSql` exige vigencia mayor que cero y no mayor que 1440 minutos, timeout positivo y acotado, y version de politica no vacia. No hay seed, precio, poligono, IVA, secreto ni credencial en configuracion.
+`Disabled` es el valor predeterminado y falla cerrado. `PostgreSql` exige vigencia mayor que cero y no mayor que 1440 minutos, y timeout positivo y acotado. La version de politica no es configuracion: viene de la regla de tarifa seleccionada. No hay seed, precio, poligono, IVA, secreto ni credencial en configuracion.
 
 ## Endpoints
 
@@ -136,7 +145,7 @@ Rollback operativo:
 
 1. cambiar `Pricing:Provider` a `Disabled` para detener nuevas cotizaciones de forma fail-closed;
 2. revertir el commit correctivo y, si se requiere retirar PRC-001 completo, sus commits originales;
-3. no ejecutar DDL inverso: la migracion de adopcion tiene `Down` intencionalmente vacio y no es propietaria del baseline;
+3. no ejecutar DDL inverso: la migracion de adopcion tiene `Down` intencionalmente vacio y no es propietaria del baseline; el `Down` de `VersionPricingPolicyPerOrganization` solo procede mientras ninguna regla tenga `policy_version`;
 4. conservar quotes, ubicaciones, reservas idempotentes y auditoria existentes para investigacion y retencion conforme a politica; no borrar automaticamente reservas incompletas.
 
 No se debe borrar ni alterar manualmente el baseline AI-06/AI-18.

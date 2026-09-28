@@ -1,5 +1,9 @@
 using System.Text.Json;
 using Locations.Application.Locations;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Paqueteria.Application.Auditing;
 using Pricing.Application.Quotes;
 using Pricing.Domain;
@@ -259,6 +263,129 @@ public sealed class PricingDomainTests
         Assert.Throws<OverflowException>(() => Money.Add(new Money(long.MaxValue), new Money(1)));
     }
 
+    [Fact]
+    public void Quote_freezes_the_policy_version_of_the_rule_it_selected()
+    {
+        var city = Rule(policyVersion: "ORG-A-city.v1");
+        var area = Rule(serviceArea: AreaId, policyVersion: "ORG-A-area.v2");
+        var zone = Rule(serviceArea: AreaId, operatingZone: ZoneId, policyVersion: "ORG-A-zone.v3");
+
+        var zoneEvaluation = Evaluate([city, area, zone]);
+        Assert.Same(zone, zoneEvaluation.Rule);
+        Assert.Equal("ORG-A-zone.v3", CreateQuote(zoneEvaluation).PricingPolicyVersion);
+
+        var areaEvaluation = Evaluate([city, area], zone: Guid.NewGuid());
+        Assert.Same(area, areaEvaluation.Rule);
+        Assert.Equal("ORG-A-area.v2", CreateQuote(areaEvaluation).PricingPolicyVersion);
+    }
+
+    [Fact]
+    public void Each_organization_quotes_with_its_own_policy_version_and_never_another_tenants_rule()
+    {
+        var otherOrganization = Guid.Parse("99999999-9999-9999-9999-999999999999");
+        var own = Rule(policyVersion: "ORG-A-2026.09");
+        var foreign = Rule(owner: otherOrganization, serviceArea: AreaId, operatingZone: ZoneId, policyVersion: "ORG-B-7");
+
+        var evaluation = Evaluate([own, foreign]);
+
+        Assert.Same(own, evaluation.Rule);
+        Assert.Equal("ORG-A-2026.09", CreateQuote(evaluation).PricingPolicyVersion);
+    }
+
+    [Fact]
+    public void A_selected_rule_without_a_policy_version_fails_closed_instead_of_falling_back()
+    {
+        var versionedCity = Rule(policyVersion: "ORG-A-v1");
+        var legacyZone = UnversionedLegacyRule(serviceArea: AreaId, operatingZone: ZoneId);
+
+        var evaluation = Evaluate([versionedCity, legacyZone]);
+
+        Assert.Equal(TariffEvaluationFailure.PolicyVersionMissing, evaluation.Failure);
+        Assert.Null(evaluation.Rule);
+        Assert.Equal(TariffEvaluationFailure.None, Evaluate([versionedCity]).Failure);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("has space")]
+    [InlineData("v1\n")]
+    [InlineData("versión")]
+    [InlineData("v1;DROP")]
+    [InlineData("v1/2")]
+    public void Tariff_rules_reject_unsafe_policy_versions(string? version)
+    {
+        Assert.False(PricingPolicyVersionFormat.IsValid(version));
+        Assert.Throws<ArgumentException>(() => Rule(policyVersion: version!));
+    }
+
+    [Fact]
+    public void Policy_version_format_accepts_the_safe_alphabet_up_to_64_characters()
+    {
+        Assert.True(PricingPolicyVersionFormat.IsValid("PRC-2026.09_org-A"));
+        Assert.True(PricingPolicyVersionFormat.IsValid(new string('v', 64)));
+        Assert.False(PricingPolicyVersionFormat.IsValid(new string('v', 65)));
+        Assert.Equal("^[A-Za-z0-9._-]{1,64}$", PricingPolicyVersionFormat.SqlPattern);
+    }
+
+    [Fact]
+    public void The_removed_global_pricing_policy_version_setting_fails_startup_validation()
+    {
+        static OptionsValidationException? Validate(Dictionary<string, string?> settings)
+        {
+            settings["ConnectionStrings:Paqueteria"] = "Host=localhost;Database=unit;Username=unit";
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(settings)
+                .Build();
+            var services = new ServiceCollection();
+            services.AddSingleton<IConfiguration>(configuration);
+            services.AddPricingInfrastructure(configuration);
+            using var provider = services.BuildServiceProvider();
+            try
+            {
+                _ = provider.GetRequiredService<IOptions<PricingOptions>>().Value;
+                return null;
+            }
+            catch (OptionsValidationException exception)
+            {
+                return exception;
+            }
+        }
+
+        Assert.Null(Validate(new Dictionary<string, string?> { ["Pricing:Provider"] = "PostgreSql" }));
+        var rejected = Validate(new Dictionary<string, string?>
+        {
+            ["Pricing:Provider"] = "PostgreSql",
+            ["Pricing:PricingPolicyVersion"] = "PRC-001-v1",
+        });
+        Assert.NotNull(rejected);
+        Assert.Contains("PRC-POLICY-VERSION-PER-ORG", rejected.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EF_materializes_pricing_entities_without_running_domain_validation()
+    {
+        // PRC-POLICY-VERSION-PER-ORG: a legacy tariff rule may be stored with policy_version NULL.
+        // Loading it must never run the validating creation path; TariffRuleEvaluator alone fails closed.
+        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<global::Pricing.Infrastructure.Persistence.PricingDbContext>()
+            .UseNpgsql("Host=localhost;Database=unit;Username=unit")
+            .Options;
+        using var context = new global::Pricing.Infrastructure.Persistence.PricingDbContext(
+            options, new global::Paqueteria.Infrastructure.Tenancy.TenantDatabaseExecutionState());
+        foreach (var type in new[] { typeof(TariffRule), typeof(Quote) })
+        {
+            var entity = context.Model.FindEntityType(type)!;
+            var binding = Assert.IsAssignableFrom<Microsoft.EntityFrameworkCore.Metadata.ConstructorBinding>(entity.ConstructorBinding);
+            Assert.Empty(binding.ParameterBindings);
+            Assert.Empty(binding.Constructor.GetParameters());
+        }
+
+        // Creation validates through the factories; neither type exposes a public constructor.
+        Assert.Empty(typeof(TariffRule).GetConstructors());
+        Assert.Empty(typeof(Quote).GetConstructors());
+    }
+
     private static TariffEvaluationResult Evaluate(
         IEnumerable<TariffRule> rules,
         Guid? area = null,
@@ -287,7 +414,8 @@ public sealed class PricingDomainTests
         TaxMode taxMode = TaxMode.Exempt,
         DateTimeOffset? activeFrom = null,
         DateTimeOffset? activeTo = null,
-        TariffRuleStatus status = TariffRuleStatus.Active) => new(
+        TariffRuleStatus status = TariffRuleStatus.Active,
+        string policyVersion = "ORG-UNIT-v1") => TariffRule.Create(
             Guid.NewGuid(),
             owner ?? OrganizationId,
             city ?? CityId,
@@ -299,7 +427,36 @@ public sealed class PricingDomainTests
             taxMode,
             activeFrom ?? Now.AddDays(-1),
             activeTo,
-            status);
+            status,
+            policyVersion);
+
+    /// <summary>A rule stored before PRC-POLICY-VERSION-PER-ORG on an upgraded installation.</summary>
+    private static TariffRule UnversionedLegacyRule(Guid? serviceArea = null, Guid? operatingZone = null)
+    {
+        var rule = Rule(serviceArea: serviceArea, operatingZone: operatingZone);
+        typeof(TariffRule).GetProperty(nameof(TariffRule.PolicyVersion))!.SetValue(rule, null);
+        return rule;
+    }
+
+    private static Quote CreateQuote(TariffEvaluationResult evaluation) => Quote.Create(
+        Guid.NewGuid(),
+        OrganizationId,
+        null,
+        CityId,
+        AreaId,
+        Guid.NewGuid(),
+        Guid.NewGuid(),
+        ServiceType.SameDay,
+        PricingTier.Occasional,
+        false,
+        evaluation,
+        [evaluation.Rule!.Id],
+        "{}",
+        "[]",
+        "[]",
+        new byte[32],
+        Now.AddMinutes(30),
+        Now);
 
     private static CreateQuoteCommand Command() => new(
         Guid.Parse("55555555-5555-5555-5555-555555555555"),

@@ -25,7 +25,6 @@ public sealed class Quote
         PricingTier pricingTier,
         bool consolidatedRoute,
         TariffEvaluationResult evaluation,
-        string pricingPolicyVersion,
         Guid[] ruleIds,
         string requestSnapshotRedacted,
         string packageSnapshot,
@@ -37,7 +36,8 @@ public sealed class Quote
         if (id == Guid.Empty || ownerOrganizationId == Guid.Empty || cityId == Guid.Empty ||
             originLocationId == Guid.Empty || destinationLocationId == Guid.Empty ||
             evaluation.Failure != TariffEvaluationFailure.None || evaluation.Rule is null ||
-            string.IsNullOrWhiteSpace(pricingPolicyVersion) || ruleIds.Length != 1 ||
+            !PricingPolicyVersionFormat.IsValid(evaluation.Rule.PolicyVersion) ||
+            ruleIds.Length != 1 || ruleIds[0] != evaluation.Rule.Id ||
             inputHash.Length != 32 || expiresAt <= createdAt)
         {
             throw new ArgumentException("The quote aggregate is invalid.");
@@ -66,7 +66,8 @@ public sealed class Quote
             TotalCents = evaluation.Total.AmountCents,
             MinimumTotalCentsSnapshot = evaluation.MinimumTotal.AmountCents,
             Currency = Money.Currency,
-            PricingPolicyVersion = pricingPolicyVersion,
+            // PRC-POLICY-VERSION-PER-ORG: frozen from the selected rule; the order copies it unchanged.
+            PricingPolicyVersion = evaluation.Rule.PolicyVersion!,
             RuleIds = ruleIds.ToArray(),
             RequestSnapshotRedacted = requestSnapshotRedacted,
             PackageSnapshot = packageSnapshot,

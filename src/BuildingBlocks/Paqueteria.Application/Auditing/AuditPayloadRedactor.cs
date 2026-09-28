@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -60,6 +61,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         "legalname",
         "lastname",
         "mobile",
+        "msisdn",
         "name",
         "password",
         "passwd",
@@ -70,7 +72,12 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         "secret",
         "subject",
         "streetaddress",
+        "tel",
         "telephone",
+        "telefono",
+        "celular",
+        "movil",
+        "whatsapp",
         "token",
         "accesstoken",
     };
@@ -175,13 +182,19 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
             normalized.EndsWith("cookie", StringComparison.Ordinal) ||
             normalized.EndsWith("email", StringComparison.Ordinal) ||
             normalized.EndsWith("phone", StringComparison.Ordinal) ||
+            normalized.EndsWith("phonenumber", StringComparison.Ordinal) ||
+            normalized.EndsWith("mobilenumber", StringComparison.Ordinal) ||
+            normalized.StartsWith("telefono", StringComparison.Ordinal) ||
+            normalized.EndsWith("telefono", StringComparison.Ordinal) ||
+            normalized.EndsWith("celular", StringComparison.Ordinal) ||
+            normalized.EndsWith("whatsappnumber", StringComparison.Ordinal) ||
             normalized.EndsWith("address", StringComparison.Ordinal) ||
             normalized.EndsWith("fullname", StringComparison.Ordinal);
     }
 
     private static bool IsSensitiveValue(string value) =>
         EmailPattern().IsMatch(value) ||
-        PhonePattern().IsMatch(value) ||
+        ContainsPhoneNumber(value) ||
         JwtPattern().IsMatch(value) ||
         value.Contains("Bearer ", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("PRIVATE KEY", StringComparison.OrdinalIgnoreCase) ||
@@ -191,11 +204,102 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         CredentialPattern().IsMatch(value) ||
         CiphertextPattern().IsMatch(value);
 
+    /// <summary>
+    /// Phone detection is the pre-existing generic rule minus two known-safe token kinds. A value that is, as a whole,
+    /// exactly one ISO-8601 date or timestamp (strictly parsed, real calendar date, year 1900-2199) is not a phone.
+    /// Otherwise well-formed UUIDs (8-4-4-4-12 hex) are removed from the text, and what remains is redacted when it
+    /// matches the legacy generic digit-run rule (8 or more characters of digits, spaces, dashes or parentheses,
+    /// optional leading <c>+</c>), an E.164 number or a Mexican 10-digit number (which also cover dotted groupings).
+    /// Dates inside free text are not exempt and may be over-redacted. Every string the previous rule redacted is
+    /// still redacted, except UUIDs and whole-value ISO dates/timestamps.
+    /// </summary>
+    private static bool ContainsPhoneNumber(string value)
+    {
+        if (value.Length < 8 || IsWholeIsoDateOrTimestamp(value))
+        {
+            return false;
+        }
+
+        var text = UuidPattern().Replace(value, " ");
+        return LegacyDigitRunPattern().IsMatch(text) ||
+            E164PhonePattern().IsMatch(text) ||
+            MexicanPhonePattern().IsMatch(text);
+    }
+
+    private static readonly string[] IsoTimestampFormats =
+    [
+        "yyyy-MM-dd'T'HH:mm",
+        "yyyy-MM-dd'T'HH:mmK",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd'T'HH:mm:ssK",
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF",
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK",
+        "yyyy-MM-dd HH:mm",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ssK",
+        "yyyy-MM-dd HH:mm:ss.FFFFFFF",
+        "yyyy-MM-dd HH:mm:ss.FFFFFFFK",
+    ];
+
+    private static bool IsWholeIsoDateOrTimestamp(string value)
+    {
+        if (value.Length is < 10 or > 40 || value[4] != '-' || value[7] != '-')
+        {
+            return false;
+        }
+
+        if (value.Length == 10)
+        {
+            return DateOnly.TryParseExact(
+                    value,
+                    "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var date) &&
+                date.Year is >= 1900 and <= 2199;
+        }
+
+        return DateTimeOffset.TryParseExact(
+                value,
+                IsoTimestampFormats,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out var timestamp) &&
+            timestamp.Year is >= 1900 and <= 2199;
+    }
+
     [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+", RegexOptions.CultureInvariant)]
     private static partial Regex EmailPattern();
 
+    [GeneratedRegex(
+        @"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex UuidPattern();
+
+    // The original generic rule, kept so the new rule is a superset of it (minus UUIDs and whole-value ISO dates).
     [GeneratedRegex(@"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])", RegexOptions.CultureInvariant)]
-    private static partial Regex PhonePattern();
+    private static partial Regex LegacyDigitRunPattern();
+
+    // Boundaries are digits only (and "+" before a number): a phone glued to a word ("llamar667-123-4567",
+    // "6671234567antes") is still a phone.
+    // "+" then 8 to 15 digits; between digits at most one separator (space, dot, dash) and optional parentheses.
+    [GeneratedRegex(
+        @"(?<![0-9+])\+[ ]?\(?[0-9](?:[ .\-]?\)?[ .\-]?\(?[0-9]){7,14}(?![0-9])",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex E164PhonePattern();
+
+    // Optional +52 / 52 and mobile 1, then exactly ten digits in the usual Mexican groupings:
+    // 6671234567, 55 1234 5678, (667) 123-4567, 667.123.45.67, 66 71 23 45 67.
+    [GeneratedRegex(
+        @"(?<![0-9+])(?:\+?52[ .\-]?(?:1[ .\-]?)?)?" +
+        @"(?:[0-9]{10}" +
+        @"|(?:\([0-9]{2}\)|[0-9]{2})[ .\-]?[0-9]{4}[ .\-]?[0-9]{4}" +
+        @"|(?:\([0-9]{3}\)|[0-9]{3})[ .\-]?[0-9]{3}[ .\-]?[0-9]{4}" +
+        @"|(?:\([0-9]{3}\)|[0-9]{3})[ .\-]?[0-9]{3}([ .\-]?)[0-9]{2}\1[0-9]{2}" +
+        @"|[0-9]{2}([ .\-]?)[0-9]{2}\2[0-9]{2}\2[0-9]{2}\2[0-9]{2})" +
+        @"(?![0-9])",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex MexicanPhonePattern();
 
     [GeneratedRegex(@"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", RegexOptions.CultureInvariant)]
     private static partial Regex JwtPattern();

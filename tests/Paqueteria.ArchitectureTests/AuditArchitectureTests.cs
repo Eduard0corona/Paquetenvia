@@ -24,21 +24,26 @@ public sealed class AuditArchitectureTests
             .Where(file => file.Source.Contains("INSERT INTO platform.audit_logs", StringComparison.Ordinal))
             .ToArray();
 
-        // REG-001 and REG-002 are the only SQL-level exceptions: onboarding, the ALLY decision and pending
+        // REG-001 and REG-002 are SQL-level exceptions: onboarding, the ALLY decision and pending
         // memberships write their audit rows for an organization the caller's tenant context cannot see yet
         // (pre-tenant, the sign-in that accepts an entry) or at all (cross-tenant), so the rows are inserted
         // inside the SECURITY DEFINER functions of the Organizations lane, in the same transaction as the
-        // change they record. Nothing else may insert audit rows outside the general writer.
+        // change they record. MDM-001-OPERATOR-LOADER is the third: the operator job has EXECUTE only and no
+        // table privilege, so its one audit row per load is inserted by the loader function in the same
+        // transaction as the load. Nothing else may insert audit rows outside the general writer.
         var registrationLane = TestRepository.GetPath(
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000400_AddSelfServiceRegistration.cs");
         var pendingMembershipLane = TestRepository.GetPath(
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000500_AddPendingMemberships.cs");
+        var masterDataLane = TestRepository.GetPath(
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000100_AddMasterDataLoader.cs");
         Assert.Equal(
             new[]
             {
                 TestRepository.GetPath("src/BuildingBlocks/Paqueteria.Infrastructure/Auditing/PostgreSqlAppendOnlyAuditWriter.cs"),
                 registrationLane,
                 pendingMembershipLane,
+                masterDataLane,
             }.Order(StringComparer.OrdinalIgnoreCase),
             sources.Select(source => source.Path).Order(StringComparer.OrdinalIgnoreCase),
             StringComparer.OrdinalIgnoreCase);
@@ -88,6 +93,17 @@ public sealed class AuditArchitectureTests
         }
 
         Assert.Equal(5, pending.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+
+        // MDM-001: exactly one insert, inside the SECURITY DEFINER loader function, never in the rollback.
+        var masterData = sources.Single(source =>
+            string.Equals(source.Path, masterDataLane, StringComparison.OrdinalIgnoreCase)).Source;
+        var loader = Assert.Single(masterData.Split("CREATE OR REPLACE FUNCTION ", StringSplitOptions.None).Skip(1));
+        Assert.StartsWith("security.load_master_data(", loader, StringComparison.Ordinal);
+        var loaderDefinition = loader[..loader.IndexOf("$function$;", StringComparison.Ordinal)];
+        Assert.Contains("SECURITY DEFINER", loaderDefinition, StringComparison.Ordinal);
+        Assert.DoesNotContain("RETURNING", loaderDefinition, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, loaderDefinition.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, masterData.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
     }
 
     [Fact]

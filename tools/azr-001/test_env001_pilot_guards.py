@@ -86,10 +86,59 @@ class SettingsTests(unittest.TestCase):
         for name, value in cases.items():
             with self.subTest(name=name):
                 self.assertTrue(guards.validate_settings([{"name": name, "value": value}], allow_sentinel=False))
-        self.assertTrue(guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "v1", "extra": 1}], allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "v1", "extra": 1}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "A__B", "value": "1"}, {"name": "A__B", "value": "2"}], allow_sentinel=False))
-        self.assertEqual([], guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "PRC-PILOT-v1"}], allow_sentinel=False))
-        self.assertTrue(guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "owner_decision_required"}], allow_sentinel=False))
+        self.assertEqual([], guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "DSP-PILOT-v1"}], allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "owner_decision_required"}], allow_sentinel=False))
+
+    def test_removed_global_pricing_policy_version_is_rejected(self):
+        # PRC-POLICY-VERSION-PER-ORG: the version comes from each organization's tariff rules.
+        failures = guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "PRC-PILOT-v1"}], allow_sentinel=False)
+        self.assertTrue(any("PRC-POLICY-VERSION-PER-ORG" in failure for failure in failures))
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertNotIn("Pricing__PricingPolicyVersion", {entry["name"] for entry in entries})
+
+
+class ObservabilityParametersTests(unittest.TestCase):
+    """OBS-002: the alert e-mail is an owner value; the file carries nothing else."""
+
+    @staticmethod
+    def document(**parameters):
+        return {"$schema": "x", "contentVersion": "1.0.0.0", "parameters": {k: {"value": v} for k, v in parameters.items()}}
+
+    def test_repository_parameters_are_well_formed_but_await_the_owner(self):
+        document = json.loads((REPO_ROOT / guards.OBSERVABILITY_PARAMETERS_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(guards.OWNER_SENTINEL, document["parameters"]["alertEmailAddress"]["value"])
+        self.assertEqual([], guards.validate_observability_parameters(document, allow_sentinel=True))
+        failures = guards.validate_observability_parameters(document, allow_sentinel=False)
+        self.assertTrue(any(guards.OWNER_SENTINEL in f for f in failures), failures)
+
+    def test_a_single_email_and_documented_thresholds_pass(self):
+        self.assertEqual([], guards.validate_observability_parameters(
+            self.document(alertEmailAddress="ops@paquetenvia.com", outboxLagThresholdSeconds=600), allow_sentinel=False))
+
+    def test_malformed_or_unexpected_parameters_fail(self):
+        cases = {
+            "not an address": self.document(alertEmailAddress="ops"),
+            "two addresses": self.document(alertEmailAddress="a@x.com,b@x.com"),
+            "padded": self.document(alertEmailAddress=" ops@x.com"),
+            "missing": self.document(outboxLagThresholdSeconds=300),
+            "unknown parameter": self.document(alertEmailAddress="ops@x.com", webhookUrl="https://x"),
+            "wrong type": self.document(alertEmailAddress="ops@x.com", outboxLagThresholdSeconds="300"),
+            "not a parameters file": {"alertEmailAddress": "ops@x.com"},
+        }
+        for name, document in cases.items():
+            with self.subTest(name=name):
+                self.assertTrue(guards.validate_observability_parameters(document, allow_sentinel=True))
+
+    def test_cli_stops_for_the_owner_decision(self):
+        result = subprocess.run([sys.executable, guards.__file__, "observability-check", "--file",
+                                 str(REPO_ROOT / guards.OBSERVABILITY_PARAMETERS_FILE)], capture_output=True, text=True)
+        self.assertEqual(1, result.returncode)
+        self.assertIn("STOP_FOR_OWNER_DECISION", result.stdout)
+        allowed = subprocess.run([sys.executable, guards.__file__, "observability-check", "--allow-owner-sentinel", "--file",
+                                  str(REPO_ROOT / guards.OBSERVABILITY_PARAMETERS_FILE)], capture_output=True, text=True)
+        self.assertEqual(0, allowed.returncode, allowed.stdout)
 
 
 SAMPLE_LOG = """# Decision log
@@ -381,6 +430,61 @@ class TemplateGuardTests(unittest.TestCase):
         pinned = "azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6"
         self.assertIn(pinned, text)
         self.assert_fails(3, self.context(workflow_text=text.replace(pinned, "azure/login@v2", 1)), "pinned")
+
+    def test_obs002_alerts_fail_closed(self):
+        def rules(t):
+            return t["observability"]["variables"]["rules"]
+
+        def default_email(t):
+            t["observability"]["parameters"]["alertEmailAddress"]["defaultValue"] = "ops@example.com"
+        self.assert_fails(21, self.context(default_email), "without a default")
+
+        def webhook(t):
+            group = self.resource(t, "observability", "Microsoft.Insights/actionGroups")
+            group["properties"]["webhookReceivers"] = [{"name": "hook", "serviceUri": "https://example.com"}]
+        self.assert_fails(21, self.context(webhook), "only by e-mail")
+
+        def one_minute(t):
+            rules(t)[0]["frequency"] = "PT1M"
+        self.assert_fails(21, self.context(one_minute), "evaluationFrequency PT1M")
+
+        def all_five_minutes(t):
+            for rule in rules(t):
+                rule["frequency"] = "PT5M"
+                rule["window"] = "PT15M"
+        self.assert_fails(21, self.context(all_five_minutes), "above the 5.00 USD")
+
+        def window_shorter_than_frequency(t):
+            rules(t)[0]["window"] = "PT5M"
+        self.assert_fails(21, self.context(window_shorter_than_frequency), "windowSize PT5M")
+
+        def dropped_rule(t):
+            t["observability"]["variables"]["rules"] = rules(t)[1:]
+        self.assert_fails(21, self.context(dropped_rule), "must be exactly")
+
+        def payload_property(t):
+            self.edit(t, "observability", "e.State.Dead", "e.State.PayloadJson")
+        self.assert_fails(21, self.context(payload_property), "PayloadJson")
+
+        def foreign_table(t):
+            self.edit(t, "observability", "ContainerAppSystemLogs_CL", "AppRequests_CL")
+        self.assert_fails(21, self.context(foreign_table), "AppRequests_CL")
+
+        def stateless(t):
+            self.resource(t, "observability", "Microsoft.Insights/scheduledQueryRules")["properties"]["autoMitigate"] = False
+        self.assert_fails(21, self.context(stateless), "stateful")
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        self.assert_fails(21, self.context(workflow_text=text.replace("observability-check", "true")), "observability.parameters.json")
+
+    def test_observability_template_is_required(self):
+        def drop(t):
+            del t["observability"]
+        self.assert_fails(0, self.context(drop), "observability")
+
+        def unknown_insights_type(t):
+            t["observability"]["resources"].append({"type": "Microsoft.Insights/diagnosticSettings", "apiVersion": "2021-05-01-preview", "name": "d"})
+        self.assert_fails(1, self.context(unknown_insights_type), "Microsoft.Insights/diagnosticSettings")
 
 
 if __name__ == "__main__":
