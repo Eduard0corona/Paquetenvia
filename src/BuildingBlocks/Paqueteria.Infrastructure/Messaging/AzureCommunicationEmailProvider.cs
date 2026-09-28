@@ -18,7 +18,7 @@ namespace Paqueteria.Infrastructure.Messaging;
 /// delivery, not that the mailbox received it.
 /// </summary>
 internal sealed class AzureCommunicationEmailProvider(
-    HttpClient client,
+    IHttpClientFactory httpClientFactory,
     TokenCredential credential,
     IOptions<MessagingOptions> options,
     TimeProvider time,
@@ -89,7 +89,7 @@ internal sealed class AzureCommunicationEmailProvider(
         message.Headers.TryAddWithoutValidation("Operation-Id", request.MessageId.ToString("D"));
 
         var (response, failure) = await MessagingHttp.SendOnceAsync(
-            client, message, TimeSpan.FromSeconds(acs.TimeoutSeconds), cancellationToken).ConfigureAwait(false);
+            httpClientFactory.CreateClient(HttpClientName), message, TimeSpan.FromSeconds(acs.TimeoutSeconds), cancellationToken).ConfigureAwait(false);
         if (failure is not null)
         {
             return Log(failure, null);
@@ -103,20 +103,21 @@ internal sealed class AzureCommunicationEmailProvider(
             }
 
             var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return Log(Classify(response, payload, request.MessageId), (int)response.StatusCode);
+            return Log(Classify(response, payload), (int)response.StatusCode);
         }
     }
 
     public void Dispose() => _tokenLock.Dispose();
 
-    private MessagingResult Classify(HttpResponseMessage response, string payload, Guid messageId)
+    private MessagingResult Classify(HttpResponseMessage response, string payload)
     {
         if (response.IsSuccessStatusCode)
         {
-            return new(
-                MessagingOutcome.Accepted,
-                MessagingResultCodes.Accepted,
-                TryReadOperationId(payload) ?? messageId.ToString("D"));
+            // Like the WhatsApp adapter, a success status without a confirmed operation id is not
+            // trusted as SENT; the caller's Operation-Id makes the outbox retry idempotent in ACS.
+            return TryReadOperationId(payload) is { } operationId
+                ? new(MessagingOutcome.Accepted, MessagingResultCodes.Accepted, operationId)
+                : new(MessagingOutcome.AmbiguousTimeout, MessagingResultCodes.ResponseInvalid);
         }
 
         return MessagingHttp.ClassifyStatus(response.StatusCode, response.Headers, time);

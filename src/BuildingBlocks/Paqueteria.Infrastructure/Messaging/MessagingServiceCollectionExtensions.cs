@@ -47,13 +47,15 @@ public static class MessagingServiceCollectionExtensions
             })
             .RemoveAllLoggers();
 
+        // The adapters hold the factory, not a client: CreateClient runs per send so the pooled
+        // handlers still rotate (DNS refresh) for the Worker's lifetime.
         services.AddSingleton(provider => new MetaWhatsAppCloudApiProvider(
-            provider.GetRequiredService<IHttpClientFactory>().CreateClient(MetaWhatsAppCloudApiProvider.HttpClientName),
+            provider.GetRequiredService<IHttpClientFactory>(),
             provider.GetRequiredService<IOptions<MessagingOptions>>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<MetaWhatsAppCloudApiProvider>>()));
         services.AddSingleton(provider => new AzureCommunicationEmailProvider(
-            provider.GetRequiredService<IHttpClientFactory>().CreateClient(AzureCommunicationEmailProvider.HttpClientName),
+            provider.GetRequiredService<IHttpClientFactory>(),
             provider.GetRequiredService<TokenCredential>(),
             provider.GetRequiredService<IOptions<MessagingOptions>>(),
             provider.GetRequiredService<TimeProvider>(),

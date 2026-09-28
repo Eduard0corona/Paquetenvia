@@ -230,6 +230,42 @@ public sealed class Gate004MessagingProviderTests
         Assert.True((bool)body["userEngagementTrackingDisabled"]!);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("{}")]
+    [InlineData("""{"status":"Running"}""")]
+    [InlineData("not json")]
+    public async Task Email_success_without_a_confirmed_operation_id_is_ambiguous(string payload)
+    {
+        var handler = new FakeHandler(_ => Json(HttpStatusCode.Accepted, payload));
+        var provider = Email(handler, new FakeCredential(), out _);
+
+        var result = await provider.SendAsync(EmailRequest(), default);
+
+        Assert.Equal(new MessagingResult(MessagingOutcome.AmbiguousTimeout, MessagingResultCodes.ResponseInvalid), result);
+    }
+
+    [Fact]
+    public async Task Adapters_create_a_client_per_send_so_pooled_handlers_rotate()
+    {
+        var whatsAppHandler = new FakeHandler(_ => Json(HttpStatusCode.OK, """{"messages":[{"id":"wamid.SYNTHETIC=="}]}"""));
+        var whatsAppFactory = new HandlerClientFactory(whatsAppHandler);
+        var whatsApp = new MetaWhatsAppCloudApiProvider(
+            whatsAppFactory, Options.Create(ProductionOptions()), TimeProvider.System, new RecordingLogger<MetaWhatsAppCloudApiProvider>());
+        var emailHandler = new FakeHandler(_ => Json(HttpStatusCode.Accepted, """{"id":"acs-operation-1"}"""));
+        var emailFactory = new HandlerClientFactory(emailHandler);
+        var email = new AzureCommunicationEmailProvider(
+            emailFactory, new FakeCredential(), Options.Create(ProductionOptions()), TimeProvider.System, new RecordingLogger<AzureCommunicationEmailProvider>());
+
+        await whatsApp.SendAsync(WhatsAppRequest(), default);
+        await whatsApp.SendAsync(WhatsAppRequest(), default);
+        await email.SendAsync(EmailRequest(), default);
+        await email.SendAsync(EmailRequest(), default);
+
+        Assert.Equal(2, whatsAppFactory.Created);
+        Assert.Equal(2, emailFactory.Created);
+    }
+
     [Fact]
     public async Task Email_reuses_the_token_until_it_nears_expiry_and_drops_it_after_401()
     {
@@ -510,13 +546,13 @@ public sealed class Gate004MessagingProviderTests
         var options = ProductionOptions(timeoutSeconds);
         Assert.Empty(MessagingOptionsValidator.Validate(options, syntheticAllowed: false));
         logs = new RecordingLogger<MetaWhatsAppCloudApiProvider>();
-        return new MetaWhatsAppCloudApiProvider(new HttpClient(handler), Options.Create(options), TimeProvider.System, logs);
+        return new MetaWhatsAppCloudApiProvider(new HandlerClientFactory(handler), Options.Create(options), TimeProvider.System, logs);
     }
 
     private static AzureCommunicationEmailProvider Email(FakeHandler handler, FakeCredential credential, out RecordingLogger<AzureCommunicationEmailProvider> logs)
     {
         logs = new RecordingLogger<AzureCommunicationEmailProvider>();
-        return new AzureCommunicationEmailProvider(new HttpClient(handler), credential, Options.Create(ProductionOptions()), TimeProvider.System, logs);
+        return new AzureCommunicationEmailProvider(new HandlerClientFactory(handler), credential, Options.Create(ProductionOptions()), TimeProvider.System, logs);
     }
 
     private static Dictionary<string, string?> SyntheticSettings() => new()
@@ -545,6 +581,17 @@ public sealed class Gate004MessagingProviderTests
         new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
     private sealed record CapturedRequest(HttpMethod Method, Uri Uri, string? Authorization, string? OperationId, string Body);
+
+    private sealed class HandlerClientFactory(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public int Created { get; private set; }
+
+        public HttpClient CreateClient(string name)
+        {
+            Created++;
+            return new HttpClient(handler, disposeHandler: false);
+        }
+    }
 
     private sealed class FakeHandler : HttpMessageHandler
     {

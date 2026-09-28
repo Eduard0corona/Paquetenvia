@@ -15,7 +15,7 @@ namespace Paqueteria.Infrastructure.Messaging;
 /// idempotency key: an ambiguous timeout retried by the outbox may deliver twice.
 /// </summary>
 internal sealed class MetaWhatsAppCloudApiProvider(
-    HttpClient client,
+    IHttpClientFactory httpClientFactory,
     IOptions<MessagingOptions> options,
     TimeProvider time,
     ILogger<MetaWhatsAppCloudApiProvider> logger) : IMessagingChannelProvider
@@ -79,7 +79,7 @@ internal sealed class MetaWhatsAppCloudApiProvider(
         message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", meta.AccessToken);
 
         var (response, failure) = await MessagingHttp.SendOnceAsync(
-            client, message, TimeSpan.FromSeconds(meta.TimeoutSeconds), cancellationToken).ConfigureAwait(false);
+            httpClientFactory.CreateClient(HttpClientName), message, TimeSpan.FromSeconds(meta.TimeoutSeconds), cancellationToken).ConfigureAwait(false);
         if (failure is not null)
         {
             return Log(failure, null);

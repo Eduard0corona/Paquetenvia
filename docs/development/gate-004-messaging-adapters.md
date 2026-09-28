@@ -70,7 +70,12 @@ with a Microsoft Entra token for `https://communication.azure.com/.default` from
 The token is cached until 5 minutes before expiry and dropped after a 401. `Operation-Id` is the
 message id, so retries of one Notification reuse one ACS operation. The body is `plainText` only,
 rendered from the configured subject and text; engagement tracking is disabled. `202 Accepted` means
-ACS queued the email, not that it was delivered.
+ACS queued the email, not that it was delivered. A success status whose body has no operation `id`
+is classified ambiguous (`MESSAGING_PROVIDER_RESPONSE_INVALID`), as the WhatsApp adapter does for a
+missing `wamid`.
+
+Both adapters take `IHttpClientFactory` and call `CreateClient` on every send, so the factory's pooled
+handlers keep rotating (DNS refresh) for the life of the Worker singleton.
 
 **Synthetic — `SyntheticWhatsAppProvider` / `SyntheticEmailProvider`.** Deterministic fake for tests,
 CI and DEV_SYNTHETIC: enforces the same template, parameter and recipient rules, performs no I/O, and
