@@ -158,6 +158,51 @@ public sealed class OrdersArchitectureTests
             reference.Contains("Infrastructure", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// TRK-002-ISSUE-ENDPOINT: the plaintext tracking token reaches exactly one place, the 201 body. The endpoints
+    /// take no logger, emit no telemetry, never interpolate the token into a problem or an exception, and read it
+    /// from the grant only to build the response; the service persists only the hash.
+    /// </summary>
+    [Fact]
+    public void Tracking_link_token_flows_only_into_the_no_store_response()
+    {
+        var endpoints = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Endpoints/PublicTrackingLinkEndpoints.cs"));
+        foreach (var forbidden in new[]
+                 {
+                     "ILogger", "LoggerMessage", ".Log", "Console.", "Debug.", "Trace.", "Activity", "Meter",
+                     "IPublicTrackingTelemetry", "Npgsql", "OrdersDbContext", "extensions:",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, endpoints, StringComparison.Ordinal);
+        }
+
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(endpoints, @"grant\.Token\b"));
+        Assert.Contains(
+            "new PublicTrackingLinkResponse(grant.TokenId, grant.OrderId, grant.Token, grant.ExpiresAt)",
+            endpoints,
+            StringComparison.Ordinal);
+        Assert.Contains("headers.CacheControl = \"no-store\"", endpoints, StringComparison.Ordinal);
+
+        var service = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Infrastructure/Tracking/PostgreSqlPublicTrackingTokenService.cs"));
+        Assert.DoesNotContain("ILogger", service, StringComparison.Ordinal);
+        Assert.Contains("tokenHasher.HashToken(token)", service, StringComparison.Ordinal);
+        Assert.Contains("(id,order_id,owner_org_id,token_hash,expires_at,revoked_at,created_at)", service, StringComparison.Ordinal);
+
+        // The records that hold the plaintext never render it as text.
+        const string token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
+        Assert.DoesNotContain(
+            token,
+            new Orders.Application.Tracking.PublicTrackingTokenGrant(Guid.NewGuid(), Guid.NewGuid(), token, default)
+                .ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            token,
+            new Orders.Endpoints.PublicTrackingLinkResponse(Guid.NewGuid(), Guid.NewGuid(), token, default).ToString(),
+            StringComparison.Ordinal);
+    }
+
     private static string[] Names(System.Reflection.Assembly assembly) =>
         assembly.GetReferencedAssemblies().Select(reference => reference.Name ?? string.Empty).ToArray();
 }
