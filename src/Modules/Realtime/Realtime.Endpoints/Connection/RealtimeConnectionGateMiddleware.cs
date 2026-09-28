@@ -67,7 +67,7 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
         HttpContext context,
         IRealtimeConnectionAuthorizer authorizer)
     {
-        if (!TryReadTrackingToken(context.Request, out var token))
+        if (!TryReadTrackingToken(context, out var token))
         {
             await WriteTrackingNotFoundAsync(context);
             return;
@@ -134,25 +134,27 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
 
     private static string? GetHubKind(PathString path)
     {
-        if (path.StartsWithSegments(RealtimeEndpointDefaults.OperationsPath, StringComparison.Ordinal))
+        if (path.StartsWithSegments(RealtimeEndpointDefaults.OperationsPath, StringComparison.OrdinalIgnoreCase))
         {
             return "operations";
         }
 
-        if (path.StartsWithSegments(RealtimeEndpointDefaults.DriverPath, StringComparison.Ordinal))
+        if (path.StartsWithSegments(RealtimeEndpointDefaults.DriverPath, StringComparison.OrdinalIgnoreCase))
         {
             return "driver";
         }
 
-        return path.StartsWithSegments(RealtimeEndpointDefaults.TrackingPath, StringComparison.Ordinal)
+        return path.StartsWithSegments(RealtimeEndpointDefaults.TrackingPath, StringComparison.OrdinalIgnoreCase)
             ? "tracking"
             : null;
     }
 
-    private static bool TryReadTrackingToken(HttpRequest request, out string token)
+    private static bool TryReadTrackingToken(HttpContext context, out string token)
     {
         token = string.Empty;
-        var queryValues = request.Query["access_token"];
+        var request = context.Request;
+        // The query only holds the redacted placeholder; the original values come from the redaction feature.
+        var queryValues = context.GetOriginalAccessTokens();
         var queryToken = queryValues.Count == 1 ? queryValues[0] : null;
         string? headerToken = null;
         if (request.Headers.TryGetValue("Authorization", out var headerValues) &&

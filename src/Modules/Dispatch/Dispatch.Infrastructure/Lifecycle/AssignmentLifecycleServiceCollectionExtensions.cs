@@ -7,6 +7,7 @@ using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Dispatch.Infrastructure.Lifecycle;
@@ -45,6 +46,7 @@ public static class AssignmentLifecycleServiceCollectionExtensions
         services.TryAddScoped<WorkerTenantTransactionContext<DispatchDbContext>>();
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.AddScoped<IAssignmentLifecycleReactor, PostgreSqlAssignmentLifecycleReactor>();
+        services.AddOutboxLaneMonitor();
         services.AddSingleton<AssignmentLifecycleProcessor>();
         services.AddHostedService<AssignmentLifecycleDispatcher>();
         services.AddHealthChecks().AddCheck<AssignmentLifecycleHealthCheck>(

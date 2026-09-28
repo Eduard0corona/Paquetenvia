@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Notifications.Infrastructure.Dispatching;
 
@@ -8,6 +9,7 @@ internal sealed class NotificationsOutboxDispatcher(
     INotificationsStore store,
     NotificationsOutboxProcessor processor,
     IOptions<NotificationsOptions> options,
+    OutboxLaneMonitor lanes,
     ILogger<NotificationsOutboxDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -20,6 +22,7 @@ internal sealed class NotificationsOutboxDispatcher(
         var nextRecovery = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
+            lanes.ReportIfDue(OutboxLanes.Notifications);
             try
             {
                 if (DateTimeOffset.UtcNow >= nextRecovery)
@@ -34,6 +37,7 @@ internal sealed class NotificationsOutboxDispatcher(
                         options.Value.BatchSize,
                         options.Value.MaximumAttempts,
                         stoppingToken);
+                    RecordClaimed(recovered);
                     await ProcessBatchAsync(recovered, processor.ProcessRecoveredAsync, stoppingToken);
                     nextRecovery = DateTimeOffset.UtcNow.AddSeconds(options.Value.StaleRecoveryIntervalSeconds);
                 }
@@ -48,6 +52,8 @@ internal sealed class NotificationsOutboxDispatcher(
                     options.Value.BatchSize,
                     TimeSpan.FromSeconds(options.Value.LeaseSeconds),
                     stoppingToken);
+                RecordClaimed(owned);
+                RecordClaimed(unowned);
                 await ProcessBatchAsync(owned, processor.ProcessOwnedAsync, stoppingToken);
                 await ProcessBatchAsync(unowned, processor.ProcessUnownedAsync, stoppingToken);
                 if (owned.Count == 0 && unowned.Count == 0)
@@ -61,11 +67,19 @@ internal sealed class NotificationsOutboxDispatcher(
             }
             catch (Exception)
             {
+                lanes.LoopFailed(OutboxLanes.Notifications);
                 logger.LogError("Notifications dispatcher loop failed with outcome {Outcome}.", "LOOP_FAILURE");
                 await Task.Delay(options.Value.PollIntervalMilliseconds, stoppingToken);
             }
         }
     }
+
+    private void RecordClaimed(
+        IReadOnlyList<Notifications.Application.Dispatching.ClaimedNotificationOutboxMessage> messages) =>
+        lanes.Claimed(
+            OutboxLanes.Notifications,
+            messages.Count,
+            messages.Count == 0 ? null : messages.Min(static message => message.AvailableAt));
 
     private async Task ProcessBatchAsync(
         IReadOnlyList<Notifications.Application.Dispatching.ClaimedNotificationOutboxMessage> messages,

@@ -17,6 +17,7 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.AddPublicTrackingPathRedaction();
         services.AddExceptionHandler<PublicTrackingTechnicalExceptionHandler>();
         services.AddCors();
         services.AddOptions<CorsOptions>()

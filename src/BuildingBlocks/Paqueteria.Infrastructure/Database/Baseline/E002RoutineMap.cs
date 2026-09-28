@@ -118,6 +118,15 @@ public static class E002RoutineMap
         new("security.apply_pending_memberships(text,bytea[],integer[])", "paqueteria_registration_executor", ["paqueteria_app"]),
     ];
 
+    /// <summary>
+    /// MDM-001-OPERATOR-LOADER: installed by the Pricing lane migration 20260928000100_AddMasterDataLoader,
+    /// owned by paqueteria_master_data_executor and executable only by paqueteria_master_data_loader.
+    /// </summary>
+    private static readonly E002RoutineEntry[] Mdm001Entries =
+    [
+        new("security.load_master_data(uuid,uuid,json,bytea,boolean)", "paqueteria_master_data_executor", ["paqueteria_master_data_loader"]),
+    ];
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -137,7 +146,8 @@ public static class E002RoutineMap
             Reg001Entries.Length != 5 || Reg001Entries.Sum(entry => 1 + entry.Grantees.Count) != 10 ||
             BffSessionEntries.Length != 6 || BffSessionEntries.Sum(entry => 1 + entry.Grantees.Count) != 12 ||
             BffPurgeEntries.Length != 1 || BffPurgeEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
-            Reg002Entries.Length != 4 || Reg002Entries.Sum(entry => 1 + entry.Grantees.Count) != 8)
+            Reg002Entries.Length != 4 || Reg002Entries.Sum(entry => 1 + entry.Grantees.Count) != 8 ||
+            Mdm001Entries.Length != 1 || Mdm001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
@@ -151,7 +161,8 @@ public static class E002RoutineMap
         bool reg001Applied = false,
         bool bffSessionApplied = false,
         bool bffPurgeApplied = false,
-        bool reg002Applied = false)
+        bool reg002Applied = false,
+        bool mdm001Applied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -195,6 +206,11 @@ public static class E002RoutineMap
             selected = selected.Concat(Reg002Entries);
         }
 
+        if (mdm001Applied)
+        {
+            selected = selected.Concat(Mdm001Entries);
+        }
+
         return Array.AsReadOnly(selected.ToArray());
     }
 
@@ -206,7 +222,8 @@ public static class E002RoutineMap
         bool reg001Applied = false,
         bool bffSessionApplied = false,
         bool bffPurgeApplied = false,
-        bool reg002Applied = false)
+        bool reg002Applied = false,
+        bool mdm001Applied = false)
     {
         var prefix = state switch
         {
@@ -223,6 +240,7 @@ public static class E002RoutineMap
             (bffSessionApplied ? "_PLUS_BFFSESSION" : string.Empty) +
             (bffPurgeApplied ? "_PLUS_BFFPURGE" : string.Empty) +
             (reg002Applied ? "_PLUS_REG002" : string.Empty) +
+            (mdm001Applied ? "_PLUS_MDM001" : string.Empty) +
             "_V1";
     }
 }

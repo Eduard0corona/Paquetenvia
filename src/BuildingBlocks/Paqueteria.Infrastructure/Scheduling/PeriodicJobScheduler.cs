@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Paqueteria.Application.Scheduling;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Paqueteria.Infrastructure.Scheduling;
 
@@ -8,6 +9,11 @@ namespace Paqueteria.Infrastructure.Scheduling;
 /// hosting <c>BackgroundService</c>. A failed cycle never ends the schedule because every job
 /// restarts from durable state; cancellation ends it cleanly.
 /// </summary>
+/// <remarks>
+/// OBS-002: every cycle writes one <see cref="TelemetryEvents.ScheduledJobCycle"/> line with the fixed
+/// job name, <c>success</c> or <c>failure</c> and its duration. The exception itself is never logged
+/// here: jobs log their own bounded error class.
+/// </remarks>
 public sealed class PeriodicJobScheduler(
     TimeProvider timeProvider,
     ILogger<PeriodicJobScheduler> logger) : IJobScheduler
@@ -26,9 +32,11 @@ public sealed class PeriodicJobScheduler(
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            var started = timeProvider.GetTimestamp();
             try
             {
                 await job.RunOnceAsync(cancellationToken);
+                LogCycle(job.Name, ScheduledJobOutcomes.Success, started);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -36,7 +44,7 @@ public sealed class PeriodicJobScheduler(
             }
             catch (Exception)
             {
-                logger.LogError("Scheduled job {JobName} cycle failed with outcome {Outcome}.", job.Name, "CYCLE_FAILURE");
+                LogCycle(job.Name, ScheduledJobOutcomes.Failure, started);
             }
 
             try
@@ -49,4 +57,13 @@ public sealed class PeriodicJobScheduler(
             }
         }
     }
+
+    private void LogCycle(string job, string outcome, long started) =>
+        logger.Log(
+            outcome == ScheduledJobOutcomes.Success ? LogLevel.Information : LogLevel.Error,
+            TelemetryEvents.ScheduledJobCycle,
+            "Scheduled job {Job} cycle finished with outcome {Outcome} in {DurationMs} ms.",
+            job,
+            outcome,
+            (long)timeProvider.GetElapsedTime(started).TotalMilliseconds);
 }

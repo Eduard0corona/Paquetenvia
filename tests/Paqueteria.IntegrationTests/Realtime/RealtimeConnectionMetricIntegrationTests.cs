@@ -25,7 +25,13 @@ public sealed class RealtimeConnectionMetricIntegrationTests
     {
         await using var factory = new RealtimeWebApplicationFactory();
         _ = factory.Server;
-        using var gauge = new ActiveConnectionsGauge(factory.Services.GetRequiredService<IRealtimeTelemetry>());
+        var telemetry = factory.Services.GetRequiredService<IRealtimeTelemetry>();
+        if (telemetry is RealtimeWebApplicationFactory.AcceptanceObservingRealtimeTelemetry observing)
+        {
+            telemetry = observing.Inner;
+        }
+
+        using var gauge = new ActiveConnectionsGauge(telemetry);
 
         var tracking = CreateConnection(
             factory,

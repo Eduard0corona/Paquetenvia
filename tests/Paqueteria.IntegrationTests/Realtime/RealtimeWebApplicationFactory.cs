@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Realtime.Application.Authorization;
+using Realtime.Application.Observability;
 
 namespace Paqueteria.IntegrationTests.Realtime;
 
@@ -83,7 +84,115 @@ public sealed class RealtimeWebApplicationFactory : WebApplicationFactory<Progra
             services.RemoveAll<IRealtimeConnectionAuthorizer>();
             services.AddSingleton<SyntheticRealtimeAuthorizationState>();
             services.AddSingleton<IRealtimeConnectionAuthorizer, SyntheticRealtimeConnectionAuthorizer>();
+
+            // Wrap (never replace) the production telemetry so the hubs keep their real
+            // metrics while tests observe ConnectionAccepted, which every hub emits only
+            // after its Groups.AddToGroupAsync calls completed.
+            var telemetry = services.Last(descriptor =>
+                descriptor.ServiceType == typeof(IRealtimeTelemetry));
+            var createInner = telemetry.ImplementationFactory
+                ?? throw new InvalidOperationException(
+                    "The production realtime telemetry registration changed shape.");
+            services.Remove(telemetry);
+            services.AddSingleton<RealtimeConnectionAcceptances>();
+            services.AddSingleton<IRealtimeTelemetry>(provider =>
+                new AcceptanceObservingRealtimeTelemetry(
+                    (IRealtimeTelemetry)createInner(provider),
+                    provider.GetRequiredService<RealtimeConnectionAcceptances>()));
         });
+    }
+
+    /// <summary>
+    /// Server-side readiness signal for hub connections of this host.
+    /// </summary>
+    internal RealtimeConnectionAcceptances ConnectionAcceptances =>
+        Services.GetRequiredService<RealtimeConnectionAcceptances>();
+
+    /// <summary>
+    /// Counts <c>ConnectionAccepted</c> per hub. The client's <c>StartAsync</c> completes
+    /// when the handshake response arrives, which SignalR sends before
+    /// <c>Hub.OnConnectedAsync</c> runs; the hubs call <c>ConnectionAccepted</c> strictly
+    /// after awaiting their group registrations, so a completed wait means a publish to
+    /// those groups reaches the connection.
+    /// </summary>
+    internal sealed class RealtimeConnectionAcceptances
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<string, long> _accepted = new(StringComparer.Ordinal);
+        private readonly List<(Dictionary<string, long> Targets, TaskCompletionSource Completion)> _waiters = [];
+
+        /// <summary>
+        /// Captures the current per-hub counts and returns a task that completes once the
+        /// given number of further connections were accepted on each hub. Call it before
+        /// <c>StartAsync</c> so no acceptance can be missed.
+        /// </summary>
+        internal Task ExpectAsync(params (string Hub, int Count)[] expectations)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate)
+            {
+                var targets = new Dictionary<string, long>(StringComparer.Ordinal);
+                foreach (var (hub, count) in expectations)
+                {
+                    targets[hub] = targets.GetValueOrDefault(hub, _accepted.GetValueOrDefault(hub)) + count;
+                }
+
+                _waiters.Add((targets, completion));
+                CompleteSatisfiedWaiters();
+            }
+
+            return completion.Task;
+        }
+
+        internal void RecordAccepted(string hub)
+        {
+            lock (_gate)
+            {
+                _accepted[hub] = _accepted.GetValueOrDefault(hub) + 1;
+                CompleteSatisfiedWaiters();
+            }
+        }
+
+        private void CompleteSatisfiedWaiters()
+        {
+            for (var index = _waiters.Count - 1; index >= 0; index--)
+            {
+                var (targets, completion) = _waiters[index];
+                if (targets.All(target => _accepted.GetValueOrDefault(target.Key) >= target.Value))
+                {
+                    _waiters.RemoveAt(index);
+                    completion.TrySetResult();
+                }
+            }
+        }
+    }
+
+    internal sealed class AcceptanceObservingRealtimeTelemetry(
+        IRealtimeTelemetry inner,
+        RealtimeConnectionAcceptances acceptances) : IRealtimeTelemetry
+    {
+        internal IRealtimeTelemetry Inner => inner;
+
+        public IDisposable MeasureAuthorization(string hub, string authKind) =>
+            inner.MeasureAuthorization(hub, authKind);
+
+        public IDisposable MeasurePublication(string eventType) =>
+            inner.MeasurePublication(eventType);
+
+        public void ConnectionAccepted(string hub, string authKind)
+        {
+            inner.ConnectionAccepted(hub, authKind);
+            acceptances.RecordAccepted(hub);
+        }
+
+        public void ConnectionRejected(string hub, string authKind) =>
+            inner.ConnectionRejected(hub, authKind);
+
+        public void ConnectionClosed(string hub) => inner.ConnectionClosed(hub);
+
+        public void PublicationSucceeded(string eventType) => inner.PublicationSucceeded(eventType);
+
+        public void PublicationFailed(string eventType) => inner.PublicationFailed(eventType);
     }
 
     internal sealed class SyntheticRealtimeAuthorizationState

@@ -1,4 +1,4 @@
-// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 1 of 4: workload identities, Key Vault and its keys.
+// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 1 of 5: workload identities, Key Vault and its keys.
 // Deployed before anything that needs a secret, so the workflow can persist generated credentials
 // (PostgreSQL administrator password, EmailLookup key) before the resources that consume them exist.
 targetScope = 'resourceGroup'

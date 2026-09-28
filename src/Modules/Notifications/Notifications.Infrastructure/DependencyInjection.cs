@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Notifications.Application.Audience;
 using Notifications.Infrastructure.Delivery;
 using Notifications.Infrastructure.Dispatching;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Notifications.Infrastructure;
 
@@ -25,6 +26,7 @@ public static class DependencyInjection
         services.AddSingleton<NotificationAudienceResolver>();
         services.AddSingleton<INotificationsStore, PostgreSqlNotificationsStore>();
         services.AddSingleton<ISyntheticInAppProvider, SyntheticInAppProvider>();
+        services.AddOutboxLaneMonitor();
         services.AddSingleton<NotificationsOutboxProcessor>();
         services.AddHostedService<NotificationsOutboxDispatcher>();
         services.AddHealthChecks().AddCheck<NotificationsHealthCheck>(

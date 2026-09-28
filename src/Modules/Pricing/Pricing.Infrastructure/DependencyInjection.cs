@@ -28,9 +28,9 @@ public static class DependencyInjection
             .Validate(options => options.Provider != PricingProviderKind.PostgreSql ||
                     options.QuoteLifetimeMinutes is >= 1 and <= 1_440,
                 "Pricing:QuoteLifetimeMinutes must be between 1 and 1440 for PostgreSql.")
-            .Validate(options => options.Provider != PricingProviderKind.PostgreSql ||
-                    !string.IsNullOrWhiteSpace(options.PricingPolicyVersion),
-                "Pricing:PricingPolicyVersion is required for PostgreSql.")
+            .Validate(_ => configuration.GetSection(PricingOptions.SectionName)["PricingPolicyVersion"] is null,
+                "Pricing:PricingPolicyVersion was removed (PRC-POLICY-VERSION-PER-ORG): each organization versions its " +
+                "own pricing policy on its tariff rules.")
             .Validate(options => options.Provider != PricingProviderKind.PostgreSql ||
                     !string.IsNullOrWhiteSpace(configuration.GetConnectionString("Paqueteria")),
                 "Pricing:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")

@@ -13,5 +13,8 @@ public sealed class PricingOptions
     public PricingProviderKind Provider { get; set; }
     public int QuoteLifetimeMinutes { get; set; } = 30;
     public int CommandTimeoutSeconds { get; set; } = 30;
-    public string PricingPolicyVersion { get; set; } = "PRC-001-v1";
+
+    // PRC-POLICY-VERSION-PER-ORG: there is no global pricing policy version any more. Each
+    // organization versions its own policy on pricing.tariff_rules.policy_version, and a quote
+    // freezes the version of the rule it selected.
 }

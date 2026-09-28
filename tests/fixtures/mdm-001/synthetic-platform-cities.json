@@ -1,0 +1,17 @@
+{
+  "format": "paquetenvia.master-data.v1",
+  "classification": "SYNTHETIC",
+  "owner_org_id": "22222222-2222-2222-2222-222222222222",
+  "cities": [
+    {
+      "country_code": "MX",
+      "state_code": "SIN",
+      "name": "Synthetic MDM City",
+      "timezone": "America/Mazatlan"
+    }
+  ],
+  "service_areas": [],
+  "operating_zones": [],
+  "tariff_rules": [],
+  "driver_profiles": []
+}
