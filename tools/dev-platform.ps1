@@ -317,7 +317,6 @@ function Set-HostConfiguration([string] $Kind) {
     $env:Locations__GeocodingProvider = "Mock"
     $env:Locations__PiiProtector = "Mock"
     $env:Pricing__Provider = "PostgreSql"
-    $env:Pricing__PricingPolicyVersion = "LOCAL-SYNTHETIC-v1"
     $env:Orders__Provider = "PostgreSql"
     $env:PublicTracking__Provider = "PostgreSql"
     $env:Drivers__Provider = "PostgreSql"

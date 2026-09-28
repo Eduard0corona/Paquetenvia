@@ -34,6 +34,7 @@ public sealed class PricingDbContext(
         tariff.Property(entity => entity.ActiveTo).HasColumnName("active_to").HasColumnType("timestamp with time zone");
         tariff.Property(entity => entity.Status).HasColumnName("status").HasColumnType("text")
             .HasConversion(value => value.ToContractValue(), value => ParseTariffStatus(value)).ValueGeneratedNever();
+        tariff.Property(entity => entity.PolicyVersion).HasColumnName("policy_version").HasColumnType("text").ValueGeneratedNever();
         tariff.HasQueryFilter(entity => tenantState.OrganizationIds.Contains(entity.OwnerOrganizationId));
 
         var quote = modelBuilder.Entity<Quote>();

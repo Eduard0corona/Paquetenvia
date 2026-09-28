@@ -1,13 +1,13 @@
 extern alias WorkerHost;
 
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orders.Infrastructure.Lifecycle;
+using Paqueteria.IntegrationTests.Hosting;
 using WorkerProgram = WorkerHost::WorkerProgram;
 
 namespace Paqueteria.IntegrationTests.Orders;
@@ -90,9 +90,9 @@ public sealed class ClaimWindowFinalizationWorkerTests
                 : $"{exception.Message} | {Flatten(exception.InnerException)}";
 
     private sealed class LifecycleWorkerFactory(Dictionary<string, string?> settings)
-        : WebApplicationFactory<WorkerProgram>
+        : StartupFailureSurfacingWebApplicationFactory<WorkerProgram>
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));

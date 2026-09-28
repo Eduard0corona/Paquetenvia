@@ -1,0 +1,169 @@
+{
+  "format": "paquetenvia.master-data.v1",
+  "classification": "SYNTHETIC",
+  "owner_org_id": "11111111-1111-1111-1111-111111111111",
+  "cities": [],
+  "service_areas": [
+    {
+      "city": {
+        "country_code": "MX",
+        "state_code": "SIN",
+        "name": "Synthetic MDM City"
+      },
+      "name": "Synthetic MDM Service Area",
+      "status": "ACTIVE",
+      "polygon": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                -107.5,
+                24.7
+              ],
+              [
+                -107.3,
+                24.7
+              ],
+              [
+                -107.3,
+                24.9
+              ],
+              [
+                -107.5,
+                24.9
+              ],
+              [
+                -107.5,
+                24.7
+              ]
+            ]
+          ]
+        ]
+      }
+    }
+  ],
+  "operating_zones": [
+    {
+      "service_area": {
+        "city": {
+          "country_code": "MX",
+          "state_code": "SIN",
+          "name": "Synthetic MDM City"
+        },
+        "name": "Synthetic MDM Service Area"
+      },
+      "name": "Synthetic MDM Core Zone",
+      "zone_type": "CORE",
+      "status": "ACTIVE",
+      "polygon": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                -107.45,
+                24.75
+              ],
+              [
+                -107.35,
+                24.75
+              ],
+              [
+                -107.35,
+                24.85
+              ],
+              [
+                -107.45,
+                24.85
+              ],
+              [
+                -107.45,
+                24.75
+              ]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "service_area": {
+        "city": {
+          "country_code": "MX",
+          "state_code": "SIN",
+          "name": "Synthetic MDM City"
+        },
+        "name": "Synthetic MDM Service Area"
+      },
+      "name": "Synthetic MDM Excluded Zone",
+      "zone_type": "EXCLUDED",
+      "status": "ACTIVE",
+      "polygon": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                -107.34,
+                24.86
+              ],
+              [
+                -107.31,
+                24.86
+              ],
+              [
+                -107.31,
+                24.89
+              ],
+              [
+                -107.34,
+                24.89
+              ],
+              [
+                -107.34,
+                24.86
+              ]
+            ]
+          ]
+        ]
+      }
+    }
+  ],
+  "tariff_rules": [
+    {
+      "city": {
+        "country_code": "MX",
+        "state_code": "SIN",
+        "name": "Synthetic MDM City"
+      },
+      "service_area": null,
+      "operating_zone": null,
+      "pricing_tier": "OCCASIONAL",
+      "service_type": "SAME_DAY",
+      "amount_cents": 11100,
+      "tax_mode": "EXEMPT",
+      "policy_version": "synthetic-v1",
+      "active_from": "2026-01-01T00:00:00Z",
+      "active_to": null,
+      "status": "ACTIVE"
+    },
+    {
+      "city": {
+        "country_code": "MX",
+        "state_code": "SIN",
+        "name": "Synthetic MDM City"
+      },
+      "service_area": "Synthetic MDM Service Area",
+      "operating_zone": "Synthetic MDM Core Zone",
+      "pricing_tier": "OCCASIONAL",
+      "service_type": "URGENT",
+      "amount_cents": 22200,
+      "tax_mode": "EXEMPT",
+      "policy_version": "synthetic-v1",
+      "active_from": "2026-01-01T00:00:00Z",
+      "active_to": "2026-12-31T23:59:59Z",
+      "status": "ACTIVE"
+    }
+  ],
+  "driver_profiles": []
+}

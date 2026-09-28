@@ -252,7 +252,10 @@ CREATE TABLE pricing.tariff_rules (
   tax_mode text NOT NULL CHECK (tax_mode IN ('PLUS_VAT','VAT_INCLUDED','EXEMPT')),
   active_from timestamptz NOT NULL,
   active_to timestamptz,
-  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE'))
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  -- PRC-POLICY-VERSION-PER-ORG: version of the owning organization's pricing policy; a quote
+  -- freezes the version of the rule it selected into pricing_policy_version.
+  policy_version text NOT NULL CHECK (policy_version ~ '^[A-Za-z0-9._-]{1,64}$')
 );
 ALTER TABLE clients.client_accounts
   ADD CONSTRAINT client_accounts_private_tariff_fk
@@ -275,7 +278,7 @@ CREATE TABLE pricing.quotes (
   total_cents bigint NOT NULL CHECK (total_cents >= 0),
   minimum_total_cents_snapshot bigint NOT NULL CHECK (minimum_total_cents_snapshot >= 0),
   currency char(3) NOT NULL DEFAULT 'MXN' CHECK (currency='MXN'),
-  pricing_policy_version text NOT NULL,
+  pricing_policy_version text NOT NULL, -- frozen from policy_version of the selected tariff rule
   rule_ids uuid[] NOT NULL DEFAULT '{}',
   request_snapshot_redacted jsonb NOT NULL,
   package_snapshot jsonb NOT NULL,
@@ -318,7 +321,7 @@ CREATE TABLE orders.orders (
   total_cents bigint NOT NULL CHECK (total_cents >= 0),
   minimum_total_cents_snapshot bigint NOT NULL CHECK (minimum_total_cents_snapshot >= 0),
   currency char(3) NOT NULL DEFAULT 'MXN' CHECK (currency='MXN'),
-  pricing_policy_version text NOT NULL,
+  pricing_policy_version text NOT NULL, -- copied unchanged from the quote
   package_snapshot jsonb NOT NULL,
   financial_override jsonb,
   cod_expected_cents bigint NOT NULL DEFAULT 0 CHECK (cod_expected_cents >= 0),
@@ -726,6 +729,22 @@ CREATE TABLE platform.idempotency_keys (
   PRIMARY KEY(owner_org_id,scope,idempotency_key)
 );
 CREATE INDEX idempotency_expiry_idx ON platform.idempotency_keys(expires_at);
+
+-- MDM-001-OPERATOR-LOADER / GATE-007: deployment marker for the master-data loader. One global row, not
+-- tenant data; written only by the migrator (Paqueteria.DatabaseMigrator master-data-gate, which also audits
+-- every change) and read only by paqueteria_master_data_executor (BYPASSRLS). It forces RLS like every
+-- application table except locations.cities; its only policy (AI-18) admits paqueteria_migrator, its owner.
+-- No row means REAL with GATE-007 open: the loader then refuses SYNTHETIC files and every driver profile.
+CREATE TABLE platform.master_data_deployment_gate (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  deployment_class text NOT NULL CHECK (deployment_class IN ('SYNTHETIC','REAL')),
+  gate_007_closed boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by text NOT NULL DEFAULT session_user,
+  CONSTRAINT master_data_deployment_gate_real_only_ck CHECK (deployment_class = 'REAL' OR NOT gate_007_closed)
+);
+ALTER TABLE platform.master_data_deployment_gate ENABLE ROW LEVEL SECURITY;
+ALTER TABLE platform.master_data_deployment_gate FORCE ROW LEVEL SECURITY;
 
 -- Tenant context and RLS --------------------------------------------------------
 CREATE OR REPLACE FUNCTION security.app_current_user() RETURNS uuid

@@ -15,7 +15,8 @@ public sealed class RealtimePrivateAccessTokenMiddleware(RequestDelegate next)
             return next(context);
         }
 
-        var queryValues = context.Request.Query["access_token"];
+        // The query only holds the redacted placeholder; the original values come from the redaction feature.
+        var queryValues = context.GetOriginalAccessTokens();
         if (queryValues.Count == 0)
         {
             return next(context);
@@ -35,6 +36,6 @@ public sealed class RealtimePrivateAccessTokenMiddleware(RequestDelegate next)
     }
 
     private static bool IsPrivateHub(PathString path) =>
-        path.StartsWithSegments(RealtimeEndpointDefaults.OperationsPath, StringComparison.Ordinal) ||
-        path.StartsWithSegments(RealtimeEndpointDefaults.DriverPath, StringComparison.Ordinal);
+        path.StartsWithSegments(RealtimeEndpointDefaults.OperationsPath, StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWithSegments(RealtimeEndpointDefaults.DriverPath, StringComparison.OrdinalIgnoreCase);
 }

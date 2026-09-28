@@ -13,6 +13,7 @@ BEGIN
      (SELECT count(*) FROM locations.operating_zones) <> 1 OR
      (SELECT count(*) FROM locations.locations) <> 4 OR
      (SELECT count(*) FROM pricing.tariff_rules) <> 1 OR
+     (SELECT policy_version FROM pricing.tariff_rules) IS DISTINCT FROM 'ops002-synthetic-v1' OR
      (SELECT count(*) FROM pricing.quotes) <> 2 OR
      (SELECT count(*) FROM orders.orders) <> 2 OR
      (SELECT count(*) FROM orders.order_events WHERE order_id='10000000-0000-4000-8000-000000000010') <> 9 OR

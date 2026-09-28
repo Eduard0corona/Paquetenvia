@@ -236,9 +236,13 @@ API and Worker settings. It cannot override any platform-managed prefix, and it 
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
 value is still `OWNER_DECISION_REQUIRED`:
 
-- `Pricing__PricingPolicyVersion`
 - `Dispatch__AssignmentPolicyVersion`
 - `Drivers__Eligibility__PolicyVersion`
+
+There is no pricing policy version setting (PRC-POLICY-VERSION-PER-ORG, owner 2026-09-28): each
+organization versions its own pricing policy in `pricing.tariff_rules.policy_version`, loaded with its
+tariffs (MDM-001), and every quote freezes the version of the rule it selected. The API refuses to
+start if `Pricing__PricingPolicyVersion` is still set.
 
 Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
@@ -456,6 +460,67 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 - **TLS:** connection strings use `SSL Mode=VerifyFull`. If the image's CA bundle ever lacks the
   PostgreSQL certificate chain, the migrate job fails at connect. Fix the CA bundle; do not downgrade
   to `Require` without an owner decision.
+
+### 6.8 Master data (MDM-001, manual run)
+
+The MDM-001 operator loader (`master-data-load`, owner decision MDM-001-OPERATOR-LOADER) is **not wired
+into `jobs.bicep`**. A pilot job needs its own operator login secret and a way to bring the reviewed file
+into the VNet, and neither is decided yet; the data itself is gated:
+
+- real service zones and tariffs wait on **GATE-010** and **GATE-011**;
+- real driver profiles wait on **GATE-007**. The database enforces it: the loader function refuses any
+  `driver_profiles` until the deployment marker `platform.master_data_deployment_gate` records GATE-007 as
+  closed. The job also refuses them outside Development, Testing and DEV_SYNTHETIC unless
+  `--allow-real-driver-profiles` is passed; both may only be used once GATE-007 is closed;
+- the pilot database is `REAL`: with no marker row, or after `master-data-gate --deployment-class REAL`, it
+  refuses every `SYNTHETIC` file, so the synthetic examples (`tests/fixtures/mdm-001/`) cannot be loaded
+  into it;
+- the loader role is a platform-operator capability, not a tenant boundary: whoever holds it can load any
+  organization's master data, so only named operator logins the owner controls may hold it.
+
+When the gates are closed, the manual run is:
+
+1. `job-pv-pilot-migrate` has applied the Pricing lane `20260928000100_AddMasterDataLoader` (the `assert`
+   job shows `Pricing: APPLIED`). On a pilot database whose baseline predates MDM-001, the lane's Azure
+   bridge stops with `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING` until an Azure administrator has created
+   `paqueteria_master_data_executor NOLOGIN BYPASSRLS` (with SET for the deployment role) and
+   `paqueteria_master_data_loader NOLOGIN NOBYPASSRLS` (granted to the deployment role only
+   `WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`: it administers the role but no member of the migrator may
+   be able to use the loader); nothing is written before that check.
+2. Record the deployment class with the migration connection (a manual `job-pv-pilot-migrate`-style run
+   of the db-ops image): `master-data-gate --connection-env PAQUETERIA_MIGRATION_CONNECTION
+   --deployment-class REAL --platform-organization-id <PLATFORM organization>`. Only once GATE-007 is
+   closed, and only to load driver profiles, add `--gate-007-closed`. Every change is audited
+   (`MASTER_DATA_GATE_CHANGED`, PLATFORM organization) and a REAL database is never made SYNTHETIC again.
+   The operator login can neither read nor change this marker.
+3. Create a named operator login (for example `pv_pilot_mdm_ec`, initials rather than a full name, since
+   the login name is recorded in the audit row) as
+   `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, from a SCRAM-SHA-256
+   verifier (never a plaintext password in SQL), and `GRANT paqueteria_master_data_loader TO pv_pilot_mdm`.
+   Never grant it `paqueteria_app`, `paqueteria_worker` or `paqueteria_migrator`: the loader refuses such a
+   login, and the lane and the `assert` job reject a loader member that is also a deployment principal.
+   Store its connection string in Key Vault like the runtime connections.
+4. From a container inside the VNet running the `paquetenvia-db-ops` image, with the reviewed file copied
+   in and the connection string in `PAQUETERIA_MASTER_DATA_CONNECTION`:
+
+   ```bash
+   dotnet /app/migrator/Paqueteria.DatabaseMigrator.dll master-data-load \
+     --connection-env PAQUETERIA_MASTER_DATA_CONNECTION \
+     --file /tmp/reviewed-master-data.json --organization-id <uuid> --dry-run
+   ```
+
+   Review the counts and the `CREATE/UPDATE section[n] fields=...` diff, then run it again without
+   `--dry-run`. Keep `DOTNET_ENVIRONMENT=Production` and `PAQUETERIA_DEPLOYMENT_CLASS=PILOT_REAL_PEOPLE`.
+   Cities come first, in a load for the PLATFORM organization; each organization's load can only
+   reference existing ACTIVE cities.
+5. The load leaves one `MASTER_DATA_LOADED` row in `platform.audit_logs` with a pseudonymous `operator_ref`
+   (a random UUID per operator login, kept in the platform-only `platform.master_data_operator_refs` and
+   readable only as `paqueteria_migrator`; never the login itself or a hash of it, since tenants can read
+   their audit rows; rows written before the MDM-001 hardening keep the former SHA-256 format), the file's SHA-256 and PostgreSQL's own SHA-256 of the document; keep the reviewed
+   file, its hash and the login with the change record. A re-run of the same file changes no master data.
+6. Remove the operator login (`DROP ROLE pv_pilot_mdm_ec`) or rotate its secret when the load is done.
+
+Details, format and error codes: `docs/development/mdm-001-master-data-loader.md`.
 
 ## 7. Security notes
 
