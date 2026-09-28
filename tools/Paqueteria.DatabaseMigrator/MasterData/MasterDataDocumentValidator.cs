@@ -20,6 +20,15 @@ internal static partial class MasterDataDocumentValidator
     internal const int MaximumSectionEntries = 5000;
     internal const int MaximumDriverServiceAreas = 100;
     internal const int MaximumVertices = 200_000;
+    internal const int MaximumTotalEntries = 20_000;
+
+    /// <summary>MDM-001 M2: the IANA zones a new Mexican city may use; the loader function holds the same list.</summary>
+    internal static readonly string[] MexicoTimeZones =
+    [
+        "America/Bahia_Banderas", "America/Cancun", "America/Chihuahua", "America/Ciudad_Juarez",
+        "America/Hermosillo", "America/Matamoros", "America/Mazatlan", "America/Merida",
+        "America/Mexico_City", "America/Monterrey", "America/Ojinaga", "America/Tijuana",
+    ];
     private const int MaximumErrors = 50;
 
     internal static readonly string[] Sections =
@@ -78,6 +87,7 @@ internal static partial class MasterDataDocumentValidator
         private readonly HashSet<string> _zones = new(StringComparer.Ordinal);
         private readonly HashSet<string> _tariffs = new(StringComparer.Ordinal);
         private readonly HashSet<string> _drivers = new(StringComparer.Ordinal);
+        private readonly List<TariffWindow> _activeWindows = [];
         private int _vertices;
 
         internal int DriverServiceAreaCount { get; private set; }
@@ -121,11 +131,51 @@ internal static partial class MasterDataDocumentValidator
                 return;
             }
 
+            var total = Sections.Sum(section => root.GetProperty(section).GetArrayLength()) +
+                root.GetProperty("driver_profiles").EnumerateArray()
+                    .Where(profile => profile.ValueKind == JsonValueKind.Object &&
+                        profile.TryGetProperty("service_areas", out var areas) && areas.ValueKind == JsonValueKind.Array)
+                    .Sum(profile => profile.GetProperty("service_areas").GetArrayLength());
+            if (total > MaximumTotalEntries)
+            {
+                Error("document", "MDM001_DOCUMENT_TOO_LARGE");
+                return;
+            }
+
             Each(root, "cities", City);
             Each(root, "service_areas", ServiceArea);
             Each(root, "operating_zones", OperatingZone);
             Each(root, "tariff_rules", TariffRule);
+            TariffOverlaps();
             Each(root, "driver_profiles", DriverProfile);
+        }
+
+        /// <summary>
+        /// MDM-001 M3, within the file: ACTIVE rules of one (city, area, zone, tier, service type) must not
+        /// overlap in [active_from, active_to). The loader function repeats this against stored rules.
+        /// </summary>
+        private void TariffOverlaps()
+        {
+            foreach (var group in _activeWindows.GroupBy(window => window.Key, StringComparer.Ordinal))
+            {
+                var ordered = group.OrderBy(window => window.From).ThenBy(window => window.Index).ToArray();
+                // The latest end seen so far (null = open-ended): any later start before it overlaps.
+                var reach = ordered[0].To;
+                var open = ordered[0].To is null;
+                for (var index = 1; index < ordered.Length; index++)
+                {
+                    if (open || ordered[index].From < reach)
+                    {
+                        Error(ordered[index].Reference, "MDM001_TARIFF_OVERLAP");
+                    }
+
+                    open |= ordered[index].To is null;
+                    if (!open && ordered[index].To > reach)
+                    {
+                        reach = ordered[index].To;
+                    }
+                }
+            }
         }
 
         private void Each(JsonElement root, string section, Action<JsonElement, string> validate)
@@ -140,19 +190,25 @@ internal static partial class MasterDataDocumentValidator
 
         private void City(JsonElement item, string reference)
         {
-            if (!Shape(item, reference, ["country_code", "state_code", "name", "timezone", "status"]))
+            // New cities are always ACTIVE, so the entry has no status; only a PLATFORM organization's load
+            // may carry cities (enforced by the loader function, which knows the organization type).
+            if (!Shape(item, reference, ["country_code", "state_code", "name", "timezone"]))
             {
                 return;
             }
 
             var key = CityKey(item, reference);
             Name(item, "name", reference);
-            if (!IsString(item, "timezone", out var timezone) || timezone.Length > 64 || !TimeZoneName().IsMatch(timezone))
+            if (IsString(item, "country_code", out var country) && country != "MX")
             {
-                Error($"{reference}.timezone", "MDM001_TIMEZONE");
+                Error($"{reference}.country_code", "MDM001_CITY_COUNTRY_NOT_SUPPORTED");
             }
 
-            Enum(item, "status", reference, "ACTIVE", "INACTIVE");
+            if (!IsString(item, "timezone", out var timezone) || !MexicoTimeZones.Contains(timezone, StringComparer.Ordinal))
+            {
+                Error($"{reference}.timezone", "MDM001_CITY_TIMEZONE_NOT_ALLOWED");
+            }
+
             if (key is not null && !_cities.Add(key))
             {
                 Error(reference, "MDM001_DUPLICATE_NATURAL_KEY");
@@ -215,7 +271,7 @@ internal static partial class MasterDataDocumentValidator
                 "OCCASIONAL", "BUSINESS_1_49", "BUSINESS_50_199", "BUSINESS_200_499", "BUSINESS_500_PLUS", "CUSTOM");
             var serviceType = Enum(item, "service_type", reference, "SAME_DAY", "URGENT", "SCHEDULED_ROUTE");
             Enum(item, "tax_mode", reference, "PLUS_VAT", "VAT_INCLUDED", "EXEMPT");
-            Enum(item, "status", reference, "ACTIVE", "INACTIVE");
+            var status = Enum(item, "status", reference, "ACTIVE", "INACTIVE");
 
             // PRC pricing policy version per organization: required on every rule. It is validated now and
             // persisted once pricing.tariff_rules.policy_version exists (feature/prc-policy-version-per-org).
@@ -245,6 +301,13 @@ internal static partial class MasterDataDocumentValidator
                 !_tariffs.Add($"{city}|{area.Value}|{zone.Value}|{tier}|{serviceType}|{from:O}"))
             {
                 Error(reference, "MDM001_DUPLICATE_NATURAL_KEY");
+            }
+
+            if (city is not null && tier is not null && serviceType is not null && from is not null &&
+                status == "ACTIVE" && (to is null || to > from))
+            {
+                _activeWindows.Add(new TariffWindow(
+                    $"{city}|{area.Value}|{zone.Value}|{tier}|{serviceType}", from.Value, to, _activeWindows.Count, reference));
             }
         }
 
@@ -537,15 +600,14 @@ internal static partial class MasterDataDocumentValidator
     [GeneratedRegex("^[A-Z0-9]{1,10}$", RegexOptions.CultureInvariant)]
     private static partial Regex StateCode();
 
-    [GeneratedRegex("^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$", RegexOptions.CultureInvariant)]
-    private static partial Regex TimeZoneName();
-
     [GeneratedRegex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", RegexOptions.CultureInvariant)]
     private static partial Regex UtcInstant();
 
     [GeneratedRegex("^[A-Za-z0-9._-]{1,64}$", RegexOptions.CultureInvariant)]
     private static partial Regex PolicyVersion();
 }
+
+internal sealed record TariffWindow(string Key, DateTimeOffset From, DateTimeOffset? To, int Index, string Reference);
 
 internal sealed record MasterDataValidationResult(
     IReadOnlyList<string> Errors,

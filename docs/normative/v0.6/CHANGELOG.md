@@ -4,16 +4,23 @@
 
 - Decisión del project owner `MDM-001-OPERATOR-LOADER`, respuesta literal: "Herramienta de operador
   (Recommended)". Traducción en `MDM-001-CONTRACT-TRANSLATION`.
+- AI-06: `platform.master_data_deployment_gate`, marca global de despliegue (`SYNTHETIC` o `REAL`,
+  `gate_007_closed`) sin RLS, escrita sólo por el migrador; sin fila vale `REAL` con GATE-007 abierto.
 - AI-18: `paqueteria_master_data_executor NOLOGIN BYPASSRLS`, con grants exactos por columna sobre las
-  seis tablas maestras, lecturas mínimas de usuario, organización y membresía e `INSERT` en
-  `platform.audit_logs` (sin `DELETE`), y `paqueteria_master_data_loader NOLOGIN NOBYPASSRLS`, con sólo
-  `USAGE` sobre `security`; ninguno se concede a `paqueteria_app` ni a `paqueteria_worker`. Aserciones
-  de despliegue 26 a 28; `validate_contracts.py` verifica los grants exactos.
+  seis tablas maestras, lecturas mínimas de usuario, organización (incluido su tipo), membresía y la marca
+  de despliegue e `INSERT` en `platform.audit_logs` (sin `DELETE`), y `paqueteria_master_data_loader
+  NOLOGIN NOBYPASSRLS`, con sólo `USAGE` sobre `security`: una capacidad de operador de plataforma, no una
+  frontera de tenant, que sólo reciben logins de operador con nombre. Ninguno se concede a
+  `paqueteria_app` ni a `paqueteria_worker`; los roles persisten tras el rollback de la lane. Aserciones de
+  despliegue 26 a 28; `validate_contracts.py` verifica los grants exactos.
 - La lane de Pricing (`20260928000100_AddMasterDataLoader`) instala
-  `security.load_master_data(uuid,uuid,jsonb,bytea,boolean)`, SECURITY DEFINER con
-  `search_path=pg_catalog, pg_temp`, con `EXECUTE` sólo para el beneficiario del operador. Valida todo el
-  documento antes de escribir, es idempotente por llave natural, exige el tenant exacto en
-  `app.current_org_ids`, escribe una fila de auditoría por carga y no escribe nada en dry-run.
+  `security.load_master_data(uuid,uuid,json,bytea,boolean)`, SECURITY DEFINER con
+  `search_path=pg_catalog, pg_temp`, con `EXECUTE` sólo para el beneficiario del operador. Aplica
+  GATE-007 y la clasificación del archivo según la marca de despliegue, sólo deja crear ciudades a una
+  organización `PLATFORM` (siempre `ACTIVE`, zonas IANA de México), rechaza vigencias de tarifa
+  traslapadas, valida todo el documento (incluidos los mismos límites y tokens de centavos que el job)
+  antes de escribir, es idempotente por llave natural, exige el tenant exacto en `app.current_org_ids`,
+  escribe una fila de auditoría por carga con el login de operador y no escribe nada en dry-run.
 - AI-06 no cambia.
 
 ## Unirse a una organización existente por correo (REG-002) — 2026-09-27

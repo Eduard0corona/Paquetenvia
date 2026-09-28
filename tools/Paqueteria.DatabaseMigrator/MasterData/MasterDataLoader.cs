@@ -111,6 +111,12 @@ internal static class MasterDataLoader
                     .ConfigureAwait(false);
             }
 
+            // MDM-001 m2: a bounded load. The lock wait covers a concurrent load of the same organization or
+            // of global rows (cities, driver profiles); both limits are transaction-scoped.
+            await ExecuteAsync(connection, transaction,
+                "SET LOCAL statement_timeout = '300s'; SET LOCAL lock_timeout = '30s'", cancellationToken)
+                .ConfigureAwait(false);
+
             await ExecuteAsync(connection, transaction, $"SET LOCAL ROLE {LoaderRole}", cancellationToken)
                 .ConfigureAwait(false);
             await using (var context = new NpgsqlCommand(
@@ -130,7 +136,9 @@ internal static class MasterDataLoader
             {
                 load.Parameters.Add(new NpgsqlParameter<Guid>("organization_id", options.OrganizationId));
                 load.Parameters.Add(new NpgsqlParameter<Guid>("load_id", loadId));
-                load.Parameters.Add(new NpgsqlParameter("document", NpgsqlDbType.Jsonb)
+                // json, not jsonb: PostgreSQL then sees the exact text, so it judges number tokens and
+                // duplicate keys exactly as the job does (MDM-001 m5).
+                load.Parameters.Add(new NpgsqlParameter("document", NpgsqlDbType.Json)
                 {
                     Value = System.Text.Encoding.UTF8.GetString(content),
                 });
@@ -205,8 +213,19 @@ internal static class MasterDataLoader
     private static void Print(JsonElement result, Guid loadId, bool dryRun, TextWriter output)
     {
         output.WriteLine(dryRun
-            ? $"MDM001_DRY_RUN classification={result.GetProperty("classification").GetString()} sha256={result.GetProperty("document_sha256").GetString()} (nothing written)"
-            : $"MDM001_LOAD_OK load_id={loadId:D} classification={result.GetProperty("classification").GetString()} sha256={result.GetProperty("document_sha256").GetString()}");
+            ? $"MDM001_DRY_RUN classification={result.GetProperty("classification").GetString()} deployment={result.GetProperty("deployment_class").GetString()} (nothing written)"
+            : $"MDM001_LOAD_OK load_id={loadId:D} classification={result.GetProperty("classification").GetString()} deployment={result.GetProperty("deployment_class").GetString()}");
+        output.WriteLine($"  file_sha256={result.GetProperty("file_sha256_reported").GetString()}");
+        output.WriteLine($"  document_sha256_computed_by_postgresql={result.GetProperty("document_sha256_computed").GetString()}");
+        var tariffs = result.GetProperty("counts").GetProperty("tariff_rules");
+        if (!result.GetProperty("policy_version_persisted").GetBoolean() &&
+            tariffs.GetProperty("created").GetInt64() + tariffs.GetProperty("updated").GetInt64() +
+            tariffs.GetProperty("unchanged").GetInt64() > 0)
+        {
+            output.WriteLine(
+                "  MDM001_NOTE policy_version was validated but is NOT stored yet: pricing.tariff_rules has no " +
+                "policy_version column until feature/prc-policy-version-per-org lands.");
+        }
         foreach (var entity in new[] { "cities", "service_areas", "operating_zones", "tariff_rules", "driver_profiles", "driver_service_areas" })
         {
             var counts = result.GetProperty("counts").GetProperty(entity);

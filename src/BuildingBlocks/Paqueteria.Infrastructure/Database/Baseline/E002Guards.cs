@@ -155,7 +155,7 @@ internal static class E002Guards
         NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            "SELECT pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,jsonb,bytea,boolean)') IS NOT NULL",
+            "SELECT pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,json,bytea,boolean)') IS NOT NULL",
             connection, transaction);
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }

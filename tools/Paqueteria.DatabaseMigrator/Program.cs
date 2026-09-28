@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
+using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.Database.Baseline;
 
@@ -37,6 +38,16 @@ internal static partial class DatabaseMigratorProgram
                 // MDM-001-OPERATOR-LOADER: an operator login with EXECUTE only; never the migration connection.
                 using var result = await MasterDataLoader.RunAsync(
                     connectionString, options.MasterData!, MasterDataEnvironment.Current(), Console.Out,
+                    cancellation.Token).ConfigureAwait(false);
+                return 0;
+            }
+
+            if (options.Command == "master-data-gate")
+            {
+                // MDM-001 B1 / GATE-007: the deployment (migration) connection records the database class.
+                await MasterDataGate.SetAsync(
+                    connectionString, options.MasterDataGate!,
+                    Environment.GetEnvironmentVariable(SyntheticEnvironmentPolicy.DeploymentClassVariable), Console.Out,
                     cancellation.Token).ConfigureAwait(false);
                 return 0;
             }
@@ -346,14 +357,17 @@ internal static partial class DatabaseMigratorProgram
     private static void PrintUsage() => Console.Error.WriteLine(
         "Usage: Paqueteria.DatabaseMigrator <verify|preflight|ownership-diagnostic|plan|apply|assert|runtime-logins> [--connection-env NAME] [--confirm-initial-baseline] [--azure-ownership-bridge]" +
         Environment.NewLine +
-        "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --file PATH --organization-id UUID [--dry-run] [--allow-real-driver-profiles]");
+        "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --file PATH --organization-id UUID [--dry-run] [--allow-real-driver-profiles]" +
+        Environment.NewLine +
+        "       Paqueteria.DatabaseMigrator master-data-gate --connection-env NAME --deployment-class SYNTHETIC|REAL [--gate-007-closed]");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
 }
 
 internal sealed record CommandOptions(string Command, string? ConnectionEnvironment,
-    bool ConfirmInitialBaseline, bool AzureOwnershipBridge, MasterDataLoadOptions? MasterData = null)
+    bool ConfirmInitialBaseline, bool AzureOwnershipBridge, MasterDataLoadOptions? MasterData = null,
+    MasterDataGateOptions? MasterDataGate = null)
 {
     internal static CommandOptions Parse(IReadOnlyList<string> arguments)
     {
@@ -364,7 +378,7 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
 
         var command = arguments[0].ToLowerInvariant();
         if (command is not ("verify" or "preflight" or "ownership-diagnostic" or "plan" or "apply" or "assert" or "runtime-logins"
-            or "master-data-load"))
+            or "master-data-load" or "master-data-gate"))
         {
             throw new CommandLineException($"Unknown command '{arguments[0]}'.");
         }
@@ -376,6 +390,8 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         string? organization = null;
         var dryRun = false;
         var allowRealDriverProfiles = false;
+        string? deploymentClass = null;
+        var gate007Closed = false;
         for (var index = 1; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -401,6 +417,12 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                 case "--allow-real-driver-profiles" when command == "master-data-load":
                     allowRealDriverProfiles = true;
                     break;
+                case "--deployment-class" when command == "master-data-gate" && index + 1 < arguments.Count:
+                    deploymentClass = arguments[++index];
+                    break;
+                case "--gate-007-closed" when command == "master-data-gate":
+                    gate007Closed = true;
+                    break;
                 default:
                     throw new CommandLineException($"Unknown or incomplete option '{arguments[index]}'.");
             }
@@ -424,6 +446,17 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         if (azureOwnershipBridge && command != "apply")
         {
             throw new CommandLineException("--azure-ownership-bridge is valid only for apply.");
+        }
+
+        if (command == "master-data-gate")
+        {
+            if (deploymentClass is not ("SYNTHETIC" or "REAL"))
+            {
+                throw new CommandLineException("master-data-gate requires --deployment-class SYNTHETIC or REAL.");
+            }
+
+            return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
+                MasterDataGate: new MasterDataGateOptions(deploymentClass, gate007Closed));
         }
 
         if (command != "master-data-load")

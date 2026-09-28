@@ -170,6 +170,21 @@ class MasterDataLoaderContractRuleTests(unittest.TestCase):
                     f"widening was not detected: {errors}",
                 )
 
+    def test_the_deployment_marker_grants_and_revoke_are_required(self) -> None:
+        # GATE-007: the executor may only read the marker's two columns; runtime roles lose every privilege.
+        widened = self.role_sql + "\nGRANT UPDATE (gate_007_closed) ON platform.master_data_deployment_gate TO paqueteria_master_data_executor;\n"
+        self.assertTrue(
+            any("outside its contract" in error for error in self.validator.executor_grant_errors(widened))
+        )
+        self.assertIn(
+            "GRANT SELECT (deployment_class,gate_007_closed) ON platform.master_data_deployment_gate TO paqueteria_master_data_executor;",
+            self.validator.MASTER_DATA_EXECUTOR_GRANTS,
+        )
+        self.assertIn(
+            "REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;",
+            self.role_sql,
+        )
+
     def test_a_missing_master_data_grant_fails(self) -> None:
         narrowed = self.role_sql.replace(
             "GRANT UPDATE (active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;", ""

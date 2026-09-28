@@ -727,6 +727,19 @@ CREATE TABLE platform.idempotency_keys (
 );
 CREATE INDEX idempotency_expiry_idx ON platform.idempotency_keys(expires_at);
 
+-- MDM-001-OPERATOR-LOADER / GATE-007: deployment marker for the master-data loader. One global row, not
+-- tenant data (like locations.cities it carries no RLS); written only by the migrator
+-- (Paqueteria.DatabaseMigrator master-data-gate) and read only by paqueteria_master_data_executor. No row
+-- means REAL with GATE-007 open: the loader then refuses SYNTHETIC files and every driver profile.
+CREATE TABLE platform.master_data_deployment_gate (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  deployment_class text NOT NULL CHECK (deployment_class IN ('SYNTHETIC','REAL')),
+  gate_007_closed boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by text NOT NULL DEFAULT session_user,
+  CONSTRAINT master_data_deployment_gate_real_only_ck CHECK (deployment_class = 'REAL' OR NOT gate_007_closed)
+);
+
 -- Tenant context and RLS --------------------------------------------------------
 CREATE OR REPLACE FUNCTION security.app_current_user() RETURNS uuid
 LANGUAGE sql STABLE PARALLEL SAFE AS $$

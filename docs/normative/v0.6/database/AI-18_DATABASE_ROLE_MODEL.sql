@@ -309,24 +309,33 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- Pilot master data is a separate security capability (MDM-001-OPERATOR-LOADER; ADR-034 pattern). Cities,
 -- service areas, operating zones, tariff rules and driver profiles are loaded by an operator job from a
 -- reviewed file, never through a public API. paqueteria_master_data_executor owns only
--- security.load_master_data(uuid,uuid,jsonb,bytea,boolean), installed by the Pricing migration lane
+-- security.load_master_data(uuid,uuid,json,bytea,boolean), installed by the Pricing migration lane
 -- (20260928000100_AddMasterDataLoader) after this baseline, SECURITY DEFINER with
 -- search_path=pg_catalog, pg_temp (PostGIS is schema-qualified as public.*), EXECUTE revoked from PUBLIC and
--- granted only to paqueteria_master_data_loader. The function requires the caller's transaction to carry
--- exactly the target organization in app.current_org_ids, validates the whole document (keys, enums,
--- integer cents, MultiPolygon validity, zone within its service area, references, natural-key uniqueness)
--- before any write, writes idempotently by natural key under a per-organization advisory lock, never
--- rewrites an existing city or the amount or tax mode of an existing tariff rule, requires an ACTIVE DRIVER
--- membership for a driver profile, writes one append-only audit row per load and, in a dry run, writes
--- nothing. paqueteria_master_data_loader is the operator grantee: NOLOGIN NOBYPASSRLS, USAGE on schema
--- security and that EXECUTE only; an operator LOGIN (provisioned by IaC or by hand, NOINHERIT, SET ROLE per
--- transaction) is its only member. Neither role is ever granted to paqueteria_app or paqueteria_worker, and
--- the runtime roles gain no privilege.
+-- granted only to paqueteria_master_data_loader.
+-- paqueteria_master_data_loader is a platform-operator capability, not a tenant boundary: its caller names
+-- the organization and also sets it as app.current_org_ids (the function refuses any other context), so a
+-- mistyped organization fails instead of loading elsewhere; the audit row names the operator login. It is
+-- NOLOGIN NOBYPASSRLS with USAGE on schema security and that EXECUTE only, and its only members are named
+-- operator LOGINs (NOINHERIT, SET ROLE per transaction) that the owner creates and removes; it is never
+-- granted to paqueteria_app, paqueteria_worker or paqueteria_bootstrap, and only deployment principals
+-- (members of paqueteria_migrator) may hold paqueteria_master_data_executor.
+-- The function enforces GATE-007 from platform.master_data_deployment_gate (REAL unless the migrator marked
+-- the database SYNTHETIC): a SYNTHETIC database takes only SYNTHETIC files, a REAL one never takes them, and
+-- driver profiles load only in a SYNTHETIC database or once the migrator recorded gate_007_closed. It
+-- validates the whole document (exact keys without duplicates, integer cents from the raw json token,
+-- MultiPolygon validity, range and vertex budget, zone within its service area, references to ACTIVE
+-- cities, natural-key uniqueness, no overlapping ACTIVE tariff windows) before any write, writes
+-- idempotently by natural key under advisory locks, creates cities (ACTIVE, Mexican IANA zones only) only
+-- for a PLATFORM organization and never rewrites one, never rewrites the amount or tax mode of an existing
+-- tariff rule, requires an ACTIVE DRIVER membership for a driver profile, writes one append-only audit row
+-- per load and, in a dry run, writes nothing. The runtime roles gain no privilege.
 REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;
 REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;
+REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;
 GRANT USAGE ON SCHEMA identity,organizations,locations,pricing,drivers,platform TO paqueteria_master_data_executor;
 GRANT SELECT (id,status) ON identity.users TO paqueteria_master_data_executor;
-GRANT SELECT (id,status) ON organizations.organizations TO paqueteria_master_data_executor;
+GRANT SELECT (id,organization_type,status) ON organizations.organizations TO paqueteria_master_data_executor;
 GRANT SELECT (user_id,organization_id,role,status) ON organizations.organization_memberships TO paqueteria_master_data_executor;
 GRANT SELECT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;
 GRANT INSERT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;
@@ -345,6 +354,7 @@ GRANT UPDATE (home_city_id,driver_type,vehicle_type,status) ON drivers.driver_pr
 GRANT SELECT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;
 GRANT INSERT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;
 GRANT UPDATE (status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;
+GRANT SELECT (deployment_class,gate_007_closed) ON platform.master_data_deployment_gate TO paqueteria_master_data_executor;
 GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_master_data_executor;
 GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
 
@@ -374,6 +384,6 @@ GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
 -- 23. identity.bff_sessions and identity.bff_logout_jtis have ENABLE and FORCE ROW LEVEL SECURITY with no policy, and paqueteria_app and paqueteria_worker hold no table or column privilege on them.
 -- 24. once the Custody BFF purge lane is recorded, paqueteria_cleanup_executor additionally owns security.purge_bff_sessions(integer) and holds USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on identity.bff_sessions and SELECT(jti_hash,expires_at) and DELETE on identity.bff_logout_jtis, and nothing else there; only paqueteria_worker may EXECUTE the purge.
 -- 25. once REG-002 is recorded, the four REG-002 functions are SECURITY DEFINER with a pinned search_path, owned by paqueteria_registration_executor, and only paqueteria_app may EXECUTE them; organizations.pending_memberships has ENABLE and FORCE ROW LEVEL SECURITY with the tenant policy, paqueteria_app holds only SELECT on it and paqueteria_worker holds nothing.
--- 26. paqueteria_master_data_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and, once the Pricing MDM-001 lane is recorded, owns only security.load_master_data(uuid,uuid,jsonb,bytea,boolean).
--- 27. paqueteria_master_data_executor holds only USAGE on schemas identity, organizations, locations, pricing, drivers and platform and exactly the column grants above: no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration or session privilege.
--- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,jsonb,bytea,boolean); the function is SECURITY DEFINER with search_path=pg_catalog, pg_temp and PUBLIC, paqueteria_app and paqueteria_worker may not EXECUTE it.
+-- 26. paqueteria_master_data_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and only to deployment principals (members of paqueteria_migrator) and, once the Pricing MDM-001 lane is recorded, owns only security.load_master_data(uuid,uuid,json,bytea,boolean). Both master data roles and their grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
+-- 27. paqueteria_master_data_executor holds only USAGE on schemas identity, organizations, locations, pricing, drivers and platform and exactly the column grants above (including SELECT(deployment_class,gate_007_closed) on platform.master_data_deployment_gate): no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration or session privilege.
+-- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,json,bytea,boolean); that function's ACL is exactly its owner and the loader, it is SECURITY DEFINER with search_path=pg_catalog, pg_temp, and platform.master_data_deployment_gate grants nothing to PUBLIC or the runtime roles.

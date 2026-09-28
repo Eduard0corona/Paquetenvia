@@ -454,10 +454,15 @@ into `jobs.bicep`**. A pilot job needs its own operator login secret and a way t
 into the VNet, and neither is decided yet; the data itself is gated:
 
 - real service zones and tariffs wait on **GATE-010** and **GATE-011**;
-- real driver profiles wait on **GATE-007**. Outside Development, Testing and DEV_SYNTHETIC the loader
-  refuses any file with `driver_profiles` unless `--allow-real-driver-profiles` is passed, and that flag
-  may only be used once GATE-007 is closed;
-- the synthetic example (`tests/fixtures/mdm-001/`) must not be loaded into the pilot database.
+- real driver profiles wait on **GATE-007**. The database enforces it: the loader function refuses any
+  `driver_profiles` until the deployment marker `platform.master_data_deployment_gate` records GATE-007 as
+  closed. The job also refuses them outside Development, Testing and DEV_SYNTHETIC unless
+  `--allow-real-driver-profiles` is passed; both may only be used once GATE-007 is closed;
+- the pilot database is `REAL`: with no marker row, or after `master-data-gate --deployment-class REAL`, it
+  refuses every `SYNTHETIC` file, so the synthetic examples (`tests/fixtures/mdm-001/`) cannot be loaded
+  into it;
+- the loader role is a platform-operator capability, not a tenant boundary: whoever holds it can load any
+  organization's master data, so only named operator logins the owner controls may hold it.
 
 When the gates are closed, the manual run is:
 
@@ -466,12 +471,17 @@ When the gates are closed, the manual run is:
    bridge stops with `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING` until an Azure administrator has created
    `paqueteria_master_data_executor NOLOGIN BYPASSRLS` and `paqueteria_master_data_loader NOLOGIN
    NOBYPASSRLS` with SET for the deployment role; nothing is written before that check.
-2. Create an operator login (for example `pv_pilot_mdm`) as
+2. Record the deployment class with the migration connection (a manual `job-pv-pilot-migrate`-style run
+   of the db-ops image): `master-data-gate --connection-env PAQUETERIA_MIGRATION_CONNECTION
+   --deployment-class REAL`. Only once GATE-007 is closed, and only to load driver profiles, add
+   `--gate-007-closed`. The operator login can neither read nor change this marker.
+3. Create a named operator login (for example `pv_pilot_mdm_ec`, initials rather than a full name, since
+   the login name is recorded in the audit row) as
    `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, from a SCRAM-SHA-256
    verifier (never a plaintext password in SQL), and `GRANT paqueteria_master_data_loader TO pv_pilot_mdm`.
    Never grant it `paqueteria_app`, `paqueteria_worker` or `paqueteria_migrator`: the loader refuses such a
    login. Store its connection string in Key Vault like the runtime connections.
-3. From a container inside the VNet running the `paquetenvia-db-ops` image, with the reviewed file copied
+4. From a container inside the VNet running the `paquetenvia-db-ops` image, with the reviewed file copied
    in and the connection string in `PAQUETERIA_MASTER_DATA_CONNECTION`:
 
    ```bash
@@ -482,9 +492,12 @@ When the gates are closed, the manual run is:
 
    Review the counts and the `CREATE/UPDATE section[n] fields=...` diff, then run it again without
    `--dry-run`. Keep `DOTNET_ENVIRONMENT=Production` and `PAQUETERIA_DEPLOYMENT_CLASS=PILOT_REAL_PEOPLE`.
-4. The load leaves one `MASTER_DATA_LOADED` row in `platform.audit_logs` with the file's SHA-256; keep the
-   reviewed file and its hash with the change record. A re-run of the same file changes no master data.
-5. Remove the operator login (`DROP ROLE pv_pilot_mdm`) or rotate its secret when the load is done.
+   Cities come first, in a load for the PLATFORM organization; each organization's load can only
+   reference existing ACTIVE cities.
+5. The load leaves one `MASTER_DATA_LOADED` row in `platform.audit_logs` with the operator login, the file's
+   SHA-256 and PostgreSQL's own SHA-256 of the document; keep the reviewed file and its hash with the change
+   record. A re-run of the same file changes no master data.
+6. Remove the operator login (`DROP ROLE pv_pilot_mdm_ec`) or rotate its secret when the load is done.
 
 Details, format and error codes: `docs/development/mdm-001-master-data-loader.md`.
 

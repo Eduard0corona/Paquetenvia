@@ -671,7 +671,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         // Rewinding it leaves a populated installation whose master data roles were pre-provisioned per E-002.
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
         await environment.AdminExecuteAsync($"""
-            DROP FUNCTION security.load_master_data(uuid,uuid,jsonb,bytea,boolean);
+            DROP FUNCTION security.load_master_data(uuid,uuid,json,bytea,boolean);
             DELETE FROM platform."__ef_migrations_history_pricing"
               WHERE "MigrationId"='{E002MasterDataStateReader.MigrationId}';
             """);

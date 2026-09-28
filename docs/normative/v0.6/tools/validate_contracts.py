@@ -93,7 +93,7 @@ SESSION_EXECUTOR_GRANTS = [
 MASTER_DATA_EXECUTOR_GRANTS = [
     "GRANT USAGE ON SCHEMA identity,organizations,locations,pricing,drivers,platform TO paqueteria_master_data_executor;",
     "GRANT SELECT (id,status) ON identity.users TO paqueteria_master_data_executor;",
-    "GRANT SELECT (id,status) ON organizations.organizations TO paqueteria_master_data_executor;",
+    "GRANT SELECT (id,organization_type,status) ON organizations.organizations TO paqueteria_master_data_executor;",
     "GRANT SELECT (user_id,organization_id,role,status) ON organizations.organization_memberships TO paqueteria_master_data_executor;",
     "GRANT SELECT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;",
     "GRANT INSERT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;",
@@ -112,6 +112,7 @@ MASTER_DATA_EXECUTOR_GRANTS = [
     "GRANT SELECT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
     "GRANT INSERT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
     "GRANT UPDATE (status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
+    "GRANT SELECT (deployment_class,gate_007_closed) ON platform.master_data_deployment_gate TO paqueteria_master_data_executor;",
     "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_master_data_executor;",
 ]
 
@@ -671,8 +672,10 @@ def main() -> int:
         "REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;",
         "REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;",
         "MDM-001-OPERATOR-LOADER",
-        "security.load_master_data(uuid,uuid,jsonb,bytea,boolean)",
+        "security.load_master_data(uuid,uuid,json,bytea,boolean)",
         "search_path=pg_catalog, pg_temp",
+        "REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;",
+        "platform-operator capability, not a tenant boundary",
         "REVOKE INSERT,UPDATE,DELETE ON locations.cities FROM paqueteria_app,paqueteria_worker;",
     ]:
         if fragment not in role_sql:
@@ -681,7 +684,9 @@ def main() -> int:
         errors.append("Master data role membership granted contrary to MDM-001-OPERATOR-LOADER")
     if re.search(r"GRANT[^;]*load_master_data[^;]*;", SQL_LINE_COMMENT.sub("", role_sql)):
         errors.append("The master data loader function is granted by its lane, not by AI-18")
-    checks.append("Master data loader: executor-owned function, operator-only EXECUTE, exact column grants")
+    if "CREATE TABLE platform.master_data_deployment_gate (" not in sql:
+        errors.append("Missing master data deployment gate (GATE-007) table in AI-06")
+    checks.append("Master data loader: executor-owned function, operator-only EXECUTE, exact column grants, GATE-007 marker")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.

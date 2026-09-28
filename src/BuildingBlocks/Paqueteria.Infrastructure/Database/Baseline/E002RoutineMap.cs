@@ -124,7 +124,7 @@ public static class E002RoutineMap
     /// </summary>
     private static readonly E002RoutineEntry[] Mdm001Entries =
     [
-        new("security.load_master_data(uuid,uuid,jsonb,bytea,boolean)", "paqueteria_master_data_executor", ["paqueteria_master_data_loader"]),
+        new("security.load_master_data(uuid,uuid,json,bytea,boolean)", "paqueteria_master_data_executor", ["paqueteria_master_data_loader"]),
     ];
 
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =

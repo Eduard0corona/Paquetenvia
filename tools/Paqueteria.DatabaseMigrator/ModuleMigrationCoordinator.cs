@@ -148,7 +148,7 @@ internal sealed class ModuleMigrationCoordinator
                 // MDM-001-OPERATOR-LOADER: the lane only adds the two master-data roles, their grants and the
                 // loader function; its rollback removes only the function. Loaded rows and audit rows stay.
                 "Pricing" =>
-                    source.Contains("DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,jsonb,bytea,boolean)", StringComparison.Ordinal) &&
+                    source.Contains("DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,json,bytea,boolean)", StringComparison.Ordinal) &&
                     source.Contains("MDM001_TENANT_CONTEXT_MISMATCH", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&

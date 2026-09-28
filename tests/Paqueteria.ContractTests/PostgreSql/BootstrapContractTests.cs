@@ -43,13 +43,13 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             new NpgsqlParameter<string[]>("schemas", ExpectedSchemas));
         Assert.Equal(ExpectedSchemas.Order(StringComparer.Ordinal), schemas);
 
-        // 50 canonical AI-06 tables (identity.bff_sessions and identity.bff_logout_jtis included,
-        // BFF-SESSION-TABLE-SHAPE and BFF-LOGOUT-JTI-PERSISTENCE, and REG-002's
-        // organizations.pending_memberships) plus the
+        // 51 canonical AI-06 tables (identity.bff_sessions and identity.bff_logout_jtis included,
+        // BFF-SESSION-TABLE-SHAPE and BFF-LOGOUT-JTI-PERSISTENCE, REG-002's
+        // organizations.pending_memberships and MDM-001's platform.master_data_deployment_gate) plus the
         // INC-001 incident evidence table, the SCL-001 key ring and their migration history lanes, the
         // SET-001 Finance history lane and the platform evolution history lane of the 2026-09-27 pilot
         // contract deltas.
-        Assert.Equal(56, await ScalarAsync<int>("""
+        Assert.Equal(57, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
