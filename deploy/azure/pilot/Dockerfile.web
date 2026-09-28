@@ -1,0 +1,31 @@
+# ENV-001 pilot web image: AUTH-001 BFF build (same origin, PILOT-SAME-ORIGIN-ROUTING).
+# Differs from deploy/azure/Dockerfile.web only in the API base URL: in BFF mode next.config.ts requires
+# NEXT_PUBLIC_API_BASE_URL to be *unset*, but `ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}`
+# always defines it (as an empty string when the build argument is omitted), and `new URL("")` then
+# fails the production build. This image never defines it, so the browser uses window.location.origin.
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+COPY apps/web ./
+RUN corepack enable && corepack prepare pnpm@11.15.1 --activate && pnpm install --frozen-lockfile
+ARG NEXT_PUBLIC_TRACKING_BRAND_NAME
+ARG NEXT_PUBLIC_TRACKING_SUPPORT_URL
+ENV NODE_ENV=production
+ENV NEXT_PUBLIC_AUTH_MODE=bff
+ENV NEXT_PUBLIC_TRACKING_BRAND_NAME=${NEXT_PUBLIC_TRACKING_BRAND_NAME}
+ENV NEXT_PUBLIC_TRACKING_SUPPORT_URL=${NEXT_PUBLIC_TRACKING_SUPPORT_URL}
+RUN pnpm build
+
+FROM node:24-bookworm-slim
+ARG SOURCE_SHA
+LABEL org.opencontainers.image.revision=${SOURCE_SHA}
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_PUBLIC_AUTH_MODE=bff
+COPY --from=build /app/.next ./.next
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/public ./public
+COPY --from=build /app/next.config.ts ./next.config.ts
+USER node
+EXPOSE 3000
+CMD ["./node_modules/.bin/next", "start", "-p", "3000"]

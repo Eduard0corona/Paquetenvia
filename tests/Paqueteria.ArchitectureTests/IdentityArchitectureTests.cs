@@ -119,14 +119,21 @@ public sealed class IdentityArchitectureTests
             "FusionAuth",
         ];
 
+        // ADP-001-PII-KEYVAULT-ENVELOPE / ADP-001-POD-BLOB-DEFENDER: Azure.Identity is admitted only
+        // as the workload (managed identity) credential of the building-block infrastructure, never
+        // as a user identity provider. Every other component stays under the full ban.
         var packages = SolutionCatalog.All
-            .SelectMany(component => ProjectMetadataReader.Read(component).PackageReferences)
+            .SelectMany(component => ProjectMetadataReader.Read(component).PackageReferences
+                .Where(package => component != SolutionCatalog.Infrastructure ||
+                    !string.Equals(package, WorkloadCredentialPackage, StringComparison.Ordinal)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         Assert.DoesNotContain(packages, package =>
             forbidden.Any(name => package.Contains(name, StringComparison.OrdinalIgnoreCase)));
     }
+
+    private const string WorkloadCredentialPackage = "Azure.Identity";
 
     [Fact]
     public void Only_Identity_Endpoints_references_the_standard_OpenIdConnect_handler()

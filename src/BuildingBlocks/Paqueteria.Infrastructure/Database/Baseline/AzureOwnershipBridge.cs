@@ -7,18 +7,36 @@ namespace Paqueteria.Infrastructure.Database.Baseline;
 /// E-002: transaction-scoped ownership-transfer compatibility for Azure PostgreSQL 18.
 /// The canonical AI-06 and AI-18 files are still executed without alteration.
 /// </summary>
+/// <remarks>
+/// Two Azure classifications may select the bridge, each as an exact (environment, deployment class) pair:
+/// AZR-001 <c>DevSynthetic</c>/<c>DEV_SYNTHETIC</c> and ENV-001 <c>Production</c>/<c>PILOT_REAL_PEOPLE</c>
+/// (owner decision PILOT-REAL-PEOPLE; ENV-001 requires the bridge to cover every privileged role on the pilot
+/// database). Any other combination, including a mixed pair, fails closed.
+/// </remarks>
 public sealed record AzureOwnershipBridgeSelection(
     string EnvironmentName,
     string DeploymentClass,
     string DeploymentProvider)
 {
+    public const string AzureFlexibleServerProvider = "AZURE_POSTGRESQL_FLEXIBLE_SERVER";
+
+    /// <summary>The exact (hosting environment, deployment class) pairs allowed to select the bridge.</summary>
+    public static IReadOnlyList<(string EnvironmentName, string DeploymentClass)> AllowedClassifications { get; } =
+    [
+        ("DevSynthetic", "DEV_SYNTHETIC"),
+        ("Production", "PILOT_REAL_PEOPLE"),
+    ];
+
     public void AssertAllowed()
     {
-        if (!string.Equals(EnvironmentName, "DevSynthetic", StringComparison.Ordinal) ||
-            !string.Equals(DeploymentClass, "DEV_SYNTHETIC", StringComparison.Ordinal) ||
-            !string.Equals(DeploymentProvider, "AZURE_POSTGRESQL_FLEXIBLE_SERVER", StringComparison.Ordinal))
+        var classified = AllowedClassifications.Any(allowed =>
+            string.Equals(EnvironmentName, allowed.EnvironmentName, StringComparison.Ordinal) &&
+            string.Equals(DeploymentClass, allowed.DeploymentClass, StringComparison.Ordinal));
+        if (!classified ||
+            !string.Equals(DeploymentProvider, AzureFlexibleServerProvider, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("E-002 ownership bridge requires Azure DEV_SYNTHETIC classification.");
+            throw new InvalidOperationException(
+                "E-002 ownership bridge requires Azure DEV_SYNTHETIC or ENV-001 PILOT_REAL_PEOPLE classification.");
         }
     }
 }
