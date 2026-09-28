@@ -46,6 +46,9 @@ builder.Configuration.AddPaqueteriaKeyVaultSecrets();
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
+// Invariant 5: secrets carried in request targets (the public tracking token in the lookup path, hub
+// access_token query values) are rewritten before hosting diagnostics, logging or telemetry read them.
+builder.Services.AddRequestTargetRedaction();
 builder.AddHttpHardening();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddEmailLookupHashing(builder.Configuration, builder.Environment);
