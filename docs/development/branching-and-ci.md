@@ -53,7 +53,18 @@ A **new** package (MVP-1 onward) needs an owner-approved entry in `dependency_ad
 - the authorized source branch;
 - the allowed and required dependency files, plus the `.csproj` files that may gain the `PackageReference`;
 - the owner decision ID;
-- an optional expiry.
+- an optional expiry;
+- optional **exact baseline amendments**, when restoring the admitted packages unavoidably
+  changes baseline lock nodes (each entry names one lock file, framework, package, version and
+  content hash; no wildcards):
+  - `additional_package_versions`: one more exact version of a package another admission
+    already admits, as a transitive node, only in the named lock files (for example MSAL's
+    `Microsoft.IdentityModel.Abstractions` 8.14.0 where AUTH-001-OIDC admits 8.19.2);
+  - `baseline_package_upgrades`: one baseline node moved from an exact version and hash to an
+    exact version and hash that this admission admits, keeping its node type;
+  - `baseline_package_removals`: one exact baseline node removed from one lock file (a node the
+    SDK prunes). Other baseline nodes of that lock file may then lose dependency edges to the
+    removed nodes, and nothing else.
 
 The admission is bound to the branch and the package set, not to a base SHA, because `main` keeps moving.
 
@@ -62,12 +73,14 @@ Order of operations:
 1. Register the admission in a PR into `development` (`status: ACTIVE`). Promote `development` → `main`. Both `main_source_guard.py` and REL-000 read the policy **from the tested base**, so a dependency PR can never admit itself.
 2. The dependency PR from the authorized branch → `main`. REL-000 runs in `NORMAL_RELEASE_EVIDENCE`, with no remediation ID and no workflow change. It accepts the diff only if it is exactly the admitted set:
    - `Directory.Packages.props` = baseline + the admitted `PackageVersion` lines;
-   - every lock file = baseline nodes, unchanged, + the admitted nodes;
+   - every lock file = baseline nodes, unchanged, + the admitted nodes, except the declared
+     amendments above;
+   - every declared amendment is actually delivered (an unused declaration fails as incomplete);
    - only allowed files are changed, and every required file is present.
 3. Back-sync (`MAIN_BACKSYNC`) as above.
 4. A follow-up PR into `development` flips the admission to `status: MERGED`. From then on the branch no longer opens PRs into `main`, but the packages stay admitted permanently: every later REL-000 run still compares against the MVP-0 baseline plus the admitted set.
 
-Anything unregistered still fails closed: an extra transitive package, another version or content hash, a change or removal of an existing package, or `Directory.Packages.props` changed without an admission. `PR Gate` still rejects `DEPS` into `development`. `MAIN_BACKSYNC` remains the only way dependencies reach `development`. Details and reason codes: `docs/development/rel-000-internal-release.md`.
+Anything unregistered still fails closed: an extra transitive package, another version or content hash, an undeclared change or removal of an existing package, a declared amendment in another lock file or framework, or `Directory.Packages.props` changed without an admission. `PR Gate` still rejects `DEPS` into `development`. `MAIN_BACKSYNC` remains the only way dependencies reach `development`. Details and reason codes: `docs/development/rel-000-internal-release.md`.
 
 ## Re-running
 

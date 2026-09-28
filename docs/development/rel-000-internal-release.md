@@ -449,6 +449,32 @@ transitivos `Microsoft.IdentityModel.{Abstractions,JsonWebTokens,Logging,Protoco
 MAIN_BACKSYNC (#106); desde entonces su `status` es `MERGED`: los paquetes siguen
 admitidos y la rama deja de abrir PRs a `main`.
 
+### Enmiendas exactas del baseline (GOV-DEPENDENCY-ADMISSION-001, ADP-001)
+
+Algunas restauraciones cambian nodos del baseline de forma inevitable. Una admisión puede
+declararlo con tres campos opcionales, todos exactos (archivo de lock, framework, paquete,
+versión y `content_hash`; sin comodines ni rangos) y limitados a sus
+`allowed_dependency_files`:
+
+- `additional_package_versions` (`id`, `version`, `content_hash`, `lock_files`): una versión
+  adicional de un paquete que **otra** admisión ya admite, distinta de la admitida, sólo como
+  nodo `Transitive` y sólo en los locks nombrados. La clave de uso es `id@version`.
+- `baseline_package_upgrades` (`lock_file`, `framework`, `id`, `from_version`,
+  `from_content_hash`, `to_version`, `to_content_hash`): un nodo del baseline pasa de la versión
+  y hash exactos a una versión que la propia admisión admite; el tipo de nodo no cambia.
+- `baseline_package_removals` (`lock_file`, `framework`, `id`, `version`, `content_hash`): un
+  nodo exacto del baseline desaparece de un lock (nodos que el SDK poda). Otros nodos de ese lock
+  y framework pueden perder **sólo** aristas `dependencies` hacia nodos retirados; cualquier otro
+  cambio sigue fallando con `DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED`.
+
+El registro rechaza con `DEPENDENCY_ADMISSION_POLICY_INVALID` las entradas incompletas o con
+campos desconocidos, los comodines, los locks fuera del allowlist, una versión adicional de un
+paquete no admitido por otra admisión (o igual a la admitida), un upgrade que no aterriza en una
+versión admitida por la misma admisión y un nodo enmendado dos veces. En la introducción
+(`validate_dependency_admission_source`) cada enmienda declarada debe entregarse en su lock
+(`DEPENDENCY_ADMISSION_INCOMPLETE` si no), y la capa permanente contra el baseline MVP-0 acepta
+las enmiendas de admisiones `ACTIVE` y `MERGED`. Pruebas: `DependencyAdmissionAmendmentTests`.
+
 ## Rollback REL-000
 
 El rollback de este bloque es no destructivo:
