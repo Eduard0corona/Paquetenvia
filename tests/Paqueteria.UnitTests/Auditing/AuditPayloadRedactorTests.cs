@@ -94,6 +94,384 @@ public sealed class AuditPayloadRedactorTests
         Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement[0].GetString());
     }
 
+    [Theory]
+    [InlineData("12345678-1234-4123-8123-123456789012")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    [InlineData("99999999-9999-9999-9999-999999999999")]
+    [InlineData("3f2a1b4c-5512-4345-8678-667123456789")]
+    [InlineData("ABCDEF01-2345-6789-ABCD-6671234567AB")]
+    [InlineData("{12345678-1234-4123-8123-123456789012}")]
+    public void Uuids_with_digit_runs_are_preserved_under_any_key(string uuid)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["value"] = uuid,
+            ["list"] = new[] { uuid },
+            ["note"] = $"token {uuid} revoked",
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(uuid, output.RootElement.GetProperty("value").GetString());
+        Assert.Equal(uuid, output.RootElement.GetProperty("list")[0].GetString());
+        Assert.Equal($"token {uuid} revoked", output.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public void Random_uuids_are_never_redacted()
+    {
+        for (var i = 0; i < 5_000; i++)
+        {
+            var id = Guid.NewGuid().ToString("D");
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { token_id = id, value = id }));
+
+            var result = redactor.Redact(document.RootElement);
+
+            using var output = JsonDocument.Parse(result.Json);
+            Assert.Equal(id, output.RootElement.GetProperty("token_id").GetString());
+            Assert.Equal(id, output.RootElement.GetProperty("value").GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData("id")]
+    [InlineData("request_id")]
+    [InlineData("entity_id")]
+    [InlineData("external_reference_id")]
+    [InlineData("orderId")]
+    [InlineData("token_ids")]
+    public void Bare_ten_digit_values_under_identifier_fields_are_redacted(string fieldName)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            [fieldName] = "6671234567",
+            ["nested"] = new Dictionary<string, object?> { [fieldName] = new[] { "55 1234 5678" } },
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain("6671234567", result.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain("55 1234 5678", result.Json, StringComparison.Ordinal);
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty(fieldName).GetString());
+        Assert.Equal(
+            AuditPayloadRedactor.Replacement,
+            output.RootElement.GetProperty("nested").GetProperty(fieldName)[0].GetString());
+    }
+
+    [Fact]
+    public void Mexican_phones_inside_identifier_arrays_are_redacted_in_free_text_and_bare_form()
+    {
+        const string freeText = "llamar al 667 123 4567 antes de entregar";
+        const string bare = "5512345678";
+        var keptId = "12345678-1234-4123-8123-667123456789";
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["related_ids"] = new[] { freeText, bare, keptId },
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain("667 123 4567", result.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(bare, result.Json, StringComparison.Ordinal);
+        using var output = JsonDocument.Parse(result.Json);
+        var items = output.RootElement.GetProperty("related_ids");
+        Assert.Equal(AuditPayloadRedactor.Replacement, items[0].GetString());
+        Assert.Equal(AuditPayloadRedactor.Replacement, items[1].GetString());
+        Assert.Equal(keptId, items[2].GetString());
+    }
+
+    [Theory]
+    [InlineData("request_id", "trk002-contract-issue-0001")]
+    [InlineData("order_ids", "1234567")]
+    [InlineData("entityId", "CLN-7FK3")]
+    public void Identifier_fields_keep_values_that_are_not_phone_shaped(string fieldName, string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            [fieldName] = value,
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(value, output.RootElement.GetProperty(fieldName).GetString());
+    }
+
+    [Theory]
+    [InlineData("request_id", "+52 667 123 4567")]
+    [InlineData("orderId", "person@example.test")]
+    [InlineData("entity_id", "aaaa.bbbb.cccc")]
+    public void Identifier_fields_still_redact_explicit_phones_and_other_pii(string fieldName, string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            [fieldName] = value,
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain(value, result.Json, StringComparison.Ordinal);
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty(fieldName).GetString());
+    }
+
+    [Theory]
+    [InlineData("+526671234567")]
+    [InlineData("+52 667 123 4567")]
+    [InlineData("+52 1 667 123 4567")]
+    [InlineData("+52 (667) 123-4567")]
+    [InlineData("+52-55-1234-5678")]
+    [InlineData("+1 (555) 123-4567")]
+    [InlineData("+44 20 7946 0958")]
+    [InlineData("+34.612.345.678")]
+    [InlineData("6671234567")]
+    [InlineData("667 123 4567")]
+    [InlineData("667-123-4567")]
+    [InlineData("667.123.4567")]
+    [InlineData("(667) 123-4567")]
+    [InlineData("(55) 1234 5678")]
+    [InlineData("55 1234 5678")]
+    [InlineData("55-1234-5678")]
+    [InlineData("667 123 45 67")]
+    [InlineData("66 71 23 45 67")]
+    [InlineData("52 667 123 4567")]
+    [InlineData("521 667 123 4567")]
+    [InlineData("526671234567")]
+    [InlineData("5216671234567")]
+    public void Phone_numbers_in_free_text_are_redacted(string phone)
+    {
+        var text = $"Llamar al {phone} antes de entregar";
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["reason"] = text,
+            ["list"] = new[] { phone },
+            ["label"] = $"tel:{phone}",
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain(phone, result.Json, StringComparison.Ordinal);
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("list")[0].GetString());
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("label").GetString());
+    }
+
+    [Theory]
+    [InlineData("llamar667-123-4567", "667-123-4567")]
+    [InlineData("whatsapp6671234567", "6671234567")]
+    [InlineData("Cel667-123-4567 favor de avisar", "667-123-4567")]
+    [InlineData("llamar al 667-123-4567antes de entregar", "667-123-4567")]
+    [InlineData("6671234567whatsapp", "6671234567")]
+    [InlineData("tel 667-123-4567Cel", "667-123-4567")]
+    [InlineData("_6671234567_", "6671234567")]
+    [InlineData("contacto+526671234567favor", "+526671234567")]
+    public void Phones_glued_to_words_are_redacted(string text, string phone)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["note"] = text,
+            ["list"] = new[] { text },
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain(phone, result.Json, StringComparison.Ordinal);
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("note").GetString());
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("list")[0].GetString());
+    }
+
+    [Theory]
+    [InlineData("token12345678-1234-4123-8123-667123456789")]
+    [InlineData("12345678-1234-4123-8123-667123456789revocado")]
+    [InlineData("orden:99999999-9999-9999-9999-999999999999;")]
+    public void Uuids_glued_to_words_are_still_preserved(string text)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { note = text }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(text, output.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public void Mostly_digit_tokens_with_a_ten_digit_run_are_over_redacted_by_design()
+    {
+        const string hash = "deadbeef6671234567cafe";
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { digest = hash }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain(hash, result.Json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Phone_next_to_a_uuid_in_free_text_is_still_redacted()
+    {
+        const string text = "orden 12345678-1234-4123-8123-123456789012 contacto 667 123 4567";
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { reason = text }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain("667 123 4567", result.Json, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("phone")]
+    [InlineData("contact_phone")]
+    [InlineData("contactPhoneNumber")]
+    [InlineData("telefono")]
+    [InlineData("telefono_contacto")]
+    [InlineData("contactoTelefono")]
+    [InlineData("tel")]
+    [InlineData("whatsapp")]
+    [InlineData("whatsapp_number")]
+    [InlineData("mobile")]
+    [InlineData("mobileNumber")]
+    [InlineData("celular")]
+    [InlineData("telefonoCelular")]
+    [InlineData("movil")]
+    [InlineData("msisdn")]
+    public void Phone_field_names_are_redacted_whatever_the_value_shape(string fieldName)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            [fieldName] = "12345",
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty(fieldName).GetString());
+    }
+
+    [Theory]
+    [InlineData("2026-09-28")]
+    [InlineData("1900-01-01")]
+    [InlineData("2199-12-31")]
+    [InlineData("2024-02-29")]
+    [InlineData("2026-09-28T10:59")]
+    [InlineData("2026-09-28T10:59:40")]
+    [InlineData("2026-09-28T10:59:40Z")]
+    [InlineData("2026-09-28T10:59:40.123Z")]
+    [InlineData("2026-09-28T10:15:30.1234567+00:00")]
+    [InlineData("2026-09-28T10:59:40-06:00")]
+    [InlineData("2199-12-31T23:59:59.9999999+14:00")]
+    [InlineData("2026-09-28 10:15:30")]
+    [InlineData("1234567")]
+    [InlineData("trk002-contract-issue-0001")]
+    [InlineData("CLN-7FK3")]
+    public void Iso_dates_timestamps_and_short_values_are_preserved(string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { value }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(value, output.RootElement.GetProperty("value").GetString());
+    }
+
+    [Theory]
+    [InlineData("66712345675512345678")]
+    [InlineData("12346671234567")]
+    [InlineData("66712345671234")]
+    [InlineData("pedido 1234 6671234567")]
+    [InlineData("12345678")]
+    [InlineData("123456789")]
+    [InlineData("12345678901")]
+    [InlineData("1234-5678-9012-3456")]
+    [InlineData("3f2a1b4c55124345866766712345678a")]
+    [InlineData("2026-09-286671234567")]
+    [InlineData("2026-13-45")]
+    [InlineData("2026-02-30")]
+    [InlineData("2025-02-29")]
+    [InlineData("5512-12-31")]
+    [InlineData("1899-12-31")]
+    [InlineData("2200-01-01")]
+    [InlineData("2026-09-28T25:00:00Z")]
+    [InlineData("2026-09-28T10:59:40Z6671234567")]
+    [InlineData(" 2026-09-28")]
+    [InlineData("llamar 5512-12-31")]
+    [InlineData("entrega 2026-09-28 tel 6671234567")]
+    [InlineData("desde 2026-09-28T10:59:40Z hasta 2026-09-29T08:00:00Z")]
+    public void Digit_runs_the_previous_rule_redacted_are_still_redacted(string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { value }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("value").GetString());
+    }
+
+    [Fact]
+    public void New_rule_redacts_everything_the_previous_rule_redacted_except_uuids_and_iso_dates()
+    {
+        // Property-style check with a fixed seed: random strings over digits, phone separators, letters and "+".
+        // Whenever the previous generic rule matched, the new redactor must redact too. Only strings holding a UUID
+        // or that are, as a whole, an ISO-8601 date/timestamp shape are excluded from the generated corpus.
+        const string alphabet = "0123456789012345678901234567890123456789 ()-+.:TZabcxyz_";
+        var random = new Random(149);
+        var checkedMatches = 0;
+        for (var i = 0; i < 50_000; i++)
+        {
+            var length = random.Next(8, 32);
+            var chars = new char[length];
+            for (var j = 0; j < length; j++)
+            {
+                chars[j] = alphabet[random.Next(alphabet.Length)];
+            }
+
+            var text = new string(chars);
+            if (!PreviousPhonePattern.IsMatch(text) || UuidLike.IsMatch(text) || WholeValueIsoDate.IsMatch(text))
+            {
+                continue;
+            }
+
+            checkedMatches++;
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(new[] { text }));
+            var result = redactor.Redact(document.RootElement);
+            using var output = JsonDocument.Parse(result.Json);
+            Assert.True(
+                output.RootElement[0].GetString() == AuditPayloadRedactor.Replacement,
+                $"Previously redacted value was kept: {text}");
+        }
+
+        Assert.True(checkedMatches > 1_000, $"Only {checkedMatches} generated values matched the previous rule.");
+    }
+
+    [Theory]
+    [InlineData("+52 667 000 0000")]
+    [InlineData("hidden@example.test +52 667 123 4567 Avenida Universidad 1234 token=super-secret ciphertext=deadbeef")]
+    [InlineData("12345678-1234-4123-8123-123456789012 y 667 123 4567")]
+    [InlineData("2026-09-28T10:59:40Z llamar 6671234567")]
+    public void Previous_redaction_corpus_is_still_redacted(string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { reason = value }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("reason").GetString());
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex PreviousPhonePattern = new(
+        @"(?<![0-9])\+?[0-9][0-9 ()-]{6,}[0-9](?![0-9])",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static readonly System.Text.RegularExpressions.Regex UuidLike = new(
+        @"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Only whole values shaped like a date or timestamp are excluded; dates inside free text stay in the corpus.
+    private static readonly System.Text.RegularExpressions.Regex WholeValueIsoDate = new(
+        @"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.+Z-]*)?$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     [Fact]
     public void Empty_payload_scalars_and_unicode_remain_valid_json()
     {
