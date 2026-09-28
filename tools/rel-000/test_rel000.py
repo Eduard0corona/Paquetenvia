@@ -4684,6 +4684,8 @@ class DependencyAdmissionTests(unittest.TestCase):
         (entry,) = [item for item in policy["dependency_admissions"] if item["id"] == "ADP-001-AZURE"]
         self.assertEqual("deps/adp-001-azure", entry["authorized_source_branch"])
         self.assertEqual(124, entry["tracked_pull_request"])
+        # #124 landed on main and reached development through MAIN_BACKSYNC #134.
+        self.assertEqual("MERGED", entry["status"])
         self.assertEqual(
             [
                 ("Azure.Extensions.AspNetCore.DataProtection.Keys", "1.6.4"),
