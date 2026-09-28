@@ -73,7 +73,9 @@ Cada módulo define su esquema PostgreSQL y no exporta repositorios/entidades in
 
 Flujos atómicos permitidos inicialmente:
 
-1. quote snapshot -> order;
+1. quote snapshot -> order (la orden copia sin cambios el snapshot de la cotización, incluido
+   `pricing_policy_version`, que la cotización congeló desde el `policy_version` de la regla de
+   tarifa seleccionada de su organización — PRC-POLICY-VERSION-PER-ORG);
 2. assignment -> order status/event;
 3. POD/custody -> order transition;
 4. COD reconciliation -> close;

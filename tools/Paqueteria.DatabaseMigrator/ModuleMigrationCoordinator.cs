@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
-        ("Pricing", "__ef_migrations_history_pricing", AddMasterDataLoader.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000100_AddMasterDataLoader.cs"),
+        ("Pricing", "__ef_migrations_history_pricing", StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000300_StoreTariffPolicyVersionInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
@@ -99,6 +99,10 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // PRC-POLICY-VERSION-PER-ORG x MDM-001: the lane's latest migration only grants the executor
+                // SELECT/INSERT on policy_version and replaces the loader function with the published body plus
+                // reviewed edits; its rollback restores the published function. No table, role or row changes.
+                "Pricing" => IsPricingLoaderPolicyVersionSource(source),
                 "Notifications" =>
                     source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
@@ -137,19 +141,6 @@ internal sealed class ModuleMigrationCoordinator
                 "Organizations" =>
                     source.Contains("REG002_ADMIN_REQUIRED", StringComparison.Ordinal) &&
                     source.Contains("DROP FUNCTION IF EXISTS security.apply_pending_memberships", StringComparison.Ordinal) &&
-                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // MDM-001-OPERATOR-LOADER: the lane only adds the two master-data roles, their grants and the
-                // loader function; its rollback removes only the function. Loaded rows and audit rows stay.
-                "Pricing" =>
-                    source.Contains("DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,json,bytea,boolean)", StringComparison.Ordinal) &&
-                    source.Contains("MDM001_TENANT_CONTEXT_MISMATCH", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
@@ -220,6 +211,16 @@ internal sealed class ModuleMigrationCoordinator
             "Pricing",
             AdoptCanonicalPricingBaseline.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs");
+        VerifyPricingSource(
+            root,
+            AddMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000100_AddMasterDataLoader.cs",
+            IsMasterDataLoaderSource);
+        VerifyPricingSource(
+            root,
+            VersionPricingPolicyPerOrganization.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000200_VersionPricingPolicyPerOrganization.cs",
+            IsPolicyVersionColumnSource);
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -443,6 +444,13 @@ internal sealed class ModuleMigrationCoordinator
         {
             "Drivers" =>
                 [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
+            "Pricing" =>
+                [
+                    AdoptCanonicalPricingBaseline.MigrationId,
+                    AddMasterDataLoader.MigrationId,
+                    VersionPricingPolicyPerOrganization.MigrationId,
+                    StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+                ],
             "Orders" =>
                 [
                     AdoptCanonicalOrdersBaseline.MigrationId,
@@ -474,8 +482,6 @@ internal sealed class ModuleMigrationCoordinator
                 [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
-            "Pricing" =>
-                [AdoptCanonicalPricingBaseline.MigrationId, AddMasterDataLoader.MigrationId],
             _ => [contract.MigrationId],
         };
         var status = ids.SequenceEqual(expectedIds, StringComparer.Ordinal)
@@ -485,6 +491,71 @@ internal sealed class ModuleMigrationCoordinator
                 ? "PENDING"
                 : "DRIFT";
         return new ModuleMigrationState(contract.Module, $"platform.{contract.HistoryTable}", contract.MigrationId, status);
+    }
+
+    /// <summary>MDM-001-OPERATOR-LOADER: only the two master-data roles, their grants and the loader function;
+    /// its rollback removes only the function. Loaded rows and audit rows stay.</summary>
+    private static bool IsMasterDataLoaderSource(string source) =>
+        source.Contains("DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,json,bytea,boolean)", StringComparison.Ordinal) &&
+        source.Contains("MDM001_TENANT_CONTEXT_MISMATCH", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>PRC-POLICY-VERSION-PER-ORG: only policy_version and its checks on the canonical tariff rules, no
+    /// row rewritten, and a rollback that refuses while any rule carries a version.</summary>
+    private static bool IsPolicyVersionColumnSource(string source) =>
+        source.Contains(VersionPricingPolicyPerOrganization.DowngradeBlocked, StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>PRC-POLICY-VERSION-PER-ORG x MDM-001: two column grants and the loader function derived from
+    /// the published one; nothing dropped (except the ungated legacy jsonb overload, as the published step
+    /// does), truncated, deleted or rewritten.</summary>
+    private static bool IsPricingLoaderPolicyVersionSource(string source) =>
+        IsPricingLoaderPolicyVersionSourceWithoutLegacyDrop(
+            source.Replace(StoreTariffPolicyVersionInMasterDataLoader.LegacyOverloadDrop, string.Empty, StringComparison.Ordinal));
+
+    private static bool IsPricingLoaderPolicyVersionSourceWithoutLegacyDrop(string source) =>
+        source.Contains(StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError, StringComparison.Ordinal) &&
+        source.Contains("AddMasterDataLoader.UpSql", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>An earlier Pricing lane migration that must keep its reviewed shape.</summary>
+    private static void VerifyPricingSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException("Pricing evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) || !isValid(source))
+        {
+            throw new BaselineVerificationException(
+                "Pricing evolution migration is destructive or has an unexpected identifier.");
+        }
     }
 
     /// <summary>An earlier lane migration that must keep its fail-closed rollback and stay non-destructive.</summary>

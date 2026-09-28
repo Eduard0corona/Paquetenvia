@@ -217,15 +217,6 @@ internal static class MasterDataLoader
             : $"MDM001_LOAD_OK load_id={loadId:D} classification={result.GetProperty("classification").GetString()} deployment={result.GetProperty("deployment_class").GetString()}");
         output.WriteLine($"  file_sha256={result.GetProperty("file_sha256_reported").GetString()}");
         output.WriteLine($"  document_sha256_computed_by_postgresql={result.GetProperty("document_sha256_computed").GetString()}");
-        var tariffs = result.GetProperty("counts").GetProperty("tariff_rules");
-        if (!result.GetProperty("policy_version_persisted").GetBoolean() &&
-            tariffs.GetProperty("created").GetInt64() + tariffs.GetProperty("updated").GetInt64() +
-            tariffs.GetProperty("unchanged").GetInt64() > 0)
-        {
-            output.WriteLine(
-                "  MDM001_NOTE policy_version was validated but is NOT stored yet: pricing.tariff_rules has no " +
-                "policy_version column until feature/prc-policy-version-per-org lands.");
-        }
         foreach (var entity in new[] { "cities", "service_areas", "operating_zones", "tariff_rules", "driver_profiles", "driver_service_areas" })
         {
             var counts = result.GetProperty("counts").GetProperty(entity);

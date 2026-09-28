@@ -74,9 +74,14 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 """,
                 ("function", AddMasterDataLoader.FunctionSignature)));
 
-        // Exactly the AI-18 column grants from pg_attribute.attacl; no table-level ACL entry for either role.
+        // Exactly the AI-18 column grants plus the two policy_version grants of the Pricing lane
+        // (PRC-POLICY-VERSION-PER-ORG), from pg_attribute.attacl; no table-level ACL entry for either role.
+        var expectedGrants = AddMasterDataLoader.ExecutorColumnGrants
+            .Concat(StoreTariffPolicyVersionInMasterDataLoader.AddedExecutorColumnGrants)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
         Assert.Equal(
-            string.Join(',', AddMasterDataLoader.ExecutorColumnGrants.Order(StringComparer.Ordinal)),
+            string.Join(',', expectedGrants),
             await ScalarAsync<string>(
                 """
                 SELECT string_agg(entry, ',' ORDER BY entry COLLATE "C") FROM (
@@ -90,6 +95,13 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             string.Join(',', AddMasterDataLoader.ExecutorColumnGrants.Order(StringComparer.Ordinal)),
             string.Join(',', DatabaseBaselineAssertions.MasterDataExecutorGrants.Order(StringComparer.Ordinal)));
         Assert.Equal(116, AddMasterDataLoader.ExecutorColumnGrants.Count);
+        Assert.Equal(StoreTariffPolicyVersionInMasterDataLoader.ExecutorColumnGrantCount, expectedGrants.Length);
+        Assert.Equal(
+            StoreTariffPolicyVersionInMasterDataLoader.AddedExecutorColumnGrants.Order(StringComparer.Ordinal),
+            DatabaseBaselineAssertions.MasterDataExecutorPolicyVersionGrants.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
+            PricingPolicyVersionStateReader.MigrationId);
         Assert.Equal(0, await ScalarAsync<long>(
             """
             SELECT (SELECT count(*) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
@@ -333,7 +345,10 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Contains("service_areas: created=1 updated=0 unchanged=0", first.Output);
         Assert.Contains("operating_zones: created=2 updated=0 unchanged=0", first.Output);
         Assert.Contains("tariff_rules: created=2 updated=0 unchanged=0", first.Output);
-        Assert.Contains("MDM001_NOTE policy_version was validated but is NOT stored yet", first.Output);
+        Assert.DoesNotContain("MDM001_NOTE", first.Output);
+        Assert.Equal(2, await ScalarAsync<long>(
+            "SELECT count(*) FROM pricing.tariff_rules WHERE owner_org_id=@org AND policy_version='synthetic-v1'",
+            ("org", organization)));
         Assert.Contains($"file_sha256={Convert.ToHexStringLower(first.Sha256)}", first.Output);
         var snapshot = await SnapshotAsync(organization);
 
@@ -516,7 +531,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Contains("MDM001_DRY_RUN", dryRun.Output);
         Assert.Contains("service_areas: created=1 updated=0 unchanged=0", dryRun.Output);
         Assert.Contains("CREATE operating_zones[2]", dryRun.Output);
-        Assert.Contains("MDM001_NOTE policy_version was validated but is NOT stored yet", dryRun.Output);
+        Assert.DoesNotContain("MDM001_NOTE", dryRun.Output);
         Assert.DoesNotContain(suffix, dryRun.Output);
         Assert.DoesNotContain(organization.ToString("D"), dryRun.Output);
         Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
@@ -799,6 +814,87 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
     }
 
     [PostgreSqlContractFact]
+    public async Task Loaded_tariff_rules_store_their_policy_version_and_a_stored_version_is_immutable()
+    {
+        // PRC-POLICY-VERSION-PER-ORG: the loader stores each rule's organization policy version; a reload with
+        // the same version changes nothing, and a different version for a stored rule is refused like a price.
+        var organization = await NewOrganizationAsync();
+        var suffix = Suffix();
+        await EnsureCityAsync(suffix);
+        var document = Document(organization, suffix);
+        document["tariff_rules"]![0]!["policy_version"] = "ORG-A-2026.09";
+        document["tariff_rules"]![1]!["policy_version"] = "ORG-A-2026.09_zone";
+
+        var loaded = await LoadAsync(document, organization);
+        Assert.Contains("tariff_rules: created=2 updated=0 unchanged=0", loaded.Output);
+        Assert.DoesNotContain("MDM001_NOTE", loaded.Output);
+        Assert.Equal("ORG-A-2026.09,ORG-A-2026.09_zone", await ScalarAsync<string>(
+            "SELECT string_agg(policy_version, ',' ORDER BY policy_version) FROM pricing.tariff_rules WHERE owner_org_id=@org",
+            ("org", organization)));
+        var snapshot = await SnapshotAsync(organization);
+
+        // The same file again: idempotent, nothing but its audit row.
+        var reload = await LoadAsync(document, organization);
+        Assert.Contains("tariff_rules: created=0 updated=0 unchanged=2", reload.Output);
+        Assert.Equal(snapshot, await SnapshotAsync(organization));
+
+        // A raised version on an existing rule is refused by the job and by a direct call, and nothing moves.
+        document["tariff_rules"]![0]!["policy_version"] = "ORG-A-2026.10";
+        document["tariff_rules"]![1]!["status"] = "INACTIVE";
+        var refused = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(document, organization));
+        Assert.Equal(MasterDataLoader.DatabaseExitCode, refused.ExitCode);
+        Assert.Contains($"{StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError} at tariff_rules[1]", refused.Message);
+        await SetGateAsync(Synthetic, false);
+        var direct = await Assert.ThrowsAsync<PostgresException>(() => CallFunctionAsync(organization, document.ToJsonString()));
+        Assert.Equal(StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError, direct.MessageText);
+        Assert.Equal(snapshot, await SnapshotAsync(organization));
+        Assert.Equal(2, await ScalarAsync<long>(
+            "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'", ("org", organization)));
+
+        // The raised version belongs on a new rule: close the old one and start the new price in the same file.
+        var raised = Document(organization, suffix);
+        raised["tariff_rules"]![0]!["policy_version"] = "ORG-A-2026.09";
+        raised["tariff_rules"]![0]!["active_to"] = "2026-10-01T00:00:00Z";
+        raised["tariff_rules"]![1]!["policy_version"] = "ORG-A-2026.09_zone";
+        var next = Tariff(suffix, "SAME_DAY", 11500, "2026-10-01T00:00:00Z", null);
+        next["policy_version"] = "ORG-A-2026.10";
+        raised["tariff_rules"]!.AsArray().Add(next);
+        var applied = await LoadAsync(raised, organization);
+        Assert.Contains("tariff_rules: created=1 updated=1 unchanged=1", applied.Output);
+        Assert.Equal("ORG-A-2026.10", await ScalarAsync<string>(
+            "SELECT policy_version FROM pricing.tariff_rules WHERE owner_org_id=@org AND amount_cents=11500",
+            ("org", organization)));
+        Assert.Equal("ORG-A-2026.09", await ScalarAsync<string>(
+            "SELECT policy_version FROM pricing.tariff_rules WHERE owner_org_id=@org AND amount_cents=11100",
+            ("org", organization)));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task The_loader_function_differs_from_the_published_one_only_by_the_reviewed_policy_version_edits()
+    {
+        var installed = await ScalarAsync<string>(
+            "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
+            ("function", AddMasterDataLoader.FunctionSignature));
+        var expected = StoreTariffPolicyVersionInMasterDataLoader.FunctionSql;
+        var body = expected[(expected.IndexOf("AS $function$", StringComparison.Ordinal) + "AS $function$".Length)..expected.LastIndexOf("$function$;", StringComparison.Ordinal)];
+        Assert.Equal(body, installed);
+        Assert.Contains(StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError, installed, StringComparison.Ordinal);
+        Assert.DoesNotContain("policy_version_persisted", installed, StringComparison.Ordinal);
+        Assert.DoesNotContain("TODO", installed, StringComparison.Ordinal);
+
+        // Undoing the edits gives back the published function byte for byte: every other statement, including
+        // the GATE-007 gate, PLATFORM-only cities, overlap, limits, tenant context and operator_ref, is intact.
+        var undone = StoreTariffPolicyVersionInMasterDataLoader.FunctionEdits
+            .Where(edit => edit.Replacement.Length > 0)
+            .Aggregate(expected, (sql, edit) => sql.Replace(edit.Replacement, edit.Published, StringComparison.Ordinal));
+        var removed = StoreTariffPolicyVersionInMasterDataLoader.FunctionEdits.Single(edit => edit.Replacement.Length == 0);
+        Assert.Equal(
+            StoreTariffPolicyVersionInMasterDataLoader.PublishedFunctionSql.Replace(removed.Published, string.Empty, StringComparison.Ordinal),
+            undone);
+        Assert.Equal(8, StoreTariffPolicyVersionInMasterDataLoader.FunctionEdits.Count);
+    }
+
+    [PostgreSqlContractFact]
     public async Task Pricing_lane_rolls_back_and_reapplies_on_real_postgresql()
     {
         var connectionString = await fixture.CreateIsolatedDatabaseAsync("mdm001updown");
@@ -810,7 +906,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             Assert.Equal(1, await ScalarAsync<long>(connectionString,
                 $"SELECT count(*) FROM pg_proc WHERE proowner='{Executor}'::regrole"));
 
-            // Down (both Pricing migrations; the adoption rollback is a no-op): the function and the history
+            // Down (every Pricing migration after the no-op adoption): the function and the history
             // rows go; roles, grants, the deployment marker and loaded data stay (MDM-001 m7).
             await MigratePricingAsync(connectionString, Migration.InitialDatabase);
             Assert.False(await ScalarAsync<bool>(connectionString,
@@ -1215,7 +1311,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
           (SELECT string_agg(concat_ws(',',id,service_area_id,name,zone_type,status,public.ST_AsText(polygon)), ';' ORDER BY id)
              FROM locations.operating_zones WHERE owner_org_id=@org),
           (SELECT string_agg(concat_ws(',',id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
-               amount_cents,tax_mode,active_from,active_to,status), ';' ORDER BY id)
+               amount_cents,tax_mode,active_from,active_to,status,policy_version), ';' ORDER BY id)
              FROM pricing.tariff_rules WHERE owner_org_id=@org),
           (SELECT string_agg(concat_ws(',',id,user_id,home_city_id,driver_type,vehicle_type,status), ';' ORDER BY id)
              FROM drivers.driver_profiles WHERE org_id=@org))

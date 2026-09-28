@@ -252,7 +252,10 @@ CREATE TABLE pricing.tariff_rules (
   tax_mode text NOT NULL CHECK (tax_mode IN ('PLUS_VAT','VAT_INCLUDED','EXEMPT')),
   active_from timestamptz NOT NULL,
   active_to timestamptz,
-  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE'))
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  -- PRC-POLICY-VERSION-PER-ORG: version of the owning organization's pricing policy; a quote
+  -- freezes the version of the rule it selected into pricing_policy_version.
+  policy_version text NOT NULL CHECK (policy_version ~ '^[A-Za-z0-9._-]{1,64}$')
 );
 ALTER TABLE clients.client_accounts
   ADD CONSTRAINT client_accounts_private_tariff_fk
@@ -275,7 +278,7 @@ CREATE TABLE pricing.quotes (
   total_cents bigint NOT NULL CHECK (total_cents >= 0),
   minimum_total_cents_snapshot bigint NOT NULL CHECK (minimum_total_cents_snapshot >= 0),
   currency char(3) NOT NULL DEFAULT 'MXN' CHECK (currency='MXN'),
-  pricing_policy_version text NOT NULL,
+  pricing_policy_version text NOT NULL, -- frozen from policy_version of the selected tariff rule
   rule_ids uuid[] NOT NULL DEFAULT '{}',
   request_snapshot_redacted jsonb NOT NULL,
   package_snapshot jsonb NOT NULL,
@@ -318,7 +321,7 @@ CREATE TABLE orders.orders (
   total_cents bigint NOT NULL CHECK (total_cents >= 0),
   minimum_total_cents_snapshot bigint NOT NULL CHECK (minimum_total_cents_snapshot >= 0),
   currency char(3) NOT NULL DEFAULT 'MXN' CHECK (currency='MXN'),
-  pricing_policy_version text NOT NULL,
+  pricing_policy_version text NOT NULL, -- copied unchanged from the quote
   package_snapshot jsonb NOT NULL,
   financial_override jsonb,
   cod_expected_cents bigint NOT NULL DEFAULT 0 CHECK (cod_expected_cents >= 0),

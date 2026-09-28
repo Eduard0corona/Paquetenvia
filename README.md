@@ -170,7 +170,7 @@ git diff --exit-code -- docs/normative/v0.6
 ```
 
 El validador debe terminar en `VALIDATION_OK` y el hash de AI-06 debe ser
-`39c24d416309b5ec40279c0a58d04a71e39e096fe550fcc88ea62faae6b7eba7`.
+`a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4`.
 
 ## Contratos runtime ARC-002
 

@@ -152,6 +152,17 @@ public sealed class DatabaseBaselineAssertions
     /// <summary>The MDM-001 executor column grants, for the lane and contract tests.</summary>
     public static IReadOnlyList<string> MasterDataExecutorGrants { get; } = Array.AsReadOnly(MasterDataExecutorColumnGrants);
 
+    /// <summary>
+    /// PRC-POLICY-VERSION-PER-ORG: the column grants the Pricing lane adds to the MDM-001 set once the loader
+    /// stores tariff policy versions (<see cref="PricingPolicyVersionStateReader"/>). AI-18 keeps the MDM-001 set
+    /// because the published MDM-001 migration verifies exactly that set before this lane step runs.
+    /// </summary>
+    public static IReadOnlyList<string> MasterDataExecutorPolicyVersionGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "pricing.tariff_rules.policy_version:INSERT",
+        "pricing.tariff_rules.policy_version:SELECT",
+    });
+
     private static readonly string[] SensitiveFunctions =
     [
         "security.resolve_identity_context(text)",
@@ -1090,6 +1101,12 @@ public sealed class DatabaseBaselineAssertions
         ICollection<string> violations,
         CancellationToken cancellationToken)
     {
+        // Recorded history, not the catalog, decides whether the two policy_version grants belong to the set, so
+        // a recorded step whose grants are missing (or grants without the step) is reported, never absorbed.
+        var grants = await PricingPolicyVersionStateReader.IsLoaderStoringAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false)
+            ? MasterDataExecutorColumnGrants.Concat(MasterDataExecutorPolicyVersionGrants).ToArray()
+            : MasterDataExecutorColumnGrants;
         await AddRowsAsync(
             violations,
             connection,
@@ -1251,7 +1268,7 @@ public sealed class DatabaseBaselineAssertions
               AND pg_catalog.pg_has_role(m.member,'paqueteria_migrator','MEMBER')
             """,
             cancellationToken,
-            new NpgsqlParameter<string[]>("grants", MasterDataExecutorColumnGrants),
+            new NpgsqlParameter<string[]>("grants", grants),
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }
 

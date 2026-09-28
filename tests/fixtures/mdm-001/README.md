@@ -13,7 +13,7 @@ Two **synthetic** examples of the reviewed file the MDM-001 operator loader read
 - `classification` is `SYNTHETIC`, and every name starts with `Synthetic`.
 - The polygons are arbitrary squares; they are not the pilot's service zones (GATE-010 is open).
 - The amounts are placeholder cents; they are not the pilot's tariffs (GATE-010 and GATE-011 are open).
-- Every tariff rule carries `policy_version: synthetic-v1` (validated, not yet persisted; see the dev doc).
+- Every tariff rule carries `policy_version: synthetic-v1`, stored with the rule (PRC-POLICY-VERSION-PER-ORG).
 - `driver_profiles` is empty: real driver profiles are personal data and wait on GATE-007. The contract
   tests add synthetic driver profiles in memory for users they create.
 - In `synthetic-master-data.json`, `owner_org_id` is the DevSeed synthetic organization

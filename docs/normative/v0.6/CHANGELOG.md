@@ -1,5 +1,26 @@
 # Changelog
 
+## Versión de política de precios por organización (PRC-POLICY-VERSION-PER-ORG) — 2026-09-28
+
+- Respuesta literal del project owner: "Versión por organización" ("Cada organización tiene su
+  propia versión de política, que se sube cuando cambia sus tarifas, y esa versión se congela en
+  cada cotización.").
+- AI-06: `pricing.tariff_rules.policy_version text NOT NULL CHECK (policy_version ~
+  '^[A-Za-z0-9._-]{1,64}$')`. La cotización congela en `pricing_policy_version` la versión de la
+  regla de tarifa seleccionada y la orden la copia sin cambios. Se elimina la configuración global
+  `Pricing:PricingPolicyVersion`.
+- Lane de Pricing (`20260928000200_VersionPricingPolicyPerOrganization`): adopta la columna en
+  instalaciones nuevas y la crea en las existentes sin reescribir filas (NOT NULL si ninguna regla
+  carece de versión; si no, CHECK NOT VALID para filas nuevas o actualizadas). El rollback se niega
+  mientras alguna regla tenga versión.
+- AI-02 (`contract_hardening.quote_to_order.pricing_policy_version`), AI-04 (`TariffRule` y reglas
+  de `Quote`/`Order`), AI-05 (descripción de `pricing_policy_version`), AI-08 (PRC-001) y AI-13 §4.
+- Integración con MDM-001 (lane de Pricing `20260928000300_StoreTariffPolicyVersionInMasterDataLoader`):
+  `security.load_master_data` guarda el `policy_version` de cada regla y rechaza cambiar el de una regla
+  guardada (`MDM001_TARIFF_POLICY_VERSION_IMMUTABLE`); el ejecutor recibe `SELECT` e `INSERT` sobre esa
+  columna (nunca `UPDATE`). Esos dos grants los posee la lane, no los `GRANT` de AI-18, porque el paso
+  MDM-001 publicado verifica exactamente los 116 grants de AI-18 antes; AI-18 lo documenta (aserción 27).
+
 ## Carga de datos maestros del piloto (MDM-001) — 2026-09-28
 
 - Decisión del project owner `MDM-001-OPERATOR-LOADER`, respuesta literal: "Herramienta de operador

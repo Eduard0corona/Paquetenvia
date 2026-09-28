@@ -273,8 +273,8 @@ internal static partial class MasterDataDocumentValidator
             Enum(item, "tax_mode", reference, "PLUS_VAT", "VAT_INCLUDED", "EXEMPT");
             var status = Enum(item, "status", reference, "ACTIVE", "INACTIVE");
 
-            // PRC pricing policy version per organization: required on every rule. It is validated now and
-            // persisted once pricing.tariff_rules.policy_version exists (feature/prc-policy-version-per-org).
+            // PRC-POLICY-VERSION-PER-ORG: required on every rule and stored in pricing.tariff_rules.policy_version;
+            // the database refuses to change the version of a stored rule (MDM001_TARIFF_POLICY_VERSION_IMMUTABLE).
             if (!IsString(item, "policy_version", out var policyVersion) || !PolicyVersion().IsMatch(policyVersion))
             {
                 Error($"{reference}.policy_version", "MDM001_POLICY_VERSION");

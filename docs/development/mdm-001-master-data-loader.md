@@ -102,14 +102,15 @@ lista permitida: `America/Bahia_Banderas`, `America/Cancun`, `America/Chihuahua`
 zona horaria o una ciudad `INACTIVE` es `MDM001_CITY_CONFLICT`. Las cargas de los tenants sólo pueden
 **referenciar** ciudades existentes y `ACTIVE` (`MDM001_CITY_NOT_FOUND` si no).
 
-**`policy_version`** es obligatorio en cada regla de tarifa (decisión del owner: la versión de la política
-de precios es por organización). Se valida con `^[A-Za-z0-9._-]{1,64}$` en el job y en PostgreSQL, pero
-**todavía no se guarda**: la columna `pricing.tariff_rules.policy_version` (NOT NULL, mismo patrón) la
-agrega la rama paralela `feature/prc-policy-version-per-org`. La salida y el dry-run lo dicen
-(`MDM001_NOTE policy_version was validated but is NOT stored yet`) y el resultado lleva
-`policy_version_persisted: false`. Cuando esa lane llegue, la función debe insertarla, compararla en la
-recarga y sumar la columna a los grants del ejecutor (hay un `TODO` en el `INSERT` de tarifas); mientras
-tanto, si la columna llega primero, el `INSERT` falla cerrado por `NOT NULL` (`MDM001_WRITE_CONFLICT`).
+**`policy_version`** es obligatorio en cada regla de tarifa (decisión del owner
+PRC-POLICY-VERSION-PER-ORG: la versión de la política de precios es por organización). Se valida con
+`^[A-Za-z0-9._-]{1,64}$` en el job y en PostgreSQL y se guarda en `pricing.tariff_rules.policy_version`
+desde la lane de Pricing `20260928000300_StoreTariffPolicyVersionInMasterDataLoader`, que concede al
+ejecutor `SELECT` e `INSERT` sobre esa columna (nunca `UPDATE`) y reemplaza la función con el cuerpo
+publicado más ediciones revisadas. Una versión guardada es inmutable, como el precio: recargar una regla
+existente con otra versión es `MDM001_TARIFF_POLICY_VERSION_IMMUTABLE`; una versión nueva va en una regla
+nueva que cierra la anterior con `active_to` en el mismo archivo. Cada cotización congela la versión de la
+regla que seleccionó.
 
 ## Llaves naturales e idempotencia
 
@@ -200,7 +201,7 @@ Cada carga real escribe una fila en `platform.audit_logs`: `org_id` = organizaci
 de carga, `request_id` = `mdm-001` y `payload_redacted` con formato, clasificación, clase de despliegue,
 `operator_ref`, `file_sha256_reported` (SHA-256 de los bytes del archivo, calculado por el job),
 `document_sha256_computed` (SHA-256 del texto exacto del documento, calculado por PostgreSQL; coinciden
-para un archivo UTF-8 sin BOM), `dry_run`, `policy_version_persisted` y conteos por entidad. Ni la
+para un archivo UTF-8 sin BOM), `dry_run` y conteos por entidad. Ni la
 auditoría ni la consola llevan nombres de lugares, identificadores de usuario ni coordenadas: los cambios
 se reportan como `ACCIÓN sección[n] fields=...`.
 

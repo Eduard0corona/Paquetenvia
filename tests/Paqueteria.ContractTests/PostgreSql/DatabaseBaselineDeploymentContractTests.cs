@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using Npgsql;
+using Pricing.Infrastructure.Persistence.Migrations;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Database.Baseline;
 
@@ -670,13 +671,17 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
         var coordinator = new ModuleMigrationCoordinator();
 
-        // Every other lane is applied by the privileged fixture principal; this contract is the MDM-001 step.
-        // Rewinding it leaves a populated installation whose master data roles were pre-provisioned per E-002.
+        // Every other lane is applied by the privileged fixture principal; this contract is the MDM-001 step
+        // and the Pricing steps after it (PRC-POLICY-VERSION-PER-ORG). Rewinding them leaves a populated
+        // installation whose master data roles were pre-provisioned per E-002.
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION security.load_master_data(uuid,uuid,json,bytea,boolean);
+            REVOKE SELECT (policy_version), INSERT (policy_version) ON pricing.tariff_rules FROM paqueteria_master_data_executor;
             DELETE FROM platform."__ef_migrations_history_pricing"
-              WHERE "MigrationId"='{E002MasterDataStateReader.MigrationId}';
+              WHERE "MigrationId" IN ('{E002MasterDataStateReader.MigrationId}',
+                '{VersionPricingPolicyPerOrganization.MigrationId}',
+                '{StoreTariffPolicyVersionInMasterDataLoader.MigrationId}');
             """);
         Assert.Equal("PENDING", await PricingLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";

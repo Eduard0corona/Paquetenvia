@@ -5,6 +5,7 @@ public enum TariffEvaluationFailure
     None,
     NoRule,
     AmbiguousRule,
+    PolicyVersionMissing,
     TaxModeBlocked,
     ConsolidatedRouteRequired,
 }
@@ -83,6 +84,15 @@ public sealed class TariffRuleEvaluator
         }
 
         var rule = selected[0];
+        // PRC-POLICY-VERSION-PER-ORG: a quote freezes the policy version of the rule it selected, so
+        // a rule without one (only possible for a rule that predates the decision) is never quoted.
+        // The check runs after selection: an unversioned rule is not skipped in favor of a less
+        // specific one, which would silently change the price.
+        if (!PricingPolicyVersionFormat.IsValid(rule.PolicyVersion))
+        {
+            return TariffEvaluationResult.Failed(TariffEvaluationFailure.PolicyVersionMissing);
+        }
+
         if (rule.TaxMode != TaxMode.Exempt)
         {
             return TariffEvaluationResult.Failed(TariffEvaluationFailure.TaxModeBlocked);
