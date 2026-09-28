@@ -54,8 +54,12 @@ or a Mexican 10-digit number with an optional `+52`/`52` and mobile `1`
 prefix in the usual groupings (`6671234567`, `667 123 4567`,
 `(55) 1234-5678`, `667.123.45.67`, `66 71 23 45 67`). These shapes apply
 under every key, identifier keys included: a bare 10-digit value under
-`*_id` is redacted, failing toward privacy. Dates, timestamps and other digit
-runs are preserved.
+`*_id` is redacted, failing toward privacy. The shapes are bounded by digits
+only, so a phone glued to a word (`llamar667-123-4567`, `whatsapp6671234567`,
+`6671234567antes`) is still redacted. As a consequence, a non-UUID token that
+is mostly digits (a hex hash or base64 value with a 10-digit run between
+letters) can be redacted too; that over-redaction is intentional. Dates,
+timestamps and digit runs of other lengths are preserved.
 
 The default limits are eight nested levels and 16 KiB of UTF-8 JSON. Invalid,
 unsupported, over-depth or over-size input throws the generic

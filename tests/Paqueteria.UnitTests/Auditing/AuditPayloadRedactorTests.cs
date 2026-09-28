@@ -259,6 +259,56 @@ public sealed class AuditPayloadRedactorTests
         Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("label").GetString());
     }
 
+    [Theory]
+    [InlineData("llamar667-123-4567", "667-123-4567")]
+    [InlineData("whatsapp6671234567", "6671234567")]
+    [InlineData("Cel667-123-4567 favor de avisar", "667-123-4567")]
+    [InlineData("llamar al 667-123-4567antes de entregar", "667-123-4567")]
+    [InlineData("6671234567whatsapp", "6671234567")]
+    [InlineData("tel 667-123-4567Cel", "667-123-4567")]
+    [InlineData("_6671234567_", "6671234567")]
+    [InlineData("contacto+526671234567favor", "+526671234567")]
+    public void Phones_glued_to_words_are_redacted(string text, string phone)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["note"] = text,
+            ["list"] = new[] { text },
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain(phone, result.Json, StringComparison.Ordinal);
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("note").GetString());
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty("list")[0].GetString());
+    }
+
+    [Theory]
+    [InlineData("token12345678-1234-4123-8123-667123456789")]
+    [InlineData("12345678-1234-4123-8123-667123456789revocado")]
+    [InlineData("orden:99999999-9999-9999-9999-999999999999;")]
+    public void Uuids_glued_to_words_are_still_preserved(string text)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { note = text }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(text, output.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public void Mostly_digit_tokens_with_a_ten_digit_run_are_over_redacted_by_design()
+    {
+        const string hash = "deadbeef6671234567cafe";
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { digest = hash }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        Assert.DoesNotContain(hash, result.Json, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Phone_next_to_a_uuid_in_free_text_is_still_redacted()
     {

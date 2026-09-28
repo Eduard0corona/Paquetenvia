@@ -208,7 +208,9 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
     /// inside an identifier never looks like a phone. What remains is redacted when it holds an E.164 number (a
     /// <c>+</c> followed by 8 to 15 digits with optional separators) or a Mexican 10-digit number with an optional
     /// <c>+52</c>/<c>52</c> and mobile <c>1</c> prefix and optional spaces, dashes, dots or parentheses. This applies
-    /// under every key, identifier keys included. A bare run of digits of any other length is not a phone.
+    /// under every key, identifier keys included. Boundaries are digits only, so a phone glued to letters is still
+    /// found; as a result a non-UUID token that is mostly digits (a hex hash, base64) can be over-redacted, which is
+    /// intentional. A bare run of digits of any other length is not a phone.
     /// </summary>
     private static bool ContainsPhoneNumber(string value)
     {
@@ -225,26 +227,28 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
     private static partial Regex EmailPattern();
 
     [GeneratedRegex(
-        @"(?<![0-9A-Za-z])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Za-z])",
+        @"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
         RegexOptions.CultureInvariant)]
     private static partial Regex UuidPattern();
 
+    // Boundaries are digits only (and "+" before a number): a phone glued to a word ("llamar667-123-4567",
+    // "6671234567antes") is still a phone. Only UUIDs are exempt; they are stripped before these patterns run.
     // "+" then 8 to 15 digits; between digits at most one separator (space, dot, dash) and optional parentheses.
     [GeneratedRegex(
-        @"(?<![\p{L}\p{N}_+])\+[ ]?\(?[0-9](?:[ .\-]?\)?[ .\-]?\(?[0-9]){7,14}(?![0-9])",
+        @"(?<![0-9+])\+[ ]?\(?[0-9](?:[ .\-]?\)?[ .\-]?\(?[0-9]){7,14}(?![0-9])",
         RegexOptions.CultureInvariant)]
     private static partial Regex E164PhonePattern();
 
     // Optional +52 / 52 and mobile 1, then exactly ten digits in the usual Mexican groupings:
     // 6671234567, 55 1234 5678, (667) 123-4567, 667.123.45.67, 66 71 23 45 67.
     [GeneratedRegex(
-        @"(?<![\p{L}\p{N}_+])(?:\+?52[ .\-]?(?:1[ .\-]?)?)?" +
+        @"(?<![0-9+])(?:\+?52[ .\-]?(?:1[ .\-]?)?)?" +
         @"(?:[0-9]{10}" +
         @"|(?:\([0-9]{2}\)|[0-9]{2})[ .\-]?[0-9]{4}[ .\-]?[0-9]{4}" +
         @"|(?:\([0-9]{3}\)|[0-9]{3})[ .\-]?[0-9]{3}[ .\-]?[0-9]{4}" +
         @"|(?:\([0-9]{3}\)|[0-9]{3})[ .\-]?[0-9]{3}([ .\-]?)[0-9]{2}\1[0-9]{2}" +
         @"|[0-9]{2}([ .\-]?)[0-9]{2}\2[0-9]{2}\2[0-9]{2}\2[0-9]{2})" +
-        @"(?![\p{L}\p{N}_])",
+        @"(?![0-9])",
         RegexOptions.CultureInvariant)]
     private static partial Regex MexicanPhonePattern();
 
