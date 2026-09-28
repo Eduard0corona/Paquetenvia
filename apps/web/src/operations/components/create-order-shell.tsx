@@ -1,0 +1,331 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import {
+  acceptanceChannels,
+  evaluateConfirmation,
+  confirmationBlockerLabels,
+  maximumPackages,
+  payerTypes,
+  type AddressDraft,
+  type PackageDraft,
+  type Quote,
+} from "../contracts/create-order";
+import { mayHandleExactCoordinates } from "../contracts/capabilities";
+import { formatMxnCentsWithCurrency } from "../contracts/money";
+import { formatMazatlanTime, serviceTypeLabel } from "../contracts/operations-formatters";
+import { operationsOrderHref } from "../routing/operations-routing";
+import type { CreateOrderController, CreateOrderState } from "../state/create-order-controller";
+import { useCreateOrder } from "../state/use-create-order";
+
+const payerLabels: Readonly<Record<string, string>> = {
+  SENDER: "Remitente",
+  RECIPIENT: "Destinatario",
+  BUSINESS_ACCOUNT: "Cuenta empresarial",
+};
+const channelLabels: Readonly<Record<string, string>> = {
+  WEB: "Web",
+  PWA: "PWA",
+  ASSISTED: "Asistido por operador",
+  API: "API",
+};
+const breakdownLabels: Readonly<Record<string, string>> = {
+  BASE_TARIFF: "Tarifa base",
+};
+
+export function CreateOrderShell() {
+  const { state, controller } = useCreateOrder();
+  return (
+    <main className="opsShell" aria-busy={state.phase === "loading" || state.busy}>
+      <header className="opsHeader">
+        <div>
+          <p className="opsEyebrow">Despacho</p>
+          <h1>Nueva orden</h1>
+          <p>Cotización y aceptación con la API como autoridad.</p>
+        </div>
+        <div className="opsHeaderStatus">
+          <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
+        </div>
+      </header>
+
+      {state.phase === "no_session" && (
+        <section className="opsMessage" role="alert">
+          <h2>Sin sesión de Operaciones</h2>
+          <p>Inicia sesión y selecciona una organización.</p>
+        </section>
+      )}
+      {state.phase === "access_unavailable" && (
+        <section className="opsMessage" role="alert">
+          <h2>Acceso no disponible</h2>
+          <p>Tu rol en la organización activa no puede crear cotizaciones ni órdenes.</p>
+        </section>
+      )}
+      {state.phase === "loading" && <p className="opsLive" aria-live="polite">Cargando permisos.</p>}
+
+      <Feedback state={state} />
+
+      {state.phase === "ready" && state.order !== null && (
+        <section className="opsMessage" aria-labelledby="order-created">
+          <h2 id="order-created">Orden {state.order.public_id}</h2>
+          <dl className="opsMoneyList">
+            <MoneyRow label="Neto" cents={state.order.price_net.amount_cents} />
+            <MoneyRow label="Total" cents={state.order.total.amount_cents} />
+          </dl>
+          <p>Servicio: {serviceTypeLabel(state.order.service_type)} · versión {state.order.version}</p>
+          <div className="opsFormActions">
+            <Link className="opsPrimary" href={operationsOrderHref(state.order.id)}>Abrir orden</Link>
+            <button type="button" className="opsSecondary" onClick={() => controller.reset()}>Capturar otra orden</button>
+          </div>
+        </section>
+      )}
+
+      {state.phase === "ready" && state.order === null && (
+        <div className="opsFormLayout">
+          <QuoteForm
+            key={state.formKey}
+            controller={controller}
+            disabled={state.busy}
+            coordinates={mayHandleExactCoordinates(state.role)}
+          />
+          {state.quote !== null && (
+            <QuoteSummary
+              key={state.quote.id}
+              quote={state.quote}
+              controller={controller}
+              canOrder={state.canOrder}
+              busy={state.busy}
+            />
+          )}
+        </div>
+      )}
+    </main>
+  );
+}
+
+function Feedback({ state }: { readonly state: CreateOrderState }) {
+  return (
+    <>
+      {state.errors.length > 0 && (
+        <ul className="opsAlert" role="alert">
+          {state.errors.map((error) => <li key={error}>{error}</li>)}
+        </ul>
+      )}
+      {state.message !== null && (
+        <p className={state.stepUpHref === null ? "opsWarning" : "opsAlert"} role="status">
+          {state.message}{" "}
+          {state.stepUpHref !== null && <Link className="opsPrimary" href={state.stepUpHref}>Verificar identidad</Link>}
+        </p>
+      )}
+    </>
+  );
+}
+
+function QuoteForm({
+  controller,
+  disabled,
+  coordinates,
+}: {
+  readonly controller: CreateOrderController;
+  readonly disabled: boolean;
+  /** Exact coordinates are only ever handled by DISPATCHER and PLATFORM_ADMIN (D5). */
+  readonly coordinates: boolean;
+}) {
+  const [packages, setPackages] = useState(1);
+  return (
+    <form
+      className="opsForm"
+      autoComplete="off"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const text = (name: string) => String(data.get(name) ?? "");
+        const addressFrom = (prefix: string): AddressDraft => ({
+          addressText: text(`${prefix}_address`),
+          contactName: text(`${prefix}_contact`),
+          phone: text(`${prefix}_phone`),
+          lat: text(`${prefix}_lat`),
+          lng: text(`${prefix}_lng`),
+          references: text(`${prefix}_references`),
+        });
+        const packageDrafts: PackageDraft[] = Array.from({ length: packages }, (_, index) => ({
+          description: text(`package_${index}_description`),
+          weightGrams: text(`package_${index}_weight`),
+          declaredValue: text(`package_${index}_declared`),
+          lengthMm: text(`package_${index}_length`),
+          widthMm: text(`package_${index}_width`),
+          heightMm: text(`package_${index}_height`),
+        }));
+        void controller.requestQuote({
+          clientAccountId: text("client_account_id"),
+          origin: addressFrom("origin"),
+          destination: addressFrom("destination"),
+          serviceType: text("service_type"),
+          consolidatedRoute: data.get("consolidated_route") === "on",
+          packages: packageDrafts,
+        });
+      }}
+    >
+      <AddressFieldset prefix="origin" legend="1. Origen" coordinates={coordinates} />
+      <AddressFieldset prefix="destination" legend="2. Destino" coordinates={coordinates} />
+      <fieldset>
+        <legend>3. Paquetes</legend>
+        {Array.from({ length: packages }, (_, index) => (
+          <fieldset key={index} className="opsPackage">
+            <legend>Paquete {index + 1}</legend>
+            <label>Descripción<input name={`package_${index}_description`} maxLength={250} required /></label>
+            <label>Peso (gramos)<input name={`package_${index}_weight`} inputMode="numeric" pattern="[0-9]+" required /></label>
+            <label>Valor declarado (MXN)<input name={`package_${index}_declared`} inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" required /></label>
+            <label>Largo (mm, opcional)<input name={`package_${index}_length`} inputMode="numeric" pattern="[0-9]+" /></label>
+            <label>Ancho (mm, opcional)<input name={`package_${index}_width`} inputMode="numeric" pattern="[0-9]+" /></label>
+            <label>Alto (mm, opcional)<input name={`package_${index}_height`} inputMode="numeric" pattern="[0-9]+" /></label>
+          </fieldset>
+        ))}
+        <div className="opsFormActions">
+          <button type="button" className="opsSecondary" disabled={packages >= maximumPackages}
+            onClick={() => setPackages((count) => Math.min(maximumPackages, count + 1))}>Agregar paquete</button>
+          <button type="button" className="opsSecondary" disabled={packages <= 1}
+            onClick={() => setPackages((count) => Math.max(1, count - 1))}>Quitar último paquete</button>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>4. Servicio</legend>
+        <label>Tipo de servicio
+          <select name="service_type" defaultValue="" required>
+            <option value="" disabled>Selecciona</option>
+            <option value="SAME_DAY">{serviceTypeLabel("SAME_DAY")}</option>
+            <option value="URGENT">{serviceTypeLabel("URGENT")}</option>
+            <option value="SCHEDULED_ROUTE">{serviceTypeLabel("SCHEDULED_ROUTE")}</option>
+          </select>
+        </label>
+        <label className="opsCheckbox"><input type="checkbox" name="consolidated_route" /> Ruta consolidada</label>
+        <label>Cuenta cliente (UUID, opcional)<input name="client_account_id" /></label>
+      </fieldset>
+      <button className="opsPrimary" type="submit" disabled={disabled}>
+        {disabled ? "Cotizando..." : "5. Cotizar"}
+      </button>
+    </form>
+  );
+}
+
+function AddressFieldset({
+  prefix,
+  legend,
+  coordinates,
+}: {
+  readonly prefix: string;
+  readonly legend: string;
+  readonly coordinates: boolean;
+}) {
+  return (
+    <fieldset>
+      <legend>{legend}</legend>
+      <label>Dirección<input name={`${prefix}_address`} minLength={8} required /></label>
+      <label>Contacto<input name={`${prefix}_contact`} required /></label>
+      <label>Teléfono<input name={`${prefix}_phone`} type="tel" required /></label>
+      {coordinates && (
+        <>
+          <label>Latitud<input name={`${prefix}_lat`} inputMode="decimal" required /></label>
+          <label>Longitud<input name={`${prefix}_lng`} inputMode="decimal" required /></label>
+        </>
+      )}
+      <label>Referencias (opcional)<input name={`${prefix}_references`} maxLength={500} /></label>
+    </fieldset>
+  );
+}
+
+function QuoteSummary({
+  quote,
+  controller,
+  canOrder,
+  busy,
+}: {
+  readonly quote: Quote;
+  readonly controller: CreateOrderController;
+  readonly canOrder: boolean;
+  readonly busy: boolean;
+}) {
+  const [now] = useState(() => new Date());
+  const blockers = evaluateConfirmation(quote, now);
+  return (
+    <section className="opsMessage" aria-labelledby="quote-title">
+      <h2 id="quote-title">Cotización</h2>
+      <dl className="opsMoneyList">
+        <MoneyRow label="Neto" cents={quote.net.amount_cents} />
+        <MoneyRow label="Impuestos" cents={quote.tax.amount_cents} />
+        {quote.breakdown.map((line, index) => (
+          <div key={index}>
+            <dt>{line.line_type === null ? "Concepto" : breakdownLabels[line.line_type] ?? line.line_type}</dt>
+            <dd>{line.amount_cents === null ? "Sin monto" : formatMxnCentsWithCurrency(line.amount_cents)}</dd>
+          </div>
+        ))}
+        <MoneyRow label="Total" cents={quote.total.amount_cents} strong />
+      </dl>
+      <p>
+        Regla aplicada: tarifa {quote.pricing_tier}, política {quote.pricing_policy_version},
+        {" "}{quote.rule_ids.length} regla(s). Mínimo de referencia {formatMxnCentsWithCurrency(quote.minimum_total_cents_snapshot)}.
+      </p>
+      <p>
+        {serviceTypeLabel(quote.service_type)} · {quote.package_count} paquete(s) ·
+        {quote.consolidated_route ? " ruta consolidada" : " sin ruta consolidada"} · vence {formatMazatlanTime(quote.expires_at)} (hora de Mazatlán)
+      </p>
+      {blockers.length > 0 && (
+        <ul className="opsWarning" role="status">
+          {blockers.map((blocker) => <li key={blocker}>{confirmationBlockerLabels[blocker]}</li>)}
+        </ul>
+      )}
+      {canOrder ? (
+        <form
+          className="opsForm"
+          autoComplete="off"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            void controller.confirmOrder({
+              payerType: String(data.get("payer_type") ?? ""),
+              termsVersion: String(data.get("terms_version") ?? ""),
+              privacyVersion: String(data.get("privacy_version") ?? ""),
+              acceptanceChannel: String(data.get("acceptance_channel") ?? ""),
+              accepted: data.get("accepted") === "on",
+            });
+          }}
+        >
+          <fieldset>
+            <legend>6. Aceptación</legend>
+            <label>Quién paga
+              <select name="payer_type" defaultValue="" required>
+                <option value="" disabled>Selecciona</option>
+                {payerTypes.map((value) => <option key={value} value={value}>{payerLabels[value]}</option>)}
+              </select>
+            </label>
+            <label>Versión de términos aceptada<input name="terms_version" maxLength={64} pattern="[A-Za-z0-9._\-]+" required /></label>
+            <label>Versión del aviso de privacidad aceptada<input name="privacy_version" maxLength={64} pattern="[A-Za-z0-9._\-]+" required /></label>
+            <label>Canal de aceptación
+              <select name="acceptance_channel" defaultValue="" required>
+                <option value="" disabled>Selecciona</option>
+                {acceptanceChannels.map((value) => <option key={value} value={value}>{channelLabels[value]}</option>)}
+              </select>
+            </label>
+            <label className="opsCheckbox">
+              <input type="checkbox" name="accepted" required /> El cliente vio el desglose y aceptó términos y aviso de privacidad
+            </label>
+          </fieldset>
+          <button className="opsPrimary" type="submit" disabled={busy || blockers.length > 0}>
+            {busy ? "Confirmando..." : "Confirmar orden"}
+          </button>
+        </form>
+      ) : (
+        <p className="opsWarning">Tu rol no puede confirmar órdenes.</p>
+      )}
+    </section>
+  );
+}
+
+function MoneyRow({ label, cents, strong = false }: { readonly label: string; readonly cents: number; readonly strong?: boolean }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{strong ? <strong>{formatMxnCentsWithCurrency(cents)}</strong> : formatMxnCentsWithCurrency(cents)}</dd>
+    </div>
+  );
+}
