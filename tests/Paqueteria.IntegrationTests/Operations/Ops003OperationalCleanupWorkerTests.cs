@@ -1,12 +1,10 @@
 extern alias WorkerHost;
 
 using System.Collections.Concurrent;
-using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using Custody.Infrastructure.Cleanup;
 using Custody.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -14,13 +12,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Paqueteria.Infrastructure.Tenancy;
+using Paqueteria.IntegrationTests.Hosting;
 using Testcontainers.PostgreSql;
 using WorkerProgram = WorkerHost::WorkerProgram;
 
@@ -154,87 +151,16 @@ public sealed class Ops003OperationalCleanupWorkerTests
 
     internal sealed class CleanupWorkerFactory(
         Dictionary<string, string?> settings,
-        IJobScheduler? scheduler = null) : WebApplicationFactory<WorkerProgram>
+        IJobScheduler? scheduler = null) : StartupFailureSurfacingWebApplicationFactory<WorkerProgram>
     {
-        private readonly HostStartupFailureRecorder _startupFailures = new();
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
-            builder.ConfigureTestServices(services =>
+            if (scheduler is not null)
             {
-                services.AddSingleton<ILoggerProvider>(_startupFailures);
-                if (scheduler is not null)
-                {
-                    services.Replace(ServiceDescriptor.Singleton(scheduler));
-                }
-            });
-        }
-
-        /// <summary>
-        /// The Worker's own <c>app.Run()</c> starts the host on the entry-point thread and, when the start
-        /// fails, disposes the host before rethrowing. <see cref="WebApplicationFactory{TEntryPoint}"/>
-        /// waits for that start from the test thread through its deferred host, which first resolves
-        /// <see cref="IHostApplicationLifetime"/> from the host's services. When the entry-point thread
-        /// has already failed and disposed the host, that resolution throws
-        /// <see cref="ObjectDisposedException"/> and hides the startup error. Only in that case the
-        /// factory rethrows the exception the Worker's host itself failed to start with, recorded before
-        /// the disposal, so the error seen here is always the one the Worker process surfaces.
-        /// </summary>
-        protected override IHost CreateHost(IHostBuilder builder)
-        {
-            try
-            {
-                return base.CreateHost(builder);
-            }
-            catch (ObjectDisposedException) when (_startupFailures.First is { } startupFailure)
-            {
-                ExceptionDispatchInfo.Throw(startupFailure);
-                throw;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Records the exception the generic host logs when it fails to start. The host logs it before the
-    /// Worker's <c>Run</c> disposes the services, so it is recorded before the deferred host can observe
-    /// the disposal.
-    /// </summary>
-    private sealed class HostStartupFailureRecorder : ILoggerProvider
-    {
-        private const string HostCategory = "Microsoft.Extensions.Hosting.Internal.Host";
-        private readonly ConcurrentQueue<Exception> _failures = new();
-
-        public Exception? First => _failures.TryPeek(out var failure) ? failure : null;
-
-        public ILogger CreateLogger(string categoryName) =>
-            string.Equals(categoryName, HostCategory, StringComparison.Ordinal)
-                ? new Recorder(_failures)
-                : NullLogger.Instance;
-
-        public void Dispose()
-        {
-        }
-
-        private sealed class Recorder(ConcurrentQueue<Exception> failures) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state)
-                where TState : notnull => null;
-
-            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
-
-            public void Log<TState>(
-                LogLevel logLevel,
-                EventId eventId,
-                TState state,
-                Exception? exception,
-                Func<TState, Exception?, string> formatter)
-            {
-                if (logLevel >= LogLevel.Error && exception is not null)
-                {
-                    failures.Enqueue(exception);
-                }
+                builder.ConfigureTestServices(services =>
+                    services.Replace(ServiceDescriptor.Singleton(scheduler)));
             }
         }
     }
