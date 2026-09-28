@@ -172,6 +172,7 @@ const nextConfig: NextConfig = {
       },
       { source: "/track/:path*", headers: privateNoStore },
       { source: "/ops/:path*", headers: privateNoStore },
+      { source: "/finance/:path*", headers: privateNoStore },
     ];
   },
 };

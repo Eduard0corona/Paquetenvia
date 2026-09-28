@@ -24,4 +24,11 @@ regexes = [
   # the history of feature/reg-join-by-email (the factory now derives its key at runtime) and that
   # pushed history cannot be rewritten.
   '''cmVnMDAyLWh0dHAtdGVzdC1rZXktMDEyMzQ1Njc4OWFiY2RlZg==''',
+  # UI-001 web test idempotency key: a sequential synthetic UUID, not a credential. It is only in the
+  # history of feature/ui-001-orders-settlements (commit 5b4c772) and that pushed history cannot be rewritten.
+  '''01234567-89ab-4cde-8f01-23456789abcd''',
+  # TRK-002 web test token: the AI-24 vector above with its first two characters changed to "ZZ". It is only
+  # in the history of feature/trk-002-issue-endpoint (commit 61f376e) and that pushed history cannot be
+  # rewritten.
+  '''ZZIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA''',
 ]

@@ -61,6 +61,8 @@ function mustUseNetworkOnly(request) {
     url.searchParams.has("access_token") ||
     url.pathname === "/ops" ||
     url.pathname.startsWith("/ops/") ||
+    url.pathname === "/finance" ||
+    url.pathname.startsWith("/finance/") ||
     url.pathname === "/track" ||
     url.pathname.startsWith("/track/") ||
     url.pathname.startsWith("/api/v1/") ||

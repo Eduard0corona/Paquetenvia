@@ -1,0 +1,264 @@
+import { TenantApiError } from "../../operations/api/tenant-request";
+import { canPerform, requiresMfa } from "../../operations/contracts/capabilities";
+import type { OperationsSession } from "../../operations/session/operations-session";
+import { ExternalStore } from "../../operations/state/external-store";
+import { PendingSubmissions } from "../../operations/state/pending-submissions";
+import { describeFailure } from "../../operations/state/tenant-error-messages";
+import type { CodApi } from "../api/cod-api";
+import {
+  buildRecordCodBody,
+  canRecordCollection,
+  financeConflictMessages,
+  isCanonicalUuid,
+  type CodTransaction,
+  type OrderFinancials,
+} from "../contracts/cod";
+
+export const codPath = "/finance/cod";
+
+export function codReturnUrl(orderId: string | null): string {
+  return orderId !== null && isCanonicalUuid(orderId) ? `${codPath}?order=${orderId}` : codPath;
+}
+
+export interface CodState {
+  readonly phase: "no_session" | "loading" | "ready" | "access_unavailable";
+  readonly role: string | null;
+  readonly canRecord: boolean;
+  readonly canReconcile: boolean;
+  readonly mfaHint: string | null;
+  readonly financials: OrderFinancials | null;
+  /** Order whose financials GET is in flight; actions stay disabled until it is loaded. */
+  readonly loadingOrder: string | null;
+  /** Latest COD record the API returned in this tenant session. */
+  readonly transaction: CodTransaction | null;
+  readonly busy: boolean;
+  readonly errors: readonly string[];
+  readonly message: string | null;
+  readonly stepUpHref: string | null;
+  /** Changes on tenant switch and after a confirmed write so typed text is dropped. */
+  readonly formKey: number;
+}
+
+export interface CodDependencies {
+  readonly readSession: () => OperationsSession | null;
+  readonly createApi: (session: OperationsSession) => CodApi;
+  readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
+  /** Order to reopen after returning from the MFA step-up. */
+  readonly initialOrder?: () => string | null;
+}
+
+const initialState: CodState = {
+  phase: "no_session",
+  role: null,
+  canRecord: false,
+  canReconcile: false,
+  mfaHint: null,
+  financials: null,
+  loadingOrder: null,
+  transaction: null,
+  busy: false,
+  errors: [],
+  message: null,
+  stepUpHref: null,
+  formKey: 0,
+};
+
+/**
+ * FIN-001 COD control. getOrderFinancials is the authority on load, refresh and
+ * after every write (success or conflict); a recorded or reconciled collection is
+ * never assumed locally. A tenant switch drops the order, COD records and keys.
+ */
+export class CodController extends ExternalStore<CodState> {
+  private api: CodApi | null = null;
+  private session: OperationsSession | null = null;
+  private generation = 0;
+  /** Monotonic load token: only the latest load() may write `financials`. */
+  private loadToken = 0;
+  private controller: AbortController | null = null;
+  private readonly pending: PendingSubmissions;
+
+  public constructor(
+    private readonly dependencies: CodDependencies,
+    pending = new PendingSubmissions(),
+  ) {
+    super(initialState);
+    this.pending = pending;
+  }
+
+  public async start(): Promise<void> {
+    this.generation += 1;
+    const generation = this.generation;
+    this.controller?.abort();
+    this.controller = new AbortController();
+    this.pending.clear();
+    const session = this.dependencies.readSession();
+    this.session = session;
+    this.api = session === null ? null : this.dependencies.createApi(session);
+    this.update({
+      ...initialState,
+      phase: session === null ? "no_session" : "loading",
+      formKey: this.getSnapshot().formKey + 1,
+    });
+    if (session === null) return;
+    let role: string | null;
+    try {
+      role = await this.dependencies.loadRole(session, this.controller.signal);
+    } catch {
+      role = null;
+    }
+    if (generation !== this.generation) return;
+    if (!canPerform(role, "getOrderFinancials")) {
+      this.update({ phase: "access_unavailable", role });
+      return;
+    }
+    this.update({
+      phase: "ready",
+      role,
+      canRecord: canPerform(role, "recordCodCollection"),
+      canReconcile: canPerform(role, "reconcileCod"),
+      mfaHint: requiresMfa(role, "getOrderFinancials")
+        ? "Consultar y conciliar cobros con tu rol requiere verificar tu identidad (MFA)."
+        : null,
+    });
+    const initial = this.dependencies.initialOrder?.() ?? null;
+    if (initial !== null && isCanonicalUuid(initial)) await this.load(initial);
+  }
+
+  public stop(): void {
+    this.generation += 1;
+    this.controller?.abort();
+    this.pending.clear();
+  }
+
+  public async load(orderId: string): Promise<void> {
+    const api = this.api;
+    if (api === null || this.getSnapshot().phase !== "ready") return;
+    if (!isCanonicalUuid(orderId)) {
+      this.update({ errors: ["La orden debe ser un UUID."], message: null, stepUpHref: null });
+      return;
+    }
+    const generation = this.generation;
+    const token = ++this.loadToken;
+    const isLatest = () => generation === this.generation && token === this.loadToken;
+    const switching = this.getSnapshot().financials?.order_id !== orderId;
+    this.update({
+      loadingOrder: orderId,
+      errors: [],
+      message: null,
+      stepUpHref: null,
+      ...(switching ? { financials: null, transaction: null } : {}),
+    });
+    try {
+      const financials = await api.financials(orderId, this.controller?.signal);
+      if (!isLatest()) return;
+      if (financials.order_id !== orderId) throw new TenantApiError("invalid");
+      this.update({ financials });
+    } catch (error) {
+      if (!isLatest()) return;
+      this.update({ financials: null });
+      this.fail(error, orderId);
+    } finally {
+      if (isLatest()) this.update({ loadingOrder: null });
+    }
+  }
+
+  public async refresh(): Promise<void> {
+    const orderId = this.getSnapshot().financials?.order_id;
+    if (orderId !== undefined) await this.load(orderId);
+  }
+
+  public async record(amountText: string, reference: string): Promise<void> {
+    const state = this.getSnapshot();
+    const financials = state.loadingOrder === null ? state.financials : null;
+    if (financials === null || !state.canRecord) return;
+    if (!canRecordCollection(financials)) {
+      this.update({ errors: ["Esta orden no tiene un cobro contra entrega pendiente de registrar."], message: null });
+      return;
+    }
+    const result = buildRecordCodBody(financials, amountText, reference);
+    if (!result.ok) {
+      this.update({ errors: result.errors, message: null, stepUpHref: null });
+      return;
+    }
+    const orderId = financials.order_id;
+    await this.write(
+      `record:${orderId}`,
+      JSON.stringify(result.body),
+      result.body,
+      (api, key, body, signal) => api.record(orderId, body, key, signal),
+      (transaction) => transaction.order_id === orderId,
+      "Cobro registrado por el servidor.",
+      orderId,
+    );
+  }
+
+  /** Reconciles the COD record the screen received, or the one the operator typed. */
+  public async reconcile(codIdText: string | null = null): Promise<void> {
+    const state = this.getSnapshot();
+    if (!state.canReconcile) return;
+    const codId = codIdText ?? state.transaction?.id ?? null;
+    if (codId === null || !isCanonicalUuid(codId)) {
+      this.update({ errors: ["El registro de cobro debe ser un UUID."], message: null, stepUpHref: null });
+      return;
+    }
+    await this.write(
+      `reconcile:${codId}`,
+      "",
+      undefined,
+      (api, key, _body, signal) => api.reconcile(codId, key, signal),
+      (transaction) => transaction.id === codId,
+      "Cobro conciliado por el servidor.",
+      state.financials?.order_id ?? null,
+    );
+  }
+
+  public get activeSession(): OperationsSession | null {
+    return this.session;
+  }
+
+  private async write<T>(
+    scope: string,
+    fingerprint: string,
+    payload: T,
+    action: (api: CodApi, key: string, payload: T, signal?: AbortSignal) => Promise<CodTransaction>,
+    matches: (transaction: CodTransaction) => boolean,
+    success: string,
+    orderId: string | null,
+  ): Promise<void> {
+    const api = this.api;
+    if (api === null || this.getSnapshot().busy) return;
+    const generation = this.generation;
+    const submission = this.pending.prepare(scope, fingerprint, () => payload);
+    this.update({ busy: true, errors: [], message: null, stepUpHref: null });
+    let reload = false;
+    try {
+      const transaction = await action(api, submission.key, submission.payload, this.controller?.signal);
+      if (generation !== this.generation) return;
+      this.pending.settle(scope);
+      if (!matches(transaction)) throw new TenantApiError("invalid");
+      this.update({ transaction, message: success, formKey: this.getSnapshot().formKey + 1 });
+      reload = true;
+    } catch (error) {
+      if (generation !== this.generation) return;
+      if (!(error instanceof TenantApiError) || !error.retryable) this.pending.settle(scope);
+      this.fail(error, orderId);
+      reload = error instanceof TenantApiError && error.category === "conflict";
+    } finally {
+      if (generation === this.generation) this.update({ busy: false });
+    }
+    // REST stays authoritative: the COD position is read again, never inferred.
+    const loaded = this.getSnapshot().financials?.order_id;
+    if (reload && generation === this.generation && loaded !== undefined) {
+      const message = this.getSnapshot().message;
+      const stepUpHref = this.getSnapshot().stepUpHref;
+      await this.load(loaded);
+      if (generation === this.generation && this.getSnapshot().message === null)
+        this.update({ message, stepUpHref });
+    }
+  }
+
+  private fail(error: unknown, orderId: string | null): void {
+    const view = describeFailure(error, codReturnUrl(orderId), financeConflictMessages);
+    this.update({ message: view.message, stepUpHref: view.stepUpHref });
+  }
+}

@@ -1,5 +1,33 @@
 # Changelog
 
+## Pantallas UI-001 de importación CSV, incidencias y COD (UI-001-SCREENS-CSV-INC-COD) — 2026-09-28
+
+- Respuesta literal del project owner: "Sí, agrégalas (Recommended)".
+- AI-07 agrega las rutas `/ops/orders/import`, `/ops/incidents` y `/finance/cod` y sus contratos de pantalla
+  `csv_order_import`, `incident_desk` y `cod_control`: roles, fuentes, estados y validaciones, limitados a las
+  operaciones AI-05 existentes (`previewOrderCsv`, `commitOrderCsv`, `openIncident`, `resolveIncident`,
+  `getOrderFinancials`, `recordCodCollection`, `reconcileCod`). D5-CAPABILITY-MATRIX y el step-up MFA de
+  PLATFORM_ADMIN y FINANCE siguen aplicando; el backend sigue siendo la barrera de autorización.
+- Sin API, estados, eventos ni migraciones nuevos. Cada contrato declara en `not_supported` lo que AI-05 no
+  permite hoy (leer o listar incidencias y pruebas, leer registros COD, filtrar órdenes con COD pendiente).
+
+## Emisión y revocación de enlaces de tracking (TRK-002) — 2026-09-28
+
+- Implementa `TRK-002-ISSUE-ENDPOINT` (respuesta literal del project owner: "Sí, con botón en UI
+  (Recommended)").
+- AI-05: `issueTrackingLink` (`POST /orders/{orderId}/tracking-link`, 201 con `Cache-Control:
+  no-store` y el esquema `PublicTrackingLink`) y `revokeTrackingLink`
+  (`POST /orders/{orderId}/tracking-link/revoke`, 204). El token en claro se devuelve una sola vez
+  y nunca se persiste ni se registra; solo se guarda su SHA-256. Emitir cuando ya hay un enlace
+  lo rota y revoca los anteriores. Auditoría `TRACKING_TOKEN_ISSUED`, `TRACKING_TOKEN_ROTATED` y
+  `TRACKING_TOKEN_REVOKED`. 404 uniforme para una orden ajena o inexistente.
+- `x-capability-matrix.tracking_link_operations`: DISPATCHER sin MFA y PLATFORM_ADMIN con un reto
+  MFA satisfecho (403 `MFA_REQUIRED` cuando solo falta el segundo factor), como `assignDriver`,
+  `createRoute` y `createExternalOffer`: emitir o revocar un enlace crea o retira una credencial
+  pública al portador. D5 no cubría estas operaciones; es el valor por defecto más seguro según
+  AI-01 §7 y queda pendiente de confirmación del owner.
+- El envío del enlace a clientes por WhatsApp o correo sigue bloqueado por GATE-004 y GATE-007.
+
 ## Endurecimiento del cargador de datos maestros (MDM-001-LOADER-HARDENING) — 2026-09-28
 
 - Seguimiento de tres hallazgos MINOR de la revisión de MDM-001, diferidos del PR de MDM-001; sin API,

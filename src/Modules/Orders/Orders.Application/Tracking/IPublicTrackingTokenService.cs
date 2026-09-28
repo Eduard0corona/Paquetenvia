@@ -24,7 +24,15 @@ public sealed record PublicTrackingTokenGrant(
     Guid TokenId,
     Guid OrderId,
     string Token,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt)
+{
+    /// <summary>
+    /// TRK-002: the plaintext token is returned once and never logged, so the generated record text, which a
+    /// structured log or an assertion message could capture, never includes it.
+    /// </summary>
+    public override string ToString() =>
+        $"{nameof(PublicTrackingTokenGrant)} {{ TokenId = {TokenId}, OrderId = {OrderId}, Token = [redacted], ExpiresAt = {ExpiresAt:O} }}";
+}
 
 public interface IPublicTrackingTokenService
 {

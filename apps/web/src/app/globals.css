@@ -880,3 +880,119 @@ p {
     grid-template-columns: 1fr;
   }
 }
+
+.opsTrackingLink {
+  border: 1px solid #b7cbc7;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.opsTrackingLink input {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0.4rem 0;
+  padding: 0.5rem;
+  font-family: ui-monospace, monospace;
+}
+
+/* UI-001: /ops/orders/new and /finance/settlements */
+.opsFormLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+  max-width: 92rem;
+  margin: 1rem auto;
+}
+
+.opsForm {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.opsForm fieldset {
+  display: grid;
+  gap: 0.6rem;
+  border: 1px solid #b7cbc7;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.opsForm legend {
+  font-weight: 800;
+}
+
+.opsForm label {
+  display: grid;
+  gap: 0.25rem;
+  color: #304d49;
+  font-weight: 650;
+}
+
+.opsForm .opsCheckbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.opsForm input,
+.opsForm select,
+.opsForm textarea {
+  min-width: 0;
+  border: 1px solid #81918f;
+  border-radius: 0.5rem;
+  padding: 0.65rem;
+  font: inherit;
+}
+
+.opsFormActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.opsMoneyList div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #d9e2ec;
+  padding: 0.35rem 0;
+}
+
+.opsMoneyList dd,
+.opsAmount {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.opsTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+.opsTable caption {
+  text-align: left;
+  color: #526966;
+}
+
+.opsTable th,
+.opsTable td {
+  border-bottom: 1px solid #d9e2ec;
+  padding: 0.45rem;
+  text-align: left;
+}
+
+@media (max-width: 768px) {
+  .opsFormLayout,
+  .opsRouteLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .opsTable {
+    display: block;
+    overflow-x: auto;
+  }
+}

@@ -55,6 +55,9 @@ export function OperationsDashboardShell() {
             Actualizar
           </button>
           <Link className="opsPrimary" href="/ops/routes">Rutas manuales</Link>
+          <Link className="opsPrimary" href="/ops/orders/import">Importar CSV</Link>
+          <Link className="opsPrimary" href="/ops/incidents">Incidencias</Link>
+          <Link className="opsPrimary" href="/finance/cod">Cobro contra entrega</Link>
         </div>
       </header>
 

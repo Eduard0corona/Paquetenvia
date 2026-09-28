@@ -212,10 +212,13 @@ describe("header wiring", () => {
     expect(layout).toContain("await connection()");
   });
 
-  it("keeps private no-store only on tracking and operations", () => {
+  it("keeps private no-store only on tracking, operations and finance", () => {
     expect(isPrivateNoStorePath("/track")).toBe(true);
     expect(isPrivateNoStorePath("/track/abc")).toBe(true);
     expect(isPrivateNoStorePath("/ops/dashboard")).toBe(true);
+    expect(isPrivateNoStorePath("/ops/orders/new")).toBe(true);
+    expect(isPrivateNoStorePath("/finance/settlements")).toBe(true);
+    expect(isPrivateNoStorePath("/financeiro")).toBe(false);
     expect(isPrivateNoStorePath("/driver/stops")).toBe(false);
     expect(isPrivateNoStorePath("/tracking")).toBe(false);
   });

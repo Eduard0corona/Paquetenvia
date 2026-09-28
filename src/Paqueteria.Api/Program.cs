@@ -159,6 +159,7 @@ app.MapQuoteEndpoints();
 app.MapOrderEndpoints();
 app.MapCsvOrderImportEndpoints();
 app.MapPublicTrackingEndpoints();
+app.MapPublicTrackingLinkEndpoints();
 app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapRealtimeHubs();
