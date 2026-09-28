@@ -34,7 +34,7 @@ namespace Pricing.Infrastructure.Persistence.Migrations;
 [Migration(MigrationId)]
 public sealed class VersionPricingPolicyPerOrganization : Migration
 {
-    public const string MigrationId = "20260928000100_VersionPricingPolicyPerOrganization";
+    public const string MigrationId = "20260928000200_VersionPricingPolicyPerOrganization";
 
     public const string FormatConstraint = "tariff_rules_policy_version_check";
 

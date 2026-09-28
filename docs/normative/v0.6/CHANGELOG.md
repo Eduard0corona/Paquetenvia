@@ -9,7 +9,7 @@
   '^[A-Za-z0-9._-]{1,64}$')`. La cotización congela en `pricing_policy_version` la versión de la
   regla de tarifa seleccionada y la orden la copia sin cambios. Se elimina la configuración global
   `Pricing:PricingPolicyVersion`.
-- Lane de Pricing (`20260928000100_VersionPricingPolicyPerOrganization`): adopta la columna en
+- Lane de Pricing (`20260928000200_VersionPricingPolicyPerOrganization`): adopta la columna en
   instalaciones nuevas y la crea en las existentes sin reescribir filas (NOT NULL si ninguna regla
   carece de versión; si no, CHECK NOT VALID para filas nuevas o actualizadas). El rollback se niega
   mientras alguna regla tenga versión.

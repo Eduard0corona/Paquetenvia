@@ -50,7 +50,7 @@ internal sealed class ModuleMigrationCoordinator
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
         ("Pricing", "__ef_migrations_history_pricing", VersionPricingPolicyPerOrganization.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000100_VersionPricingPolicyPerOrganization.cs"),
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000200_VersionPricingPolicyPerOrganization.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
