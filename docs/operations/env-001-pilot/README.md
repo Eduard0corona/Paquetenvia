@@ -187,13 +187,18 @@ the app restarts or starts a new revision; the workflow restarts the API and Wor
 | Secret | For |
 |---|---|
 | `google-maps-api-key` | GATE-003-PROVIDER-GOOGLE (Locations geocoding/routing adapter) |
-| `whatsapp-cloud-api-token` | GATE-004-CHANNELS (Meta Cloud API access token) |
-| `whatsapp-app-secret` | GATE-004-CHANNELS (webhook signature verification) |
+| `whatsapp-cloud-api-token` | GATE-004-CHANNELS (Meta Cloud API access token) → Worker `Messaging:WhatsApp:MetaCloudApi:AccessToken` |
+| `whatsapp-phone-number-id` | GATE-004-CHANNELS (WhatsApp Business phone number id) → Worker `Messaging:WhatsApp:MetaCloudApi:PhoneNumberId` |
+| `whatsapp-app-secret` | GATE-004-CHANNELS (webhook signature verification; no webhook exists yet, so nothing reads it) |
 
-Azure Communication Services email should use the workload's managed identity, so it needs no secret.
+Azure Communication Services email uses the Worker's managed identity, so it needs no secret.
 It is **not** in the Bicep yet. The resources themselves are free (about 0.00025 USD per email).
 Binding `paquetenvia.com` as a sender needs its own DNS records (domain TXT, SPF, DKIM x2) and
-Meta/ACS sender setup, and it belongs with the GATE-004 adapter work.
+Meta/ACS sender setup. The adapters exist (`docs/development/gate-004-messaging-adapters.md`) but
+are **not wired into the pilot templates**: every `Messaging` channel stays `Disabled` until the owner
+supplies the secrets, the approved templates and the sender domain, and a separate change adds the
+Worker mappings, the per-secret RBAC and the guard allowlist together (a mapped secret that does not
+exist stops the Worker at start).
 
 App settings wired by `apps.bicep`:
 

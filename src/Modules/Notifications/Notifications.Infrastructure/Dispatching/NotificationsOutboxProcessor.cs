@@ -170,7 +170,7 @@ internal sealed class NotificationsOutboxProcessor(
                 variables,
                 idempotencyKey),
             cancellationToken);
-        var next = result.Outcome is "TRANSIENT" or "AMBIGUOUS"
+        var next = NotificationDeliveryOutcome.IsRetried(result.Outcome)
             ? DateTimeOffset.UtcNow + NotificationRetryPolicy.CalculateDelay(
                 message.Attempts,
                 options.Value.RetryBaseSeconds,
