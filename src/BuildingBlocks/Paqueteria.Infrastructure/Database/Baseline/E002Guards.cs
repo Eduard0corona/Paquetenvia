@@ -80,12 +80,25 @@ internal static class E002Guards
         ("paqueteria_cleanup_executor", true),
         ("paqueteria_registration_executor", true),
         ("paqueteria_session_executor", true),
+        ("paqueteria_master_data_executor", true),
+        ("paqueteria_master_data_loader", false),
+    ];
+
+    /// <summary>
+    /// MDM-001-OPERATOR-LOADER: roles an installation that predates the Pricing MDM-001 lane does not have yet.
+    /// A missing one is not a mismatch while its function is absent too; once either exists it is held to the
+    /// same exact attributes as every canonical role.
+    /// </summary>
+    internal static readonly string[] LaneIntroducedRoles =
+    [
+        "paqueteria_master_data_executor", "paqueteria_master_data_loader",
     ];
 
     internal static readonly string[] SpecializedOwners =
     [
         "paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
         "paqueteria_cleanup_executor", "paqueteria_registration_executor", "paqueteria_session_executor",
+        "paqueteria_master_data_executor",
     ];
 
     /// <summary>E-002 v0.8 §11: an ACL entry whose grantee/grantor cannot be resolved is a normalization failure.</summary>
@@ -100,7 +113,7 @@ internal static class E002Guards
         return new E002AclEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
     }
 
-    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor). Returns the names of roles that differ.</summary>
+    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor; MDM-001-OPERATOR-LOADER the eleventh and twelfth, the master data executor and its operator grantee). Returns the names of roles that differ.</summary>
     internal static async Task<IReadOnlyList<string>> RoleAttributeMismatchesAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
     {
@@ -113,7 +126,20 @@ internal static class E002Guards
                 """, connection, transaction);
             command.Parameters.AddWithValue("name", name);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            var found = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (!found && LaneIntroducedRoles.Contains(name, StringComparer.Ordinal))
+            {
+                await reader.DisposeAsync().ConfigureAwait(false);
+                if (!await MasterDataFunctionExistsAsync(connection, transaction, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                mismatches.Add(name);
+                continue;
+            }
+
+            if (!found ||
                 reader.GetBoolean(0) || reader.GetBoolean(1) || reader.GetBoolean(2) ||
                 reader.GetBoolean(3) || !reader.GetBoolean(4) || reader.GetBoolean(5) ||
                 reader.GetBoolean(6) != bypassRls)
@@ -125,6 +151,24 @@ internal static class E002Guards
         return mismatches;
     }
 
+    private static async Task<bool> MasterDataFunctionExistsAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,jsonb,bytea,boolean)') IS NOT NULL",
+            connection, transaction);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+    }
+
+    private static async Task<bool> RoleExistsAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, string role, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT pg_catalog.to_regrole(@role) IS NOT NULL", connection, transaction);
+        command.Parameters.AddWithValue("role", role);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+    }
+
     /// <summary>E-002 v0.8 §16: effective USAGE/SET authority evaluated by effect. Returns roles lacking it.</summary>
     internal static async Task<IReadOnlyList<string>> EffectiveCapabilityGapsAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
@@ -133,8 +177,15 @@ internal static class E002Guards
         foreach (var role in new[] { "paqueteria_migrator", "paqueteria_bootstrap",
                      "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
                      "paqueteria_cleanup_executor", "paqueteria_registration_executor",
-                     "paqueteria_session_executor" })
+                     "paqueteria_session_executor", "paqueteria_master_data_executor" })
         {
+            if (LaneIntroducedRoles.Contains(role, StringComparer.Ordinal) &&
+                !await RoleExistsAsync(connection, transaction, role, cancellationToken).ConfigureAwait(false))
+            {
+                // Checked by RoleAttributeMismatchesAsync: absent only while its lane is absent too.
+                continue;
+            }
+
             await using var command = new NpgsqlCommand("""
                 SELECT pg_catalog.pg_has_role(session_user,@role,'SET'),
                        pg_catalog.pg_has_role(session_user,@role,'USAGE')

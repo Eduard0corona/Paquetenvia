@@ -23,7 +23,78 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_cleanup_executor",
         "paqueteria_registration_executor",
         "paqueteria_session_executor",
+        // MDM-001-OPERATOR-LOADER: neither the executor nor the operator grantee may be assumed by a runtime role.
+        "paqueteria_master_data_executor",
+        "paqueteria_master_data_loader",
     ];
+
+    /// <summary>MDM-001-OPERATOR-LOADER: the executor's exact column grants (schema.table.column:privilege).</summary>
+    private static readonly string[] MasterDataExecutorColumnGrants =
+    [
+        "drivers.driver_profiles.driver_type:INSERT", "drivers.driver_profiles.home_city_id:INSERT",
+        "drivers.driver_profiles.id:INSERT", "drivers.driver_profiles.org_id:INSERT",
+        "drivers.driver_profiles.status:INSERT", "drivers.driver_profiles.user_id:INSERT",
+        "drivers.driver_profiles.vehicle_type:INSERT",
+        "drivers.driver_profiles.driver_type:SELECT", "drivers.driver_profiles.home_city_id:SELECT",
+        "drivers.driver_profiles.id:SELECT", "drivers.driver_profiles.org_id:SELECT",
+        "drivers.driver_profiles.status:SELECT", "drivers.driver_profiles.user_id:SELECT",
+        "drivers.driver_profiles.vehicle_type:SELECT",
+        "drivers.driver_profiles.driver_type:UPDATE", "drivers.driver_profiles.home_city_id:UPDATE",
+        "drivers.driver_profiles.status:UPDATE", "drivers.driver_profiles.vehicle_type:UPDATE",
+        "drivers.driver_service_areas.driver_id:INSERT", "drivers.driver_service_areas.org_id:INSERT",
+        "drivers.driver_service_areas.service_area_id:INSERT", "drivers.driver_service_areas.status:INSERT",
+        "drivers.driver_service_areas.driver_id:SELECT", "drivers.driver_service_areas.org_id:SELECT",
+        "drivers.driver_service_areas.service_area_id:SELECT", "drivers.driver_service_areas.status:SELECT",
+        "drivers.driver_service_areas.status:UPDATE",
+        "identity.users.id:SELECT", "identity.users.status:SELECT",
+        "locations.cities.country_code:INSERT", "locations.cities.id:INSERT", "locations.cities.name:INSERT",
+        "locations.cities.state_code:INSERT", "locations.cities.status:INSERT", "locations.cities.timezone:INSERT",
+        "locations.cities.country_code:SELECT", "locations.cities.id:SELECT", "locations.cities.name:SELECT",
+        "locations.cities.state_code:SELECT", "locations.cities.status:SELECT", "locations.cities.timezone:SELECT",
+        "locations.operating_zones.id:INSERT", "locations.operating_zones.name:INSERT",
+        "locations.operating_zones.owner_org_id:INSERT", "locations.operating_zones.polygon:INSERT",
+        "locations.operating_zones.service_area_id:INSERT", "locations.operating_zones.status:INSERT",
+        "locations.operating_zones.zone_type:INSERT",
+        "locations.operating_zones.id:SELECT", "locations.operating_zones.name:SELECT",
+        "locations.operating_zones.owner_org_id:SELECT", "locations.operating_zones.polygon:SELECT",
+        "locations.operating_zones.service_area_id:SELECT", "locations.operating_zones.status:SELECT",
+        "locations.operating_zones.zone_type:SELECT",
+        "locations.operating_zones.polygon:UPDATE", "locations.operating_zones.status:UPDATE",
+        "locations.operating_zones.zone_type:UPDATE",
+        "locations.service_areas.city_id:INSERT", "locations.service_areas.id:INSERT",
+        "locations.service_areas.name:INSERT", "locations.service_areas.owner_org_id:INSERT",
+        "locations.service_areas.polygon:INSERT", "locations.service_areas.status:INSERT",
+        "locations.service_areas.city_id:SELECT", "locations.service_areas.id:SELECT",
+        "locations.service_areas.name:SELECT", "locations.service_areas.owner_org_id:SELECT",
+        "locations.service_areas.polygon:SELECT", "locations.service_areas.status:SELECT",
+        "locations.service_areas.polygon:UPDATE", "locations.service_areas.status:UPDATE",
+        "organizations.organization_memberships.organization_id:SELECT",
+        "organizations.organization_memberships.role:SELECT",
+        "organizations.organization_memberships.status:SELECT",
+        "organizations.organization_memberships.user_id:SELECT",
+        "organizations.organizations.id:SELECT", "organizations.organizations.status:SELECT",
+        "platform.audit_logs.action:INSERT", "platform.audit_logs.actor_id:INSERT",
+        "platform.audit_logs.entity_id:INSERT", "platform.audit_logs.entity_type:INSERT",
+        "platform.audit_logs.id:INSERT", "platform.audit_logs.occurred_at:INSERT",
+        "platform.audit_logs.org_id:INSERT", "platform.audit_logs.payload_redacted:INSERT",
+        "platform.audit_logs.request_id:INSERT",
+        "pricing.tariff_rules.active_from:INSERT", "pricing.tariff_rules.active_to:INSERT",
+        "pricing.tariff_rules.amount_cents:INSERT", "pricing.tariff_rules.city_id:INSERT",
+        "pricing.tariff_rules.id:INSERT", "pricing.tariff_rules.operating_zone_id:INSERT",
+        "pricing.tariff_rules.owner_org_id:INSERT", "pricing.tariff_rules.pricing_tier:INSERT",
+        "pricing.tariff_rules.service_area_id:INSERT", "pricing.tariff_rules.service_type:INSERT",
+        "pricing.tariff_rules.status:INSERT", "pricing.tariff_rules.tax_mode:INSERT",
+        "pricing.tariff_rules.active_from:SELECT", "pricing.tariff_rules.active_to:SELECT",
+        "pricing.tariff_rules.amount_cents:SELECT", "pricing.tariff_rules.city_id:SELECT",
+        "pricing.tariff_rules.id:SELECT", "pricing.tariff_rules.operating_zone_id:SELECT",
+        "pricing.tariff_rules.owner_org_id:SELECT", "pricing.tariff_rules.pricing_tier:SELECT",
+        "pricing.tariff_rules.service_area_id:SELECT", "pricing.tariff_rules.service_type:SELECT",
+        "pricing.tariff_rules.status:SELECT", "pricing.tariff_rules.tax_mode:SELECT",
+        "pricing.tariff_rules.active_to:UPDATE", "pricing.tariff_rules.status:UPDATE",
+    ];
+
+    /// <summary>The MDM-001 executor column grants, for the lane and contract tests.</summary>
+    public static IReadOnlyList<string> MasterDataExecutorGrants { get; } = Array.AsReadOnly(MasterDataExecutorColumnGrants);
 
     private static readonly string[] SensitiveFunctions =
     [
@@ -58,6 +129,7 @@ public sealed class DatabaseBaselineAssertions
         "cleanup executor boundary (OPS-003-CLEANUP-ROLE)",
         "registration executor boundary (REG-001)",
         "BFF session executor boundary (BFF-SESSION-TABLE-SHAPE)",
+        "master data executor and loader boundary (MDM-001-OPERATOR-LOADER)",
         "real default-privilege inheritance probes",
     });
 
@@ -173,12 +245,22 @@ public sealed class DatabaseBaselineAssertions
                 session_store(name,bypass_rls) AS (
                   SELECT 'paqueteria_session_executor',true
                   WHERE pg_catalog.to_regrole('paqueteria_session_executor') IS NOT NULL
-                     OR pg_catalog.to_regprocedure('security.resolve_bff_session(bytea)') IS NOT NULL)
+                     OR pg_catalog.to_regprocedure('security.resolve_bff_session(bytea)') IS NOT NULL),
+                -- MDM-001-OPERATOR-LOADER: the same rule for installations that predate the master data roles.
+                master_data(name,bypass_rls) AS (
+                  SELECT 'paqueteria_master_data_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_master_data_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,jsonb,bytea,boolean)') IS NOT NULL
+                  UNION ALL
+                  SELECT 'paqueteria_master_data_loader',false
+                  WHERE pg_catalog.to_regrole('paqueteria_master_data_loader') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,jsonb,bytea,boolean)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
                 FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
                       UNION ALL SELECT name,bypass_rls FROM cleanup
                       UNION ALL SELECT name,bypass_rls FROM registration
-                      UNION ALL SELECT name,bypass_rls FROM session_store) expected
+                      UNION ALL SELECT name,bypass_rls FROM session_store
+                      UNION ALL SELECT name,bypass_rls FROM master_data) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
@@ -237,6 +319,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertSessionExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertMasterDataBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -454,6 +539,10 @@ public sealed class DatabaseBaselineAssertions
                 ('security.revoke_pending_membership(uuid,uuid,uuid,text,text)'),
                 ('security.apply_pending_memberships(text,bytea[],integer[])')) registration(signature)
               WHERE to_regprocedure(signature) IS NOT NULL
+              UNION ALL
+              -- MDM-001-OPERATOR-LOADER: installed by the Pricing lane after the baseline.
+              SELECT 'security.load_master_data(uuid,uuid,jsonb,bytea,boolean)','paqueteria_master_data_executor'
+              WHERE to_regprocedure('security.load_master_data(uuid,uuid,jsonb,bytea,boolean)') IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
@@ -467,7 +556,7 @@ public sealed class DatabaseBaselineAssertions
             JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
                 'paqueteria_lifecycle_executor','paqueteria_cleanup_executor','paqueteria_registration_executor',
-                'paqueteria_session_executor')
+                'paqueteria_session_executor','paqueteria_master_data_executor','paqueteria_master_data_loader')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -886,6 +975,150 @@ public sealed class DatabaseBaselineAssertions
             WHERE (SELECT count(*) FROM installed WHERE signature<>'security.purge_bff_sessions(integer)')<>2
             """,
             cancellationToken,
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// MDM-001-OPERATOR-LOADER lane contract: after the Pricing lane (and after any E-002 temporary grant is
+    /// revoked) both roles and the loader function must exist and satisfy the exact boundary.
+    /// </summary>
+    public static async Task AssertMasterDataLoaderInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'master data executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_master_data_executor') IS NULL
+            UNION ALL
+            SELECT 'master data loader role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_master_data_loader') IS NULL
+            UNION ALL
+            SELECT 'master data loader function is missing'
+            WHERE pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,jsonb,bytea,boolean)') IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await AssertMasterDataBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
+    /// MDM-001-OPERATOR-LOADER: once the master data executor exists it holds exactly USAGE on the six
+    /// schemas it reads or writes and the AI-18 column grants, no table-wide grant, inherits nothing and owns
+    /// no relation; the operator grantee holds only USAGE on <c>security</c>, no table or column privilege,
+    /// and neither role is reachable from a runtime or bootstrap role. The loader function, once installed,
+    /// is a pinned SECURITY DEFINER owned by the executor and executable only by the operator grantee. The
+    /// roles may exist without the function (fresh AI-18 before the lane, or after the lane is rolled back).
+    /// </summary>
+    private static async Task AssertMasterDataBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_master_data_executor'
+            ),
+            loader AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_master_data_loader'
+            ),
+            expected AS (
+              SELECT split_part(grant_text, '.', 1) AS table_schema,
+                     split_part(grant_text, '.', 2) AS table_name,
+                     split_part(split_part(grant_text, '.', 3), ':', 1) AS column_name,
+                     split_part(grant_text, ':', 2) AS privilege_type
+              FROM unnest(@grants::text[]) grant_text),
+            actual AS (
+              SELECT table_schema,table_name,column_name,privilege_type
+              FROM information_schema.column_privileges
+              WHERE grantee='paqueteria_master_data_executor'),
+            installed AS (
+              SELECT p.oid,p.proowner,p.prosecdef,p.proconfig,p.prosrc
+              FROM pg_catalog.pg_proc p
+              WHERE p.oid=pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,jsonb,bytea,boolean)'))
+            SELECT 'missing master data executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected master data executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected master data table grant: ' || grantee || ' ' || table_schema || '.' || table_name || ':' || privilege_type
+            FROM information_schema.table_privileges
+            WHERE grantee IN ('paqueteria_master_data_executor','paqueteria_master_data_loader')
+            UNION ALL
+            SELECT 'unexpected master data loader column grant: ' || table_schema || '.' || table_name || '.' || column_name
+            FROM information_schema.column_privileges
+            WHERE grantee='paqueteria_master_data_loader'
+            UNION ALL
+            SELECT 'master data executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM
+                   (n.nspname IN ('identity','organizations','locations','pricing','drivers','platform')))
+            UNION ALL
+            SELECT 'master data loader schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN loader
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(loader.oid,n.oid,'CREATE')
+                OR has_schema_privilege(loader.oid,n.oid,'USAGE') IS DISTINCT FROM (n.nspname='security'))
+            UNION ALL
+            SELECT 'master data role inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m
+            WHERE m.member IN (SELECT oid FROM executor UNION ALL SELECT oid FROM loader)
+            UNION ALL
+            SELECT 'master data role is reachable from ' || member.rolname
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles member ON member.oid=m.member
+            WHERE m.roleid IN (SELECT oid FROM executor UNION ALL SELECT oid FROM loader)
+              AND member.rolname IN ('paqueteria_app','paqueteria_worker','paqueteria_bootstrap',
+                     'paqueteria_master_data_loader','paqueteria_master_data_executor')
+            UNION ALL
+            SELECT 'master data role owns a relation, schema or type'
+            FROM (SELECT oid FROM executor UNION ALL SELECT oid FROM loader) r
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=r.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=r.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=r.oid)
+            UNION ALL
+            SELECT 'master data loader role owns a function'
+            FROM loader WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_proc WHERE proowner=loader.oid)
+            UNION ALL
+            SELECT 'master data loader function is unsafe'
+            FROM installed
+            WHERE NOT installed.prosecdef
+               OR NOT ('search_path=pg_catalog, pg_temp'=ANY(COALESCE(installed.proconfig,ARRAY[]::text[])))
+               OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR installed.proowner IS DISTINCT FROM (SELECT oid FROM executor)
+               OR has_function_privilege('public',installed.oid,'EXECUTE')
+               OR has_function_privilege('paqueteria_app',installed.oid,'EXECUTE')
+               OR has_function_privilege('paqueteria_worker',installed.oid,'EXECUTE')
+               OR NOT has_function_privilege('paqueteria_master_data_loader',installed.oid,'EXECUTE')
+            UNION ALL
+            SELECT 'master data loader function exists without both master data roles'
+            FROM installed
+            WHERE NOT EXISTS (SELECT 1 FROM executor) OR NOT EXISTS (SELECT 1 FROM loader)
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("grants", MasterDataExecutorColumnGrants),
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }
 

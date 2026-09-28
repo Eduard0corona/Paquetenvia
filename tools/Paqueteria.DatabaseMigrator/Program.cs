@@ -32,6 +32,15 @@ internal static partial class DatabaseMigratorProgram
 
             var connectionString = ReadConnectionString(options.ConnectionEnvironment!);
             E002SemanticAssertions.AssertConnectionReset(connectionString);
+            if (options.Command == "master-data-load")
+            {
+                // MDM-001-OPERATOR-LOADER: an operator login with EXECUTE only; never the migration connection.
+                using var result = await MasterDataLoader.RunAsync(
+                    connectionString, options.MasterData!, MasterDataEnvironment.Current(), Console.Out,
+                    cancellation.Token).ConfigureAwait(false);
+                return 0;
+            }
+
             var deployer = new DatabaseBaselineDeployer();
             var moduleMigrations = new ModuleMigrationCoordinator();
             switch (options.Command)
@@ -148,6 +157,11 @@ internal static partial class DatabaseMigratorProgram
         {
             Console.Error.WriteLine(exception.Message);
             return 4;
+        }
+        catch (MasterDataLoadException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return exception.ExitCode;
         }
         catch (RuntimeLoginException exception)
         {
@@ -330,14 +344,16 @@ internal static partial class DatabaseMigratorProgram
     }
 
     private static void PrintUsage() => Console.Error.WriteLine(
-        "Usage: Paqueteria.DatabaseMigrator <verify|preflight|ownership-diagnostic|plan|apply|assert|runtime-logins> [--connection-env NAME] [--confirm-initial-baseline] [--azure-ownership-bridge]");
+        "Usage: Paqueteria.DatabaseMigrator <verify|preflight|ownership-diagnostic|plan|apply|assert|runtime-logins> [--connection-env NAME] [--confirm-initial-baseline] [--azure-ownership-bridge]" +
+        Environment.NewLine +
+        "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --file PATH --organization-id UUID [--dry-run] [--allow-real-driver-profiles]");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
 }
 
 internal sealed record CommandOptions(string Command, string? ConnectionEnvironment,
-    bool ConfirmInitialBaseline, bool AzureOwnershipBridge)
+    bool ConfirmInitialBaseline, bool AzureOwnershipBridge, MasterDataLoadOptions? MasterData = null)
 {
     internal static CommandOptions Parse(IReadOnlyList<string> arguments)
     {
@@ -347,7 +363,8 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         }
 
         var command = arguments[0].ToLowerInvariant();
-        if (command is not ("verify" or "preflight" or "ownership-diagnostic" or "plan" or "apply" or "assert" or "runtime-logins"))
+        if (command is not ("verify" or "preflight" or "ownership-diagnostic" or "plan" or "apply" or "assert" or "runtime-logins"
+            or "master-data-load"))
         {
             throw new CommandLineException($"Unknown command '{arguments[0]}'.");
         }
@@ -355,6 +372,10 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         string? connectionEnvironment = null;
         var confirm = false;
         var azureOwnershipBridge = false;
+        string? file = null;
+        string? organization = null;
+        var dryRun = false;
+        var allowRealDriverProfiles = false;
         for (var index = 1; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -367,6 +388,18 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                     break;
                 case "--azure-ownership-bridge":
                     azureOwnershipBridge = true;
+                    break;
+                case "--file" when command == "master-data-load" && index + 1 < arguments.Count:
+                    file = arguments[++index];
+                    break;
+                case "--organization-id" when command == "master-data-load" && index + 1 < arguments.Count:
+                    organization = arguments[++index];
+                    break;
+                case "--dry-run" when command == "master-data-load":
+                    dryRun = true;
+                    break;
+                case "--allow-real-driver-profiles" when command == "master-data-load":
+                    allowRealDriverProfiles = true;
                     break;
                 default:
                     throw new CommandLineException($"Unknown or incomplete option '{arguments[index]}'.");
@@ -393,7 +426,26 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
             throw new CommandLineException("--azure-ownership-bridge is valid only for apply.");
         }
 
-        return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge);
+        if (command != "master-data-load")
+        {
+            return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge);
+        }
+
+        if (string.IsNullOrWhiteSpace(file))
+        {
+            throw new CommandLineException("master-data-load requires --file PATH.");
+        }
+
+        // The organization is named on the command line and again inside the reviewed document; both must match.
+        if (organization is null ||
+            !Guid.TryParseExact(organization, "D", out var organizationId) ||
+            !string.Equals(organization, organizationId.ToString("D"), StringComparison.Ordinal))
+        {
+            throw new CommandLineException("master-data-load requires --organization-id as a lowercase UUID.");
+        }
+
+        return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
+            new MasterDataLoadOptions(file, organizationId, dryRun, allowRealDriverProfiles));
     }
 }
 

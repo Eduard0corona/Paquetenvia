@@ -137,5 +137,48 @@ class BffSessionContractRuleTests(unittest.TestCase):
         self.assertNotEqual([], self.validator.bff_session_errors(without_force, self.role_sql))
 
 
+class MasterDataLoaderContractRuleTests(unittest.TestCase):
+    """MDM-001-OPERATOR-LOADER: exact executor and operator-grantee grants, never a runtime membership."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.validator = load_validator()
+        cls.role_sql = ROLE_MODEL_PATH.read_text(encoding="utf-8")
+
+    def test_canonical_role_model_satisfies_the_master_data_grant_sets(self) -> None:
+        self.assertEqual(
+            [],
+            [error for error in self.validator.executor_grant_errors(self.role_sql) if "Master data" in error],
+        )
+        self.assertEqual(
+            self.validator.MASTER_DATA_UPDATE_GRANTS,
+            [grant for grant in self.validator.MASTER_DATA_EXECUTOR_GRANTS if grant.startswith("GRANT UPDATE")],
+        )
+
+    def test_a_widened_master_data_grant_fails(self) -> None:
+        for widening in [
+            "GRANT DELETE ON pricing.tariff_rules TO paqueteria_master_data_executor;",
+            "GRANT UPDATE (amount_cents) ON pricing.tariff_rules TO paqueteria_master_data_executor;",
+            "GRANT SELECT ON orders.orders TO paqueteria_app, paqueteria_master_data_executor;",
+            "GRANT SELECT ON locations.service_areas TO paqueteria_master_data_loader;",
+            "GRANT USAGE ON SCHEMA pricing TO paqueteria_worker,paqueteria_master_data_loader;",
+        ]:
+            with self.subTest(widening=widening):
+                errors = self.validator.executor_grant_errors(self.role_sql + "\n" + widening + "\n")
+                self.assertTrue(
+                    any("outside its contract" in error for error in errors),
+                    f"widening was not detected: {errors}",
+                )
+
+    def test_a_missing_master_data_grant_fails(self) -> None:
+        narrowed = self.role_sql.replace(
+            "GRANT UPDATE (active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;", ""
+        )
+        self.assertNotEqual(narrowed, self.role_sql)
+        self.assertTrue(
+            any("differ from the contract" in error for error in self.validator.executor_grant_errors(narrowed))
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

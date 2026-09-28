@@ -35,12 +35,18 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             SELECT h."MigrationId", pg_get_userbyid(c.relowner)
             FROM platform.__ef_migrations_history_pricing h
             JOIN pg_class c ON c.relname='__ef_migrations_history_pricing'
-            JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='platform';
+            JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='platform'
+            ORDER BY h."MigrationId";
             """);
         await using var reader = await command.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
-        Assert.Equal(AdoptCanonicalPricingBaseline.MigrationId, reader.GetString(0));
-        Assert.Equal("paqueteria_migrator", reader.GetString(1));
+        // The adoption, then MDM-001-OPERATOR-LOADER (the master data loader function).
+        foreach (var migrationId in new[] { AdoptCanonicalPricingBaseline.MigrationId, AddMasterDataLoader.MigrationId })
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(migrationId, reader.GetString(0));
+            Assert.Equal("paqueteria_migrator", reader.GetString(1));
+        }
+
         Assert.False(await reader.ReadAsync());
 
         var options = new DbContextOptionsBuilder<PricingDbContext>()

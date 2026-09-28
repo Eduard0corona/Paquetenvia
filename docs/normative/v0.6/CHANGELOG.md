@@ -1,5 +1,21 @@
 # Changelog
 
+## Carga de datos maestros del piloto (MDM-001) — 2026-09-28
+
+- Decisión del project owner `MDM-001-OPERATOR-LOADER`, respuesta literal: "Herramienta de operador
+  (Recommended)". Traducción en `MDM-001-CONTRACT-TRANSLATION`.
+- AI-18: `paqueteria_master_data_executor NOLOGIN BYPASSRLS`, con grants exactos por columna sobre las
+  seis tablas maestras, lecturas mínimas de usuario, organización y membresía e `INSERT` en
+  `platform.audit_logs` (sin `DELETE`), y `paqueteria_master_data_loader NOLOGIN NOBYPASSRLS`, con sólo
+  `USAGE` sobre `security`; ninguno se concede a `paqueteria_app` ni a `paqueteria_worker`. Aserciones
+  de despliegue 26 a 28; `validate_contracts.py` verifica los grants exactos.
+- La lane de Pricing (`20260928000100_AddMasterDataLoader`) instala
+  `security.load_master_data(uuid,uuid,jsonb,bytea,boolean)`, SECURITY DEFINER con
+  `search_path=pg_catalog, pg_temp`, con `EXECUTE` sólo para el beneficiario del operador. Valida todo el
+  documento antes de escribir, es idempotente por llave natural, exige el tenant exacto en
+  `app.current_org_ids`, escribe una fila de auditoría por carga y no escribe nada en dry-run.
+- AI-06 no cambia.
+
 ## Unirse a una organización existente por correo (REG-002) — 2026-09-27
 
 - Respuestas literales del project owner: "El admin la agrega por correo (Recomendado)",

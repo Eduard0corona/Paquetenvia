@@ -27,7 +27,7 @@ and `CHECKSUMS_SHA256.txt`):
 
 ```text
 AI-06  35f1c6e839b2efbe441bfc6e5acd7a3a291534822a1de7067dddd5f7530f88bc
-AI-18  b3b4d51607e0ce95d38da2a9ea252466efba5804fdb5dc38937fd45292bab5bf
+AI-18  060d248312365769471ffb95637ac6d787271a0445957c2538d660dee3d9b655
 ```
 
 The original ARC-002 run validated the earlier revisions (AI-06 `c7681336…`,

@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
-        ("Pricing", "__ef_migrations_history_pricing", AdoptCanonicalPricingBaseline.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs"),
+        ("Pricing", "__ef_migrations_history_pricing", AddMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000100_AddMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
@@ -145,6 +145,19 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // MDM-001-OPERATOR-LOADER: the lane only adds the two master-data roles, their grants and the
+                // loader function; its rollback removes only the function. Loaded rows and audit rows stay.
+                "Pricing" =>
+                    source.Contains("DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,jsonb,bytea,boolean)", StringComparison.Ordinal) &&
+                    source.Contains("MDM001_TENANT_CONTEXT_MISMATCH", StringComparison.Ordinal) &&
+                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -202,6 +215,11 @@ internal sealed class ModuleMigrationCoordinator
             "Organizations",
             AdoptCanonicalOrganizationsBaseline.MigrationId,
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrganizationsBaseline.cs");
+        VerifyAdoptionSource(
+            root,
+            "Pricing",
+            AdoptCanonicalPricingBaseline.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalPricingBaseline.cs");
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -275,7 +293,7 @@ internal sealed class ModuleMigrationCoordinator
         }
         if (before.Single(state => state.Module == "Pricing").Status == "PENDING")
         {
-            await MigratePricingAsync(connectionString, cancellationToken);
+            await MigratePricingAsync(connectionString, cancellationToken, azureOwnershipBridge);
         }
         if (before.Single(state => state.Module == "Orders").Status == "PENDING")
         {
@@ -456,6 +474,8 @@ internal sealed class ModuleMigrationCoordinator
                 [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
+            "Pricing" =>
+                [AdoptCanonicalPricingBaseline.MigrationId, AddMasterDataLoader.MigrationId],
             _ => [contract.MigrationId],
         };
         var status = ids.SequenceEqual(expectedIds, StringComparer.Ordinal)
@@ -794,7 +814,8 @@ internal sealed class ModuleMigrationCoordinator
         await context.Database.MigrateAsync(cancellationToken);
     }
 
-    private static async Task MigratePricingAsync(string connectionString, CancellationToken cancellationToken)
+    private static async Task MigratePricingAsync(string connectionString, CancellationToken cancellationToken,
+        bool azureOwnershipBridge)
     {
         await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
         var options = new DbContextOptionsBuilder<PricingDbContext>()
@@ -804,8 +825,124 @@ internal sealed class ModuleMigrationCoordinator
                 postgres.MigrationsHistoryTable("__ef_migrations_history_pricing", "platform");
             })
             .Options;
-        await using var context = new PricingDbContext(options, new TenantDatabaseExecutionState());
-        await context.Database.MigrateAsync(cancellationToken);
+        if (!azureOwnershipBridge)
+        {
+            await using (var context = new PricingDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            await using var verification = await connection.BeginTransactionAsync(cancellationToken);
+            await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(
+                connection, verification, cancellationToken);
+            await verification.RollbackAsync(cancellationToken);
+            return;
+        }
+
+        // E-002/MDM-001-OPERATOR-LOADER: transferring the loader function to the master data executor as a
+        // non-superuser needs SET on the executor and a transaction-scoped CREATE on schema security, exactly
+        // like the Organizations REG-001 bridge; nothing else is granted and nothing survives the commit.
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var stage = "lock";
+        try
+        {
+            await using (var advisory = new NpgsqlCommand(
+                "SELECT pg_catalog.pg_advisory_xact_lock(@key)", connection, transaction))
+            {
+                advisory.Parameters.AddWithValue("key", CanonicalBaselineContract.AdvisoryLockKey);
+                await advisory.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "capability-gate";
+            await using (var capability = new NpgsqlCommand("""
+                SELECT pg_catalog.to_regrole('paqueteria_master_data_executor') IS NOT NULL
+                   AND pg_catalog.to_regrole('paqueteria_master_data_loader') IS NOT NULL
+                   AND pg_catalog.pg_has_role(session_user,'paqueteria_master_data_executor','SET')
+                """, connection, transaction))
+            {
+                if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_master_data_executor,paqueteria_master_data_loader; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "create-prestate";
+            await using (var prestate = new NpgsqlCommand(
+                "SELECT pg_catalog.has_schema_privilege('paqueteria_master_data_executor','security','CREATE')",
+                connection, transaction))
+            {
+                if (await prestate.ExecuteScalarAsync(cancellationToken) is true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_CREATE_PRESTATE_PRESENT role=paqueteria_master_data_executor schema=security; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "grant-temporary-create";
+            await using (var grant = new NpgsqlCommand(
+                "GRANT CREATE ON SCHEMA security TO paqueteria_master_data_executor", connection, transaction))
+            {
+                await grant.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "mdm001-ef-migration";
+            await using (var context = new PricingDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await using (var historyExists = new NpgsqlCommand(
+                    "SELECT to_regclass('platform.__ef_migrations_history_pricing') IS NOT NULL",
+                    connection, transaction))
+                {
+                    if (await historyExists.ExecuteScalarAsync(cancellationToken) is not true)
+                    {
+                        var createHistory = context.GetService<IHistoryRepository>().GetCreateScript();
+                        await using var create = new NpgsqlCommand(createHistory, connection, transaction);
+                        await create.ExecuteNonQueryAsync(cancellationToken);
+                    }
+                }
+
+                await context.Database.UseTransactionAsync(transaction, cancellationToken);
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            // Revoke as the schema owner that granted it, whatever role the migration left active.
+            stage = "revoke-temporary-create";
+            await using (var revoke = new NpgsqlCommand("""
+                SET LOCAL ROLE paqueteria_migrator;
+                REVOKE CREATE ON SCHEMA security FROM paqueteria_master_data_executor;
+                RESET ROLE;
+                """, connection, transaction))
+            {
+                await revoke.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "assert-master-data-boundary";
+            await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(
+                connection, transaction, cancellationToken);
+            stage = "commit";
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (PostgresException exception)
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw new InvalidOperationException(
+                $"E002_PRICING_BRIDGE_FAILED stage={stage} SQLSTATE={exception.SqlState} message={exception.MessageText}; " +
+                "STOP_FOR_CONTRACT_REVIEW",
+                exception);
+        }
+        catch
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw;
+        }
     }
 
     private static async Task MigrateDriversAsync(string connectionString, CancellationToken cancellationToken)

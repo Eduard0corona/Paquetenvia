@@ -73,7 +73,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                     GRANT paqueteria_migrator, paqueteria_app, paqueteria_worker,
                           paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance,
                           paqueteria_lifecycle_executor, paqueteria_cleanup_executor,
-                          paqueteria_registration_executor, paqueteria_session_executor
+                          paqueteria_registration_executor, paqueteria_session_executor,
+                          paqueteria_master_data_executor, paqueteria_master_data_loader
                     TO {{_login}} WITH ADMIN TRUE, SET TRUE;
                     DO $$ BEGIN CREATE ROLE azure_pg_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                     {{(azureAdmin ? $"GRANT azure_pg_admin TO {_login};" : string.Empty)}}
@@ -311,14 +312,20 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 ("paqueteria_lifecycle_executor", true), ("paqueteria_cleanup_executor", true),
                 ("paqueteria_registration_executor", true),
                 ("paqueteria_session_executor", true),
+                ("paqueteria_master_data_executor", true),
+                ("paqueteria_master_data_loader", false),
             ],
             E002Guards.CanonicalRoles);
         Assert.Equal(
             [
                 "paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
                 "paqueteria_cleanup_executor", "paqueteria_registration_executor", "paqueteria_session_executor",
+                "paqueteria_master_data_executor",
             ],
             E002Guards.SpecializedOwners);
+        Assert.Equal(
+            ["paqueteria_master_data_executor", "paqueteria_master_data_loader"],
+            E002Guards.LaneIntroducedRoles);
         Assert.Equal(
             Identity.Infrastructure.Persistence.Migrations.AddBffSessionStore.MigrationId,
             E002BffSessionStateReader.SessionStoreMigrationId);
@@ -445,6 +452,21 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(
             "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
             E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true, true));
+
+        // MDM-001-OPERATOR-LOADER: one master-data-executor routine for the operator grantee only.
+        Assert.Equal(
+            Pricing.Infrastructure.Persistence.Migrations.AddMasterDataLoader.MigrationId,
+            E002MasterDataStateReader.MigrationId);
+        var masterData = Assert.Single(
+            E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true, true, true, mdm001Applied: true)
+                .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true, true, true)));
+        Assert.Equal(Pricing.Infrastructure.Persistence.Migrations.AddMasterDataLoader.FunctionSignature, masterData.Signature);
+        Assert.Equal("paqueteria_master_data_executor", masterData.Owner);
+        Assert.Equal(["paqueteria_master_data_loader"], masterData.Grantees);
+        Assert.Equal(48, E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true, true, true, true).Count);
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true, true, true));
     }
 
     [PostgreSqlContractFact]
@@ -542,10 +564,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_V1",
                 semantic.RoutineMap);
-            Assert.Equal(47, semantic.ControlledIdentities);
-            Assert.Equal(92, semantic.NormalizedExecuteRows);
+            Assert.Equal(48, semantic.ControlledIdentities);
+            Assert.Equal(94, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> CustodyLaneAsync() =>
@@ -626,15 +648,95 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_V1",
                 semantic.RoutineMap);
-            Assert.Equal(47, semantic.ControlledIdentities);
-            Assert.Equal(92, semantic.NormalizedExecuteRows);
+            Assert.Equal(48, semantic.ControlledIdentities);
+            Assert.Equal(94, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> IdentityLaneAsync() =>
             (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
                 .Single(state => state.Module == "Identity").Status;
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_applies_the_mdm001_pricing_lane_as_non_superuser()
+    {
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgemdm001");
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+        var coordinator = new ModuleMigrationCoordinator();
+
+        // Every other lane is applied by the privileged fixture principal; this contract is the MDM-001 step.
+        // Rewinding it leaves a populated installation whose master data roles were pre-provisioned per E-002.
+        await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+        await environment.AdminExecuteAsync($"""
+            DROP FUNCTION security.load_master_data(uuid,uuid,jsonb,bytea,boolean);
+            DELETE FROM platform."__ef_migrations_history_pricing"
+              WHERE "MigrationId"='{E002MasterDataStateReader.MigrationId}';
+            """);
+        Assert.Equal("PENDING", await PricingLaneAsync());
+        const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
+        var securityAclBefore = await environment.TextAsync(SecurityAclSql);
+
+        // Without the E-002 bridge the managed-service principal cannot hand the function to the executor.
+        var denied = FindPostgresException(await Assert.ThrowsAnyAsync<Exception>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None)));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+        Assert.Equal("PENDING", await PricingLaneAsync());
+
+        // Fail closed on a pre-existing temporary CREATE, and leave it for the operator.
+        await environment.AdminExecuteAsync("GRANT CREATE ON SCHEMA security TO paqueteria_master_data_executor");
+        var prestate = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_CREATE_PRESTATE_PRESENT role=paqueteria_master_data_executor", prestate.Message,
+            StringComparison.Ordinal);
+        await environment.AdminExecuteAsync("REVOKE CREATE ON SCHEMA security FROM paqueteria_master_data_executor");
+
+        // Fail closed without effective SET authority over the executor.
+        await environment.AdminExecuteAsync($"REVOKE SET OPTION FOR paqueteria_master_data_executor FROM {environment.Login}");
+        var capability = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_master_data_executor", capability.Message,
+            StringComparison.Ordinal);
+        await environment.AdminExecuteAsync($"GRANT paqueteria_master_data_executor TO {environment.Login} WITH SET TRUE");
+        Assert.Equal("PENDING", await PricingLaneAsync());
+        Assert.Equal(securityAclBefore, await environment.TextAsync(SecurityAclSql));
+
+        await coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+
+        Assert.All(await coordinator.AssertAsync(environment.DeploymentConnectionString, CancellationToken.None),
+            state => Assert.Equal("APPLIED", state.Status));
+        Assert.Equal(
+            "paqueteria_master_data_executor|{paqueteria_master_data_executor=X/paqueteria_master_data_executor,paqueteria_master_data_loader=X/paqueteria_master_data_executor}",
+            await environment.TextAsync("""
+                SELECT string_agg(pg_get_userbyid(proowner) || '|' || proacl::text, ';' ORDER BY proname)
+                FROM pg_proc WHERE proowner='paqueteria_master_data_executor'::regrole
+                """));
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_master_data_executor','security','CREATE')"));
+        Assert.Equal(securityAclBefore, await environment.TextAsync(SecurityAclSql));
+
+        await using (var admin = new NpgsqlConnection(environment.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await new DatabaseBaselineAssertions().AssertAsync(admin);
+        }
+
+        await using (var deployment = new NpgsqlConnection(environment.DeploymentConnectionString))
+        {
+            await deployment.OpenAsync();
+            var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
+            Assert.Equal(
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_V1",
+                semantic.RoutineMap);
+            Assert.Equal(48, semantic.ControlledIdentities);
+            Assert.Equal(94, semantic.NormalizedExecuteRows);
+        }
+
+        async Task<string> PricingLaneAsync() =>
+            (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status;
     }
 
     [PostgreSqlContractFact]
@@ -717,10 +819,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_V1",
                 semantic.RoutineMap);
-            Assert.Equal(47, semantic.ControlledIdentities);
-            Assert.Equal(92, semantic.NormalizedExecuteRows);
+            Assert.Equal(48, semantic.ControlledIdentities);
+            Assert.Equal(94, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrganizationsLaneAsync() =>
@@ -866,10 +968,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             // The Notifications lane also installed the D8 DISPATCH lane and the Custody OPS-003 lane is applied
             // too: two routines each, owner + Worker.
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_V1",
                 semantic.RoutineMap);
-            Assert.Equal(47, semantic.ControlledIdentities);
-            Assert.Equal(92, semantic.NormalizedExecuteRows);
+            Assert.Equal(48, semantic.ControlledIdentities);
+            Assert.Equal(94, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>

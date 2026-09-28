@@ -447,6 +447,47 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
   PostgreSQL certificate chain, the migrate job fails at connect. Fix the CA bundle; do not downgrade
   to `Require` without an owner decision.
 
+### 6.8 Master data (MDM-001, manual run)
+
+The MDM-001 operator loader (`master-data-load`, owner decision MDM-001-OPERATOR-LOADER) is **not wired
+into `jobs.bicep`**. A pilot job needs its own operator login secret and a way to bring the reviewed file
+into the VNet, and neither is decided yet; the data itself is gated:
+
+- real service zones and tariffs wait on **GATE-010** and **GATE-011**;
+- real driver profiles wait on **GATE-007**. Outside Development, Testing and DEV_SYNTHETIC the loader
+  refuses any file with `driver_profiles` unless `--allow-real-driver-profiles` is passed, and that flag
+  may only be used once GATE-007 is closed;
+- the synthetic example (`tests/fixtures/mdm-001/`) must not be loaded into the pilot database.
+
+When the gates are closed, the manual run is:
+
+1. `job-pv-pilot-migrate` has applied the Pricing lane `20260928000100_AddMasterDataLoader` (the `assert`
+   job shows `Pricing: APPLIED`). On a pilot database whose baseline predates MDM-001, the lane's Azure
+   bridge stops with `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING` until an Azure administrator has created
+   `paqueteria_master_data_executor NOLOGIN BYPASSRLS` and `paqueteria_master_data_loader NOLOGIN
+   NOBYPASSRLS` with SET for the deployment role; nothing is written before that check.
+2. Create an operator login (for example `pv_pilot_mdm`) as
+   `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, from a SCRAM-SHA-256
+   verifier (never a plaintext password in SQL), and `GRANT paqueteria_master_data_loader TO pv_pilot_mdm`.
+   Never grant it `paqueteria_app`, `paqueteria_worker` or `paqueteria_migrator`: the loader refuses such a
+   login. Store its connection string in Key Vault like the runtime connections.
+3. From a container inside the VNet running the `paquetenvia-db-ops` image, with the reviewed file copied
+   in and the connection string in `PAQUETERIA_MASTER_DATA_CONNECTION`:
+
+   ```bash
+   dotnet /app/migrator/Paqueteria.DatabaseMigrator.dll master-data-load \
+     --connection-env PAQUETERIA_MASTER_DATA_CONNECTION \
+     --file /tmp/reviewed-master-data.json --organization-id <uuid> --dry-run
+   ```
+
+   Review the counts and the `CREATE/UPDATE section[n] fields=...` diff, then run it again without
+   `--dry-run`. Keep `DOTNET_ENVIRONMENT=Production` and `PAQUETERIA_DEPLOYMENT_CLASS=PILOT_REAL_PEOPLE`.
+4. The load leaves one `MASTER_DATA_LOADED` row in `platform.audit_logs` with the file's SHA-256; keep the
+   reviewed file and its hash with the change record. A re-run of the same file changes no master data.
+5. Remove the operator login (`DROP ROLE pv_pilot_mdm`) or rotate its secret when the load is done.
+
+Details, format and error codes: `docs/development/mdm-001-master-data-loader.md`.
+
 ## 7. Security notes
 
 - **PostgreSQL:** no public endpoint. Only the VNet reaches it, and every database action runs as a

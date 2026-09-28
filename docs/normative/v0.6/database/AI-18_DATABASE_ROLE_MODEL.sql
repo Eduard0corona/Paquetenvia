@@ -12,6 +12,8 @@ DO $$ BEGIN CREATE ROLE paqueteria_lifecycle_executor NOLOGIN BYPASSRLS; EXCEPTI
 DO $$ BEGIN CREATE ROLE paqueteria_cleanup_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_registration_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_session_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_master_data_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -304,6 +306,48 @@ GRANT INSERT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext
 GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;
 GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paqueteria_session_executor;
 
+-- Pilot master data is a separate security capability (MDM-001-OPERATOR-LOADER; ADR-034 pattern). Cities,
+-- service areas, operating zones, tariff rules and driver profiles are loaded by an operator job from a
+-- reviewed file, never through a public API. paqueteria_master_data_executor owns only
+-- security.load_master_data(uuid,uuid,jsonb,bytea,boolean), installed by the Pricing migration lane
+-- (20260928000100_AddMasterDataLoader) after this baseline, SECURITY DEFINER with
+-- search_path=pg_catalog, pg_temp (PostGIS is schema-qualified as public.*), EXECUTE revoked from PUBLIC and
+-- granted only to paqueteria_master_data_loader. The function requires the caller's transaction to carry
+-- exactly the target organization in app.current_org_ids, validates the whole document (keys, enums,
+-- integer cents, MultiPolygon validity, zone within its service area, references, natural-key uniqueness)
+-- before any write, writes idempotently by natural key under a per-organization advisory lock, never
+-- rewrites an existing city or the amount or tax mode of an existing tariff rule, requires an ACTIVE DRIVER
+-- membership for a driver profile, writes one append-only audit row per load and, in a dry run, writes
+-- nothing. paqueteria_master_data_loader is the operator grantee: NOLOGIN NOBYPASSRLS, USAGE on schema
+-- security and that EXECUTE only; an operator LOGIN (provisioned by IaC or by hand, NOINHERIT, SET ROLE per
+-- transaction) is its only member. Neither role is ever granted to paqueteria_app or paqueteria_worker, and
+-- the runtime roles gain no privilege.
+REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;
+GRANT USAGE ON SCHEMA identity,organizations,locations,pricing,drivers,platform TO paqueteria_master_data_executor;
+GRANT SELECT (id,status) ON identity.users TO paqueteria_master_data_executor;
+GRANT SELECT (id,status) ON organizations.organizations TO paqueteria_master_data_executor;
+GRANT SELECT (user_id,organization_id,role,status) ON organizations.organization_memberships TO paqueteria_master_data_executor;
+GRANT SELECT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;
+GRANT INSERT (id,country_code,state_code,name,timezone,status) ON locations.cities TO paqueteria_master_data_executor;
+GRANT SELECT (id,owner_org_id,city_id,name,polygon,status) ON locations.service_areas TO paqueteria_master_data_executor;
+GRANT INSERT (id,owner_org_id,city_id,name,polygon,status) ON locations.service_areas TO paqueteria_master_data_executor;
+GRANT UPDATE (polygon,status) ON locations.service_areas TO paqueteria_master_data_executor;
+GRANT SELECT (id,owner_org_id,service_area_id,name,zone_type,polygon,status) ON locations.operating_zones TO paqueteria_master_data_executor;
+GRANT INSERT (id,owner_org_id,service_area_id,name,zone_type,polygon,status) ON locations.operating_zones TO paqueteria_master_data_executor;
+GRANT UPDATE (zone_type,polygon,status) ON locations.operating_zones TO paqueteria_master_data_executor;
+GRANT SELECT (id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,amount_cents,tax_mode,active_from,active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;
+GRANT INSERT (id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,amount_cents,tax_mode,active_from,active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;
+GRANT UPDATE (active_to,status) ON pricing.tariff_rules TO paqueteria_master_data_executor;
+GRANT SELECT (id,user_id,org_id,home_city_id,driver_type,vehicle_type,status) ON drivers.driver_profiles TO paqueteria_master_data_executor;
+GRANT INSERT (id,user_id,org_id,home_city_id,driver_type,vehicle_type,status) ON drivers.driver_profiles TO paqueteria_master_data_executor;
+GRANT UPDATE (home_city_id,driver_type,vehicle_type,status) ON drivers.driver_profiles TO paqueteria_master_data_executor;
+GRANT SELECT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;
+GRANT INSERT (driver_id,service_area_id,org_id,status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;
+GRANT UPDATE (status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;
+GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_master_data_executor;
+GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
@@ -330,3 +374,6 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- 23. identity.bff_sessions and identity.bff_logout_jtis have ENABLE and FORCE ROW LEVEL SECURITY with no policy, and paqueteria_app and paqueteria_worker hold no table or column privilege on them.
 -- 24. once the Custody BFF purge lane is recorded, paqueteria_cleanup_executor additionally owns security.purge_bff_sessions(integer) and holds USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on identity.bff_sessions and SELECT(jti_hash,expires_at) and DELETE on identity.bff_logout_jtis, and nothing else there; only paqueteria_worker may EXECUTE the purge.
 -- 25. once REG-002 is recorded, the four REG-002 functions are SECURITY DEFINER with a pinned search_path, owned by paqueteria_registration_executor, and only paqueteria_app may EXECUTE them; organizations.pending_memberships has ENABLE and FORCE ROW LEVEL SECURITY with the tenant policy, paqueteria_app holds only SELECT on it and paqueteria_worker holds nothing.
+-- 26. paqueteria_master_data_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and, once the Pricing MDM-001 lane is recorded, owns only security.load_master_data(uuid,uuid,jsonb,bytea,boolean).
+-- 27. paqueteria_master_data_executor holds only USAGE on schemas identity, organizations, locations, pricing, drivers and platform and exactly the column grants above: no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration or session privilege.
+-- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,jsonb,bytea,boolean); the function is SECURITY DEFINER with search_path=pg_catalog, pg_temp and PUBLIC, paqueteria_app and paqueteria_worker may not EXECUTE it.

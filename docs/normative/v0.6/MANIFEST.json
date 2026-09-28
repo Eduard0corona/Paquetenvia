@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4272,
-      "sha256": "e7f6c15d81afdd0400e3fb792320b33f636dc186905f67e8a4809229c32b1e55"
+      "sha256": "480fbd7575ef79b14d658adb290a625786a62fcb39c5eb8bd0ae9e08d0f8820b"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 35625,
-      "sha256": "5e92aa9ba66f34b566171b262afe291f7043f78e22648fa92e9052e80651fb35"
+      "bytes": 36804,
+      "sha256": "57455b2db960f2c2c6f6f32aaad97edc1776c5ec01bc74dc6e4bbf141ef28deb"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "32ee9416dd4b2997eec9f285502445ef428a5ffae00f2ec7050f62c81445137e"
+      "sha256": "5ddbd1d1864b47b6fe70c566b6218c03df2a51e71496743ce41be949c26263c3"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -69,13 +69,13 @@
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 28335,
-      "sha256": "b3b4d51607e0ce95d38da2a9ea252466efba5804fdb5dc38937fd45292bab5bf"
+      "bytes": 34086,
+      "sha256": "060d248312365769471ffb95637ac6d787271a0445957c2538d660dee3d9b655"
     },
     {
       "path": "decision-log.md",
-      "bytes": 71009,
-      "sha256": "1d55492f0d77fc560448450a124ab2d15d9dbc6d1356b88f0174e01368c9ee47"
+      "bytes": 72694,
+      "sha256": "47f46bf8f31499f8e150dc10714a3a10a6a936e026a618173073b77e9121bcd5"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -374,8 +374,8 @@
     },
     {
       "path": "tools/validate_contracts.py",
-      "bytes": 35753,
-      "sha256": "f1d5789690c2fceab8f1f3ac8a625092c816c233294818649667576f1e7147fd"
+      "bytes": 41442,
+      "sha256": "6468738e8a1d823e92266da5b8da85a7c4b6e5f3bb0b7b36177c851fc7ad7a3a"
     }
   ]
 }
