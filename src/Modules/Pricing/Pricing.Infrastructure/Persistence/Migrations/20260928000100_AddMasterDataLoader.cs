@@ -20,7 +20,8 @@ namespace Pricing.Infrastructure.Persistence.Migrations;
 /// marker, validates the whole reviewed document first (exact keys without duplicates, enums, integer cents
 /// from the raw token, geometry validity, range, size and containment, references to ACTIVE cities, natural
 /// keys, non-overlapping ACTIVE tariff windows) and only then writes, idempotently by natural key, inside
-/// the caller's transaction, with one append-only audit row per load that names the operator login. A dry
+/// the caller's transaction, with one append-only audit row per load that names the operator by a
+/// pseudonymous reference (<c>operator_ref</c>). A dry
 /// run validates and diffs without writing anything.</item>
 /// </list>
 /// The lane lives in Pricing because Pricing runs after the Locations and Drivers lanes, so every table it
@@ -38,6 +39,8 @@ public sealed class AddMasterDataLoader : Migration
     public const string LoaderRole = "paqueteria_master_data_loader";
     public const string FunctionSignature = "security.load_master_data(uuid,uuid,json,bytea,boolean)";
     public const string GateTable = "platform.master_data_deployment_gate";
+    public const string LegacyFunctionSignature = "security.load_master_data(uuid,uuid,jsonb,bytea,boolean)";
+    public const string OperatorReferencePrefix = "paquetenvia.mdm-001.operator:";
     public const string SearchPath = "search_path=pg_catalog, pg_temp";
     public const string DocumentFormat = "paquetenvia.master-data.v1";
     public const int MaximumSectionEntries = 5000;
@@ -250,6 +253,15 @@ public sealed class AddMasterDataLoader : Migration
               CONSTRAINT master_data_deployment_gate_real_only_ck CHECK (deployment_class = 'REAL' OR NOT gate_007_closed)
             );
           END IF;
+          -- Like every application table except the global cities, the marker forces RLS. Its only policy is
+          -- for paqueteria_migrator, its owner and only writer; the executor reads it through BYPASSRLS and the
+          -- runtime roles hold no grant at all. An existing marker without them is brought to that shape.
+          ALTER TABLE platform.master_data_deployment_gate ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE platform.master_data_deployment_gate FORCE ROW LEVEL SECURITY;
+          IF NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid='platform.master_data_deployment_gate'::regclass) THEN
+            CREATE POLICY master_data_deployment_gate_migrator ON platform.master_data_deployment_gate
+              TO paqueteria_migrator USING (true) WITH CHECK (true);
+          END IF;
           IF (SELECT string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text, ','
                 ORDER BY a.attnum)
               FROM pg_attribute a
@@ -264,6 +276,12 @@ public sealed class AddMasterDataLoader : Migration
              OR EXISTS (
                SELECT 1 FROM pg_trigger
                WHERE tgrelid='platform.master_data_deployment_gate'::regclass AND NOT tgisinternal)
+             OR (SELECT string_agg(pol.polname || ':' || pol.polcmd::text || ':' || pol.polpermissive::text || ':'
+                   || (SELECT string_agg(CASE WHEN r = 0 THEN 'public' ELSE pg_get_userbyid(r) END, '+') FROM unnest(pol.polroles) r)
+                   || ':' || COALESCE(pg_get_expr(pol.polqual, pol.polrelid), '') || ':'
+                   || COALESCE(pg_get_expr(pol.polwithcheck, pol.polrelid), ''), ',')
+                 FROM pg_policy pol WHERE pol.polrelid='platform.master_data_deployment_gate'::regclass)
+                IS DISTINCT FROM 'master_data_deployment_gate_migrator:*:true:paqueteria_migrator:true:true'
              OR pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid='platform.master_data_deployment_gate'::regclass))
                 <> 'paqueteria_migrator' THEN
             RAISE EXCEPTION 'MDM-001 requires the canonical AI-06 platform.master_data_deployment_gate';
@@ -272,6 +290,10 @@ public sealed class AddMasterDataLoader : Migration
         $adoption$;
 
         RESET ROLE;
+
+        -- MDM-001 N1: an installation that ran the first published version of this lane has the ungated
+        -- jsonb overload; it must never stay callable next to the gated json function.
+        DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,jsonb,bytea,boolean);
 
         DO $role$
         BEGIN
@@ -324,6 +346,16 @@ public sealed class AddMasterDataLoader : Migration
               AND NOT pg_has_role(m.member, 'paqueteria_migrator', 'MEMBER')
           ) THEN
             RAISE EXCEPTION 'MDM-001 executor has a member that is not a deployment principal';
+          END IF;
+          -- MDM-001 N2: an operator login is never also a deployment principal. Only a membership that can be
+          -- used counts (INHERIT or SET): a CREATEROLE creator's automatic ADMIN-only grant cannot load.
+          IF EXISTS (
+            SELECT 1 FROM pg_auth_members m
+            WHERE m.roleid='paqueteria_master_data_loader'::regrole
+              AND (m.inherit_option OR m.set_option)
+              AND pg_has_role(m.member, 'paqueteria_migrator', 'MEMBER')
+          ) THEN
+            RAISE EXCEPTION 'MDM-001 loader has a member that is also a deployment principal';
           END IF;
           IF EXISTS (SELECT 1 FROM pg_class WHERE relowner IN ('paqueteria_master_data_executor'::regrole, 'paqueteria_master_data_loader'::regrole))
              OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspowner IN ('paqueteria_master_data_executor'::regrole, 'paqueteria_master_data_loader'::regrole))
@@ -1244,12 +1276,17 @@ public sealed class AddMasterDataLoader : Migration
             'counts', v_counts);
 
           IF NOT p_dry_run THEN
-            -- MDM-001 M1: the operator login is the actor of record (no application user performs a load).
+            -- MDM-001 M1/N3: the operator is the actor of record (no application user performs a load). The
+            -- tenant-readable payload carries only a pseudonym: SHA-256 over a domain-separated login name, which
+            -- platform staff match against the operator logins they created.
             INSERT INTO platform.audit_logs(
               id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at)
             VALUES (
               pg_catalog.gen_random_uuid(), p_organization_id, NULL, 'MASTER_DATA_LOADED', 'MASTER_DATA_LOAD',
-              p_load_id, 'mdm-001', v_result || pg_catalog.jsonb_build_object('operator_login', SESSION_USER::text), v_now);
+              p_load_id, 'mdm-001',
+              v_result || pg_catalog.jsonb_build_object('operator_ref', pg_catalog.encode(pg_catalog.sha256(
+                pg_catalog.convert_to('paquetenvia.mdm-001.operator:' || SESSION_USER::text, 'UTF8')), 'hex')),
+              v_now);
           END IF;
 
           RETURN v_result || pg_catalog.jsonb_build_object('changes', v_changes);
@@ -1357,6 +1394,10 @@ public sealed class AddMasterDataLoader : Migration
              OR EXISTS (
                SELECT 1 FROM pg_auth_members m
                WHERE m.roleid = executor AND NOT pg_has_role(m.member, 'paqueteria_migrator', 'MEMBER'))
+             OR EXISTS (
+               SELECT 1 FROM pg_auth_members m
+               WHERE m.roleid = loader AND (m.inherit_option OR m.set_option)
+                 AND pg_has_role(m.member, 'paqueteria_migrator', 'MEMBER'))
              OR (SELECT count(*) FROM pg_proc WHERE proowner=executor) <> 1
           THEN
             RAISE EXCEPTION 'MDM-001 ownership or membership differs from the MDM-001 contract';
@@ -1370,7 +1411,8 @@ public sealed class AddMasterDataLoader : Migration
     /// <summary>
     /// MDM-001 rollback: removes the loader function, so no further master-data load is possible. Rows it
     /// already loaded are legitimate master data referenced by quotes, orders and assignments, and its audit
-    /// rows are append-only, so both stay. The two roles, their grants and the deployment marker stay too
+    /// rows are append-only, so both stay. The first published jsonb overload is dropped too (MDM-001 N1).
+    /// The two roles, their grants and the deployment marker stay too
     /// (MDM-001 m7): on fresh installations AI-06 and AI-18 own them, a rollback must not make an installation
     /// differ from the baseline it was built from, and without the function they are inert (the executor
     /// owns nothing and no login can reach it). Re-applying the lane restores the function.
@@ -1379,6 +1421,7 @@ public sealed class AddMasterDataLoader : Migration
         """
         RESET ROLE;
         DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,json,bytea,boolean);
+        DROP FUNCTION IF EXISTS security.load_master_data(uuid,uuid,jsonb,bytea,boolean);
         SET LOCAL ROLE paqueteria_migrator;
         """;
 

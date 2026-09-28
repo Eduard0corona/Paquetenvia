@@ -56,16 +56,17 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas.Where(name => name != "extensions").ToArray())));
 
-        // 40 tenant tables with a policy (organizations.pending_memberships included) plus the two
-        // pre-tenant BFF tables, forced without any policy.
-        Assert.Equal(42, await ScalarAsync<int>("""
+        // 40 tenant tables with a policy (organizations.pending_memberships included), the two pre-tenant
+        // BFF tables forced without any policy, and MDM-001's deployment marker, forced with one policy that
+        // admits only paqueteria_migrator.
+        Assert.Equal(43, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
               AND c.relrowsecurity AND c.relforcerowsecurity
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas)));
-        Assert.Equal(40, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
+        Assert.Equal(41, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
 
         var lifecycle = await QueryStringsAsync(
             "SELECT proname FROM pg_proc JOIN pg_namespace n ON n.oid=pronamespace WHERE n.nspname='security' AND proname=ANY(@names) ORDER BY proname",

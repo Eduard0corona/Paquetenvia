@@ -359,7 +359,7 @@ internal static partial class DatabaseMigratorProgram
         Environment.NewLine +
         "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --file PATH --organization-id UUID [--dry-run] [--allow-real-driver-profiles]" +
         Environment.NewLine +
-        "       Paqueteria.DatabaseMigrator master-data-gate --connection-env NAME --deployment-class SYNTHETIC|REAL [--gate-007-closed]");
+        "       Paqueteria.DatabaseMigrator master-data-gate --connection-env NAME --deployment-class SYNTHETIC|REAL --platform-organization-id UUID [--gate-007-closed]");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
@@ -392,6 +392,7 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         var allowRealDriverProfiles = false;
         string? deploymentClass = null;
         var gate007Closed = false;
+        string? platformOrganization = null;
         for (var index = 1; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -422,6 +423,9 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                     break;
                 case "--gate-007-closed" when command == "master-data-gate":
                     gate007Closed = true;
+                    break;
+                case "--platform-organization-id" when command == "master-data-gate" && index + 1 < arguments.Count:
+                    platformOrganization = arguments[++index];
                     break;
                 default:
                     throw new CommandLineException($"Unknown or incomplete option '{arguments[index]}'.");
@@ -455,8 +459,16 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                 throw new CommandLineException("master-data-gate requires --deployment-class SYNTHETIC or REAL.");
             }
 
+            // Every gate change is audited against the PLATFORM organization, named explicitly.
+            if (platformOrganization is null ||
+                !Guid.TryParseExact(platformOrganization, "D", out var platformOrganizationId) ||
+                !string.Equals(platformOrganization, platformOrganizationId.ToString("D"), StringComparison.Ordinal))
+            {
+                throw new CommandLineException("master-data-gate requires --platform-organization-id as a lowercase UUID.");
+            }
+
             return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
-                MasterDataGate: new MasterDataGateOptions(deploymentClass, gate007Closed));
+                MasterDataGate: new MasterDataGateOptions(deploymentClass, gate007Closed, platformOrganizationId));
         }
 
         if (command != "master-data-load")

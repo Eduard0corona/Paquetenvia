@@ -457,7 +457,6 @@ public sealed class DatabaseBaselineAssertions
                 WHERE n.nspname=ANY(@schemas::text[]) AND c.relkind IN ('r','p')
                   AND c.relname NOT IN (
                     'cities',
-                    'master_data_deployment_gate',
                     '__ef_migrations_history_identity',
                     '__ef_migrations_history_organizations',
                     '__ef_migrations_history_locations',
@@ -1227,6 +1226,29 @@ public sealed class DatabaseBaselineAssertions
             UNION ALL
             SELECT 'platform.master_data_deployment_gate must be owned by paqueteria_migrator'
             FROM gate WHERE pg_catalog.pg_get_userbyid(gate.relowner)<>'paqueteria_migrator'
+            UNION ALL
+            SELECT 'platform.master_data_deployment_gate must force RLS with only the migrator policy'
+            FROM gate JOIN pg_catalog.pg_class c ON c.oid=gate.oid
+            WHERE NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+               OR (SELECT string_agg(pol.polname || ':' || pol.polcmd::text || ':' || pol.polpermissive::text || ':'
+                     || (SELECT string_agg(CASE WHEN r=0 THEN 'public' ELSE pg_catalog.pg_get_userbyid(r) END, '+')
+                         FROM unnest(pol.polroles) r)
+                     || ':' || COALESCE(pg_catalog.pg_get_expr(pol.polqual, pol.polrelid), '') || ':'
+                     || COALESCE(pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid), ''), ',')
+                   FROM pg_catalog.pg_policy pol WHERE pol.polrelid=gate.oid)
+                  IS DISTINCT FROM 'master_data_deployment_gate_migrator:*:true:paqueteria_migrator:true:true'
+            UNION ALL
+            SELECT 'master data executor owns another function: ' || p.oid::regprocedure::text
+            FROM pg_catalog.pg_proc p
+            WHERE p.proowner IN (SELECT oid FROM executor)
+              AND p.oid IS DISTINCT FROM pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,json,bytea,boolean)')
+            UNION ALL
+            SELECT 'master data loader has a member that is also a deployment principal: ' || member.rolname
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles member ON member.oid=m.member
+            WHERE m.roleid IN (SELECT oid FROM loader)
+              AND (m.inherit_option OR m.set_option)
+              AND pg_catalog.pg_has_role(m.member,'paqueteria_migrator','MEMBER')
             """,
             cancellationToken,
             new NpgsqlParameter<string[]>("grants", MasterDataExecutorColumnGrants),

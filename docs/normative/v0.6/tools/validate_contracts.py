@@ -675,6 +675,7 @@ def main() -> int:
         "security.load_master_data(uuid,uuid,json,bytea,boolean)",
         "search_path=pg_catalog, pg_temp",
         "REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;",
+        "CREATE POLICY master_data_deployment_gate_migrator ON platform.master_data_deployment_gate\n  TO paqueteria_migrator USING (true) WITH CHECK (true);",
         "platform-operator capability, not a tenant boundary",
         "REVOKE INSERT,UPDATE,DELETE ON locations.cities FROM paqueteria_app,paqueteria_worker;",
     ]:
@@ -684,8 +685,15 @@ def main() -> int:
         errors.append("Master data role membership granted contrary to MDM-001-OPERATOR-LOADER")
     if re.search(r"GRANT[^;]*load_master_data[^;]*;", SQL_LINE_COMMENT.sub("", role_sql)):
         errors.append("The master data loader function is granted by its lane, not by AI-18")
-    if "CREATE TABLE platform.master_data_deployment_gate (" not in sql:
-        errors.append("Missing master data deployment gate (GATE-007) table in AI-06")
+    for fragment in [
+        "CREATE TABLE platform.master_data_deployment_gate (",
+        "ALTER TABLE platform.master_data_deployment_gate ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE platform.master_data_deployment_gate FORCE ROW LEVEL SECURITY;",
+    ]:
+        if fragment not in sql:
+            errors.append(f"Missing master data deployment gate (GATE-007) contract in AI-06: {fragment}")
+    if re.search(r"CREATE\s+POLICY[^;]*ON\s+platform\.master_data_deployment_gate\b", SQL_LINE_COMMENT.sub("", sql)):
+        errors.append("The deployment gate policy belongs to AI-18 (it names paqueteria_migrator), not AI-06")
     checks.append("Master data loader: executor-owned function, operator-only EXECUTE, exact column grants, GATE-007 marker")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so

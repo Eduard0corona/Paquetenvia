@@ -315,11 +315,17 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- granted only to paqueteria_master_data_loader.
 -- paqueteria_master_data_loader is a platform-operator capability, not a tenant boundary: its caller names
 -- the organization and also sets it as app.current_org_ids (the function refuses any other context), so a
--- mistyped organization fails instead of loading elsewhere; the audit row names the operator login. It is
--- NOLOGIN NOBYPASSRLS with USAGE on schema security and that EXECUTE only, and its only members are named
--- operator LOGINs (NOINHERIT, SET ROLE per transaction) that the owner creates and removes; it is never
--- granted to paqueteria_app, paqueteria_worker or paqueteria_bootstrap, and only deployment principals
--- (members of paqueteria_migrator) may hold paqueteria_master_data_executor.
+-- mistyped organization fails instead of loading elsewhere; the audit row names the operator by a
+-- pseudonymous operator_ref (SHA-256 of 'paquetenvia.mdm-001.operator:' || login), never the login itself,
+-- because tenants can read their audit rows. It is NOLOGIN NOBYPASSRLS with USAGE on schema security and
+-- that EXECUTE only, and its only members are named operator LOGINs (NOINHERIT, SET ROLE per transaction)
+-- that the owner creates and removes; it is never granted to paqueteria_app, paqueteria_worker or
+-- paqueteria_bootstrap, no member that can use it (INHERIT or SET) may also be a member of
+-- paqueteria_migrator, and only deployment principals (members of paqueteria_migrator) may hold
+-- paqueteria_master_data_executor.
+-- platform.master_data_deployment_gate forces RLS; its single policy admits only paqueteria_migrator, the
+-- owner that master-data-gate writes it as (each change is audited against the PLATFORM organization, and
+-- the command never turns a REAL database back into a SYNTHETIC one).
 -- The function enforces GATE-007 from platform.master_data_deployment_gate (REAL unless the migrator marked
 -- the database SYNTHETIC): a SYNTHETIC database takes only SYNTHETIC files, a REAL one never takes them, and
 -- driver profiles load only in a SYNTHETIC database or once the migrator recorded gate_007_closed. It
@@ -333,6 +339,8 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;
 REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;
 REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;
+CREATE POLICY master_data_deployment_gate_migrator ON platform.master_data_deployment_gate
+  TO paqueteria_migrator USING (true) WITH CHECK (true);
 GRANT USAGE ON SCHEMA identity,organizations,locations,pricing,drivers,platform TO paqueteria_master_data_executor;
 GRANT SELECT (id,status) ON identity.users TO paqueteria_master_data_executor;
 GRANT SELECT (id,organization_type,status) ON organizations.organizations TO paqueteria_master_data_executor;
@@ -384,6 +392,6 @@ GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
 -- 23. identity.bff_sessions and identity.bff_logout_jtis have ENABLE and FORCE ROW LEVEL SECURITY with no policy, and paqueteria_app and paqueteria_worker hold no table or column privilege on them.
 -- 24. once the Custody BFF purge lane is recorded, paqueteria_cleanup_executor additionally owns security.purge_bff_sessions(integer) and holds USAGE on schema identity, SELECT(session_key_hash,expires_at,revoked_at) and DELETE on identity.bff_sessions and SELECT(jti_hash,expires_at) and DELETE on identity.bff_logout_jtis, and nothing else there; only paqueteria_worker may EXECUTE the purge.
 -- 25. once REG-002 is recorded, the four REG-002 functions are SECURITY DEFINER with a pinned search_path, owned by paqueteria_registration_executor, and only paqueteria_app may EXECUTE them; organizations.pending_memberships has ENABLE and FORCE ROW LEVEL SECURITY with the tenant policy, paqueteria_app holds only SELECT on it and paqueteria_worker holds nothing.
--- 26. paqueteria_master_data_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and only to deployment principals (members of paqueteria_migrator) and, once the Pricing MDM-001 lane is recorded, owns only security.load_master_data(uuid,uuid,json,bytea,boolean). Both master data roles and their grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
+-- 26. paqueteria_master_data_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and only to deployment principals (members of paqueteria_migrator) and, once the Pricing MDM-001 lane is recorded, owns only security.load_master_data(uuid,uuid,json,bytea,boolean) (the first published jsonb overload is dropped by that lane's Up and Down). Both master data roles and their grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
 -- 27. paqueteria_master_data_executor holds only USAGE on schemas identity, organizations, locations, pricing, drivers and platform and exactly the column grants above (including SELECT(deployment_class,gate_007_closed) on platform.master_data_deployment_gate): no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration or session privilege.
--- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,json,bytea,boolean); that function's ACL is exactly its owner and the loader, it is SECURITY DEFINER with search_path=pg_catalog, pg_temp, and platform.master_data_deployment_gate grants nothing to PUBLIC or the runtime roles.
+-- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role and to no member that can use it while also being a member of paqueteria_migrator, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,json,bytea,boolean); that function's ACL is exactly its owner and the loader, it is SECURITY DEFINER with search_path=pg_catalog, pg_temp, and platform.master_data_deployment_gate forces RLS with only the master_data_deployment_gate_migrator policy and grants nothing to PUBLIC or the runtime roles.

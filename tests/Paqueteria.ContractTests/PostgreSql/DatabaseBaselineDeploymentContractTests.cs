@@ -74,8 +74,11 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                           paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance,
                           paqueteria_lifecycle_executor, paqueteria_cleanup_executor,
                           paqueteria_registration_executor, paqueteria_session_executor,
-                          paqueteria_master_data_executor, paqueteria_master_data_loader
+                          paqueteria_master_data_executor
                     TO {{_login}} WITH ADMIN TRUE, SET TRUE;
+                    -- MDM-001 N2: the deployment principal administers the operator grantee (AI-18 revokes it from
+                    -- the runtime roles) but can never use it, like a CREATEROLE creator's automatic grant.
+                    GRANT paqueteria_master_data_loader TO {{_login}} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
                     DO $$ BEGIN CREATE ROLE azure_pg_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                     {{(azureAdmin ? $"GRANT azure_pg_admin TO {_login};" : string.Empty)}}
                     {{(allowlist is null ? string.Empty : $"ALTER DATABASE \"{database}\" SET azure.extensions = '{allowlist}';")}}

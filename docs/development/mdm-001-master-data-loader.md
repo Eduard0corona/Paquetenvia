@@ -23,16 +23,24 @@ pero **no** es una frontera de seguridad entre tenants: la frontera es quién re
 
 - sus únicos miembros son logins de operador **con nombre**, creados y retirados por el owner (por
   ejemplo `pv_pilot_mdm_<iniciales>`), nunca `paqueteria_app`, `paqueteria_worker` ni `paqueteria_bootstrap`;
-- cada carga deja en `platform.audit_logs` el login de operador (`operator_login` = `session_user`) como
-  actor registrado. `actor_id` queda `NULL`: ningún usuario de la aplicación hace la carga.
-
-El nombre del login de operador queda en la auditoría: no uses nombres de persona completos.
+  ningún miembro que pueda usarlo (`INHERIT` o `SET`) puede ser a la vez miembro de `paqueteria_migrator`
+  (lo verifican la lane y `DatabaseBaselineAssertions`): quien carga no es quien despliega;
+- cada carga deja en `platform.audit_logs` al operador como actor registrado, con un **seudónimo**:
+  `operator_ref` = SHA-256 hex de `paquetenvia.mdm-001.operator:` + login. Los tenants pueden leer sus
+  filas de auditoría, así que el nombre del login nunca se guarda; el personal de plataforma identifica al
+  operador recalculando `operator_ref` para los logins que creó. `actor_id` queda `NULL`: ningún usuario de
+  la aplicación hace la carga. El seudónimo es un hash sin sal de un nombre corto: identifica, pero no
+  oculta el login a quien pueda adivinarlo; no uses nombres de persona completos.
 
 ## Compuerta de despliegue (GATE-007) en la base
 
 `platform.master_data_deployment_gate` (AI-06) es una sola fila global que sólo escribe el migrador
-(`master-data-gate`, como `paqueteria_migrator`) y sólo lee el ejecutor. La función la aplica en cada
-llamada, con independencia de las variables de entorno de la máquina del operador:
+(`master-data-gate`, como `paqueteria_migrator`) y sólo lee el ejecutor. Como toda tabla de aplicación
+salvo `locations.cities`, fuerza RLS; su única política (AI-18) admite a `paqueteria_migrator`, su dueño.
+Cada cambio queda como fila de auditoría append-only (`MASTER_DATA_GATE_CHANGED`) de la organización
+`PLATFORM`, con el estado anterior, el nuevo y el `operator_ref` del login de despliegue. El comando nunca
+vuelve `SYNTHETIC` una base marcada `REAL` (`MDM001_GATE_REAL_TO_SYNTHETIC_REFUSED`). La función aplica la
+marca en cada llamada, con independencia de las variables de entorno de la máquina del operador:
 
 | Marca | Archivos `SYNTHETIC` | Archivos `REVIEWED` | `driver_profiles` |
 | --- | --- | --- | --- |
@@ -44,7 +52,7 @@ llamada, con independencia de las variables de entorno de la máquina del operad
 ```bash
 # con la conexión de despliegue (migración), nunca con el login de operador
 Paqueteria.DatabaseMigrator master-data-gate --connection-env PAQUETERIA_MIGRATION_CONNECTION \
-  --deployment-class SYNTHETIC|REAL [--gate-007-closed]
+  --deployment-class SYNTHETIC|REAL --platform-organization-id <uuid PLATFORM> [--gate-007-closed]
 ```
 
 `--gate-007-closed` sólo vale con `REAL` y **sólo puede usarse cuando GATE-007 esté cerrado** (aviso,
@@ -151,8 +159,11 @@ valores de llave, para que el log del servidor no los registre.
 
 La migración Pricing `20260928000100_AddMasterDataLoader` (Pricing corre después de Locations y Drivers):
 
+- elimina, si existe, la sobrecarga `security.load_master_data(uuid,uuid,jsonb,bytea,boolean)` de la
+  primera versión publicada, que no tenía compuerta (también lo hace el `Down`);
 - adopta `platform.master_data_deployment_gate` (AI-06), o la crea como `paqueteria_migrator` en una
-  instalación cuya línea base es anterior, y falla si su forma difiere;
+  instalación cuya línea base es anterior, le fuerza RLS con su única política para el migrador, y falla
+  si su forma difiere;
 - crea, si faltan, `paqueteria_master_data_executor NOLOGIN BYPASSRLS` (dueño de la función) y
   `paqueteria_master_data_loader NOLOGIN NOBYPASSRLS` (el beneficiario del operador) y falla si ya existen
   con atributos, membresías u objetos fuera de contrato; sólo los principales de despliegue (miembros de
@@ -187,7 +198,7 @@ de propiedad de Azure del carril Pricing y `validate_contracts.py` (permisos exa
 Cada carga real escribe una fila en `platform.audit_logs`: `org_id` = organización cargada,
 `actor_id` = `NULL`, `action` = `MASTER_DATA_LOADED`, `entity_type` = `MASTER_DATA_LOAD`, `entity_id` = id
 de carga, `request_id` = `mdm-001` y `payload_redacted` con formato, clasificación, clase de despliegue,
-`operator_login`, `file_sha256_reported` (SHA-256 de los bytes del archivo, calculado por el job),
+`operator_ref`, `file_sha256_reported` (SHA-256 de los bytes del archivo, calculado por el job),
 `document_sha256_computed` (SHA-256 del texto exacto del documento, calculado por PostgreSQL; coinciden
 para un archivo UTF-8 sin BOM), `dry_run`, `policy_version_persisted` y conteos por entidad. Ni la
 auditoría ni la consola llevan nombres de lugares, identificadores de usuario ni coordenadas: los cambios
@@ -223,7 +234,8 @@ Paqueteria.DatabaseMigrator master-data-load \
 Localmente (después de `DevSeed bootstrap` y `apply`), marca la base como sintética y crea el login:
 
 ```bash
-Paqueteria.DatabaseMigrator master-data-gate --connection-env PAQUETERIA_MIGRATION_CONNECTION --deployment-class SYNTHETIC
+Paqueteria.DatabaseMigrator master-data-gate --connection-env PAQUETERIA_MIGRATION_CONNECTION \
+  --deployment-class SYNTHETIC --platform-organization-id <uuid de la organización PLATFORM sintética>
 ```
 
 ```sql

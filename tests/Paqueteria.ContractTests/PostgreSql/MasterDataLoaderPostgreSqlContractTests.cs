@@ -135,6 +135,12 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                      ($"GRANT {Executor} TO {OperatorLogin}",
                       $"REVOKE {Executor} FROM {OperatorLogin}",
                       "master data executor has a member that is not a deployment principal"),
+                     ($"GRANT {Loader} TO paqueteria_migrator",
+                      $"REVOKE {Loader} FROM paqueteria_migrator",
+                      "master data loader has a member that is also a deployment principal"),
+                     (LegacyFunctionSql,
+                      $"DROP FUNCTION {AddMasterDataLoader.LegacyFunctionSignature}",
+                      "master data executor owns another function"),
                  })
         {
             await EnsureOperatorLoginAsync();
@@ -210,21 +216,57 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             }
         }
 
-        // The migrator command writes it; GATE-007 is recorded only for a REAL database.
+        // The marker forces RLS; its only policy admits the migrator.
+        Assert.Equal("t|t|master_data_deployment_gate_migrator", await ScalarAsync<string>(
+            """
+            SELECT concat_ws('|',c.relrowsecurity,c.relforcerowsecurity,
+              (SELECT string_agg(polname,',') FROM pg_policy WHERE polrelid=c.oid))
+            FROM pg_class c WHERE c.oid='platform.master_data_deployment_gate'::regclass
+            """));
+
+        // The migrator command writes it, audited against the PLATFORM organization; GATE-007 is recorded
+        // only for a REAL database, and a REAL database is never marked SYNTHETIC again.
+        var platform = await NewOrganizationAsync("PLATFORM");
+        var tenant = await NewOrganizationAsync();
+        var refusedTenant = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataGate.SetAsync(
+            fixture.DeploymentConnectionString, new MasterDataGateOptions(Real, false, tenant), null, TextWriter.Null, CancellationToken.None));
+        Assert.Contains("MDM001_GATE_PLATFORM_ORGANIZATION_REQUIRED", refusedTenant.Message);
+        await SetGateAsync(Synthetic, false);
         var output = new StringWriter();
-        await MasterDataGate.SetAsync(fixture.DeploymentConnectionString, new MasterDataGateOptions(Real, true), null, output, CancellationToken.None);
-        Assert.Contains("MDM001_GATE_SET deployment_class=REAL gate_007_closed=true", output.ToString());
+        await MasterDataGate.SetAsync(fixture.DeploymentConnectionString, new MasterDataGateOptions(Real, true, platform), null, output, CancellationToken.None);
+        Assert.Contains("MDM001_GATE_SET deployment_class=REAL gate_007_closed=true (audited)", output.ToString());
         Assert.Equal("REAL|t", await ScalarAsync<string>(
             "SELECT concat_ws('|',deployment_class,gate_007_closed) FROM platform.master_data_deployment_gate"));
         var refused = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataGate.SetAsync(
-            fixture.DeploymentConnectionString, new MasterDataGateOptions(Synthetic, true), null, TextWriter.Null, CancellationToken.None));
+            fixture.DeploymentConnectionString, new MasterDataGateOptions(Synthetic, true, platform), null, TextWriter.Null, CancellationToken.None));
         Assert.Contains("MDM001_GATE_007_ONLY_FOR_REAL", refused.Message);
         var pilot = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataGate.SetAsync(
-            fixture.DeploymentConnectionString, new MasterDataGateOptions(Synthetic, false), "PILOT_REAL_PEOPLE", TextWriter.Null, CancellationToken.None));
+            fixture.DeploymentConnectionString, new MasterDataGateOptions(Synthetic, false, platform), "PILOT_REAL_PEOPLE", TextWriter.Null, CancellationToken.None));
         Assert.Contains("MDM001_GATE_SYNTHETIC_REFUSED", pilot.Message);
-        await MasterDataGate.SetAsync(fixture.DeploymentConnectionString, new MasterDataGateOptions(Synthetic, false), null, TextWriter.Null, CancellationToken.None);
-        Assert.Equal("SYNTHETIC|f", await ScalarAsync<string>(
+        var backwards = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataGate.SetAsync(
+            fixture.DeploymentConnectionString, new MasterDataGateOptions(Synthetic, false, platform), null, TextWriter.Null, CancellationToken.None));
+        Assert.Contains("MDM001_GATE_REAL_TO_SYNTHETIC_REFUSED", backwards.Message);
+        await MasterDataGate.SetAsync(fixture.DeploymentConnectionString, new MasterDataGateOptions(Real, false, platform), null, TextWriter.Null, CancellationToken.None);
+        Assert.Equal("REAL|f", await ScalarAsync<string>(
             "SELECT concat_ws('|',deployment_class,gate_007_closed) FROM platform.master_data_deployment_gate"));
+
+        // Two audited changes, append-only, in the PLATFORM organization, with a pseudonym and no login name.
+        var audit = await ScalarAsync<string>(
+            """
+            SELECT string_agg(payload_redacted::text, '|' ORDER BY occurred_at)
+            FROM platform.audit_logs
+            WHERE org_id=@org AND action='MASTER_DATA_GATE_CHANGED' AND entity_type='MASTER_DATA_DEPLOYMENT_GATE'
+            """,
+            ("org", platform));
+        Assert.Equal(2, audit.Split('|').Length);
+        Assert.Contains("\"from\": {\"gate_007_closed\": false, \"deployment_class\": \"SYNTHETIC\"}", audit);
+        Assert.Contains("\"to\": {\"gate_007_closed\": true, \"deployment_class\": \"REAL\"}", audit);
+        var deploymentLogin = new NpgsqlConnectionStringBuilder(fixture.DeploymentConnectionString).Username!;
+        Assert.Contains($"\"operator_ref\": \"{OperatorReference(deploymentLogin)}\"", audit);
+        Assert.DoesNotContain(deploymentLogin, audit);
+        Assert.Equal(0, await ScalarAsync<long>(
+            "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_GATE_CHANGED'", ("org", tenant)));
+        await SetGateAsync(Synthetic, false);
     }
 
     [PostgreSqlContractFact]
@@ -311,7 +353,8 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             ("org", organization));
         Assert.Contains(Convert.ToHexStringLower(first.Sha256), payloads);
         Assert.Contains("document_sha256_computed", payloads);
-        Assert.Contains($"\"operator_login\": \"{OperatorLogin}\"", payloads);
+        Assert.Contains($"\"operator_ref\": \"{OperatorReference(OperatorLogin)}\"", payloads);
+        Assert.DoesNotContain(OperatorLogin, payloads);
         Assert.DoesNotContain("Synthetic", payloads);
         Assert.DoesNotContain("-107.", payloads);
         Assert.Equal(1, await ScalarAsync<long>(
@@ -800,7 +843,12 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             Assert.Equal(0L, await ScalarAsync<long>(connectionString,
                 $"SELECT count(*) FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a WHERE a.grantee='{Executor}'::regrole"));
 
+            // MDM-001 N1: the first published version installed an ungated jsonb overload, owned by the
+            // executor and executable by the loader. Up removes it.
+            await ExecuteAsync(connectionString, LegacyFunctionSql);
             await MigratePricingAsync(connectionString, null);
+            Assert.False(await ScalarAsync<bool>(connectionString,
+                $"SELECT to_regprocedure('{AddMasterDataLoader.LegacyFunctionSignature}') IS NOT NULL"));
             await using (var connection = new NpgsqlConnection(connectionString))
             {
                 await connection.OpenAsync();
@@ -815,6 +863,17 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
 
             Assert.Equal("paqueteria_migrator", await ScalarAsync<string>(connectionString,
                 $"SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='{AddMasterDataLoader.GateTable}'::regclass"));
+            Assert.True(await ScalarAsync<bool>(connectionString,
+                $"SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='{AddMasterDataLoader.GateTable}'::regclass"));
+
+            // Down removes the jsonb overload as well; Up then leaves only the json function.
+            await ExecuteAsync(connectionString, LegacyFunctionSql);
+            await MigratePricingAsync(connectionString, Migration.InitialDatabase);
+            Assert.Equal(0L, await ScalarAsync<long>(connectionString,
+                "SELECT count(*) FROM pg_proc WHERE proname='load_master_data'"));
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(AddMasterDataLoader.FunctionSignature, await ScalarAsync<string>(connectionString,
+                "SELECT string_agg(oid::regprocedure::text, ',') FROM pg_proc WHERE proname='load_master_data'"));
             Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
                 .Single(state => state.Module == "Pricing").Status);
         }
@@ -825,6 +884,20 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
     }
 
     private static string Suffix() => Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>The first published signature, installed as that version did (ungated, loader-executable).</summary>
+    private static readonly string LegacyFunctionSql = $$"""
+        CREATE FUNCTION security.load_master_data(p_organization_id uuid, p_load_id uuid, p_document jsonb,
+          p_document_sha256 bytea, p_dry_run boolean)
+        RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT NULL::jsonb';
+        REVOKE ALL ON FUNCTION {{AddMasterDataLoader.LegacyFunctionSignature}} FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION {{AddMasterDataLoader.LegacyFunctionSignature}} TO {{Loader}};
+        ALTER FUNCTION {{AddMasterDataLoader.LegacyFunctionSignature}} OWNER TO {{Executor}};
+        """;
+
+    /// <summary>MDM-001 N3: the audit pseudonym of a login, as platform staff recompute it.</summary>
+    private static string OperatorReference(string login) => Convert.ToHexStringLower(
+        SHA256.HashData(Encoding.UTF8.GetBytes(AddMasterDataLoader.OperatorReferencePrefix + login)));
 
     private static string CityName(string suffix) => $"MDM City {suffix}";
 
