@@ -185,6 +185,11 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
 - **Azure (decisión del owner para el piloto):** el ingress enruta esos cuatro prefijos
   directamente a la API y el resto a Next (sin salto extra y con WebSocket nativo).
   `PAQUETENVIA_API_PROXY_ORIGIN` queda vacía.
+  - Implementado en ENV-001 con *rule-based routing* de Container Apps: `deploy/azure/pilot/apps.bicep`
+    y `docs/operations/env-001-pilot/README.md` §3.
+  - La imagen web del piloto (`deploy/azure/pilot/Dockerfile.web`) no define
+    `NEXT_PUBLIC_API_BASE_URL`. `deploy/azure/Dockerfile.web` siempre la define (vacía si falta el
+    argumento), y con cadena vacía `next.config.ts` falla en producción (`new URL("")`).
 - La API **no** deriva el `redirect_uri` de `Host`/`X-Forwarded-*`: usa
   `AuthCenter:PublicOrigin`. Esto evita depender de los forwarded headers que configura otro PR.
 - `/login`, `/auth/*` y `/signin-authcenter` son network-only en el Service Worker.

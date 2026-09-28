@@ -202,7 +202,8 @@
     {
       "name": "DEPLOY_WORKFLOW",
       "patterns": [
-        ".github/workflows/deploy-azure-dev.yml"
+        ".github/workflows/deploy-azure-dev.yml",
+        ".github/workflows/deploy-azure-pilot.yml"
       ],
       "jobs": [
         "azr-static"
