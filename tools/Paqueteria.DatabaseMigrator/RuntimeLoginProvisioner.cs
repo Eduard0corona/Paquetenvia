@@ -26,12 +26,18 @@ internal static partial class RuntimeLoginProvisioner
 
     internal static bool IsScramVerifier(string? value) => value is not null && ScramVerifier().IsMatch(value);
 
-    internal static async Task RunAsync(string connectionString, CancellationToken cancellationToken)
+    /// <param name="readSetting">
+    /// Resolves a setting by name. The migrator passes the same lookup it uses for its connection, so with
+    /// the ADP-001 Key Vault secrets source on (PILOT-KEYVAULT-PRIVATE-APP-READ) the verifiers come from the
+    /// mapped Key Vault secrets rather than from environment variables.
+    /// </param>
+    internal static async Task RunAsync(string connectionString, Func<string, string?> readSetting,
+        CancellationToken cancellationToken)
     {
         var verifiers = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (login, _, variable) in Logins)
         {
-            var verifier = Environment.GetEnvironmentVariable(variable);
+            var verifier = readSetting(variable);
             if (!IsScramVerifier(verifier))
             {
                 throw new RuntimeLoginException($"{variable} must be a SCRAM-SHA-256 verifier (4096 iterations).");

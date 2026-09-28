@@ -232,19 +232,73 @@ class TemplateGuardTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assert_fails(7, self.context(mutate), value)
 
-    def test_inline_or_foreign_secret_fails(self):
-        def inline(t):
+    def test_container_apps_secrets_and_secret_refs_are_forbidden(self):
+        def kv_reference(t):
             api = self.resource(t, "apps", "Microsoft.App/containerApps", "ca-pv-pilot-api")
-            api["properties"]["configuration"]["secrets"].append({"name": "x", "value": "plaintext"})
-        self.assert_fails(6, self.context(inline), "Key Vault reference")
+            api["properties"]["configuration"]["secrets"] = [
+                {"name": "pg-api-conn", "keyVaultUrl": "https://kv/secrets/pg-api-runtime-connection", "identity": "x"}]
+        self.assert_fails(6, self.context(kv_reference), "declares Container Apps secrets")
 
-        def admin_secret(t):
-            api = self.resource(t, "apps", "Microsoft.App/containerApps", "ca-pv-pilot-api")
-            secret = copy.deepcopy(api["properties"]["configuration"]["secrets"][0])
-            secret["name"] = "admin"
-            secret["keyVaultUrl"] = secret["keyVaultUrl"].replace("pg-api-runtime-connection", "pg-migrate-connection")
-            api["properties"]["configuration"]["secrets"].append(secret)
-        self.assert_fails(6, self.context(admin_secret), "pg-migrate-connection")
+        def secret_ref(t):
+            t["apps"]["variables"]["productionEnv"].append({"name": "Some__Setting", "secretRef": "x"})
+        self.assert_fails(6, self.context(secret_ref), "uses secretRef")
+
+        def plain_connection(t):
+            t["apps"]["variables"]["productionEnv"].append({"name": "ConnectionStrings__Paqueteria", "value": "Host=x"})
+        self.assert_fails(6, self.context(plain_connection), "sensitive setting ConnectionStrings__Paqueteria")
+
+    @staticmethod
+    def edit(t, template: str, old: str, new: str, count: int = 1):
+        """Edit the compiled ARM text (Bicep inlines env arrays that use reference() into expressions)."""
+        raw = json.dumps(t[template])
+        assert raw.count(old) >= 1, old
+        t[template] = json.loads(raw.replace(old, new, count))
+
+    def test_key_vault_mappings_must_match_least_privilege_and_rbac(self):
+        def foreign_secret(t):
+            self.edit(t, "apps", "'value', 'paquetenvia-email-lookup-key-1'", "'value', 'pg-migrate-connection'")
+        self.assert_fails(6, self.context(foreign_secret), "differ from the least-privilege set")
+
+        def rbac_drift(t):
+            t["apps"]["variables"]["apiSecretNames"] = [n for n in t["apps"]["variables"]["apiSecretNames"]
+                                                        if n != "paquetenvia-email-lookup-key-1"]
+        self.assert_fails(6, self.context(rbac_drift), "apps.apiSecretNames")
+
+        def logins_on_migrate_identity(t):
+            t["jobs"]["variables"]["migrateSecretNames"] = list(t["jobs"]["variables"]["loginsSecretNames"])
+        self.assert_fails(6, self.context(logins_on_migrate_identity), "jobs.migrateSecretNames")
+
+        def duplicate_key(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__1__ConfigurationKey', 'value', 'ConnectionStrings:Paqueteria')",
+                      "'KeyVaultSecrets__Mappings__1__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaWorker')")
+        self.assert_fails(6, self.context(duplicate_key), "duplicates")
+
+        def no_vault_uri(t):
+            raw = json.dumps(t["jobs"])
+            start = raw.index("createObject('name', 'KeyVaultSecrets__VaultUri'")
+            end = raw.index("createObject('name', 'KeyVaultSecrets__Mappings__0__SecretName'", start)
+            t["jobs"] = json.loads(raw[:start] + raw[end:])
+        self.assert_fails(6, self.context(no_vault_uri), "without KeyVaultSecrets__VaultUri")
+
+    def test_key_vault_must_deny_public_traffic(self):
+        def allow(t):
+            self.resource(t, "security", "Microsoft.KeyVault/vaults")["properties"]["networkAcls"]["defaultAction"] = "Allow"
+        self.assert_fails(13, self.context(allow), "defaultAction must be Deny")
+
+        def trusted_services(t):
+            self.resource(t, "security", "Microsoft.KeyVault/vaults")["properties"]["networkAcls"]["bypass"] = "AzureServices"
+        self.assert_fails(13, self.context(trusted_services), "bypass must be None")
+
+        def standing_ip(t):
+            self.resource(t, "security", "Microsoft.KeyVault/vaults")["properties"]["networkAcls"]["ipRules"] = [{"value": "1.2.3.4/32"}]
+        self.assert_fails(13, self.context(standing_ip), "standing ipRules")
+
+        def no_subnet(t):
+            self.resource(t, "security", "Microsoft.KeyVault/vaults")["properties"]["networkAcls"]["virtualNetworkRules"] = []
+        self.assert_fails(13, self.context(no_subnet), "Container Apps subnet")
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        self.assert_fails(13, self.context(workflow_text=text.replace("kv-firewall.sh close", "true")), "temporary Key Vault firewall")
 
     def test_storage_and_defender_fail_closed(self):
         def shared_key(t):

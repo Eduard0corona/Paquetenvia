@@ -225,7 +225,7 @@ jobs:
           [[ "${location}" == "${PILOT_REGION}" ]] || { echo "::error::resource group must exist in ${PILOT_REGION} (bootstrap.md step 2)"; exit 1; }
           az extension add --name containerapp --upgrade --yes --only-show-errors
 
-      - name: Stage 1 - identities, Key Vault and keys (security.bicep)
+      - name: Stage 1 - identities, VNet, Key Vault (deny by default) and keys (security.bicep)
         id: security
         shell: bash
         run: |
@@ -237,6 +237,14 @@ jobs:
             echo "${key}=$(jq -r ".${key}.value" <<<"${outputs}")" >> "${GITHUB_OUTPUT}"
           done
 
+      # PILOT-KEYVAULT-PRIVATE-APP-READ: the vault denies public traffic; open a temporary /32 rule for this
+      # runner only around its secret reads and writes (window 1), and always close it.
+      - name: Open Key Vault firewall for this runner (window 1)
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: bash deploy/azure/pilot/kv-firewall.sh open "${VAULT}"
+
       - name: Ensure generated secrets (admin password, EmailLookup key); never printed
         shell: bash
         env:
@@ -244,12 +252,6 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          # Wait for the Key Vault Secrets Officer assignment of the deployer to propagate.
-          for attempt in $(seq 1 20); do
-            if az keyvault secret list --vault-name "${VAULT}" --query "length(@)" -o tsv >/dev/null 2>&1; then break; fi
-            [[ "${attempt}" == 20 ]] && { echo "::error::Key Vault data plane not reachable with the deployer role"; exit 1; }
-            sleep 30
-          done
           has_secret() { [[ "$(az keyvault secret list --vault-name "${VAULT}" --query "length([?name=='$1'])" -o tsv)" == "1" ]]; }
           put_secret() { az keyvault secret set --vault-name "${VAULT}" --name "$1" --file "$2" --encoding utf-8 --only-show-errors --output none; shred -u "$2"; }
           if ! has_secret pg-admin-password; then
@@ -263,8 +265,7 @@ jobs:
             echo "Generated paquetenvia-email-lookup-key-1."
           fi
 
-      - name: Stage 2 - network, logs, registry, storage, PostgreSQL, environment, budget (platform.bicep)
-        id: platform
+      - name: Prepare platform parameters (reads the administrator password; never printed)
         shell: bash
         env:
           VAULT: ${{ steps.security.outputs.vaultName }}
@@ -288,14 +289,35 @@ jobs:
                                            "publicOrigin": {"value": "https://" + os.environ["PILOT_HOST"]}}}))
           PY
           unset admin
+
+      - name: Close Key Vault firewall for this runner (window 1)
+        if: always()
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: bash deploy/azure/pilot/kv-firewall.sh close "${VAULT:-}"
+
+      - name: Stage 2 - logs, registry, storage, PostgreSQL, environment, budget (platform.bicep)
+        id: platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'shred -u "${RUNNER_TEMP}/platform.parameters.json" 2>/dev/null || true' EXIT
           az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-platform \
             --template-file "${RUNNER_TEMP}/arm/platform.json" --parameters "@${RUNNER_TEMP}/platform.parameters.json" \
             --only-show-errors --output none
-          shred -u "${RUNNER_TEMP}/platform.parameters.json"
           outputs="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-platform --query properties.outputs -o json)"
           for key in registryName registryServer blobServiceUri postgresHost postgresAdministratorLogin containerEnvironmentName containerEnvironmentStaticIp customDomainVerificationId containerAppsSubnetPrefix; do
             echo "${key}=$(jq -r ".${key}.value" <<<"${outputs}")" >> "${GITHUB_OUTPUT}"
           done
+
+      # PILOT-KEYVAULT-PRIVATE-APP-READ: the vault denies public traffic; open a temporary /32 rule for this
+      # runner only around its secret reads and writes (window 2), and always close it.
+      - name: Open Key Vault firewall for this runner (window 2)
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: bash deploy/azure/pilot/kv-firewall.sh open "${VAULT}"
 
       - name: Ensure database connection secrets and runtime login verifiers; never printed
         shell: bash
@@ -319,11 +341,18 @@ jobs:
           put_secret pg-migrate-connection "${RUNNER_TEMP}/s"
           # Runtime LOGIN passwords are generated once; the job receives only their SCRAM verifiers.
           for role in api worker; do
-            if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then continue; fi
+            if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier" \
+               && { [[ "${role}" != "worker" ]] || has_secret pg-worker-custody-connection; }; then continue; fi
             password="$(openssl rand -hex 32)"
             echo "::add-mask::${password}"
             printf 'Host=%s;Database=paqueteria;Username=pv_pilot_%s;Password=%s;Maximum Pool Size=5;Minimum Pool Size=0;%s' \
               "${PGHOST_FQDN}" "${role}" "${password}" "${common}" > "${RUNNER_TEMP}/s"
+            if [[ "${role}" == "worker" ]]; then
+              # The Worker maps the same login twice (ConnectionStrings:PaqueteriaWorker and :Paqueteria);
+              # the ADP-001 source refuses a duplicated secret name, so the value is stored under two names.
+              cp "${RUNNER_TEMP}/s" "${RUNNER_TEMP}/s2"
+              put_secret pg-worker-custody-connection "${RUNNER_TEMP}/s2"
+            fi
             put_secret "pg-${role}-runtime-connection" "${RUNNER_TEMP}/s"
             printf '%s' "${password}" | python3 ./tools/azr-001/env001_pilot_guards.py scram-verifier | tr -d '\n' > "${RUNNER_TEMP}/s"
             put_secret "pg-${role}-login-verifier" "${RUNNER_TEMP}/s"
@@ -334,6 +363,13 @@ jobs:
             echo "::error::Key Vault ${VAULT} lacks authcenter-paquetenvia-client-secret. Store the AuthCenter client secret (README 'Secrets the owner writes') and re-run."
             exit 1
           fi
+
+      - name: Close Key Vault firewall for this runner (window 2)
+        if: always()
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: bash deploy/azure/pilot/kv-firewall.sh close "${VAULT:-}"
 
       - name: Build and push images by digest (deployed_git_sha = tested_git_sha)
         id: images
@@ -419,7 +455,7 @@ jobs:
               "trustedProxyNetwork=${PROXY_NETWORK}" "businessSettings=@deploy/azure/pilot/apps.settings.json" \
             --only-show-errors --output none
           if [[ "${ROTATE_RUNTIME_LOGINS}" == "true" ]]; then
-            # Key Vault references refresh lazily; restart so the re-keyed logins take effect now.
+            # The apps read Key Vault secrets once at startup; restart so the re-keyed logins take effect now.
             for app in ca-pv-pilot-api ca-pv-pilot-worker; do
               revision="$(az containerapp show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --query properties.latestRevisionName -o tsv)"
               az containerapp revision restart --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${revision}" --only-show-errors --output none

@@ -31,9 +31,7 @@ DRILL="${SOURCE}-drill-$(date -u +%Y%m%d%H%M)"
 DRILL="${DRILL:0:63}"
 JOB="job-pv-pilot-verify"
 SECRET="pg-restore-drill-connection"
-MIGRATE_IDENTITY_ID="$(az identity show -g "${RG}" -n id-pv-pilot-migrate --query id -o tsv)"
 MIGRATE_PRINCIPAL="$(az identity show -g "${RG}" -n id-pv-pilot-migrate --query principalId -o tsv)"
-VAULT_URI="$(az keyvault show -n "${VAULT}" --query properties.vaultUri -o tsv)"
 
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "restore_drill_started=${started} source=${SOURCE} target=${DRILL} restore_point=${RESTORE_TIME}"
@@ -47,35 +45,41 @@ DRILL_HOST="$(az postgres flexible-server show -g "${RG}" -n "${DRILL}" --query 
 echo "restore_completed=${restored} host=${DRILL_HOST}"
 
 # 2. Connection to the restored server (same administrator credential as at the restore point).
+#    PILOT-KEYVAULT-PRIVATE-APP-READ: the vault denies public traffic, so this machine opens a temporary
+#    /32 rule for itself (kv-firewall.sh) and the cleanup always closes it.
+FIREWALL="$(dirname "$0")/kv-firewall.sh"
 umask 077
 tmp="$(mktemp)"
-trap 'shred -u "${tmp}" 2>/dev/null || true' EXIT
+SECRET_SCOPE="$(az keyvault show -n "${VAULT}" --query id -o tsv)/secrets/${SECRET}"
+
+# Cleanup on every exit: point the verify job's Key Vault mapping back at the pilot migration connection,
+# revoke the temporary Key Vault Secrets User assignment on the drill secret, close this machine's
+# temporary Key Vault firewall rule and wipe the local temporary file.
+cleanup() {
+  az containerapp job update -g "${RG}" -n "${JOB}" --only-show-errors --output none \
+    --set-env-vars "KeyVaultSecrets__Mappings__0__SecretName=pg-migrate-connection" || true
+  az role assignment delete --assignee "${MIGRATE_PRINCIPAL}" --role "Key Vault Secrets User" \
+    --scope "${SECRET_SCOPE}" --only-show-errors --output none || true
+  bash "${FIREWALL}" close "${VAULT}" || true
+  shred -u "${tmp}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+bash "${FIREWALL}" open "${VAULT}"
 admin="$(az keyvault secret show --vault-name "${VAULT}" --name pg-admin-password --query value -o tsv)"
 printf 'Host=%s;Database=paqueteria;Username=%s;Password=%s;Maximum Pool Size=2;Minimum Pool Size=0;SSL Mode=VerifyFull;Timeout=15;Command Timeout=120' \
   "${DRILL_HOST}" "${ADMIN_LOGIN}" "${admin}" > "${tmp}"
 unset admin
 az keyvault secret set --vault-name "${VAULT}" --name "${SECRET}" --file "${tmp}" --encoding utf-8 --only-show-errors --output none
-secret_id="$(az keyvault secret show --vault-name "${VAULT}" --name "${SECRET}" --query id -o tsv | sed 's#/[^/]*$##')"
-SECRET_SCOPE="$(az keyvault show -n "${VAULT}" --query id -o tsv)/secrets/${SECRET}"
 az role assignment create --assignee-object-id "${MIGRATE_PRINCIPAL}" --assignee-principal-type ServicePrincipal \
   --role "Key Vault Secrets User" --scope "${SECRET_SCOPE}" \
   --only-show-errors --output none
 sleep 60
 
-# Cleanup on every exit: point the verify job back at the pilot database, revoke the temporary
-# Key Vault Secrets User assignment on the drill secret, and wipe the local temporary file.
-cleanup() {
-  az containerapp job secret set -g "${RG}" -n "${JOB}" --only-show-errors --output none \
-    --secrets "pg-verify-conn=keyvaultref:${VAULT_URI}secrets/pg-migrate-connection,identityref:${MIGRATE_IDENTITY_ID}" || true
-  az role assignment delete --assignee "${MIGRATE_PRINCIPAL}" --role "Key Vault Secrets User" \
-    --scope "${SECRET_SCOPE}" --only-show-errors --output none || true
-  shred -u "${tmp}" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# 3. Point the read-only verify job at the restored server and run `assert` (baseline + every module lane).
-az containerapp job secret set -g "${RG}" -n "${JOB}" --only-show-errors --output none \
-  --secrets "pg-verify-conn=keyvaultref:${secret_id},identityref:${MIGRATE_IDENTITY_ID}"
+# 3. Point the read-only verify job at the restored server (its Key Vault mapping 0 names the drill secret;
+#    the job reads it itself at start) and run `assert` (baseline + every module lane).
+az containerapp job update -g "${RG}" -n "${JOB}" --only-show-errors --output none \
+  --set-env-vars "KeyVaultSecrets__Mappings__0__SecretName=${SECRET}"
 execution="$(az containerapp job start -g "${RG}" -n "${JOB}" --query name -o tsv)"
 status="Running"
 for _ in $(seq 1 60); do

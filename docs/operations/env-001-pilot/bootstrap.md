@@ -123,8 +123,11 @@ It never receives a crypto role, so it cannot unwrap PII or Data Protection keys
 
 ### Owner access to the vault (for §6.6 of the README)
 
-The vault uses RBAC. To write the AuthCenter client secret, the owner temporarily grants themselves
-*Key Vault Secrets Officer* on the vault after the first run creates it:
+The vault uses RBAC and denies public traffic (PILOT-KEYVAULT-PRIVATE-APP-READ). To write the AuthCenter
+client secret after the first run creates the vault, the owner needs two things:
+- a temporary firewall rule for their own IP (`deploy/azure/pilot/kv-firewall.sh open|close <kv>`,
+  see README §6.6);
+- a temporary *Key Vault Secrets Officer* role on the vault:
 
 ```bash
 KV="$(az deployment group show -g "$RG" -n env001-security --query properties.outputs.vaultName.value -o tsv)"

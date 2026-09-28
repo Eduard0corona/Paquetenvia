@@ -50,14 +50,40 @@ API_PREFIXES = ("/api", "/hubs", "/auth")
 API_EXACT_PATHS = ("/signin-authcenter",)
 
 # Key Vault secrets each workload may reference (least privilege, §17-style classes).
-ALLOWED_SECRETS = {
-    API_APP: {"pg-api-runtime-connection", "authcenter-paquetenvia-client-secret", "paquetenvia-email-lookup-key-1"},
-    WORKER_APP: {"pg-worker-runtime-connection"},
-    WEB_APP: set(),
-    MIGRATE_JOB: {"pg-migrate-connection"},
-    LOGINS_JOB: {"pg-migrate-connection", "pg-api-login-verifier", "pg-worker-login-verifier"},
-    VERIFY_JOB: {"pg-migrate-connection"},
+# PILOT-KEYVAULT-PRIVATE-APP-READ: each workload reads exactly these Key Vault secrets itself (ADP-001
+# `KeyVaultSecrets__Mappings__<n>__SecretName` -> `__ConfigurationKey`), never through Container Apps.
+REQUIRED_SECRET_MAPPINGS = {
+    API_APP: {
+        "pg-api-runtime-connection": "ConnectionStrings:Paqueteria",
+        "authcenter-paquetenvia-client-secret": "AuthCenter:ClientSecret",
+        "paquetenvia-email-lookup-key-1": "EmailLookup:Keys:1",
+    },
+    WORKER_APP: {
+        "pg-worker-runtime-connection": "ConnectionStrings:PaqueteriaWorker",
+        "pg-worker-custody-connection": "ConnectionStrings:Paqueteria",
+    },
+    WEB_APP: {},
+    MIGRATE_JOB: {"pg-migrate-connection": "PAQUETERIA_MIGRATION_CONNECTION"},
+    LOGINS_JOB: {
+        "pg-migrate-connection": "PAQUETERIA_MIGRATION_CONNECTION",
+        "pg-api-login-verifier": "PAQUETERIA_API_LOGIN_VERIFIER",
+        "pg-worker-login-verifier": "PAQUETERIA_WORKER_LOGIN_VERIFIER",
+    },
+    VERIFY_JOB: {"pg-migrate-connection": "PAQUETERIA_MIGRATION_CONNECTION"},
 }
+ALLOWED_SECRETS = {name: set(mapping) for name, mapping in REQUIRED_SECRET_MAPPINGS.items()}
+# Template variable holding the secrets that get a per-secret Key Vault Secrets User assignment for the
+# identity of each workload; it must equal the workload's mapped secret set.
+SECRET_RBAC_VARIABLE = {
+    API_APP: ("apps", "apiSecretNames"),
+    WORKER_APP: ("apps", "workerSecretNames"),
+    MIGRATE_JOB: ("jobs", "migrateSecretNames"),
+    VERIFY_JOB: ("jobs", "migrateSecretNames"),
+    LOGINS_JOB: ("jobs", "loginsSecretNames"),
+}
+MAPPING_KEY = re.compile(r"^KeyVaultSecrets__Mappings__(\d+)__(SecretName|ConfigurationKey)$")
+SENSITIVE_SETTINGS = re.compile(
+    r"^(ConnectionStrings__.*|.*Secret|EmailLookup__Keys__.*|PAQUETERIA_MIGRATION_CONNECTION|.*_VERIFIER|.*Password.*|.*ApiKey.*|.*Token)$")
 
 AUTHORIZED_RESOURCE_TYPES = frozenset(
     {
@@ -405,21 +431,72 @@ def guard_05_images(ctx: Context) -> GuardResult:
     return _result(5, "managed-identity pulls of immutable images", failures, "no registry credentials, digests only")
 
 
+def secret_mappings(workload: Workload) -> dict[str, str] | str:
+    """`SecretName -> ConfigurationKey` from the workload's ADP-001 mapping env, or an error text."""
+    indexed: dict[int, dict[str, str]] = {}
+    for key, (kind, value) in workload.env.items():
+        match = MAPPING_KEY.match(key)
+        if not match:
+            continue
+        if kind != "value" or value == "<expression>":
+            return f"{key} must be a literal value"
+        indexed.setdefault(int(match.group(1)), {})[match.group(2)] = value
+    if sorted(indexed) != list(range(len(indexed))):
+        return f"mapping indexes must be 0..n-1, found {sorted(indexed)}"
+    mappings: dict[str, str] = {}
+    keys: set[str] = set()
+    for index in sorted(indexed):
+        pair = indexed[index]
+        if set(pair) != {"SecretName", "ConfigurationKey"}:
+            return f"mapping {index} must have SecretName and ConfigurationKey"
+        if pair["SecretName"] in mappings or pair["ConfigurationKey"] in keys:
+            return f"mapping {index} duplicates a secret name or configuration key"
+        mappings[pair["SecretName"]] = pair["ConfigurationKey"]
+        keys.add(pair["ConfigurationKey"])
+    return mappings
+
+
+def _copy_count_variable(resource: dict[str, Any]) -> str | None:
+    count = str(((resource.get("copy") or {}).get("count")) or "")
+    match = re.fullmatch(r"\[length\(variables\('([A-Za-z0-9_]+)'\)\)\]", count)
+    return match.group(1) if match else None
+
+
 def guard_06_secrets(ctx: Context) -> GuardResult:
+    """PILOT-KEYVAULT-PRIVATE-APP-READ: no Container Apps secrets at all; each workload reads exactly its
+    mapped Key Vault secrets itself, and its identity holds Key Vault Secrets User on exactly those secrets."""
     failures = []
+    reader_role = "4633458b-17de-408a-b874-0445c86b69e6"
     for workload in ctx.workloads:
-        for secret in workload.configuration.get("secrets", []) or []:
-            if "value" in secret or not secret.get("keyVaultUrl") or not secret.get("identity"):
-                failures.append(f"{workload.name} secret {secret.get('name')} must be a Key Vault reference with a managed identity")
-        allowed = ALLOWED_SECRETS.get(workload.name, set())
-        extra = sorted(set(workload.secret_names) - allowed)
-        if extra:
-            failures.append(f"{workload.name} references secrets outside its least-privilege set: {extra}")
+        if workload.configuration.get("secrets"):
+            failures.append(f"{workload.name} declares Container Apps secrets; Key Vault secrets are read by the application")
         for key, (kind, _) in workload.env.items():
-            sensitive = key.startswith("ConnectionStrings__") or key.endswith("Secret") or key.startswith("EmailLookup__Keys__") or "CONNECTION" in key or "VERIFIER" in key
-            if sensitive and kind != "secretRef":
-                failures.append(f"{workload.name} passes {key} as a plain value")
-    return _result(6, "secrets only from Key Vault, least privilege", failures, "every secret is a keyVaultUrl reference")
+            if kind == "secretRef":
+                failures.append(f"{workload.name} uses secretRef for {key}")
+            if SENSITIVE_SETTINGS.match(key):
+                failures.append(f"{workload.name} sets sensitive setting {key} in its environment; map it from Key Vault instead")
+        expected = REQUIRED_SECRET_MAPPINGS.get(workload.name, {})
+        mappings = secret_mappings(workload)
+        if isinstance(mappings, str):
+            failures.append(f"{workload.name}: {mappings}")
+            continue
+        if mappings != expected:
+            failures.append(f"{workload.name} Key Vault mappings {mappings} differ from the least-privilege set {expected}")
+        if expected:
+            if workload.env.get("KeyVaultSecrets__VaultUri") is None:
+                failures.append(f"{workload.name} maps Key Vault secrets without KeyVaultSecrets__VaultUri")
+            if workload.env.get("AZURE_CLIENT_ID") is None:
+                failures.append(f"{workload.name} must name its user-assigned identity in AZURE_CLIENT_ID")
+            template, variable = SECRET_RBAC_VARIABLE[workload.name]
+            granted = ctx.templates[template].get("variables", {}).get(variable)
+            if not isinstance(granted, list) or set(granted) != set(expected):
+                failures.append(f"{workload.name}: {template}.{variable} (per-secret Key Vault Secrets User) is {granted}, expected {sorted(expected)}")
+            assignments = [r for _, r in ctx.resources("Microsoft.Authorization/roleAssignments")
+                           if _copy_count_variable(r) == variable and reader_role in json.dumps(ctx.templates[template].get("variables", {}))]
+            if not assignments:
+                failures.append(f"{workload.name}: no per-secret Key Vault Secrets User assignment loops over {variable}")
+    return _result(6, "Key Vault secrets read by the application, least privilege", failures,
+                   "no Container Apps secrets; mappings match per-secret RBAC")
 
 
 def guard_07_production_classification(ctx: Context) -> GuardResult:
@@ -599,7 +676,22 @@ def guard_13_key_vault(ctx: Context) -> GuardResult:
             failures.append(f"key {name} must be RSA >= 3072 limited to wrapKey/unwrapKey")
     if ctx.resources("Microsoft.KeyVault/vaults/secrets"):
         failures.append("templates must not create secret values (the workflow writes generated secrets)")
-    return _result(13, "Key Vault RBAC, purge protection, wrap-only keys", failures, f"{len(keys)} key(s)")
+    # PILOT-KEYVAULT-PRIVATE-APP-READ: deny by default, no trusted-service bypass, no standing IP rule,
+    # only the Container Apps subnet admitted.
+    for _, vault in ctx.resources("Microsoft.KeyVault/vaults"):
+        acls = (vault.get("properties", {}) or {}).get("networkAcls", {}) or {}
+        if acls.get("defaultAction") != "Deny":
+            failures.append(f"Key Vault networkAcls.defaultAction must be Deny, found {acls.get('defaultAction')}")
+        if acls.get("bypass") != "None":
+            failures.append(f"Key Vault networkAcls.bypass must be None, found {acls.get('bypass')}")
+        if acls.get("ipRules"):
+            failures.append("Key Vault must not declare standing ipRules (the workflow opens a temporary rule)")
+        rules = acls.get("virtualNetworkRules", []) or []
+        if len(rules) != 1 or "snet-containerapps" not in json.dumps(rules):
+            failures.append("Key Vault must admit exactly the Container Apps subnet")
+    if "kv-firewall.sh open" not in ctx.workflow_text or "kv-firewall.sh close" not in ctx.workflow_text:
+        failures.append("workflow must open and close the temporary Key Vault firewall rule around its secret access")
+    return _result(13, "Key Vault deny-by-default, RBAC, purge protection, wrap-only keys", failures, f"{len(keys)} key(s)")
 
 
 def guard_14_rbac(ctx: Context) -> GuardResult:

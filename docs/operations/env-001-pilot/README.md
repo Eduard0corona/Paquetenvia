@@ -61,7 +61,7 @@ Otherwise the deploy job stops before logging in to Azure.
                         |                                            |
                ca-pv-pilot-api (internal ingress, 1 replica)   ca-pv-pilot-web (internal ingress, 1-2)
                         |   \                                    Next.js, NEXT_PUBLIC_AUTH_MODE=bff
-                        |    \-- Key Vault (secrets by reference; pii-kek, dataprotection-kek)
+                        |    \-- Key Vault (deny by default; app-read secrets, pii-kek, dataprotection-kek)
                         |    \-- Blob Storage "proofs" (user-delegation SAS; Defender scan)
                ca-pv-pilot-worker (no ingress, 1 replica) ---/
                         |
@@ -72,8 +72,8 @@ Otherwise the deploy job stops before logging in to Azure.
 
 | Resource | Name (suffix = `uniqueString(subscription, resource group)`) |
 |---|---|
-| Identities | `id-pv-pilot-api`, `id-pv-pilot-worker`, `id-pv-pilot-web`, `id-pv-pilot-migrate` |
-| Key Vault | `kv-pvp-<suffix13>`: RBAC, soft delete 90 days, purge protection |
+| Identities | `id-pv-pilot-api`, `id-pv-pilot-worker`, `id-pv-pilot-web`, `id-pv-pilot-migrate` (migrate and verify jobs), `id-pv-pilot-logins` (logins job) |
+| Key Vault | `kv-pvp-<suffix13>`: RBAC, soft delete 90 days, purge protection, firewall `Deny` with only the Container Apps subnet admitted (PILOT-KEYVAULT-PRIVATE-APP-READ) |
 | VNet / subnets | `vnet-pv-pilot`: `snet-containerapps` `10.60.0.0/23` (service endpoints Storage and Key Vault), `snet-postgres` `10.60.2.0/28` |
 | Private DNS | `pv-pilot.private.postgres.database.azure.com` |
 | Log Analytics | `law-pv-pilot-<suffix>`: 30 days, 0.3 GB/day cap |
@@ -134,16 +134,50 @@ public.
 
 ## 4. Configuration, identities and secrets
 
-Every secret lives only in Key Vault. Container Apps reference secrets with `keyVaultUrl` plus the
-workload's user-assigned identity. Each identity has *Key Vault Secrets User* on the **individual**
-secrets it needs, never on the whole vault (guard P06).
+Every secret lives only in Key Vault. The vault firewall denies public traffic (PILOT-KEYVAULT-PRIVATE-APP-READ):
+- `defaultAction: Deny` and `bypass: None`;
+- only the Container Apps subnet is admitted, through its free `Microsoft.KeyVault` service endpoint.
+
+Container Apps Key Vault *references* are **not used**. The platform, not the app, resolves those, and
+there is a public report that they fail behind such a firewall (microsoft/azure-container-apps#1287).
+Instead, API, Worker and the three database jobs read their secrets **themselves** at startup, from
+inside the VNet, with their managed identity (`AZURE_CLIENT_ID`). They use the ADP-001 Key Vault
+secrets source ("Key Vault secrets read by the application" in
+`docs/development/adp-001-production-adapters.md`):
+
+- `KeyVaultSecrets__VaultUri` turns the source on.
+- `KeyVaultSecrets__Mappings__<n>__SecretName` and `__ConfigurationKey` map one secret to one
+  configuration key. Only the mapped secrets are read.
+- A missing, disabled or unreadable secret stops the host before it starts.
+
+Each identity has *Key Vault Secrets User* on **exactly** the secrets it maps, never on the whole vault.
+Guard P06 checks three things:
+- the mappings equal that least-privilege set;
+- the per-secret RBAC arrays equal the mappings;
+- no workload declares Container Apps secrets, a `secretRef`, or a sensitive setting in plain env.
+
+| Workload (identity) | Secret → configuration key |
+|---|---|
+| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1` |
+| Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker`; `pg-worker-custody-connection` → `ConnectionStrings:Paqueteria` (same login, stored under a second name because the source refuses a duplicated secret name) |
+| Migrate and verify jobs (`id-pv-pilot-migrate`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION` |
+| Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER` |
+
+The GitHub runner is outside the VNet. `deploy/azure/pilot/kv-firewall.sh` opens a temporary `/32`
+rule for the runner's public IP only around its secret reads and writes, and an `always()` step closes
+it. There are two windows:
+- generated secrets and the platform parameters;
+- the database connection secrets.
+
+Every redeploy of `security.bicep` also resets `ipRules` to empty. A secret rotation takes effect when
+the app restarts or starts a new revision; the workflow restarts the API and Worker after a rotation.
 
 | Key Vault secret | Written by | Read by |
 |---|---|---|
 | `pg-admin-password` | workflow (generated once, never printed) | workflow only |
 | `pg-migrate-connection` | workflow (every run, derived from the admin password) | migrate, logins and verify jobs |
-| `pg-api-runtime-connection` / `pg-worker-runtime-connection` | workflow (generated once, 64 hex chars) | API / Worker |
-| `pg-api-login-verifier` / `pg-worker-login-verifier` | workflow (SCRAM of the above) | logins job |
+| `pg-api-runtime-connection` / `pg-worker-runtime-connection` (+ `pg-worker-custody-connection`, same value) | workflow (generated once, 64 hex chars) | API / Worker |
+| `pg-api-login-verifier` / `pg-worker-login-verifier` | workflow (SCRAM of the above) | logins job (its own identity) |
 | `paquetenvia-email-lookup-key-1` | workflow (generated once: 32 random bytes, base64) | API (`EmailLookup__Keys__1`) |
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |
 | `pg-restore-drill-connection` | `restore-drill.sh` | verify job, during a drill only |
@@ -358,11 +392,16 @@ This removes everything in the group. The budget and role assignments are scoped
 
 ### 6.6 Secrets the owner writes
 
+The vault denies public traffic, so open a temporary rule for your Cloud Shell's IP and close it
+afterwards:
+
 ```bash
+bash deploy/azure/pilot/kv-firewall.sh open <kv>
 # Paste the value when prompted; it never appears in shell history or process lists.
 read -rs AUTHCENTER_SECRET && printf '%s' "$AUTHCENTER_SECRET" > /tmp/ac && \
 az keyvault secret set --vault-name <kv> --name authcenter-paquetenvia-client-secret --file /tmp/ac --encoding utf-8 --output none; \
 shred -u /tmp/ac; unset AUTHCENTER_SECRET
+bash deploy/azure/pilot/kv-firewall.sh close <kv>
 ```
 
 The workflow identity has *Key Vault Secrets Officer* on the vault. The owner needs a data-plane role
@@ -406,8 +445,14 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
     so that switching `defaultAction` to `Deny` later keeps the workloads' access and cuts off only
     browsers.
   - A private endpoint (about 7.30 USD per month) would not help: phones are not in the VNet.
-- **Key Vault and ACR:** public endpoints with Entra RBAC only. The GitHub-hosted runner must write
-  secrets and push images; ACR Basic has no network rules.
+- **Key Vault (PILOT-KEYVAULT-PRIVATE-APP-READ):** `defaultAction: Deny`, `bypass: None`, and only the
+  Container Apps subnet admitted.
+  - The apps and jobs read their secrets themselves with their managed identities (§4).
+  - The GitHub runner, or the owner's Cloud Shell, gets a temporary `/32` rule only around its secret
+    access, and the rule is always removed.
+  - Guard P13 fails if the vault is not deny-by-default or if the workflow stops closing its rule.
+- **ACR:** public endpoint with Entra RBAC only. The GitHub-hosted runner pushes images, and ACR Basic
+  has no network rules.
 - **Deployer:** *Contributor* plus *Role Based Access Control Administrator* on the resource group
   only, constrained by an ABAC condition to the seven roles the templates assign (see bootstrap).
   The templates never assign Owner, Contributor, User Access Administrator, Storage Blob Data Owner or
@@ -427,7 +472,7 @@ The 20 guards (P00–P19) run on the compiled ARM output and the workflow:
   - No `${{ }}` inside `run:`.
   - The 13/13 `deploy-gate`, image digests and the GATE-007/GATE-012 checks are present.
 - **Secrets and settings:**
-  - Secrets come only from Key Vault, and each workload's secret set is least privilege.
+  - Secrets come only from Key Vault, read by the application. The per-workload mappings equal the per-secret RBAC, and there are no Container Apps secrets or `secretRef`.
   - Workloads run as `Production`/`PILOT_REAL_PEOPLE`, with no Mock or Synthetic values.
 - **Replicas and migrations:** a single API and Worker replica on `InProcess`. Migrations run only
   through the canonical migrator jobs, and the pilot db-ops image contains no DevSeed.
@@ -436,7 +481,7 @@ The 20 guards (P00–P19) run on the compiled ARM output and the workflow:
   - PostgreSQL is private, version 18, with ≥ 7-day backups, secure transport and the extension
     allowlist, in a VNet-injected Consumption environment.
   - Storage flags and Defender scanning are set.
-  - Key Vault has RBAC, purge protection and wrap-only RSA keys of at least 3072 bits.
+  - Key Vault denies public traffic (only the Container Apps subnet, no bypass, no standing IP rule) and has RBAC, purge protection and wrap-only RSA keys of at least 3072 bits.
 - **RBAC:** role assignments stay within the allowlist.
 - **Cost:** the 100 USD budget exists and the log cap is set.
 - **ADP-001 and web:**

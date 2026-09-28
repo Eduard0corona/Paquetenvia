@@ -38,9 +38,7 @@ var tags = {
   dataClassification: 'REAL_PEOPLE'
   cleanupGroup: 'ENV-001'
 }
-var addressSpace = '10.60.0.0/22'
 var containerAppsSubnetPrefix = '10.60.0.0/23'
-var postgresSubnetPrefix = '10.60.2.0/28'
 var postgresAdministratorLogin = 'pvpilotadmin'
 
 var roles = {
@@ -57,57 +55,9 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-1
   name: 'id-pv-pilot-worker'
 }
 
-// ---------------------------------------------------------------- network
-resource vnet 'Microsoft.Network/virtualNetworks@2024-07-01' = {
+// ---------------------------------------------------------------- network (VNet created in security.bicep)
+resource vnet 'Microsoft.Network/virtualNetworks@2024-07-01' existing = {
   name: 'vnet-pv-pilot'
-  location: location
-  tags: tags
-  properties: {
-    addressSpace: {
-      addressPrefixes: [
-        addressSpace
-      ]
-    }
-    subnets: [
-      {
-        name: 'snet-containerapps'
-        properties: {
-          addressPrefix: containerAppsSubnetPrefix
-          delegations: [
-            {
-              name: 'containerapps'
-              properties: {
-                serviceName: 'Microsoft.App/environments'
-              }
-            }
-          ]
-          // Free service endpoints: Blob and Key Vault traffic from the workloads stays on the Azure backbone.
-          serviceEndpoints: [
-            {
-              service: 'Microsoft.Storage'
-            }
-            {
-              service: 'Microsoft.KeyVault'
-            }
-          ]
-        }
-      }
-      {
-        name: 'snet-postgres'
-        properties: {
-          addressPrefix: postgresSubnetPrefix
-          delegations: [
-            {
-              name: 'postgres'
-              properties: {
-                serviceName: 'Microsoft.DBforPostgreSQL/flexibleServers'
-              }
-            }
-          ]
-        }
-      }
-    ]
-  }
 }
 
 resource containerAppsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-07-01' existing = {
@@ -176,6 +126,7 @@ var pullIdentityNames = [
   'id-pv-pilot-worker'
   'id-pv-pilot-web'
   'id-pv-pilot-migrate'
+  'id-pv-pilot-logins'
 ]
 
 resource pullIdentities 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = [for name in pullIdentityNames: {

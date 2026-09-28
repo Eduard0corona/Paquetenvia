@@ -55,6 +55,7 @@ var apiSecretNames = [
 ]
 var workerSecretNames = [
   'pg-worker-runtime-connection'
+  'pg-worker-custody-connection'
 ]
 
 resource containerEnvironment 'Microsoft.App/managedEnvironments@2025-07-01' existing = {
@@ -162,14 +163,67 @@ var dataProtectionEnv = [
   }
 ]
 
-var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, [
+// PILOT-KEYVAULT-PRIVATE-APP-READ (ADP-001 "Key Vault secrets read by the application"): the API and
+// the Worker read their secrets themselves at startup, from the VNet, with their managed identities.
+// Each mapping must match the per-secret Key Vault Secrets User assignments above (guard P06).
+var apiKeyVaultEnv = [
+  {
+    name: 'KeyVaultSecrets__VaultUri'
+    value: vault.properties.vaultUri
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__0__SecretName'
+    value: 'pg-api-runtime-connection'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__0__ConfigurationKey'
+    value: 'ConnectionStrings:Paqueteria'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__1__SecretName'
+    value: 'authcenter-paquetenvia-client-secret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__1__ConfigurationKey'
+    value: 'AuthCenter:ClientSecret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__2__SecretName'
+    value: 'paquetenvia-email-lookup-key-1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__2__ConfigurationKey'
+    value: 'EmailLookup:Keys:1'
+  }
+]
+
+var workerKeyVaultEnv = [
+  {
+    name: 'KeyVaultSecrets__VaultUri'
+    value: vault.properties.vaultUri
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__0__SecretName'
+    value: 'pg-worker-runtime-connection'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__0__ConfigurationKey'
+    value: 'ConnectionStrings:PaqueteriaWorker'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__1__SecretName'
+    value: 'pg-worker-custody-connection'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__1__ConfigurationKey'
+    value: 'ConnectionStrings:Paqueteria'
+  }
+]
+
+var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, apiKeyVaultEnv, [
   {
     name: 'AZURE_CLIENT_ID'
     value: apiIdentity.properties.clientId
-  }
-  {
-    name: 'ConnectionStrings__Paqueteria'
-    secretRef: 'pg-api-conn'
   }
   {
     name: 'Authentication__Provider'
@@ -188,10 +242,6 @@ var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, [
     value: authCenterClientId
   }
   {
-    name: 'AuthCenter__ClientSecret'
-    secretRef: 'authcenter-client-secret'
-  }
-  {
     name: 'AuthCenter__PublicOrigin'
     value: publicOrigin
   }
@@ -202,10 +252,6 @@ var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, [
   {
     name: 'EmailLookup__CurrentKeyVersion'
     value: '1'
-  }
-  {
-    name: 'EmailLookup__Keys__1'
-    secretRef: 'email-lookup-key-1'
   }
   {
     name: 'IdentityBootstrap__Provider'
@@ -303,7 +349,7 @@ var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, [
   }
 ], businessSettings)
 
-var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, [
+var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, workerKeyVaultEnv, [
   {
     name: 'AZURE_CLIENT_ID'
     value: workerIdentity.properties.clientId
@@ -311,14 +357,6 @@ var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, [
   {
     name: 'Urls'
     value: 'http://+:8080'
-  }
-  {
-    name: 'ConnectionStrings__Paqueteria'
-    secretRef: 'pg-worker-conn'
-  }
-  {
-    name: 'ConnectionStrings__PaqueteriaWorker'
-    secretRef: 'pg-worker-conn'
   }
   {
     name: 'Drivers__Provider'
@@ -427,23 +465,6 @@ resource api 'Microsoft.App/containerApps@2025-07-01' = {
           identity: apiIdentity.id
         }
       ]
-      secrets: [
-        {
-          name: 'pg-api-conn'
-          keyVaultUrl: '${vault.properties.vaultUri}secrets/pg-api-runtime-connection'
-          identity: apiIdentity.id
-        }
-        {
-          name: 'authcenter-client-secret'
-          keyVaultUrl: '${vault.properties.vaultUri}secrets/authcenter-paquetenvia-client-secret'
-          identity: apiIdentity.id
-        }
-        {
-          name: 'email-lookup-key-1'
-          keyVaultUrl: '${vault.properties.vaultUri}secrets/paquetenvia-email-lookup-key-1'
-          identity: apiIdentity.id
-        }
-      ]
     }
     template: {
       containers: [
@@ -488,13 +509,6 @@ resource worker 'Microsoft.App/containerApps@2025-07-01' = {
       registries: [
         {
           server: registry.properties.loginServer
-          identity: workerIdentity.id
-        }
-      ]
-      secrets: [
-        {
-          name: 'pg-worker-conn'
-          keyVaultUrl: '${vault.properties.vaultUri}secrets/pg-worker-runtime-connection'
           identity: workerIdentity.id
         }
       ]

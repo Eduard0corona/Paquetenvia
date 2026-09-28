@@ -22,11 +22,16 @@ var roles = {
   keyVaultCryptoServiceEncryptionUser: 'e147488a-f6f5-4113-8e2d-b22465e65bf6'
 }
 
+var addressSpace = '10.60.0.0/22'
+var containerAppsSubnetPrefix = '10.60.0.0/23'
+var postgresSubnetPrefix = '10.60.2.0/28'
+
 var identityNames = [
   'id-pv-pilot-api'
   'id-pv-pilot-worker'
   'id-pv-pilot-web'
   'id-pv-pilot-migrate'
+  'id-pv-pilot-logins'
 ]
 
 resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = [for name in identityNames: {
@@ -34,6 +39,64 @@ resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30
   location: location
   tags: tags
 }]
+
+// Network: created in stage 1 so the Key Vault firewall can admit the Container Apps subnet.
+resource vnet 'Microsoft.Network/virtualNetworks@2024-07-01' = {
+  name: 'vnet-pv-pilot'
+  location: location
+  tags: tags
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        addressSpace
+      ]
+    }
+    subnets: [
+      {
+        name: 'snet-containerapps'
+        properties: {
+          addressPrefix: containerAppsSubnetPrefix
+          delegations: [
+            {
+              name: 'containerapps'
+              properties: {
+                serviceName: 'Microsoft.App/environments'
+              }
+            }
+          ]
+          // Free service endpoints: Blob and Key Vault traffic from the workloads stays on the Azure backbone.
+          serviceEndpoints: [
+            {
+              service: 'Microsoft.Storage'
+            }
+            {
+              service: 'Microsoft.KeyVault'
+            }
+          ]
+        }
+      }
+      {
+        name: 'snet-postgres'
+        properties: {
+          addressPrefix: postgresSubnetPrefix
+          delegations: [
+            {
+              name: 'postgres'
+              properties: {
+                serviceName: 'Microsoft.DBforPostgreSQL/flexibleServers'
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource containerAppsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-07-01' existing = {
+  parent: vnet
+  name: 'snet-containerapps'
+}
 
 resource vault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: 'kv-pvp-${take(suffix, 13)}'
@@ -49,12 +112,22 @@ resource vault 'Microsoft.KeyVault/vaults@2024-11-01' = {
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
     enablePurgeProtection: true
-    // The GitHub-hosted runner writes generated secrets and Container Apps resolve secret references
-    // over the public endpoint; every data-plane call still requires an Entra RBAC role.
+    // PILOT-KEYVAULT-PRIVATE-APP-READ: deny by default. Only the Container Apps subnet (Microsoft.KeyVault
+    // service endpoint) reaches the data plane; the apps and jobs read their secrets and keys themselves
+    // with their managed identities. No trusted-service bypass. The deployment workflow adds its runner's
+    // IP as a temporary rule around its secret writes and always removes it (kv-firewall.sh); every
+    // redeploy of this template resets ipRules to empty.
     publicNetworkAccess: 'Enabled'
     networkAcls: {
-      bypass: 'AzureServices'
-      defaultAction: 'Allow'
+      bypass: 'None'
+      defaultAction: 'Deny'
+      ipRules: []
+      virtualNetworkRules: [
+        {
+          id: containerAppsSubnet.id
+          ignoreMissingVnetServiceEndpoint: false
+        }
+      ]
     }
   }
 }

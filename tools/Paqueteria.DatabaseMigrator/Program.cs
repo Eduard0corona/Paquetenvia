@@ -48,7 +48,8 @@ internal static partial class DatabaseMigratorProgram
                 case "runtime-logins":
                     // ENV-001: least-privilege runtime LOGIN roles for the pilot API and Worker (SCRAM verifiers only).
                     await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
-                    await RuntimeLoginProvisioner.RunAsync(connectionString, cancellation.Token).ConfigureAwait(false);
+                    await RuntimeLoginProvisioner.RunAsync(connectionString, ReadSetting, cancellation.Token)
+                        .ConfigureAwait(false);
                     Console.WriteLine($"RUNTIME_LOGINS_OK api={RuntimeLoginProvisioner.ApiLogin} worker={RuntimeLoginProvisioner.WorkerLogin}");
                     return 0;
 
@@ -175,7 +176,7 @@ internal static partial class DatabaseMigratorProgram
             throw new CommandLineException("--connection-env must be a valid environment variable name.");
         }
 
-        var value = Environment.GetEnvironmentVariable(environmentName);
+        var value = ReadSetting(environmentName);
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new CommandLineException($"Environment variable '{environmentName}' is not set.");
@@ -183,6 +184,12 @@ internal static partial class DatabaseMigratorProgram
 
         return value;
     }
+
+    /// <summary>
+    /// The single lookup for named settings (connection and runtime-login verifiers). It reads environment
+    /// variables today; the ADP-001 Key Vault secrets source overlays mapped secrets on the same names.
+    /// </summary>
+    internal static string? ReadSetting(string name) => Environment.GetEnvironmentVariable(name);
 
     private static async Task<E002NotificationState> AssertE002SemanticAsync(
         string connectionString, CancellationToken cancellationToken)
