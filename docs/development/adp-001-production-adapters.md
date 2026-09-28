@@ -23,10 +23,50 @@ Values in angle brackets are placeholders.
 
 | Variable | Host | Meaning |
 | --- | --- | --- |
-| `AZURE_CLIENT_ID` | API, Worker | Client id of the **user-assigned** managed identity of that workload. When absent, the system-assigned identity is used. No secret, connection string or account key is read for any Azure adapter. |
+| `AZURE_CLIENT_ID` | API, Worker, DatabaseMigrator job | Client id of the **user-assigned** managed identity of that workload. When absent, the system-assigned identity is used. No secret, connection string or account key is read for any Azure adapter. |
 
 The adapters authenticate only with `ManagedIdentityCredential`; there is no client secret,
 storage account key or SAS in configuration.
+
+### Key Vault secrets read by the application (PILOT-KEYVAULT-PRIVATE-APP-READ)
+
+The pilot Key Vault uses `defaultAction=Deny`, so Container Apps platform Key Vault references are
+not used. API, Worker and the DatabaseMigrator job read their own secrets at startup, from inside
+the VNet (Key Vault private endpoint), with `ManagedIdentityCredential` (`AZURE_CLIENT_ID`). The
+source is **off unless `KeyVaultSecrets__VaultUri` is set**; local and synthetic runs are unchanged.
+
+| Variable | Value | Required |
+| --- | --- | --- |
+| `KeyVaultSecrets__VaultUri` | `https://<vault>.vault.azure.net/` (HTTPS, no path) | turns the source on |
+| `KeyVaultSecrets__Mappings__<n>__SecretName` | Key Vault secret name (`[0-9A-Za-z-]`, 1–127) | one per secret, `n` = 0, 1, 2… |
+| `KeyVaultSecrets__Mappings__<n>__ConfigurationKey` | the configuration key that receives the value (`:` separated) | same `n` |
+| `KeyVaultSecrets__TimeoutSeconds` | `30` (default; 5–120) | no |
+
+Rules: only the listed secrets are read (there is no "load every secret" mode); the latest
+enabled version is read once at startup; a missing, disabled or unreadable secret, a duplicated
+secret name or configuration key, or an empty mapping list **stops the host before it starts**;
+values are never logged. Key Vault values override the same key from environment variables and
+appsettings. A secret rotation takes effect on the next restart/revision.
+
+Suggested mappings (the secret names are the ENV-001 agent's choice; the configuration keys are
+fixed by the application):
+
+| Workload | Configuration key | Meaning |
+| --- | --- | --- |
+| API | `ConnectionStrings:Paqueteria` | PostgreSQL connection of `paqueteria_app` login |
+| API | `EmailLookup:Keys:1` | REG-002 email lookup HMAC key (Base64) |
+| API | any other secret setting (for example the AuthCenter client secret, maps API key) | same mechanism |
+| Worker | `ConnectionStrings:PaqueteriaWorker` | PostgreSQL connection of the worker login |
+| Worker | `ConnectionStrings:Paqueteria` | when the Worker hosts components that read it |
+| DatabaseMigrator job | `PAQUETERIA_MIGRATION_CONNECTION` | the value `--connection-env PAQUETERIA_MIGRATION_CONNECTION` reads; with the source on, the migrator resolves that name from its configuration (environment variables overlaid by the mapped Key Vault secret), so the job no longer needs the connection string in an environment variable |
+
+Example (API): `KeyVaultSecrets__VaultUri=https://kv-paquetenvia.vault.azure.net/`,
+`KeyVaultSecrets__Mappings__0__SecretName=paqueteria-app-connection`,
+`KeyVaultSecrets__Mappings__0__ConfigurationKey=ConnectionStrings:Paqueteria`.
+
+RBAC: **Key Vault Secrets User** for each workload identity, scoped to each secret it maps
+(`/secrets/<name>`), never the whole vault. The Worker gets no access to API-only secrets, and the
+migrator job only to its migration connection.
 
 ### PII envelope protector (API only)
 
