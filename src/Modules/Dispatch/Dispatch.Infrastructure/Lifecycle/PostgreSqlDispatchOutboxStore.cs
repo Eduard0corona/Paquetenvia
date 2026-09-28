@@ -15,7 +15,8 @@ public sealed record ClaimedDispatchOutboxMessage(
     string Payload,
     int Attempts,
     Guid LeaseToken,
-    DateTimeOffset LeaseExpiresAt);
+    DateTimeOffset LeaseExpiresAt,
+    DateTimeOffset? AvailableAt = null);
 
 /// <summary>Connection source for the Worker credential; every scope runs as paqueteria_worker.</summary>
 public sealed class DispatchWorkerConnectionFactory(string connectionString) : IAsyncDisposable
@@ -103,7 +104,9 @@ public sealed class PostgreSqlDispatchOutboxStore(DispatchWorkerConnectionFactor
                     reader.GetString(reader.GetOrdinal("payload")),
                     reader.GetInt32(reader.GetOrdinal("attempts")),
                     reader.GetGuid(reader.GetOrdinal("lease_token")),
-                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("lease_expires_at"))));
+                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("lease_expires_at")),
+                    // OBS-002: already part of the claim function's result row; used only for the lane's claim age.
+                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("available_at"))));
             }
         }
 

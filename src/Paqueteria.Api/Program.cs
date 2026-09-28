@@ -20,6 +20,7 @@ using Paqueteria.Api.Http;
 using Paqueteria.Api.Tenancy;
 using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.DataProtection;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Security;
 using Locations.Endpoints;
 using Locations.Infrastructure;
@@ -47,6 +48,8 @@ builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
 builder.AddHttpHardening();
+// OBS-002: one PII-free summary of response status classes per minute (no path, user or tenant).
+builder.Services.AddHttpStatusTelemetry();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddEmailLookupHashing(builder.Configuration, builder.Environment);
 builder.Services.AddProblemDetails();
@@ -83,6 +86,7 @@ builder.Services
 
 var app = builder.Build();
 
+app.UseHttpStatusTelemetry();
 app.UseTrustedForwardedHeaders();
 app.UseExceptionHandler();
 if (!app.Environment.IsDevelopment())

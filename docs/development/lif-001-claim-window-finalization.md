@@ -66,7 +66,7 @@ Con `Enabled=true` el Worker exige `ConnectionStrings:PaqueteriaWorker` y no
 arranca sin ella.
 
 Cada ciclo ejecuta lotes hasta que uno finaliza cero filas o se alcanza
-`MaxBatchesPerCycle`. Un ciclo fallido se registra con el outcome `CYCLE_FAILURE`
+`MaxBatchesPerCycle`. Un ciclo fallido se registra con el evento `ScheduledJobCycle` y outcome `failure` (OBS-002)
 y el siguiente se ejecuta tras el intervalo; la mutación en base de datos es el
 mecanismo de idempotencia, por lo que reinicios y Workers concurrentes no duplican
 efectos.
