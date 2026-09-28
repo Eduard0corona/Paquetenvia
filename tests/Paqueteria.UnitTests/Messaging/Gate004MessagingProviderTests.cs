@@ -266,6 +266,119 @@ public sealed class Gate004MessagingProviderTests
         Assert.Equal(2, emailFactory.Created);
     }
 
+    // ------------------------------------------------------------------ AI-03 §16 resilience
+
+    [Fact]
+    public async Task WhatsApp_circuit_opens_after_consecutive_failures_and_one_probe_closes_it()
+    {
+        var failing = true;
+        var handler = new FakeHandler(_ => failing
+            ? Json(HttpStatusCode.ServiceUnavailable, "{}")
+            : Json(HttpStatusCode.OK, """{"messages":[{"id":"wamid.SYNTHETIC=="}]}"""));
+        var clock = new Security.Adp001KeyVaultWrapClientHttpTests.ManualTimeProvider(DateTimeOffset.Parse("2026-09-28T00:00:00Z"));
+        var options = ProductionOptions();
+        options.WhatsApp.MetaCloudApi.CircuitBreakerFailureThreshold = 2;
+        options.WhatsApp.MetaCloudApi.CircuitBreakerBreakSeconds = 30;
+        using var provider = new MetaWhatsAppCloudApiProvider(
+            new HandlerClientFactory(handler), Options.Create(options), clock, new RecordingLogger<MetaWhatsAppCloudApiProvider>());
+
+        Assert.Equal(MessagingOutcome.TransientFailure, (await provider.SendAsync(WhatsAppRequest(), default)).Outcome);
+        Assert.Equal(MessagingOutcome.TransientFailure, (await provider.SendAsync(WhatsAppRequest(), default)).Outcome);
+
+        var rejected = await provider.SendAsync(WhatsAppRequest(), default);
+        Assert.Equal(new MessagingResult(MessagingOutcome.TransientFailure, MessagingResultCodes.CircuitOpen, RetryAfter: TimeSpan.FromSeconds(30)), rejected);
+        Assert.Equal(2, handler.Requests.Count);
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        failing = false;
+        var probe = await provider.SendAsync(WhatsAppRequest(), default);
+        Assert.Equal(MessagingOutcome.Accepted, probe.Outcome);
+        Assert.Equal(MessagingCircuitBreaker.State.Closed, provider.Guard.CircuitBreaker.CurrentState);
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Permanent_provider_answers_do_not_open_the_circuit()
+    {
+        var handler = new FakeHandler(_ => Json(HttpStatusCode.BadRequest, """{"error":{"code":132001}}"""));
+        var options = ProductionOptions();
+        options.WhatsApp.MetaCloudApi.CircuitBreakerFailureThreshold = 1;
+        using var provider = new MetaWhatsAppCloudApiProvider(
+            new HandlerClientFactory(handler), Options.Create(options), TimeProvider.System, new RecordingLogger<MetaWhatsAppCloudApiProvider>());
+
+        Assert.Equal(MessagingOutcome.PermanentFailure, (await provider.SendAsync(WhatsAppRequest(), default)).Outcome);
+        Assert.Equal(MessagingOutcome.PermanentFailure, (await provider.SendAsync(WhatsAppRequest(), default)).Outcome);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Email_bulkhead_rejects_a_send_beyond_the_concurrency_limit_without_calling_acs()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new FakeHandler(async (_, _) =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+            return Json(HttpStatusCode.Accepted, """{"id":"acs-operation-1"}""");
+        });
+        var options = ProductionOptions();
+        options.Email.AzureCommunicationServices.MaxConcurrentRequests = 1;
+        using var provider = new AzureCommunicationEmailProvider(
+            new HandlerClientFactory(handler), new FakeCredential(), Options.Create(options), TimeProvider.System, new RecordingLogger<AzureCommunicationEmailProvider>());
+
+        var first = provider.SendAsync(EmailRequest(), default).AsTask();
+        await entered.Task;
+        var second = await provider.SendAsync(EmailRequest(), default);
+        release.SetResult();
+
+        Assert.Equal(new MessagingResult(MessagingOutcome.TransientFailure, MessagingResultCodes.ConcurrencyLimited), second);
+        Assert.Equal(MessagingOutcome.Accepted, (await first).Outcome);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_records_no_failure_and_frees_the_bulkhead()
+    {
+        var handler = new FakeHandler(async (_, token) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            throw new InvalidOperationException("unreachable");
+        });
+        var options = ProductionOptions();
+        options.WhatsApp.MetaCloudApi.CircuitBreakerFailureThreshold = 1;
+        options.WhatsApp.MetaCloudApi.MaxConcurrentRequests = 1;
+        using var provider = new MetaWhatsAppCloudApiProvider(
+            new HandlerClientFactory(handler), Options.Create(options), TimeProvider.System, new RecordingLogger<MetaWhatsAppCloudApiProvider>());
+        using var cancelled = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provider.SendAsync(WhatsAppRequest(), cancelled.Token).AsTask());
+
+        Assert.Equal(MessagingCircuitBreaker.State.Closed, provider.Guard.CircuitBreaker.CurrentState);
+        using var again = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provider.SendAsync(WhatsAppRequest(), again.Token).AsTask());
+    }
+
+    [Theory]
+    [InlineData(0, 30, 8)]
+    [InlineData(5, 0, 8)]
+    [InlineData(5, 30, 0)]
+    [InlineData(51, 30, 8)]
+    public void Resilience_settings_out_of_range_fail_validation(int threshold, int breakSeconds, int concurrency)
+    {
+        var options = ProductionOptions();
+        options.WhatsApp.MetaCloudApi.CircuitBreakerFailureThreshold = threshold;
+        options.WhatsApp.MetaCloudApi.CircuitBreakerBreakSeconds = breakSeconds;
+        options.WhatsApp.MetaCloudApi.MaxConcurrentRequests = concurrency;
+        options.Email.AzureCommunicationServices.CircuitBreakerFailureThreshold = threshold;
+        options.Email.AzureCommunicationServices.CircuitBreakerBreakSeconds = breakSeconds;
+        options.Email.AzureCommunicationServices.MaxConcurrentRequests = concurrency;
+
+        var failures = MessagingOptionsValidator.Validate(options, syntheticAllowed: false);
+
+        Assert.Equal(2, failures.Count(failure => failure.Contains("resilience", StringComparison.Ordinal)));
+    }
+
     [Fact]
     public async Task Email_reuses_the_token_until_it_nears_expiry_and_drops_it_after_401()
     {

@@ -77,6 +77,20 @@ missing `wamid`.
 Both adapters take `IHttpClientFactory` and call `CreateClient` on every send, so the factory's pooled
 handlers keep rotating (DNS refresh) for the life of the Worker singleton.
 
+**Resilience (AI-03 §16).** Each adapter wraps the provider call in a `MessagingProviderGuard`:
+- **Circuit breaker:** after `CircuitBreakerFailureThreshold` consecutive transient or ambiguous
+  outcomes (default 5) the circuit opens for `CircuitBreakerBreakSeconds` (default 30). While it is
+  open, sends return `TransientFailure` / `MESSAGING_PROVIDER_CIRCUIT_OPEN` without calling the
+  provider, and the break time is the `Retry-After` hint. After the break, a single half-open probe
+  runs and closes or reopens the circuit.
+- **Bulkhead:** at most `MaxConcurrentRequests` calls run at once (default 8). A call beyond that
+  returns `TransientFailure` / `MESSAGING_PROVIDER_CONCURRENCY_LIMITED`.
+- **What counts:** accepted and permanent answers mean the provider responded, so they close the
+  circuit. Caller cancellation records nothing.
+- **Configuration:** the settings live under `Messaging:WhatsApp:MetaCloudApi` and
+  `Messaging:Email:AzureCommunicationServices`, validated as 1-50, 1-600 and 1-64.
+- The outbox RETRY/backoff remains the only retry loop.
+
 **Synthetic — `SyntheticWhatsAppProvider` / `SyntheticEmailProvider`.** Deterministic fake for tests,
 CI and DEV_SYNTHETIC: enforces the same template, parameter and recipient rules, performs no I/O, and
 returns the configured `SyntheticOutcome` with a receipt derived from message id, channel and

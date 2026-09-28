@@ -93,6 +93,8 @@ public static class MessagingResultCodes
     public const string ReengagementRequired = "MESSAGING_REENGAGEMENT_REQUIRED";
     public const string ProviderTemplateRejected = "MESSAGING_PROVIDER_TEMPLATE_REJECTED";
     public const string PolicyBlocked = "MESSAGING_POLICY_BLOCKED";
+    public const string CircuitOpen = "MESSAGING_PROVIDER_CIRCUIT_OPEN";
+    public const string ConcurrencyLimited = "MESSAGING_PROVIDER_CONCURRENCY_LIMITED";
 
     public static IReadOnlySet<string> All { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
@@ -100,7 +102,7 @@ public static class MessagingResultCodes
         ChannelDisabled, TemplateNotConfigured, TemplateParametersInvalid, RecipientInvalid,
         Timeout, Unreachable, RateLimited, Unavailable, AuthenticationFailed, Rejected,
         ResponseInvalid, RecipientUndeliverable, ReengagementRequired, ProviderTemplateRejected,
-        PolicyBlocked,
+        PolicyBlocked, CircuitOpen, ConcurrencyLimited,
     };
 }
 

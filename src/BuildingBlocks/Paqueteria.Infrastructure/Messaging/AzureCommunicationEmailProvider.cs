@@ -29,6 +29,11 @@ internal sealed class AzureCommunicationEmailProvider(
     private static readonly TimeSpan TokenRefreshMargin = TimeSpan.FromMinutes(5);
 
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
+    private readonly MessagingProviderGuard _guard = new(
+        time,
+        options.Value.Email.AzureCommunicationServices.CircuitBreakerFailureThreshold,
+        TimeSpan.FromSeconds(options.Value.Email.AzureCommunicationServices.CircuitBreakerBreakSeconds),
+        options.Value.Email.AzureCommunicationServices.MaxConcurrentRequests);
     private volatile CachedToken? _token;
 
     public MessagingChannel Channel => MessagingChannel.Email;
@@ -50,17 +55,6 @@ internal sealed class AzureCommunicationEmailProvider(
         if (!MessagingOptionsValidator.IsEmailAddress(request.Recipient.Address))
         {
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.RecipientInvalid), null);
-        }
-
-        string token;
-        try
-        {
-            token = await GetTokenAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-        {
-            // The managed identity endpoint failed before anything was sent.
-            return Log(new(MessagingOutcome.TransientFailure, MessagingResultCodes.AuthenticationFailed), null);
         }
 
         var body = new JsonObject
@@ -85,14 +79,43 @@ internal sealed class AzureCommunicationEmailProvider(
         {
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
         };
-        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         message.Headers.TryAddWithoutValidation("Operation-Id", request.MessageId.ToString("D"));
 
+        var (result, status) = await _guard.RunAsync(
+            token => SendToProviderAsync(message, acs.TimeoutSeconds, token), cancellationToken).ConfigureAwait(false);
+        return Log(result, status);
+    }
+
+    internal MessagingProviderGuard Guard => _guard;
+
+    public void Dispose()
+    {
+        _tokenLock.Dispose();
+        _guard.Dispose();
+    }
+
+    private async ValueTask<(MessagingResult Result, int? Status)> SendToProviderAsync(
+        HttpRequestMessage message,
+        int timeoutSeconds,
+        CancellationToken cancellationToken)
+    {
+        string token;
+        try
+        {
+            token = await GetTokenAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // The managed identity endpoint failed before anything was sent.
+            return (new(MessagingOutcome.TransientFailure, MessagingResultCodes.AuthenticationFailed), null);
+        }
+
+        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         var (response, failure) = await MessagingHttp.SendOnceAsync(
-            httpClientFactory.CreateClient(HttpClientName), message, TimeSpan.FromSeconds(acs.TimeoutSeconds), cancellationToken).ConfigureAwait(false);
+            httpClientFactory.CreateClient(HttpClientName), message, TimeSpan.FromSeconds(timeoutSeconds), cancellationToken).ConfigureAwait(false);
         if (failure is not null)
         {
-            return Log(failure, null);
+            return (failure, null);
         }
 
         using (response)
@@ -103,11 +126,9 @@ internal sealed class AzureCommunicationEmailProvider(
             }
 
             var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return Log(Classify(response, payload), (int)response.StatusCode);
+            return (Classify(response, payload), (int)response.StatusCode);
         }
     }
-
-    public void Dispose() => _tokenLock.Dispose();
 
     private MessagingResult Classify(HttpResponseMessage response, string payload)
     {

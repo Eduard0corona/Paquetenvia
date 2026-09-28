@@ -59,6 +59,15 @@ public sealed class MetaCloudApiOptions
     public string AccessToken { get; set; } = string.Empty;
 
     public int TimeoutSeconds { get; set; } = 10;
+
+    /// <summary>AI-03 §16 circuit breaker: consecutive provider failures that open the circuit.</summary>
+    public int CircuitBreakerFailureThreshold { get; set; } = 5;
+
+    /// <summary>Seconds the circuit stays open before one half-open probe.</summary>
+    public int CircuitBreakerBreakSeconds { get; set; } = 30;
+
+    /// <summary>AI-03 §16 bulkhead: concurrent provider calls; a call beyond it is retried later by the outbox.</summary>
+    public int MaxConcurrentRequests { get; set; } = 8;
 }
 
 public sealed class WhatsAppTemplateOptions
@@ -96,6 +105,15 @@ public sealed class AzureCommunicationEmailOptions
     public string ApiVersion { get; set; } = "2023-03-31";
 
     public int TimeoutSeconds { get; set; } = 15;
+
+    /// <summary>AI-03 §16 circuit breaker: consecutive provider failures that open the circuit.</summary>
+    public int CircuitBreakerFailureThreshold { get; set; } = 5;
+
+    /// <summary>Seconds the circuit stays open before one half-open probe.</summary>
+    public int CircuitBreakerBreakSeconds { get; set; } = 30;
+
+    /// <summary>AI-03 §16 bulkhead: concurrent provider calls; a call beyond it is retried later by the outbox.</summary>
+    public int MaxConcurrentRequests { get; set; } = 8;
 }
 
 public sealed class EmailTemplateOptions
@@ -155,6 +173,11 @@ internal static partial class MessagingOptionsValidator
             {
                 failures.Add("Messaging:WhatsApp:MetaCloudApi:TimeoutSeconds must be between 1 and 60.");
             }
+
+            if (!IsResilienceValid(meta.CircuitBreakerFailureThreshold, meta.CircuitBreakerBreakSeconds, meta.MaxConcurrentRequests))
+            {
+                failures.Add("Messaging:WhatsApp:MetaCloudApi resilience needs CircuitBreakerFailureThreshold 1-50, CircuitBreakerBreakSeconds 1-600 and MaxConcurrentRequests 1-64.");
+            }
         }
 
         foreach (var (key, template) in whatsApp.Templates)
@@ -201,6 +224,11 @@ internal static partial class MessagingOptionsValidator
             {
                 failures.Add("Messaging:Email:AzureCommunicationServices:TimeoutSeconds must be between 1 and 60.");
             }
+
+            if (!IsResilienceValid(acs.CircuitBreakerFailureThreshold, acs.CircuitBreakerBreakSeconds, acs.MaxConcurrentRequests))
+            {
+                failures.Add("Messaging:Email:AzureCommunicationServices resilience needs CircuitBreakerFailureThreshold 1-50, CircuitBreakerBreakSeconds 1-600 and MaxConcurrentRequests 1-64.");
+            }
         }
 
         foreach (var (key, template) in email.Templates)
@@ -218,6 +246,11 @@ internal static partial class MessagingOptionsValidator
 
         return failures;
     }
+
+    private static bool IsResilienceValid(int failureThreshold, int breakSeconds, int maxConcurrentRequests) =>
+        failureThreshold is >= 1 and <= 50 &&
+        breakSeconds is >= 1 and <= 600 &&
+        maxConcurrentRequests is >= 1 and <= 64;
 
     internal static bool IsEmailAddress(string? value)
     {

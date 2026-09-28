@@ -18,9 +18,17 @@ internal sealed class MetaWhatsAppCloudApiProvider(
     IHttpClientFactory httpClientFactory,
     IOptions<MessagingOptions> options,
     TimeProvider time,
-    ILogger<MetaWhatsAppCloudApiProvider> logger) : IMessagingChannelProvider
+    ILogger<MetaWhatsAppCloudApiProvider> logger) : IMessagingChannelProvider, IDisposable
 {
     public const string HttpClientName = "Paqueteria.Messaging.MetaWhatsAppCloudApi";
+
+    private readonly MessagingProviderGuard _guard = new(
+        time,
+        options.Value.WhatsApp.MetaCloudApi.CircuitBreakerFailureThreshold,
+        TimeSpan.FromSeconds(options.Value.WhatsApp.MetaCloudApi.CircuitBreakerBreakSeconds),
+        options.Value.WhatsApp.MetaCloudApi.MaxConcurrentRequests);
+
+    internal MessagingProviderGuard Guard => _guard;
 
     // Meta error codes (https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes).
     private static readonly HashSet<long> TransientCodes =
@@ -78,17 +86,29 @@ internal sealed class MetaWhatsAppCloudApiProvider(
         };
         message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", meta.AccessToken);
 
+        var (result, status) = await _guard.RunAsync(
+            token => SendToProviderAsync(message, meta.TimeoutSeconds, token), cancellationToken).ConfigureAwait(false);
+        return Log(result, status);
+    }
+
+    public void Dispose() => _guard.Dispose();
+
+    private async ValueTask<(MessagingResult Result, int? Status)> SendToProviderAsync(
+        HttpRequestMessage message,
+        int timeoutSeconds,
+        CancellationToken cancellationToken)
+    {
         var (response, failure) = await MessagingHttp.SendOnceAsync(
-            httpClientFactory.CreateClient(HttpClientName), message, TimeSpan.FromSeconds(meta.TimeoutSeconds), cancellationToken).ConfigureAwait(false);
+            httpClientFactory.CreateClient(HttpClientName), message, TimeSpan.FromSeconds(timeoutSeconds), cancellationToken).ConfigureAwait(false);
         if (failure is not null)
         {
-            return Log(failure, null);
+            return (failure, null);
         }
 
         using (response)
         {
             var payload = await response!.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return Log(Classify(response, payload), (int)response.StatusCode);
+            return (Classify(response, payload), (int)response.StatusCode);
         }
     }
 
