@@ -993,6 +993,78 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         }
     }
 
+    [PostgreSqlContractFact]
+    public async Task Legacy_unversioned_rules_load_through_EF_and_fail_closed_only_when_selected()
+    {
+        // An installation upgraded with tariff rules keeps policy_version nullable behind the NOT VALID
+        // guard (PRC-POLICY-VERSION-PER-ORG). This contract collection runs serially, so the shared
+        // schema is put in that state for this test only and restored to the canonical AI-06 shape.
+        var data = SyntheticPricingData.Create("ORG-PRC-legacy.v1");
+        var privateRuleId = Guid.NewGuid();
+        var accountId = Guid.NewGuid();
+        var urgentLegacyRuleId = Guid.NewGuid();
+        await SeedAsync(data);
+        try
+        {
+            await ExecuteAdminAsync(
+                $"""
+                ALTER TABLE pricing.tariff_rules ALTER COLUMN policy_version DROP NOT NULL;
+                UPDATE pricing.tariff_rules SET policy_version=NULL WHERE id=@city_rule;
+                INSERT INTO pricing.tariff_rules(
+                  id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
+                  amount_cents,tax_mode,active_from,active_to,status,policy_version)
+                VALUES
+                  (@urgent_rule,@org,@city,NULL,NULL,'OCCASIONAL','URGENT',11111,'EXEMPT',now()-interval '1 day',NULL,'ACTIVE',NULL),
+                  (@private_rule,@org,@city,@area,@zone,'CUSTOM','SAME_DAY',45678,'EXEMPT',now()-interval '1 day',NULL,'ACTIVE',NULL);
+                INSERT INTO clients.client_accounts(id,owner_org_id,name,status,private_tariff_id,created_at)
+                  VALUES (@account,@org,'Synthetic legacy private account','ACTIVE',@private_rule,now());
+                ALTER TABLE pricing.tariff_rules ADD CONSTRAINT {VersionPricingPolicyPerOrganization.RequiredConstraint}
+                  CHECK (policy_version IS NOT NULL) NOT VALID;
+                """,
+                P("city_rule", data.CityRuleId), P("urgent_rule", urgentLegacyRuleId), P("private_rule", privateRuleId),
+                P("org", data.OrganizationId), P("city", data.CityId), P("area", data.AreaId), P("zone", data.ZoneId),
+                P("account", accountId));
+
+            await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 4, applicationName: "PRC.PolicyVersion.Legacy");
+            await using var scope = CreateScope(appDataSource);
+
+            // A more specific versioned rule still quotes, although an unversioned city rule is loaded too.
+            var quoted = await scope.Service.CreateAsync(CreateCommand(data, "prc-policy-legacy-zone-001"), default);
+            Assert.Equal([data.ZoneRuleId], quoted.RuleIds);
+            Assert.Equal("ORG-PRC-legacy.v1", quoted.PricingPolicyVersion);
+
+            // The unversioned rule is the one selected: uniform NO_TARIFF_RULE, never an exception.
+            var selected = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(
+                CreateCommand(data, "prc-policy-legacy-urgent-01") with { ServiceType = "URGENT" }, default));
+            Assert.Equal(QuoteValidationCode.NoTariffRule, selected.Code);
+
+            // The same for an unversioned private tariff.
+            var privateTariff = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(
+                CreateCommand(data, "prc-policy-legacy-private-1") with { ClientAccountId = accountId }, default));
+            Assert.Equal(QuoteValidationCode.NoTariffRule, privateTariff.Code);
+
+            Assert.Equal(1L, await ScalarAdminAsync<long>(
+                "SELECT count(*) FROM pricing.quotes WHERE owner_org_id=@org", P("org", data.OrganizationId)));
+        }
+        finally
+        {
+            await ExecuteAdminAsync(
+                """
+                DELETE FROM platform.idempotency_keys WHERE owner_org_id=@org;
+                DELETE FROM pricing.quotes WHERE owner_org_id=@org;
+                DELETE FROM clients.client_accounts WHERE id=@account;
+                DELETE FROM pricing.tariff_rules WHERE policy_version IS NULL;
+                """,
+                P("org", data.OrganizationId), P("account", accountId));
+            await ExecuteAdminAsync(
+                $"""
+                ALTER TABLE pricing.tariff_rules DROP CONSTRAINT IF EXISTS {VersionPricingPolicyPerOrganization.RequiredConstraint};
+                ALTER TABLE pricing.tariff_rules ALTER COLUMN policy_version SET NOT NULL;
+                """);
+            await CleanupAsync(data);
+        }
+    }
+
     private async Task InsertRuleAsync(SyntheticPricingData data, string? version)
     {
         await using var command = fixture.AdminDataSource.CreateCommand(

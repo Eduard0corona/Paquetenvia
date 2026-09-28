@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Locations.Application.Locations;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -362,6 +363,29 @@ public sealed class PricingDomainTests
         Assert.Contains("PRC-POLICY-VERSION-PER-ORG", rejected.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void EF_materializes_pricing_entities_without_running_domain_validation()
+    {
+        // PRC-POLICY-VERSION-PER-ORG: a legacy tariff rule may be stored with policy_version NULL.
+        // Loading it must never run the validating creation path; TariffRuleEvaluator alone fails closed.
+        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<global::Pricing.Infrastructure.Persistence.PricingDbContext>()
+            .UseNpgsql("Host=localhost;Database=unit;Username=unit")
+            .Options;
+        using var context = new global::Pricing.Infrastructure.Persistence.PricingDbContext(
+            options, new global::Paqueteria.Infrastructure.Tenancy.TenantDatabaseExecutionState());
+        foreach (var type in new[] { typeof(TariffRule), typeof(Quote) })
+        {
+            var entity = context.Model.FindEntityType(type)!;
+            var binding = Assert.IsAssignableFrom<Microsoft.EntityFrameworkCore.Metadata.ConstructorBinding>(entity.ConstructorBinding);
+            Assert.Empty(binding.ParameterBindings);
+            Assert.Empty(binding.Constructor.GetParameters());
+        }
+
+        // Creation validates through the factories; neither type exposes a public constructor.
+        Assert.Empty(typeof(TariffRule).GetConstructors());
+        Assert.Empty(typeof(Quote).GetConstructors());
+    }
+
     private static TariffEvaluationResult Evaluate(
         IEnumerable<TariffRule> rules,
         Guid? area = null,
@@ -391,7 +415,7 @@ public sealed class PricingDomainTests
         DateTimeOffset? activeFrom = null,
         DateTimeOffset? activeTo = null,
         TariffRuleStatus status = TariffRuleStatus.Active,
-        string policyVersion = "ORG-UNIT-v1") => new(
+        string policyVersion = "ORG-UNIT-v1") => TariffRule.Create(
             Guid.NewGuid(),
             owner ?? OrganizationId,
             city ?? CityId,

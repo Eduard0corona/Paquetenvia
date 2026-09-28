@@ -2,9 +2,13 @@ namespace Pricing.Domain;
 
 public sealed class TariffRule
 {
+    // EF Core materializes rows through this constructor and the private setters, so loading a stored
+    // rule never runs the creation validation below. A legacy rule on an upgraded installation may hold
+    // policy_version NULL (PRC-POLICY-VERSION-PER-ORG); TariffRuleEvaluator is the single place that
+    // fails closed on it. Creation goes through Create, so no validating constructor exists for EF to bind.
     private TariffRule() { }
 
-    public TariffRule(
+    public static TariffRule Create(
         Guid id,
         Guid ownerOrganizationId,
         Guid cityId,
@@ -35,19 +39,22 @@ public sealed class TariffRule
         }
 
         _ = new Money(amountCents);
-        Id = id;
-        OwnerOrganizationId = ownerOrganizationId;
-        CityId = cityId;
-        ServiceAreaId = serviceAreaId;
-        OperatingZoneId = operatingZoneId;
-        PricingTier = pricingTier;
-        ServiceType = serviceType;
-        AmountCents = amountCents;
-        TaxMode = taxMode;
-        ActiveFrom = activeFrom;
-        ActiveTo = activeTo;
-        Status = status;
-        PolicyVersion = policyVersion;
+        return new TariffRule
+        {
+            Id = id,
+            OwnerOrganizationId = ownerOrganizationId,
+            CityId = cityId,
+            ServiceAreaId = serviceAreaId,
+            OperatingZoneId = operatingZoneId,
+            PricingTier = pricingTier,
+            ServiceType = serviceType,
+            AmountCents = amountCents,
+            TaxMode = taxMode,
+            ActiveFrom = activeFrom,
+            ActiveTo = activeTo,
+            Status = status,
+            PolicyVersion = policyVersion,
+        };
     }
 
     public Guid Id { get; private set; }
