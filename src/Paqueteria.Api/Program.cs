@@ -20,6 +20,7 @@ using Paqueteria.Api.Http;
 using Paqueteria.Api.Tenancy;
 using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.DataProtection;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Security;
 using Locations.Endpoints;
 using Locations.Infrastructure;
@@ -46,7 +47,12 @@ builder.Configuration.AddPaqueteriaKeyVaultSecrets();
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
+// Invariant 5: secrets carried in request targets (the public tracking token in the lookup path, hub
+// access_token query values) are rewritten before hosting diagnostics, logging or telemetry read them.
+builder.Services.AddRequestTargetRedaction();
 builder.AddHttpHardening();
+// OBS-002: one PII-free summary of response status classes per minute (no path, user or tenant).
+builder.Services.AddHttpStatusTelemetry();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddEmailLookupHashing(builder.Configuration, builder.Environment);
 builder.Services.AddProblemDetails();
@@ -83,6 +89,7 @@ builder.Services
 
 var app = builder.Build();
 
+app.UseHttpStatusTelemetry();
 app.UseTrustedForwardedHeaders();
 app.UseExceptionHandler();
 if (!app.Environment.IsDevelopment())

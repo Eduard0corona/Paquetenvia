@@ -1,4 +1,4 @@
-// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 2 of 4: network, logs, registry, proof storage,
+// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 2 of 5: network, logs, registry, proof storage,
 // private PostgreSQL, the VNet-injected Container Apps environment and the cost budget.
 targetScope = 'resourceGroup'
 

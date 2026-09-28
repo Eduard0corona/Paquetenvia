@@ -6,8 +6,8 @@ public static class CanonicalBaselineContract
     public const string ManifestRelativePath = "database/migrations/v0.6-baseline.json";
     public const string SchemaRelativePath = "docs/normative/v0.6/database/AI-06_SCHEMA.sql";
     public const string RolesRelativePath = "docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql";
-    public const string SchemaSha256 = "35f1c6e839b2efbe441bfc6e5acd7a3a291534822a1de7067dddd5f7530f88bc";
-    public const string RolesSha256 = "b3b4d51607e0ce95d38da2a9ea252466efba5804fdb5dc38937fd45292bab5bf";
+    public const string SchemaSha256 = "a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4";
+    public const string RolesSha256 = "53c486c12178a470aa35764be2b117105f3ac077f384f7f3d0b7cca01a2b810f";
     public const string DeploymentCredential = "privileged-deployment";
     public const long AdvisoryLockKey = 5_783_000_321_440_564_562L;
 }

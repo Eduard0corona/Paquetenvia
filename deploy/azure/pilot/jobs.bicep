@@ -1,4 +1,4 @@
-// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 3 of 4: manual Container Apps Jobs that run the canonical
+// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 3 of 5: manual Container Apps Jobs that run the canonical
 // DatabaseMigrator inside the VNet (the database has no public endpoint). No app runs migrations at startup.
 targetScope = 'resourceGroup'
 

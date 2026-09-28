@@ -5,6 +5,7 @@ using Notifications.Application.Audience;
 using Notifications.Application.Dispatching;
 using Notifications.Infrastructure.Delivery;
 using Npgsql;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Notifications.Infrastructure.Dispatching;
 
@@ -13,6 +14,7 @@ internal sealed class NotificationsOutboxProcessor(
     NotificationAudienceResolver audience,
     ISyntheticInAppProvider provider,
     IOptions<NotificationsOptions> options,
+    OutboxLaneMonitor lanes,
     ILogger<NotificationsOutboxProcessor> logger)
 {
     public async Task ProcessOwnedAsync(
@@ -272,11 +274,33 @@ internal sealed class NotificationsOutboxProcessor(
         LogOutcome(status, code);
     }
 
-    private void LogOutcome(string outcome, string code) =>
+    private void LogOutcome(string outcome, string code)
+    {
+        if (Settlement(outcome, code) is { } settlement)
+        {
+            lanes.Settled(OutboxLanes.Notifications, settlement);
+        }
+
         logger.LogInformation(
             "Notifications dispatcher completed with owner {Owner}, channel {Channel}, outcome {Outcome}, code {Code}.",
             "NOTIFICATIONS",
             "IN_APP",
             outcome,
             code);
+    }
+
+    /// <summary>
+    /// OBS-002: the outbox status each logged outcome leaves behind (AI-06 settle, apply and expand
+    /// functions): a source row is PROCESSED once expanded or without recipients and DEAD otherwise.
+    /// </summary>
+    internal static OutboxSettlement? Settlement(string outcome, string code) => outcome switch
+    {
+        "DEAD" or "MAX_ATTEMPTS" or NotificationDeliveryOutcome.Permanent => OutboxSettlement.Dead,
+        NotificationDeliveryOutcome.Success => OutboxSettlement.Processed,
+        NotificationDeliveryOutcome.Transient or NotificationDeliveryOutcome.Ambiguous => OutboxSettlement.Retry,
+        "SOURCE" => code is NotificationErrorCodes.SourceExpanded or NotificationErrorCodes.NoEligibleRecipient
+            ? OutboxSettlement.Processed
+            : OutboxSettlement.Dead,
+        _ => null,
+    };
 }

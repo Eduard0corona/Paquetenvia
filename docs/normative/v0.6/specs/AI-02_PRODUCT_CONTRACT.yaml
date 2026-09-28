@@ -148,6 +148,9 @@ contract_hardening:
     - package_snapshot
     - minimum_total_cents_snapshot
     - pricing_policy_version
+    pricing_policy_version: each organization versions its own pricing policy on its tariff rules (pricing.tariff_rules.policy_version);
+      the quote freezes the version of the tariff rule it selected and the order copies it unchanged. There is no global
+      pricing policy version (PRC-POLICY-VERSION-PER-ORG).
     single_use: orders.quote_id is UNIQUE; quote transitions ACTIVE -> USED in the same transaction as order creation.
     pii: request_snapshot_redacted contains no contact name, telephone, access notes or plaintext address; required PII is
       encrypted separately.

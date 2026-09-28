@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
 using Orders.Application.Tracking;
+using Paqueteria.Infrastructure.Observability;
 using Realtime.Application.Authorization;
 using Realtime.Application.Configuration;
 using Realtime.Application.Dispatching;
@@ -122,6 +123,7 @@ public static class DependencyInjection
         services.TryAddSingleton<IRealtimeOutboxFailureInjector, NoOpRealtimeOutboxFailureInjector>();
         services.AddSingleton<PublicOrderStatusPolicy>();
         services.AddSingleton<RealtimeOutboxTelemetry>();
+        services.AddOutboxLaneMonitor();
         services.AddSingleton<RealtimeOutboxProcessor>();
         services.AddHostedService<BusinessOutboxDispatcher>();
         services.AddHostedService<LocationOutboxDispatcher>();

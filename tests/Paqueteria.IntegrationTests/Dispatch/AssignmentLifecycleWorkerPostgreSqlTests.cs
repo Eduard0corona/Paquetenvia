@@ -1,12 +1,12 @@
 extern alias WorkerHost;
 
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using Paqueteria.IntegrationTests.Hosting;
 using Paqueteria.IntegrationTests.Realtime;
 using Paqueteria.IntegrationTests.Security;
 using Realtime.Infrastructure.Dispatching;
@@ -204,9 +204,9 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
                 : $"{exception.Message} | {Flatten(exception.InnerException)}";
 
     private sealed class DispatchLifecycleWorkerFactory(Dictionary<string, string?> settings)
-        : WebApplicationFactory<WorkerProgram>
+        : StartupFailureSurfacingWebApplicationFactory<WorkerProgram>
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));

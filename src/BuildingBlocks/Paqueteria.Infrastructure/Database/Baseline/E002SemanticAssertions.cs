@@ -54,8 +54,6 @@ public sealed class E002SemanticAssertions
         await AssertSchemaOwnersAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         await AssertExtensionsAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         await AssertTemporaryCreateResidueAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
-        await AssertSchemaAclAsync(connection, transaction, "security", SecurityAcl(), violations, cancellationToken)
-            .ConfigureAwait(false);
         await AssertSchemaAclAsync(connection, transaction, "notifications", NotificationsAcl(state), violations,
             cancellationToken).ConfigureAwait(false);
         var mapState = E002NotificationStateReader.SelectMap(state);
@@ -73,9 +71,14 @@ public sealed class E002SemanticAssertions
             .IsPurgeAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var reg002Applied = await E002RegistrationStateReader
             .IsReg002AppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var mdm001Applied = await E002MasterDataStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
+        await AssertSchemaAclAsync(connection, transaction, "security",
+            await SecurityAclAsync(connection, transaction, cancellationToken).ConfigureAwait(false), violations,
+            cancellationToken).ConfigureAwait(false);
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
             connection, transaction, mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied,
-            bffSessionApplied, bffPurgeApplied, reg002Applied, violations, cancellationToken)
+            bffSessionApplied, bffPurgeApplied, reg002Applied, mdm001Applied, violations, cancellationToken)
             .ConfigureAwait(false);
         await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
@@ -87,7 +90,7 @@ public sealed class E002SemanticAssertions
             state,
             E002RoutineMap.Name(
                 mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-                reg002Applied),
+                reg002Applied, mdm001Applied),
             identities,
             aclRows);
     }
@@ -117,11 +120,13 @@ public sealed class E002SemanticAssertions
             .IsPurgeAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var reg002Applied = await E002RegistrationStateReader
             .IsReg002AppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var mdm001Applied = await E002MasterDataStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
         // D8-OUTBOX-LANE-DISPATCH: the NTF-001 target is asserted when its own history row is written,
         // before the later DISPATCH lane migration of the same lane has run.
         await AssertRoutineMapCoreAsync(connection, transaction, E002RoutineMapState.Ntf001TargetApplied,
             lif001Applied, dispatchLaneApplied: false, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-            reg002Applied, violations, cancellationToken).ConfigureAwait(false);
+            reg002Applied, mdm001Applied, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
             throw new E002SemanticException(violations.AsReadOnly());
@@ -243,16 +248,38 @@ public sealed class E002SemanticAssertions
         }
     }
 
-    private static IReadOnlyList<AclEntry> SecurityAcl() =>
-    [
-        new("paqueteria_migrator", "paqueteria_migrator", "CREATE", false),
-        new("paqueteria_migrator", "paqueteria_migrator", "USAGE", false),
-        new("paqueteria_app", "paqueteria_migrator", "USAGE", false),
-        new("paqueteria_worker", "paqueteria_migrator", "USAGE", false),
-        new("paqueteria_bootstrap", "paqueteria_migrator", "USAGE", false),
-        new("paqueteria_outbox_executor", "paqueteria_migrator", "USAGE", false),
-        new("paqueteria_maintenance", "paqueteria_migrator", "USAGE", false),
-    ];
+    private static IReadOnlyList<AclEntry> SecurityAcl(bool masterDataLoaderPresent)
+    {
+        var expected = new List<AclEntry>
+        {
+            new("paqueteria_migrator", "paqueteria_migrator", "CREATE", false),
+            new("paqueteria_migrator", "paqueteria_migrator", "USAGE", false),
+            new("paqueteria_app", "paqueteria_migrator", "USAGE", false),
+            new("paqueteria_worker", "paqueteria_migrator", "USAGE", false),
+            new("paqueteria_bootstrap", "paqueteria_migrator", "USAGE", false),
+            new("paqueteria_outbox_executor", "paqueteria_migrator", "USAGE", false),
+            new("paqueteria_maintenance", "paqueteria_migrator", "USAGE", false),
+        };
+
+        // MDM-001-OPERATOR-LOADER: AI-18 (fresh installations) or the Pricing lane (populated installations)
+        // creates the operator grantee together with its USAGE on security; an installation that predates
+        // both has neither.
+        if (masterDataLoaderPresent)
+        {
+            expected.Add(new("paqueteria_master_data_loader", "paqueteria_migrator", "USAGE", false));
+        }
+
+        return expected;
+    }
+
+    private static async Task<IReadOnlyList<AclEntry>> SecurityAclAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT pg_catalog.to_regrole('paqueteria_master_data_loader') IS NOT NULL", connection, transaction);
+        var present = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+        return SecurityAcl(present);
+    }
 
     private static IReadOnlyList<AclEntry> NotificationsAcl(E002NotificationState state)
     {
@@ -304,11 +331,12 @@ public sealed class E002SemanticAssertions
     private static async Task<(int Identities, int ExecuteRows)> AssertRoutineMapCoreAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, E002RoutineMapState mapState,
         bool lif001Applied, bool dispatchLaneApplied, bool ops003Applied, bool reg001Applied, bool bffSessionApplied,
-        bool bffPurgeApplied, bool reg002Applied, ICollection<string> violations, CancellationToken cancellationToken)
+        bool bffPurgeApplied, bool reg002Applied, bool mdm001Applied, ICollection<string> violations,
+        CancellationToken cancellationToken)
     {
         var map = E002RoutineMap.Select(
             mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-            reg002Applied);
+            reg002Applied, mdm001Applied);
         var expectedOids = new HashSet<uint>();
         var totalRows = 0;
         foreach (var routine in map)

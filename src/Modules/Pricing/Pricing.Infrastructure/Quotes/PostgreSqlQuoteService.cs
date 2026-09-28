@@ -226,7 +226,6 @@ public sealed class PostgreSqlQuoteService(
                     tier,
                     command.ConsolidatedRoute,
                     evaluation,
-                    options.Value.PricingPolicyVersion,
                     [selectedRule.Id],
                     JsonSerializer.Serialize(requestSnapshot, JsonOptions),
                     JsonSerializer.Serialize(packageSnapshot, JsonOptions),
@@ -336,10 +335,20 @@ public sealed class PostgreSqlQuoteService(
                 serviceType.ToContractValue());
         }
 
+        if (evaluation.Failure == TariffEvaluationFailure.PolicyVersionMissing)
+        {
+            logger.LogWarning(
+                "Tariff rule without a pricing policy version for organization {OrganizationId}, city {CityId}, service {ServiceType}; the rule is not quotable until it carries one.",
+                organizationId,
+                cityId,
+                serviceType.ToContractValue());
+        }
+
         throw new QuoteValidationException(evaluation.Failure switch
         {
             TariffEvaluationFailure.NoRule => QuoteValidationCode.NoTariffRule,
             TariffEvaluationFailure.AmbiguousRule => QuoteValidationCode.AmbiguousTariffRule,
+            TariffEvaluationFailure.PolicyVersionMissing => QuoteValidationCode.NoTariffRule,
             TariffEvaluationFailure.TaxModeBlocked => QuoteValidationCode.TaxModeBlocked,
             TariffEvaluationFailure.ConsolidatedRouteRequired => QuoteValidationCode.ConsolidatedRouteRequired,
             _ => QuoteValidationCode.InvalidRequest,

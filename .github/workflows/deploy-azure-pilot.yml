@@ -145,6 +145,11 @@ jobs:
         shell: bash
         run: python ./tools/azr-001/env001_pilot_guards.py settings-check --file tested/deploy/azure/pilot/apps.settings.json
 
+      # OBS-002: the alert action group needs the owner's e-mail; stop before touching Azure while it is missing.
+      - name: Require the OBS-002 alert e-mail (STOP_FOR_OWNER_DECISION)
+        shell: bash
+        run: python ./tools/azr-001/env001_pilot_guards.py observability-check --file tested/deploy/azure/pilot/observability.parameters.json
+
   deploy:
     name: Deploy pilot (deployed_git_sha = tested_git_sha)
     needs: provenance
@@ -475,6 +480,16 @@ jobs:
           fi
           fqdn="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-apps --query properties.outputs.routeFqdn.value -o tsv)"
           echo "routeFqdn=${fqdn}" >> "${GITHUB_OUTPUT}"
+
+      - name: Stage 5 - OBS-002 alerts, e-mail action group and workbook (observability.bicep)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ./tools/azr-001/env001_pilot_guards.py observability-check --file deploy/azure/pilot/observability.parameters.json
+          az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-observability \
+            --template-file "${RUNNER_TEMP}/arm/observability.json" \
+            --parameters "@deploy/azure/pilot/observability.parameters.json" \
+            --only-show-errors --output none
 
       - name: Smoke test same-origin routing
         shell: bash

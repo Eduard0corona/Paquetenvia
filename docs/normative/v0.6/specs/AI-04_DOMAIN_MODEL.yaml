@@ -101,6 +101,22 @@ entities:
     - address
     - contact_name
     - phone
+  TariffRule:
+    required:
+    - id
+    - owner_org_id
+    - city_id
+    - pricing_tier
+    - service_type
+    - amount_cents
+    - tax_mode
+    - active_from
+    - status
+    - policy_version
+    rules:
+    - policy_version is the version of the owning organization's pricing policy; each organization raises it when it changes its tariffs (PRC-POLICY-VERSION-PER-ORG)
+    - policy_version matches ^[A-Za-z0-9._-]{1,64}$
+    - there is no global pricing policy version
   Quote:
     required:
     - id
@@ -120,6 +136,7 @@ entities:
     rules:
     - single-use through UNIQUE orders.quote_id
     - snapshot redacted contains no plaintext PII
+    - pricing_policy_version is frozen from the policy_version of the selected tariff rule (PRC-POLICY-VERSION-PER-ORG)
   Order:
     required:
     - id
@@ -135,6 +152,7 @@ entities:
     rules:
     - commercial ownership never changes silently
     - CLOSED becomes final when claim window expires
+    - pricing_policy_version is copied unchanged from the quote
   DriverPosition:
     required:
     - id

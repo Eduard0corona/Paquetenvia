@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Orders.Application.Tracking;
 using Paqueteria.Application;
+using Paqueteria.Infrastructure.Observability;
 using Realtime.Application.Configuration;
 using Realtime.Application.Dispatching;
 using Realtime.Application.Events;
@@ -16,7 +17,8 @@ internal sealed class RealtimeOutboxProcessor(
     IRealtimeOutboxFailureInjector failureInjector,
     PublicOrderStatusPolicy publicStatusPolicy,
     IOptions<OutboxDispatcherOptions> options,
-    RealtimeOutboxTelemetry telemetry)
+    RealtimeOutboxTelemetry telemetry,
+    OutboxLaneMonitor lanes)
 {
     public async Task ProcessBusinessAsync(
         ClaimedBusinessOutboxMessage message,
@@ -631,6 +633,17 @@ internal sealed class RealtimeOutboxProcessor(
         }
 
         telemetry.Settled(lane, status.ToLowerInvariant(), errorCode);
+        OutboxSettlement? settlement = status switch
+        {
+            "PROCESSED" => OutboxSettlement.Processed,
+            "RETRY" => OutboxSettlement.Retry,
+            "DEAD" => OutboxSettlement.Dead,
+            _ => null,
+        };
+        if (settlement is { } value)
+        {
+            lanes.Settled(RealtimeOutboxLanes.Monitored(lane), value);
+        }
     }
 
     private static string EventType(ParsedBusinessOutboxEvent value) => value switch

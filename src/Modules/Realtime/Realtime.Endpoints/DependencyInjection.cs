@@ -24,6 +24,7 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.AddRealtimeAccessTokenRedaction();
         services.AddCors();
         services.AddOptions<CorsOptions>()
             .Configure<IOptions<RealtimeOptions>>((cors, realtime) =>

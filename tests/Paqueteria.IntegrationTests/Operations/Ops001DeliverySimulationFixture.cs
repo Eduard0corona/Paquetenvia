@@ -149,10 +149,10 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
 
             INSERT INTO pricing.tariff_rules(
               id,owner_org_id,city_id,service_area_id,operating_zone_id,
-              pricing_tier,service_type,amount_cents,tax_mode,active_from,status)
+              pricing_tier,service_type,amount_cents,tax_mode,active_from,status,policy_version)
             VALUES (
               @tariff,@org,@city,@area,@zone,'OCCASIONAL','SAME_DAY',
-              12000,'EXEMPT',clock_timestamp()-interval '1 day','ACTIVE');
+              12000,'EXEMPT',clock_timestamp()-interval '1 day','ACTIVE','OPS-001-synthetic-v1');
             """,
             cancellationToken,
             P("org", data.OrganizationId),
@@ -234,7 +234,6 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
         settings["Pricing:Provider"] = "PostgreSql";
         settings["Pricing:CommandTimeoutSeconds"] = "30";
         settings["Pricing:QuoteLifetimeMinutes"] = "30";
-        settings["Pricing:PricingPolicyVersion"] = "OPS-001-synthetic-v1";
         settings["Orders:Provider"] = "PostgreSql";
         settings["Drivers:Provider"] = "PostgreSql";
         settings["Dispatch:Provider"] = "PostgreSql";

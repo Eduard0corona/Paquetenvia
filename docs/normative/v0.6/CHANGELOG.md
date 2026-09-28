@@ -15,6 +15,70 @@
   del owner.
 - El envío del enlace a clientes por WhatsApp o correo sigue bloqueado por GATE-004 y GATE-007.
 
+## Endurecimiento del cargador de datos maestros (MDM-001-LOADER-HARDENING) — 2026-09-28
+
+- Seguimiento de tres hallazgos MINOR de la revisión de MDM-001, diferidos del PR de MDM-001; sin API,
+  estados, eventos ni UI nuevos.
+- X1: `security.load_master_data` rechaza en cada llamada una sesión cuyo login sea miembro de
+  `paqueteria_migrator` (`MDM001_DEPLOYMENT_PRINCIPAL_REFUSED`): un miembro con sólo `ADMIN` sobre
+  `paqueteria_master_data_loader` podía concederse `SET` y llamar la función directamente.
+- X2: `operator_ref` deja de ser un SHA-256 sin sal de un login adivinable y pasa a ser un UUID aleatorio
+  por login, en `platform.master_data_operator_refs` (sólo plataforma: FORCE RLS con una única política para
+  `paqueteria_migrator`, sin permisos de runtime; el ejecutor sólo `SELECT`/`INSERT` de dos columnas). Sin
+  secreto nuevo. Las filas de auditoría anteriores (append-only) conservan el formato SHA-256.
+- X3: `master-data-gate` toma `pg_advisory_xact_lock(2026092803)` antes de leer la marca de despliegue, para
+  que dos primeras ejecuciones concurrentes no puedan dejar `SYNTHETIC` sobre un `REAL`.
+- Lane de Pricing `20260928000400_HardenMasterDataLoaderOperatorBoundary` (dueña de la tabla y de los cuatro
+  grants, como el paso de `policy_version`); AI-18 lo documenta en comentarios y en las aserciones 27 y 28.
+
+## Versión de política de precios por organización (PRC-POLICY-VERSION-PER-ORG) — 2026-09-28
+
+- Respuesta literal del project owner: "Versión por organización" ("Cada organización tiene su
+  propia versión de política, que se sube cuando cambia sus tarifas, y esa versión se congela en
+  cada cotización.").
+- AI-06: `pricing.tariff_rules.policy_version text NOT NULL CHECK (policy_version ~
+  '^[A-Za-z0-9._-]{1,64}$')`. La cotización congela en `pricing_policy_version` la versión de la
+  regla de tarifa seleccionada y la orden la copia sin cambios. Se elimina la configuración global
+  `Pricing:PricingPolicyVersion`.
+- Lane de Pricing (`20260928000200_VersionPricingPolicyPerOrganization`): adopta la columna en
+  instalaciones nuevas y la crea en las existentes sin reescribir filas (NOT NULL si ninguna regla
+  carece de versión; si no, CHECK NOT VALID para filas nuevas o actualizadas). El rollback se niega
+  mientras alguna regla tenga versión.
+- AI-02 (`contract_hardening.quote_to_order.pricing_policy_version`), AI-04 (`TariffRule` y reglas
+  de `Quote`/`Order`), AI-05 (descripción de `pricing_policy_version`), AI-08 (PRC-001) y AI-13 §4.
+- Integración con MDM-001 (lane de Pricing `20260928000300_StoreTariffPolicyVersionInMasterDataLoader`):
+  `security.load_master_data` guarda el `policy_version` de cada regla y rechaza cambiar el de una regla
+  guardada (`MDM001_TARIFF_POLICY_VERSION_IMMUTABLE`); el ejecutor recibe `SELECT` e `INSERT` sobre esa
+  columna (nunca `UPDATE`). Esos dos grants los posee la lane, no los `GRANT` de AI-18, porque el paso
+  MDM-001 publicado verifica exactamente los 116 grants de AI-18 antes; AI-18 lo documenta (aserción 27).
+
+## Carga de datos maestros del piloto (MDM-001) — 2026-09-28
+
+- Decisión del project owner `MDM-001-OPERATOR-LOADER`, respuesta literal: "Herramienta de operador
+  (Recommended)". Traducción en `MDM-001-CONTRACT-TRANSLATION`.
+- AI-06: `platform.master_data_deployment_gate`, marca global de despliegue (`SYNTHETIC` o `REAL`,
+  `gate_007_closed`) con FORCE RLS, escrita sólo por el migrador (cada cambio auditado; nunca de `REAL` a
+  `SYNTHETIC`); sin fila vale `REAL` con GATE-007 abierto. AI-18 le da una única política, para
+  `paqueteria_migrator`.
+- AI-18: `paqueteria_master_data_executor NOLOGIN BYPASSRLS`, con grants exactos por columna sobre las
+  seis tablas maestras, lecturas mínimas de usuario, organización (incluido su tipo), membresía y la marca
+  de despliegue e `INSERT` en `platform.audit_logs` (sin `DELETE`), y `paqueteria_master_data_loader
+  NOLOGIN NOBYPASSRLS`, con sólo `USAGE` sobre `security`: una capacidad de operador de plataforma, no una
+  frontera de tenant, que sólo reciben logins de operador con nombre que no sean principales de despliegue.
+  Ninguno se concede a
+  `paqueteria_app` ni a `paqueteria_worker`; los roles persisten tras el rollback de la lane. Aserciones de
+  despliegue 26 a 28; `validate_contracts.py` verifica los grants exactos.
+- La lane de Pricing (`20260928000100_AddMasterDataLoader`) instala
+  `security.load_master_data(uuid,uuid,json,bytea,boolean)`, SECURITY DEFINER con
+  `search_path=pg_catalog, pg_temp`, con `EXECUTE` sólo para el beneficiario del operador. Aplica
+  GATE-007 y la clasificación del archivo según la marca de despliegue, sólo deja crear ciudades a una
+  organización `PLATFORM` (siempre `ACTIVE`, zonas IANA de México), rechaza vigencias de tarifa
+  traslapadas, valida todo el documento (incluidos los mismos límites y tokens de centavos que el job)
+  antes de escribir, es idempotente por llave natural, exige el tenant exacto en `app.current_org_ids`,
+  escribe una fila de auditoría por carga con un seudónimo del operador (`operator_ref`) y no escribe nada
+  en dry-run. La lane elimina la sobrecarga `jsonb` de la primera versión publicada.
+- AI-06 no cambia.
+
 ## Unirse a una organización existente por correo (REG-002) — 2026-09-27
 
 - Respuestas literales del project owner: "El admin la agrega por correo (Recomendado)",
