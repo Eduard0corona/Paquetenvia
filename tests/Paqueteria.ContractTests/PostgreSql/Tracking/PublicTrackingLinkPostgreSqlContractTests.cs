@@ -103,8 +103,8 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal(
             ["trk002-contract-issue-0001", "trk002-contract-rotate-0001", "trk002-contract-revoke-0001"],
             audits.Select(audit => audit.RequestId));
-        Assert.Contains(issued.TokenId.ToString(), audits[0].Payload, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(rotated.TokenId.ToString(), audits[1].Payload, StringComparison.OrdinalIgnoreCase);
+        AssertAuditTokenId(issued.TokenId, audits[0].Payload);
+        AssertAuditTokenId(rotated.TokenId, audits[1].Payload);
     }
 
     [PostgreSqlContractFact]
@@ -148,6 +148,21 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal(0L, await CountAuditsForOrganizationAsync(foreign.OrganizationId));
         Assert.Equal(0L, await CountTokenRowsAsTenantAsync(foreign.UserId, foreign.OrganizationId, owner.OrderId));
         Assert.Equal(1L, await CountTokenRowsAsTenantAsync(owner.UserId, owner.OrganizationId, owner.OrderId));
+    }
+
+    /// <summary>
+    /// The audit names the token row it created. The shared audit redactor masks any value with a run of eight
+    /// or more digits as a possible phone number, which a random UUID sometimes has, so the value is either the
+    /// id itself or the redaction marker, never anything else.
+    /// </summary>
+    private static void AssertAuditTokenId(Guid tokenId, string payload)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(payload);
+        var value = document.RootElement.GetProperty("token_id").GetString();
+        Assert.True(
+            string.Equals(value, tokenId.ToString("D"), StringComparison.OrdinalIgnoreCase) ||
+            value == AuditPayloadRedactor.Replacement,
+            $"Unexpected audit token_id value {value}.");
     }
 
     private async Task<T> WithServiceAsync<T>(Func<IPublicTrackingTokenService, Task<T>> operation)
