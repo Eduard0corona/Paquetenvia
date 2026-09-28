@@ -3,15 +3,23 @@ using Paqueteria.ArchitectureTests.Architecture;
 namespace Paqueteria.ArchitectureTests;
 
 /// <summary>
-/// GATE-004-CHANNELS: outbound provider HTTP stays confined to the messaging adapters, their HTTP
-/// clients never log requests, and no adapter logs a recipient, a parameter, a token or a body.
+/// GATE-004-CHANNELS: outbound provider HTTP stays confined to the messaging adapters (and the
+/// GATE-003 Google Maps geocoding adapter), their HTTP clients never log requests, and no adapter
+/// logs a recipient, a parameter, a token or a body.
 /// </summary>
 public sealed class MessagingArchitectureTests
 {
     private const string MessagingDirectory = "src/BuildingBlocks/Paqueteria.Infrastructure/Messaging/";
 
+    private static readonly string[] OutboundHttpAllowlist =
+    [
+        MessagingDirectory,
+        "src/Modules/Locations/Locations.Infrastructure/Geocoding/GoogleMaps/",
+        "src/Modules/Locations/Locations.Infrastructure/DependencyInjection.cs",
+    ];
+
     [Fact]
-    public void Outbound_http_clients_exist_only_in_the_messaging_adapters()
+    public void Outbound_http_clients_exist_only_in_the_provider_adapters()
     {
         var users = SourceFiles("src")
             .Where(file => file.Text.Contains("HttpClient", StringComparison.Ordinal))
@@ -19,7 +27,9 @@ public sealed class MessagingArchitectureTests
             .ToArray();
 
         Assert.NotEmpty(users);
-        Assert.All(users, path => Assert.StartsWith(MessagingDirectory, path, StringComparison.Ordinal));
+        Assert.All(users, path => Assert.Contains(
+            OutboundHttpAllowlist,
+            allowed => path.StartsWith(allowed, StringComparison.Ordinal)));
     }
 
     [Fact]
