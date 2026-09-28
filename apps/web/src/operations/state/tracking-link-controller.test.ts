@@ -9,7 +9,8 @@ import {
 
 const orderId = "66666666-6666-6666-6666-666666666666";
 const token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
-const secondToken = "ZZIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
+// A second, obviously synthetic token of the contracted shape (43 Base64URL characters), built at runtime.
+const secondToken = "s".repeat(43);
 
 function link(value = token): PublicTrackingLink {
   return {
