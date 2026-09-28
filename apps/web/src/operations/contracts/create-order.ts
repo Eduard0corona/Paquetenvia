@@ -1,3 +1,4 @@
+import { isAcceptanceVersion, type AcceptanceVersions, acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import { parseMxnToCents } from "./money";
 
 /**
@@ -11,6 +12,8 @@ export const payerTypes = ["SENDER", "RECIPIENT", "BUSINESS_ACCOUNT"] as const;
 export type PayerType = (typeof payerTypes)[number];
 export const acceptanceChannels = ["WEB", "PWA", "ASSISTED", "API"] as const;
 export type AcceptanceChannel = (typeof acceptanceChannels)[number];
+/** /ops/orders/new is operator-assisted by definition; the channel is never chosen. */
+export const operatorAcceptanceChannel: AcceptanceChannel = "ASSISTED";
 export const quoteStatuses = ["ACTIVE", "USED", "EXPIRED", "REVOKED"] as const;
 export type QuoteStatus = (typeof quoteStatuses)[number];
 export const pricingTiers = [
@@ -96,11 +99,9 @@ export interface QuoteDraft {
   readonly packages: readonly PackageDraft[];
 }
 
+/** What the operator captures; versions and channel are never operator input. */
 export interface AcceptanceDraft {
   readonly payerType: string;
-  readonly termsVersion: string;
-  readonly privacyVersion: string;
-  readonly acceptanceChannel: string;
   readonly accepted: boolean;
 }
 
@@ -150,7 +151,6 @@ const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const coordinatePattern = /^-?\d{1,3}(?:\.\d{1,10})?$/;
 const positiveIntegerPattern = /^\d{1,9}$/;
-const versionPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
  * Builds the AI-05 CreateQuoteRequest from the form. Errors are Spanish field
@@ -267,22 +267,27 @@ function positiveInteger(text: string): number | null {
     : null;
 }
 
-/** AI-05 CreateOrderRequest; `acceptedAt` is the client-observed acceptance moment. */
+/**
+ * AI-05 CreateOrderRequest; `acceptedAt` is the client-observed acceptance moment.
+ * The versions come only from the owner-set server configuration and the channel is
+ * always ASSISTED, so the acceptance record cannot be shaped by the operator.
+ */
 export function buildCreateOrderBody(
   quoteId: string,
   draft: AcceptanceDraft,
+  versions: AcceptanceVersions | null,
   acceptedAt: Date,
 ): DraftResult<CreateOrderBody> {
   const errors: string[] = [];
   if (!uuidPattern.test(quoteId)) errors.push("Cotiza de nuevo antes de confirmar.");
   if (!(payerTypes as readonly string[]).includes(draft.payerType))
     errors.push("Selecciona quién paga.");
-  if (!versionPattern.test(draft.termsVersion))
-    errors.push("La versión de términos admite letras, números, punto, guion y guion bajo (máximo 64).");
-  if (!versionPattern.test(draft.privacyVersion))
-    errors.push("La versión del aviso de privacidad admite letras, números, punto, guion y guion bajo (máximo 64).");
-  if (!(acceptanceChannels as readonly string[]).includes(draft.acceptanceChannel))
-    errors.push("Selecciona el canal de aceptación.");
+  if (
+    versions === null ||
+    !isAcceptanceVersion(versions.termsVersion) ||
+    !isAcceptanceVersion(versions.privacyVersion)
+  )
+    errors.push(acceptanceVersionsUnavailableMessage);
   if (!draft.accepted)
     errors.push("Confirma que el cliente aceptó términos y aviso de privacidad.");
   if (Number.isNaN(acceptedAt.getTime())) errors.push("La hora de aceptación no es válida.");
@@ -293,10 +298,10 @@ export function buildCreateOrderBody(
       quote_id: quoteId,
       payer_type: draft.payerType as PayerType,
       acceptance: {
-        terms_version: draft.termsVersion,
-        privacy_version: draft.privacyVersion,
+        terms_version: versions!.termsVersion,
+        privacy_version: versions!.privacyVersion,
         accepted_at: acceptedAt.toISOString(),
-        acceptance_channel: draft.acceptanceChannel as AcceptanceChannel,
+        acceptance_channel: operatorAcceptanceChannel,
       },
     },
   };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
@@ -57,16 +58,11 @@ describe("createQuote request", () => {
 });
 
 describe("createOrder request", () => {
-  const acceptance = {
-    payerType: "SENDER",
-    termsVersion: "terms-2026.09",
-    privacyVersion: "privacy_v3",
-    acceptanceChannel: "ASSISTED",
-    accepted: true,
-  };
+  const acceptance = { payerType: "SENDER", accepted: true };
+  const versions = { termsVersion: "terms-2026.09", privacyVersion: "privacy_v3" };
 
   it("builds the AI-05 CreateOrderRequest with the observed acceptance time", () => {
-    const result = buildCreateOrderBody(quoteId, acceptance, new Date("2026-09-28T17:00:00Z"));
+    const result = buildCreateOrderBody(quoteId, acceptance, versions, new Date("2026-09-28T17:00:00Z"));
     expect(result).toEqual({
       ok: true,
       body: {
@@ -82,15 +78,27 @@ describe("createOrder request", () => {
     });
   });
 
+  it.each([{ payerType: "" }, { accepted: false }])("refuses an incomplete acceptance %o", (change) => {
+    expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, versions, new Date()).ok).toBe(false);
+  });
+
+  it("always sends the ASSISTED channel for the operator-assisted flow", () => {
+    const tampered = { ...acceptance, acceptanceChannel: "WEB" };
+    const result = buildCreateOrderBody(quoteId, tampered, versions, new Date());
+    expect(result.ok && result.body.acceptance.acceptance_channel).toBe("ASSISTED");
+  });
+
   it.each([
-    { payerType: "" },
-    { termsVersion: "" },
-    { termsVersion: "v 1" },
-    { privacyVersion: "x".repeat(65) },
-    { acceptanceChannel: "PHONE" },
-    { accepted: false },
-  ])("refuses an incomplete acceptance %o", (change) => {
-    expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, new Date()).ok).toBe(false);
+    null,
+    { termsVersion: "", privacyVersion: "privacy_v3" },
+    { termsVersion: "v 1", privacyVersion: "privacy_v3" },
+    { termsVersion: "terms-2026.09", privacyVersion: "x".repeat(65) },
+    { termsVersion: "OWNER_DECISION_REQUIRED", privacyVersion: "privacy_v3" },
+  ])("blocks the order without valid configured versions %o", (configured) => {
+    expect(buildCreateOrderBody(quoteId, acceptance, configured, new Date())).toEqual({
+      ok: false,
+      errors: [acceptanceVersionsUnavailableMessage],
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import type { OrdersApi } from "../api/orders-api";
+import type { AcceptanceVersions } from "../contracts/acceptance-versions";
 import { TenantApiError } from "../api/tenant-request";
 import { canPerform } from "../contracts/capabilities";
 import {
@@ -37,6 +38,8 @@ export interface CreateOrderDependencies {
   readonly readSession: () => OperationsSession | null;
   readonly createApi: (session: OperationsSession) => OrdersApi;
   readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
+  /** Owner-set terms/privacy versions from the server; `null` blocks confirmation. */
+  readonly acceptanceVersions: AcceptanceVersions | null;
   readonly now?: () => Date;
 }
 
@@ -154,7 +157,7 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
       });
       return;
     }
-    const result = buildCreateOrderBody(quote.id, draft, now);
+    const result = buildCreateOrderBody(quote.id, draft, this.dependencies.acceptanceVersions, now);
     if (!result.ok) {
       this.update({ errors: result.errors, message: null, stepUpHref: null });
       return;

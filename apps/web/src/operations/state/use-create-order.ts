@@ -6,16 +6,20 @@ import {
   readOperationsSession,
   subscribeToOperationsSession,
 } from "../session/operations-session";
+import type { AcceptanceVersions } from "../contracts/acceptance-versions";
 import { apiBaseUrl, loadActiveRole } from "./active-role";
 import { CreateOrderController, type CreateOrderState } from "./create-order-controller";
 
-export function useCreateOrder(): { state: CreateOrderState; controller: CreateOrderController } {
+export function useCreateOrder(
+  acceptanceVersions: AcceptanceVersions | null,
+): { state: CreateOrderState; controller: CreateOrderController } {
   const [controller] = useState(
     () =>
       new CreateOrderController({
         readSession: readOperationsSession,
         createApi: (session) => createOrdersApi(apiBaseUrl(), session),
         loadRole: loadActiveRole,
+        acceptanceVersions,
       }),
   );
   const state = useSyncExternalStore(

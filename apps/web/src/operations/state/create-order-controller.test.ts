@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OrdersApi } from "../api/orders-api";
+import {
+  acceptanceVersionsUnavailableMessage,
+  type AcceptanceVersions,
+} from "../contracts/acceptance-versions";
 import { TenantApiError } from "../api/tenant-request";
 import { parseCreatedOrder, parseQuote } from "../contracts/create-order";
 import { draft, orderResponse, quoteResponse } from "../contracts/create-order.fixtures";
@@ -9,19 +13,18 @@ import { PendingSubmissions } from "./pending-submissions";
 
 const orgA = "11111111-1111-4111-8111-111111111111";
 const orgB = "22222222-2222-4222-8222-222222222222";
-const acceptance = {
-  payerType: "SENDER",
-  termsVersion: "terms-1",
-  privacyVersion: "privacy-1",
-  acceptanceChannel: "ASSISTED",
-  accepted: true,
-};
+const acceptance = { payerType: "SENDER", accepted: true };
+const configuredVersions: AcceptanceVersions = { termsVersion: "terms-1", privacyVersion: "privacy-1" };
 
 function session(organizationId: string): OperationsSession {
   return { organizationId, sessionNamespace: "synthetic", getAccessToken: () => "token" };
 }
 
-function setup(roles: Record<string, string>, api: Partial<OrdersApi> = {}) {
+function setup(
+  roles: Record<string, string>,
+  api: Partial<OrdersApi> = {},
+  acceptanceVersions: AcceptanceVersions | null = configuredVersions,
+) {
   let current: OperationsSession | null = session(orgA);
   const orders: OrdersApi = {
     createQuote: vi.fn(async () => parseQuote(quoteResponse())),
@@ -35,6 +38,7 @@ function setup(roles: Record<string, string>, api: Partial<OrdersApi> = {}) {
       readSession: () => current,
       createApi: () => orders,
       loadRole: async (active) => roles[active.organizationId] ?? null,
+      acceptanceVersions,
       now: () => new Date("2026-09-28T17:00:00Z"),
     },
     pending,
@@ -100,6 +104,37 @@ describe("quote to order", () => {
       expect.any(AbortSignal),
     );
     expect(controller.getSnapshot()).toMatchObject({ quote: null, order: { public_id: "PQ-000123" } });
+  });
+
+  it("takes versions from server config and the channel as ASSISTED, never from the form", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await controller.requestQuote(draft());
+    // A tampered form submission carrying its own versions and channel is ignored.
+    const forged = {
+      ...acceptance,
+      termsVersion: "forged-terms",
+      privacyVersion: "forged-privacy",
+      acceptanceChannel: "WEB",
+      acceptance: { terms_version: "forged", acceptance_channel: "API" },
+    };
+    await controller.confirmOrder(forged);
+    const body = vi.mocked(orders.createOrder).mock.calls[0]![0];
+    expect(body.acceptance).toEqual({
+      terms_version: "terms-1",
+      privacy_version: "privacy-1",
+      accepted_at: "2026-09-28T17:00:00.000Z",
+      acceptance_channel: "ASSISTED",
+    });
+  });
+
+  it("blocks confirmation when the configured versions are missing", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" }, {}, null);
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder(acceptance);
+    expect(orders.createOrder).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().errors).toContain(acceptanceVersionsUnavailableMessage);
   });
 
   it("does not call createOrder while the low price guard blocks", async () => {

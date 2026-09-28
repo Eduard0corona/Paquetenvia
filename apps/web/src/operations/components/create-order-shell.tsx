@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import {
-  acceptanceChannels,
+  acceptanceVersionsUnavailableMessage,
+  type AcceptanceVersions,
+} from "../contracts/acceptance-versions";
+import {
   evaluateConfirmation,
   confirmationBlockerLabels,
   maximumPackages,
@@ -24,18 +27,16 @@ const payerLabels: Readonly<Record<string, string>> = {
   RECIPIENT: "Destinatario",
   BUSINESS_ACCOUNT: "Cuenta empresarial",
 };
-const channelLabels: Readonly<Record<string, string>> = {
-  WEB: "Web",
-  PWA: "PWA",
-  ASSISTED: "Asistido por operador",
-  API: "API",
-};
 const breakdownLabels: Readonly<Record<string, string>> = {
   BASE_TARIFF: "Tarifa base",
 };
 
-export function CreateOrderShell() {
-  const { state, controller } = useCreateOrder();
+export function CreateOrderShell({
+  acceptanceVersions,
+}: {
+  readonly acceptanceVersions: AcceptanceVersions | null;
+}) {
+  const { state, controller } = useCreateOrder(acceptanceVersions);
   return (
     <main className="opsShell" aria-busy={state.phase === "loading" || state.busy}>
       <header className="opsHeader">
@@ -95,6 +96,7 @@ export function CreateOrderShell() {
               controller={controller}
               canOrder={state.canOrder}
               busy={state.busy}
+              acceptanceVersions={acceptanceVersions}
             />
           )}
         </div>
@@ -239,11 +241,13 @@ function QuoteSummary({
   controller,
   canOrder,
   busy,
+  acceptanceVersions,
 }: {
   readonly quote: Quote;
   readonly controller: CreateOrderController;
   readonly canOrder: boolean;
   readonly busy: boolean;
+  readonly acceptanceVersions: AcceptanceVersions | null;
 }) {
   const [now] = useState(() => new Date());
   const blockers = evaluateConfirmation(quote, now);
@@ -283,9 +287,6 @@ function QuoteSummary({
             const data = new FormData(event.currentTarget);
             void controller.confirmOrder({
               payerType: String(data.get("payer_type") ?? ""),
-              termsVersion: String(data.get("terms_version") ?? ""),
-              privacyVersion: String(data.get("privacy_version") ?? ""),
-              acceptanceChannel: String(data.get("acceptance_channel") ?? ""),
               accepted: data.get("accepted") === "on",
             });
           }}
@@ -298,19 +299,20 @@ function QuoteSummary({
                 {payerTypes.map((value) => <option key={value} value={value}>{payerLabels[value]}</option>)}
               </select>
             </label>
-            <label>Versión de términos aceptada<input name="terms_version" maxLength={64} pattern="[A-Za-z0-9._\-]+" required /></label>
-            <label>Versión del aviso de privacidad aceptada<input name="privacy_version" maxLength={64} pattern="[A-Za-z0-9._\-]+" required /></label>
-            <label>Canal de aceptación
-              <select name="acceptance_channel" defaultValue="" required>
-                <option value="" disabled>Selecciona</option>
-                {acceptanceChannels.map((value) => <option key={value} value={value}>{channelLabels[value]}</option>)}
-              </select>
-            </label>
+            {acceptanceVersions === null ? (
+              <p className="opsWarning" role="alert">{acceptanceVersionsUnavailableMessage}</p>
+            ) : (
+              <dl className="opsMoneyList" aria-label="Documentos que acepta el cliente">
+                <div><dt>Versión de términos vigente</dt><dd>{acceptanceVersions.termsVersion}</dd></div>
+                <div><dt>Versión del aviso de privacidad vigente</dt><dd>{acceptanceVersions.privacyVersion}</dd></div>
+                <div><dt>Canal de aceptación</dt><dd>Asistido por operador</dd></div>
+              </dl>
+            )}
             <label className="opsCheckbox">
               <input type="checkbox" name="accepted" required /> El cliente vio el desglose y aceptó términos y aviso de privacidad
             </label>
           </fieldset>
-          <button className="opsPrimary" type="submit" disabled={busy || blockers.length > 0}>
+          <button className="opsPrimary" type="submit" disabled={busy || blockers.length > 0 || acceptanceVersions === null}>
             {busy ? "Confirmando..." : "Confirmar orden"}
           </button>
         </form>
