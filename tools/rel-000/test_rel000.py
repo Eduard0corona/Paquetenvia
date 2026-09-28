@@ -4689,6 +4689,7 @@ class DependencyAdmissionTests(unittest.TestCase):
                 ("Azure.Extensions.AspNetCore.DataProtection.Keys", "1.6.4"),
                 ("Azure.Identity", "1.21.0"),
                 ("Azure.Security.KeyVault.Keys", "4.10.1"),
+                ("Azure.Security.KeyVault.Secrets", "4.11.1"),
                 ("Azure.Storage.Blobs", "12.29.2"),
             ],
             [(item["id"], item["version"]) for item in entry["admitted_direct_packages"]],

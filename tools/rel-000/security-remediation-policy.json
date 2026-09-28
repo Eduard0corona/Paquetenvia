@@ -52,11 +52,12 @@
       "authorized_source_branch": "deps/adp-001-azure",
       "tracked_pull_request": 124,
       "ecosystem": "nuget",
-      "description": "Azure SDK for the ADP-001 production adapters (ADP-001-PII-KEYVAULT-ENVELOPE, ADP-001-POD-BLOB-DEFENDER): managed identity, Key Vault envelope and Data Protection KEK, Blob proof storage. Declares the exact baseline amendments the restore produces: MSAL's Microsoft.IdentityModel.Abstractions 8.14.0 where AUTH-001-OIDC's 8.19.2 is absent, the IntegrationTests Microsoft.Bcl.AsyncInterfaces upgrade, and the framework-pruned Microsoft.Extensions nodes of Paqueteria.Infrastructure and Pricing.Infrastructure.",
+      "description": "Azure SDK for the ADP-001 production adapters (ADP-001-PII-KEYVAULT-ENVELOPE, ADP-001-POD-BLOB-DEFENDER): managed identity, Key Vault envelope and Data Protection KEK, Blob proof storage, and application-read Key Vault secrets (PILOT-KEYVAULT-PRIVATE-APP-READ). Declares the exact baseline amendments the restore produces: MSAL's Microsoft.IdentityModel.Abstractions 8.14.0 where AUTH-001-OIDC's 8.19.2 is absent, the IntegrationTests Microsoft.Bcl.AsyncInterfaces upgrade, and the framework-pruned Microsoft.Extensions nodes of Paqueteria.Infrastructure and Pricing.Infrastructure.",
       "admitted_direct_packages": [
         {"id": "Azure.Extensions.AspNetCore.DataProtection.Keys", "version": "1.6.4", "content_hash": "7uKgk1WzELt5Pbp09liae8HBL3XOe0x/+DGYYC5DCiCKGRxrGi0BfmVCqzvzXGMOxITL4THEYf1GklzmAuJRTQ=="},
         {"id": "Azure.Identity", "version": "1.21.0", "content_hash": "GeFv8sGwRKvDKwI2WFy8r0mhmlxEVZg24Sit2NogTjiSO8RVjllWM65OT6e1sKjOvG8V74y7hAbaELUUPjZQSw=="},
         {"id": "Azure.Security.KeyVault.Keys", "version": "4.10.1", "content_hash": "RAFXuB5dWDTrfU5kw/uLH9IMeW7wL2ZgpR6sBcZZ/jJ0LOuKQ+ScEy2S8KeTr+BWnDIyIHtLLDPzEAPtbBZf5w=="},
+        {"id": "Azure.Security.KeyVault.Secrets", "version": "4.11.1", "content_hash": "/yFMJGQYPPvBSrupjJ388qqXZ1h70Yrer1vG+z+jddgovEmIE7IhShU6ZGIi24IPArY8HBH6FFtgVK369TWhmQ=="},
         {"id": "Azure.Storage.Blobs", "version": "12.29.2", "content_hash": "NeZmk7bphspT2BYn8XaNCTV4/9vQG+ea79F85MBTi2o2WiXIIJNsRBtFyeBrzK2HIk476rfSqLNwPt4vXgOEkQ=="}
       ],
       "admitted_transitive_packages": [
