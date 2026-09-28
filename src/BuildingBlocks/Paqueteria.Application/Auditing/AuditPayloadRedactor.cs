@@ -101,7 +101,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
                 SkipValidation = false,
             }))
             {
-                WriteElement(writer, payload, 0, identifierContext: false);
+                WriteElement(writer, payload, 0);
             }
 
             if (buffer.WrittenCount > options.MaximumUtf8Bytes)
@@ -121,7 +121,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         }
     }
 
-    private void WriteElement(Utf8JsonWriter writer, JsonElement element, int depth, bool identifierContext)
+    private void WriteElement(Utf8JsonWriter writer, JsonElement element, int depth)
     {
         if (depth > options.MaximumDepth)
         {
@@ -141,7 +141,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
                     }
                     else
                     {
-                        WriteElement(writer, property.Value, depth + 1, IsIdentifierName(property.Name));
+                        WriteElement(writer, property.Value, depth + 1);
                     }
                 }
 
@@ -151,14 +151,14 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
                 writer.WriteStartArray();
                 foreach (var item in element.EnumerateArray())
                 {
-                    WriteElement(writer, item, depth + 1, identifierContext);
+                    WriteElement(writer, item, depth + 1);
                 }
 
                 writer.WriteEndArray();
                 break;
             case JsonValueKind.String:
                 var value = element.GetString() ?? string.Empty;
-                writer.WriteStringValue(IsSensitiveValue(value, identifierContext) ? Replacement : value);
+                writer.WriteStringValue(IsSensitiveValue(value) ? Replacement : value);
                 break;
             case JsonValueKind.Number:
             case JsonValueKind.True:
@@ -191,48 +191,9 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
             normalized.EndsWith("fullname", StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// Keys that name identifiers: <c>id</c>, <c>request_id</c>, <c>orderId</c>, <c>token_ids</c> and so on. Their
-    /// values (and the items of an array under them) are exempt from the bare-digit Mexican phone shape, because
-    /// generated identifiers can carry any digit run. Every other value rule, including the explicit <c>+</c>
-    /// E.164 shape, still applies to them.
-    /// </summary>
-    private static bool IsIdentifierName(string name)
-    {
-        foreach (var suffix in IdentifierSuffixes)
-        {
-            if (name.Equals(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (name.Length <= suffix.Length || !name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var before = name[name.Length - suffix.Length - 1];
-            if (before is '_' or '-' or '.')
-            {
-                // snake_case, kebab-case, dotted: request_id, entity-id, order.ids.
-                return true;
-            }
-
-            // camelCase / PascalCase: orderId, OrderIds, requestID. "paid" or "valid" do not qualify.
-            if (char.IsUpper(name[name.Length - suffix.Length]) && (char.IsLower(before) || char.IsDigit(before)))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static readonly string[] IdentifierSuffixes = ["id", "ids"];
-
-    private static bool IsSensitiveValue(string value, bool identifierContext) =>
+    private static bool IsSensitiveValue(string value) =>
         EmailPattern().IsMatch(value) ||
-        ContainsPhoneNumber(value, identifierContext) ||
+        ContainsPhoneNumber(value) ||
         JwtPattern().IsMatch(value) ||
         value.Contains("Bearer ", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("PRIVATE KEY", StringComparison.OrdinalIgnoreCase) ||
@@ -245,11 +206,11 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
     /// <summary>
     /// Phone detection by shape. Well-formed UUIDs (8-4-4-4-12 hex) are removed from the text first, so a digit run
     /// inside an identifier never looks like a phone. What remains is redacted when it holds an E.164 number (a
-    /// <c>+</c> followed by 8 to 15 digits with optional separators) or, outside identifier keys, a Mexican
-    /// 10-digit number with an optional <c>+52</c>/<c>52</c> and mobile <c>1</c> prefix and optional spaces,
-    /// dashes, dots or parentheses. A bare run of digits of any other length is not a phone.
+    /// <c>+</c> followed by 8 to 15 digits with optional separators) or a Mexican 10-digit number with an optional
+    /// <c>+52</c>/<c>52</c> and mobile <c>1</c> prefix and optional spaces, dashes, dots or parentheses. This applies
+    /// under every key, identifier keys included. A bare run of digits of any other length is not a phone.
     /// </summary>
-    private static bool ContainsPhoneNumber(string value, bool identifierContext)
+    private static bool ContainsPhoneNumber(string value)
     {
         if (value.Length < 8)
         {
@@ -257,12 +218,7 @@ public sealed partial class AuditPayloadRedactor : IAuditPayloadRedactor
         }
 
         var text = UuidPattern().Replace(value, " ");
-        if (E164PhonePattern().IsMatch(text))
-        {
-            return true;
-        }
-
-        return !identifierContext && MexicanPhonePattern().IsMatch(text);
+        return E164PhonePattern().IsMatch(text) || MexicanPhonePattern().IsMatch(text);
     }
 
     [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+", RegexOptions.CultureInvariant)]

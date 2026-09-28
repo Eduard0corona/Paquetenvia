@@ -136,46 +136,67 @@ public sealed class AuditPayloadRedactorTests
 
     [Theory]
     [InlineData("id")]
-    [InlineData("ID")]
     [InlineData("request_id")]
     [InlineData("entity_id")]
-    [InlineData("order-id")]
+    [InlineData("external_reference_id")]
     [InlineData("orderId")]
-    [InlineData("OrderID")]
-    [InlineData("externalReferenceId")]
     [InlineData("token_ids")]
-    [InlineData("orderIds")]
-    public void Identifier_fields_keep_numeric_identifiers(string fieldName)
+    public void Bare_ten_digit_values_under_identifier_fields_are_redacted(string fieldName)
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             [fieldName] = "6671234567",
-            ["nested"] = new Dictionary<string, object?> { [fieldName] = new[] { "5512345678", "20260928001" } },
+            ["nested"] = new Dictionary<string, object?> { [fieldName] = new[] { "55 1234 5678" } },
         }));
 
         var result = redactor.Redact(document.RootElement);
 
+        Assert.DoesNotContain("6671234567", result.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain("55 1234 5678", result.Json, StringComparison.Ordinal);
         using var output = JsonDocument.Parse(result.Json);
-        Assert.Equal("6671234567", output.RootElement.GetProperty(fieldName).GetString());
-        var nested = output.RootElement.GetProperty("nested").GetProperty(fieldName);
-        Assert.Equal("5512345678", nested[0].GetString());
-        Assert.Equal("20260928001", nested[1].GetString());
+        Assert.Equal(AuditPayloadRedactor.Replacement, output.RootElement.GetProperty(fieldName).GetString());
+        Assert.Equal(
+            AuditPayloadRedactor.Replacement,
+            output.RootElement.GetProperty("nested").GetProperty(fieldName)[0].GetString());
     }
 
-    [Theory]
-    [InlineData("paid")]
-    [InlineData("valid")]
-    [InlineData("note")]
-    public void Words_ending_in_id_are_not_identifier_fields(string fieldName)
+    [Fact]
+    public void Mexican_phones_inside_identifier_arrays_are_redacted_in_free_text_and_bare_form()
     {
+        const string freeText = "llamar al 667 123 4567 antes de entregar";
+        const string bare = "5512345678";
+        var keptId = "12345678-1234-4123-8123-667123456789";
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
         {
-            [fieldName] = "667 123 4567",
+            ["related_ids"] = new[] { freeText, bare, keptId },
         }));
 
         var result = redactor.Redact(document.RootElement);
 
         Assert.DoesNotContain("667 123 4567", result.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(bare, result.Json, StringComparison.Ordinal);
+        using var output = JsonDocument.Parse(result.Json);
+        var items = output.RootElement.GetProperty("related_ids");
+        Assert.Equal(AuditPayloadRedactor.Replacement, items[0].GetString());
+        Assert.Equal(AuditPayloadRedactor.Replacement, items[1].GetString());
+        Assert.Equal(keptId, items[2].GetString());
+    }
+
+    [Theory]
+    [InlineData("request_id", "trk002-contract-issue-0001")]
+    [InlineData("order_ids", "20260928001")]
+    [InlineData("entityId", "12345678")]
+    public void Identifier_fields_keep_values_that_are_not_phone_shaped(string fieldName, string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            [fieldName] = value,
+        }));
+
+        var result = redactor.Redact(document.RootElement);
+
+        using var output = JsonDocument.Parse(result.Json);
+        Assert.Equal(value, output.RootElement.GetProperty(fieldName).GetString());
     }
 
     [Theory]
