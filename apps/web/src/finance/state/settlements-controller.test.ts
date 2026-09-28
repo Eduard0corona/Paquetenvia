@@ -289,6 +289,7 @@ describe("selection sequencing", () => {
     finish(parseSettlement(settlementResponse({ id: idA, status: "APPROVED" })));
     await writing;
     expect(controller.getSnapshot().selected?.id).toBe(idB);
+    expect(controller.getSnapshot().message).toBeNull();
   });
 });
 

@@ -353,8 +353,12 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
       if (generation !== this.generation) return;
       this.pending.settle(scope);
       // A selection made while the write was in flight wins over the write's result.
-      if (token === this.selection) this.update({ selected: settlement, formKey: this.getSnapshot().formKey + 1 });
-      this.update({ message: "Cambio confirmado por el servidor." });
+      if (token === this.selection)
+        this.update({
+          selected: settlement,
+          message: "Cambio confirmado por el servidor.",
+          formKey: this.getSnapshot().formKey + 1,
+        });
     } catch (error) {
       if (generation !== this.generation) return;
       if (!(error instanceof TenantApiError) || !error.retryable) this.pending.settle(scope);
