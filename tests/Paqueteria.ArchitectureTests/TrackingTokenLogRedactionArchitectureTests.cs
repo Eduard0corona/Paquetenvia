@@ -18,8 +18,14 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
     private static readonly Regex RequestPathSink = new(
         @"AddHttpLogging|UseHttpLogging|AddW3CLogging|UseW3CLogging|IncludeScopes|AddOpenTelemetry|"
         + @"AzureMonitor|ApplicationInsights|AddSimpleConsole|AddSystemdConsole|"
-        + @"AddEventSourceLogger|AddEventLog|AddDebug\(",
+        + @"AddEventSourceLogger|AddEventLog|AddDebug\(|Serilog|NLog|AddSeq\(",
         RegexOptions.CultureInvariant);
+
+    // Files that register a request-path log sink, each reviewed as served only behind the tracking redaction.
+    // Empty today. A new sink fails Request_path_log_sinks_are_reviewed_and_behind_the_tracking_redaction until it
+    // is reviewed and listed here with its reason; a stale entry fails it too.
+    private static readonly IReadOnlyDictionary<string, string> ReviewedRequestPathSinks =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     [Theory]
     [InlineData("/api/v1/tracking/AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
@@ -62,6 +68,50 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
         var descriptor = Assert.Single(services, item => item.ServiceType == typeof(IHttpContextFactory));
         Assert.Equal("PublicTrackingRedactingHttpContextFactory", descriptor.ImplementationType?.Name);
         Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+
+        // HostingApplication reuses a connection's pooled HttpContext (Kestrel IHostContextContainer) through
+        // DefaultHttpContextFactory.Initialize, bypassing Create, only when the registered factory IS a
+        // DefaultHttpContextFactory. Any other factory is called through Create on every request, which is what
+        // keeps the redaction on reused keep-alive and HTTP/2 connections (integration-tested on real Kestrel).
+        Assert.False(descriptor.ImplementationType!.IsAssignableTo(typeof(DefaultHttpContextFactory)));
+    }
+
+    [Theory]
+    [InlineData("/hubs/driver", "/hubs/driver")]
+    [InlineData("/api/v1/tracking/token-value", "/api/v1/tracking/redacted")]
+    public void Redacting_factory_keeps_the_default_context_lifecycle(string path, string expectedPath)
+    {
+        // Same contract as DefaultHttpContextFactory: a fresh context over the server features, the accessor set
+        // on Create and cleared on Dispose, and a lazily created request services scope from the root provider.
+        var services = new ServiceCollection();
+        services.AddOptions();
+        services.AddHttpContextAccessor();
+        services.AddPublicTrackingPathRedaction();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<IHttpContextFactory>();
+        var accessor = provider.GetRequiredService<IHttpContextAccessor>();
+
+        var features = new Microsoft.AspNetCore.Http.Features.FeatureCollection();
+        features.Set<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>(
+            new Microsoft.AspNetCore.Http.Features.HttpRequestFeature { Path = path });
+        features.Set<Microsoft.AspNetCore.Http.Features.IHttpResponseFeature>(
+            new Microsoft.AspNetCore.Http.Features.HttpResponseFeature());
+        features.Set<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>(
+            new StreamResponseBodyFeature(Stream.Null));
+
+        var context = factory.Create(features);
+        Assert.IsType<DefaultHttpContext>(context);
+        Assert.Same(features, context.Features);
+        Assert.Same(context, accessor.HttpContext);
+        Assert.Equal(expectedPath, context.Request.Path.Value);
+        Assert.NotNull(context.RequestServices);
+
+        var second = factory.Create(new Microsoft.AspNetCore.Http.Features.FeatureCollection(features));
+        Assert.NotSame(context, second);
+        factory.Dispose(second);
+
+        factory.Dispose(context);
+        Assert.Null(accessor.HttpContext);
     }
 
     [Fact]
@@ -80,22 +130,35 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
         AssertRedactionIsTheOnlyHttpContextFactory("the API host serves the public tracking lookup");
 
     [Fact]
-    public void Request_path_log_sinks_are_only_registered_behind_the_tracking_redaction()
+    public void Request_path_log_sinks_are_reviewed_and_behind_the_tracking_redaction()
     {
-        // Every sink matched here writes the request path or the hosting RequestPath scope somewhere (HTTP/W3C
-        // logging, scope-including formatters, OpenTelemetry or Application Insights exporters, other providers).
-        // Adding one is safe only while the redaction is the host's IHttpContextFactory.
+        // Every sink matched here writes the request path, the query or the hosting RequestPath scope somewhere
+        // (HTTP/W3C logging, scope-including formatters, OpenTelemetry or Application Insights exporters, other
+        // providers). Each one must be reviewed and listed, and the redaction must stay wired for all of them.
         var sinks = SourceFiles()
             .Concat(Directory.EnumerateFiles(TestRepository.GetPath("src"), "appsettings*.json", SearchOption.AllDirectories))
             .Where(file => !IsBuildOutput(file))
             .Where(file => RequestPathSink.IsMatch(File.ReadAllText(file)))
             .Select(Relative)
+            .Order(StringComparer.Ordinal)
             .ToArray();
 
-        AssertRedactionIsTheOnlyHttpContextFactory(
-            sinks.Length == 0
-                ? "no request-path log sink is registered today, and one added later must stay covered"
-                : "request-path log sinks are registered in: " + string.Join(", ", sinks));
+        var unreviewed = sinks.Where(sink => !ReviewedRequestPathSinks.ContainsKey(sink)).ToArray();
+        Assert.True(
+            unreviewed.Length == 0,
+            "Request-path log sinks registered without review against the tracking token redaction: "
+            + string.Join(", ", unreviewed)
+            + ". Check that they only observe the redacted path (the sink must run in a host whose "
+            + "IHttpContextFactory is the tracking redaction), then list them in ReviewedRequestPathSinks.");
+        var stale = ReviewedRequestPathSinks.Keys
+            .Where(sink => !sinks.Contains(sink, StringComparer.Ordinal))
+            .ToArray();
+        Assert.True(stale.Length == 0, "Stale ReviewedRequestPathSinks entries: " + string.Join(", ", stale));
+
+        foreach (var sink in sinks)
+        {
+            AssertRedactionIsTheOnlyHttpContextFactory($"{sink} registers a request-path log sink");
+        }
     }
 
     [Fact]

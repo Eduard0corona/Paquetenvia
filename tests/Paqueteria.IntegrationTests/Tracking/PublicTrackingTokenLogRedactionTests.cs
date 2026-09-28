@@ -3,6 +3,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -24,38 +27,10 @@ public sealed class PublicTrackingTokenLogRedactionTests(
     [Fact]
     public async Task Lookup_token_reaches_no_log_message_scope_or_activity_at_trace_level()
     {
-        var unknown = RandomToken();
-        var lookups = new (string Token, string Path, HttpStatusCode Status)[]
-        {
-            (PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken,
-                $"/api/v1/tracking/{PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken}",
-                HttpStatusCode.OK),
-            (unknown, $"/api/v1/tracking/{unknown}", HttpStatusCode.NotFound),
-            // Malformed: padded, wrong length and characters outside Base64URL, and a routing-case variant.
-            (unknown + "=", $"/api/v1/tracking/{unknown}=", HttpStatusCode.NotFound),
-            ("malformedTRKsecret.value~1", "/api/v1/tracking/malformedTRKsecret.value~1", HttpStatusCode.NotFound),
-            ("upperCasePathTRKsecret", "/API/V1/TRACKING/upperCasePathTRKsecret", HttpStatusCode.NotFound),
-        };
-
+        var lookups = Lookups();
         var logs = new CapturingLoggerProvider();
         using var activities = new CapturingActivityListener("Microsoft.AspNetCore");
-        await using var host = factory.WithWebHostBuilder(builder =>
-        {
-            builder.ConfigureAppConfiguration(configuration =>
-                configuration.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["Logging:LogLevel:Default"] = "Trace",
-                    ["Logging:LogLevel:Microsoft"] = "Trace",
-                    ["Logging:LogLevel:Microsoft.AspNetCore"] = "Trace",
-                    // A scope-including formatter must be harmless too.
-                    ["Logging:Console:FormatterName"] = "json",
-                    ["Logging:Console:FormatterOptions:IncludeScopes"] = "true",
-                }));
-            builder.ConfigureLogging(logging => logging
-                .AddProvider(logs)
-                .SetMinimumLevel(LogLevel.Trace)
-                .AddFilter<CapturingLoggerProvider>(null, LogLevel.Trace));
-        });
+        await using var host = factory.WithWebHostBuilder(builder => ConfigureCapture(builder, logs));
         using var client = host.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
@@ -69,9 +44,137 @@ public sealed class PublicTrackingTokenLogRedactionTests(
             cacheControl.Add(response.Headers.CacheControl?.ToString());
         }
 
+        AssertNoLeak(lookups, logs.Entries, activities.Entries);
+
+        // Privacy headers apply to every path routing sends to the lookup, whatever its casing.
+        Assert.All(cacheControl, value => Assert.Equal("no-store, private", value));
+    }
+
+    [Fact]
+    public async Task Lookup_token_is_redacted_on_every_request_of_reused_kestrel_connections()
+    {
+        // Kestrel keeps one hosting context per connection (IHostContextContainer); TestServer does not. Several
+        // lookups over one persistent HTTP/1.1 connection and one HTTP/2 connection prove every request is covered.
+        var lookups = Lookups();
+        var logs = new CapturingLoggerProvider();
+        using var activities = new CapturingActivityListener("Microsoft.AspNetCore");
+        await using var host = factory.WithWebHostBuilder(builder => ConfigureCapture(builder, logs));
+        host.UseKestrel(options =>
+        {
+            options.Listen(IPAddress.Loopback, 0, listen => listen.Protocols = HttpProtocols.Http1);
+            options.Listen(IPAddress.Loopback, 0, listen => listen.Protocols = HttpProtocols.Http2);
+        });
+        host.StartServer();
+        var addresses = host.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()!
+            .Addresses
+            .Select(address => new Uri(address, UriKind.Absolute))
+            .ToArray();
+        Assert.Equal(2, addresses.Length);
+
+        var exercised = new List<Version>();
+        foreach (var address in addresses)
+        {
+            using var handler = new SocketsHttpHandler
+            {
+                MaxConnectionsPerServer = 1,
+                PooledConnectionLifetime = Timeout.InfiniteTimeSpan,
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
+                AllowAutoRedirect = false,
+            };
+            using var client = new HttpClient(handler) { BaseAddress = address };
+            var version = await ProbeVersionAsync(client);
+            exercised.Add(version);
+            for (var round = 0; round < 2; round++)
+            {
+                foreach (var lookup in lookups)
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, lookup.Path)
+                    {
+                        Version = version,
+                        VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                    };
+                    using var response = await client.SendAsync(request);
+                    Assert.Equal(lookup.Status, response.StatusCode);
+                    Assert.Equal(version, response.Version);
+                    Assert.Equal("no-store, private", response.Headers.CacheControl?.ToString());
+                }
+            }
+        }
+
+        Assert.Equal([HttpVersion.Version11, HttpVersion.Version20], exercised.Order().ToArray());
         var logEntries = logs.Entries;
-        var activityEntries = activities.Entries;
-        // The capture is real: hosting opened a request scope and started a request activity for every lookup.
+        AssertNoLeak(lookups, logEntries, activities.Entries);
+
+        // The lookups really shared connections: one Kestrel connection per protocol served all of them, so the
+        // hosting context of the first request was reused by every later one.
+        var trackingScopes = logEntries
+            .Where(entry => entry.StartsWith("Microsoft.AspNetCore.Hosting.Diagnostics scope", StringComparison.Ordinal)
+                && entry.Contains("/tracking/", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        Assert.Equal(2 * 2 * lookups.Length, trackingScopes.Length);
+        var connections = trackingScopes
+            .Select(entry => RequestIdPattern.Match(entry))
+            .Where(match => match.Success)
+            .Select(match => match.Groups["connection"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, connections.Length);
+    }
+
+    [Fact]
+    public void Host_uses_the_tracking_path_redacting_http_context_factory()
+    {
+        var httpContextFactory = factory.Services.GetRequiredService<IHttpContextFactory>();
+        Assert.Equal(
+            "PublicTrackingRedactingHttpContextFactory",
+            httpContextFactory.GetType().Name);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex RequestIdPattern = new(
+        @"RequestId=(?<connection>[^:\s]+):[0-9A-F]+",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static (string Token, string Path, HttpStatusCode Status)[] Lookups()
+    {
+        var unknown = RandomToken();
+        return
+        [
+            (PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken,
+                $"/api/v1/tracking/{PostgreSqlSecurityWebApplicationFactory.ValidTrackingToken}",
+                HttpStatusCode.OK),
+            (unknown, $"/api/v1/tracking/{unknown}", HttpStatusCode.NotFound),
+            // Malformed: padded, wrong length and characters outside Base64URL, and a routing-case variant.
+            (unknown + "=", $"/api/v1/tracking/{unknown}=", HttpStatusCode.NotFound),
+            ("malformedTRKsecret.value~1", "/api/v1/tracking/malformedTRKsecret.value~1", HttpStatusCode.NotFound),
+            ("upperCasePathTRKsecret", "/API/V1/TRACKING/upperCasePathTRKsecret", HttpStatusCode.NotFound),
+        ];
+    }
+
+    private static void ConfigureCapture(IWebHostBuilder builder, CapturingLoggerProvider logs)
+    {
+        builder.ConfigureAppConfiguration(configuration =>
+            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Logging:LogLevel:Default"] = "Trace",
+                ["Logging:LogLevel:Microsoft"] = "Trace",
+                ["Logging:LogLevel:Microsoft.AspNetCore"] = "Trace",
+                // A scope-including formatter must be harmless too.
+                ["Logging:Console:FormatterName"] = "json",
+                ["Logging:Console:FormatterOptions:IncludeScopes"] = "true",
+            }));
+        builder.ConfigureLogging(logging => logging
+            .AddProvider(logs)
+            .SetMinimumLevel(LogLevel.Trace)
+            .AddFilter<CapturingLoggerProvider>(null, LogLevel.Trace));
+    }
+
+    private static void AssertNoLeak(
+        IReadOnlyCollection<(string Token, string Path, HttpStatusCode Status)> lookups,
+        IReadOnlyCollection<string> logEntries,
+        IReadOnlyCollection<string> activityEntries)
+    {
+        // The capture is real: hosting opened a request scope and started a request activity for the lookups.
         Assert.Contains(logEntries, entry => entry.Contains("scope", StringComparison.Ordinal)
             && entry.Contains("RequestPath", StringComparison.Ordinal)
             && entry.Contains("/tracking/redacted", StringComparison.OrdinalIgnoreCase));
@@ -84,18 +187,31 @@ public sealed class PublicTrackingTokenLogRedactionTests(
             AssertAbsent(lookup.Token, logEntries, "log");
             AssertAbsent(lookup.Token, activityEntries, "activity");
         }
-
-        // Privacy headers apply to every path routing sends to the lookup, whatever its casing.
-        Assert.All(cacheControl, value => Assert.Equal("no-store, private", value));
     }
 
-    [Fact]
-    public void Host_uses_the_tracking_path_redacting_http_context_factory()
+    private static async Task<Version> ProbeVersionAsync(HttpClient client)
     {
-        var httpContextFactory = factory.Services.GetRequiredService<IHttpContextFactory>();
-        Assert.Equal(
-            "PublicTrackingRedactingHttpContextFactory",
-            httpContextFactory.GetType().Name);
+        foreach (var version in new[] { HttpVersion.Version20, HttpVersion.Version11 })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/health/live")
+            {
+                Version = version,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+            };
+            try
+            {
+                using var response = await client.SendAsync(request);
+                if (response.IsSuccessStatusCode && response.Version == version)
+                {
+                    return version;
+                }
+            }
+            catch (HttpRequestException)
+            {
+            }
+        }
+
+        throw new InvalidOperationException("The Kestrel listener answered neither HTTP/2 nor HTTP/1.1.");
     }
 
     private static void AssertAbsent(string token, IReadOnlyCollection<string> entries, string kind)
