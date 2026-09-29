@@ -137,9 +137,9 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     ["DRIVER", "reconcileCod", false],
     ["VIEWER", "getOrderFinancials", false],
     ["DISPATCHER", "issueTrackingLink", true],
-    ["PLATFORM_ADMIN", "revokeTrackingLink", true],
+    ["PLATFORM_ADMIN", "issueTrackingLink", true],
     ["VIEWER", "issueTrackingLink", false],
-    ["FINANCE", "revokeTrackingLink", false],
+    ["FINANCE", "issueTrackingLink", false],
   ])("%s may %s: %s", (role, operation, expected) => {
     expect(canPerform(role, operation)).toBe(expected);
   });
@@ -170,15 +170,19 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
   });
 
   it("hints MFA for PLATFORM_ADMIN, never DISPATCHER, on the tracking link (TRK-002)", () => {
-    for (const operation of ["issueTrackingLink", "revokeTrackingLink"] as const) {
-      expect(requiresMfa("PLATFORM_ADMIN", operation)).toBe(true);
-      expect(requiresMfa("DISPATCHER", operation)).toBe(false);
-    }
+    expect(requiresMfa("PLATFORM_ADMIN", "issueTrackingLink")).toBe(true);
+    expect(requiresMfa("DISPATCHER", "issueTrackingLink")).toBe(false);
     const start = openApi.indexOf("  tracking_link_operations_decision:");
     const decision = openApi.slice(start, openApi.indexOf("  tracking_link_operations:", start));
     expect(decision.replace(/\s+/g, " ")).toContain(
       "DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge",
     );
+  });
+
+  it("has no tracking link revocation (TRK-002-NO-REVOCATION)", () => {
+    expect(Object.keys(capabilityMatrix)).not.toContain("revokeTrackingLink");
+    expect(Object.keys(publishedMatrix())).not.toContain("revokeTrackingLink");
+    expect(openApi).not.toContain("revokeTrackingLink");
   });
 
   it("resolves the role of the selected organization only", () => {

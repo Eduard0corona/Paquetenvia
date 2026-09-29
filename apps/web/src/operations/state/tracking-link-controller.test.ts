@@ -9,8 +9,6 @@ import {
 
 const orderId = "66666666-6666-6666-6666-666666666666";
 const token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
-// A second, obviously synthetic token of the contracted shape (43 Base64URL characters), built at runtime.
-const secondToken = "s".repeat(43);
 
 function link(value = token, generation = 1, validUntil: string | null = null): PublicTrackingLink {
   return {
@@ -29,7 +27,6 @@ function setup(api: Partial<TrackingLinkApi>) {
   const controller = new TrackingLinkController(
     {
       getOrCreate: vi.fn().mockResolvedValue(link()),
-      revoke: vi.fn().mockResolvedValue(undefined),
       ...api,
     },
     orderId,
@@ -67,29 +64,32 @@ describe("tracking link controller (TRK-002-AUTO-LINK)", () => {
     ]);
   });
 
-  it("shows the next generation after a revocation and a finished order's grace end", async () => {
+  it("shows a finished order's grace end with the same link", async () => {
     const getOrCreate = vi
       .fn()
       .mockResolvedValueOnce(link())
-      .mockResolvedValueOnce(link(secondToken, 2, "2026-10-01T18:00:00.000Z"));
+      .mockResolvedValueOnce(link(token, 1, "2026-10-01T18:00:00.000Z"));
     const { controller } = setup({ getOrCreate });
     await controller.show();
-    await controller.revoke();
-    expect(controller.current).toEqual({
-      kind: "idle",
-      message:
-        "Enlace revocado: ya no muestra la orden. Si la orden sigue en curso, al volver a verlo se genera uno nuevo.",
-      stepUpHref: null,
-    });
-    expect(JSON.stringify(controller.current)).not.toContain(token);
+    controller.hide();
     await controller.show();
     expect(controller.current).toEqual({
       kind: "shown",
-      url: `https://paquetenvia.test/track/${secondToken}`,
-      generation: 2,
+      url: `https://paquetenvia.test/track/${token}`,
+      generation: 1,
       validUntil: "2026-10-01T18:00:00.000Z",
       copied: false,
     });
+  });
+
+  it("offers no revocation (TRK-002-NO-REVOCATION)", () => {
+    const { controller } = setup({});
+    expect("revoke" in controller).toBe(false);
+    const component = readFileSync(
+      "src/operations/components/operations-tracking-link.tsx",
+      "utf8",
+    );
+    expect(component).not.toMatch(/Revocar|revoke\(/);
   });
 
   it("copies to the clipboard and reports it, or stays uncopied without a clipboard", async () => {
@@ -106,7 +106,7 @@ describe("tracking link controller (TRK-002-AUTO-LINK)", () => {
     expect(controller.current).toMatchObject({ kind: "shown", copied: false });
   });
 
-  it("forgets the link when hidden, revoked or disposed", async () => {
+  it("forgets the link when hidden or disposed", async () => {
     const { controller, states } = setup({});
     await controller.show();
     controller.hide();
@@ -152,22 +152,18 @@ describe("tracking link controller (TRK-002-AUTO-LINK)", () => {
     expect(controller.current).toEqual({ kind: "idle", message, stepUpHref: null });
   });
 
-  it.each(["show", "revoke"] as const)(
-    "offers the MFA step-up back to the order when %s answers 403 MFA_REQUIRED",
-    async (action) => {
-      const mfa = new TenantApiError("forbidden", "MFA_REQUIRED", true);
-      const { controller } = setup({
-        getOrCreate: vi.fn().mockRejectedValue(mfa),
-        revoke: vi.fn().mockRejectedValue(mfa),
-      });
-      await controller[action]();
-      expect(controller.current).toEqual({
-        kind: "idle",
-        message: "Esta acción requiere verificar tu identidad (MFA).",
-        stepUpHref: `/login?mfa=required&return_url=${encodeURIComponent(`/ops/orders/${orderId}`)}`,
-      });
-    },
-  );
+  it("offers the MFA step-up back to the order when show answers 403 MFA_REQUIRED", async () => {
+    const mfa = new TenantApiError("forbidden", "MFA_REQUIRED", true);
+    const { controller } = setup({
+      getOrCreate: vi.fn().mockRejectedValue(mfa),
+    });
+    await controller.show();
+    expect(controller.current).toEqual({
+      kind: "idle",
+      message: "Esta acción requiere verificar tu identidad (MFA).",
+      stepUpHref: `/login?mfa=required&return_url=${encodeURIComponent(`/ops/orders/${orderId}`)}`,
+    });
+  });
 
   it("keeps a generic 403 without the step-up", async () => {
     const { controller } = setup({
@@ -182,15 +178,12 @@ describe("tracking link controller (TRK-002-AUTO-LINK)", () => {
     const getOrCreate = vi.fn(
       () => new Promise<PublicTrackingLink>((done) => (resolve = done)),
     );
-    const revoke = vi.fn().mockResolvedValue(undefined);
-    const { controller } = setup({ getOrCreate, revoke });
+    const { controller } = setup({ getOrCreate });
     const pending = controller.show();
     await controller.show();
-    await controller.revoke();
     resolve(link());
     await pending;
     expect(getOrCreate).toHaveBeenCalledOnce();
-    expect(revoke).not.toHaveBeenCalled();
   });
 
   it("never persists or logs the link in the browser and offers no rotation", () => {

@@ -486,7 +486,9 @@ token_hash_contract:
     a Key Vault key (AI-24 tracking_token.derivation); tokens issued before it were 32 cryptographically random bytes
   link_lifetime: AI-24 public_tracking.link_lifetime - valid while the order is in progress (RESCHEDULED included) and
     for 24 hours after its first DELIVERED, RETURNED or CANCELLED public event; no new link for an order in a final
-    public status; a revoked generation never comes back
+    public status; nobody revokes a link (TRK-002-NO-REVOCATION, no revocation operation exists); a retired
+    generation (a pre-derivation token or a link of a key version no longer configured, replaced by the next one)
+    never comes back
   token_encoding: Base64URL without padding
   hash_algorithm: SHA-256
   hash_input: exact UTF-8 bytes of the encoded token, without trim or normalization

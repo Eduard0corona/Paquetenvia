@@ -80,9 +80,10 @@ public sealed class SyntheticEnvironmentArchitectureTests
             Assert.DoesNotContain(forbidden, source, StringComparison.OrdinalIgnoreCase);
         }
 
-        // TRK-002-AUTO-LINK: first link, repeat (same link), revoke, next generation; no rotation exists.
-        Assert.Equal(3, Regex.Matches(source, @"tokenService\.GetOrCreateAsync\(").Count);
-        Assert.Single(Regex.Matches(source, @"tokenService\.RevokeAsync\("));
+        // TRK-002-AUTO-LINK: first link and repeat (same link); no rotation exists and, since TRK-002-NO-REVOCATION,
+        // no revocation either.
+        Assert.Equal(2, Regex.Matches(source, @"tokenService\.GetOrCreateAsync\(").Count);
+        Assert.DoesNotContain("RevokeAsync(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("RotateAsync(", source, StringComparison.Ordinal);
         Assert.Contains("projectionReader.FindAsync", source, StringComparison.Ordinal);
     }
@@ -121,13 +122,13 @@ public sealed class SyntheticEnvironmentArchitectureTests
     {
         AssertSha256(
             "docs/normative/v0.6/specs/AI-08_BACKLOG.yaml",
-            "DB8F1969BBBD8CA011577E732E8178907E4CAA1F2E68CA66687D7062FD972C05");
+            "969190623DDC330DE0F6D3C3638AC25B56528CD5EDAF5344E468C677CD762939");
         AssertSha256(
             "docs/normative/v0.6/MANIFEST.json",
-            "F8AD90D2DC1184BC95F8D8E33CB1E25D360CE29C74E68979EF2A8E7A9B7714F1");
+            "7A2AAE7CBE219FA1BA75F373C59F56790C643707AFA6630210FFD6E28C0328E0");
         AssertSha256(
             "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
-            "C1D734756F81F483762759C7854DD6730425B2A494329697800EF12E9D7812D6");
+            "946AE2A2CFD4630EF68246523918090B339C756EE1B1B477C8B4284AA7323D90");
     }
 
     [Fact]
