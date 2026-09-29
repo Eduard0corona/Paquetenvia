@@ -23,10 +23,10 @@ public sealed class PublicTrackingPostgreSqlTests(
 
     /// <summary>
     /// REL-000 required evidence for TRK-001 (item-evidence), kept under its original name and adapted to
-    /// TRK-002-AUTO-LINK: the lifecycle is tenant-safe (another organization gets the uniform not-found and RLS hides
-    /// the rows), every state change is audited (issue and revocation, never a read), and the plaintext token is
-    /// never persisted or logged: it is only ever returned in the no-store get-or-create response, re-derived for
-    /// the same generation on every call.
+    /// TRK-002-AUTO-LINK and TRK-002-NO-REVOCATION: the lifecycle is tenant-safe (another organization gets the uniform
+    /// not-found and RLS hides the rows), every state change is audited (the issue, never a read; nobody revokes a
+    /// link, so it keeps resolving), and the plaintext token is never persisted or logged: it is only ever returned in
+    /// the no-store get-or-create response, re-derived for the same generation on every call.
     /// </summary>
     [Fact]
     public async Task Lifecycle_is_tenant_safe_audited_and_plaintext_is_returned_once()
@@ -84,56 +84,45 @@ public sealed class PublicTrackingPostgreSqlTests(
         Assert.Equal(audits, await CountAuditsAsync(order.OrderId));
         Assert.Equal((1, 1, 1), await ReadTokenStateAsync(order.OrderId));
 
-        await RevokeAsync(order.OrderId, "trk-revoke");
-        await AssertLookupAsync(grant.Token, HttpStatusCode.NotFound);
-        var auditsAfterFirstRevoke = await CountAuditsAsync(order.OrderId);
-        Assert.Equal(audits + 1, auditsAfterFirstRevoke);
-        await RevokeAsync(order.OrderId, "trk-revoke-repeat");
-        Assert.Equal(auditsAfterFirstRevoke, await CountAuditsAsync(order.OrderId));
+        // TRK-002-NO-REVOCATION: the former revocation route is not mapped (404, even for a member who could read the
+        // link), nothing retires the live link and it keeps resolving to the same order.
+        using (var client = host.CreateClient())
+        using (var request = new HttpRequestMessage(
+                   HttpMethod.Post,
+                   $"/api/v1/orders/{order.OrderId:D}/tracking-link/revoke"))
+        {
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer",
+                Identity.Infrastructure.Mock.MockIdentityProfiles.ActivePlatformAdminMfa);
+            request.Headers.Add(
+                "X-Organization-Id",
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId.ToString("D"));
+            request.Headers.Add("Idempotency-Key", $"trk-no-revocation-{Guid.NewGuid():N}");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
 
-        var next = await GetOrCreateAsync(order.OrderId, "trk-next");
-        Assert.Equal(2, next.Generation);
-        Assert.NotEqual(grant.Token, next.Token);
-        await AssertStoredSafelyAsync(order.OrderId, next, "TRACKING_TOKEN_ISSUED");
-        await AssertLookupAsync(grant.Token, HttpStatusCode.NotFound);
-        await AssertLookupAsync(next.Token, HttpStatusCode.OK);
+        Assert.Equal(audits, await CountAuditsAsync(order.OrderId));
+        Assert.Equal((1, 1, 1), await ReadTokenStateAsync(order.OrderId));
+        await AssertLookupAsync(grant.Token, HttpStatusCode.OK);
 
         // Tenant-safe: another organization gets the uniform not-found and changes nothing.
-        foreach (var operation in new Func<IPublicTrackingTokenService, Task>[]
-                 {
-                     service => service.GetOrCreateAsync(
-                         new GetOrCreatePublicTrackingLinkCommand(
-                             ActorId,
-                             PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
-                             order.OrderId,
-                             "trk-cross-tenant"),
-                         default),
-                     service => service.RevokeAsync(
-                         new RevokePublicTrackingTokenCommand(
-                             ActorId,
-                             PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
-                             order.OrderId,
-                             "trk-cross-tenant-revoke"),
-                         default),
-                 })
-        {
-            await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() =>
-                WithServiceAsync(async service =>
-                {
-                    await operation(service);
-                    return true;
-                }));
-        }
+        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() =>
+            WithServiceAsync(service => service.GetOrCreateAsync(
+                new GetOrCreatePublicTrackingLinkCommand(
+                    ActorId,
+                    PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                    order.OrderId,
+                    "trk-cross-tenant"),
+                default)));
 
-        Assert.Equal(auditsAfterFirstRevoke + 1, await CountAuditsAsync(order.OrderId));
-        await AssertLookupAsync(next.Token, HttpStatusCode.OK);
+        Assert.Equal(audits, await CountAuditsAsync(order.OrderId));
+        Assert.Equal((1, 1, 1), await ReadTokenStateAsync(order.OrderId));
+        await AssertLookupAsync(grant.Token, HttpStatusCode.OK);
 
         // Never persisted anywhere readable and never logged by the host that served the response.
-        foreach (var token in new[] { grant.Token, next.Token })
-        {
-            Assert.Equal(0L, await CountPlaintextAsync(token));
-            Assert.DoesNotContain(logs.Entries, entry => entry.Contains(token, StringComparison.Ordinal));
-        }
+        Assert.Equal(0L, await CountPlaintextAsync(grant.Token));
+        Assert.DoesNotContain(logs.Entries, entry => entry.Contains(grant.Token, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -314,19 +303,6 @@ public sealed class PublicTrackingPostgreSqlTests(
                 orderId,
                 requestId),
             default));
-
-    private Task RevokeAsync(Guid orderId, string requestId) =>
-        WithServiceAsync(async service =>
-        {
-            await service.RevokeAsync(
-                new RevokePublicTrackingTokenCommand(
-                    ActorId,
-                    PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,
-                    orderId,
-                    requestId),
-                default);
-            return true;
-        });
 
     /// <summary>The DELIVERED transition as the productive path writes it: status and its public event.</summary>
     private async Task FinishAsync(Guid orderId, string ago)

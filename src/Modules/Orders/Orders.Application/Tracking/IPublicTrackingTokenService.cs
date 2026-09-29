@@ -3,14 +3,10 @@ namespace Orders.Application.Tracking;
 /// <summary>
 /// TRK-002-AUTO-LINK: returns the order's current public tracking link, re-derived from its generation, and
 /// creates one only when the order has none that can still be shown. It never rotates a live link.
+/// TRK-002-NO-REVOCATION: nobody revokes a link; it lives until 24 hours after the order reaches a final public
+/// status, so the service has no revocation.
 /// </summary>
 public sealed record GetOrCreatePublicTrackingLinkCommand(
-    Guid ActorId,
-    Guid OrganizationId,
-    Guid OrderId,
-    string RequestId);
-
-public sealed record RevokePublicTrackingTokenCommand(
     Guid ActorId,
     Guid OrganizationId,
     Guid OrderId,
@@ -19,7 +15,10 @@ public sealed record RevokePublicTrackingTokenCommand(
 /// <param name="TokenId">The token row of the current generation.</param>
 /// <param name="OrderId">The order the link shows.</param>
 /// <param name="Token">The plaintext token, re-derived on every call and never stored or logged.</param>
-/// <param name="Generation">The link generation; a revoked generation is never derived again.</param>
+/// <param name="Generation">
+/// The link generation: 1 for the link written with the order; it grows only when a pre-derivation token or a link
+/// of a key version no longer configured is replaced, and a retired generation is never derived again.
+/// </param>
 /// <param name="ValidUntil">
 /// Null while the order is in progress; once it is DELIVERED, RETURNED or CANCELLED for the public, the end of
 /// the 24-hour grace after which the public lookup answers the uniform 404.
@@ -43,10 +42,6 @@ public interface IPublicTrackingTokenService
 {
     Task<PublicTrackingTokenGrant> GetOrCreateAsync(
         GetOrCreatePublicTrackingLinkCommand command,
-        CancellationToken cancellationToken);
-
-    Task RevokeAsync(
-        RevokePublicTrackingTokenCommand command,
         CancellationToken cancellationToken);
 }
 

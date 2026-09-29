@@ -9,8 +9,8 @@ using Paqueteria.Application.Auditing;
 namespace Orders.Infrastructure.Tracking;
 
 /// <summary>
-/// TRK-002-AUTO-LINK statements on <c>orders.public_tracking_tokens</c>, shared by the get-or-create and revoke
-/// service and by the order-creation issuer. Every statement runs on the caller's tenant transaction (RLS scoped to
+/// TRK-002-AUTO-LINK statements on <c>orders.public_tracking_tokens</c>, shared by the get-or-create service and by
+/// the order-creation issuer. Every statement runs on the caller's tenant transaction (RLS scoped to
 /// the owner organization) and none returns or writes a plaintext token: rows keep only the SHA-256 of the token,
 /// its generation and the key version it was derived with.
 /// </summary>
@@ -18,7 +18,6 @@ internal static class PublicTrackingLinkStore
 {
     internal const int AdvisoryLockNamespace = 0x54524B31; // TRK1
     internal const string IssuedAction = "TRACKING_TOKEN_ISSUED";
-    internal const string RevokedAction = "TRACKING_TOKEN_REVOKED";
     internal const string AuditEntityType = "PublicTrackingToken";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -135,7 +134,11 @@ internal static class PublicTrackingLinkStore
         return links;
     }
 
-    /// <summary>Retires every link of the order the public lookup could still accept.</summary>
+    /// <summary>
+    /// Retires every link of the order the public lookup could still accept. Only get-or-create calls it, when the
+    /// order has no link that can be re-derived (a pre-derivation token or a key version no longer configured) and the
+    /// next generation replaces it; nobody revokes a live derived link (TRK-002-NO-REVOCATION).
+    /// </summary>
     internal static async Task<int> RetireActiveLinksAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -159,8 +162,8 @@ internal static class PublicTrackingLinkStore
     }
 
     /// <summary>
-    /// The next generation of the order: one above every generation it ever had, revoked ones included, so a
-    /// revoked link is never derived again.
+    /// The next generation of the order: one above every generation it ever had, retired ones included, so a
+    /// retired link is never derived again.
     /// </summary>
     internal static async Task<int> ReadNextGenerationAsync(
         NpgsqlConnection connection,
@@ -254,37 +257,6 @@ internal static class PublicTrackingLinkStore
                 token_id = tokenId,
                 generation,
                 key_version = keyVersion,
-                previous_tokens_revoked_count = previousTokensRevokedCount,
-                request_id = requestId,
-            }, JsonOptions),
-            occurredAt,
-            cancellationToken);
-
-    internal static Task WriteRevokedAuditAsync(
-        IAppendOnlyAuditWriter auditWriter,
-        IAuditPayloadRedactor auditRedactor,
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid actorId,
-        Guid organizationId,
-        Guid orderId,
-        string? requestId,
-        int previousTokensRevokedCount,
-        DateTimeOffset occurredAt,
-        CancellationToken cancellationToken) =>
-        WriteAuditAsync(
-            auditWriter,
-            auditRedactor,
-            connection,
-            transaction,
-            actorId,
-            organizationId,
-            orderId,
-            requestId,
-            RevokedAction,
-            JsonSerializer.SerializeToElement(new
-            {
-                order_id = orderId,
                 previous_tokens_revoked_count = previousTokensRevokedCount,
                 request_id = requestId,
             }, JsonOptions),

@@ -135,25 +135,28 @@ public sealed class CapabilityMatrixContractTests
     }
 
     /// <summary>
-    /// TRK-002-ISSUE-ENDPOINT: D5 predates the tracking link operations, so AI-05 publishes their roles in their own
-    /// section, names the owner decision that scoped them and states the roles are the AI-01 section 7 safer default
-    /// pending owner confirmation. They mint or revoke a public bearer credential, so the server grants exactly the
-    /// roles of assignDriver, createRoute and createExternalOffer: DISPATCHER without MFA and PLATFORM_ADMIN with MFA.
+    /// TRK-002-ISSUE-ENDPOINT: D5 predates the tracking link operation, so AI-05 publishes its roles in their own
+    /// section and names the owner decisions; TRK-002-NO-REVOCATION confirmed the roles ("Sí, con MFA") and removed
+    /// revocation. It hands out a public bearer credential, so the server grants exactly the roles of assignDriver,
+    /// createRoute and createExternalOffer: DISPATCHER without MFA and PLATFORM_ADMIN with MFA.
     /// </summary>
     [Fact]
     public void Tracking_link_operations_take_DISPATCHER_and_PLATFORM_ADMIN_with_MFA()
     {
         var decision = Matrix.Scalar("tracking_link_operations_decision");
         Assert.StartsWith("TRK-002-ISSUE-ENDPOINT", decision, StringComparison.Ordinal);
-        Assert.Contains("pending owner confirmation", decision, StringComparison.Ordinal);
-        Assert.Contains("safer default per AI-01 section 7", decision, StringComparison.Ordinal);
+        Assert.Contains("TRK-002-NO-REVOCATION", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí, con MFA\"", decision, StringComparison.Ordinal);
+        Assert.DoesNotContain("pending owner confirmation", decision, StringComparison.Ordinal);
         Assert.Contains("DISPATCHER members without MFA", decision, StringComparison.Ordinal);
         Assert.Contains("PLATFORM_ADMIN members with a satisfied MFA challenge", decision, StringComparison.Ordinal);
         var section = Matrix.Mapping("tracking_link_operations");
-        Assert.Equal(
-            ["issueTrackingLink", "revokeTrackingLink"],
-            OperationIds(section).Order(StringComparer.Ordinal));
-        foreach (var capability in new[] { TenantCapabilities.IssueTrackingLink, TenantCapabilities.RevokeTrackingLink })
+        Assert.Equal(["issueTrackingLink"], OperationIds(section).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(
+            typeof(TenantCapabilities).GetFields(),
+            field => field.Name.Contains("Revoke", StringComparison.Ordinal) &&
+                field.Name.Contains("TrackingLink", StringComparison.Ordinal));
+        foreach (var capability in new[] { TenantCapabilities.IssueTrackingLink })
         {
             foreach (var reference in new[]
                      {
