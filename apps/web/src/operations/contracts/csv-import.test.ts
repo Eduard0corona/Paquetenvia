@@ -58,7 +58,7 @@ describe("CSV-001 preview parser", () => {
     [
       "a valid row with errors",
       previewResponse({
-        rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [{ column: "x", code: "QUOTE_ID_INVALID" }] }],
+        rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [{ column: "x", code: "QUOTE_ID_INVALID" }], cod_expected_cents: 0 }],
       }),
     ],
     [
@@ -71,14 +71,93 @@ describe("CSV-001 preview parser", () => {
     ],
     [
       "a non-UUID quote",
-      previewResponse({ rows: [{ row_number: 2, quote_id: "not-a-uuid", payer_type: "SENDER", valid: true, errors: [] }] }),
+      previewResponse({ rows: [{ row_number: 2, quote_id: "not-a-uuid", payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 0 }] }),
     ],
     [
       "a fractional row number",
-      previewResponse({ rows: [{ row_number: 2.5, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] }] }),
+      previewResponse({ rows: [{ row_number: 2.5, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 0 }] }),
+    ],
+    [
+      "a valid row without its COD",
+      previewResponse({ rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] }] }),
+    ],
+    [
+      "a negative COD",
+      previewResponse({
+        rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: -1 }],
+      }),
+    ],
+    [
+      "a fractional COD",
+      previewResponse({
+        rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 150.5 }],
+      }),
+    ],
+    [
+      "a COD beyond the safe integer range",
+      previewResponse({
+        rows: [
+          {
+            row_number: 2,
+            quote_id: quoteId,
+            payer_type: "SENDER",
+            valid: true,
+            errors: [],
+            cod_expected_cents: Number.MAX_SAFE_INTEGER + 1,
+          },
+        ],
+      }),
+    ],
+    [
+      "a COD given as text",
+      previewResponse({
+        rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: "150" }],
+      }),
+    ],
+    [
+      "an invalid row that carries a COD",
+      previewResponse({
+        valid_rows: 0,
+        invalid_rows: 1,
+        rows: [
+          {
+            row_number: 2,
+            quote_id: null,
+            payer_type: null,
+            valid: false,
+            errors: [{ column: "quote_id", code: "QUOTE_ID_INVALID" }],
+            cod_expected_cents: 0,
+          },
+        ],
+      }),
     ],
   ])("fails closed on %s", (_label, body) => {
     expect(() => parseCsvImportPreview(body)).toThrow(ContractViolationError);
+  });
+
+  it("keeps the integer COD of each valid row and none for an invalid row (D6-COD-EXPECTED)", () => {
+    const preview = parseCsvImportPreview(invalidPreviewResponse());
+    expect(preview.rows.map((row) => row.cod_expected_cents)).toEqual([15_050, null]);
+  });
+
+  it("reports an invalid COD cell with its own code", () => {
+    const preview = parseCsvImportPreview(
+      previewResponse({
+        valid_rows: 0,
+        invalid_rows: 1,
+        rows: [
+          {
+            row_number: 2,
+            quote_id: quoteId,
+            payer_type: null,
+            valid: false,
+            errors: [{ column: "cod_expected_cents", code: "COD_EXPECTED_CENTS_INVALID" }],
+          },
+        ],
+      }),
+    );
+    expect(preview.rows[0].errors[0]).toEqual({ column: "cod_expected_cents", code: "COD_EXPECTED_CENTS_INVALID" });
+    expect(isCommittable(preview)).toBe(false);
   });
 });
 

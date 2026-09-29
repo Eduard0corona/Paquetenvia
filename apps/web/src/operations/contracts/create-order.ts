@@ -108,6 +108,11 @@ export interface QuoteDraft {
 export interface AcceptanceDraft {
   readonly payerType: string;
   readonly accepted: boolean;
+  /**
+   * D6-COD-EXPECTED: optional cash-on-delivery amount typed in MXN (e.g. `150.50`);
+   * empty or absent means no COD. Converted to integer cents without floating point.
+   */
+  readonly codAmount?: string;
 }
 
 interface AddressBody {
@@ -146,6 +151,8 @@ export interface CreateOrderBody {
     accepted_at: string;
     acceptance_channel: AcceptanceChannel;
   };
+  /** D6-COD-EXPECTED: integer MXN cents, sent only when the order carries COD. */
+  cod_expected_cents?: number;
 }
 
 export type DraftResult<T> =
@@ -296,20 +303,36 @@ export function buildCreateOrderBody(
   if (!draft.accepted)
     errors.push("Confirma que el cliente aceptó términos y aviso de privacidad.");
   if (Number.isNaN(acceptedAt.getTime())) errors.push("La hora de aceptación no es válida.");
+  const codCents = codExpectedCents(draft.codAmount);
+  if (codCents === null) errors.push(invalidCodAmountMessage);
   if (errors.length > 0) return { ok: false, errors };
-  return {
-    ok: true,
-    body: {
-      quote_id: quoteId,
-      payer_type: draft.payerType as PayerType,
-      acceptance: {
-        terms_version: versions!.termsVersion,
-        privacy_version: versions!.privacyVersion,
-        accepted_at: acceptedAt.toISOString(),
-        acceptance_channel: operatorAcceptanceChannel,
-      },
+  const body: CreateOrderBody = {
+    quote_id: quoteId,
+    payer_type: draft.payerType as PayerType,
+    acceptance: {
+      terms_version: versions!.termsVersion,
+      privacy_version: versions!.privacyVersion,
+      accepted_at: acceptedAt.toISOString(),
+      acceptance_channel: operatorAcceptanceChannel,
     },
   };
+  // Zero is "no COD": the field is left out, which the server treats identically.
+  if (codCents! > 0) body.cod_expected_cents = codCents!;
+  return { ok: true, body };
+}
+
+export const invalidCodAmountMessage =
+  "El cobro contra entrega debe ser un monto en MXN con hasta 2 decimales, sin signos, comas ni símbolos.";
+
+/**
+ * D6-COD-EXPECTED: the typed COD in MXN as integer cents (0 when left empty), or
+ * `null` when the text is not a plain non-negative amount with at most two decimals.
+ * Uses the integer-only {@link parseMxnToCents}; no floating-point value is involved.
+ */
+export function codExpectedCents(text: string | undefined): number | null {
+  const trimmed = (text ?? "").trim();
+  if (trimmed === "") return 0;
+  return parseMxnToCents(trimmed);
 }
 
 export type ConfirmationBlocker = "inactive" | "expired" | "low_price";

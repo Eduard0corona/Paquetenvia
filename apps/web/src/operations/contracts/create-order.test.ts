@@ -3,6 +3,7 @@ import { acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
+  codExpectedCents,
   confirmationBlockerLabels,
   CreateOrderContractError,
   evaluateConfirmation,
@@ -83,6 +84,36 @@ describe("createOrder request", () => {
   it.each([{ payerType: "" }, { accepted: false }])("refuses an incomplete acceptance %o", (change) => {
     expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, versions, new Date()).ok).toBe(false);
   });
+
+  it.each([
+    ["150.50", 15_050],
+    ["150.5", 15_050],
+    ["150", 15_000],
+    ["0.01", 1],
+    [" 1234567.89 ", 123_456_789],
+    ["0.1", 10],
+    ["0.29", 29],
+  ])("sends the typed COD %s as exact integer cents (D6-COD-EXPECTED)", (typed, cents) => {
+    const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+    expect(result.ok && result.body.cod_expected_cents).toBe(cents);
+    expect(Number.isSafeInteger(cents)).toBe(true);
+  });
+
+  it.each(["", "   ", "0", "0.00", undefined])("sends no COD field for %o", (typed) => {
+    const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+    expect(result.ok).toBe(true);
+    expect(result.ok && "cod_expected_cents" in result.body).toBe(false);
+  });
+
+  it.each(["-1", "+1", "1,500", "1 500", "150.505", "$150", "1e3", "150,50", "abc", "150.", ".5", "99999999999999"])(
+    "refuses the COD %s instead of reinterpreting it",
+    (typed) => {
+      const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.errors.join(" ")).toContain("cobro contra entrega");
+      expect(codExpectedCents(typed)).toBeNull();
+    },
+  );
 
   it("always sends the ASSISTED channel for the operator-assisted flow", () => {
     const tampered = { ...acceptance, acceptanceChannel: "WEB" };

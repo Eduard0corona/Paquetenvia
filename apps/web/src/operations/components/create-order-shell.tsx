@@ -73,6 +73,12 @@ export function CreateOrderShell({
           <dl className="opsMoneyList">
             <MoneyRow label="Neto sin IVA" cents={state.order.price_net.amount_cents} />
             <MoneyRow label={`Total (${vatIncludedLabel})`} cents={state.order.total.amount_cents} />
+            {state.orderCodExpectedCents !== null && (
+              <div>
+                <dt>Cobro contra entrega declarado</dt>
+                <dd>{state.orderCodExpectedCents === 0 ? "Sin cobro" : formatMxnCentsWithCurrency(state.orderCodExpectedCents)}</dd>
+              </div>
+            )}
           </dl>
           <p>Servicio: {serviceTypeLabel(state.order.service_type)} · versión {state.order.version}</p>
           <div className="opsFormActions">
@@ -289,6 +295,7 @@ function QuoteSummary({
             void controller.confirmOrder({
               payerType: String(data.get("payer_type") ?? ""),
               accepted: data.get("accepted") === "on",
+              codAmount: String(data.get("cod_amount") ?? ""),
             });
           }}
         >
@@ -300,6 +307,16 @@ function QuoteSummary({
                 {payerTypes.map((value) => <option key={value} value={value}>{payerLabels[value]}</option>)}
               </select>
             </label>
+            <label>Cobro contra entrega (MXN, opcional)
+              <input
+                name="cod_amount"
+                inputMode="decimal"
+                pattern="[0-9]+(\.[0-9]{1,2})?"
+                placeholder="Vacío si no hay cobro"
+                aria-describedby="cod-amount-help"
+              />
+            </label>
+            <p id="cod-amount-help">Monto que el repartidor cobrará al entregar, en pesos con hasta 2 decimales (por ejemplo 150.50).</p>
             {acceptanceVersions === null ? (
               <p className="opsWarning" role="alert">{acceptanceVersionsUnavailableMessage}</p>
             ) : (
