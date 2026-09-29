@@ -10,7 +10,9 @@ using Paqueteria.Application.Tenancy;
 namespace Orders.Endpoints;
 
 /// <summary>
-/// TRK-002-AUTO-LINK: the authenticated read (get-or-create) and revocation of an order's public tracking link.
+/// TRK-002-AUTO-LINK: the authenticated read (get-or-create) of an order's public tracking link.
+/// TRK-002-NO-REVOCATION: nobody revokes a link, so there is no revocation route; a link lives until 24 hours after
+/// the order reaches a final public status.
 /// </summary>
 /// <remarks>
 /// Every order gets its link when it is created; <c>issueTrackingLink</c> returns that same link, re-derived for the
@@ -24,7 +26,6 @@ namespace Orders.Endpoints;
 public static class PublicTrackingLinkEndpoints
 {
     public const string IssueRoute = "/api/v1/orders/{orderId:guid}/tracking-link";
-    public const string RevokeRoute = "/api/v1/orders/{orderId:guid}/tracking-link/revoke";
 
     public static IEndpointRouteBuilder MapPublicTrackingLinkEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -34,18 +35,6 @@ public static class PublicTrackingLinkEndpoints
             .WithName("issueTrackingLink")
             .WithTags("Tracking")
             .Produces<PublicTrackingLinkResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
-
-        endpoints.MapPost(RevokeRoute, RevokeAsync)
-            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
-            .RequireTenantContext(StatusCodes.Status403Forbidden)
-            .WithName("revokeTrackingLink")
-            .WithTags("Tracking")
-            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -128,58 +117,6 @@ public static class PublicTrackingLinkEndpoints
         return Results.Json(
             PublicTrackingLinkResponse.From(grant, publicBaseUrl, baseUrlPolicy),
             statusCode: StatusCodes.Status200OK);
-    }
-
-    private static async Task<IResult> RevokeAsync(
-        Guid orderId,
-        HttpContext httpContext,
-        IOrganizationRequestSession session,
-        ITenantContext tenantContext,
-        IPublicTrackingTokenService service,
-        CancellationToken cancellationToken)
-    {
-        if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) || orderId == Guid.Empty)
-        {
-            return Conflict();
-        }
-
-        if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
-        {
-            return TenantCapabilityGate.Forbidden();
-        }
-
-        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.RevokeTrackingLink) is { } denied)
-        {
-            return denied;
-        }
-
-        try
-        {
-            await service.RevokeAsync(
-                new RevokePublicTrackingTokenCommand(
-                    actorId,
-                    tenantContext.OrganizationId,
-                    orderId,
-                    idempotencyKey),
-                cancellationToken);
-            return Results.NoContent();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (PublicTrackingTokenNotFoundException)
-        {
-            return NotFound();
-        }
-        catch (PublicTrackingTokenConflictException)
-        {
-            return Conflict();
-        }
-        catch (PublicTrackingTokenInfrastructureException)
-        {
-            return Unavailable();
-        }
     }
 
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)

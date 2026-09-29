@@ -102,7 +102,7 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
     }
 
     [PostgreSqlContractFact]
-    public async Task Revocation_is_the_uniform_404_and_the_next_get_or_create_derives_the_next_generation()
+    public async Task A_retired_generation_is_the_uniform_404_and_is_never_derived_again()
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
         await scenario.InitializeAsync(orderStatus: "DELIVERING");
@@ -112,9 +112,11 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal(1, first.Generation);
         Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(first.Token));
 
-        await RevokeAsync(scenario, scenario.OrderId, "trk002-revoke-0001");
+        // TRK-002-NO-REVOCATION: no operation revokes a link. A row can still be retired (revoked_at) when a
+        // pre-derivation token or a removed key version is replaced; retiring it here directly proves that the lookup
+        // fails closed for a retired row and that its generation never comes back.
+        await RetireAsync(scenario, scenario.OrderId);
         Assert.Null(await ReadProjectionPublicIdKeyAsync(first.Token));
-        await RevokeAsync(scenario, scenario.OrderId, "trk002-revoke-0001");
 
         var second = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-revoke-read-0002");
         Assert.Equal(2, second.Generation);
@@ -130,12 +132,12 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal([true, false], rows.Select(row => row.Revoked));
         var audits = await ReadAuditsAsync(scenario.OrderId);
         Assert.Equal(
-            ["TRACKING_TOKEN_ISSUED", "TRACKING_TOKEN_REVOKED", "TRACKING_TOKEN_ISSUED"],
+            ["TRACKING_TOKEN_ISSUED", "TRACKING_TOKEN_ISSUED"],
             audits.Select(audit => audit.Action));
         Assert.Equal(
-            ["trk002-revoke-read-0001", "trk002-revoke-0001", "trk002-revoke-read-0002"],
+            ["trk002-revoke-read-0001", "trk002-revoke-read-0002"],
             audits.Select(audit => audit.RequestId));
-        AssertAuditPayload(audits[2].Payload, second.TokenId, generation: 2, keyVersion: 1, revokedCount: 0);
+        AssertAuditPayload(audits[1].Payload, second.TokenId, generation: 2, keyVersion: 1, revokedCount: 0);
         Assert.All(audits, audit =>
         {
             Assert.DoesNotContain(first.Token, audit.Payload, StringComparison.Ordinal);
@@ -182,8 +184,8 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
         await SetStatusAsync(scenario, "CLOSED");
         Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(link.Token));
 
-        // A revoked link of a finished order is never replaced.
-        await RevokeAsync(scenario, scenario.OrderId, "trk002-final-revoke-0001");
+        // A retired link of a finished order is never replaced.
+        await RetireAsync(scenario, scenario.OrderId);
         await Assert.ThrowsAsync<PublicTrackingLinkOrderFinishedException>(() =>
             GetOrCreateAsync(scenario, scenario.OrderId, "trk002-final-read-0003"));
         Assert.Single(await ReadTokenRowsAsync(scenario.OrderId));
@@ -306,7 +308,7 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
     }
 
     [PostgreSqlContractFact]
-    public async Task Another_organization_can_neither_see_get_nor_revoke_the_link()
+    public async Task Another_organization_can_neither_see_nor_get_the_link()
     {
         await using var owner = new SyntheticOrderScenario(fixture);
         await owner.InitializeAsync(orderStatus: "DELIVERING");
@@ -321,14 +323,6 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
                 new GetOrCreatePublicTrackingLinkCommand(
                     foreign.UserId, foreign.OrganizationId, owner.OrderId, "trk002-contract-foreign-0001"),
                 CancellationToken.None)));
-        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() => WithServiceAsync(Ring((1, KeyOne)), async service =>
-        {
-            await service.RevokeAsync(
-                new RevokePublicTrackingTokenCommand(
-                    foreign.UserId, foreign.OrganizationId, owner.OrderId, "trk002-contract-foreign-0002"),
-                CancellationToken.None);
-            return true;
-        }));
 
         // Nothing changed for the owner, the link still resolves, the foreign organization wrote no audit and RLS
         // hides the owner's token rows from the foreign tenant context entirely.
@@ -379,14 +373,18 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
             new GetOrCreatePublicTrackingLinkCommand(scenario.UserId, scenario.OrganizationId, orderId, requestId),
             CancellationToken.None));
 
-    private Task RevokeAsync(SyntheticOrderScenario scenario, Guid orderId, string requestId) =>
-        WithServiceAsync(Ring((1, KeyOne)), async service =>
-        {
-            await service.RevokeAsync(
-                new RevokePublicTrackingTokenCommand(scenario.UserId, scenario.OrganizationId, orderId, requestId),
-                CancellationToken.None);
-            return true;
-        });
+    /// <summary>
+    /// Retires the order's live link directly (test setup only). No runtime operation revokes a link
+    /// (TRK-002-NO-REVOCATION); get-or-create retires only a link it cannot re-derive.
+    /// </summary>
+    private static Task RetireAsync(SyntheticOrderScenario scenario, Guid orderId) =>
+        scenario.ExecuteAdminAsync(
+            """
+            UPDATE orders.public_tracking_tokens
+            SET revoked_at=clock_timestamp()
+            WHERE order_id=@order AND revoked_at IS NULL;
+            """,
+            SyntheticOrderScenario.P("order", orderId));
 
     private async Task<T> WithServiceAsync<T>(
         PublicTrackingLinkKeyRing ring,

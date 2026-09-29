@@ -15,9 +15,9 @@ namespace Paqueteria.IntegrationTests.Tracking;
 /// <summary>
 /// TRK-002-AUTO-LINK end to end: authenticated HTTP, the real tenant pipeline, the least-privilege runtime role
 /// under RLS and the anonymous public lookup. Get-or-create returns the same link and its public URL on every call,
-/// only the hash is stored, creation and revocation are audited (reads are not), a revoked link is the uniform 404,
-/// the next call derives the next generation, a finished order is the coded 409, and another organization is
-/// refused with the same 404 without any effect.
+/// only the hash is stored, creation is audited (reads are not), nobody can revoke the link (TRK-002-NO-REVOCATION:
+/// the former revocation route is 404 and the link keeps resolving), a finished order is the coded 409, and another
+/// organization is refused with the same 404 without any effect.
 /// </summary>
 [Collection(PublicTrackingPostgreSqlCollection.Name)]
 [Trait("Category", "PublicTrackingPostgreSql")]
@@ -27,7 +27,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
     private static readonly Guid PlatformAdminMfaId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2");
 
     [Fact]
-    public async Task Get_or_create_revoke_and_next_generation_over_HTTP_keep_one_link_audit_changes_and_close_the_public_link()
+    public async Task Get_or_create_over_HTTP_keeps_one_link_audits_its_creation_and_cannot_be_revoked()
     {
         // The authenticated operations run on a host whose every log line and scope is captured. The anonymous
         // lookups run on the plain host: the public URL carries the token by design (TRK-001), so the framework's
@@ -60,47 +60,44 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
             Assert.Equal(first, await ReadLinkAsync(again));
         }
 
-        var revokeKey = Key();
-        using var revoked = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, RevokePath(orderId), revokeKey);
-        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
-        await AssertLookupAsync(lookup, first.Token, HttpStatusCode.NotFound);
+        // TRK-002-NO-REVOCATION: the former revocation route is not mapped, even for a member who may read the link,
+        // and the link keeps resolving.
+        using (var revoke = await PostAsync(
+                   client,
+                   MockIdentityProfiles.ActivePlatformAdminMfa,
+                   $"{IssuePath(orderId)}/revoke",
+                   Key()))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, revoke.StatusCode);
+        }
 
-        var nextKey = Key();
-        using var next = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), nextKey);
-        Assert.Equal(HttpStatusCode.OK, next.StatusCode);
-        var second = await ReadLinkAsync(next);
-        Assert.Equal(2, second.Generation);
-        Assert.NotEqual(first.Token, second.Token);
-        await AssertLookupAsync(lookup, first.Token, HttpStatusCode.NotFound);
-        await AssertLookupAsync(lookup, second.Token, HttpStatusCode.OK);
+        using (var revoke = await PostAsync(
+                   client,
+                   MockIdentityProfiles.ActiveDispatcher,
+                   $"{IssuePath(orderId)}/revoke",
+                   Key()))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, revoke.StatusCode);
+        }
+
+        await AssertLookupAsync(lookup, first.Token, HttpStatusCode.OK);
 
         // Only hashes are stored; the audit trail names each change and the key of the request that caused it.
         var state = await ReadTokenStateAsync(orderId);
-        Assert.Equal(2, state.Hashes.Count);
+        Assert.Single(state.Hashes);
         Assert.Contains(state.Hashes, hash => hash.SequenceEqual(SHA256.HashData(Encoding.UTF8.GetBytes(first.Token))));
-        Assert.Contains(state.Hashes, hash => hash.SequenceEqual(SHA256.HashData(Encoding.UTF8.GetBytes(second.Token))));
         Assert.Equal(1, state.Active);
         Assert.Equal(
             [
                 ("TRACKING_TOKEN_ISSUED", issueKey),
-                ("TRACKING_TOKEN_REVOKED", revokeKey),
-                ("TRACKING_TOKEN_ISSUED", nextKey),
             ],
             await ReadAuditsAsync(orderId, PlatformAdminMfaId));
-        foreach (var token in new[] { first.Token, second.Token })
-        {
-            Assert.Equal(0L, await CountPlaintextAsync(token));
-            var leaked = logs.Entries
-                .Where(entry => entry.Contains(token, StringComparison.Ordinal))
-                .Select(entry => entry.Replace(token, "<token>", StringComparison.Ordinal))
-                .ToArray();
-            Assert.True(leaked.Length == 0, string.Join('\n', leaked));
-        }
-
-        // Replaying the revocation of the retired generation succeeds without another audit row.
-        using var replay = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, RevokePath(orderId), revokeKey);
-        Assert.Equal(HttpStatusCode.NoContent, replay.StatusCode);
-        Assert.Equal(4, (await ReadAuditsAsync(orderId, PlatformAdminMfaId)).Count);
+        Assert.Equal(0L, await CountPlaintextAsync(first.Token));
+        var leaked = logs.Entries
+            .Where(entry => entry.Contains(first.Token, StringComparison.Ordinal))
+            .Select(entry => entry.Replace(first.Token, "<token>", StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(leaked.Length == 0, string.Join('\n', leaked));
     }
 
     [Fact]
@@ -127,18 +124,19 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         var link = await ReadLinkAsync(issued);
         var before = await ReadTokenStateAsync(orderId);
 
-        foreach (var path in new[] { IssuePath(orderId), RevokePath(orderId) })
+        using (var viewer = await PostAsync(client, MockIdentityProfiles.ActiveViewer, IssuePath(orderId), Key()))
         {
-            using var viewer = await PostAsync(client, MockIdentityProfiles.ActiveViewer, path, Key());
             Assert.Equal(HttpStatusCode.Forbidden, viewer.StatusCode);
+        }
 
-            // The multi-organization user is a DISPATCHER of the PLATFORM organization, which does not own the order.
-            using var foreign = await PostAsync(
-                client,
-                MockIdentityProfiles.ActiveMultiOrganization,
-                path,
-                Key(),
-                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId);
+        // The multi-organization user is a DISPATCHER of the PLATFORM organization, which does not own the order.
+        using (var foreign = await PostAsync(
+                   client,
+                   MockIdentityProfiles.ActiveMultiOrganization,
+                   IssuePath(orderId),
+                   Key(),
+                   PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId))
+        {
             Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
             Assert.DoesNotContain(link.Token, await foreign.Content.ReadAsStringAsync(), StringComparison.Ordinal);
         }
@@ -322,7 +320,6 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
 
     private static string IssuePath(Guid orderId) => $"/api/v1/orders/{orderId:D}/tracking-link";
 
-    private static string RevokePath(Guid orderId) => $"/api/v1/orders/{orderId:D}/tracking-link/revoke";
 
     private static string Key() => $"trk002-pg-{Guid.NewGuid():N}";
 

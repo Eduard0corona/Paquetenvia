@@ -27,13 +27,14 @@ descritas más abajo; el endpoint público, el hash y la proyección no cambian 
   lookup público no la necesita. Sin llave válida la API no arranca con el proveedor PostgreSql, salvo en
   Development y Testing, que derivan una llave sintética en tiempo de ejecución a partir de una etiqueta
   pública.
-- **Obtener o crear.** `IPublicTrackingTokenService` expone `GetOrCreateAsync` y `RevokeAsync`.
+- **Obtener o crear.** `IPublicTrackingTokenService` expone `GetOrCreateAsync` (desde
+  `TRK-002-NO-REVOCATION` ya no hay `RevokeAsync`; ver la sección siguiente).
   `issueTrackingLink` devuelve 200 `no-store` con `token`, `url`
   (`{PublicTracking:PublicBaseUrl}/track/{token}`), `generation` y `valid_until`; el mismo enlace para
   cualquier reintento o Idempotency-Key, sin escribir nada. Solo crea (y audita) cuando la orden no tiene
-  un enlace re-derivable: ninguno, uno revocado (siguiente generación) o uno previo a la derivación o de una
-  versión de llave retirada (se retira en la misma transacción). Una llave distinta bajo la misma versión
-  falla cerrado (503). Revocar retira la generación actual; una generación revocada nunca vuelve.
+  un enlace re-derivable: ninguno, o uno previo a la derivación o de una versión de llave retirada (se
+  retira en la misma transacción y lo sustituye la generación siguiente). Una llave distinta bajo la misma
+  versión falla cerrado (503). Una generación retirada nunca vuelve.
 - **Vigencia.** Mientras la orden avanza (RESCHEDULED incluido) y 24 horas después de su primer evento
   público DELIVERED, RETURNED o CANCELLED; lo verifica `security.get_public_tracking_projection` junto
   con el hash (lane PlatformEvolution `20260929000200_BoundTrackingLinksToOrderLifecycle`). Una orden en
@@ -46,6 +47,35 @@ descritas más abajo; el endpoint público, el hash y la proyección no cambian 
 - **Configuración.** Se eliminan `PublicTracking:TokenLifetimeHours` y `TokenCollisionRetryCount`; se
   agregan `PublicBaseUrl` (origen https; loopback http solo en Development/Testing),
   `CurrentLinkKeyVersion` y `LinkKeys`.
+
+## Actualización TRK-002-NO-REVOCATION (2026-09-29)
+
+Decisión literal del owner (`TRK-002-NO-REVOCATION` en `decision-log.md`): "La liga la puede ver el
+despachador, y el cliente al que le llegará el pedido, la cual se le enviará por WhatsApp y correo
+electronico."; sobre PLATFORM_ADMIN: "Sí, con MFA"; sobre quién puede anularla: "Nadie la anula".
+
+- **Sin revocación.** Se eliminan `revokeTrackingLink` de AI-05 (`POST /orders/{orderId}/tracking-link/revoke`),
+  su endpoint, `RevokeAsync`/`RevokePublicTrackingTokenCommand`, la capacidad `RevokeTrackingLink`, la auditoría
+  `TRACKING_TOKEN_REVOKED` como acción nueva, el paso de revocación del verificador sintético y el botón
+  "Revocar enlace" de la UI con su llamada cliente. La ruta anterior responde 404 (no está mapeada) para
+  cualquier rol; `DELETE` sobre la ruta del enlace responde 405.
+- **Vigencia sin cambios.** El enlace vive mientras la orden avanza y 24 horas después de su primer evento
+  público final (`security.get_public_tracking_projection`); nadie puede acortarla.
+- **Quién lo ve.** Sin cambios: DISPATCHER sin MFA y PLATFORM_ADMIN con MFA satisfecho (ahora confirmado por
+  el owner, ya no "pendiente de confirmación"); solo la organización dueña de la orden.
+- **Base de datos.** Sin migración. No existía función SQL ni grant exclusivos de la revocación: el runtime
+  escribía `revoked_at` con el mismo `UPDATE` bajo RLS que usa obtener-o-crear para retirar un token previo a
+  la derivación o de una versión de llave ya no configurada, y la proyección pública sigue exigiendo
+  `revoked_at IS NULL`. Por eso `revoked_at` y `generation` se conservan sin DDL (AI-06 y AI-18 sin cambios):
+  `generation` queda en 1 para cada enlace y solo crece cuando se sustituye un token previo o de una versión
+  de llave retirada. Eliminar las columnas exigiría una migración destructiva y rompería el rollback.
+  Las filas y auditorías `TRACKING_TOKEN_REVOKED` históricas se conservan (append-only).
+- **Envío al cliente.** No forma parte de esta tarea: sigue bloqueado por GATE-004/GATE-007 y las plantillas
+  del owner. Obtener-o-crear sigue siendo la única fuente del enlace, así que un canal futuro puede usarlo.
+- **Riesgo residual.** Un enlace filtrado no se puede invalidar individualmente antes del fin de su vigencia.
+  La única contención es operativa y global: deshabilitar el tracking público (`PublicTracking:Provider`), o
+  retirar la versión de llave, que sustituye cada enlace de esa versión solo cuando se vuelve a leer con
+  obtener-o-crear (el lookup público es por hash y no necesita la llave).
 
 ## Token, persistencia y ciclo de vida
 

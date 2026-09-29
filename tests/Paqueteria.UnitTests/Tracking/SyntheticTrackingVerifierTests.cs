@@ -29,7 +29,7 @@ public sealed class SyntheticTrackingVerifierTests
     }
 
     [Fact]
-    public async Task Stable_link_revoke_and_next_generation_return_only_non_secret_evidence_and_emit_nothing()
+    public async Task Stable_link_that_keeps_resolving_returns_only_non_secret_evidence_and_emits_nothing()
     {
         using var environment = new ProcessEnvironmentVariable("DOTNET_ENVIRONMENT", "DevSynthetic");
         using var deployment = new ProcessEnvironmentVariable(
@@ -50,20 +50,14 @@ public sealed class SyntheticTrackingVerifierTests
             Console.SetError(error);
             var result = await verifier.VerifyAsync(Request);
 
-            Assert.Equal(3, fake.GetOrCreateCalls);
-            Assert.Equal(1, fake.RevokeCalls);
-            Assert.Equal(4, fake.LookupCalls);
-            Assert.Equal(
-                4,
-                new[] { result.FirstRequestId, result.RepeatRequestId, result.RevokeRequestId, result.NextRequestId }
-                    .Distinct(StringComparer.Ordinal).Count());
-            Assert.Equal(1, result.FirstGeneration);
-            Assert.Equal(2, result.NextGeneration);
-            Assert.NotEqual(result.FirstTokenId, result.NextTokenId);
+            Assert.Equal(2, fake.GetOrCreateCalls);
+            Assert.Equal(2, fake.LookupCalls);
+            Assert.NotEqual(result.FirstRequestId, result.RepeatRequestId);
+            Assert.Equal(1, result.Generation);
+            Assert.Equal(fake.FirstTokenId, result.TokenId);
             Assert.True(result.FirstLinkFound);
             Assert.True(result.RepeatReturnedSameLink);
-            Assert.True(result.FirstLinkInvalidAfterRevoke);
-            Assert.True(result.NextLinkValid);
+            Assert.True(result.LinkStillValidAfterRepeat);
             var evidence = JsonSerializer.Serialize(result);
             Assert.DoesNotContain(TrackingFake.TokenA, evidence, StringComparison.Ordinal);
             Assert.DoesNotContain(TrackingFake.TokenB, evidence, StringComparison.Ordinal);
@@ -94,7 +88,24 @@ public sealed class SyntheticTrackingVerifierTests
 
         await Assert.ThrowsAsync<SyntheticTrackingVerificationException>(
             () => new SyntheticTrackingVerifier(fake, fake).VerifyAsync(Request));
-        Assert.Equal(0, fake.RevokeCalls);
+        Assert.Equal(2, fake.GetOrCreateCalls);
+    }
+
+    [Fact]
+    public async Task A_link_that_stops_resolving_fails_the_verification()
+    {
+        using var environment = new ProcessEnvironmentVariable("DOTNET_ENVIRONMENT", "DevSynthetic");
+        using var deployment = new ProcessEnvironmentVariable(
+            SyntheticEnvironmentPolicy.DeploymentClassVariable,
+            SyntheticEnvironmentPolicy.DeploymentClass);
+        using var optIn = new ProcessEnvironmentVariable(
+            SyntheticTrackingVerifier.TrackingOptInVariable,
+            "true");
+        var fake = new TrackingFake { StopResolvingAfterLookups = 1 };
+
+        await Assert.ThrowsAsync<SyntheticTrackingVerificationException>(
+            () => new SyntheticTrackingVerifier(fake, fake).VerifyAsync(Request));
+        Assert.Equal(2, fake.LookupCalls);
     }
 
     private static async Task AssertRejectedAsync(
@@ -115,7 +126,6 @@ public sealed class SyntheticTrackingVerifierTests
         await Assert.ThrowsAsync<SyntheticTrackingVerificationUnauthorizedException>(
             () => verifier.VerifyAsync(Request));
         Assert.Equal(0, fake.GetOrCreateCalls);
-        Assert.Equal(0, fake.RevokeCalls);
         Assert.Equal(0, fake.LookupCalls);
     }
 
@@ -123,14 +133,14 @@ public sealed class SyntheticTrackingVerifierTests
     {
         internal const string TokenA = "SEC003_SENTINEL_PLAINTEXT_GENERATION_1_0001";
         internal const string TokenB = "SEC003_SENTINEL_PLAINTEXT_GENERATION_2_0002";
-        private readonly Guid firstTokenId = Guid.NewGuid();
         private readonly Guid nextTokenId = Guid.NewGuid();
         private string? activeToken;
         private int generation;
 
+        internal Guid FirstTokenId { get; } = Guid.NewGuid();
         internal bool RotateOnEveryCall { get; init; }
+        internal int? StopResolvingAfterLookups { get; init; }
         internal int GetOrCreateCalls { get; private set; }
-        internal int RevokeCalls { get; private set; }
         internal int LookupCalls { get; private set; }
 
         public Task<PublicTrackingTokenGrant> GetOrCreateAsync(
@@ -145,20 +155,11 @@ public sealed class SyntheticTrackingVerifierTests
             }
 
             return Task.FromResult(new PublicTrackingTokenGrant(
-                generation == 1 ? firstTokenId : nextTokenId,
+                generation == 1 ? FirstTokenId : nextTokenId,
                 command.OrderId,
                 activeToken,
                 generation,
                 null));
-        }
-
-        public Task RevokeAsync(
-            RevokePublicTrackingTokenCommand command,
-            CancellationToken cancellationToken)
-        {
-            RevokeCalls++;
-            activeToken = null;
-            return Task.CompletedTask;
         }
 
         public ValueTask<PublicTrackingLookupResult> FindAsync(
@@ -166,8 +167,9 @@ public sealed class SyntheticTrackingVerifierTests
             CancellationToken cancellationToken)
         {
             LookupCalls++;
+            var resolves = StopResolvingAfterLookups is not { } limit || LookupCalls <= limit;
             return ValueTask.FromResult(
-                string.Equals(token, activeToken, StringComparison.Ordinal)
+                resolves && string.Equals(token, activeToken, StringComparison.Ordinal)
                     ? PublicTrackingLookupResult.Found(new PublicTrackingProjection(
                         "ORD_sec003synthetic",
                         PublicOrderStatus.Delivered,
