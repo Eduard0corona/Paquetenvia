@@ -19,29 +19,23 @@ public sealed class DisabledPublicTrackingTokenService : IPublicTrackingTokenSer
         CancellationToken cancellationToken) =>
         Task.FromException<PublicTrackingTokenGrant>(
             new PublicTrackingTokenInfrastructureException("Public tracking is unavailable."));
-
-    public Task RevokeAsync(
-        RevokePublicTrackingTokenCommand command,
-        CancellationToken cancellationToken) =>
-        Task.FromException(
-            new PublicTrackingTokenInfrastructureException("Public tracking is unavailable."));
 }
 
 /// <summary>
-/// TRK-002-AUTO-LINK: get-or-create and revoke of an order's public tracking link, inside one tenant transaction
-/// that locks the order (owned by the selected organization, otherwise the uniform 404).
+/// TRK-002-AUTO-LINK: get-or-create of an order's public tracking link, inside one tenant transaction that locks the
+/// order (owned by the selected organization, otherwise the uniform 404).
 /// </summary>
 /// <remarks>
 /// <para>
 /// Get-or-create re-derives the token of the current generation and writes nothing, so a retry with the same or
 /// another Idempotency-Key returns the same link and adds no audit row. It creates a link (audited
-/// <c>TRACKING_TOKEN_ISSUED</c>) only when the order has none that can be re-derived: none yet, a revoked one (the
-/// next generation), a pre-derivation random one, or one whose key version is no longer configured (those two are
-/// retired in the same transaction). A finished order never gets a new link.
+/// <c>TRACKING_TOKEN_ISSUED</c>) only when the order has none that can be re-derived: none yet, a pre-derivation
+/// random one, or one whose key version is no longer configured (those two are retired in the same transaction and
+/// replaced by the next generation). A finished order never gets a new link.
 /// </para>
 /// <para>
-/// Revoke retires the live link (audited <c>TRACKING_TOKEN_REVOKED</c>); the public lookup then answers the uniform
-/// 404, and a later get-or-create derives the next generation, never the revoked one.
+/// TRK-002-NO-REVOCATION: nobody revokes a link. There is no revocation operation; a link lives until 24 hours after
+/// the order reaches a final public status (checked by the public lookup).
 /// </para>
 /// </remarks>
 public sealed class PostgreSqlPublicTrackingTokenService(
@@ -96,77 +90,6 @@ public sealed class PostgreSqlPublicTrackingTokenService(
         {
             throw new PublicTrackingTokenInfrastructureException(
                 "Public tracking link retrieval failed safely.",
-                exception);
-        }
-    }
-
-    public async Task RevokeAsync(
-        RevokePublicTrackingTokenCommand command,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        ValidateShape(command.ActorId, command.OrganizationId, command.OrderId, command.RequestId);
-        var now = RequireUtc(clock.UtcNow);
-        try
-        {
-            await transactionContext.ExecuteAsync(
-                new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
-                async (dbContext, token) =>
-                {
-                    var (connection, transaction) = GetDatabase(dbContext);
-                    await PublicTrackingLinkStore.AcquireOrderLockAsync(connection, transaction, command.OrderId, token);
-                    if (await PublicTrackingLinkStore.ReadOwnedOrderStatusForUpdateAsync(
-                            connection,
-                            transaction,
-                            command.OrganizationId,
-                            command.OrderId,
-                            token) is null)
-                    {
-                        throw new PublicTrackingTokenNotFoundException();
-                    }
-
-                    var revoked = await PublicTrackingLinkStore.RetireActiveLinksAsync(
-                        connection,
-                        transaction,
-                        command.OrderId,
-                        now,
-                        token);
-                    if (revoked == 0)
-                    {
-                        return true;
-                    }
-
-                    await PublicTrackingLinkStore.WriteRevokedAuditAsync(
-                        auditWriter,
-                        auditRedactor,
-                        connection,
-                        transaction,
-                        command.ActorId,
-                        command.OrganizationId,
-                        command.OrderId,
-                        command.RequestId,
-                        revoked,
-                        now,
-                        token);
-                    return true;
-                },
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception) when (
-            exception is PublicTrackingTokenNotFoundException
-                or PublicTrackingTokenConflictException
-                or PublicTrackingTokenInfrastructureException)
-        {
-            throw;
-        }
-        catch (Exception exception) when (exception is PostgresException or NpgsqlException or DbUpdateException)
-        {
-            throw new PublicTrackingTokenInfrastructureException(
-                "Public tracking token revocation failed safely.",
                 exception);
         }
     }

@@ -832,7 +832,10 @@ paths:
         owned by the organization selected with X-Organization-Id: get-or-create,
         never rotation. Every order gets its link when it is created (createOrder
         writes it and its TRACKING_TOKEN_ISSUED audit in the same transaction),
-        so this operation normally returns that link: the token is re-derived as
+        so this operation normally returns that link. TRK-002-NO-REVOCATION:
+        nobody revokes a link (there is no revocation operation); it lives
+        until 24 hours after the order reaches a final public status. The
+        token is re-derived as
         Base64URL without padding of HMAC-SHA256 over the versioned input
         paquetenvia-trk-v1|key_version|order_id|generation with a Key Vault key,
         32 bytes and 43 characters. Only its SHA-256 (x-runtime-contracts
@@ -842,10 +845,10 @@ paths:
         writes nothing; the key is required and recorded as the audit request_id
         when a link is created. A link is created, audited
         TRACKING_TOKEN_ISSUED, only when the order has none that can be
-        re-derived: the next generation after a revocation (a revoked
-        generation never comes back), or a replacement for a random token
-        issued before this decision or a link whose key version is no longer
-        configured (both retired in the same transaction). A link lives while
+        re-derived: none yet, or a replacement for a random token issued
+        before TRK-002-AUTO-LINK or a link whose key version is no longer
+        configured (both retired in the same transaction, as the next
+        generation; a retired generation never comes back). A link lives while
         the order is in progress, RESCHEDULED included, and for 24 hours after
         the order first reaches a final public status (DELIVERED, which covers
         CLOSED, CLAIM_OPEN and CLAIM_RESOLVED, RETURNED or CANCELLED);
@@ -857,8 +860,8 @@ paths:
         order that is missing, of another organization or only operated by it
         is the uniform 404. DISPATCHER members may call it; PLATFORM_ADMIN
         members need a satisfied MFA challenge (403 MFA_REQUIRED when only the
-        second factor is missing), the safer default per AI-01 section 7
-        pending owner confirmation (x-capability-matrix
+        second factor is missing), confirmed by the owner in
+        TRK-002-NO-REVOCATION (x-capability-matrix
         tracking_link_operations). Capability is decided before order
         existence. Nothing is sent to customers; delivering the link over
         WhatsApp or email waits on GATE-004 and GATE-007.
@@ -892,46 +895,6 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/TrackingLinkConflict'
-        '503':
-          $ref: '#/components/responses/ServiceUnavailable'
-  /orders/{orderId}/tracking-link/revoke:
-    post:
-      tags:
-      - Tracking
-      operationId: revokeTrackingLink
-      description: >-
-        TRK-002-ISSUE-ENDPOINT, kept by TRK-002-AUTO-LINK. Retires the current
-        generation of the public tracking link of an order owned by the
-        selected organization (and any link issued before TRK-002-AUTO-LINK);
-        publicTracking then answers the uniform 404 for it. The revocation is
-        audited TRACKING_TOKEN_REVOKED with the Idempotency-Key as request_id;
-        an order without an active link is a success without a new audit row,
-        so a replay is harmless. A later issueTrackingLink derives the next
-        generation, never the revoked one, and only while the order is not in
-        a final public status. Same capability and uniform 404 as
-        issueTrackingLink: DISPATCHER members, and PLATFORM_ADMIN members with
-        a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor
-        is missing).
-      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
-      x-shape-validation: invalid-request-without-productive-transaction
-      x-capability-protected-state:
-      - order
-      - public_tracking_tokens
-      parameters:
-      - $ref: '#/components/parameters/OrganizationContext'
-      - $ref: '#/components/parameters/OrderId'
-      - $ref: '#/components/parameters/IdempotencyKey'
-      responses:
-        '204':
-          description: No active public tracking link remains for the order
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/UniformNotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /organizations/{organizationId}/audit:
@@ -5393,7 +5356,9 @@ components:
         TRK-002-AUTO-LINK. The only response that ever carries a plaintext
         public tracking token, re-derived on every call and never persisted or
         logged. url is PublicTracking:PublicBaseUrl followed by /track/ and the
-        token; generation starts at 1 and grows only after a revocation;
+        token; generation starts at 1 and grows only when a pre-derivation
+        random token or a link of a key version no longer configured is
+        replaced (nobody revokes a link, TRK-002-NO-REVOCATION);
         valid_until is null while the order is in progress and, once it is in
         a final public status, the end of the 24-hour grace after which
         publicTracking answers the uniform 404.
@@ -5599,17 +5564,17 @@ x-capability-matrix:
     listPendingMemberships: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
     renewPendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
     revokePendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
-  tracking_link_operations_decision: TRK-002-ISSUE-ENDPOINT (project owner, 2026-09-28) scoped issueTrackingLink and
-    revokeTrackingLink, and TRK-002-AUTO-LINK (project owner, 2026-09-29) made issueTrackingLink the get-or-create of
-    the link every order receives at creation; D5-CAPABILITY-MATRIX predates them and they hand out or revoke a public
-    bearer credential, so they
-    follow the operations outside the matrix that create or reassign operational state (assignDriver, createRoute,
+  tracking_link_operations_decision: TRK-002-ISSUE-ENDPOINT (project owner, 2026-09-28) scoped issueTrackingLink,
+    TRK-002-AUTO-LINK (project owner, 2026-09-29) made it the get-or-create of the link every order receives at
+    creation, and TRK-002-NO-REVOCATION (project owner, 2026-09-29) removed the revocation operation (nobody revokes a
+    link) and confirmed who sees it; D5-CAPABILITY-MATRIX predates them and the operation hands out a public bearer
+    credential, so it
+    follows the operations outside the matrix that create or reassign operational state (assignDriver, createRoute,
     createExternalOffer) - DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge (403
-    MFA_REQUIRED when only the second factor is missing), the safer default per AI-01 section 7 pending owner
-    confirmation; only the organization that owns the order may issue or revoke its link
+    MFA_REQUIRED when only the second factor is missing), as the owner confirmed ("Sí, con MFA"); only the
+    organization that owns the order may read its link
   tracking_link_operations:
     issueTrackingLink: [DISPATCHER, PLATFORM_ADMIN]
-    revokeTrackingLink: [DISPATCHER, PLATFORM_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).

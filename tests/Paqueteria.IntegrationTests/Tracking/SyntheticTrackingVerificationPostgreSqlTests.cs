@@ -17,7 +17,7 @@ public sealed class SyntheticTrackingVerificationPostgreSqlTests(
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1");
 
     [Fact]
-    public async Task Stable_link_revoke_and_next_generation_use_productive_tenant_audit_and_anonymous_projection_paths()
+    public async Task Stable_link_uses_productive_tenant_audit_and_anonymous_projection_paths()
     {
         using var environment = new ProcessEnvironmentVariable("DOTNET_ENVIRONMENT", "DevSynthetic");
         using var deployment = new ProcessEnvironmentVariable(
@@ -49,10 +49,8 @@ public sealed class SyntheticTrackingVerificationPostgreSqlTests(
         Assert.Equal(order.PublicId, result.PublicId);
         Assert.True(result.FirstLinkFound);
         Assert.True(result.RepeatReturnedSameLink);
-        Assert.True(result.FirstLinkInvalidAfterRevoke);
-        Assert.True(result.NextLinkValid);
-        Assert.Equal(1, result.FirstGeneration);
-        Assert.Equal(2, result.NextGeneration);
+        Assert.True(result.LinkStillValidAfterRepeat);
+        Assert.Equal(1, result.Generation);
 
         await using var connection = new NpgsqlConnection(factory.AdminConnectionString);
         await connection.OpenAsync();
@@ -73,8 +71,8 @@ public sealed class SyntheticTrackingVerificationPostgreSqlTests(
               (SELECT count(*)::integer
                  FROM platform.audit_logs
                 WHERE entity_id=@order_id
-                  AND ((action='TRACKING_TOKEN_ISSUED' AND request_id IN (@first,@next))
-                    OR (action='TRACKING_TOKEN_REVOKED' AND request_id=@revoke))),
+                  AND action='TRACKING_TOKEN_ISSUED'
+                  AND request_id=@first),
               (SELECT count(*)::integer
                  FROM platform.audit_logs
                 WHERE entity_id=@order_id
@@ -88,14 +86,12 @@ public sealed class SyntheticTrackingVerificationPostgreSqlTests(
         command.Parameters.AddWithValue("order_id", order.OrderId);
         command.Parameters.AddWithValue("first", result.FirstRequestId);
         command.Parameters.AddWithValue("repeat", result.RepeatRequestId);
-        command.Parameters.AddWithValue("revoke", result.RevokeRequestId);
-        command.Parameters.AddWithValue("next", result.NextRequestId);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.Equal(2, reader.GetInt32(0));
+        Assert.Equal(1, reader.GetInt32(0));
         Assert.Equal(1, reader.GetInt32(1));
-        Assert.Equal(2, reader.GetInt32(2));
-        Assert.Equal(3, reader.GetInt32(3));
+        Assert.Equal(1, reader.GetInt32(2));
+        Assert.Equal(1, reader.GetInt32(3));
         Assert.Equal(0, reader.GetInt32(4));
         Assert.True(reader.GetBoolean(5));
         Assert.True(reader.GetBoolean(6));

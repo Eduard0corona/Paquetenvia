@@ -10,8 +10,9 @@ public sealed record SyntheticTrackingVerificationRequest(
     string RunId);
 
 /// <summary>
-/// TRK-002-AUTO-LINK evidence: the link is stable across get-or-create calls, a revoked link stops resolving and
-/// the next get-or-create derives the next generation. It holds identifiers only, never a token.
+/// TRK-002-AUTO-LINK evidence: the link resolves and is stable across get-or-create calls with different keys, and
+/// it keeps resolving afterwards (TRK-002-NO-REVOCATION: nobody revokes a link). It holds identifiers only, never a
+/// token.
 /// </summary>
 public sealed record SyntheticTrackingVerificationResult(
     Guid ActorId,
@@ -20,17 +21,12 @@ public sealed record SyntheticTrackingVerificationResult(
     string RunId,
     string FirstRequestId,
     string RepeatRequestId,
-    string RevokeRequestId,
-    string NextRequestId,
-    Guid FirstTokenId,
-    Guid NextTokenId,
-    int FirstGeneration,
-    int NextGeneration,
+    Guid TokenId,
+    int Generation,
     string PublicId,
     bool FirstLinkFound,
     bool RepeatReturnedSameLink,
-    bool FirstLinkInvalidAfterRevoke,
-    bool NextLinkValid);
+    bool LinkStillValidAfterRepeat);
 
 public sealed class SyntheticTrackingVerificationUnauthorizedException : Exception
 {
@@ -64,13 +60,9 @@ public sealed class SyntheticTrackingVerifier(
 
         var firstRequest = CreateRequestId(request.RunId, "first");
         var repeatRequest = CreateRequestId(request.RunId, "repeat");
-        var revokeRequest = CreateRequestId(request.RunId, "revoke");
-        var nextRequest = CreateRequestId(request.RunId, "next");
         PublicTrackingTokenGrant? first = null;
         PublicTrackingTokenGrant? repeat = null;
-        PublicTrackingTokenGrant? next = null;
         string? firstToken = null;
-        string? nextToken = null;
         try
         {
             first = await tokenService.GetOrCreateAsync(
@@ -81,8 +73,8 @@ public sealed class SyntheticTrackingVerifier(
                     firstRequest),
                 cancellationToken);
             firstToken = first.Token;
-            var firstTokenId = first.TokenId;
-            var firstGeneration = first.Generation;
+            var tokenId = first.TokenId;
+            var generation = first.Generation;
             first = null;
             var firstLookup = await projectionReader.FindAsync(firstToken, cancellationToken);
             if (!firstLookup.IsFound)
@@ -101,8 +93,8 @@ public sealed class SyntheticTrackingVerifier(
                     request.OrderId,
                     repeatRequest),
                 cancellationToken);
-            var sameLink = repeat.TokenId == firstTokenId &&
-                repeat.Generation == firstGeneration &&
+            var sameLink = repeat.TokenId == tokenId &&
+                repeat.Generation == generation &&
                 string.Equals(repeat.Token, firstToken, StringComparison.Ordinal);
             repeat = null;
             if (!sameLink)
@@ -111,53 +103,14 @@ public sealed class SyntheticTrackingVerifier(
                     "A repeated get-or-create did not return the same link.");
             }
 
-            await tokenService.RevokeAsync(
-                new RevokePublicTrackingTokenCommand(
-                    request.ActorId,
-                    request.OrganizationId,
-                    request.OrderId,
-                    revokeRequest),
-                cancellationToken);
-            var revokedLookup = await projectionReader.FindAsync(firstToken, cancellationToken);
-            if (revokedLookup.IsFound)
-            {
-                throw new SyntheticTrackingVerificationException(
-                    "The first link remained valid after revocation.");
-            }
-
-            next = await tokenService.GetOrCreateAsync(
-                new GetOrCreatePublicTrackingLinkCommand(
-                    request.ActorId,
-                    request.OrganizationId,
-                    request.OrderId,
-                    nextRequest),
-                cancellationToken);
-            nextToken = next.Token;
-            var nextTokenId = next.TokenId;
-            var nextGeneration = next.Generation;
-            next = null;
-            if (nextGeneration != firstGeneration + 1 ||
-                string.Equals(nextToken, firstToken, StringComparison.Ordinal))
-            {
-                throw new SyntheticTrackingVerificationException(
-                    "The link issued after revocation is not the next generation.");
-            }
-
-            var supersededLookup = await projectionReader.FindAsync(firstToken, cancellationToken);
+            // TRK-002-NO-REVOCATION: nothing retires a live link, so it still resolves to the same order.
+            var repeatLookup = await projectionReader.FindAsync(firstToken, cancellationToken);
             firstToken = null;
-            if (supersededLookup.IsFound)
+            if (!repeatLookup.IsFound ||
+                !string.Equals(repeatLookup.Projection!.PublicId, publicId, StringComparison.Ordinal))
             {
                 throw new SyntheticTrackingVerificationException(
-                    "The revoked link came back after the next generation.");
-            }
-
-            var nextLookup = await projectionReader.FindAsync(nextToken, cancellationToken);
-            nextToken = null;
-            if (!nextLookup.IsFound ||
-                !string.Equals(nextLookup.Projection!.PublicId, publicId, StringComparison.Ordinal))
-            {
-                throw new SyntheticTrackingVerificationException(
-                    "The next link did not produce the expected public projection.");
+                    "The link stopped producing the expected public projection.");
             }
 
             return new SyntheticTrackingVerificationResult(
@@ -167,25 +120,18 @@ public sealed class SyntheticTrackingVerifier(
                 request.RunId,
                 firstRequest,
                 repeatRequest,
-                revokeRequest,
-                nextRequest,
-                firstTokenId,
-                nextTokenId,
-                firstGeneration,
-                nextGeneration,
+                tokenId,
+                generation,
                 publicId,
                 FirstLinkFound: true,
                 RepeatReturnedSameLink: true,
-                FirstLinkInvalidAfterRevoke: true,
-                NextLinkValid: true);
+                LinkStillValidAfterRepeat: true);
         }
         finally
         {
             firstToken = null;
-            nextToken = null;
             first = null;
             repeat = null;
-            next = null;
         }
     }
 

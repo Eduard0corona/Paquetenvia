@@ -68,14 +68,17 @@ describe("tracking link API (TRK-002-AUTO-LINK)", () => {
   it("matches the AI-05 operations, paths and capability roles", () => {
     expect(openApi).toContain("  /orders/{orderId}/tracking-link:");
     expect(openApi).toContain("      operationId: issueTrackingLink");
-    expect(openApi).toContain("  /orders/{orderId}/tracking-link/revoke:");
-    expect(openApi).toContain("      operationId: revokeTrackingLink");
     expect(openApi).toContain(
       `    issueTrackingLink: [${trackingLinkRoles.join(", ")}]`,
     );
-    expect(openApi).toContain(
-      `    revokeTrackingLink: [${trackingLinkRoles.join(", ")}]`,
-    );
+    // TRK-002-NO-REVOCATION: nobody revokes a link, so AI-05 has no revoke operation.
+    expect(openApi).not.toContain("/orders/{orderId}/tracking-link/revoke");
+    expect(openApi).not.toContain("revokeTrackingLink");
+  });
+
+  it("has no client call that revokes a link (TRK-002-NO-REVOCATION)", () => {
+    const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
+    expect(Object.keys(api)).toEqual(["getOrCreate"]);
   });
 
   it("offers the actions only to the owner organization's dispatchers and platform admins", () => {
@@ -149,18 +152,18 @@ describe("tracking link API (TRK-002-AUTO-LINK)", () => {
     expect(headers["Idempotency-Key"]).toBe("tracking-link-key-0001");
   });
 
-  it("revokes through the cookie session with the CSRF header and expects 204", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  it("gets the link through the cookie session with the CSRF header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
     vi.stubGlobal("fetch", fetchMock);
 
-    await createTrackingLinkApi("https://ops.synthetic.test", cookie).revoke(
+    await createTrackingLinkApi("https://ops.synthetic.test", cookie).getOrCreate(
       orderId,
       "tracking-link-key-0002",
     );
 
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(url.toString()).toBe(
-      `https://ops.synthetic.test/api/v1/orders/${orderId}/tracking-link/revoke`,
+      `https://ops.synthetic.test/api/v1/orders/${orderId}/tracking-link`,
     );
     expect(init.credentials).toBe("include");
     const headers = init.headers as Record<string, string>;
@@ -185,9 +188,6 @@ describe("tracking link API (TRK-002-AUTO-LINK)", () => {
     await expect(api.getOrCreate(orderId, "k")).rejects.toEqual(
       new TenantApiError(category),
     );
-    await expect(api.revoke(orderId, "k")).rejects.toEqual(
-      new TenantApiError(category),
-    );
   });
 
   it("marks a 403 MFA_REQUIRED problem for the step-up and keeps other 403s generic", async () => {
@@ -199,17 +199,14 @@ describe("tracking link API (TRK-002-AUTO-LINK)", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(problem({ status: 403, code: "MFA_REQUIRED" }))
-      .mockResolvedValueOnce(problem({ status: 403, code: "MFA_REQUIRED" }))
       .mockResolvedValueOnce(problem({ status: 403 }));
     vi.stubGlobal("fetch", fetchMock);
     const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
 
-    for (const attempt of [api.getOrCreate(orderId, "k"), api.revoke(orderId, "k")]) {
-      const error = await attempt.catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(TenantApiError);
-      expect((error as TenantApiError).category).toBe("forbidden");
-      expect((error as TenantApiError).mfaRequired).toBe(true);
-    }
+    const error = await api.getOrCreate(orderId, "k").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TenantApiError);
+    expect((error as TenantApiError).category).toBe("forbidden");
+    expect((error as TenantApiError).mfaRequired).toBe(true);
     const generic = await api.getOrCreate(orderId, "k").catch((caught: unknown) => caught);
     expect((generic as TenantApiError).category).toBe("forbidden");
     expect((generic as TenantApiError).mfaRequired).toBe(false);
@@ -272,7 +269,7 @@ describe("tracking link API (TRK-002-AUTO-LINK)", () => {
     const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
     await expect(api.getOrCreate("not-a-uuid", "k")).rejects.toBeInstanceOf(TenantApiError);
     await expect(
-      api.revoke("00000000-0000-0000-0000-000000000000", "k"),
+      api.getOrCreate("00000000-0000-0000-0000-000000000000", "k"),
     ).rejects.toBeInstanceOf(TenantApiError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
