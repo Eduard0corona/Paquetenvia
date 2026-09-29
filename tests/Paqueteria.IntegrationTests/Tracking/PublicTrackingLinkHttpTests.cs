@@ -19,7 +19,8 @@ namespace Paqueteria.IntegrationTests.Tracking;
 /// TRK-002-AUTO-LINK over HTTP with the token service replaced by a recording stub: request shape, then capability
 /// (DISPATCHER without MFA, PLATFORM_ADMIN only with MFA), then the service; the uniform 404, the uncoded 409, the
 /// coded 409 TRACKING_LINK_ORDER_FINISHED and the 503 mappings; the no-store 200 get-or-create that returns the same
-/// link on every call with its public URL; and no plaintext in any log line, scope or problem body.
+/// link on every call with its public URL; no revocation route (TRK-002-NO-REVOCATION); and no plaintext in any log
+/// line, scope or problem body.
 /// </summary>
 public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLinkHttpTests.Factory>
 {
@@ -48,32 +49,26 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
     public async Task Roles_outside_the_capability_get_the_generic_403_before_the_service(string profile)
     {
         var orderId = Guid.NewGuid();
-        foreach (var path in new[] { IssuePath(orderId), RevokePath(orderId) })
-        {
-            using var response = await SendAsync(profile, path, Key());
-            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-            Assert.DoesNotContain("MFA_REQUIRED", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
-        }
+        using var response = await SendAsync(profile, IssuePath(orderId), Key());
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.DoesNotContain("MFA_REQUIRED", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
 
         Assert.Equal(0, factory.Service.CallsFor(orderId));
     }
 
     /// <summary>
-    /// A PLATFORM_ADMIN whose only unmet requirement is the second factor receives 403 MFA_REQUIRED on both
-    /// operations before the token service is called (x-capability-matrix tracking_link_operations).
+    /// A PLATFORM_ADMIN whose only unmet requirement is the second factor receives 403 MFA_REQUIRED before the token
+    /// service is called (x-capability-matrix tracking_link_operations; owner confirmation "Sí, con MFA").
     /// </summary>
     [Fact]
     public async Task Platform_admin_without_MFA_gets_MFA_REQUIRED_before_the_service()
     {
         var orderId = Guid.NewGuid();
-        foreach (var path in new[] { IssuePath(orderId), RevokePath(orderId) })
-        {
-            using var response = await SendAsync(MockIdentityProfiles.ActivePlatformAdminNoMfa, path, Key());
-            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
-            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            Assert.Equal("MFA_REQUIRED", json.RootElement.GetProperty("code").GetString());
-        }
+        using var response = await SendAsync(MockIdentityProfiles.ActivePlatformAdminNoMfa, IssuePath(orderId), Key());
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("MFA_REQUIRED", json.RootElement.GetProperty("code").GetString());
 
         Assert.Equal(0, factory.Service.CallsFor(orderId));
     }
@@ -87,9 +82,7 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         foreach (var profile in new[] { MockIdentityProfiles.ActiveDispatcher, MockIdentityProfiles.ActiveViewer })
         {
             using var issue = await SendAsync(profile, IssuePath(orderId), key);
-            using var revoke = await SendAsync(profile, RevokePath(orderId), key);
             Assert.Equal(HttpStatusCode.Conflict, issue.StatusCode);
-            Assert.Equal(HttpStatusCode.Conflict, revoke.StatusCode);
         }
 
         Assert.Equal(0, factory.Service.CallsFor(orderId));
@@ -148,15 +141,11 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         }).ToArray();
         Assert.Single(bodies.Select(ReadToken).Distinct(StringComparer.Ordinal));
         Assert.Equal(1, factory.Service.CreationsFor(orderId));
-
-        // Revocation retires the generation; the next call derives generation 2, a different link.
-        using var revoked = await SendAsync(MockIdentityProfiles.ActiveDispatcher, RevokePath(orderId), Key());
-        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
-        using var next = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
-        var nextBody = await next.Content.ReadAsStringAsync();
-        Assert.NotEqual(ReadToken(bodies[0]), ReadToken(nextBody));
-        using var nextJson = JsonDocument.Parse(nextBody);
-        Assert.Equal(2, nextJson.RootElement.GetProperty("generation").GetInt32());
+        foreach (var body in bodies)
+        {
+            using var json = JsonDocument.Parse(body);
+            Assert.Equal(1, json.RootElement.GetProperty("generation").GetInt32());
+        }
     }
 
     [Fact]
@@ -180,28 +169,33 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         Assert.False(body.RootElement.TryGetProperty("code", out _));
     }
 
+    /// <summary>
+    /// TRK-002-NO-REVOCATION: nobody revokes a link. The former revocation route is not mapped for any role (404,
+    /// even for the members who may read the link), the link route accepts no other method (405), and the token
+    /// service is never called.
+    /// </summary>
     [Theory]
     [InlineData(MockIdentityProfiles.ActiveDispatcher)]
     [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa)]
-    public async Task Revoke_is_204_without_a_body_and_passes_the_key_as_the_audit_request_id(string profile)
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa)]
+    [InlineData(MockIdentityProfiles.ActiveViewer)]
+    public async Task The_revocation_route_does_not_exist_for_any_role(string profile)
     {
         var orderId = Guid.NewGuid();
-        var key = Key();
-        using var response = await SendAsync(profile, RevokePath(orderId), key);
+        using var revoke = await SendAsync(profile, $"{IssuePath(orderId)}/revoke", Key());
+        Assert.Equal(HttpStatusCode.NotFound, revoke.StatusCode);
 
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-        Assert.Empty(await response.Content.ReadAsByteArrayAsync());
-        var command = factory.Service.LastRevoke(orderId);
-        Assert.Equal(key, command.RequestId);
-        Assert.Equal(MockIdentityProfiles.ViewerOrganizationId, command.OrganizationId);
+        using var delete = await SendAsync(profile, IssuePath(orderId), Key(), method: HttpMethod.Delete);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, delete.StatusCode);
+
+        Assert.Equal(0, factory.Service.CallsFor(orderId));
     }
 
     [Fact]
     public async Task Missing_or_foreign_orders_are_the_uniform_404_and_failures_are_503_without_the_token()
     {
-        foreach (var path in new[] { IssuePath(Stub.NotFoundOrderId), RevokePath(Stub.NotFoundOrderId) })
+        using (var response = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(Stub.NotFoundOrderId), Key()))
         {
-            using var response = await SendAsync(MockIdentityProfiles.ActiveDispatcher, path, Key());
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
             Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         }
@@ -214,9 +208,8 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
             MockIdentityProfiles.OperationsOrganizationId);
         Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
 
-        foreach (var path in new[] { IssuePath(Stub.UnavailableOrderId), RevokePath(Stub.UnavailableOrderId) })
+        using (var response = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(Stub.UnavailableOrderId), Key()))
         {
-            using var response = await SendAsync(MockIdentityProfiles.ActiveDispatcher, path, Key());
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         }
 
@@ -230,14 +223,12 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         var orderId = Guid.NewGuid();
         using var issued = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
         using var repeated = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
-        using var revoked = await SendAsync(MockIdentityProfiles.ActiveDispatcher, RevokePath(orderId), Key());
-        using var next = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
+        using var other = await SendAsync(MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(Guid.NewGuid()), Key());
         using var failed = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(Stub.UnavailableOrderId), Key());
         using var finished = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(Stub.FinishedOrderId), Key());
         Assert.Equal(HttpStatusCode.OK, issued.StatusCode);
         Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, next.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, other.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, finished.StatusCode);
 
@@ -263,10 +254,11 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         string profile,
         string path,
         string? idempotencyKey,
-        Guid? organizationId = null)
+        Guid? organizationId = null,
+        HttpMethod? method = null)
     {
         using var client = factory.CreateClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, path);
+        using var request = new HttpRequestMessage(method ?? HttpMethod.Post, path);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", profile);
         request.Headers.Add(
             "X-Organization-Id",
@@ -280,8 +272,6 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
     }
 
     private static string IssuePath(Guid orderId) => $"/api/v1/orders/{orderId:D}/tracking-link";
-
-    private static string RevokePath(Guid orderId) => $"/api/v1/orders/{orderId:D}/tracking-link/revoke";
 
     private static string Key() => $"trk002-http-{Guid.NewGuid():N}";
 
@@ -325,7 +315,6 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         private readonly ConcurrentDictionary<Guid, PublicTrackingTokenGrant> active = new();
         private readonly ConcurrentDictionary<Guid, int> generations = new();
         private readonly ConcurrentDictionary<Guid, GetOrCreatePublicTrackingLinkCommand> reads = new();
-        private readonly ConcurrentDictionary<Guid, RevokePublicTrackingTokenCommand> revokes = new();
         private readonly ConcurrentDictionary<Guid, int> calls = new();
         private readonly ConcurrentDictionary<Guid, int> creations = new();
         private readonly ConcurrentDictionary<Guid, PublicTrackingTokenGrant> last = new();
@@ -339,8 +328,6 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         internal PublicTrackingTokenGrant LastGrant(Guid orderId) => last[orderId];
 
         internal GetOrCreatePublicTrackingLinkCommand LastGetOrCreate(Guid orderId) => reads[orderId];
-
-        internal RevokePublicTrackingTokenCommand LastRevoke(Guid orderId) => revokes[orderId];
 
         internal IReadOnlyCollection<string> AllTokens() => tokens.ToArray();
 
@@ -372,15 +359,6 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
                 last[command.OrderId] = grant;
                 return Task.FromResult(grant);
             }
-        }
-
-        public Task RevokeAsync(RevokePublicTrackingTokenCommand command, CancellationToken cancellationToken)
-        {
-            Touch(command.OrderId);
-            revokes[command.OrderId] = command;
-            Fail(command.OrderId);
-            active.TryRemove(command.OrderId, out _);
-            return Task.CompletedTask;
         }
 
         private void Touch(Guid orderId) => calls.AddOrUpdate(orderId, 1, (_, value) => value + 1);

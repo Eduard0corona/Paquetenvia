@@ -15,6 +15,21 @@
   tablas ni roles nuevos; rollback restaura la función anterior. AI-06 y AI-18 sin cambios.
 - AI-04, AI-07 y AI-19 registran la resolución. Las cotizaciones y órdenes existentes conservan sus montos congelados.
 
+## Enlaces de tracking sin revocación (TRK-002-NO-REVOCATION) — 2026-09-29
+
+- Decisión literal del project owner registrada en `decision-log.md` (`TRK-002-NO-REVOCATION`): "La liga la puede
+  ver el despachador, y el cliente al que le llegará el pedido, la cual se le enviará por WhatsApp y correo
+  electronico."; PLATFORM_ADMIN "Sí, con MFA"; quién la anula: "Nadie la anula".
+- AI-05: se elimina `revokeTrackingLink` (`POST /orders/{orderId}/tracking-link/revoke`) y su fila en
+  `x-capability-matrix.tracking_link_operations`; la decisión de esa sección deja de estar pendiente de
+  confirmación (DISPATCHER sin MFA, PLATFORM_ADMIN con MFA). `issueTrackingLink` y `PublicTrackingLink` explican
+  que nadie revoca el enlace y que `generation` solo crece al sustituir un token previo a la derivación o de una
+  versión de llave ya no configurada.
+- Vigencia sin cambios: mientras la orden avanza y 24 horas después de su primer estado público final.
+- AI-04, AI-08 y AI-24 registran la ausencia de revocación. AI-06 y AI-18 sin cambios y sin migración: no existía
+  función ni grant exclusivos de la revocación; `revoked_at` y `generation` se conservan.
+- El envío del enlace por WhatsApp y correo sigue bloqueado por GATE-004, GATE-007 y las plantillas del owner.
+
 ## Enlaces de tracking automáticos y derivados (TRK-002-AUTO-LINK) — 2026-09-29
 
 - Decisión literal del project owner registrada en `decision-log.md` (`TRK-002-AUTO-LINK`); sustituye el emitir y
