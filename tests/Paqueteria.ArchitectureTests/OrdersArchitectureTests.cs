@@ -159,9 +159,11 @@ public sealed class OrdersArchitectureTests
     }
 
     /// <summary>
-    /// TRK-002-ISSUE-ENDPOINT: the plaintext tracking token reaches exactly one place, the 201 body. The endpoints
-    /// take no logger, emit no telemetry, never interpolate the token into a problem or an exception, and read it
-    /// from the grant only to build the response; the service persists only the hash.
+    /// TRK-002-AUTO-LINK: the plaintext tracking token reaches exactly one place, the no-store 200 body of
+    /// get-or-create (as the token and inside the public URL). The endpoints take no logger, emit no telemetry, never
+    /// interpolate the token into a problem or an exception (the one coded 409 carries only the constant AI-05 code),
+    /// and read it from the grant only to build the response. The service and the order-creation issuer derive the
+    /// token and persist only its hash.
     /// </summary>
     [Fact]
     public void Tracking_link_token_flows_only_into_the_no_store_response()
@@ -171,35 +173,73 @@ public sealed class OrdersArchitectureTests
         foreach (var forbidden in new[]
                  {
                      "ILogger", "LoggerMessage", ".Log", "Console.", "Debug.", "Trace.", "Activity", "Meter",
-                     "IPublicTrackingTelemetry", "Npgsql", "OrdersDbContext", "extensions:",
+                     "IPublicTrackingTelemetry", "Npgsql", "OrdersDbContext",
                  })
         {
             Assert.DoesNotContain(forbidden, endpoints, StringComparison.Ordinal);
         }
 
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(endpoints, @"grant\.Token\b"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(endpoints, "extensions:"));
         Assert.Contains(
-            "new PublicTrackingLinkResponse(grant.TokenId, grant.OrderId, grant.Token, grant.ExpiresAt)",
+            """
+                        extensions: new Dictionary<string, object?>
+                        {
+                            ["code"] = PublicTrackingLinkOrderFinishedException.ProblemCode,
+                        });
+            """,
             endpoints,
             StringComparison.Ordinal);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(endpoints, @"grant\.Token\b").Count);
+        Assert.Contains(
+            """
+                        grant.Token,
+                        PublicTrackingLinkPolicy.BuildUrl(publicBaseUrl, grant.Token),
+            """,
+            endpoints,
+            StringComparison.Ordinal);
+        Assert.Contains("PublicTrackingLinkResponse.From(grant, publicBaseUrl)", endpoints, StringComparison.Ordinal);
         Assert.Contains("headers.CacheControl = \"no-store\"", endpoints, StringComparison.Ordinal);
+
+        foreach (var path in new[]
+                 {
+                     "src/Modules/Orders/Orders.Infrastructure/Tracking/PostgreSqlPublicTrackingTokenService.cs",
+                     "src/Modules/Orders/Orders.Infrastructure/Tracking/OrderTrackingLinkIssuer.cs",
+                     "src/Modules/Orders/Orders.Infrastructure/Tracking/PublicTrackingLinkStore.cs",
+                     "src/Modules/Orders/Orders.Infrastructure/Tracking/PublicTrackingLinkKeyRing.cs",
+                 })
+        {
+            var source = File.ReadAllText(TestRepository.GetPath(path));
+            Assert.DoesNotContain("ILogger", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("Console.", source, StringComparison.Ordinal);
+        }
 
         var service = File.ReadAllText(TestRepository.GetPath(
             "src/Modules/Orders/Orders.Infrastructure/Tracking/PostgreSqlPublicTrackingTokenService.cs"));
-        Assert.DoesNotContain("ILogger", service, StringComparison.Ordinal);
+        var issuer = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Infrastructure/Tracking/OrderTrackingLinkIssuer.cs"));
+        var store = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Infrastructure/Tracking/PublicTrackingLinkStore.cs"));
         Assert.Contains("tokenHasher.HashToken(token)", service, StringComparison.Ordinal);
-        Assert.Contains("(id,order_id,owner_org_id,token_hash,expires_at,revoked_at,created_at)", service, StringComparison.Ordinal);
+        Assert.Contains("tokenHasher.HashToken(token)", issuer, StringComparison.Ordinal);
+        Assert.Contains(
+            "(id,order_id,owner_org_id,token_hash,expires_at,revoked_at,created_at,generation,key_version)",
+            store,
+            StringComparison.Ordinal);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(store, "INSERT INTO orders.public_tracking_tokens"));
+        Assert.DoesNotContain("RETURNING", store, StringComparison.OrdinalIgnoreCase);
 
         // The records that hold the plaintext never render it as text.
         const string token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
         Assert.DoesNotContain(
             token,
-            new Orders.Application.Tracking.PublicTrackingTokenGrant(Guid.NewGuid(), Guid.NewGuid(), token, default)
+            new Orders.Application.Tracking.PublicTrackingTokenGrant(Guid.NewGuid(), Guid.NewGuid(), token, 1, null)
                 .ToString(),
             StringComparison.Ordinal);
         Assert.DoesNotContain(
             token,
-            new Orders.Endpoints.PublicTrackingLinkResponse(Guid.NewGuid(), Guid.NewGuid(), token, default).ToString(),
+            new Orders.Endpoints.PublicTrackingLinkResponse(
+                    Guid.NewGuid(), Guid.NewGuid(), token, $"https://tracking.test/track/{token}", 1, null)
+                .ToString(),
             StringComparison.Ordinal);
     }
 

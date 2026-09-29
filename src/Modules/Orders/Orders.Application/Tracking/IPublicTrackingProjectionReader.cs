@@ -85,10 +85,27 @@ public enum PublicTrackingProviderKind
 public sealed class PublicTrackingOptions
 {
     public const string SectionName = "PublicTracking";
+    public const int MaximumLinkKeys = 8;
     public PublicTrackingProviderKind Provider { get; set; } = PublicTrackingProviderKind.Disabled;
     public int CommandTimeoutSeconds { get; set; } = 5;
-    public double TokenLifetimeHours { get; set; } = 168;
-    public int TokenCollisionRetryCount { get; set; } = 3;
+
+    /// <summary>
+    /// TRK-002-AUTO-LINK: the https origin that serves the public page, for example
+    /// <c>https://paquetenvia.com</c>; links are <c>{PublicBaseUrl}/track/{token}</c>. Required whenever the
+    /// provider is PostgreSql.
+    /// </summary>
+    public string? PublicBaseUrl { get; set; }
+
+    /// <summary>TRK-002-AUTO-LINK: the key version new link generations are derived with.</summary>
+    public int CurrentLinkKeyVersion { get; set; } = 1;
+
+    /// <summary>
+    /// TRK-002-AUTO-LINK: key version to Base64 of 32 to 128 random bytes, read from the Key Vault secret
+    /// <c>public-tracking-link-key</c> (<c>PublicTracking:LinkKeys:1</c>) and never committed. An older version stays
+    /// configured for as long as its links should keep being shown to operators.
+    /// </summary>
+    public Dictionary<int, string> LinkKeys { get; set; } = [];
+
     public string[] AllowedOrigins { get; set; } = [];
     public int LookupPermitLimit { get; set; } = 60;
     public int LookupWindowSeconds { get; set; } = 60;

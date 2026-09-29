@@ -138,6 +138,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 ["IdentityBootstrap:Provider"] = "PostgreSql",
                 ["IdentityBootstrap:CommandTimeoutSeconds"] = "5",
                 ["PublicTracking:Provider"] = "PostgreSql",
+                ["PublicTracking:PublicBaseUrl"] = "https://tracking.synthetic.local",
                 ["PublicTracking:CommandTimeoutSeconds"] = "5",
                 ["Orders:Provider"] = "PostgreSql",
                 ["Orders:CommandTimeoutSeconds"] = "5",

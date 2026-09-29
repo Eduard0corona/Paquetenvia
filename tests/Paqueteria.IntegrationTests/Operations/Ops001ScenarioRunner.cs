@@ -523,8 +523,8 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         {
             var grant = await scope.ServiceProvider
                 .GetRequiredService<IPublicTrackingTokenService>()
-                .IssueAsync(
-                    new IssuePublicTrackingTokenCommand(
+                .GetOrCreateAsync(
+                    new GetOrCreatePublicTrackingLinkCommand(
                         data.DispatcherUserId,
                         data.OrganizationId,
                         orderId,

@@ -22,10 +22,28 @@ tracking_token:
   hash: SHA-256
   hash_input: exact UTF-8 bytes of encoded token
   storage: bytea length 32
+  derivation:
+    decision: TRK-002-AUTO-LINK (project owner, 2026-09-29)
+    algorithm: HMAC-SHA256(key, UTF-8 bytes of canonical_input); the 32-byte MAC is the token entropy
+    canonical_input: paquetenvia-trk-v1|{key_version}|{order_id}|{generation}
+    canonical_rules: exact ASCII, no whitespace; key_version and generation invariant decimal integers; order_id UUID D lowercase
+    key: Key Vault secret public-tracking-link-key, Base64 of 32 to 128 random bytes, read by the API at start
+      (PublicTracking:LinkKeys:{key_version}, current version PublicTracking:CurrentLinkKeyVersion); never stored in
+      the database, logged or committed
+    fail_closed: the API refuses to start with PublicTracking:Provider=PostgreSql and no valid key, except
+      Development and Testing, which derive a synthetic key at runtime from a public label
+    stored: token_hash only, plus generation (starting at 1) and key_version; plaintext never persisted or logged
+    generation: a revoked generation is never derived again; the next link of the order is max(generation)+1
+    rotation: a new key version becomes current for new generations; stored links keep resolving (the lookup is by
+      hash); a link whose key version is no longer configured is retired and replaced by the next generation on the
+      next get-or-create; a key whose bytes changed under the same version fails closed
+    pre_derivation_tokens: rows with key_version NULL are random tokens issued before TRK-002-AUTO-LINK; they keep their
+      fixed expires_at and are retired and replaced on the next get-or-create
   required_contract_tests:
   - C# vs PostgreSQL fixed vector
   - valid token projection
   - single-byte mutation mismatch
+  - C# derivation vs PostgreSQL extensions.hmac over the canonical input
   test_vector:
     raw_bytes_hex: 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20
     token: AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA
@@ -75,6 +93,21 @@ outbox_lifecycle:
 public_tracking:
   normative_source: specs/AI-04_DOMAIN_MODEL.yaml public_tracking_contract
   sql_fail_closed: unmapped state returns no projection; anonymous API returns uniform 404
+  link_lifetime:
+    decision: TRK-002-AUTO-LINK (project owner, 2026-09-29)
+    issuance: every order gets generation 1 of its link inside the createOrder transaction, audited TRACKING_TOKEN_ISSUED
+    get_or_create: issueTrackingLink returns the same link for any retry or Idempotency-Key and never rotates
+    valid_while: the order is in progress, RESCHEDULED included
+    final_public_statuses:
+    - DELIVERED
+    - RETURNED
+    - CANCELLED
+    grace_after_final: 24 hours after the first order event whose public_event_code is DELIVERED, RETURNED or CANCELLED
+    enforcement: security.get_public_tracking_projection, atomically with the hash lookup; a final status without its
+      final event returns no projection
+    no_new_links: an order in a final public status never gets a new link (409 TRACKING_LINK_ORDER_FINISHED)
+    expires_at: infinity for derived links; the fixed ceiling of pre-derivation tokens is still enforced
+    public_url: '{PublicTracking:PublicBaseUrl}/track/{token}; PublicBaseUrl is an absolute https origin'
   csharp_fail_loud: unmapped state throws PublicStatusMappingException and alerts
   timeline: only non-null public_event_code; raw payload prohibited
   contract_test: compare all 17 internal states between AI-04, SQL and C#

@@ -794,6 +794,13 @@ paths:
       - Tracking
       security: []
       operationId: publicTracking
+      description: >-
+        Minimal public view of the order a tracking token names (AI-04
+        public_tracking_contract). TRK-002-AUTO-LINK: a link resolves while
+        the order is in progress and for 24 hours after it first reaches
+        DELIVERED, RETURNED or CANCELLED for the public; a revoked, expired,
+        unknown or malformed token, and a link past that grace, are the same
+        uniform 404.
       parameters:
       - name: token
         in: path
@@ -820,25 +827,38 @@ paths:
       - Tracking
       operationId: issueTrackingLink
       description: >-
-        TRK-002-ISSUE-ENDPOINT. Issues a public tracking link for an order owned
-        by the organization selected with X-Organization-Id. The first link of
-        the order is audited TRACKING_TOKEN_ISSUED; when a link already exists
-        the request rotates it: every earlier link of the order is revoked in
-        the same transaction and the new one is audited TRACKING_TOKEN_ROTATED.
-        The token is 32 random bytes as Base64URL without padding; only its
-        SHA-256 (x-runtime-contracts token_hash) is stored, so the plaintext is
-        returned exactly once, in this 201 body, and is never persisted, logged
-        or placed in a problem response. The public link is /track/{token} on
-        the tracking origin and resolves through publicTracking until it
-        expires (PublicTracking:TokenLifetimeHours, default 168 hours) or is
-        revoked. The Idempotency-Key is required and recorded as the audit
-        request_id; because no plaintext is stored, a replay never returns an
-        earlier token: it rotates again and only the newest response holds a
-        valid link. An order that is missing, of another organization or only
-        operated by it is the uniform 404. DISPATCHER members may issue;
-        PLATFORM_ADMIN members need a satisfied MFA challenge (403 MFA_REQUIRED
-        when only the second factor is missing), the safer default per AI-01
-        section 7 pending owner confirmation (x-capability-matrix
+        TRK-002-AUTO-LINK (supersedes the issue-and-rotate behaviour of
+        TRK-002-ISSUE-ENDPOINT). Returns the public tracking link of an order
+        owned by the organization selected with X-Organization-Id: get-or-create,
+        never rotation. Every order gets its link when it is created (createOrder
+        writes it and its TRACKING_TOKEN_ISSUED audit in the same transaction),
+        so this operation normally returns that link: the token is re-derived as
+        Base64URL without padding of HMAC-SHA256 over the versioned input
+        paquetenvia-trk-v1|key_version|order_id|generation with a Key Vault key,
+        32 bytes and 43 characters. Only its SHA-256 (x-runtime-contracts
+        token_hash) is stored; the key and the plaintext never are, and the
+        plaintext is never logged or placed in a problem response. A retry with
+        the same Idempotency-Key, or with another one, returns the same link and
+        writes nothing; the key is required and recorded as the audit request_id
+        when a link is created. A link is created, audited
+        TRACKING_TOKEN_ISSUED, only when the order has none that can be
+        re-derived: the next generation after a revocation (a revoked
+        generation never comes back), or a replacement for a random token
+        issued before this decision or a link whose key version is no longer
+        configured (both retired in the same transaction). A link lives while
+        the order is in progress, RESCHEDULED included, and for 24 hours after
+        the order first reaches a final public status (DELIVERED, which covers
+        CLOSED, CLAIM_OPEN and CLAIM_RESOLVED, RETURNED or CANCELLED);
+        valid_until reports that end, and publicTracking then answers the
+        uniform 404. An order in a final public status never gets a new link:
+        without a link that can still be shown the answer is 409
+        TRACKING_LINK_ORDER_FINISHED. url is the public page
+        PublicTracking:PublicBaseUrl followed by /track/ and the token. An
+        order that is missing, of another organization or only operated by it
+        is the uniform 404. DISPATCHER members may call it; PLATFORM_ADMIN
+        members need a satisfied MFA challenge (403 MFA_REQUIRED when only the
+        second factor is missing), the safer default per AI-01 section 7
+        pending owner confirmation (x-capability-matrix
         tracking_link_operations). Capability is decided before order
         existence. Nothing is sent to customers; delivering the link over
         WhatsApp or email waits on GATE-004 and GATE-007.
@@ -852,11 +872,11 @@ paths:
       - $ref: '#/components/parameters/OrderId'
       - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '201':
-          description: The new public tracking link, shown once
+        '200':
+          description: The order's current public tracking link, the same on every call
           headers:
             Cache-Control:
-              description: TRK-002-ISSUE-ENDPOINT; no cache may keep the plaintext token.
+              description: TRK-002-AUTO-LINK; no cache may keep the plaintext token.
               schema:
                 type: string
                 const: no-store
@@ -871,7 +891,7 @@ paths:
         '404':
           $ref: '#/components/responses/UniformNotFound'
         '409':
-          $ref: '#/components/responses/Conflict'
+          $ref: '#/components/responses/TrackingLinkConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/tracking-link/revoke:
@@ -880,12 +900,15 @@ paths:
       - Tracking
       operationId: revokeTrackingLink
       description: >-
-        TRK-002-ISSUE-ENDPOINT. Revokes every active public tracking link of an
-        order owned by the selected organization; publicTracking then answers
-        the uniform 404 for each of them. The revocation is audited
-        TRACKING_TOKEN_REVOKED with the Idempotency-Key as request_id; an order
-        without an active link is a success without a new audit row, so a
-        replay is harmless. Same capability and uniform 404 as
+        TRK-002-ISSUE-ENDPOINT, kept by TRK-002-AUTO-LINK. Retires the current
+        generation of the public tracking link of an order owned by the
+        selected organization (and any link issued before TRK-002-AUTO-LINK);
+        publicTracking then answers the uniform 404 for it. The revocation is
+        audited TRACKING_TOKEN_REVOKED with the Idempotency-Key as request_id;
+        an order without an active link is a success without a new audit row,
+        so a replay is harmless. A later issueTrackingLink derives the next
+        generation, never the revoked one, and only while the order is not in
+        a final public status. Same capability and uniform 404 as
         issueTrackingLink: DISPATCHER members, and PLATFORM_ADMIN members with
         a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor
         is missing).
@@ -2496,6 +2519,16 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/Problem'
+    TrackingLinkConflict:
+      description: >-
+        TRK-002-AUTO-LINK. A missing, repeated or malformed Idempotency-Key is
+        the uniform conflict without a code; an order in a final public status
+        without a link that can still be shown is
+        TRACKING_LINK_ORDER_FINISHED. Never carries a token.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/TrackingLinkConflictProblem'
     RoutingConflict:
       description: >-
         RTE-001 stale version, duplicate route membership, active-route
@@ -5333,13 +5366,20 @@ components:
       type: object
       additionalProperties: false
       description: >-
-        TRK-002-ISSUE-ENDPOINT. The only response that ever carries a plaintext
-        public tracking token. It is never persisted or logged.
+        TRK-002-AUTO-LINK. The only response that ever carries a plaintext
+        public tracking token, re-derived on every call and never persisted or
+        logged. url is PublicTracking:PublicBaseUrl followed by /track/ and the
+        token; generation starts at 1 and grows only after a revocation;
+        valid_until is null while the order is in progress and, once it is in
+        a final public status, the end of the 24-hour grace after which
+        publicTracking answers the uniform 404.
       required:
       - token_id
       - order_id
       - token
-      - expires_at
+      - url
+      - generation
+      - valid_until
       properties:
         token_id:
           type: string
@@ -5352,9 +5392,45 @@ components:
           minLength: 43
           maxLength: 43
           pattern: ^[A-Za-z0-9_-]{43}$
-        expires_at:
+        url:
           type: string
+          format: uri
+          pattern: ^https://[^/?#]+/track/[A-Za-z0-9_-]{43}$
+        generation:
+          type: integer
+          format: int32
+          minimum: 1
+        valid_until:
+          type:
+          - string
+          - 'null'
           format: date-time
+    TrackingLinkConflictProblem:
+      type: object
+      description: >-
+        TRK-002-AUTO-LINK 409 problem. code is present only as
+        TRACKING_LINK_ORDER_FINISHED; every other conflict is uncoded.
+      required:
+      - type
+      - title
+      - status
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - TRACKING_LINK_ORDER_FINISHED
     PublicTrackingProjection:
       type: object
       required:
@@ -5500,7 +5576,9 @@ x-capability-matrix:
     renewPendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
     revokePendingMembership: [PLATFORM_ADMIN, ALLY_ADMIN, BUSINESS_ADMIN]
   tracking_link_operations_decision: TRK-002-ISSUE-ENDPOINT (project owner, 2026-09-28) scoped issueTrackingLink and
-    revokeTrackingLink; D5-CAPABILITY-MATRIX predates them and they mint or revoke a public bearer credential, so they
+    revokeTrackingLink, and TRK-002-AUTO-LINK (project owner, 2026-09-29) made issueTrackingLink the get-or-create of
+    the link every order receives at creation; D5-CAPABILITY-MATRIX predates them and they hand out or revoke a public
+    bearer credential, so they
     follow the operations outside the matrix that create or reassign operational state (assignDriver, createRoute,
     createExternalOffer) - DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge (403
     MFA_REQUIRED when only the second factor is missing), the safer default per AI-01 section 7 pending owner

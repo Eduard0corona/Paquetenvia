@@ -7,8 +7,9 @@ using YamlDotNet.RepresentationModel;
 namespace Paqueteria.ContractTests;
 
 /// <summary>
-/// TRK-002-ISSUE-ENDPOINT: the two authenticated tracking link operations are served exactly as AI-05 contracts
-/// them, and the one response that carries the plaintext token is declared no-store.
+/// TRK-002-ISSUE-ENDPOINT and TRK-002-AUTO-LINK: the two authenticated tracking link operations are served exactly
+/// as AI-05 contracts them (get-or-create 200 and revoke 204), and the one response that carries the plaintext token
+/// is declared no-store.
 /// </summary>
 public sealed class PublicTrackingLinkImplementationContractTests
 {
@@ -26,7 +27,11 @@ public sealed class PublicTrackingLinkImplementationContractTests
         Assert.Equal("/api/v1/orders/{orderId:guid}/tracking-link", PublicTrackingLinkEndpoints.IssueRoute);
         Assert.Equal("/api/v1/orders/{orderId:guid}/tracking-link/revoke", PublicTrackingLinkEndpoints.RevokeRoute);
 
-        foreach (var (operation, success) in new[] { (issue, "201"), (revoke, "204") })
+        foreach (var (operation, success, conflict) in new[]
+                 {
+                     (issue, "200", "#/components/responses/TrackingLinkConflict"),
+                     (revoke, "204", "#/components/responses/Conflict"),
+                 })
         {
             Assert.Equal(
                 [
@@ -42,7 +47,7 @@ public sealed class PublicTrackingLinkImplementationContractTests
             Assert.Equal("#/components/responses/Unauthorized", responses.Mapping("401").Scalar("$ref"));
             Assert.Equal("#/components/responses/Forbidden", responses.Mapping("403").Scalar("$ref"));
             Assert.Equal("#/components/responses/UniformNotFound", responses.Mapping("404").Scalar("$ref"));
-            Assert.Equal("#/components/responses/Conflict", responses.Mapping("409").Scalar("$ref"));
+            Assert.Equal(conflict, responses.Mapping("409").Scalar("$ref"));
             Assert.Equal("#/components/responses/ServiceUnavailable", responses.Mapping("503").Scalar("$ref"));
             Assert.Equal(
                 "shape-validation-then-capability-before-persisted-state",
@@ -50,7 +55,18 @@ public sealed class PublicTrackingLinkImplementationContractTests
             Assert.Contains("GATE-004", issue.Scalar("description"), StringComparison.Ordinal);
         }
 
-        var created = issue.Mapping("responses").Mapping("201");
+        Assert.Contains("TRK-002-AUTO-LINK", issue.Scalar("description"), StringComparison.Ordinal);
+        Assert.Contains("get-or-create", issue.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal(
+            ["TRACKING_LINK_ORDER_FINISHED"],
+            Contract.Mapping("components").Mapping("schemas").Mapping("TrackingLinkConflictProblem")
+                .Mapping("properties").Mapping("code").Sequence("enum").Children
+                .Cast<YamlScalarNode>().Select(node => node.Value!));
+        Assert.Equal(
+            Orders.Application.Tracking.PublicTrackingLinkOrderFinishedException.ProblemCode,
+            "TRACKING_LINK_ORDER_FINISHED");
+
+        var created = issue.Mapping("responses").Mapping("200");
         Assert.Equal(
             "no-store",
             created.Mapping("headers").Mapping("Cache-Control").Mapping("schema").Scalar("const"));
@@ -76,11 +92,19 @@ public sealed class PublicTrackingLinkImplementationContractTests
                 .Order(StringComparer.Ordinal));
         Assert.Equal("^[A-Za-z0-9_-]{43}$", schema.Mapping("properties").Mapping("token").Scalar("pattern"));
 
+        Assert.Equal(
+            "^https://[^/?#]+/track/[A-Za-z0-9_-]{43}$",
+            schema.Mapping("properties").Mapping("url").Scalar("pattern"));
+
         const string token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
-        var response = new PublicTrackingLinkResponse(Guid.NewGuid(), Guid.NewGuid(), token, DateTimeOffset.UnixEpoch);
-        Assert.DoesNotContain(token, response.ToString(), StringComparison.Ordinal);
         var grant = new Orders.Application.Tracking.PublicTrackingTokenGrant(
-            Guid.NewGuid(), Guid.NewGuid(), token, DateTimeOffset.UnixEpoch);
+            Guid.NewGuid(), Guid.NewGuid(), token, 2, DateTimeOffset.UnixEpoch);
+        var response = PublicTrackingLinkResponse.From(grant, "https://paquetenvia.com");
+        Assert.Equal($"https://paquetenvia.com/track/{token}", response.Url);
+        Assert.Matches(schema.Mapping("properties").Mapping("url").Scalar("pattern"), response.Url);
+        Assert.Equal(2, response.Generation);
+        Assert.Equal(DateTimeOffset.UnixEpoch, response.ValidUntil);
+        Assert.DoesNotContain(token, response.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(token, grant.ToString(), StringComparison.Ordinal);
     }
 

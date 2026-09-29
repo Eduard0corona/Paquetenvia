@@ -58,8 +58,13 @@ public sealed class PublicTrackingImplementationContractTests
     public void Lifecycle_options_keep_the_contracted_secure_defaults()
     {
         var options = new PublicTrackingOptions();
-        Assert.Equal(168d, options.TokenLifetimeHours);
-        Assert.Equal(3, options.TokenCollisionRetryCount);
+        // TRK-002-AUTO-LINK: no fixed token lifetime; links live with the order plus 24 hours after it finishes.
+        Assert.Null(typeof(PublicTrackingOptions).GetProperty("TokenLifetimeHours"));
+        Assert.Null(typeof(PublicTrackingOptions).GetProperty("TokenCollisionRetryCount"));
+        Assert.Equal(TimeSpan.FromHours(24), PublicTrackingLinkPolicy.FinalStatusGrace);
+        Assert.Null(options.PublicBaseUrl);
+        Assert.Empty(options.LinkKeys);
+        Assert.Equal(1, options.CurrentLinkKeyVersion);
         Assert.Equal(60, options.LookupPermitLimit);
         Assert.Equal(60, options.LookupWindowSeconds);
         Assert.Empty(options.AllowedOrigins);
@@ -69,9 +74,9 @@ public sealed class PublicTrackingImplementationContractTests
             .Select(property => property.Name)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal(["ExpiresAt", "OrderId", "Token", "TokenId"], grantProperties);
+        Assert.Equal(["Generation", "OrderId", "Token", "TokenId", "ValidUntil"], grantProperties);
         Assert.DoesNotContain(
-            typeof(IssuePublicTrackingTokenCommand).Assembly.GetTypes(),
+            typeof(GetOrCreatePublicTrackingLinkCommand).Assembly.GetTypes(),
             type =>
                 type != typeof(PublicTrackingTokenGrant) &&
                 type.GetProperties().Any(property =>

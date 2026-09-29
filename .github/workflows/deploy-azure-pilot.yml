@@ -380,6 +380,10 @@ jobs:
             echo "::error::Key Vault ${VAULT} lacks google-maps-api-key. Store the restricted Google Maps Platform key (README 'Secrets the owner writes') and re-run."
             exit 1
           fi
+          if ! has_secret public-tracking-link-key; then
+            echo "::error::Key Vault ${VAULT} lacks public-tracking-link-key. Store the tracking link key (README 'Secrets the owner writes') and re-run."
+            exit 1
+          fi
 
       - name: Close Key Vault firewall for this runner (window 2)
         if: always()

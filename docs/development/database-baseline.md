@@ -13,7 +13,7 @@ role model. Their mandatory hashes and order are declared in
 `database/migrations/v0.6-baseline.json`:
 
 ```text
-AI-06 a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4
+AI-06 4e441d1165c17611abe317811278eb2932c27758685d768629855ab78de39da4
 AI-18 53c486c12178a470aa35764be2b117105f3ac077f384f7f3d0b7cca01a2b810f
 ```
 
@@ -186,3 +186,12 @@ nueva. Solo cambia los cuerpos de las dos funciones de `paqueteria_bootstrap`
 exacto de columnas de bootstrap y la definición de cada índice, y rechaza un
 índice homónimo con otra forma. Su `Down` devuelve el contrato previo a la
 decisión (cuerpos, grants e índices) y solo debe acompañar al release anterior.
+
+`TRK-002-AUTO-LINK` agrega un segundo paso a esa lane,
+`20260929000200_BoundTrackingLinksToOrderLifecycle`, que reescribe solo el cuerpo de
+`security.get_public_tracking_projection(text)` con la vigencia ligada al ciclo de vida de la orden
+(conserva dueño, ACL, `search_path` y el orden de la timeline; no cambia grants). Corre después de
+`ApplyPilotContractDeltas`, que en una instalación nueva restablece el cuerpo anterior. Las columnas
+`generation` y `key_version` de `orders.public_tracking_tokens` llegan por la lane Orders
+(`20260929000100_AddTrackingLinkGenerations`), que adopta la forma de AI-06 si ya existe. Los `Down` de
+ambos pasos fallan cerrado.

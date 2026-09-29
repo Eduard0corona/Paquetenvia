@@ -160,7 +160,7 @@ Guard P06 checks three things:
 
 | Workload (identity) | Secret → configuration key |
 |---|---|
-| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey` |
+| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey`; `public-tracking-link-key` → `PublicTracking:LinkKeys:1` |
 | Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys) |
 | Migrate and verify jobs (`id-pv-pilot-migrate`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION` |
 | Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER` |
@@ -183,6 +183,7 @@ the app restarts or starts a new revision; the workflow restarts the API and Wor
 | `paquetenvia-email-lookup-key-1` | workflow (generated once: 32 random bytes, base64) | API (`EmailLookup__Keys__1`) |
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |
 | `google-maps-api-key` | **owner** (Google Cloud Console, GATE-003-PROVIDER-GOOGLE) | API (`Locations__GoogleMaps__ApiKey`) |
+| `public-tracking-link-key` | **owner** (32 random bytes, base64; TRK-002-AUTO-LINK) | API (`PublicTracking__LinkKeys__1`) |
 | `pg-restore-drill-connection` | `restore-drill.sh` | verify job, during a drill only |
 
 **Reserved names (not created, for later work):**
@@ -209,6 +210,10 @@ App settings wired by `apps.bicep`:
   - AuthCenter (`Authority`/`Issuer` `https://authcenter.info`, `ClientId` `paquetenvia-web-prod`,
     `PublicOrigin`, `SessionStore=PostgreSql`).
   - `EmailLookup__CurrentKeyVersion=1`, `EmailLookup__Keys__1`.
+  - TRK-002-AUTO-LINK: `PublicTracking__PublicBaseUrl` (the public origin, so links are
+    `https://<public host>/track/<token>`), `PublicTracking__CurrentLinkKeyVersion=1` and
+    `PublicTracking__LinkKeys__1` (Key Vault `public-tracking-link-key`). The API refuses to start
+    with public tracking enabled and no valid key.
   - Every module provider set to `PostgreSql`.
   - `Realtime__Provider=SignalR`, `Backplane=InProcess`, allowed origins.
   - ADP-001: `AZURE_CLIENT_ID`, `Locations__PiiProtector` and `Incidents__PiiProtector` set to
@@ -437,10 +442,21 @@ shred -u /tmp/ac; unset AUTHCENTER_SECRET
 read -rs GOOGLE_MAPS_KEY && printf '%s' "$GOOGLE_MAPS_KEY" > /tmp/gm && \
 az keyvault secret set --vault-name <kv> --name google-maps-api-key --file /tmp/gm --encoding utf-8 --output none; \
 shred -u /tmp/gm; unset GOOGLE_MAPS_KEY
+# TRK-002-AUTO-LINK: 32 random bytes, base64, generated in place and never shown.
+umask 077 && openssl rand -base64 32 | tr -d '\n' > /tmp/tl && \
+az keyvault secret set --vault-name <kv> --name public-tracking-link-key --file /tmp/tl --encoding utf-8 --output none; \
+shred -u /tmp/tl
 bash deploy/azure/pilot/kv-firewall.sh close <kv>
 ```
 
-The workflow stops before deploying while either owner secret is missing. The API reads
+`public-tracking-link-key` derives every public tracking link (HMAC-SHA256; only the SHA-256 of each
+link is stored). Write it once and keep it: replacing the value under the same version makes the API
+refuse to show existing links (it fails closed). To rotate, store the new key under a new secret name,
+map it as `PublicTracking:LinkKeys:2`, set `PublicTracking__CurrentLinkKeyVersion=2` and keep version 1
+mapped while its links should still be shown to operators; links already sent keep working either way,
+because the public lookup only compares hashes. Rotation is a template change reviewed like any other.
+
+The workflow stops before deploying while any owner secret is missing. The API reads
 `google-maps-api-key` at startup even while `Locations__GeocodingProvider=Manual`, so the key must exist
 before the next deploy. Restrict it in Google Cloud Console to the Geocoding API and set the quota and
 budget there; those values are owner decisions still open under GATE-003.

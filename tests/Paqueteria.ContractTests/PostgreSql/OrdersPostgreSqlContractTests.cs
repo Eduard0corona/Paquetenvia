@@ -5,6 +5,9 @@ using Orders.Application.Orders;
 using Orders.Infrastructure;
 using Orders.Infrastructure.Orders;
 using Orders.Infrastructure.Persistence;
+using Orders.Infrastructure.Tracking;
+using Orders.Application.Tracking;
+using Paqueteria.Contracts.Tracking;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Contracts.Legal;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
@@ -94,7 +97,11 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
               (SELECT payload::text FROM orders.order_events e WHERE e.order_id=o.id),
               (SELECT payload::text FROM platform.outbox_events x WHERE x.aggregate_id=o.id),
               (SELECT payload_redacted::text FROM platform.audit_logs a
-                WHERE a.entity_id=o.id AND a.action='ORDER_CREATED')
+                WHERE a.entity_id=o.id AND a.action='ORDER_CREATED'),
+              (SELECT count(*) FROM orders.public_tracking_tokens t
+                WHERE t.order_id=o.id AND t.generation=1 AND t.key_version=1 AND t.revoked_at IS NULL),
+              (SELECT count(*) FROM platform.audit_logs a
+                WHERE a.entity_id=o.id AND a.action='TRACKING_TOKEN_ISSUED')
             FROM pricing.quotes q
             JOIN orders.orders o ON o.quote_id=q.id
             CROSS JOIN LATERAL (SELECT q.owner_org_id) o2
@@ -126,6 +133,9 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             AcceptedAtClient,
             "WEB");
         Assert.Equal(OrderAcceptanceCanonicalizer.ComputeSha256(expectedEvidence), reader.GetFieldValue<byte[]>(32));
+        // TRK-002-AUTO-LINK: one link (generation 1) and one audit, even for the replayed request.
+        Assert.Equal(1L, reader.GetInt64(36));
+        Assert.Equal(1L, reader.GetInt64(37));
         foreach (var jsonOrdinal in new[] { 33, 34, 35 })
         {
             var json = reader.GetString(jsonOrdinal);
@@ -162,7 +172,9 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
                   (SELECT count(*) FROM orders.order_events WHERE owner_org_id=@org),
                   (SELECT count(*) FROM platform.outbox_events WHERE owner_org_id=@org),
                   (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ORDER_CREATED'),
-                  (SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@org AND scope='ORD-001:CREATE_ORDER')
+                  (SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@org AND scope='ORD-001:CREATE_ORDER'),
+                  (SELECT count(*) FROM orders.public_tracking_tokens WHERE owner_org_id=@org),
+                  (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='TRACKING_TOKEN_ISSUED')
                 FROM pricing.quotes WHERE id=@quote;
                 """);
             command.Parameters.AddWithValue("quote", scenario.QuoteId);
@@ -171,7 +183,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             Assert.True(await reader.ReadAsync());
             Assert.Equal("ACTIVE", reader.GetString(0));
             Assert.True(reader.GetBoolean(1));
-            for (var ordinal = 2; ordinal <= 8; ordinal++)
+            for (var ordinal = 2; ordinal <= 10; ordinal++)
             {
                 Assert.Equal(0L, reader.GetInt64(ordinal));
             }
@@ -312,6 +324,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
                 Orders.Infrastructure.Persistence.Migrations.AdoptCanonicalOrdersBaseline.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddRealtimeResynchronizationCursor.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddOrderLifecycleFinalizationExecutor.MigrationId,
+                Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId,
             ],
             await context.Database.GetAppliedMigrationsAsync());
 
@@ -350,7 +363,23 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
                 IdempotencyLifetimeMinutes = 60,
                 PublicIdCollisionRetryCount = 2,
             }),
-            new SystemClock());
+            new SystemClock(),
+            // TRK-002-AUTO-LINK: every order gets generation 1 of its link in the same transaction.
+            new PostgreSqlOrderTrackingLinkIssuer(
+                new TrackingTokenHasher(),
+                new PublicTrackingLinkKeyRing(
+                    new PublicTrackingOptions
+                    {
+                        Provider = PublicTrackingProviderKind.PostgreSql,
+                        LinkKeys =
+                        {
+                            [1] = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(
+                                System.Text.Encoding.UTF8.GetBytes("orders contract tests tracking link key"))),
+                        },
+                    },
+                    allowSyntheticKey: false),
+                new PostgreSqlAppendOnlyAuditWriter(state),
+                new AuditPayloadRedactor()));
         return new RuntimeScope(context, service);
     }
 

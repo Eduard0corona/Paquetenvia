@@ -5,10 +5,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Notifications.Infrastructure.Persistence;
 using Npgsql;
-using Paqueteria.Contracts.Tracking;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Paqueteria.Infrastructure.Tenancy;
 using Testcontainers.PostgreSql;
@@ -34,19 +32,11 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
     private string _adminConnectionString = string.Empty;
     private string _applicationConnectionString = string.Empty;
     private string _workerConnectionString = string.Empty;
-    private readonly TrackingTokenHasher? _trackingTokenHasher;
     private readonly bool _seedSyntheticData;
 
     public PostgreSqlSecurityWebApplicationFactory()
         : this(seedSyntheticData: true)
     {
-    }
-
-    internal PostgreSqlSecurityWebApplicationFactory(
-        TrackingTokenHasher trackingTokenHasher)
-        : this(seedSyntheticData: true)
-    {
-        _trackingTokenHasher = trackingTokenHasher;
     }
 
     internal PostgreSqlSecurityWebApplicationFactory(bool seedSyntheticData)
@@ -131,6 +121,12 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         }
     }
 
+    /// <summary>TRK-002-AUTO-LINK test-only link key (version 1), derived at runtime so no key-like literal is committed.</summary>
+    public static byte[] TestTrackingLinkKey { get; } =
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("paquetenvia trk002 http tests"));
+
+    public const string TrackingLinkPublicBaseUrl = "https://tracking.synthetic.local";
+
     /// <summary>REG-002 test-only email lookup key, derived at runtime so no key-like literal is committed.</summary>
     public static string TestEmailLookupKey { get; } = Convert.ToBase64String(
         System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("paquetenvia reg002 http tests")));
@@ -148,6 +144,10 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
                 ["PublicTracking:CommandTimeoutSeconds"] = "5",
                 ["PublicTracking:LookupPermitLimit"] = "1000",
                 ["PublicTracking:AllowedOrigins:0"] = "https://tracking.synthetic.local",
+                // TRK-002-AUTO-LINK: links are derived with a test-only key and built on the synthetic origin.
+                ["PublicTracking:PublicBaseUrl"] = TrackingLinkPublicBaseUrl,
+                ["PublicTracking:CurrentLinkKeyVersion"] = "1",
+                ["PublicTracking:LinkKeys:1"] = Convert.ToBase64String(TestTrackingLinkKey),
                 ["Tenancy:Provider"] = "PostgreSql",
                 ["Tenancy:CommandTimeoutSeconds"] = "5",
                 ["OperationsDashboard:Provider"] = "PostgreSql",
@@ -157,14 +157,6 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
                 ["EmailLookup:CurrentKeyVersion"] = "1",
                 ["EmailLookup:Keys:1"] = TestEmailLookupKey,
             }));
-        if (_trackingTokenHasher is not null)
-        {
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<TrackingTokenHasher>();
-                services.AddSingleton(_trackingTokenHasher);
-            });
-        }
     }
 
     public async Task<int> CountTenantActivationAuditsAsync()

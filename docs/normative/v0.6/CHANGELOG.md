@@ -1,5 +1,28 @@
 # Changelog
 
+## Enlaces de tracking automáticos y derivados (TRK-002-AUTO-LINK) — 2026-09-29
+
+- Decisión literal del project owner registrada en `decision-log.md` (`TRK-002-AUTO-LINK`); sustituye el emitir y
+  rotar de `TRK-002-ISSUE-ENDPOINT`.
+- Cada orden recibe su enlace dentro de la transacción de `createOrder` (flujo 1 de AI-13 §4; escritura interna de
+  Orders, no un sexto flujo), auditado `TRACKING_TOKEN_ISSUED`. El token es Base64URL sin padding de HMAC-SHA256 con
+  una llave de Key Vault (`public-tracking-link-key`) sobre `paquetenvia-trk-v1|key_version|order_id|generation`;
+  solo se guarda su SHA-256 (regla 6 de AI-01 sin cambio), con `generation` y `key_version`.
+- AI-05: `issueTrackingLink` pasa a obtener-o-crear: 200 `no-store` con `url`
+  (`{PublicTracking:PublicBaseUrl}/track/{token}`), `generation` y `valid_until`; el mismo enlace para cualquier
+  reintento o Idempotency-Key, sin rotar. 409 `TRACKING_LINK_ORDER_FINISHED` para una orden en estado público final
+  sin enlace vigente (`TrackingLinkConflict`, `TrackingLinkConflictProblem`). `revokeTrackingLink` retira la
+  generación actual; la siguiente lectura deriva la generación siguiente, nunca una revocada.
+- Vigencia: mientras la orden avanza (RESCHEDULED incluido) y 24 horas después de su primer evento público
+  DELIVERED, RETURNED o CANCELLED, verificado en `security.get_public_tracking_projection`; después, 404 uniforme.
+  Se elimina `PublicTracking:TokenLifetimeHours`.
+- AI-06: `orders.public_tracking_tokens` gana `generation` y `key_version` y dos índices únicos parciales; la
+  proyección pública aplica la vigencia. Lane Orders `20260929000100_AddTrackingLinkGenerations` y lane
+  PlatformEvolution `20260929000200_BoundTrackingLinksToOrderLifecycle`, ambas con rollback que falla cerrado.
+  AI-18 sin cambios.
+- AI-04, AI-08, AI-13 y AI-24 registran la derivación, la vigencia y las pruebas.
+- El envío del enlace a clientes sigue bloqueado por GATE-004 y GATE-007.
+
 ## Pantallas UI-001 de importación CSV, incidencias y COD (UI-001-SCREENS-CSV-INC-COD) — 2026-09-28
 
 - Respuesta literal del project owner: "Sí, agrégalas (Recommended)".

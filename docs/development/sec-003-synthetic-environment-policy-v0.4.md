@@ -112,10 +112,12 @@ PAQUETERIA_SYNTHETIC_TRACKING_ENABLED=true
 ```
 
 The caller supplies ActorId, OrganizationId, OrderId and a non-secret RunId.
-One call generates distinct non-secret request IDs, performs rotation A and B
-against the same order through `IPublicTrackingTokenService.RotateAsync`, and
-looks up both grants through `IPublicTrackingProjectionReader`. It then verifies
-that token A is invalid and token B is still valid.
+Since TRK-002-AUTO-LINK there is no rotation: one call generates distinct
+non-secret request IDs, gets the order's link twice through
+`IPublicTrackingTokenService.GetOrCreateAsync` (the second call must return the
+same link), revokes it with `RevokeAsync`, gets the next generation and looks
+the links up through `IPublicTrackingProjectionReader`. It then verifies that
+the revoked link is invalid and the next generation is valid.
 
 The verifier contains no SQL, database package, tenant-context implementation,
 audit write, privileged credential, Azure dependency, logger or console/file

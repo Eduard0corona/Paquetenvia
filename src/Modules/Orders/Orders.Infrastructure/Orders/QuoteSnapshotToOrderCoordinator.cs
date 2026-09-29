@@ -11,6 +11,7 @@ using NpgsqlTypes;
 using Orders.Application.Orders;
 using Orders.Domain;
 using Orders.Infrastructure.Persistence;
+using Orders.Infrastructure.Tracking;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Idempotency;
@@ -30,6 +31,7 @@ public enum OrderCreationStage
     EventInserted,
     OutboxInserted,
     AuditInserted,
+    TrackingLinkInserted,
     QuoteConsumed,
     BeforeIdempotencyCompletion,
 }
@@ -55,8 +57,13 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     IAppendOnlyAuditWriter auditWriter,
     IAuditPayloadRedactor auditRedactor,
     IOptions<OrdersOptions> options,
-    IClock clock) : IOrderService
+    IClock clock,
+    IOrderTrackingLinkIssuer? trackingLinkIssuer = null) : IOrderService
 {
+    // TRK-002-AUTO-LINK: the order's first public tracking link is issued in this same transaction when public
+    // tracking is enabled; without an issuer (public tracking disabled) orders are created without a link.
+    private readonly IOrderTrackingLinkIssuer trackingLinks = trackingLinkIssuer ?? new DisabledOrderTrackingLinkIssuer();
+
     internal const string IdempotencyScope = "ORD-001:CREATE_ORDER";
     private const string PublicIdUniqueConstraint = "orders_public_id_key";
     private const string QuoteIdUniqueConstraint = "orders_quote_id_key";
@@ -377,6 +384,19 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 now),
             cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.AuditInserted, cancellationToken);
+
+        // TRK-002-AUTO-LINK: an Orders-internal write inside the existing quote_snapshot_to_order flow (AI-13
+        // section 4, flow 1), not a new cross-module flow. The token row and its audit commit with the order.
+        await trackingLinks.IssueInitialAsync(
+            connection,
+            transaction,
+            order.Id,
+            order.OwnerOrganizationId,
+            command.ActorId,
+            command.RequestId,
+            now,
+            cancellationToken);
+        await failureInjector.OnStageAsync(OrderCreationStage.TrackingLinkInserted, cancellationToken);
 
         await ConsumeQuoteAsync(connection, transaction, quote.Id, now, cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.QuoteConsumed, cancellationToken);
