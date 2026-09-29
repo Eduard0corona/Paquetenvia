@@ -193,11 +193,11 @@ public sealed class OrdersArchitectureTests
         Assert.Contains(
             """
                         grant.Token,
-                        PublicTrackingLinkPolicy.BuildUrl(publicBaseUrl, grant.Token),
+                        baseUrlPolicy.BuildUrl(publicBaseUrl, grant.Token),
             """,
             endpoints,
             StringComparison.Ordinal);
-        Assert.Contains("PublicTrackingLinkResponse.From(grant, publicBaseUrl)", endpoints, StringComparison.Ordinal);
+        Assert.Contains("PublicTrackingLinkResponse.From(grant, publicBaseUrl, baseUrlPolicy)", endpoints, StringComparison.Ordinal);
         Assert.Contains("headers.CacheControl = \"no-store\"", endpoints, StringComparison.Ordinal);
 
         foreach (var path in new[]
