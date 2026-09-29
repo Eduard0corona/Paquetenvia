@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Orders.Application.Tracking;
 using Paqueteria.Contracts.Tracking;
@@ -20,11 +21,27 @@ public sealed class PublicTrackingPostgreSqlTests(
     private static readonly Guid ActorId =
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1");
 
+    /// <summary>
+    /// REL-000 required evidence for TRK-001 (item-evidence), kept under its original name and adapted to
+    /// TRK-002-AUTO-LINK: the lifecycle is tenant-safe (another organization gets the uniform not-found and RLS hides
+    /// the rows), every state change is audited (issue and revocation, never a read), and the plaintext token is
+    /// never persisted or logged: it is only ever returned in the no-store get-or-create response, re-derived for
+    /// the same generation on every call.
+    /// </summary>
     [Fact]
-    public async Task Link_is_stable_audited_once_tenant_safe_and_revocation_derives_the_next_generation()
+    public async Task Lifecycle_is_tenant_safe_audited_and_plaintext_is_returned_once()
     {
+        var logs = new CapturingLoggerProvider();
+        await using var host = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureLogging(logging => logging.AddProvider(logs).SetMinimumLevel(LogLevel.Trace)));
         var order = await CreateOrderAsync();
-        var grant = await GetOrCreateAsync(order.OrderId, "trk-first");
+        var grant = await WithServiceAsync(host, service => service.GetOrCreateAsync(
+            new GetOrCreatePublicTrackingLinkCommand(
+                ActorId,
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,
+                order.OrderId,
+                "trk-issue"),
+            default));
 
         Assert.Equal(43, grant.Token.Length);
         Assert.Matches("^[A-Za-z0-9_-]{43}$", grant.Token);
@@ -33,12 +50,33 @@ public sealed class PublicTrackingPostgreSqlTests(
             TrackingLinkTokenDerivation.DeriveToken(
                 PostgreSqlSecurityWebApplicationFactory.TestTrackingLinkKey, 1, order.OrderId, 1),
             grant.Token);
+        Assert.DoesNotContain(grant.Token, grant.ToString(), StringComparison.Ordinal);
         await AssertStoredSafelyAsync(order.OrderId, grant, "TRACKING_TOKEN_ISSUED");
         await AssertLookupAsync(grant.Token, HttpStatusCode.OK);
 
-        // Same link for any retry or key: nothing is written again.
+        // The only place the plaintext leaves the service: the no-store body of the authenticated get-or-create.
+        using (var client = host.CreateClient())
+        using (var request = new HttpRequestMessage(
+                   HttpMethod.Post,
+                   $"/api/v1/orders/{order.OrderId:D}/tracking-link"))
+        {
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer",
+                Identity.Infrastructure.Mock.MockIdentityProfiles.ActivePlatformAdminMfa);
+            request.Headers.Add(
+                "X-Organization-Id",
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId.ToString("D"));
+            request.Headers.Add("Idempotency-Key", $"trk001-http-read-{Guid.NewGuid():N}");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            using var json = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(grant.Token, json.RootElement.GetProperty("token").GetString());
+        }
+
+        // Same link for any retry or key: nothing is written again, so reads are never audited.
         var audits = await CountAuditsAsync(order.OrderId);
-        foreach (var key in new[] { "trk-first", "trk-another-key" })
+        foreach (var key in new[] { "trk-issue", "trk-another-key" })
         {
             Assert.Equal(grant.Token, (await GetOrCreateAsync(order.OrderId, key)).Token);
         }
@@ -49,23 +87,53 @@ public sealed class PublicTrackingPostgreSqlTests(
         await RevokeAsync(order.OrderId, "trk-revoke");
         await AssertLookupAsync(grant.Token, HttpStatusCode.NotFound);
         var auditsAfterFirstRevoke = await CountAuditsAsync(order.OrderId);
+        Assert.Equal(audits + 1, auditsAfterFirstRevoke);
         await RevokeAsync(order.OrderId, "trk-revoke-repeat");
         Assert.Equal(auditsAfterFirstRevoke, await CountAuditsAsync(order.OrderId));
 
         var next = await GetOrCreateAsync(order.OrderId, "trk-next");
         Assert.Equal(2, next.Generation);
         Assert.NotEqual(grant.Token, next.Token);
+        await AssertStoredSafelyAsync(order.OrderId, next, "TRACKING_TOKEN_ISSUED");
         await AssertLookupAsync(grant.Token, HttpStatusCode.NotFound);
         await AssertLookupAsync(next.Token, HttpStatusCode.OK);
 
-        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() =>
-            WithServiceAsync(service => service.GetOrCreateAsync(
-                new GetOrCreatePublicTrackingLinkCommand(
-                    ActorId,
-                    PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
-                    order.OrderId,
-                    "trk-cross-tenant"),
-                default)));
+        // Tenant-safe: another organization gets the uniform not-found and changes nothing.
+        foreach (var operation in new Func<IPublicTrackingTokenService, Task>[]
+                 {
+                     service => service.GetOrCreateAsync(
+                         new GetOrCreatePublicTrackingLinkCommand(
+                             ActorId,
+                             PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                             order.OrderId,
+                             "trk-cross-tenant"),
+                         default),
+                     service => service.RevokeAsync(
+                         new RevokePublicTrackingTokenCommand(
+                             ActorId,
+                             PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                             order.OrderId,
+                             "trk-cross-tenant-revoke"),
+                         default),
+                 })
+        {
+            await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() =>
+                WithServiceAsync(async service =>
+                {
+                    await operation(service);
+                    return true;
+                }));
+        }
+
+        Assert.Equal(auditsAfterFirstRevoke + 1, await CountAuditsAsync(order.OrderId));
+        await AssertLookupAsync(next.Token, HttpStatusCode.OK);
+
+        // Never persisted anywhere readable and never logged by the host that served the response.
+        foreach (var token in new[] { grant.Token, next.Token })
+        {
+            Assert.Equal(0L, await CountPlaintextAsync(token));
+            Assert.DoesNotContain(logs.Entries, entry => entry.Contains(token, StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -281,6 +349,65 @@ public sealed class PublicTrackingPostgreSqlTests(
     private async Task<T> WithServiceAsync<T>(
         Func<IPublicTrackingTokenService, Task<T>> operation)
         => await WithServiceAsync(factory, operation);
+
+    private static async Task<T> WithServiceAsync<T>(
+        WebApplicationFactory<Program> host,
+        Func<IPublicTrackingTokenService, Task<T>> operation)
+    {
+        await using var scope = host.Services.CreateAsyncScope();
+        return await operation(scope.ServiceProvider.GetRequiredService<IPublicTrackingTokenService>());
+    }
+
+    /// <summary>Rows anywhere in the audit log, the token table or the outbox whose text contains the plaintext.</summary>
+    private async Task<long> CountPlaintextAsync(string token)
+    {
+        await using var connection = new NpgsqlConnection(factory.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT (SELECT count(*) FROM platform.audit_logs a WHERE pg_catalog.to_jsonb(a)::text LIKE '%'||@token||'%')
+                 + (SELECT count(*) FROM orders.public_tracking_tokens t WHERE pg_catalog.to_jsonb(t)::text LIKE '%'||@token||'%')
+                 + (SELECT count(*) FROM platform.outbox_events o WHERE pg_catalog.to_jsonb(o)::text LIKE '%'||@token||'%');
+            """,
+            connection);
+        command.Parameters.AddWithValue("token", token);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> entries = new();
+
+        internal IReadOnlyCollection<string> Entries => entries.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class CapturingLogger(
+            string category,
+            System.Collections.Concurrent.ConcurrentQueue<string> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull
+            {
+                entries.Enqueue($"{category} scope {state}");
+                return null;
+            }
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                entries.Enqueue($"{category} {logLevel} {formatter(state, exception)} {exception}");
+        }
+    }
 
     private static async Task<T> WithServiceAsync<T>(
         PostgreSqlSecurityWebApplicationFactory targetFactory,
