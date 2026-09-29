@@ -24,6 +24,11 @@ public sealed class FinanceHttpWebApplicationFactory : WebApplicationFactory<Pro
     internal static readonly Guid ConcurrencyConflict = Guid.Parse("f1000000-0000-0000-0000-000000000005");
     internal static readonly Guid Unavailable = Guid.Parse("f1000000-0000-0000-0000-000000000006");
 
+    /// <summary>An order whose 5000-cent COD collection is RECORDED and not yet reconciled.</summary>
+    internal static readonly Guid Recorded = Guid.Parse("f1000000-0000-0000-0000-000000000007");
+
+    internal static readonly Guid RecordedCodId = Guid.Parse("f1c00000-0000-0000-0000-000000000007");
+
     /// <summary>Store evidence an unavailable provider might carry; none of it may reach a response.</summary>
     internal const string InternalDetail =
         "Host=10.20.30.40;Password=fin001-secret relation finance.cod_transactions does not exist";
@@ -76,7 +81,16 @@ public sealed class FinanceHttpWebApplicationFactory : WebApplicationFactory<Pro
         public Task<OrderFinancialsResult> GetOrderFinancialsAsync(
             GetOrderFinancialsQuery query,
             CancellationToken cancellationToken) =>
-            Outcome(query.OrderId, () => OrderFinancialsResult.From("DELIVERING", UncollectedCodOrder(query.OrderId)));
+            Outcome(query.OrderId, () => query.OrderId == Recorded
+                ? OrderFinancialsResult.From(
+                    "DELIVERED",
+                    OrderUnitEconomics.Calculate(
+                        query.OrderId,
+                        new(12_000),
+                        [new(DeliveryModality.Own, new(4_500), 1)],
+                        new(new(5_000), CodStatus.Recorded, new(5_000))),
+                    new CodTransactionResult(RecordedCodId, query.OrderId, 5_000, "RECORDED", RecordedAt, null))
+                : OrderFinancialsResult.From("DELIVERING", UncollectedCodOrder(query.OrderId), null));
 
         public Task<RouteFinancialsResult> GetRouteFinancialsAsync(
             GetRouteFinancialsQuery query,

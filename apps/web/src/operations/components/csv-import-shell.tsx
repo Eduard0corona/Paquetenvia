@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import {
+  csvCodColumn,
   csvFileErrorLabels,
+  csvHeader,
   csvRowErrorLabels,
   csvRowOutcomeLabels,
   isCommittable,
   type CsvImportCommit,
   type CsvImportPreview,
 } from "../contracts/csv-import";
+import { formatMxnCentsWithCurrency } from "../contracts/money";
 import { operationsOrderHref } from "../routing/operations-routing";
 import type { CsvImportController, CsvImportState } from "../state/csv-import-controller";
 import { useCsvImport } from "../state/use-csv-import";
@@ -61,8 +64,13 @@ function UploadForm({
       <fieldset>
         <legend>Archivo</legend>
         <p>
-          Formato CSV-001 en UTF-8 con encabezado <code>quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel</code>;
+          Formato CSV-001 en UTF-8 con encabezado <code>{csvHeader}</code>;
           hasta 500 filas y 1 MiB. Cada fila usa una cotización vigente de esta organización.
+        </p>
+        <p>
+          Cobro contra entrega (opcional): agrega al final la columna <code>{csvCodColumn}</code> con el monto en
+          centavos enteros, sin punto, comas ni signos (por ejemplo <code>15050</code> para $150.50). Deja la celda
+          vacía si la orden no lleva cobro.
         </p>
         <label>Archivo CSV
           <input
@@ -110,13 +118,14 @@ function PreviewReport({
         <table className="opsTable">
           <caption>Resultado por fila (la línea 1 es el encabezado)</caption>
           <thead>
-            <tr><th scope="col">Línea</th><th scope="col">Cotización</th><th scope="col">Resultado</th></tr>
+            <tr><th scope="col">Línea</th><th scope="col">Cotización</th><th scope="col">Cobro contra entrega</th><th scope="col">Resultado</th></tr>
           </thead>
           <tbody>
             {preview.rows.map((row) => (
               <tr key={row.row_number}>
                 <td>{row.row_number}</td>
                 <td>{row.quote_id ?? "—"}</td>
+                <td>{codLabel(row.cod_expected_cents)}</td>
                 <td>
                   {row.valid
                     ? "Válida"
@@ -138,6 +147,12 @@ function PreviewReport({
       )}
     </>
   );
+}
+
+/** Server-reported integer cents only; the client never parses the COD cell. */
+function codLabel(cents: number | null): string {
+  if (cents === null) return "—";
+  return cents === 0 ? "Sin cobro" : formatMxnCentsWithCurrency(cents);
 }
 
 function CommitReport({

@@ -577,6 +577,18 @@ public sealed class PostgreSqlOrderCodGuardReader : IOrderCodGuardReader
     }
 }
 
+/// <summary>
+/// API-FIN-COD-VISIBILITY-2026-09-29: the read-only listOrders predicate for "COD pending reconciliation", an order
+/// whose COD collection is RECORDED and not yet RECONCILED. It only reads finance.cod_transactions under the same
+/// tenant transaction and RLS as the order list; it writes nothing and adds no cross-module flow.
+/// </summary>
+internal static class OrderCodPendingReconciliationPredicate
+{
+    internal const string Sql =
+        "EXISTS (SELECT 1 FROM finance.cod_transactions c " +
+        "WHERE c.order_id=orders.orders.id AND c.status='RECORDED' AND c.reconciled_at IS NULL)";
+}
+
 internal static class TransitionReaderCommand
 {
     internal static NpgsqlCommand Create(

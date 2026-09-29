@@ -10,6 +10,7 @@ export const capabilityMatrix = {
   createQuote: ["DISPATCHER", "PLATFORM_ADMIN"],
   getQuote: ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER"],
   createOrder: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listOrders: ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER"],
   previewOrderCsv: ["DISPATCHER", "PLATFORM_ADMIN"],
   commitOrderCsv: ["DISPATCHER", "PLATFORM_ADMIN"],
   createSettlement: ["FINANCE", "PLATFORM_ADMIN"],
@@ -21,9 +22,9 @@ export const capabilityMatrix = {
   markSettlementPaid: ["FINANCE", "PLATFORM_ADMIN"],
   voidSettlement: ["FINANCE", "PLATFORM_ADMIN"],
   exportSettlementCsv: ["FINANCE", "PLATFORM_ADMIN"],
-  // x-capability-matrix tracking_link_operations (TRK-002-ISSUE-ENDPOINT).
+  // x-capability-matrix tracking_link_operations (TRK-002-ISSUE-ENDPOINT,
+  // TRK-002-NO-REVOCATION: nobody revokes a tracking link, so there is no revoke row).
   issueTrackingLink: ["DISPATCHER", "PLATFORM_ADMIN"],
-  revokeTrackingLink: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 /**
@@ -45,6 +46,11 @@ export const financeOperationsMatrix = {
 export const screenOperationsMatrix = {
   openIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
   resolveIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // x-capability-matrix incident_operations (API-INC-LIST-PROOFS-2026-09-29): the
+  // incident desk reads admit exactly the resolveIncident roles.
+  listIncidents: ["DISPATCHER", "PLATFORM_ADMIN"],
+  getIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listOrderProofs: ["DISPATCHER", "PLATFORM_ADMIN"],
   recordCodCollection: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
@@ -62,9 +68,8 @@ export type CapabilityOperation =
 /**
  * Operations that need a satisfied MFA challenge for a given role. D7-SETTLEMENT-MFA:
  * approve and pay need MFA for every permitted role; SET-001: PLATFORM_ADMIN needs
- * MFA for every settlement operation; TRK-002-ISSUE-ENDPOINT: PLATFORM_ADMIN needs
- * MFA to issue or revoke a tracking link (AI-01 section 7 safer default, pending
- * owner confirmation). DISPATCHER never needs MFA. The client cannot see the MFA evidence, so
+ * MFA for every settlement operation; TRK-002-NO-REVOCATION: PLATFORM_ADMIN needs
+ * MFA to view the tracking link (owner: "Sí, con MFA"). DISPATCHER never needs MFA. The client cannot see the MFA evidence, so
  * this only drives an explanatory hint; the API answers `403 MFA_REQUIRED`.
  */
 const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperation[]>>> = {
@@ -74,6 +79,9 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     // PLATFORM_ADMIN keeps MFA wherever the operation already demanded it.
     "openIncident",
     "resolveIncident",
+    "listIncidents",
+    "getIncident",
+    "listOrderProofs",
     "recordCodCollection",
     "getOrderFinancials",
     "reconcileCod",
@@ -86,7 +94,6 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "voidSettlement",
     "exportSettlementCsv",
     "issueTrackingLink",
-    "revokeTrackingLink",
   ],
 };
 
@@ -104,6 +111,16 @@ export function requiresMfa(
 ): boolean {
   if (role === null) return false;
   return mfaOperations[role]?.includes(operation) ?? false;
+}
+
+/**
+ * API-FIN-COD-VISIBILITY-2026-09-29 (x-capability-matrix cod_pending_reconciliation_filter):
+ * listOrders honors cod_pending_reconciliation only for a role holding both listOrders
+ * and getOrderFinancials, so DISPATCHER and PLATFORM_ADMIN (with MFA); FINANCE and
+ * VIEWER never request the pending list.
+ */
+export function canListPendingCod(role: string | null): boolean {
+  return canPerform(role, "listOrders") && canPerform(role, "getOrderFinancials");
 }
 
 /** The role the signed-in person holds in the organization selected with X-Organization-Id. */

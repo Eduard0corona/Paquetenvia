@@ -73,7 +73,8 @@ public static class OrderEndpoints
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
             !IsValid(request) ||
-            !OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(request.Acceptance.AcceptedAt, clock.UtcNow))
+            !OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(request.Acceptance.AcceptedAt, clock.UtcNow) ||
+            !TryReadCodExpectedCents(request.CodExpectedCents, out var codExpectedCents))
         {
             return Conflict();
         }
@@ -102,7 +103,8 @@ public static class OrderEndpoints
                         request.Acceptance.PrivacyVersion,
                         request.Acceptance.AcceptedAt,
                         request.Acceptance.AcceptanceChannel),
-                    httpContext.TraceIdentifier),
+                    httpContext.TraceIdentifier,
+                    codExpectedCents),
                 cancellationToken);
             return Results.Created($"/api/v1/orders/{result.Id:D}", ToResponse(result));
         }
@@ -123,6 +125,7 @@ public static class OrderEndpoints
     private static async Task<IResult> ListAsync(
         string? status,
         Guid? owner_org_id,
+        string? cod_pending_reconciliation,
         string? cursor,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
@@ -139,6 +142,19 @@ public static class OrderEndpoints
             return denied;
         }
 
+        // API-FIN-COD-VISIBILITY-2026-09-29: the COD filter reveals financial state, so its mere presence also
+        // requires the getOrderFinancials capability, decided before any order is read.
+        if (cod_pending_reconciliation is not null &&
+            TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.GetOrderFinancials) is { } financeDenied)
+        {
+            return financeDenied;
+        }
+
+        if (!OrderListCodFilter.TryParse(cod_pending_reconciliation, out var codPendingReconciliation))
+        {
+            return Results.Ok(new OrderPageResponse([], null));
+        }
+
         try
         {
             var page = await service.ListAsync(
@@ -147,6 +163,7 @@ public static class OrderEndpoints
                 status,
                 owner_org_id,
                 cursor,
+                codPendingReconciliation,
                 cancellationToken);
             return Results.Ok(new OrderPageResponse(
                 page.Items.Select(ToResponse).ToArray(),
@@ -288,6 +305,24 @@ public static class OrderEndpoints
             request.Acceptance.AcceptedAt,
             request.Acceptance.AcceptanceChannel);
 
+    /// <summary>
+    /// D6-COD-EXPECTED: an absent (or JSON null) <c>cod_expected_cents</c> is zero. A present value must be a JSON
+    /// number whose literal is a plain non-negative integer that fits int64; <c>1.5</c>, <c>1e3</c>, <c>150.0</c>,
+    /// <c>-1</c> and a quoted <c>"150"</c> are the uniform 409, the same as every other invalid contract value,
+    /// because the literal is checked rather than whatever a lenient number binder would coerce it to.
+    /// </summary>
+    private static bool TryReadCodExpectedCents(JsonElement? value, out long cents)
+    {
+        cents = 0;
+        if (value is not { } element || element.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        return element.ValueKind == JsonValueKind.Number &&
+            OrderInputPolicy.TryParseCodExpectedCents(element.GetRawText(), out cents);
+    }
+
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
     {
         value = string.Empty;
@@ -365,10 +400,16 @@ public static class OrderEndpoints
         Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
 }
 
+/// <summary>
+/// AI-05 CreateOrderRequest. <c>cod_expected_cents</c> (D6-COD-EXPECTED) is the optional COD the dispatcher
+/// declares, in MXN integer cents; absent means zero. It is written to <c>orders.cod_expected_cents</c> and is read
+/// back only through the finance operations (FIN-001/SET-001), never through the Order response a VIEWER can read.
+/// </summary>
 public sealed record CreateOrderRequest(
     [property: JsonPropertyName("quote_id")] Guid QuoteId,
     [property: JsonPropertyName("payer_type")] string PayerType,
-    [property: JsonPropertyName("acceptance")] OrderAcceptanceRequest Acceptance);
+    [property: JsonPropertyName("acceptance")] OrderAcceptanceRequest Acceptance,
+    [property: JsonPropertyName("cod_expected_cents")] JsonElement? CodExpectedCents = null);
 
 public sealed record OrderAcceptanceRequest(
     [property: JsonPropertyName("terms_version")] string TermsVersion,
@@ -433,3 +474,27 @@ public sealed record OrderDetailResponse(
 public sealed record OrderPageResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<OrderResponse> Items,
     [property: JsonPropertyName("next_cursor")] string? NextCursor);
+
+/// <summary>
+/// API-FIN-COD-VISIBILITY-2026-09-29: <c>cod_pending_reconciliation</c> accepts exactly <c>true</c> or <c>false</c>;
+/// absent means no filter. Any other value is an unmatched filter, answered like an unknown status with an empty
+/// page, and only after the capability gate.
+/// </summary>
+public static class OrderListCodFilter
+{
+    public static bool TryParse(string? value, out bool codPendingReconciliation)
+    {
+        codPendingReconciliation = false;
+        switch (value)
+        {
+            case null:
+            case "false":
+                return true;
+            case "true":
+                codPendingReconciliation = true;
+                return true;
+            default:
+                return false;
+        }
+    }
+}

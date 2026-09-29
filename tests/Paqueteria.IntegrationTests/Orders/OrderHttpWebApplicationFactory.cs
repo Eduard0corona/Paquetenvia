@@ -23,6 +23,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
 
     internal int CreateCallCount => orderService.CreateCallCount;
     internal int TransitionCallCount => orderService.TransitionCallCount;
+    internal int ListCallCount => orderService.ListCallCount;
+    internal bool? LastListCodPendingReconciliation => orderService.LastListCodPendingReconciliation;
     internal CreateOrderCommand? LastCreateCommand => orderService.LastCreateCommand;
     internal TransitionOrderCommand? LastTransitionCommand => orderService.LastTransitionCommand;
 
@@ -123,11 +125,21 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         private readonly ConcurrentDictionary<Guid, byte> activeDriverAssignments = new();
         private int createCallCount;
         private int transitionCallCount;
+        private int listCallCount;
+        private int lastListCodPending = -1;
         private CreateOrderCommand? lastCreateCommand;
         private TransitionOrderCommand? lastTransitionCommand;
 
         internal int CreateCallCount => Volatile.Read(ref createCallCount);
         internal int TransitionCallCount => Volatile.Read(ref transitionCallCount);
+        internal int ListCallCount => Volatile.Read(ref listCallCount);
+
+        internal bool? LastListCodPendingReconciliation => Volatile.Read(ref lastListCodPending) switch
+        {
+            -1 => null,
+            1 => true,
+            _ => false,
+        };
         internal CreateOrderCommand? LastCreateCommand => Volatile.Read(ref lastCreateCommand);
         internal TransitionOrderCommand? LastTransitionCommand => Volatile.Read(ref lastTransitionCommand);
 
@@ -163,7 +175,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 command.OrganizationId, command.QuoteId, command.PayerType,
                 command.Acceptance.TermsVersion, command.Acceptance.PrivacyVersion,
                 command.Acceptance.AcceptedAt.ToUniversalTime().ToString("O"),
-                command.Acceptance.AcceptanceChannel);
+                command.Acceptance.AcceptanceChannel,
+                command.CodExpectedCents);
             lock (gate)
             {
                 if (responses.TryGetValue((command.OrganizationId, command.IdempotencyKey), out var stored))
@@ -302,9 +315,18 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             string? status,
             Guid? ownerOrganizationId,
             string? cursor,
+            bool codPendingReconciliation,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref listCallCount);
+            Volatile.Write(ref lastListCodPending, codPendingReconciliation ? 1 : 0);
+            if (codPendingReconciliation)
+            {
+                // The stub records no COD collection, so no order is pending reconciliation.
+                return Task.FromResult(new OrderPageResult([], null));
+            }
+
             if (ownerOrganizationId is { } owner && owner != organizationId)
             {
                 return Task.FromResult(new OrderPageResult([], null));

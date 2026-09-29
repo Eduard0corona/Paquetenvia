@@ -14,6 +14,7 @@ import {
   type AddressDraft,
   type PackageDraft,
   type Quote,
+  vatIncludedLabel,
 } from "../contracts/create-order";
 import { mayHandleExactCoordinates } from "../contracts/capabilities";
 import { formatMxnCentsWithCurrency } from "../contracts/money";
@@ -28,7 +29,7 @@ const payerLabels: Readonly<Record<string, string>> = {
   BUSINESS_ACCOUNT: "Cuenta empresarial",
 };
 const breakdownLabels: Readonly<Record<string, string>> = {
-  BASE_TARIFF: "Tarifa base",
+  BASE_TARIFF: `Tarifa base (${vatIncludedLabel})`,
 };
 
 export function CreateOrderShell({
@@ -70,8 +71,14 @@ export function CreateOrderShell({
         <section className="opsMessage" aria-labelledby="order-created">
           <h2 id="order-created">Orden {state.order.public_id}</h2>
           <dl className="opsMoneyList">
-            <MoneyRow label="Neto" cents={state.order.price_net.amount_cents} />
-            <MoneyRow label="Total" cents={state.order.total.amount_cents} />
+            <MoneyRow label="Neto sin IVA" cents={state.order.price_net.amount_cents} />
+            <MoneyRow label={`Total (${vatIncludedLabel})`} cents={state.order.total.amount_cents} />
+            {state.orderCodExpectedCents !== null && (
+              <div>
+                <dt>Cobro contra entrega declarado</dt>
+                <dd>{state.orderCodExpectedCents === 0 ? "Sin cobro" : formatMxnCentsWithCurrency(state.orderCodExpectedCents)}</dd>
+              </div>
+            )}
           </dl>
           <p>Servicio: {serviceTypeLabel(state.order.service_type)} · versión {state.order.version}</p>
           <div className="opsFormActions">
@@ -255,19 +262,19 @@ function QuoteSummary({
     <section className="opsMessage" aria-labelledby="quote-title">
       <h2 id="quote-title">Cotización</h2>
       <dl className="opsMoneyList">
-        <MoneyRow label="Neto" cents={quote.net.amount_cents} />
-        <MoneyRow label="Impuestos" cents={quote.tax.amount_cents} />
+        <MoneyRow label="Neto sin IVA" cents={quote.net.amount_cents} />
+        <MoneyRow label="IVA" cents={quote.tax.amount_cents} />
         {quote.breakdown.map((line, index) => (
           <div key={index}>
             <dt>{line.line_type === null ? "Concepto" : breakdownLabels[line.line_type] ?? line.line_type}</dt>
             <dd>{line.amount_cents === null ? "Sin monto" : formatMxnCentsWithCurrency(line.amount_cents)}</dd>
           </div>
         ))}
-        <MoneyRow label="Total" cents={quote.total.amount_cents} strong />
+        <MoneyRow label={`Total (${vatIncludedLabel})`} cents={quote.total.amount_cents} strong />
       </dl>
       <p>
         Regla aplicada: tarifa {quote.pricing_tier}, política {quote.pricing_policy_version},
-        {" "}{quote.rule_ids.length} regla(s). Mínimo de referencia {formatMxnCentsWithCurrency(quote.minimum_total_cents_snapshot)}.
+        {" "}{quote.rule_ids.length} regla(s). Mínimo de referencia {formatMxnCentsWithCurrency(quote.minimum_total_cents_snapshot)} ({vatIncludedLabel}).
       </p>
       <p>
         {serviceTypeLabel(quote.service_type)} · {quote.package_count} paquete(s) ·
@@ -288,6 +295,7 @@ function QuoteSummary({
             void controller.confirmOrder({
               payerType: String(data.get("payer_type") ?? ""),
               accepted: data.get("accepted") === "on",
+              codAmount: String(data.get("cod_amount") ?? ""),
             });
           }}
         >
@@ -299,6 +307,16 @@ function QuoteSummary({
                 {payerTypes.map((value) => <option key={value} value={value}>{payerLabels[value]}</option>)}
               </select>
             </label>
+            <label>Cobro contra entrega (MXN, opcional)
+              <input
+                name="cod_amount"
+                inputMode="decimal"
+                pattern="[0-9]+(\.[0-9]{1,2})?"
+                placeholder="Vacío si no hay cobro"
+                aria-describedby="cod-amount-help"
+              />
+            </label>
+            <p id="cod-amount-help">Monto que el repartidor cobrará al entregar, en pesos con hasta 2 decimales (por ejemplo 150.50).</p>
             {acceptanceVersions === null ? (
               <p className="opsWarning" role="alert">{acceptanceVersionsUnavailableMessage}</p>
             ) : (

@@ -37,7 +37,7 @@ export function previewResponse(overrides: Record<string, unknown> = {}): Record
     valid_rows: 1,
     invalid_rows: 0,
     file_errors: [],
-    rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] }],
+    rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 0 }],
     ...overrides,
   };
 }
@@ -48,7 +48,7 @@ export function invalidPreviewResponse(): Record<string, unknown> {
     valid_rows: 1,
     invalid_rows: 1,
     rows: [
-      { row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] },
+      { row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 15_050 },
       {
         row_number: 3,
         quote_id: null,
@@ -96,10 +96,43 @@ export function incidentResponse(overrides: Record<string, unknown> = {}): Recor
   };
 }
 
+export function proofResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: proofId,
+    proof_type: "DELIVERY_PHOTO",
+    sha256: "0a".repeat(32),
+    captured_at: "2026-09-28T15:55:00Z",
+    ...overrides,
+  };
+}
+
+/**
+ * getOrderFinancials. cod_record (API-FIN-COD-VISIBILITY-2026-09-29) follows the
+ * COD position unless an override names it: null without a status, otherwise the
+ * CodTransaction of that status and amount.
+ */
 export function financialsResponse(
   overrides: Record<string, unknown> = {},
   cod: Record<string, unknown> = {},
 ): Record<string, unknown> {
+  const position: Record<string, unknown> = {
+    expected_cents: 25_050,
+    status: null,
+    recorded: false,
+    reconciled: false,
+    satisfies_delivery_requirement: false,
+    satisfies_close_requirement: false,
+    ...cod,
+  };
+  const status = position.status;
+  const record =
+    status === null || status === undefined
+      ? null
+      : codTransactionResponse({
+          status,
+          amount_cents: typeof position.amount_cents === "number" ? position.amount_cents : 25_050,
+          ...(status === "RECONCILED" ? { reconciled_at: "2026-09-28T18:00:00Z" } : {}),
+        });
   return {
     order_id: orderId,
     order_status: "DELIVERING",
@@ -113,15 +146,8 @@ export function financialsResponse(
       { modality: "EXTERNAL", cost_cents: 0, assignment_count: 0 },
       { modality: "ALLY_CAPACITY", cost_cents: 0, assignment_count: 0 },
     ],
-    cod: {
-      expected_cents: 25_050,
-      status: null,
-      recorded: false,
-      reconciled: false,
-      satisfies_delivery_requirement: false,
-      satisfies_close_requirement: false,
-      ...cod,
-    },
+    cod: position,
+    cod_record: record,
     ...overrides,
   };
 }
@@ -135,6 +161,29 @@ export function codTransactionResponse(overrides: Record<string, unknown> = {}):
     recorded_at: "2026-09-28T17:00:00Z",
     reconciled_at: null,
     ...overrides,
+  };
+}
+
+/** One AI-05 Order as listOrders returns it, for the COD pending list. */
+export function pendingOrderResponse(id: string, publicId: string): Record<string, unknown> {
+  return {
+    id,
+    public_id: publicId,
+    owner_org_id: orgA,
+    operator_org_id: null,
+    status: "DELIVERED",
+    price_net: { currency: "MXN", amount_cents: 10_000 },
+    version: 3,
+    origin_location_id: syntheticUuid(0x601),
+    destination_location_id: syntheticUuid(0x602),
+    service_type: "SAME_DAY",
+    quote_id: quoteId,
+    city_id: syntheticUuid(0x701),
+    service_area_id: null,
+    pricing_tier: "OCCASIONAL",
+    total: { currency: "MXN", amount_cents: 10_000 },
+    claim_window_ends_at: null,
+    finalized_at: null,
   };
 }
 

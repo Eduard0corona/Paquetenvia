@@ -29,11 +29,16 @@ export type PricingTier = (typeof pricingTiers)[number];
 /** AI05-INPUT-LIMITS: CreateQuoteRequest packages minItems 1, maxItems 20. */
 export const maximumPackages = 20;
 /**
- * AI-07 create_order.low_price_guard: block confirmation at <= 52 MXN net unless the
- * route flag (consolidated_route, AI-02 low_price_guard) or an authorized override.
- * AI-05 exposes no override on createOrder, so only the route flag unblocks it here.
+ * AI-07 create_order.low_price_guard: block confirmation at <= 52 MXN total, IVA included
+ * (GATE-011-VAT-INCLUDED-2026-09-29: "52 con IVA incluido"), unless the route flag
+ * (consolidated_route, AI-02 low_price_guard) or an authorized override. The guard reads the
+ * VAT-included total the customer pays, never the pre-tax net. AI-05 exposes no override on
+ * createOrder, so only the route flag unblocks it here.
  */
-export const lowPriceGuardNetCents = 5_200;
+export const lowPriceGuardTotalCents = 5_200;
+
+/** GATE-011-VAT-INCLUDED-2026-09-29: every price is presented with IVA included. */
+export const vatIncludedLabel = "IVA incluido";
 
 export interface Money {
   readonly currency: "MXN";
@@ -103,6 +108,11 @@ export interface QuoteDraft {
 export interface AcceptanceDraft {
   readonly payerType: string;
   readonly accepted: boolean;
+  /**
+   * D6-COD-EXPECTED: optional cash-on-delivery amount typed in MXN (e.g. `150.50`);
+   * empty or absent means no COD. Converted to integer cents without floating point.
+   */
+  readonly codAmount?: string;
 }
 
 interface AddressBody {
@@ -141,6 +151,8 @@ export interface CreateOrderBody {
     accepted_at: string;
     acceptance_channel: AcceptanceChannel;
   };
+  /** D6-COD-EXPECTED: integer MXN cents, sent only when the order carries COD. */
+  cod_expected_cents?: number;
 }
 
 export type DraftResult<T> =
@@ -291,20 +303,36 @@ export function buildCreateOrderBody(
   if (!draft.accepted)
     errors.push("Confirma que el cliente aceptó términos y aviso de privacidad.");
   if (Number.isNaN(acceptedAt.getTime())) errors.push("La hora de aceptación no es válida.");
+  const codCents = codExpectedCents(draft.codAmount);
+  if (codCents === null) errors.push(invalidCodAmountMessage);
   if (errors.length > 0) return { ok: false, errors };
-  return {
-    ok: true,
-    body: {
-      quote_id: quoteId,
-      payer_type: draft.payerType as PayerType,
-      acceptance: {
-        terms_version: versions!.termsVersion,
-        privacy_version: versions!.privacyVersion,
-        accepted_at: acceptedAt.toISOString(),
-        acceptance_channel: operatorAcceptanceChannel,
-      },
+  const body: CreateOrderBody = {
+    quote_id: quoteId,
+    payer_type: draft.payerType as PayerType,
+    acceptance: {
+      terms_version: versions!.termsVersion,
+      privacy_version: versions!.privacyVersion,
+      accepted_at: acceptedAt.toISOString(),
+      acceptance_channel: operatorAcceptanceChannel,
     },
   };
+  // Zero is "no COD": the field is left out, which the server treats identically.
+  if (codCents! > 0) body.cod_expected_cents = codCents!;
+  return { ok: true, body };
+}
+
+export const invalidCodAmountMessage =
+  "El cobro contra entrega debe ser un monto en MXN con hasta 2 decimales, sin signos, comas ni símbolos.";
+
+/**
+ * D6-COD-EXPECTED: the typed COD in MXN as integer cents (0 when left empty), or
+ * `null` when the text is not a plain non-negative amount with at most two decimals.
+ * Uses the integer-only {@link parseMxnToCents}; no floating-point value is involved.
+ */
+export function codExpectedCents(text: string | undefined): number | null {
+  const trimmed = (text ?? "").trim();
+  if (trimmed === "") return 0;
+  return parseMxnToCents(trimmed);
 }
 
 export type ConfirmationBlocker = "inactive" | "expired" | "low_price";
@@ -317,7 +345,7 @@ export function evaluateConfirmation(
   const blockers: ConfirmationBlocker[] = [];
   if (quote.status !== "ACTIVE") blockers.push("inactive");
   if (Date.parse(quote.expires_at) <= now.getTime()) blockers.push("expired");
-  if (quote.net.amount_cents <= lowPriceGuardNetCents && !quote.consolidated_route)
+  if (quote.total.amount_cents <= lowPriceGuardTotalCents && !quote.consolidated_route)
     blockers.push("low_price");
   return blockers;
 }
@@ -326,7 +354,7 @@ export const confirmationBlockerLabels: Readonly<Record<ConfirmationBlocker, str
   inactive: "La cotización ya no está activa; cotiza de nuevo.",
   expired: "La cotización expiró; cotiza de nuevo.",
   low_price:
-    "Precio neto de 52 MXN o menos: solo se confirma con ruta consolidada.",
+    "Total de 52 MXN o menos (IVA incluido): solo se confirma con ruta consolidada.",
 };
 
 // ---------------------------------------------------------------------------

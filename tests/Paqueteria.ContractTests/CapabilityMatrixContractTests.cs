@@ -135,25 +135,28 @@ public sealed class CapabilityMatrixContractTests
     }
 
     /// <summary>
-    /// TRK-002-ISSUE-ENDPOINT: D5 predates the tracking link operations, so AI-05 publishes their roles in their own
-    /// section, names the owner decision that scoped them and states the roles are the AI-01 section 7 safer default
-    /// pending owner confirmation. They mint or revoke a public bearer credential, so the server grants exactly the
-    /// roles of assignDriver, createRoute and createExternalOffer: DISPATCHER without MFA and PLATFORM_ADMIN with MFA.
+    /// TRK-002-ISSUE-ENDPOINT: D5 predates the tracking link operation, so AI-05 publishes its roles in their own
+    /// section and names the owner decisions; TRK-002-NO-REVOCATION confirmed the roles ("Sí, con MFA") and removed
+    /// revocation. It hands out a public bearer credential, so the server grants exactly the roles of assignDriver,
+    /// createRoute and createExternalOffer: DISPATCHER without MFA and PLATFORM_ADMIN with MFA.
     /// </summary>
     [Fact]
     public void Tracking_link_operations_take_DISPATCHER_and_PLATFORM_ADMIN_with_MFA()
     {
         var decision = Matrix.Scalar("tracking_link_operations_decision");
         Assert.StartsWith("TRK-002-ISSUE-ENDPOINT", decision, StringComparison.Ordinal);
-        Assert.Contains("pending owner confirmation", decision, StringComparison.Ordinal);
-        Assert.Contains("safer default per AI-01 section 7", decision, StringComparison.Ordinal);
+        Assert.Contains("TRK-002-NO-REVOCATION", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí, con MFA\"", decision, StringComparison.Ordinal);
+        Assert.DoesNotContain("pending owner confirmation", decision, StringComparison.Ordinal);
         Assert.Contains("DISPATCHER members without MFA", decision, StringComparison.Ordinal);
         Assert.Contains("PLATFORM_ADMIN members with a satisfied MFA challenge", decision, StringComparison.Ordinal);
         var section = Matrix.Mapping("tracking_link_operations");
-        Assert.Equal(
-            ["issueTrackingLink", "revokeTrackingLink"],
-            OperationIds(section).Order(StringComparer.Ordinal));
-        foreach (var capability in new[] { TenantCapabilities.IssueTrackingLink, TenantCapabilities.RevokeTrackingLink })
+        Assert.Equal(["issueTrackingLink"], OperationIds(section).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(
+            typeof(TenantCapabilities).GetFields(),
+            field => field.Name.Contains("Revoke", StringComparison.Ordinal) &&
+                field.Name.Contains("TrackingLink", StringComparison.Ordinal));
+        foreach (var capability in new[] { TenantCapabilities.IssueTrackingLink })
         {
             foreach (var reference in new[]
                      {
@@ -170,6 +173,84 @@ public sealed class CapabilityMatrixContractTests
                 [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true)],
                 capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
         }
+    }
+
+    /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29: the listOrders COD pending filter is honored only for the roles that hold
+    /// both listOrders and getOrderFinancials; FINANCE gains no listOrders access through it.
+    /// </summary>
+    [Fact]
+    public void Cod_pending_filter_takes_the_intersection_of_listOrders_and_getOrderFinancials()
+    {
+        var decision = Matrix.Scalar("cod_pending_reconciliation_filter");
+        Assert.StartsWith("API-FIN-COD-VISIBILITY-2026-09-29", decision, StringComparison.Ordinal);
+        Assert.Contains("both listOrders and getOrderFinancials", decision, StringComparison.Ordinal);
+        Assert.Contains("FINANCE keeps no access to listOrders", decision, StringComparison.Ordinal);
+
+        var published = Published();
+        Assert.DoesNotContain("FINANCE", published["listOrders"]);
+        var admitted = TenantCapabilities.ListOrders.Grants.Select(grant => grant.Role)
+            .Intersect(TenantCapabilities.GetOrderFinancials.Grants.Select(grant => grant.Role))
+            .ToArray();
+        Assert.Equal([OrganizationRole.Dispatcher, OrganizationRole.PlatformAdmin], admitted);
+        Assert.Contains(
+            TenantCapabilities.GetOrderFinancials.Grants,
+            grant => grant.Role == OrganizationRole.PlatformAdmin && grant.RequiresMfa);
+
+        var listOrders = Contract.Mapping("paths").Mapping("/orders").Mapping("get");
+        var parameter = listOrders.Sequence("parameters").Children.Cast<YamlMappingNode>()
+            .Single(node => node.Children.ContainsKey(new YamlScalarNode("name")) &&
+                node.Scalar("name") == "cod_pending_reconciliation");
+        Assert.Equal("query", parameter.Scalar("in"));
+        Assert.Equal("boolean", parameter.Mapping("schema").Scalar("type"));
+        Assert.Contains("getOrderFinancials", parameter.Scalar("description"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// API-INC-LIST-PROOFS-2026-09-29: AI-05 publishes who may open an incident exactly as the server already
+    /// enforces it — the capability catalog and the SQL authorization of the incident service agree role for role —
+    /// and the three incident desk reads admit exactly the resolveIncident grants, MFA included.
+    /// </summary>
+    [Fact]
+    public void Incident_operations_publish_the_enforced_open_rule_and_reads_mirror_resolution()
+    {
+        var decision = Matrix.Scalar("incident_operations_decision");
+        Assert.StartsWith("API-INC-LIST-PROOFS-2026-09-29", decision, StringComparison.Ordinal);
+        Assert.Contains("rule the server already enforces", decision, StringComparison.Ordinal);
+        Assert.Contains("ACCEPTED or ACTIVE assignment", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["getIncident", "listIncidents", "listOrderProofs", "openIncident", "resolveIncident"],
+            OperationIds(Matrix.Mapping("incident_operations")).Order(StringComparer.Ordinal));
+
+        Assert.Equal(
+            [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true), (OrganizationRole.Driver, false)],
+            TenantCapabilities.OpenIncident.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        foreach (var read in new[]
+                 {
+                     TenantCapabilities.ListIncidents, TenantCapabilities.GetIncident, TenantCapabilities.ListOrderProofs,
+                 })
+        {
+            Assert.Equal(
+                TenantCapabilities.ResolveIncident.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                read.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        }
+
+        // The SQL the incident service authorizes an opening with admits exactly these roles: a DISPATCHER, a
+        // PLATFORM_ADMIN only with MFA, and a DRIVER only through an ACCEPTED or ACTIVE assignment of the order.
+        var sql = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root, "src", "Modules", "Incidents", "Incidents.Infrastructure", "Incidents",
+            "IncidentsSql.cs"));
+        var start = sql.IndexOf("ReadAuthorizedOrderAsync(", StringComparison.Ordinal);
+        var end = sql.IndexOf("AS authorized", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        var authorization = sql[start..end];
+        Assert.Equal(
+            ["DISPATCHER", "DRIVER", "PLATFORM_ADMIN"],
+            System.Text.RegularExpressions.Regex.Matches(authorization, "m\\.role='([A-Z_]+)'")
+                .Select(match => match.Groups[1].Value)
+                .Order(StringComparer.Ordinal));
+        Assert.Contains("@mfa\n                  AND EXISTS", authorization.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        Assert.Contains("a.status IN ('ACCEPTED','ACTIVE')", authorization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -210,7 +291,7 @@ public sealed class CapabilityMatrixContractTests
         foreach (var section in new[]
                  {
                      "operations", "finance_operations", "platform_operations", "membership_operations",
-                     "tracking_link_operations",
+                     "tracking_link_operations", "incident_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

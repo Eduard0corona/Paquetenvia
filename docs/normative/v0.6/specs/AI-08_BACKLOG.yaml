@@ -1513,7 +1513,7 @@ items:
   - controlled load of cities, service areas, operating zones, tariffs and driver profiles
   acceptance_criteria:
   - master data loads are idempotent, audited and tenant-scoped
-  - real zones and tariffs require GATE-010 and GATE-011 resolution or explicit owner scoping
+  - real zones require GATE-010 resolution or explicit owner scoping; tariffs follow GATE-011-VAT-INCLUDED-2026-09-29
   required_tests:
   - idempotent reload
   - cross-tenant isolation
@@ -1532,12 +1532,14 @@ items:
   - delivery of the link through an approved channel
   acceptance_criteria:
   - the plaintext token is never persisted or logged (TRK-002-AUTO-LINK - it is re-derived for authenticated reads)
-  - issuance and revocation are audited
+  - issuance is audited
+  - TRK-002-NO-REVOCATION - nobody revokes a link; there is no revocation operation and a link lives until 24 hours after the order's final public status
   - sending links to customers requires GATE-004 and GATE-007
   - TRK-002-AUTO-LINK - every order gets its link when it is created; get-or-create returns the same link and never rotates
   - TRK-002-AUTO-LINK - a link lives with the order and 24 hours after its first final public status; finished orders get no new link
   required_tests:
   - link issued once per generation, with the order, and returned unchanged by get-or-create
-  - revoked token returns the uniform 404 and the next generation differs
+  - the revocation route does not exist and a link keeps resolving until its lifecycle bound
+  - a retired (replaced) token returns the uniform 404 and the next generation differs
   - a finished order resolves for 24 hours after its final event, then the uniform 404
   approval_gate: GATE-004

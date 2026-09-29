@@ -125,7 +125,16 @@ public static class OrderFinancialsEndpoints
         result.MarginCents,
         result.MarginBasisPoints,
         result.CostByModality.Select(ToResponse).ToArray(),
-        ToResponse(result.Cod));
+        ToResponse(result.Cod),
+        result.CodRecord is { } record
+            ? new CodTransactionResponse(
+                record.Id,
+                record.OrderId,
+                record.AmountCents,
+                record.Status,
+                record.RecordedAt,
+                record.ReconciledAt)
+            : null);
 
     private static RouteFinancialsResponse ToResponse(RouteFinancialsResult result) => new(
         result.RouteId,
@@ -194,7 +203,9 @@ public sealed record OrderFinancialsResponse(
     [property: JsonPropertyName("margin_cents")] long MarginCents,
     [property: JsonPropertyName("margin_basis_points")] long? MarginBasisPoints,
     [property: JsonPropertyName("cost_by_modality")] IReadOnlyList<ModalityCostResponse> CostByModality,
-    [property: JsonPropertyName("cod")] CodPositionResponse Cod);
+    [property: JsonPropertyName("cod")] CodPositionResponse Cod,
+    [property: JsonPropertyName("cod_record"), JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    CodTransactionResponse? CodRecord);
 
 public sealed record RouteOrderFinancialsResponse(
     [property: JsonPropertyName("order_id")] Guid OrderId,

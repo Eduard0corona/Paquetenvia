@@ -161,6 +161,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         string? status,
         Guid? ownerOrganizationId,
         string? cursor,
+        bool codPendingReconciliation,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty ||
@@ -183,6 +184,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             (dbContext, token) => ListWithinTransactionAsync(
                 dbContext,
                 status,
+                codPendingReconciliation,
                 hasCursor,
                 cursorCreatedAt,
                 cursorId,
@@ -224,6 +226,14 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                     "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
                     CultureInfo.InvariantCulture));
             writer.WriteString("acceptance_channel", command.Acceptance.AcceptanceChannel);
+            // D6-COD-EXPECTED: the declared COD is part of the request, so replaying a key with another amount is
+            // IDEMPOTENCY_CONFLICT. Zero (no COD) is omitted, which keeps every pre-COD fingerprint byte-identical
+            // and makes an absent field and an explicit zero the same request, as they are the same order.
+            if (command.CodExpectedCents != 0)
+            {
+                writer.WriteNumber("cod_expected_cents", command.CodExpectedCents);
+            }
+
             writer.WriteEndObject();
         }
 
@@ -315,7 +325,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             quote.PricingPolicyVersion,
             quote.PackageSnapshot,
             quote.FinancialOverride,
-            now);
+            now,
+            command.CodExpectedCents);
 
         await InsertOrderAsync(connection, transaction, order, cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.OrderInserted, cancellationToken);
@@ -367,6 +378,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             payer_type = order.PayerType.ToContractValue(),
             pricing_tier = order.PricingTier,
             total_cents = order.TotalCents,
+            cod_expected_cents = order.CodExpectedCents,
             request_id = command.RequestId,
         }, JsonOptions);
         await auditWriter.WriteAsync(
@@ -418,6 +430,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     private async Task<OrderPageResult> ListWithinTransactionAsync(
         OrdersDbContext dbContext,
         string? status,
+        bool codPendingReconciliation,
         bool hasCursor,
         DateTimeOffset cursorCreatedAt,
         Guid cursorId,
@@ -428,17 +441,19 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         await using var command = CreateCommand(
             connection,
             transaction,
-            """
+            $"""
             SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
                    origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
                    pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at
             FROM orders.orders
             WHERE (@status IS NULL OR status=@status)
+              AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
               AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
             ORDER BY created_at DESC,id DESC
             LIMIT @take
             """);
         command.Parameters.Add(P("status", NpgsqlDbType.Text, status));
+        command.Parameters.Add(P("cod_pending", NpgsqlDbType.Boolean, codPendingReconciliation));
         command.Parameters.Add(P("has_cursor", NpgsqlDbType.Boolean, hasCursor));
         command.Parameters.Add(P("cursor_created_at", NpgsqlDbType.TimestampTz, cursorCreatedAt));
         command.Parameters.Add(P("cursor_id", NpgsqlDbType.Uuid, cursorId));
@@ -518,6 +533,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             command.QuoteId == Guid.Empty ||
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             !OrderInputPolicy.TryParsePayerType(command.PayerType, out _) ||
+            !OrderInputPolicy.IsCodExpectedCents(command.CodExpectedCents) ||
             command.Acceptance is null ||
             !OrderAcceptanceInputPolicy.IsValid(
                 command.Acceptance.TermsVersion,
@@ -764,7 +780,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
               claim_window_ends_at,finalized_at,archived_at,created_at,updated_at)
             VALUES (
               @id,@public_id,@quote_id,@owner,NULL,@client,@city,@area,@origin,@destination,@service,@tier,@consolidated,
-              @payer,'DRAFT',@subtotal,@discount,@tax,@total,@minimum,@currency,@policy,@packages,@override,0,1,
+              @payer,'DRAFT',@subtotal,@discount,@tax,@total,@minimum,@currency,@policy,@packages,@override,@cod,1,
               NULL,NULL,NULL,@created,@updated)
             """);
         AddOrderParameters(command, order);
@@ -986,6 +1002,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         command.Parameters.Add(P("policy", NpgsqlDbType.Text, order.PricingPolicyVersion));
         command.Parameters.Add(P("packages", NpgsqlDbType.Jsonb, order.PackageSnapshot));
         command.Parameters.Add(P("override", NpgsqlDbType.Jsonb, order.FinancialOverride));
+        command.Parameters.Add(P("cod", NpgsqlDbType.Bigint, order.CodExpectedCents));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, order.CreatedAt));
         command.Parameters.Add(P("updated", NpgsqlDbType.TimestampTz, order.UpdatedAt));
     }

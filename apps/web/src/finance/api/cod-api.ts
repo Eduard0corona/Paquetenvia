@@ -9,14 +9,21 @@ import {
   isValidCodReference,
   parseCodTransaction,
   parseOrderFinancials,
+  parsePendingCodPage,
   type CodTransaction,
   type OrderFinancials,
+  type PendingCodPage,
   type RecordCodBody,
 } from "../contracts/cod";
 
-/** AI-05 getOrderFinancials, recordCodCollection and reconcileCod (FIN-001). */
+/**
+ * AI-05 getOrderFinancials, recordCodCollection and reconcileCod (FIN-001), and
+ * listOrders filtered by cod_pending_reconciliation (API-FIN-COD-VISIBILITY-2026-09-29).
+ */
 export interface CodApi {
   financials(orderId: string, signal?: AbortSignal): Promise<OrderFinancials>;
+  /** Orders whose COD collection is RECORDED and not yet RECONCILED, newest first. */
+  pendingReconciliation(cursor: string | null, signal?: AbortSignal): Promise<PendingCodPage>;
   record(orderId: string, body: RecordCodBody, idempotencyKey: string, signal?: AbortSignal): Promise<CodTransaction>;
   reconcile(codId: string, idempotencyKey: string, signal?: AbortSignal): Promise<CodTransaction>;
 }
@@ -32,6 +39,12 @@ export function createCodApi(baseUrl: string, session: OperationsSession): CodAp
         signal,
       });
       return (await readJson(response, parseOrderFinancials)) as OrderFinancials;
+    },
+    async pendingReconciliation(cursor, signal) {
+      const search = new URLSearchParams({ cod_pending_reconciliation: "true" });
+      if (cursor !== null) search.set("cursor", cursor);
+      const response = await send({ method: "GET", path: "/api/v1/orders", search, signal });
+      return (await readJson(response, parsePendingCodPage)) as PendingCodPage;
     },
     async record(orderId, body, idempotencyKey, signal) {
       assertUuid(orderId);

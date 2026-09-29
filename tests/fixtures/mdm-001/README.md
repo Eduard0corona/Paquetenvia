@@ -12,7 +12,9 @@ Two **synthetic** examples of the reviewed file the MDM-001 operator loader read
 
 - `classification` is `SYNTHETIC`, and every name starts with `Synthetic`.
 - The polygons are arbitrary squares; they are not the pilot's service zones (GATE-010 is open).
-- The amounts are placeholder cents; they are not the pilot's tariffs (GATE-010 and GATE-011 are open).
+- The amounts are placeholder cents; they are not the pilot's tariffs (GATE-010 is open).
+- Every tariff rule is `VAT_INCLUDED`: the amount is the total with IVA included, and the loader creates no other
+  tax mode (GATE-011-VAT-INCLUDED-2026-09-29).
 - Every tariff rule carries `policy_version: synthetic-v1`, stored with the rule (PRC-POLICY-VERSION-PER-ORG).
 - `driver_profiles` is empty: real driver profiles are personal data and wait on GATE-007. The contract
   tests add synthetic driver profiles in memory for users they create.

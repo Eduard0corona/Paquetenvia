@@ -251,7 +251,11 @@ screen_contracts:
     - recargos
     - total
     - rule explanation
-    low_price_guard: block confirmation at <=52 MXN net unless route flag or authorized override
+    - totals labeled "IVA incluido" (GATE-011-VAT-INCLUDED-2026-09-29)
+    low_price_guard: block confirmation at <=52 MXN total, IVA included, unless route flag or authorized override
+      (GATE-011-VAT-INCLUDED-2026-09-29; compares the total the customer pays, never the pre-tax net)
+    cod_expected: D6-COD-EXPECTED - optional COD amount typed in MXN with at most two decimals, converted to integer
+      cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -363,6 +367,7 @@ screen_contracts:
     - a commit 422 replaces the preview with the returned per-row report and creates nothing
     - a commit response whose content_digest differs from the previewed one fails closed
     - per-row outcomes show CREATED with public_id or FAILED with error_code
+    - each previewed row shows the server-reported cod_expected_cents (D6-COD-EXPECTED) as MXN, or no COD for 0
     idempotency:
     - Idempotency-Key names the batch and is reused for a retry of the same content_digest after a network or 5xx failure
     - a new file or a definitive server answer drops the key
@@ -374,13 +379,18 @@ screen_contracts:
     release: MVP-1
     route: /ops/incidents
     decision: UI-001-SCREENS-CSV-INC-COD
+    decision_amendment: API-INC-LIST-PROOFS-2026-09-29
     authority: REST API + PostgreSQL
     sources:
       open: POST /orders/{orderId}/incidents (openIncident)
       resolve: POST /incidents/{incidentId}/resolution (resolveIncident)
+      list: GET /incidents (listIncidents)
+      read: GET /incidents/{incidentId} (getIncident)
+      evidence: GET /orders/{orderId}/proofs (listOrderProofs)
     roles:
       open: [DISPATCHER, PLATFORM_ADMIN with MFA]
       resolve: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      list_and_read: [DISPATCHER, PLATFORM_ADMIN with MFA]
       note: DRIVER opens incidents from /driver/stops/:id and never resolves; this screen does not admit DRIVER
     states:
     - no_session
@@ -396,19 +406,22 @@ screen_contracts:
     - description has 1 to 2000 characters
     - occurred_at is captured in America/Mazatlan and sent as UTC; later than now plus 5 minutes or older than 72 hours
       is refused client-side, and the server remains authoritative for its configured window
-    - evidence_proof_ids are 1 to 10 unique canonical UUIDs
+    - evidence_proof_ids are 1 to 10 unique canonical UUIDs, picked from the listOrderProofs page of the order
+    - the incident to resolve is picked from the pending incidents listIncidents returned
     - resolution outcome is RESOLVED or REJECTED and reason follows the AI-05 ResolveIncidentRequest pattern, sent
       exactly as typed
     display:
-    - only the Incident returned by openIncident or resolveIncident in the current tenant session is shown
+    - the incidents listIncidents returns for the active organization, newest first, filterable by status and order,
+      with further pages loaded through next_cursor; an Incident returned by openIncident or resolveIncident replaces
+      the listed one with the same id
     - status, severity, reason_code, next_action, custody_acquired, occurred_at and sla_due_at
+    - proofs show proof_type and captured_at only; no image, download or signed URL is requested or rendered
     - description and resolution reason are never echoed back after submission
     idempotency:
     - each open and each resolution reuses its Idempotency-Key for a retry of the same payload after a network or 5xx
       failure
     not_supported:
-    - listing incidents or reading one incident; AI-05 exposes no incident read operation
-    - discovering proof ids for evidence; AI-05 exposes no proof read operation
+    - viewing or downloading proof images; listOrderProofs returns metadata only
   cod_control:
     release: MVP-1
     route: /finance/cod
@@ -418,11 +431,14 @@ screen_contracts:
       read: GET /orders/{orderId}/financials (getOrderFinancials)
       record: POST /orders/{orderId}/cod-records (recordCodCollection)
       reconcile: POST /cod-records/{codId}/reconcile (reconcileCod)
+      pending_list: GET /orders?cod_pending_reconciliation=true (listOrders, API-FIN-COD-VISIBILITY-2026-09-29)
     roles:
       read: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
       record: [DISPATCHER, PLATFORM_ADMIN with MFA]
       reconcile: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
-      note: FINANCE never records a COD collection; DRIVER records from its own assignment, not from this screen
+      pending_list: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      note: FINANCE never records a COD collection; DRIVER records from its own assignment, not from this screen;
+        FINANCE holds no listOrders capability, so it opens an order by id and reconciles from its financials
     states:
     - no_session
     - access_unavailable
@@ -438,19 +454,21 @@ screen_contracts:
     - record is offered only when the COD position expects a positive amount and no collection is recorded
     - the recorded amount must equal expected_cents exactly; reference has 1 to 200 characters without surrounding
       whitespace
-    - reconcile is offered for a RECORDED collection whose id the screen received from recordCodCollection, or for a
-      COD record id typed by the operator
+    - reconcile is offered for a RECORDED collection whose id the screen received from recordCodCollection or from
+      getOrderFinancials cod_record (API-FIN-COD-VISIBILITY-2026-09-29); the operator never types a COD record id
+    - reconcile from the pending list first reads getOrderFinancials for that order and reconciles only the RECORDED
+      cod_record it returns
     recovery:
     - load and refresh fetch getOrderFinancials
-    - every successful or conflicting write refetches getOrderFinancials; optimistic UI is never authoritative
+    - every successful or conflicting write refetches getOrderFinancials and the pending list; optimistic UI is never
+      authoritative
     idempotency:
     - record and reconcile reuse their Idempotency-Key for a retry of the same payload after a network or 5xx failure
     privacy:
     - no browser persistence; a tenant switch clears the loaded order, COD records and keys
     - the COD reference is never echoed back after submission nor logged
     not_supported:
-    - reading or listing COD records; AI-05 CodPosition carries no COD record id
-    - listing orders with pending COD; AI-05 listOrders has no COD filter
+    - listing COD records across orders other than through the listOrders pending filter
 prototype_file: prototype/index.html
 meta:
   version: '0.6'

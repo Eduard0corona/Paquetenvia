@@ -29,7 +29,8 @@ public sealed class Order
         string pricingPolicyVersion,
         string packageSnapshot,
         string? financialOverride,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        long codExpectedCents)
     {
         if (id == Guid.Empty || quoteId == Guid.Empty || ownerOrganizationId == Guid.Empty ||
             cityId == Guid.Empty || originLocationId == Guid.Empty || destinationLocationId == Guid.Empty ||
@@ -37,7 +38,7 @@ public sealed class Order
             string.IsNullOrWhiteSpace(pricingTier) || string.IsNullOrWhiteSpace(pricingPolicyVersion) ||
             string.IsNullOrWhiteSpace(packageSnapshot) || currency != "MXN" ||
             subtotalCents < 0 || discountCents < 0 || taxCents < 0 || totalCents < 0 ||
-            minimumTotalCentsSnapshot < 0 ||
+            minimumTotalCentsSnapshot < 0 || codExpectedCents < 0 ||
             totalCents != checked(subtotalCents - discountCents + taxCents))
         {
             throw new ArgumentException("The order snapshot is invalid.");
@@ -67,7 +68,7 @@ public sealed class Order
         PricingPolicyVersion = pricingPolicyVersion;
         PackageSnapshot = packageSnapshot;
         FinancialOverride = financialOverride;
-        CodExpectedCents = 0;
+        CodExpectedCents = codExpectedCents;
         Version = 1;
         ClaimWindowEndsAt = null;
         FinalizedAt = null;
@@ -108,6 +109,10 @@ public sealed class Order
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
+    /// <summary>
+    /// Creates a DRAFT order from its quote snapshot. <paramref name="codExpectedCents"/> is the dispatcher-declared
+    /// COD expectation in MXN cents (D6-COD-EXPECTED); zero means the order carries no COD.
+    /// </summary>
     public static Order Create(
         Guid id,
         string publicId,
@@ -131,7 +136,8 @@ public sealed class Order
         string pricingPolicyVersion,
         string packageSnapshot,
         string? financialOverride,
-        DateTimeOffset createdAt) =>
+        DateTimeOffset createdAt,
+        long codExpectedCents = 0) =>
         new(
             id,
             publicId,
@@ -155,5 +161,6 @@ public sealed class Order
             pricingPolicyVersion,
             packageSnapshot,
             financialOverride,
-            createdAt);
+            createdAt,
+            codExpectedCents);
 }

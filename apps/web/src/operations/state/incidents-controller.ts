@@ -5,9 +5,13 @@ import {
   buildOpenIncidentBody,
   buildResolveIncidentBody,
   incidentConflictMessages,
+  incidentStatuses,
   type Incident,
+  type IncidentStatus,
   type OpenIncidentDraft,
+  type Proof,
 } from "../contracts/incident";
+import { isCanonicalUuid } from "../contracts/strict-json";
 import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
 import { PendingSubmissions } from "./pending-submissions";
@@ -20,9 +24,22 @@ export interface IncidentsState {
   readonly role: string | null;
   readonly canOpen: boolean;
   readonly canResolve: boolean;
+  /** listIncidents (API-INC-LIST-PROOFS-2026-09-29). */
+  readonly canList: boolean;
+  /** listOrderProofs (API-INC-LIST-PROOFS-2026-09-29). */
+  readonly canListProofs: boolean;
   readonly mfaHint: string | null;
-  /** Incidents the API returned in this tenant session, newest first. */
+  /** Incidents the API returned in this tenant session (listed, opened or resolved), newest first. */
   readonly incidents: readonly Incident[];
+  /** The listIncidents status filter in effect; null lists every status. */
+  readonly statusFilter: IncidentStatus | null;
+  /** next_cursor of the last listed page; null when every page was loaded. */
+  readonly nextCursor: string | null;
+  readonly listing: boolean;
+  /** The order whose proofs are shown for evidence selection. */
+  readonly proofsOrderId: string | null;
+  readonly proofs: readonly Proof[];
+  readonly proofsCursor: string | null;
   readonly busy: boolean;
   readonly errors: readonly string[];
   readonly message: string | null;
@@ -43,8 +60,16 @@ const initialState: IncidentsState = {
   role: null,
   canOpen: false,
   canResolve: false,
+  canList: false,
+  canListProofs: false,
   mfaHint: null,
   incidents: [],
+  statusFilter: null,
+  nextCursor: null,
+  listing: false,
+  proofsOrderId: null,
+  proofs: [],
+  proofsCursor: null,
   busy: false,
   errors: [],
   message: null,
@@ -53,9 +78,10 @@ const initialState: IncidentsState = {
 };
 
 /**
- * INC-001 open and resolve. Every incident shown is exactly what the API returned;
- * nothing is inferred locally. A tenant switch drops the incidents, typed text and
- * pending Idempotency-Keys.
+ * INC-001 open and resolve, with the incidents and order proofs listed by the API
+ * (API-INC-LIST-PROOFS-2026-09-29) so ids are picked, not typed. Every incident and
+ * proof shown is exactly what the API returned; nothing is inferred locally. A tenant
+ * switch drops the incidents, proofs, typed text and pending Idempotency-Keys.
  */
 export class IncidentsController extends ExternalStore<IncidentsState> {
   private api: IncidentsApi | null = null;
@@ -96,16 +122,77 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
     if (generation !== this.generation) return;
     const canOpen = canPerform(role, "openIncident");
     const canResolve = canPerform(role, "resolveIncident");
+    const canList = canPerform(role, "listIncidents");
     this.update({
       phase: canOpen || canResolve ? "ready" : "access_unavailable",
       role,
       canOpen,
       canResolve,
+      canList,
+      canListProofs: canPerform(role, "listOrderProofs"),
       mfaHint:
         requiresMfa(role, "openIncident") || requiresMfa(role, "resolveIncident")
           ? "Abrir y resolver incidencias con tu rol requiere verificar tu identidad (MFA)."
           : null,
     });
+    if (canList) await this.refresh(null);
+  }
+
+  /** Loads the first listIncidents page for `status` (null: every status), replacing the list. */
+  public async refresh(status: IncidentStatus | null = this.getSnapshot().statusFilter): Promise<void> {
+    if (!this.getSnapshot().canList) return;
+    if (status !== null && !(incidentStatuses as readonly string[]).includes(status)) return;
+    await this.read(
+      () => this.api!.list(status === null ? {} : { status }, null, this.controller?.signal),
+      (page) => ({ incidents: page.items, nextCursor: page.next_cursor, statusFilter: status }),
+      { statusFilter: status },
+    );
+  }
+
+  /** Appends the next listIncidents page, keeping any incident already shown. */
+  public async loadMore(): Promise<void> {
+    const { canList, nextCursor, statusFilter } = this.getSnapshot();
+    if (!canList || nextCursor === null) return;
+    await this.read(
+      () => this.api!.list(statusFilter === null ? {} : { status: statusFilter }, nextCursor, this.controller?.signal),
+      (page) => {
+        const known = new Set(this.getSnapshot().incidents.map((incident) => incident.id));
+        return {
+          incidents: [...this.getSnapshot().incidents, ...page.items.filter((item) => !known.has(item.id))],
+          nextCursor: page.next_cursor,
+        };
+      },
+    );
+  }
+
+  /** Lists the proofs of `orderId` so the evidence is picked from what the API returned. */
+  public async loadProofs(orderId: string): Promise<void> {
+    if (!this.getSnapshot().canListProofs) return;
+    if (!isCanonicalUuid(orderId)) {
+      this.update({ errors: ["La orden debe ser un UUID."], message: null, stepUpHref: null });
+      return;
+    }
+    await this.read(
+      () => this.api!.listOrderProofs(orderId, null, this.controller?.signal),
+      (page) => ({ proofsOrderId: orderId, proofs: page.items, proofsCursor: page.next_cursor }),
+      { proofsOrderId: null, proofs: [], proofsCursor: null },
+    );
+  }
+
+  public async loadMoreProofs(): Promise<void> {
+    const { canListProofs, proofsOrderId, proofsCursor } = this.getSnapshot();
+    if (!canListProofs || proofsOrderId === null || proofsCursor === null) return;
+    await this.read(
+      () => this.api!.listOrderProofs(proofsOrderId, proofsCursor, this.controller?.signal),
+      (page) => {
+        if (this.getSnapshot().proofsOrderId !== proofsOrderId) return {};
+        const known = new Set(this.getSnapshot().proofs.map((proof) => proof.id));
+        return {
+          proofs: [...this.getSnapshot().proofs, ...page.items.filter((item) => !known.has(item.id))],
+          proofsCursor: page.next_cursor,
+        };
+      },
+    );
   }
 
   public stop(): void {
@@ -153,6 +240,28 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
     return this.session;
   }
 
+  /** One read at a time; a result that arrives after a tenant switch is dropped. */
+  private async read<T>(
+    request: () => Promise<T>,
+    apply: (result: T) => Partial<IncidentsState>,
+    before: Partial<IncidentsState> = {},
+  ): Promise<void> {
+    if (this.api === null || this.getSnapshot().listing) return;
+    const generation = this.generation;
+    this.update({ ...before, listing: true, errors: [], message: null, stepUpHref: null });
+    try {
+      const result = await request();
+      if (generation !== this.generation) return;
+      this.update(apply(result));
+    } catch (error) {
+      if (generation !== this.generation) return;
+      const view = describeFailure(error, incidentsPath, incidentConflictMessages);
+      this.update({ message: view.message, stepUpHref: view.stepUpHref });
+    } finally {
+      if (generation === this.generation) this.update({ listing: false });
+    }
+  }
+
   private async write<T>(
     scope: string,
     fingerprint: string,
@@ -176,6 +285,10 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
         incidents: [incident, ...this.getSnapshot().incidents.filter((item) => item.id !== incident.id)],
         message: success,
         formKey: this.getSnapshot().formKey + 1,
+        // The evidence picked for this opening is not offered again for the next one.
+        proofsOrderId: null,
+        proofs: [],
+        proofsCursor: null,
       });
     } catch (error) {
       if (generation !== this.generation) return;

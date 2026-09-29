@@ -1,15 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { ContractViolationError } from "../../operations/contracts/strict-json";
 import {
+  codId,
   codTransactionResponse,
   financialsResponse,
+  orderId,
+  pendingOrderResponse,
+  syntheticUuid,
 } from "../../operations/contracts/ui-001-screens.fixtures";
 import {
   buildRecordCodBody,
   canRecordCollection,
   formatBasisPoints,
+  maximumOrderPageSize,
   parseCodTransaction,
   parseOrderFinancials,
+  parsePendingCodPage,
+  reconcilableRecord,
 } from "./cod";
 
 describe("OrderFinancials parser", () => {
@@ -63,6 +70,90 @@ describe("OrderFinancials parser", () => {
     ["an unknown order status", financialsResponse({ order_status: "LOST" })],
   ])("fails closed on %s", (_label, body) => {
     expect(() => parseOrderFinancials(body)).toThrow(ContractViolationError);
+  });
+});
+
+describe("OrderFinancials cod_record (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
+  const recordedPosition = { status: "RECORDED", amount_cents: 25_050, recorded: true, satisfies_delivery_requirement: true };
+
+  it("is null while nothing is collected", () => {
+    const financials = parseOrderFinancials(financialsResponse());
+    expect(financials.cod_record).toBeNull();
+    expect(reconcilableRecord(financials)).toBeNull();
+  });
+
+  it("carries the record id so a RECORDED collection is reconcilable without typing it", () => {
+    const financials = parseOrderFinancials(financialsResponse({}, recordedPosition));
+    expect(financials.cod_record).toMatchObject({ id: codId, order_id: orderId, amount_cents: 25_050, status: "RECORDED" });
+    expect(reconcilableRecord(financials)?.id).toBe(codId);
+  });
+
+  it("does not offer a RECONCILED record for reconciliation", () => {
+    const financials = parseOrderFinancials(
+      financialsResponse({}, { status: "RECONCILED", amount_cents: 25_050, recorded: true, reconciled: true }),
+    );
+    expect(financials.cod_record?.status).toBe("RECONCILED");
+    expect(reconcilableRecord(financials)).toBeNull();
+  });
+
+  it.each([
+    ["a missing cod_record", (() => { const body = financialsResponse(); delete body.cod_record; return body; })()],
+    ["a record without a COD status", financialsResponse({ cod_record: codTransactionResponse() })],
+    ["a COD status without a record", financialsResponse({ cod_record: null }, recordedPosition)],
+    [
+      "a record of another order",
+      financialsResponse({ cod_record: codTransactionResponse({ order_id: syntheticUuid(0x999) }) }, recordedPosition),
+    ],
+    [
+      "a record whose status differs from the position",
+      financialsResponse(
+        { cod_record: codTransactionResponse({ status: "RECONCILED", reconciled_at: "2026-09-28T18:00:00Z" }) },
+        recordedPosition,
+      ),
+    ],
+    [
+      "a record whose amount differs from the position",
+      financialsResponse({ cod_record: codTransactionResponse({ amount_cents: 25_049 }) }, recordedPosition),
+    ],
+    [
+      "a record carrying the reference",
+      financialsResponse({ cod_record: codTransactionResponse({ reference: "Recibo 17" }) }, recordedPosition),
+    ],
+    [
+      "a record carrying the collecting driver",
+      financialsResponse(
+        { cod_record: codTransactionResponse({ collected_by_driver_id: syntheticUuid(0x888) }) },
+        recordedPosition,
+      ),
+    ],
+  ])("fails closed on %s", (_label, body) => {
+    expect(() => parseOrderFinancials(body)).toThrow(ContractViolationError);
+  });
+});
+
+describe("COD pending list parser", () => {
+  it("keeps only the id, public id and status of each AI-05 Order", () => {
+    const page = parsePendingCodPage({
+      items: [pendingOrderResponse(orderId, "PQ-000123")],
+      next_cursor: "cursor-2",
+    });
+    expect(page).toEqual({
+      items: [{ id: orderId, public_id: "PQ-000123", status: "DELIVERED" }],
+      next_cursor: "cursor-2",
+    });
+  });
+
+  it.each([
+    ["an extra page key", { items: [], next_cursor: null, total: 0 }],
+    ["an order with an unknown key", { items: [{ ...pendingOrderResponse(orderId, "PQ-1"), cod: {} }], next_cursor: null }],
+    ["an order without an id", { items: [{ ...pendingOrderResponse(orderId, "PQ-1"), id: "x" }], next_cursor: null }],
+    ["an empty cursor", { items: [], next_cursor: "" }],
+    [
+      "more orders than a page holds",
+      { items: Array.from({ length: maximumOrderPageSize + 1 }, () => pendingOrderResponse(orderId, "PQ-1")), next_cursor: null },
+    ],
+  ])("fails closed on %s", (_label, body) => {
+    expect(() => parsePendingCodPage(body)).toThrow(ContractViolationError);
   });
 });
 

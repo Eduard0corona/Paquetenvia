@@ -115,14 +115,15 @@ The caller supplies ActorId, OrganizationId, OrderId and a non-secret RunId.
 Since TRK-002-AUTO-LINK there is no rotation: one call generates distinct
 non-secret request IDs, gets the order's link twice through
 `IPublicTrackingTokenService.GetOrCreateAsync` (the second call must return the
-same link), revokes it with `RevokeAsync`, gets the next generation and looks
-the links up through `IPublicTrackingProjectionReader`. It then verifies that
-the revoked link is invalid and the next generation is valid.
+same link) and looks the link up through `IPublicTrackingProjectionReader`
+before and after the second call. Since TRK-002-NO-REVOCATION nobody revokes a
+link, so the verifier checks that the link keeps resolving to the same order;
+there is no revocation step.
 
 The verifier contains no SQL, database package, tenant-context implementation,
 audit write, privileged credential, Azure dependency, logger or console/file
 output. The grant plaintext exists only in local managed-memory references while
-the productive reader needs it. The result includes token row identifiers and
+the productive reader needs it. The result includes the token row identifier and
 outcomes, never plaintext, prefix, suffix, reversible encoding, hash or
 fingerprint.
 

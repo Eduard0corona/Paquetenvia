@@ -46,6 +46,26 @@ public static class IncidentEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+        endpoints.MapGet("/api/v1/incidents", ListIncidentsAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("listIncidents")
+            .WithTags("Incidents")
+            .Produces<IncidentPageResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+        endpoints.MapGet("/api/v1/incidents/{incidentId}", GetIncidentAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("getIncident")
+            .WithTags("Incidents")
+            .Produces<IncidentResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }
 
@@ -194,6 +214,146 @@ public static class IncidentEndpoints
         }
     }
 
+    /// <summary>
+    /// API-INC-LIST-PROOFS-2026-09-29. Every query parameter appears at most once and parses exactly;
+    /// anything else is INVALID_REQUEST, decided before capability or any incident is read. Capability
+    /// is then settled from the session and again inside the tenant transaction.
+    /// </summary>
+    private static async Task<IResult> ListIncidentsAsync(
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        IIncidentReadService service,
+        CancellationToken cancellationToken)
+    {
+        if (!TryReadReadContext(session, tenantContext, out var actorId, out var organizationId))
+        {
+            return Forbidden();
+        }
+
+        if (!TryReadListFilters(httpContext.Request.Query, out var status, out var orderId, out var cursor))
+        {
+            return Conflict("INVALID_REQUEST");
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListIncidents) is { } denied)
+        {
+            return denied;
+        }
+
+        try
+        {
+            var page = await service.ListAsync(
+                new ListIncidentsQuery(actorId, organizationId, session.MfaSatisfied, status, orderId, cursor),
+                cancellationToken);
+            return Results.Ok(new IncidentPageResponse(page.Items.Select(ToResponse).ToArray(), page.NextCursor));
+        }
+        catch (Exception exception)
+        {
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListIncidents),
+                cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// API-INC-LIST-PROOFS-2026-09-29. Capability first; then a malformed, missing or foreign incident
+    /// is the same uniform 404.
+    /// </summary>
+    private static async Task<IResult> GetIncidentAsync(
+        string incidentId,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        IIncidentReadService service,
+        CancellationToken cancellationToken)
+    {
+        if (!TryReadReadContext(session, tenantContext, out var actorId, out var organizationId))
+        {
+            return Forbidden();
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.GetIncident) is { } denied)
+        {
+            return denied;
+        }
+
+        if (!Guid.TryParseExact(incidentId, "D", out var parsedIncidentId) || parsedIncidentId == Guid.Empty)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            var result = await service.GetAsync(
+                new GetIncidentQuery(actorId, organizationId, session.MfaSatisfied, parsedIncidentId),
+                cancellationToken);
+            return Results.Ok(ToResponse(result));
+        }
+        catch (Exception exception)
+        {
+            return ToProblem(
+                exception,
+                () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.GetIncident),
+                cancellationToken);
+        }
+    }
+
+    public static IReadOnlyList<string> ListQueryParameters { get; } = ["status", "order_id", "cursor"];
+
+    internal static bool TryReadListFilters(
+        IQueryCollection query,
+        out string? status,
+        out Guid? orderId,
+        out IncidentCursor? cursor)
+    {
+        status = null;
+        orderId = null;
+        cursor = null;
+        if (query.Keys.Any(key => !ListQueryParameters.Contains(key, StringComparer.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        if (query.TryGetValue("status", out var statusValue))
+        {
+            status = statusValue[0];
+            if (string.IsNullOrEmpty(status) || !IncidentReadPolicy.IsValidStatusFilter(status))
+            {
+                return false;
+            }
+        }
+
+        if (query.TryGetValue("order_id", out var orderValue))
+        {
+            if (!Guid.TryParseExact(orderValue[0], "D", out var parsedOrder) || parsedOrder == Guid.Empty)
+            {
+                return false;
+            }
+
+            orderId = parsedOrder;
+        }
+
+        return !query.TryGetValue("cursor", out var cursorValue) ||
+            IncidentCursorCodec.TryDecode(cursorValue[0], out cursor);
+    }
+
+    private static bool TryReadReadContext(
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        out Guid actorId,
+        out Guid organizationId)
+    {
+        actorId = default;
+        organizationId = default;
+        return session.IsActive &&
+            session.UserId is { } userId &&
+            (actorId = userId) != Guid.Empty &&
+            tenantContext.IsSelected &&
+            (organizationId = tenantContext.OrganizationId) != Guid.Empty;
+    }
+
     private static IncidentResponse ToResponse(IncidentResult result) =>
         new(
             result.Id,
@@ -293,6 +453,10 @@ public sealed record ResolveIncidentRequest(
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; init; }
 }
+
+public sealed record IncidentPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<IncidentResponse> Items,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
 public sealed record IncidentResponse(
     [property: JsonPropertyName("id")] Guid Id,

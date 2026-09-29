@@ -95,6 +95,8 @@ public static class DependencyInjection
                 _ => serviceProvider.GetRequiredService<DisabledIncidentPiiProtector>(),
             });
         services.AddScoped<IIncidentService, PostgreSqlIncidentService>();
+        // API-INC-LIST-PROOFS-2026-09-29: listIncidents and getIncident, read-only.
+        services.AddScoped<IIncidentReadService, PostgreSqlIncidentReadService>();
         // openIncident's configurable occurrence age (OPS-003-INCIDENT-72H-UNIFICATION-CONFIGURABLE-
         // 2026-09-27), built from the options validated above so the endpoint and the service judge
         // occurred_at with the same limits.

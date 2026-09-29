@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canListPendingCod,
   canPerform,
   capabilityMatrix,
   financeOperationsMatrix,
@@ -80,6 +81,17 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     }
   });
 
+  it("mirrors AI-05 incident_operations for the incident desk (API-INC-LIST-PROOFS-2026-09-29)", () => {
+    const published = publishedSection("incident_operations", "\nx-pilot-contract-deltas:");
+    // The API also admits DRIVER to openIncident, only for its own assignment and only from /driver.
+    expect(published.openIncident).toEqual(["DISPATCHER", "PLATFORM_ADMIN", "DRIVER"]);
+    for (const operation of ["resolveIncident", "listIncidents", "getIncident", "listOrderProofs"] as const) {
+      expect(published[operation], operation).toEqual([...screenOperationsMatrix[operation]]);
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+      expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
+    }
+  });
+
   it("each mirrored operation exists in AI-05", () => {
     for (const operation of [
       ...Object.keys(capabilityMatrix),
@@ -113,6 +125,12 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     ["PLATFORM_ADMIN", "resolveIncident", true],
     ["DRIVER", "openIncident", false],
     ["VIEWER", "resolveIncident", false],
+    ["DISPATCHER", "listIncidents", true],
+    ["PLATFORM_ADMIN", "getIncident", true],
+    ["DISPATCHER", "listOrderProofs", true],
+    ["DRIVER", "listIncidents", false],
+    ["VIEWER", "listOrderProofs", false],
+    ["FINANCE", "getIncident", false],
     ["FINANCE", "getOrderFinancials", true],
     ["FINANCE", "reconcileCod", true],
     ["FINANCE", "recordCodCollection", false],
@@ -120,9 +138,9 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     ["DRIVER", "reconcileCod", false],
     ["VIEWER", "getOrderFinancials", false],
     ["DISPATCHER", "issueTrackingLink", true],
-    ["PLATFORM_ADMIN", "revokeTrackingLink", true],
+    ["PLATFORM_ADMIN", "issueTrackingLink", true],
     ["VIEWER", "issueTrackingLink", false],
-    ["FINANCE", "revokeTrackingLink", false],
+    ["FINANCE", "issueTrackingLink", false],
   ])("%s may %s: %s", (role, operation, expected) => {
     expect(canPerform(role, operation)).toBe(expected);
   });
@@ -153,15 +171,19 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
   });
 
   it("hints MFA for PLATFORM_ADMIN, never DISPATCHER, on the tracking link (TRK-002)", () => {
-    for (const operation of ["issueTrackingLink", "revokeTrackingLink"] as const) {
-      expect(requiresMfa("PLATFORM_ADMIN", operation)).toBe(true);
-      expect(requiresMfa("DISPATCHER", operation)).toBe(false);
-    }
+    expect(requiresMfa("PLATFORM_ADMIN", "issueTrackingLink")).toBe(true);
+    expect(requiresMfa("DISPATCHER", "issueTrackingLink")).toBe(false);
     const start = openApi.indexOf("  tracking_link_operations_decision:");
     const decision = openApi.slice(start, openApi.indexOf("  tracking_link_operations:", start));
     expect(decision.replace(/\s+/g, " ")).toContain(
       "DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge",
     );
+  });
+
+  it("has no tracking link revocation (TRK-002-NO-REVOCATION)", () => {
+    expect(Object.keys(capabilityMatrix)).not.toContain("revokeTrackingLink");
+    expect(Object.keys(publishedMatrix())).not.toContain("revokeTrackingLink");
+    expect(openApi).not.toContain("revokeTrackingLink");
   });
 
   it("resolves the role of the selected organization only", () => {
@@ -178,5 +200,17 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(mayHandleExactCoordinates("FINANCE")).toBe(false);
     expect(mayHandleExactCoordinates("DISPATCHER")).toBe(true);
     expect(mayHandleExactCoordinates("PLATFORM_ADMIN")).toBe(true);
+  });
+});
+
+describe("API-FIN-COD-VISIBILITY-2026-09-29 COD pending filter", () => {
+  it("is offered only to roles holding both listOrders and getOrderFinancials", () => {
+    const start = openApi.indexOf("\n  cod_pending_reconciliation_filter:");
+    expect(start).toBeGreaterThan(openApi.indexOf("x-capability-matrix:"));
+    expect(openApi.slice(start, start + 800)).toContain("both listOrders and getOrderFinancials");
+    expect(openApi).toContain("- name: cod_pending_reconciliation");
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN"]) expect(canListPendingCod(role), role).toBe(true);
+    for (const role of ["FINANCE", "VIEWER", "DRIVER", "ALLY_ADMIN", null]) expect(canListPendingCod(role), String(role)).toBe(false);
+    expect(requiresMfa("PLATFORM_ADMIN", "getOrderFinancials")).toBe(true);
   });
 });

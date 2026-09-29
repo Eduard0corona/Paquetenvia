@@ -1,4 +1,5 @@
 using Finance.Application;
+using Finance.Application.Cod;
 using Finance.Application.Financials;
 using Finance.Domain;
 using Finance.Infrastructure.Persistence;
@@ -24,7 +25,8 @@ public sealed class PostgreSqlOrderFinancialsService(FinanceTenantGateway gatewa
 
     private const string OrderSql =
         """
-        SELECT o.id,o.status,o.total_cents,o.cod_expected_cents,c.status,c.amount_cents
+        SELECT o.id,o.status,o.total_cents,o.cod_expected_cents,c.status,c.amount_cents,
+               c.id,c.recorded_at,c.reconciled_at
         FROM orders.orders o
         LEFT JOIN finance.cod_transactions c ON c.order_id=o.id
         WHERE o.id=@order AND (o.owner_org_id=@organization OR o.operator_org_id=@organization)
@@ -79,6 +81,7 @@ public sealed class PostgreSqlOrderFinancialsService(FinanceTenantGateway gatewa
                 command.Parameters.Add(P("order", NpgsqlDbType.Uuid, query.OrderId));
                 command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, query.OrganizationId));
                 OrderRow row;
+                CodTransactionResult? codRecord;
                 await using (var reader = await command.ExecuteReaderAsync(token))
                 {
                     if (!await reader.ReadAsync(token))
@@ -87,11 +90,12 @@ public sealed class PostgreSqlOrderFinancialsService(FinanceTenantGateway gatewa
                     }
 
                     row = ReadOrder(reader);
+                    codRecord = ReadCodRecord(reader, row);
                 }
 
                 var costs = await ReadCostsAsync(
                     connection, transaction, query.OrganizationId, [row.Id], token);
-                return OrderFinancialsResult.From(row.Status, ToEconomics(row, costs));
+                return OrderFinancialsResult.From(row.Status, ToEconomics(row, costs), codRecord);
             },
             cancellationToken);
     }
@@ -236,6 +240,33 @@ public sealed class PostgreSqlOrderFinancialsService(FinanceTenantGateway gatewa
         }
 
         return new(expected, status, row.CodAmountCents is { } amount ? new MoneyCents(amount) : null);
+    }
+
+    /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29: the COD collection record of a single order, read from the same row as
+    /// its COD position. Only the CodTransaction fields are read; the reference and the collecting driver never
+    /// leave the database on this path. It follows the COD position exactly: a row whose status the position does
+    /// not recognise is no record, and a recognised row missing its id or amount fails closed as unavailable.
+    /// </summary>
+    private static CodTransactionResult? ReadCodRecord(NpgsqlDataReader reader, OrderRow row)
+    {
+        if (row.CodStatus is null || !FinanceContractValues.TryParseCodStatus(row.CodStatus, out _))
+        {
+            return null;
+        }
+
+        if (row.CodAmountCents is not { } amount || reader.IsDBNull(6))
+        {
+            throw new FinanceUnavailableException("A COD collection record is incomplete.");
+        }
+
+        return new(
+            reader.GetGuid(6),
+            row.Id,
+            amount,
+            row.CodStatus,
+            reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7),
+            reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8));
     }
 
     private static OrderRow ReadOrder(NpgsqlDataReader reader) => new(

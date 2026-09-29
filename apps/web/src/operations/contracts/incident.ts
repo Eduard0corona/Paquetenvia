@@ -1,18 +1,21 @@
 import {
   array,
   boolean,
+  boundedString,
   exactObject,
   fail,
   isCanonicalUuid,
+  nullable,
   oneOf,
   timestamp,
   uuid,
 } from "./strict-json";
 
 /**
- * /ops/incidents (AI-07 incident_desk) over AI-05 openIncident and resolveIncident.
- * AI-05 publishes no incident read, so the screen shows only the Incident the API
- * returned to this tenant session.
+ * /ops/incidents (AI-07 incident_desk) over AI-05 openIncident, resolveIncident and
+ * the API-INC-LIST-PROOFS-2026-09-29 reads listIncidents, getIncident and
+ * listOrderProofs. Every incident and proof shown is exactly what the API returned
+ * to this tenant session.
  */
 
 export const incidentStatuses = ["OPEN", "INVESTIGATING", "RESOLVED", "REJECTED"] as const;
@@ -268,4 +271,97 @@ export function parseIncident(value: unknown): Incident {
     sla_due_at: timestamp(object.sla_due_at),
     evidence_proof_ids: proofs,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Reads (API-INC-LIST-PROOFS-2026-09-29)
+
+/** The server owns the page size; a page larger than this is not trusted. */
+const maximumPageItems = 200;
+/** AI-05 bounds every list cursor to 128 characters. */
+export const maximumCursorLength = 128;
+
+export interface IncidentPage {
+  readonly items: readonly Incident[];
+  readonly next_cursor: string | null;
+}
+
+function cursor(value: unknown): string {
+  const text = boundedString(value, 1, maximumCursorLength);
+  if (!/^[A-Za-z0-9_-]+$/.test(text)) fail();
+  return text;
+}
+
+export function parseIncidentPage(value: unknown): IncidentPage {
+  const object = exactObject(value, ["items", "next_cursor"]);
+  const items = array(object.items, maximumPageItems).map(parseIncident);
+  if (new Set(items.map((item) => item.id)).size !== items.length) fail();
+  return { items, next_cursor: nullable(object.next_cursor, cursor) };
+}
+
+/** The AI-06 proof types; the listing never carries anything but these. */
+export const proofTypes = ["PICKUP_PHOTO", "DELIVERY_PHOTO", "SIGNATURE", "DELIVERY_CODE", "RETURN_PHOTO"] as const;
+export type ProofType = (typeof proofTypes)[number];
+export const proofTypeLabels: Readonly<Record<ProofType, string>> = {
+  PICKUP_PHOTO: "Foto de recolección",
+  DELIVERY_PHOTO: "Foto de entrega",
+  SIGNATURE: "Firma",
+  DELIVERY_CODE: "Código de entrega",
+  RETURN_PHOTO: "Foto de devolución",
+};
+
+/** AI-05 Proof: metadata only, never bytes, storage keys or URLs. */
+export interface Proof {
+  readonly id: string;
+  readonly proof_type: ProofType;
+  readonly sha256: string;
+  readonly captured_at: string;
+}
+
+export interface ProofPage {
+  readonly items: readonly Proof[];
+  readonly next_cursor: string | null;
+}
+
+export function parseProof(value: unknown): Proof {
+  const object = exactObject(value, ["id", "proof_type", "sha256", "captured_at"]);
+  const sha256 = boundedString(object.sha256, 64, 64);
+  if (!/^[0-9a-f]{64}$/.test(sha256)) fail();
+  return {
+    id: uuid(object.id),
+    proof_type: oneOf(object.proof_type, proofTypes),
+    sha256,
+    captured_at: timestamp(object.captured_at),
+  };
+}
+
+export function parseProofPage(value: unknown): ProofPage {
+  const object = exactObject(value, ["items", "next_cursor"]);
+  const items = array(object.items, maximumPageItems).map(parseProof);
+  if (new Set(items.map((item) => item.id)).size !== items.length) fail();
+  return { items, next_cursor: nullable(object.next_cursor, cursor) };
+}
+
+export interface IncidentListFilter {
+  readonly status?: IncidentStatus;
+  readonly orderId?: string;
+}
+
+/** Only the published filters, each at most once and already canonical. */
+export function incidentListSearch(filter: IncidentListFilter, cursorValue?: string | null): URLSearchParams {
+  const search = new URLSearchParams();
+  if (filter.status !== undefined) {
+    if (!(incidentStatuses as readonly string[]).includes(filter.status)) fail();
+    search.set("status", filter.status);
+  }
+  if (filter.orderId !== undefined) {
+    if (!isCanonicalUuid(filter.orderId)) fail();
+    search.set("order_id", filter.orderId);
+  }
+  if (cursorValue !== undefined && cursorValue !== null) search.set("cursor", cursor(cursorValue));
+  return search;
+}
+
+export function isPending(incident: Incident): boolean {
+  return incident.status === "OPEN" || incident.status === "INVESTIGATING";
 }

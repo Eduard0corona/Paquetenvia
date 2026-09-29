@@ -1,5 +1,5 @@
 import { TenantApiError } from "../../operations/api/tenant-request";
-import { canPerform, requiresMfa } from "../../operations/contracts/capabilities";
+import { canListPendingCod, canPerform, requiresMfa } from "../../operations/contracts/capabilities";
 import type { OperationsSession } from "../../operations/session/operations-session";
 import { ExternalStore } from "../../operations/state/external-store";
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
@@ -10,8 +10,10 @@ import {
   canRecordCollection,
   financeConflictMessages,
   isCanonicalUuid,
+  reconcilableRecord,
   type CodTransaction,
   type OrderFinancials,
+  type PendingCodOrder,
 } from "../contracts/cod";
 
 export const codPath = "/finance/cod";
@@ -25,6 +27,12 @@ export interface CodState {
   readonly role: string | null;
   readonly canRecord: boolean;
   readonly canReconcile: boolean;
+  /** listOrders with cod_pending_reconciliation (DISPATCHER, PLATFORM_ADMIN with MFA). */
+  readonly canListPending: boolean;
+  /** Orders whose collection is RECORDED and not RECONCILED; null until the API answered. */
+  readonly pending: readonly PendingCodOrder[] | null;
+  readonly pendingCursor: string | null;
+  readonly pendingLoading: boolean;
   readonly mfaHint: string | null;
   readonly financials: OrderFinancials | null;
   /** Order whose financials GET is in flight; actions stay disabled until it is loaded. */
@@ -52,6 +60,10 @@ const initialState: CodState = {
   role: null,
   canRecord: false,
   canReconcile: false,
+  canListPending: false,
+  pending: null,
+  pendingCursor: null,
+  pendingLoading: false,
   mfaHint: null,
   financials: null,
   loadingOrder: null,
@@ -74,6 +86,8 @@ export class CodController extends ExternalStore<CodState> {
   private generation = 0;
   /** Monotonic load token: only the latest load() may write `financials`. */
   private loadToken = 0;
+  /** Monotonic token for the pending list: only the latest loadPending() may write it. */
+  private pendingToken = 0;
   private controller: AbortController | null = null;
   private readonly pending: PendingSubmissions;
 
@@ -116,12 +130,70 @@ export class CodController extends ExternalStore<CodState> {
       role,
       canRecord: canPerform(role, "recordCodCollection"),
       canReconcile: canPerform(role, "reconcileCod"),
+      canListPending: canListPendingCod(role),
       mfaHint: requiresMfa(role, "getOrderFinancials")
         ? "Consultar y conciliar cobros con tu rol requiere verificar tu identidad (MFA)."
         : null,
     });
+    await this.loadPending();
+    if (generation !== this.generation) return;
     const initial = this.dependencies.initialOrder?.() ?? null;
     if (initial !== null && isCanonicalUuid(initial)) await this.load(initial);
+  }
+
+  /**
+   * API-FIN-COD-VISIBILITY-2026-09-29: the list of collections awaiting
+   * reconciliation, straight from listOrders. `more` appends the next page; any
+   * other call replaces the list. Roles outside the filter never request it.
+   */
+  public async loadPending(more = false): Promise<void> {
+    const api = this.api;
+    const state = this.getSnapshot();
+    if (api === null || state.phase !== "ready" || !state.canListPending) return;
+    const cursor = more ? state.pendingCursor : null;
+    if (more && cursor === null) return;
+    const generation = this.generation;
+    const token = ++this.pendingToken;
+    const isLatest = () => generation === this.generation && token === this.pendingToken;
+    this.update({ pendingLoading: true });
+    try {
+      const page = await api.pendingReconciliation(cursor, this.controller?.signal);
+      if (!isLatest()) return;
+      const previous = more ? (this.getSnapshot().pending ?? []) : [];
+      const seen = new Set(previous.map((order) => order.id));
+      this.update({
+        pending: [...previous, ...page.items.filter((order) => !seen.has(order.id))],
+        pendingCursor: page.next_cursor,
+      });
+    } catch (error) {
+      if (!isLatest()) return;
+      if (!more) this.update({ pending: null, pendingCursor: null });
+      this.fail(error, null);
+    } finally {
+      if (isLatest()) this.update({ pendingLoading: false });
+    }
+  }
+
+  /**
+   * Opens a pending order and reconciles the collection its financials name, so
+   * nobody types a COD record id. The record is taken only from the REST read.
+   */
+  public async reconcileFromList(orderId: string): Promise<void> {
+    const state = this.getSnapshot();
+    if (!state.canReconcile || state.busy || !isCanonicalUuid(orderId)) return;
+    const generation = this.generation;
+    await this.load(orderId);
+    if (generation !== this.generation) return;
+    const financials = this.getSnapshot().financials;
+    const record = financials?.order_id === orderId ? reconcilableRecord(financials) : null;
+    if (record === null) {
+      if (financials?.order_id === orderId) {
+        this.update({ errors: ["El cobro de esta orden ya no está pendiente de conciliar; se actualizó la lista."] });
+        await this.loadPending();
+      }
+      return;
+    }
+    await this.reconcile(record.id);
   }
 
   public stop(): void {
@@ -152,7 +224,8 @@ export class CodController extends ExternalStore<CodState> {
       const financials = await api.financials(orderId, this.controller?.signal);
       if (!isLatest()) return;
       if (financials.order_id !== orderId) throw new TenantApiError("invalid");
-      this.update({ financials });
+      // The COD record comes from REST (API-FIN-COD-VISIBILITY-2026-09-29), so it can be reconciled as shown.
+      this.update({ financials, transaction: financials.cod_record ?? this.getSnapshot().transaction });
     } catch (error) {
       if (!isLatest()) return;
       this.update({ financials: null });
@@ -192,11 +265,11 @@ export class CodController extends ExternalStore<CodState> {
     );
   }
 
-  /** Reconciles the COD record the screen received, or the one the operator typed. */
+  /** Reconciles the given COD record, or the one the screen received from the API. */
   public async reconcile(codIdText: string | null = null): Promise<void> {
     const state = this.getSnapshot();
     if (!state.canReconcile) return;
-    const codId = codIdText ?? state.transaction?.id ?? null;
+    const codId = codIdText ?? state.transaction?.id ?? reconcilableRecord(state.financials)?.id ?? null;
     if (codId === null || !isCanonicalUuid(codId)) {
       this.update({ errors: ["El registro de cobro debe ser un UUID."], message: null, stepUpHref: null });
       return;
@@ -246,12 +319,13 @@ export class CodController extends ExternalStore<CodState> {
     } finally {
       if (generation === this.generation) this.update({ busy: false });
     }
-    // REST stays authoritative: the COD position is read again, never inferred.
+    // REST stays authoritative: the COD position and the pending list are read again, never inferred.
     const loaded = this.getSnapshot().financials?.order_id;
-    if (reload && generation === this.generation && loaded !== undefined) {
+    if (reload && generation === this.generation) {
       const message = this.getSnapshot().message;
       const stepUpHref = this.getSnapshot().stepUpHref;
-      await this.load(loaded);
+      if (loaded !== undefined) await this.load(loaded);
+      await this.loadPending();
       if (generation === this.generation && this.getSnapshot().message === null)
         this.update({ message, stepUpHref });
     }

@@ -87,6 +87,26 @@ public sealed class OrdersArchitectureTests
         Assert.DoesNotContain("DELETE FROM", readers, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29: Orders reads finance.cod_transactions only from the narrow read-only
+    /// readers file (the COD transition guard and the listOrders COD pending predicate), never writes it, and the
+    /// order list uses the predicate instead of its own finance SQL.
+    /// </summary>
+    [Fact]
+    public void Cod_reads_in_Orders_are_limited_to_the_narrow_readers()
+    {
+        var root = TestRepository.GetPath("src/Modules/Orders");
+        var codReaders = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => File.ReadAllText(path).Contains("finance.cod_transactions", StringComparison.Ordinal))
+            .ToArray();
+        var reader = Assert.Single(codReaders);
+        Assert.EndsWith("PostgreSqlOrderTransitionReaders.cs", reader, StringComparison.Ordinal);
+        var coordinator = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Orders/Orders.Infrastructure/Orders/QuoteSnapshotToOrderCoordinator.cs"));
+        Assert.Contains("OrderCodPendingReconciliationPredicate.Sql", coordinator, StringComparison.Ordinal);
+        Assert.DoesNotContain("finance.", coordinator, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Orders_contains_no_generic_repository_and_state_matrix_lives_only_in_domain()
     {

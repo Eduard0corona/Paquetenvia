@@ -14,12 +14,20 @@ public static class CsvOrderImportContract
     public const string ColumnPrivacyVersion = "privacy_version";
     public const string ColumnAcceptedAt = "accepted_at";
     public const string ColumnAcceptanceChannel = "acceptance_channel";
+
+    /// <summary>
+    /// D6-COD-EXPECTED: optional seventh column with the dispatcher-declared COD in MXN integer cents. It is named
+    /// after the <c>cod_expected_cents</c> field of <c>POST /orders</c>, as every other column is named after its
+    /// ORD-001 field.
+    /// </summary>
+    public const string ColumnCodExpectedCents = "cod_expected_cents";
     public const string ColumnFile = "file";
 
     public const int MaximumFileBytes = 1_048_576;
     public const int MaximumDataRows = 500;
     public const int MaximumVersionLength = Orders.OrderAcceptanceInputPolicy.MaximumVersionLength;
 
+    /// <summary>The six-column header without COD; every row of such a file has no COD expectation.</summary>
     public static readonly ImmutableArray<string> Header =
     [
         ColumnQuoteId,
@@ -29,6 +37,12 @@ public static class CsvOrderImportContract
         ColumnAcceptedAt,
         ColumnAcceptanceChannel,
     ];
+
+    /// <summary>
+    /// The seven-column header with the optional COD column last (D6-COD-EXPECTED). Appending it keeps every
+    /// existing six-column file valid and unchanged in meaning.
+    /// </summary>
+    public static readonly ImmutableArray<string> HeaderWithCod = [.. Header, ColumnCodExpectedCents];
 
     public static string HeaderLine => string.Join(',', Header);
 }
@@ -54,6 +68,7 @@ public static class CsvOrderImportRowErrorCodes
     public const string PrivacyVersionInvalid = "PRIVACY_VERSION_INVALID";
     public const string AcceptedAtInvalid = "ACCEPTED_AT_INVALID";
     public const string AcceptanceChannelInvalid = "ACCEPTANCE_CHANNEL_INVALID";
+    public const string CodExpectedCentsInvalid = "COD_EXPECTED_CENTS_INVALID";
 }
 
 public static class CsvOrderImportRowStatuses
@@ -72,12 +87,17 @@ public static class CsvOrderImportRowFailureCodes
 
 public sealed record CsvOrderImportRowError(string Column, string Code);
 
+/// <summary>
+/// One previewed row. <see cref="CodExpectedCents"/> echoes the COD the row declares so the dispatcher can check it
+/// before confirming: zero for a row without COD, null (omitted from the response) when the row did not prevalidate.
+/// </summary>
 public sealed record CsvOrderImportRowPreview(
     int RowNumber,
     string? QuoteId,
     string? PayerType,
     bool Valid,
-    IReadOnlyList<CsvOrderImportRowError> Errors)
+    IReadOnlyList<CsvOrderImportRowError> Errors,
+    long? CodExpectedCents = null)
 {
     public IReadOnlyList<CsvOrderImportRowError> Errors { get; } = Errors.ToImmutableArray();
 }
@@ -90,7 +110,8 @@ public sealed record CsvOrderImportOrderRow(
     string TermsVersion,
     string PrivacyVersion,
     DateTimeOffset AcceptedAt,
-    string AcceptanceChannel);
+    string AcceptanceChannel,
+    long CodExpectedCents = 0);
 
 public sealed record CsvOrderImportPrevalidation(
     string ContentDigest,
