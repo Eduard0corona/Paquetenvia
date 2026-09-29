@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canListPendingCod,
   canPerform,
   capabilityMatrix,
   financeOperationsMatrix,
@@ -178,5 +179,17 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(mayHandleExactCoordinates("FINANCE")).toBe(false);
     expect(mayHandleExactCoordinates("DISPATCHER")).toBe(true);
     expect(mayHandleExactCoordinates("PLATFORM_ADMIN")).toBe(true);
+  });
+});
+
+describe("API-FIN-COD-VISIBILITY-2026-09-29 COD pending filter", () => {
+  it("is offered only to roles holding both listOrders and getOrderFinancials", () => {
+    const start = openApi.indexOf("\n  cod_pending_reconciliation_filter:");
+    expect(start).toBeGreaterThan(openApi.indexOf("x-capability-matrix:"));
+    expect(openApi.slice(start, start + 800)).toContain("both listOrders and getOrderFinancials");
+    expect(openApi).toContain("- name: cod_pending_reconciliation");
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN"]) expect(canListPendingCod(role), role).toBe(true);
+    for (const role of ["FINANCE", "VIEWER", "DRIVER", "ALLY_ADMIN", null]) expect(canListPendingCod(role), String(role)).toBe(false);
+    expect(requiresMfa("PLATFORM_ADMIN", "getOrderFinancials")).toBe(true);
   });
 });

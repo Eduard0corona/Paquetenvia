@@ -119,6 +119,11 @@ public sealed class FinanceImplementationContractTests
         Assert.Equal(
             codStatuses,
             Scalars(schemas.Mapping("CodTransaction").Mapping("properties").Mapping("status").Sequence("enum")));
+        // API-FIN-COD-VISIBILITY-2026-09-29: the order's COD record uses the CodTransaction vocabulary.
+        Assert.Equal(
+            codStatuses,
+            Scalars(schemas.Mapping("OrderFinancials").Mapping("properties").Mapping("cod_record")
+                .Mapping("properties").Mapping("status").Sequence("enum")));
 
         // A COD position has no status until a collection exists, so its enum admits the null value itself.
         var positionStatuses = schemas.Mapping("CodPosition").Mapping("properties").Mapping("status").Sequence("enum")
@@ -196,8 +201,8 @@ public sealed class FinanceImplementationContractTests
             "amount_cents", "expected_cents", "reconciled", "recorded", "satisfies_close_requirement",
             "satisfies_delivery_requirement", "status");
         AssertProperties<OrderFinancialsResponse>(
-            "cod", "cost_by_modality", "cost_cents", "currency", "margin_basis_points", "margin_cents",
-            "order_id", "order_status", "revenue_cents");
+            "cod", "cod_record", "cost_by_modality", "cost_cents", "currency", "margin_basis_points",
+            "margin_cents", "order_id", "order_status", "revenue_cents");
         AssertProperties<RouteOrderFinancialsResponse>(
             "cod", "cost_by_modality", "cost_cents", "margin_basis_points", "margin_cents", "order_id",
             "revenue_cents");
@@ -445,6 +450,15 @@ public sealed class FinanceImplementationContractTests
     {
         var schema = Resolve(root, reference);
         Assert.Equal("object", schema.Scalar("type"));
+        AssertObjectDescribes(root, schema, dto);
+    }
+
+    /// <summary>
+    /// The members of an object schema, named or inline (an inline nullable object such as
+    /// OrderFinancials.cod_record has its type checked by the caller).
+    /// </summary>
+    private static void AssertObjectDescribes(YamlMappingNode root, YamlMappingNode schema, Type dto)
+    {
         Assert.Equal("false", schema.Scalar("additionalProperties"));
         var properties = JsonProperties(dto);
         var declared = schema.Mapping("properties");
@@ -517,6 +531,10 @@ public sealed class FinanceImplementationContractTests
         {
             Assert.Equal("array", jsonType);
             AssertSchemaDescribes(root, schema.Mapping("items").Scalar("$ref"), type.GetGenericArguments()[0]);
+        }
+        else if (jsonType == "object" && type.IsClass)
+        {
+            AssertObjectDescribes(root, schema, type);
         }
         else
         {

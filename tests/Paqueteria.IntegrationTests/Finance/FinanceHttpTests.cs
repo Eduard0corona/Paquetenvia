@@ -118,6 +118,45 @@ public sealed class FinanceHttpTests : IClassFixture<FinanceHttpWebApplicationFa
         }
     }
 
+    /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29: getOrderFinancials publishes the order's COD collection record in the
+    /// CodTransaction shape, null while nothing is collected, and never the reference or the collecting driver.
+    /// </summary>
+    [Fact]
+    public async Task Order_financials_expose_the_cod_record_without_personal_data()
+    {
+        using (var request = Request("getOrderFinancials", FinanceHttpWebApplicationFactory.Succeeds))
+        using (var response = await client.SendAsync(request))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.True(document.RootElement.TryGetProperty("cod_record", out var none));
+            Assert.Equal(JsonValueKind.Null, none.ValueKind);
+        }
+
+        using (var request = Request("getOrderFinancials", FinanceHttpWebApplicationFactory.Recorded.ToString("D")))
+        using (var response = await client.SendAsync(request))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(body);
+            var cod = document.RootElement.GetProperty("cod");
+            Assert.Equal("RECORDED", cod.GetProperty("status").GetString());
+            var record = document.RootElement.GetProperty("cod_record");
+            Assert.Equal(
+                ["amount_cents", "id", "order_id", "reconciled_at", "recorded_at", "status"],
+                record.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+            Assert.Equal(FinanceHttpWebApplicationFactory.RecordedCodId, record.GetProperty("id").GetGuid());
+            Assert.Equal(FinanceHttpWebApplicationFactory.Recorded, record.GetProperty("order_id").GetGuid());
+            Assert.Equal(5_000, record.GetProperty("amount_cents").GetInt64());
+            Assert.Equal("RECORDED", record.GetProperty("status").GetString());
+            Assert.Equal(JsonValueKind.String, record.GetProperty("recorded_at").ValueKind);
+            Assert.Equal(JsonValueKind.Null, record.GetProperty("reconciled_at").ValueKind);
+            Assert.DoesNotContain("reference", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("driver", body, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     [Fact]
     public async Task Malformed_identifiers_are_404_on_reads_and_invalid_request_on_writes()
     {

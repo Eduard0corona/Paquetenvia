@@ -9,6 +9,11 @@ using Finance.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Orders.Application.Orders;
+using Orders.Infrastructure;
+using Orders.Infrastructure.Orders;
+using Orders.Infrastructure.Persistence;
+using Orders.Infrastructure.Tracking;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
@@ -44,6 +49,8 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         var afterRecord = await financials.GetOrderFinancialsAsync(scenario.OrderQuery(scenario.CodOrderId), default);
         Assert.True(afterRecord.Cod.SatisfiesDeliveryRequirement);
         Assert.False(afterRecord.Cod.SatisfiesCloseRequirement);
+        // API-FIN-COD-VISIBILITY-2026-09-29: the order's financials carry the very record reconcileCod takes.
+        Assert.Equal(recorded, afterRecord.CodRecord);
 
         await scenario.SetOrderStatusAsync(scenario.CodOrderId, "DELIVERED");
         var reconciled = await cod.ReconcileAsync(scenario.Reconcile(recorded.Id, "reconcile"), default);
@@ -56,6 +63,7 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
             scenario.OrderQuery(scenario.CodOrderId), default);
         Assert.True(afterReconcile.Cod.SatisfiesDeliveryRequirement);
         Assert.True(afterReconcile.Cod.SatisfiesCloseRequirement);
+        Assert.Equal(reconciled, afterReconcile.CodRecord);
 
         // A second reconciliation under a fresh key is a state conflict, not a silent no-op.
         var repeat = await Assert.ThrowsAsync<FinanceConflictException>(() =>
@@ -411,6 +419,122 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
             Assert.True(DateTimeOffset.UtcNow < deadline, "The request never waited for the order lock.");
             await Task.Delay(TimeSpan.FromMilliseconds(10));
         }
+    }
+
+    /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29 on real PostgreSQL: getOrderFinancials has no COD record before a
+    /// collection, and listOrders with the COD pending filter returns exactly the tenant's orders whose collection
+    /// is RECORDED and not RECONCILED, never another tenant's, inside the tenant transaction and under RLS.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Api_fin_cod_visibility_exposes_the_record_and_lists_only_pending_collections()
+    {
+        await using var scenario = await FinanceScenario.CreateAsync(fixture);
+        await using var foreignScenario = await FinanceScenario.CreateAsync(fixture);
+        var cod = CreateCodService(fixture.AppDataSource);
+        var financials = CreateFinancialsService(fixture.AppDataSource);
+
+        var before = await financials.GetOrderFinancialsAsync(scenario.OrderQuery(scenario.CodOrderId), default);
+        Assert.Null(before.Cod.Status);
+        Assert.Null(before.CodRecord);
+        Assert.Null((await financials.GetOrderFinancialsAsync(
+            scenario.OrderQuery(scenario.OwnOrderId), default)).CodRecord);
+
+        await using (var orders = CreateOrdersListScope())
+        {
+            Assert.Empty((await ListPendingAsync(orders.Service, scenario)).Items);
+            var all = await orders.Service.ListAsync(
+                scenario.ActorId, scenario.OrganizationId, null, null, null, false, default);
+            Assert.Equal(3, all.Items.Count);
+        }
+
+        var recorded = await cod.RecordAsync(scenario.Record(scenario.CodOrderId, 5_000, "visibility"), default);
+        var foreignRecorded = await CreateCodService(fixture.AppDataSource).RecordAsync(
+            foreignScenario.Record(foreignScenario.CodOrderId, 5_000, "visibility-foreign"), default);
+        Assert.Equal("RECORDED", foreignRecorded.Status);
+
+        var withRecord = await financials.GetOrderFinancialsAsync(scenario.OrderQuery(scenario.CodOrderId), default);
+        Assert.Equal(recorded, withRecord.CodRecord);
+        Assert.Equal(recorded.Id, withRecord.CodRecord!.Id);
+        Assert.Equal(5_000, withRecord.CodRecord.AmountCents);
+
+        await using (var orders = CreateOrdersListScope())
+        {
+            var pending = await ListPendingAsync(orders.Service, scenario);
+            Assert.Equal([scenario.CodOrderId], pending.Items.Select(order => order.Id));
+            Assert.Null(pending.NextCursor);
+            // The status filter still applies together with the COD filter.
+            Assert.Empty((await orders.Service.ListAsync(
+                scenario.ActorId, scenario.OrganizationId, "CLOSED", null, null, true, default)).Items);
+        }
+
+        await scenario.SetOrderStatusAsync(scenario.CodOrderId, "DELIVERED");
+        var reconciled = await cod.ReconcileAsync(scenario.Reconcile(recorded.Id, "visibility-reconcile"), default);
+        Assert.Equal("RECONCILED", reconciled.Status);
+        Assert.Equal(
+            reconciled,
+            (await financials.GetOrderFinancialsAsync(scenario.OrderQuery(scenario.CodOrderId), default)).CodRecord);
+
+        await using (var orders = CreateOrdersListScope())
+        {
+            Assert.Empty((await ListPendingAsync(orders.Service, scenario)).Items);
+            // The other tenant still sees its own pending collection, and only it.
+            var foreignPending = await ListPendingAsync(orders.Service, foreignScenario);
+            Assert.Equal([foreignScenario.CodOrderId], foreignPending.Items.Select(order => order.Id));
+        }
+    }
+
+    private static Task<OrderPageResult> ListPendingAsync(IOrderService service, FinanceScenario scenario) =>
+        service.ListAsync(scenario.ActorId, scenario.OrganizationId, null, null, null, true, default);
+
+    private OrdersListScope CreateOrdersListScope()
+    {
+        var state = new TenantDatabaseExecutionState();
+        var options = new DbContextOptionsBuilder<OrdersDbContext>()
+            .UseNpgsql(fixture.AppDataSource, postgres => postgres.EnableRetryOnFailure())
+            .AddInterceptors(
+                new TenantTransactionGuardInterceptor(state),
+                new TenantSaveChangesGuardInterceptor(state))
+            .Options;
+        var context = new OrdersDbContext(options, state);
+        var service = new QuoteSnapshotToOrderCoordinator(
+            new TenantTransactionContext<OrdersDbContext>(context, state),
+            new CryptographicOrderPublicIdGenerator(),
+            new NoOpOrderCreationFailureInjector(),
+            new PostgreSqlAppendOnlyAuditWriter(state),
+            new AuditPayloadRedactor(),
+            Options.Create(new OrdersOptions
+            {
+                Provider = OrdersProviderKind.PostgreSql,
+                CommandTimeoutSeconds = 30,
+                PageSize = 50,
+                IdempotencyLifetimeMinutes = 60,
+                PublicIdCollisionRetryCount = 2,
+            }),
+            new Paqueteria.Infrastructure.SystemClock(),
+            new PostgreSqlOrderTrackingLinkIssuer(
+                new Paqueteria.Contracts.Tracking.TrackingTokenHasher(),
+                new PublicTrackingLinkKeyRing(
+                    new Orders.Application.Tracking.PublicTrackingOptions
+                    {
+                        Provider = Orders.Application.Tracking.PublicTrackingProviderKind.PostgreSql,
+                        LinkKeys =
+                        {
+                            [1] = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(
+                                System.Text.Encoding.UTF8.GetBytes("finance contract tests tracking link key"))),
+                        },
+                    },
+                    allowSyntheticKey: false),
+                new PostgreSqlAppendOnlyAuditWriter(state),
+                new AuditPayloadRedactor()));
+        return new OrdersListScope(context, service);
+    }
+
+    private sealed class OrdersListScope(OrdersDbContext context, IOrderService service) : IAsyncDisposable
+    {
+        internal IOrderService Service { get; } = service;
+
+        public ValueTask DisposeAsync() => context.DisposeAsync();
     }
 
     private PostgreSqlOrderFinancialsService CreateFinancialsService(NpgsqlDataSource dataSource) =>

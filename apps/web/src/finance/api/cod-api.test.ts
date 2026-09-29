@@ -7,6 +7,7 @@ import {
   jsonResponse,
   orderId,
   orgA,
+  pendingOrderResponse,
   problem,
   syntheticKey,
 } from "../../operations/contracts/ui-001-screens.fixtures";
@@ -30,6 +31,33 @@ describe("COD api", () => {
     expect(init).toMatchObject({ method: "GET", cache: "no-store" });
     expect((init.headers as Record<string, string>)["X-Organization-Id"]).toBe(orgA);
     expect(financials.cod.expected_cents).toBe(25_050);
+  });
+
+  it("lists pending collections through listOrders with the COD filter and the cursor", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { items: [pendingOrderResponse(orderId, "PQ-000123")], next_cursor: "next" }))
+      .mockResolvedValueOnce(jsonResponse(200, { items: [], next_cursor: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createCodApi("https://api.synthetic.test", bearerSession());
+    const first = await api.pendingReconciliation(null);
+    const [url, init] = lastCall(fetchMock);
+    expect(url.pathname).toBe("/api/v1/orders");
+    expect([...url.searchParams.entries()]).toEqual([["cod_pending_reconciliation", "true"]]);
+    expect(init).toMatchObject({ method: "GET", cache: "no-store" });
+    expect((init.headers as Record<string, string>)["X-Organization-Id"]).toBe(orgA);
+    expect(first.items.map((order) => order.id)).toEqual([orderId]);
+    await api.pendingReconciliation("next");
+    const [nextUrl] = lastCall(fetchMock);
+    expect(nextUrl.searchParams.get("cod_pending_reconciliation")).toBe("true");
+    expect(nextUrl.searchParams.get("cursor")).toBe("next");
+  });
+
+  it("keeps the 403 of a role the COD filter refuses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(problem(403, "MFA_REQUIRED")));
+    await expect(
+      createCodApi("https://api.synthetic.test", bearerSession()).pendingReconciliation(null),
+    ).rejects.toMatchObject({ category: "forbidden", mfaRequired: true });
   });
 
   it("records with integer cents and the Idempotency-Key", async () => {

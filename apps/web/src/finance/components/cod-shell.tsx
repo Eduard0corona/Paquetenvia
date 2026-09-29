@@ -12,6 +12,7 @@ import {
   modalityLabels,
   type CodTransaction,
   type OrderFinancials,
+  type PendingCodOrder,
 } from "../contracts/cod";
 import type { CodController, CodState } from "../state/cod-controller";
 import { useCod } from "../state/use-cod";
@@ -40,10 +41,8 @@ export function CodShell() {
       {state.phase === "ready" && (
         <section className="opsFormLayout">
           <div>
+            {state.canListPending && <PendingList state={state} controller={controller} />}
             <LookupForm key={`lookup-${state.formKey}`} controller={controller} disabled={state.loadingOrder !== null} />
-            {state.canReconcile && (
-              <ReconcileByIdForm key={`reconcile-${state.formKey}`} controller={controller} disabled={state.busy} />
-            )}
           </div>
           <section>
             {state.loadingOrder !== null && <p className="opsLive" aria-live="polite">Cargando la orden.</p>}
@@ -74,19 +73,56 @@ function LookupForm({ controller, disabled }: { readonly controller: CodControll
   );
 }
 
-function ReconcileByIdForm({ controller, disabled }: { readonly controller: CodController; readonly disabled: boolean }) {
+/** API-FIN-COD-VISIBILITY-2026-09-29: collections recorded and not yet reconciled, from listOrders. */
+function PendingList({ state, controller }: { readonly state: CodState; readonly controller: CodController }) {
+  const busy = state.busy || state.loadingOrder !== null;
   return (
-    <form className="opsForm" autoComplete="off" onSubmit={(event) => {
-      event.preventDefault();
-      void controller.reconcile(String(new FormData(event.currentTarget).get("cod_id") ?? "").trim());
-    }}>
-      <fieldset>
-        <legend>Conciliar por registro de cobro</legend>
-        <p>La API no permite consultar registros de cobro; usa esta opción solo si conoces el identificador.</p>
-        <label>Registro de cobro (UUID)<input name="cod_id" required /></label>
-        <button className="opsSecondary" type="submit" disabled={disabled}>Conciliar</button>
-      </fieldset>
-    </form>
+    <section aria-busy={state.pendingLoading}>
+      <h2>Cobros pendientes de conciliar</h2>
+      <button className="opsSecondary" type="button" disabled={state.pendingLoading}
+        onClick={() => void controller.loadPending()}>Actualizar lista</button>
+      {state.pending === null ? (
+        state.pendingLoading ? <p className="opsLive" aria-live="polite">Cargando cobros pendientes.</p> : null
+      ) : state.pending.length === 0 ? (
+        <p>No hay cobros registrados pendientes de conciliar.</p>
+      ) : (
+        <ul>
+          {state.pending.map((order) => (
+            <PendingRow key={order.id} order={order} busy={busy} canReconcile={state.canReconcile} controller={controller} />
+          ))}
+        </ul>
+      )}
+      {state.pendingCursor !== null && (
+        <button className="opsSecondary" type="button" disabled={state.pendingLoading}
+          onClick={() => void controller.loadPending(true)}>Cargar más</button>
+      )}
+    </section>
+  );
+}
+
+function PendingRow({
+  order,
+  busy,
+  canReconcile,
+  controller,
+}: {
+  readonly order: PendingCodOrder;
+  readonly busy: boolean;
+  readonly canReconcile: boolean;
+  readonly controller: CodController;
+}) {
+  const status = (orderStatusLabels as Readonly<Record<string, string>>)[order.status] ?? order.status;
+  return (
+    <li>
+      <span>{order.public_id} · {status}</span>{" "}
+      <button className="opsSecondary" type="button" disabled={busy} onClick={() => void controller.load(order.id)}>
+        Ver cobro
+      </button>
+      {canReconcile && (
+        <button className="opsPrimary" type="button" disabled={busy}
+          onClick={() => void controller.reconcileFromList(order.id)}>Conciliar</button>
+      )}
+    </li>
   );
 }
 
@@ -154,9 +190,6 @@ function Financials({
             <button className="opsPrimary" type="submit" disabled={state.busy}>Registrar cobro</button>
           </fieldset>
         </form>
-      )}
-      {cod.status === "RECORDED" && state.canReconcile && state.transaction?.order_id !== financials.order_id && (
-        <p>El cobro está registrado. Para conciliarlo indica el registro de cobro; la API no lo expone en esta consulta.</p>
       )}
     </>
   );

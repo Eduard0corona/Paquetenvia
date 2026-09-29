@@ -1,3 +1,4 @@
+import { parseCreatedOrder, type CreatedOrder } from "../../operations/contracts/create-order";
 import { parseMxnToCents, sumCents } from "../../operations/contracts/money";
 import {
   array,
@@ -14,8 +15,10 @@ import {
 
 /**
  * /finance/cod (AI-07 cod_control) over AI-05 getOrderFinancials,
- * recordCodCollection and reconcileCod. Every amount is int64 MXN cents exactly as
- * the API returned it; totals that do not add up fail closed.
+ * recordCodCollection and reconcileCod, plus listOrders with
+ * cod_pending_reconciliation (API-FIN-COD-VISIBILITY-2026-09-29). Every amount is
+ * int64 MXN cents exactly as the API returned it; totals that do not add up fail
+ * closed.
  */
 
 export const orderStatuses = [
@@ -70,6 +73,11 @@ export interface OrderFinancials {
   readonly margin_basis_points: number | null;
   readonly cost_by_modality: readonly ModalityCost[];
   readonly cod: CodPosition;
+  /**
+   * API-FIN-COD-VISIBILITY-2026-09-29: the order's COD collection record, the one
+   * reconcileCod takes; null exactly while cod.status is null.
+   */
+  readonly cod_record: CodTransaction | null;
 }
 
 export interface CodTransaction {
@@ -80,6 +88,17 @@ export interface CodTransaction {
   readonly recorded_at: string | null;
   readonly reconciled_at: string | null;
 }
+
+/** One row of the listOrders page filtered by cod_pending_reconciliation=true. */
+export type PendingCodOrder = Pick<CreatedOrder, "id" | "public_id" | "status">;
+
+export interface PendingCodPage {
+  readonly items: readonly PendingCodOrder[];
+  readonly next_cursor: string | null;
+}
+
+/** Orders:PageSize is at most 200 (Orders.Infrastructure options validation). */
+export const maximumOrderPageSize = 200;
 
 export const codStatusLabels: Readonly<Record<CodStatus, string>> = {
   EXPECTED: "Esperado",
@@ -195,6 +214,7 @@ export function parseOrderFinancials(value: unknown): OrderFinancials {
     "margin_basis_points",
     "cost_by_modality",
     "cod",
+    "cod_record",
   ]);
   if (object.currency !== "MXN") fail();
   const buckets = array(object.cost_by_modality, 3).map(parseModalityCost);
@@ -208,8 +228,15 @@ export function parseOrderFinancials(value: unknown): OrderFinancials {
   const basisPoints = nullable(object.margin_basis_points, (points) => integer(points));
   // margin_basis_points is null exactly when revenue is zero.
   if ((basisPoints === null) !== (revenue === 0)) fail();
+  const orderIdValue = uuid(object.order_id);
+  const cod = parseCodPosition(object.cod);
+  const record = nullable(object.cod_record, parseCodTransaction);
+  // The record is the row the position is derived from: both exist together and agree.
+  if ((record === null) !== (cod.status === null)) fail();
+  if (record !== null && (record.order_id !== orderIdValue || record.status !== cod.status ||
+    record.amount_cents !== cod.amount_cents)) fail();
   return {
-    order_id: uuid(object.order_id),
+    order_id: orderIdValue,
     order_status: oneOf(object.order_status, orderStatuses),
     currency: "MXN",
     revenue_cents: revenue,
@@ -217,8 +244,34 @@ export function parseOrderFinancials(value: unknown): OrderFinancials {
     margin_cents: margin,
     margin_basis_points: basisPoints,
     cost_by_modality: buckets,
-    cod: parseCodPosition(object.cod),
+    cod,
+    cod_record: record,
   };
+}
+
+/** The listOrders page; each item is the strict AI-05 Order, reduced to what the list shows. */
+export function parsePendingCodPage(value: unknown): PendingCodPage {
+  const object = exactObject(value, ["items", "next_cursor"]);
+  const items = array(object.items, maximumOrderPageSize).map((item) => {
+    let order: CreatedOrder;
+    try {
+      order = parseCreatedOrder(item);
+    } catch {
+      fail();
+    }
+    return { id: order.id, public_id: order.public_id, status: order.status };
+  });
+  const nextCursor = nullable(object.next_cursor, (cursor) => {
+    if (typeof cursor !== "string" || cursor.length < 1 || cursor.length > 512) fail();
+    return cursor;
+  });
+  return { items, next_cursor: nextCursor };
+}
+
+/** A collection the screen may reconcile straight from the order it loaded. */
+export function reconcilableRecord(financials: OrderFinancials | null): CodTransaction | null {
+  const record = financials?.cod_record ?? null;
+  return record !== null && record.status === "RECORDED" ? record : null;
 }
 
 export function parseCodTransaction(value: unknown): CodTransaction {
