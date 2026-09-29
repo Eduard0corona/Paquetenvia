@@ -3,8 +3,10 @@ import { acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
+  confirmationBlockerLabels,
   CreateOrderContractError,
   evaluateConfirmation,
+  lowPriceGuardTotalCents,
   parseCreatedOrder,
   parseQuote,
 } from "./create-order";
@@ -114,14 +116,28 @@ describe("confirmation guard (AI-07 create_order)", () => {
     expect(evaluateConfirmation(parseQuote(quoteResponse({ status: "USED" })), now)).toEqual(["inactive"]);
   });
 
-  it("blocks at 52 MXN net or less unless the quote is a consolidated route", () => {
-    const at52 = quoteResponse({ net: { currency: "MXN", amount_cents: 5_200 } });
-    const at45 = quoteResponse({ net: { currency: "MXN", amount_cents: 4_500 } });
-    const at5201 = quoteResponse({ net: { currency: "MXN", amount_cents: 5_201 } });
+  // GATE-011-VAT-INCLUDED-2026-09-29: "52 con IVA incluido" — the guard reads the VAT-included total.
+  const vatIncluded = (net: number, tax: number) => quoteResponse({
+    net: { currency: "MXN", amount_cents: net },
+    tax: { currency: "MXN", amount_cents: tax },
+    total: { currency: "MXN", amount_cents: net + tax },
+  });
+
+  it("blocks at 52 MXN total, IVA included, or less unless the quote is a consolidated route", () => {
+    const at52 = vatIncluded(4_483, 717);
+    const at45 = vatIncluded(3_879, 621);
+    const at5201 = vatIncluded(4_484, 717);
     expect(evaluateConfirmation(parseQuote(at52), now)).toEqual(["low_price"]);
     expect(evaluateConfirmation(parseQuote(at45), now)).toEqual(["low_price"]);
     expect(evaluateConfirmation(parseQuote(at5201), now)).toEqual([]);
     expect(evaluateConfirmation(parseQuote({ ...at52, consolidated_route: true }), now)).toEqual([]);
+  });
+
+  it("never applies the guard to the pre-tax net", () => {
+    // 60.32 MXN total is 52.00 net + 8.32 IVA: above the guard, because the customer pays 60.32.
+    expect(evaluateConfirmation(parseQuote(vatIncluded(5_200, 832)), now)).toEqual([]);
+    expect(lowPriceGuardTotalCents).toBe(5_200);
+    expect(confirmationBlockerLabels.low_price).toContain("IVA incluido");
   });
 });
 
@@ -129,7 +145,7 @@ describe("quote and order parsers", () => {
   it("keeps the displayed fields and drops the redacted request snapshot", () => {
     const quote = parseQuote(quoteResponse());
     expect(quote.net.amount_cents).toBe(8_000);
-    expect(quote.breakdown).toEqual([{ line_type: "BASE_TARIFF", amount_cents: 8_000 }]);
+    expect(quote.breakdown).toEqual([{ line_type: "BASE_TARIFF", amount_cents: 9_280 }]);
     expect(quote.package_count).toBe(1);
     expect(quote).not.toHaveProperty("request_snapshot_redacted");
     expect(quote).not.toHaveProperty("package_snapshot");

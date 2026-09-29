@@ -416,6 +416,9 @@ pricing_invariants:
 - BUSINESS_200_499 and BUSINESS_500_PLUS require consolidated_route or valid financial_override
 - total_cents must be >= minimum_total_cents_snapshot unless override
 - GATE-011 determines tax calculation but cannot change the frozen minimum snapshot retroactively
+- GATE-011-VAT-INCLUDED-2026-09-29 (resolved) prices are VAT_INCLUDED for every organization; the tariff amount is the
+  total, subtotal = floor((100 * total + 58) / 116), tax = total - subtotal (integer cents); minimum_total_cents_snapshot
+  is the VAT-included total; existing quotes and orders keep their frozen amounts
 transaction_coordinator_allowlist:
 - quote_snapshot_to_order
 - assignment_to_order_status_event

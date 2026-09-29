@@ -72,7 +72,14 @@ public sealed class PricingArchitectureTests
         Assert.DoesNotContain("Repository<", source, StringComparison.Ordinal);
         Assert.DoesNotContain("GoogleMaps", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Mapbox", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("VatRate", source, StringComparison.OrdinalIgnoreCase);
+        // GATE-011-VAT-INCLUDED-2026-09-29: the only IVA rate is the integer basis-point constant of
+        // TariffTaxCalculator; no other Pricing file may declare or read a rate.
+        var calculator = Path.Combine(root, "Pricing.Domain", "TariffTaxCalculator.cs");
+        var withoutCalculator = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !string.Equals(Path.GetFullPath(path), Path.GetFullPath(calculator), StringComparison.Ordinal))
+            .Select(File.ReadAllText));
+        Assert.DoesNotContain("VatRate", withoutCalculator, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("public const long VatRateBasisPoints = 1_600;", File.ReadAllText(calculator), StringComparison.Ordinal);
         Assert.DoesNotContain("TaxProvider", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("decimal", ReadDomainSource(root), StringComparison.Ordinal);
         Assert.DoesNotContain("double", ReadDomainSource(root), StringComparison.Ordinal);

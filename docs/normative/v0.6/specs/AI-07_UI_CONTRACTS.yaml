@@ -251,7 +251,9 @@ screen_contracts:
     - recargos
     - total
     - rule explanation
-    low_price_guard: block confirmation at <=52 MXN net unless route flag or authorized override
+    - totals labeled "IVA incluido" (GATE-011-VAT-INCLUDED-2026-09-29)
+    low_price_guard: block confirmation at <=52 MXN total, IVA included, unless route flag or authorized override
+      (GATE-011-VAT-INCLUDED-2026-09-29; compares the total the customer pays, never the pre-tax net)
   driver_stop:
     offline_cache:
     - assigned stop minimum data

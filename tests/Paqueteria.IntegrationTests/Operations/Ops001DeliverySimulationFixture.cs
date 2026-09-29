@@ -152,7 +152,7 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
               pricing_tier,service_type,amount_cents,tax_mode,active_from,status,policy_version)
             VALUES (
               @tariff,@org,@city,@area,@zone,'OCCASIONAL','SAME_DAY',
-              12000,'EXEMPT',clock_timestamp()-interval '1 day','ACTIVE','OPS-001-synthetic-v1');
+              12000,'VAT_INCLUDED',clock_timestamp()-interval '1 day','ACTIVE','OPS-001-synthetic-v1');
             """,
             cancellationToken,
             P("org", data.OrganizationId),

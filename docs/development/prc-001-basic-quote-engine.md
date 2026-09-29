@@ -37,13 +37,22 @@ Sin `client_account_id` se usa `OCCASIONAL`. Con cuenta, la proyeccion de `clien
 
 El precio procede exclusivamente de `pricing.tariff_rules.amount_cents`. `Money` usa `long`, moneda fija `MXN` y operaciones checked:
 
+Desde `GATE-011-VAT-INCLUDED-2026-09-29` (IVA incluido, igual para todas las organizaciones) la tarifa
+es el total con IVA incluido y el desglose es aritmetica entera (`TariffTaxCalculator`, tasa 16 % = 1600
+puntos base, redondeo half-up al centavo):
+
 ```text
-subtotal = amount_cents
+total = amount_cents                                   (VAT_INCLUDED)
+subtotal = floor((100 * total + 58) / 116)             = round_half_up(total / 1.16)
 discount = 0
-tax = 0
-total = subtotal
-minimum_total_cents_snapshot = amount_cents
+tax = total - subtotal
+minimum_total_cents_snapshot = total
 ```
+
+Ejemplos: 5200 -> 4483 + 717; 12000 -> 10345 + 1655; 6032 -> 5200 + 832. Con 16 % nunca hay empate de medio
+centavo (`25 * total / 29` tiene denominador impar), asi que la regla de redondeo no altera ningun resultado.
+`PLUS_VAT` conserva su aritmetica probada (`tax = floor((16 * subtotal + 50) / 100)`, `total = subtotal + tax`)
+pero no es seleccionable.
 
 ## Version de politica de precios (PRC-POLICY-VERSION-PER-ORG)
 
@@ -51,7 +60,7 @@ Decision del owner (2026-09-28, literal: "Version por organizacion"): cada organ
 
 La comprobacion ocurre despues de la seleccion por especificidad: una regla seleccionada sin version (solo posible en una instalacion actualizada cuyas reglas anteriores aun no se versionan) falla cerrado con 422 `NO_TARIFF_RULE` y una senal tecnica sin PII; nunca se sustituye por una regla menos especifica.
 
-El flujo ejecutable solo acepta `EXEMPT`. `PLUS_VAT` y `VAT_INCLUDED` fallan cerrados. No se supone tasa, redondeo ni presentacion fiscal; GATE-011 sigue sin resolverse.
+El flujo ejecutable solo acepta `VAT_INCLUDED` (GATE-011 resuelta, `GATE-011-VAT-INCLUDED-2026-09-29`). Una regla seleccionada `PLUS_VAT` o `EXEMPT` falla cerrado con `TaxModeBlocked`; nunca se sustituye por una regla menos especifica. Las cotizaciones y ordenes anteriores conservan sus montos congelados.
 
 ## Paquetes, snapshots y redaccion
 

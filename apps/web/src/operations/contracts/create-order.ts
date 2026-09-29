@@ -29,11 +29,16 @@ export type PricingTier = (typeof pricingTiers)[number];
 /** AI05-INPUT-LIMITS: CreateQuoteRequest packages minItems 1, maxItems 20. */
 export const maximumPackages = 20;
 /**
- * AI-07 create_order.low_price_guard: block confirmation at <= 52 MXN net unless the
- * route flag (consolidated_route, AI-02 low_price_guard) or an authorized override.
- * AI-05 exposes no override on createOrder, so only the route flag unblocks it here.
+ * AI-07 create_order.low_price_guard: block confirmation at <= 52 MXN total, IVA included
+ * (GATE-011-VAT-INCLUDED-2026-09-29: "52 con IVA incluido"), unless the route flag
+ * (consolidated_route, AI-02 low_price_guard) or an authorized override. The guard reads the
+ * VAT-included total the customer pays, never the pre-tax net. AI-05 exposes no override on
+ * createOrder, so only the route flag unblocks it here.
  */
-export const lowPriceGuardNetCents = 5_200;
+export const lowPriceGuardTotalCents = 5_200;
+
+/** GATE-011-VAT-INCLUDED-2026-09-29: every price is presented with IVA included. */
+export const vatIncludedLabel = "IVA incluido";
 
 export interface Money {
   readonly currency: "MXN";
@@ -317,7 +322,7 @@ export function evaluateConfirmation(
   const blockers: ConfirmationBlocker[] = [];
   if (quote.status !== "ACTIVE") blockers.push("inactive");
   if (Date.parse(quote.expires_at) <= now.getTime()) blockers.push("expired");
-  if (quote.net.amount_cents <= lowPriceGuardNetCents && !quote.consolidated_route)
+  if (quote.total.amount_cents <= lowPriceGuardTotalCents && !quote.consolidated_route)
     blockers.push("low_price");
   return blockers;
 }
@@ -326,7 +331,7 @@ export const confirmationBlockerLabels: Readonly<Record<ConfirmationBlocker, str
   inactive: "La cotización ya no está activa; cotiza de nuevo.",
   expired: "La cotización expiró; cotiza de nuevo.",
   low_price:
-    "Precio neto de 52 MXN o menos: solo se confirma con ruta consolidada.",
+    "Total de 52 MXN o menos (IVA incluido): solo se confirma con ruta consolidada.",
 };
 
 // ---------------------------------------------------------------------------
