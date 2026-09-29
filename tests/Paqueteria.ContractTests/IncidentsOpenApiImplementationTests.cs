@@ -21,6 +21,8 @@ public sealed partial class IncidentsOpenApiImplementationTests
 {
     private const string IncidentsPath = "/orders/{orderId}/incidents";
     private const string ResolutionPath = "/incidents/{incidentId}/resolution";
+    private const string ListPath = "/incidents";
+    private const string IncidentPath = "/incidents/{incidentId}";
 
     [Fact]
     public void Open_incident_operation_publishes_the_status_matrix_the_endpoint_implements()
@@ -336,9 +338,15 @@ public sealed partial class IncidentsOpenApiImplementationTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        // Opening and resolving are the whole incident surface: no list, get, delete or reopen.
+        // Opening, resolving and the two API-INC-LIST-PROOFS-2026-09-29 reads are the whole incident
+        // surface: no update, delete or reopen.
         Assert.Equal(
-            [$"POST {ResolutionPath} resolveIncident", $"POST {IncidentsPath} openIncident"],
+            [
+                $"GET {ListPath} listIncidents",
+                $"GET {IncidentPath} getIncident",
+                $"POST {ResolutionPath} resolveIncident",
+                $"POST {IncidentsPath} openIncident",
+            ],
             published);
         Assert.Equal(published, implemented);
     }
@@ -522,6 +530,125 @@ public sealed partial class IncidentsOpenApiImplementationTests
             Regex.Matches(service, @"\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+[a-z_]+\.[a-z_]+")
                 .Select(match => match.Value)
                 .ToArray());
+    }
+
+    // ------------------------------------------------ API-INC-LIST-PROOFS-2026-09-29 reads
+
+    [Fact]
+    public void List_incidents_publishes_the_status_matrix_filters_and_page_the_endpoint_implements()
+    {
+        var operation = Contract().Mapping("paths").Mapping(ListPath).Mapping("get");
+        Assert.Equal("listIncidents", operation.Scalar("operationId"));
+        var responses = operation.Mapping("responses");
+        var declared = responses.Children.Keys.Cast<YamlScalarNode>().Select(node => node.Value!)
+            .Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(["200", "401", "403", "409", "503"], declared);
+        Assert.Equal(ProducedStatuses("listIncidents"), declared);
+        Assert.Equal(
+            "#/components/schemas/IncidentPage",
+            responses.Mapping("200").Mapping("content").Mapping("application/json").Mapping("schema").Scalar("$ref"));
+        Assert.Equal("#/components/responses/IncidentConflict", responses.Mapping("409").Scalar("$ref"));
+        Assert.Equal(
+            "shape-validation-then-capability-before-persisted-state",
+            operation.Scalar("x-authorization-precedence"));
+
+        // The query parameters are exactly the ones the endpoint parses, and nothing configures the page size.
+        var parameters = operation.Sequence("parameters").Children.Cast<YamlMappingNode>().ToArray();
+        Assert.Equal(
+            "#/components/parameters/OrganizationContext",
+            parameters[0].Scalar("$ref"));
+        var query = parameters.Skip(1).ToDictionary(parameter => parameter.Scalar("name"), StringComparer.Ordinal);
+        Assert.Equal(
+            IncidentEndpoints.ListQueryParameters.Order(StringComparer.Ordinal),
+            query.Keys.Order(StringComparer.Ordinal));
+        Assert.All(query.Values, parameter =>
+        {
+            Assert.Equal("query", parameter.Scalar("in"));
+            Assert.Equal("false", parameter.Scalar("required"));
+        });
+        AssertEnum(
+            query["status"].Mapping("schema"),
+            Enum.GetValues<IncidentStatus>().Select(value => value.ToContractValue()).ToArray());
+        Assert.Equal("uuid", query["order_id"].Mapping("schema").Scalar("format"));
+        Assert.Equal(
+            IncidentCursorCodec.MaximumLength,
+            int.Parse(query["cursor"].Mapping("schema").Scalar("maxLength")));
+
+        var page = Schema("IncidentPage");
+        Assert.Equal(JsonProperties<IncidentPageResponse>(), PropertyNames(page));
+        Assert.Equal(JsonProperties<IncidentPageResponse>(), Required(page));
+        Assert.Equal("false", page.Scalar("additionalProperties"));
+        Assert.Equal(
+            "#/components/schemas/Incident",
+            page.Mapping("properties").Mapping("items").Mapping("items").Scalar("$ref"));
+    }
+
+    [Fact]
+    public void Get_incident_publishes_the_status_matrix_the_endpoint_implements()
+    {
+        var operation = Contract().Mapping("paths").Mapping(IncidentPath).Mapping("get");
+        Assert.Equal("getIncident", operation.Scalar("operationId"));
+        var responses = operation.Mapping("responses");
+        var declared = responses.Children.Keys.Cast<YamlScalarNode>().Select(node => node.Value!)
+            .Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(["200", "401", "403", "404", "503"], declared);
+        Assert.Equal(ProducedStatuses("getIncident"), declared);
+        Assert.Equal(
+            "#/components/schemas/Incident",
+            responses.Mapping("200").Mapping("content").Mapping("application/json").Mapping("schema").Scalar("$ref"));
+        Assert.Equal("#/components/responses/UniformNotFound", responses.Mapping("404").Scalar("$ref"));
+        Assert.Equal(
+            ["#/components/parameters/OrganizationContext", "#/components/parameters/IncidentId"],
+            operation.Sequence("parameters").Children.Cast<YamlMappingNode>().Select(parameter => parameter.Scalar("$ref")));
+    }
+
+    /// <summary>
+    /// The reads settle capability from the session before the service runs, and the service settles it
+    /// again from the persisted memberships before any incident row is read; neither writes anything.
+    /// </summary>
+    [Fact]
+    public void Incident_reads_settle_capability_before_any_incident_and_never_write()
+    {
+        var list = HandlerSource("ListIncidentsAsync");
+        int[] listOrder =
+        [
+            list.IndexOf("TryReadListFilters(", StringComparison.Ordinal),
+            list.IndexOf("TenantCapabilities.ListIncidents) is { } denied", StringComparison.Ordinal),
+            list.IndexOf("service.ListAsync(", StringComparison.Ordinal),
+        ];
+        Assert.All(listOrder, index => Assert.True(index >= 0));
+        Assert.Equal(listOrder.Order().ToArray(), listOrder);
+
+        var get = HandlerSource("GetIncidentAsync");
+        int[] getOrder =
+        [
+            get.IndexOf("TenantCapabilities.GetIncident) is { } denied", StringComparison.Ordinal),
+            get.IndexOf("Guid.TryParseExact(incidentId, \"D\"", StringComparison.Ordinal),
+            get.IndexOf("service.GetAsync(", StringComparison.Ordinal),
+        ];
+        Assert.All(getOrder, index => Assert.True(index >= 0));
+        Assert.Equal(getOrder.Order().ToArray(), getOrder);
+
+        var service = ReadRepositoryFile(
+            "src", "Modules", "Incidents", "Incidents.Infrastructure", "Incidents", "PostgreSqlIncidentReadService.cs");
+        var capability = service.IndexOf("IncidentsSql.ReadResolutionCapabilityAsync", StringComparison.Ordinal);
+        var read = service.IndexOf("return await read(dbContext, token);", StringComparison.Ordinal);
+        Assert.True(capability >= 0 && read > capability);
+        Assert.DoesNotMatch(@"(?i)\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", service);
+        // The protected description, its key and the actor never leave the store through a read.
+        Assert.DoesNotContain("description_ciphertext", service, StringComparison.Ordinal);
+        Assert.DoesNotContain("pii_key_version", service, StringComparison.Ordinal);
+        Assert.DoesNotContain("created_by", service, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Open_incident_publishes_who_may_open_as_the_server_enforces_it()
+    {
+        var description = OpenIncidentOperation().Scalar("description");
+        Assert.Contains("API-INC-LIST-PROOFS-2026-09-29", description, StringComparison.Ordinal);
+        Assert.Contains("active DISPATCHER member", description, StringComparison.Ordinal);
+        Assert.Contains("PLATFORM_ADMIN member with a satisfied MFA challenge", description, StringComparison.Ordinal);
+        Assert.Contains("ACCEPTED or ACTIVE assignment", description, StringComparison.Ordinal);
     }
 
     private static YamlMappingNode Contract() =>

@@ -226,6 +226,14 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                     "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
                     CultureInfo.InvariantCulture));
             writer.WriteString("acceptance_channel", command.Acceptance.AcceptanceChannel);
+            // D6-COD-EXPECTED: the declared COD is part of the request, so replaying a key with another amount is
+            // IDEMPOTENCY_CONFLICT. Zero (no COD) is omitted, which keeps every pre-COD fingerprint byte-identical
+            // and makes an absent field and an explicit zero the same request, as they are the same order.
+            if (command.CodExpectedCents != 0)
+            {
+                writer.WriteNumber("cod_expected_cents", command.CodExpectedCents);
+            }
+
             writer.WriteEndObject();
         }
 
@@ -317,7 +325,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             quote.PricingPolicyVersion,
             quote.PackageSnapshot,
             quote.FinancialOverride,
-            now);
+            now,
+            command.CodExpectedCents);
 
         await InsertOrderAsync(connection, transaction, order, cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.OrderInserted, cancellationToken);
@@ -369,6 +378,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             payer_type = order.PayerType.ToContractValue(),
             pricing_tier = order.PricingTier,
             total_cents = order.TotalCents,
+            cod_expected_cents = order.CodExpectedCents,
             request_id = command.RequestId,
         }, JsonOptions);
         await auditWriter.WriteAsync(
@@ -523,6 +533,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             command.QuoteId == Guid.Empty ||
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             !OrderInputPolicy.TryParsePayerType(command.PayerType, out _) ||
+            !OrderInputPolicy.IsCodExpectedCents(command.CodExpectedCents) ||
             command.Acceptance is null ||
             !OrderAcceptanceInputPolicy.IsValid(
                 command.Acceptance.TermsVersion,
@@ -769,7 +780,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
               claim_window_ends_at,finalized_at,archived_at,created_at,updated_at)
             VALUES (
               @id,@public_id,@quote_id,@owner,NULL,@client,@city,@area,@origin,@destination,@service,@tier,@consolidated,
-              @payer,'DRAFT',@subtotal,@discount,@tax,@total,@minimum,@currency,@policy,@packages,@override,0,1,
+              @payer,'DRAFT',@subtotal,@discount,@tax,@total,@minimum,@currency,@policy,@packages,@override,@cod,1,
               NULL,NULL,NULL,@created,@updated)
             """);
         AddOrderParameters(command, order);
@@ -991,6 +1002,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         command.Parameters.Add(P("policy", NpgsqlDbType.Text, order.PricingPolicyVersion));
         command.Parameters.Add(P("packages", NpgsqlDbType.Jsonb, order.PackageSnapshot));
         command.Parameters.Add(P("override", NpgsqlDbType.Jsonb, order.FinancialOverride));
+        command.Parameters.Add(P("cod", NpgsqlDbType.Bigint, order.CodExpectedCents));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, order.CreatedAt));
         command.Parameters.Add(P("updated", NpgsqlDbType.TimestampTz, order.UpdatedAt));
     }

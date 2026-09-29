@@ -37,7 +37,7 @@ export function previewResponse(overrides: Record<string, unknown> = {}): Record
     valid_rows: 1,
     invalid_rows: 0,
     file_errors: [],
-    rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] }],
+    rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 0 }],
     ...overrides,
   };
 }
@@ -48,7 +48,7 @@ export function invalidPreviewResponse(): Record<string, unknown> {
     valid_rows: 1,
     invalid_rows: 1,
     rows: [
-      { row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] },
+      { row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 15_050 },
       {
         row_number: 3,
         quote_id: null,
@@ -92,6 +92,16 @@ export function incidentResponse(overrides: Record<string, unknown> = {}): Recor
     occurred_at: "2026-09-28T16:00:00Z",
     sla_due_at: "2026-09-29T16:00:00Z",
     evidence_proof_ids: [proofId],
+    ...overrides,
+  };
+}
+
+export function proofResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: proofId,
+    proof_type: "DELIVERY_PHOTO",
+    sha256: "0a".repeat(32),
+    captured_at: "2026-09-28T15:55:00Z",
     ...overrides,
   };
 }

@@ -315,7 +315,6 @@ REQUIRED_OPEN_DECISIONS = {
     "GATE-008",
     "GATE-009",
     "GATE-010",
-    "GATE-011",
     "GATE-012",
     "GATE-013",
     "GATE-014",

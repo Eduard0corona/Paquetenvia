@@ -16,7 +16,8 @@ public sealed record CreateOrderCommand(
     Guid QuoteId,
     string PayerType,
     OrderAcceptanceInput Acceptance,
-    string? RequestId);
+    string? RequestId,
+    long CodExpectedCents = 0);
 
 public sealed record MoneyResult(string Currency, long AmountCents);
 
@@ -111,6 +112,35 @@ public interface IOrderPublicIdGenerator
 
 public static class OrderInputPolicy
 {
+    /// <summary>The longest decimal text an int64 amount of cents can have (<c>9223372036854775807</c>).</summary>
+    public const int MaximumCodExpectedCentsDigits = 19;
+
+    /// <summary>
+    /// D6-COD-EXPECTED: the dispatcher-declared COD expectation is MXN integer cents (int64), zero meaning no COD.
+    /// A negative amount is never a valid expectation.
+    /// </summary>
+    public static bool IsCodExpectedCents(long value) => value >= 0;
+
+    /// <summary>
+    /// Reads a COD expectation written as text, on a CSV-001 row or as the raw JSON number of
+    /// <c>POST /orders</c>. Only a plain run of ASCII digits that fits int64 is accepted: signs, decimal points,
+    /// exponents, thousands separators, currency symbols and whitespace are all rejected, so no fractional or
+    /// floating-point value can ever become an amount of cents.
+    /// </summary>
+    public static bool TryParseCodExpectedCents(string? text, out long cents)
+    {
+        cents = 0;
+        return !string.IsNullOrEmpty(text) &&
+            text.Length <= MaximumCodExpectedCentsDigits &&
+            text.All(char.IsAsciiDigit) &&
+            long.TryParse(
+                text,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out cents) &&
+            IsCodExpectedCents(cents);
+    }
+
     public static bool IsPayerType(string? value) =>
         value is "SENDER" or "RECIPIENT" or "BUSINESS_ACCOUNT";
 

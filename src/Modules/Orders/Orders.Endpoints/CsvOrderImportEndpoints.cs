@@ -231,7 +231,8 @@ public static class CsvOrderImportEndpoints
                 row.Valid,
                 row.Errors
                     .Select(error => new CsvImportRowErrorResponse(error.Column, error.Code))
-                    .ToArray()))
+                    .ToArray(),
+                row.CodExpectedCents))
             .ToArray());
 
     private static CsvImportCommitResponse ToCommitResponse(CsvOrderImportCommitResult result) => new(
@@ -278,7 +279,9 @@ public sealed record CsvImportRowPreviewResponse(
     [property: JsonPropertyName("quote_id")] string? QuoteId,
     [property: JsonPropertyName("payer_type")] string? PayerType,
     [property: JsonPropertyName("valid")] bool Valid,
-    [property: JsonPropertyName("errors")] IReadOnlyList<CsvImportRowErrorResponse> Errors);
+    [property: JsonPropertyName("errors")] IReadOnlyList<CsvImportRowErrorResponse> Errors,
+    [property: JsonPropertyName("cod_expected_cents"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? CodExpectedCents);
 
 public sealed record CsvImportPreviewResponse(
     [property: JsonPropertyName("content_digest")] string ContentDigest,

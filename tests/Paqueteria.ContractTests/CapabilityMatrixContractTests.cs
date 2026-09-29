@@ -206,6 +206,53 @@ public sealed class CapabilityMatrixContractTests
         Assert.Contains("getOrderFinancials", parameter.Scalar("description"), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// API-INC-LIST-PROOFS-2026-09-29: AI-05 publishes who may open an incident exactly as the server already
+    /// enforces it — the capability catalog and the SQL authorization of the incident service agree role for role —
+    /// and the three incident desk reads admit exactly the resolveIncident grants, MFA included.
+    /// </summary>
+    [Fact]
+    public void Incident_operations_publish_the_enforced_open_rule_and_reads_mirror_resolution()
+    {
+        var decision = Matrix.Scalar("incident_operations_decision");
+        Assert.StartsWith("API-INC-LIST-PROOFS-2026-09-29", decision, StringComparison.Ordinal);
+        Assert.Contains("rule the server already enforces", decision, StringComparison.Ordinal);
+        Assert.Contains("ACCEPTED or ACTIVE assignment", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["getIncident", "listIncidents", "listOrderProofs", "openIncident", "resolveIncident"],
+            OperationIds(Matrix.Mapping("incident_operations")).Order(StringComparer.Ordinal));
+
+        Assert.Equal(
+            [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true), (OrganizationRole.Driver, false)],
+            TenantCapabilities.OpenIncident.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        foreach (var read in new[]
+                 {
+                     TenantCapabilities.ListIncidents, TenantCapabilities.GetIncident, TenantCapabilities.ListOrderProofs,
+                 })
+        {
+            Assert.Equal(
+                TenantCapabilities.ResolveIncident.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                read.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        }
+
+        // The SQL the incident service authorizes an opening with admits exactly these roles: a DISPATCHER, a
+        // PLATFORM_ADMIN only with MFA, and a DRIVER only through an ACCEPTED or ACTIVE assignment of the order.
+        var sql = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root, "src", "Modules", "Incidents", "Incidents.Infrastructure", "Incidents",
+            "IncidentsSql.cs"));
+        var start = sql.IndexOf("ReadAuthorizedOrderAsync(", StringComparison.Ordinal);
+        var end = sql.IndexOf("AS authorized", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        var authorization = sql[start..end];
+        Assert.Equal(
+            ["DISPATCHER", "DRIVER", "PLATFORM_ADMIN"],
+            System.Text.RegularExpressions.Regex.Matches(authorization, "m\\.role='([A-Z_]+)'")
+                .Select(match => match.Groups[1].Value)
+                .Order(StringComparer.Ordinal));
+        Assert.Contains("@mfa\n                  AND EXISTS", authorization.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        Assert.Contains("a.status IN ('ACCEPTED','ACTIVE')", authorization, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -244,7 +291,7 @@ public sealed class CapabilityMatrixContractTests
         foreach (var section in new[]
                  {
                      "operations", "finance_operations", "platform_operations", "membership_operations",
-                     "tracking_link_operations",
+                     "tracking_link_operations", "incident_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

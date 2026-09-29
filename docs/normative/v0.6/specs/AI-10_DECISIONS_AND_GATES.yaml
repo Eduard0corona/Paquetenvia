@@ -43,11 +43,6 @@ open_decisions:
   topic: service_zones_and_sla
   severity: BLOCKER_FOR_REAL_QUOTES
   decision_needed: zone polygons, hours, package limits, prohibited items, SLA
-- id: GATE-011
-  topic: tax_display
-  severity: BLOCKER_FOR_PUBLIC_PRICING
-  decision_needed: PLUS_VAT or VAT_INCLUDED; calculation of subtotal/discount/tax/total and review of configured absolute
-    price floors
 - id: GATE-012
   topic: cloud_and_data_residency
   severity: BLOCKER_FOR_PRODUCTION
@@ -170,6 +165,43 @@ resolved_decisions:
   - confirm deployment topology sustains the committed 99.5%
   reference: docs/gates/GATE-002_RESOLUTION_IDENTITY_PROVIDER.md
   gate_007_input: data residency defined (Mexico, no international transfer)
+- id: GATE-011
+  topic: tax_display
+  resolved_on: 2026-09-29
+  resolved_by: project_owner
+  decision_record: GATE-011-VAT-INCLUDED-2026-09-29 (decision-log.md)
+  owner_literals:
+  - "Presentación de impuestos, IVA incluido"
+  - "52 con IVA incluido"
+  - "Igual para todas"
+  decision: prices are presented with IVA included (VAT_INCLUDED), the same for every organization and client company;
+    no organization chooses PLUS_VAT or EXEMPT
+  tax_calculation: integer cents only; the tariff amount is the total the customer pays; subtotal (net) =
+    round_half_up(total * 10000 / 11600) = floor((100 * total + 58) / 116); tax = total - subtotal; discount = 0;
+    total = subtotal - discount + tax; IVA rate 16% (1600 basis points); an exact half cent never occurs at 16%
+  selectable_tax_modes:
+  - VAT_INCLUDED
+  retained_not_selectable:
+  - PLUS_VAT (arithmetic kept and tested; tax = round_half_up(subtotal * 16 / 100), total = subtotal + tax)
+  - EXEMPT
+  absolute_price_floor: the 52 MXN low-price guard (AI-07 create_order.low_price_guard, 5200 cents, blocked at <= 5200
+    unless consolidated_route or an authorized override) compares the VAT-included total the customer pays, never the
+    pre-tax net; the comparison stays non-strict (a total of exactly 52.00 is blocked)
+  minimum_total_cents_snapshot: the VAT-included total of the selected rule; SQL keeps CHECK total_cents >=
+    minimum_total_cents_snapshot unless override (ADR-021), unchanged
+  frozen_snapshots: quotes and orders created before the decision keep their frozen subtotal, tax, total and minimum;
+    nothing is recomputed
+  enforcement:
+  - Pricing.Domain quotes only VAT_INCLUDED rules; a selected PLUS_VAT or EXEMPT rule fails closed (TaxModeBlocked)
+  - security.load_master_data refuses to create a PLUS_VAT or EXEMPT tariff rule (MDM001_TARIFF_TAX_MODE_NOT_ALLOWED;
+    Pricing lane 20260929000200_RequireVatIncludedTariffsInMasterDataLoader); a stored rule may still be closed
+  - AI-06 keeps the tax_mode vocabulary and CHECK (PLUS_VAT, VAT_INCLUDED, EXEMPT); no destructive change
+  ai06_ai18: unchanged; the decision adds no DDL, CHECK, grant or role (the loader step only replaces the function body)
+  pending_outside_this_gate:
+  - CFDI invoicing remains GATE-006
+  - real tariffs and zones remain GATE-010
+  pilot_authorized: false
+  production_authorized: false
 - id: REL-000-DEF-001
   topic: fin001_release_classification
   resolved_on: 2026-07-31

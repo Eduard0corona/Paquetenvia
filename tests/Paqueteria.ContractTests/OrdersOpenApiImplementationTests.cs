@@ -33,7 +33,7 @@ public sealed class OrdersOpenApiImplementationTests
     [Fact]
     public void Request_and_response_DTOs_match_AI05_without_internal_or_PII_fields()
     {
-        AssertJsonProperties<CreateOrderRequest>("acceptance", "payer_type", "quote_id");
+        AssertJsonProperties<CreateOrderRequest>("acceptance", "cod_expected_cents", "payer_type", "quote_id");
         AssertJsonProperties<OrderAcceptanceRequest>(
             "acceptance_channel", "accepted_at", "privacy_version", "terms_version");
         AssertJsonProperties<TransitionOrderRequest>(
@@ -232,7 +232,7 @@ public sealed class OrdersOpenApiImplementationTests
 
         AssertJsonProperties<CsvImportRowErrorResponse>("code", "column");
         AssertJsonProperties<CsvImportRowPreviewResponse>(
-            "errors", "payer_type", "quote_id", "row_number", "valid");
+            "cod_expected_cents", "errors", "payer_type", "quote_id", "row_number", "valid");
         AssertJsonProperties<CsvImportPreviewResponse>(
             "content_digest", "file_errors", "invalid_rows", "rows", "total_rows", "valid_rows");
         AssertJsonProperties<CsvImportRowOutcomeResponse>(
@@ -243,9 +243,13 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Equal(
             JsonPropertyNames<CsvImportRowErrorResponse>(),
             RequiredPropertyNames(schemas.Mapping("CsvImportRowError")));
+        // D6-COD-EXPECTED: cod_expected_cents is the one optional preview field; it is present exactly on valid rows.
+        Assert.Equal(
+            JsonPropertyNames<CsvImportRowPreviewResponse>().Where(name => name != "cod_expected_cents"),
+            RequiredPropertyNames(schemas.Mapping("CsvImportRowPreview")));
         Assert.Equal(
             JsonPropertyNames<CsvImportRowPreviewResponse>(),
-            RequiredPropertyNames(schemas.Mapping("CsvImportRowPreview")));
+            PropertyNames(schemas.Mapping("CsvImportRowPreview")));
         Assert.Equal(
             JsonPropertyNames<CsvImportPreviewResponse>(),
             RequiredPropertyNames(schemas.Mapping("CsvImportPreview")));
@@ -272,6 +276,56 @@ public sealed class OrdersOpenApiImplementationTests
             EnumValues(schemas.Mapping("CsvImportConflictProblem").Mapping("properties").Mapping("code")));
     }
 
+    /// <summary>
+    /// D6-COD-EXPECTED: the COD expectation is an optional int64 of cents with minimum 0 on createOrder and on the
+    /// CSV-001 preview, the CSV column is named after the createOrder field and appended last, the row error is the
+    /// implementation's, the delta is marked shipped, and Order never exposes the amount to its VIEWER readers.
+    /// </summary>
+    [Fact]
+    public void The_COD_expectation_matches_AI05_and_stays_off_the_Order_schema()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        foreach (var cod in new[]
+        {
+            schemas.Mapping("CreateOrderRequest").Mapping("properties").Mapping("cod_expected_cents"),
+            schemas.Mapping("CsvImportRowPreview").Mapping("properties").Mapping("cod_expected_cents"),
+        })
+        {
+            Assert.Equal("integer", cod.Scalar("type"));
+            Assert.Equal("int64", cod.Scalar("format"));
+            Assert.Equal("0", cod.Scalar("minimum"));
+        }
+
+        Assert.DoesNotContain("cod_expected_cents", PropertyNames(schemas.Mapping("Order")));
+        AssertJsonProperties<OrderResponse>(
+            "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id",
+            "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
+            "quote_id", "service_area_id", "service_type", "status", "total", "version");
+        Assert.DoesNotContain(
+            typeof(OrderDetailResponse).GetProperties(),
+            property => property.Name.Contains("Cod", StringComparison.Ordinal));
+
+        Assert.Equal("cod_expected_cents", CsvOrderImportContract.ColumnCodExpectedCents);
+        Assert.Equal(
+            [.. CsvOrderImportContract.Header, "cod_expected_cents"],
+            CsvOrderImportContract.HeaderWithCod.ToArray());
+        var fileDescription = schemas.Mapping("CsvImportPreviewRequest").Mapping("properties").Mapping("file")
+            .Scalar("description");
+        Assert.Contains(CsvOrderImportContract.HeaderLine, fileDescription, StringComparison.Ordinal);
+        Assert.Contains(
+            "optionally followed by cod_expected_cents",
+            fileDescription,
+            StringComparison.Ordinal);
+        Assert.Contains(CsvOrderImportRowErrorCodes.CodExpectedCentsInvalid, RowErrorCodes());
+
+        var delta = root.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Single(entry => entry.Scalar("id") == "D6-COD-EXPECTED");
+        Assert.Equal("DECIDED", delta.Scalar("status"));
+        Assert.Contains("feature/ord-csv-cod-expected", delta.Scalar("implementation"), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Shared_idempotency_policy_matches_normative_limits()
     {
@@ -287,9 +341,13 @@ public sealed class OrdersOpenApiImplementationTests
         var createOrder = root.Mapping("components").Mapping("schemas").Mapping("CreateOrderRequest");
         var acceptance = createOrder.Mapping("properties").Mapping("acceptance");
 
+        // D6-COD-EXPECTED: cod_expected_cents is the one optional CreateOrderRequest field.
+        Assert.Equal(
+            JsonPropertyNames<CreateOrderRequest>().Where(name => name != "cod_expected_cents"),
+            RequiredPropertyNames(createOrder));
         Assert.Equal(
             JsonPropertyNames<CreateOrderRequest>(),
-            RequiredPropertyNames(createOrder));
+            PropertyNames(createOrder));
         Assert.Equal(
             JsonPropertyNames<OrderAcceptanceRequest>(),
             RequiredPropertyNames(acceptance));
@@ -354,6 +412,12 @@ public sealed class OrdersOpenApiImplementationTests
         .Select(field => (string)field.GetRawConstantValue()!)
         .Order(StringComparer.Ordinal)
         .ToArray();
+
+    private static string[] PropertyNames(YamlMappingNode schema) =>
+        schema.Mapping("properties").Children.Keys
+            .Select(key => Assert.IsType<YamlScalarNode>(key).Value!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
     private static string[] RequiredPropertyNames(YamlMappingNode schema) =>
         schema.Sequence("required").Children

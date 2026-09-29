@@ -708,6 +708,54 @@ paths:
           $ref: '#/components/responses/ProofConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      tags:
+      - Custody
+      operationId: listOrderProofs
+      description: >-
+        API-INC-LIST-PROOFS-2026-09-29 returns one page of the POD-001 proofs of
+        one order, newest first by created_at then id, so the incident desk picks
+        evidence_proof_ids from a list. Each item is the Proof representation
+        finalizeProof returns (id, proof_type, sha256, captured_at) and nothing
+        else: never the object bytes, the storage key, a signed or download URL,
+        the capture point or the recipient name. The server owns the bounded page
+        size. Only DISPATCHER members and PLATFORM_ADMIN members with a
+        satisfied MFA challenge may list (x-capability-matrix incident_operations);
+        DRIVER, VIEWER, FINANCE and every other role receive the uniform 403
+        before any order or proof is read. A malformed, missing or other-tenant
+        order is the same uniform 404. The only query parameter is cursor, at
+        most once; an unknown parameter or a cursor this operation did not issue
+        for this order is 409 INVALID_REQUEST. The read never writes.
+      x-authorization-precedence: capability-before-persisted-state
+      x-capability-protected-state:
+      - order
+      - proof
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+      responses:
+        '200':
+          description: Cursor-paginated proof metadata of the order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/ProofConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/incidents:
     post:
       tags:
@@ -723,6 +771,14 @@ paths:
         than server time plus the configured clock tolerance (default 5 minutes)
         is 409 INVALID_REQUEST. The check precedes the idempotency replay, so an
         expired report is refused even when its Idempotency-Key is still stored.
+        Who may open (API-INC-LIST-PROOFS-2026-09-29, publishing the rule the
+        server already enforces; x-capability-matrix incident_operations): an
+        active DISPATCHER member of the selected organization; an active
+        PLATFORM_ADMIN member with a satisfied MFA challenge (403 MFA_REQUIRED
+        when only the second factor is missing); and an active DRIVER member
+        with an ACTIVE driver profile in that organization, only for an order
+        it currently holds an ACCEPTED or ACTIVE assignment for. Every other
+        role, and a driver without that assignment, receives the generic 403.
       x-shape-validation: invalid-request-without-productive-transaction
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -749,6 +805,105 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/IncidentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /incidents:
+    get:
+      tags:
+      - Incidents
+      operationId: listIncidents
+      description: >-
+        API-INC-LIST-PROOFS-2026-09-29 returns one page of the incidents of the
+        selected organization (as owner or operator of their order), newest
+        first by created_at then id, each exactly as the Incident representation
+        openIncident and resolveIncident return it. The server owns the bounded
+        page size. status keeps the incidents in that status and order_id keeps
+        the incidents of that order. Every query parameter appears at most once
+        and parses exactly; an unknown parameter, an unknown status, an order_id
+        that is not a canonical UUID or a cursor that was not issued by this
+        operation is 409 INVALID_REQUEST. Same capability as resolveIncident:
+        DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA
+        challenge; DRIVER, VIEWER and every other role receive the uniform 403
+        before any incident is read. Another tenant's incidents are never listed.
+        The description and the resolution reason are never returned. A stored
+        incident outside the published vocabulary fails closed as 503. The read
+        never writes.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - incident
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - OPEN
+          - INVESTIGATING
+          - RESOLVED
+          - REJECTED
+      - name: order_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+      responses:
+        '200':
+          description: Cursor-paginated tenant incidents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IncidentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /incidents/{incidentId}:
+    get:
+      tags:
+      - Incidents
+      operationId: getIncident
+      description: >-
+        API-INC-LIST-PROOFS-2026-09-29 returns one incident of the selected
+        organization as the Incident representation. Same capability as
+        resolveIncident, evaluated before incident visibility: DISPATCHER
+        members and PLATFORM_ADMIN members with a satisfied MFA challenge;
+        every other role receives the uniform 403 for any incident id. A
+        malformed, missing or other-tenant incident is the same uniform 404.
+        The description and the resolution reason are never returned. The read
+        never writes.
+      x-authorization-precedence: capability-before-persisted-state
+      x-capability-protected-state:
+      - incident
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/IncidentId'
+      responses:
+        '200':
+          description: Incident
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /incidents/{incidentId}/resolution:
@@ -2893,6 +3048,18 @@ components:
               - PWA
               - ASSISTED
               - API
+        cod_expected_cents:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            D6-COD-EXPECTED - optional cash-on-delivery amount the dispatcher declares, in MXN integer cents; absent
+            or 0 means the order carries no COD. The JSON literal must be a plain non-negative integer that fits
+            int64 (no fraction, exponent, sign or string); anything else is rejected with 409 before any order is
+            created. It is copied to orders.cod_expected_cents and is part of the Idempotency-Key request hash, so
+            replaying a key with another amount is a conflict. It is read back only through the finance operations
+            (CodPosition.expected_cents, cod_expected_cents_total) and settlements, never through Order, which
+            VIEWER can read.
     Order:
       type: object
       required:
@@ -3207,6 +3374,22 @@ components:
         captured_at:
           type: string
           format: date-time
+    ProofPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Proof'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Opaque cursor of the next page; null on the last page.
     OpenIncidentRequest:
       type: object
       additionalProperties: false
@@ -3350,6 +3533,22 @@ components:
           items:
             type: string
             format: uuid
+    IncidentPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Incident'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Opaque cursor of the next page; null on the last page.
     PublicTracking:
       type: object
       required:
@@ -3570,7 +3769,11 @@ components:
         file:
           type: string
           format: binary
-          description: UTF-8 CSV-001 document, at most 1 MiB and 500 data rows.
+          description: >-
+            UTF-8 CSV-001 document, at most 1 MiB and 500 data rows. The header is
+            quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel, optionally followed by
+            cod_expected_cents (D6-COD-EXPECTED); an empty COD cell means no COD and a filled one must be a plain
+            non-negative integer of MXN cents.
     CsvImportCommitRequest:
       type: object
       required:
@@ -3603,6 +3806,7 @@ components:
           - PRIVACY_VERSION_INVALID
           - ACCEPTED_AT_INVALID
           - ACCEPTANCE_CHANNEL_INVALID
+          - COD_EXPECTED_CENTS_INVALID
     CsvImportRowPreview:
       type: object
       required:
@@ -3631,6 +3835,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CsvImportRowError'
+        cod_expected_cents:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            D6-COD-EXPECTED - the COD the row declares in MXN cents, 0 when it declares none. Present exactly when
+            valid is true, so the dispatcher can check each amount before confirming the batch.
     CsvImportPreview:
       type: object
       required:
@@ -5613,9 +5824,21 @@ x-capability-matrix:
     follows the operations outside the matrix that create or reassign operational state (assignDriver, createRoute,
     createExternalOffer) - DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge (403
     MFA_REQUIRED when only the second factor is missing), as the owner confirmed ("Sí, con MFA"); only the
-    organization that owns the order may read its link
+    organization that owns the order may issue or read its link
   tracking_link_operations:
     issueTrackingLink: [DISPATCHER, PLATFORM_ADMIN]
+  incident_operations_decision: API-INC-LIST-PROOFS-2026-09-29 (project owner, 2026-09-29) - openIncident publishes the
+    rule the server already enforces - DISPATCHER members, PLATFORM_ADMIN members with a satisfied MFA challenge (403
+    MFA_REQUIRED when only the second factor is missing) and DRIVER members only for an order they currently hold an
+    ACCEPTED or ACTIVE assignment for; resolveIncident keeps DISPATCHER and PLATFORM_ADMIN members with a satisfied MFA
+    challenge; the incident desk reads listIncidents, getIncident and listOrderProofs admit exactly the resolveIncident
+    roles, so a DRIVER or a VIEWER never reads incidents or proofs through them
+  incident_operations:
+    openIncident: [DISPATCHER, PLATFORM_ADMIN, DRIVER]
+    resolveIncident: [DISPATCHER, PLATFORM_ADMIN]
+    listIncidents: [DISPATCHER, PLATFORM_ADMIN]
+    getIncident: [DISPATCHER, PLATFORM_ADMIN]
+    listOrderProofs: [DISPATCHER, PLATFORM_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -5632,6 +5855,10 @@ x-pilot-contract-deltas:
     status: DECIDED
     decision: D6-COD-PILOT
     literal: el despachador declara el monto COD al crear la orden (y en el CSV)
+    implementation: shipped by feature/ord-csv-cod-expected together with its code and tests
+      (D6-COD-EXPECTED-IMPLEMENTED-2026-09-29) - CreateOrderRequest.cod_expected_cents, the optional CSV-001 column
+      cod_expected_cents with row error COD_EXPECTED_CENTS_INVALID, CsvImportRowPreview.cod_expected_cents and the
+      value in the ORD-001 request hash; Order does not expose it because VIEWER reads Order and has no finance read
     delta: CreateOrderRequest and the CSV row accept an optional non-negative integer COD expectation in MXN cents (int64),
       declared by the dispatcher; it is copied to orders.cod_expected_cents and flows to FIN-001 and SET-001
     quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the

@@ -22,6 +22,10 @@ export const maximumCsvDataRows = 500;
 /** The multipart filename; the local file name never leaves the browser. */
 export const csvUploadFilename = "orders.csv";
 
+/** CSV-001 header; the COD column (D6-COD-EXPECTED) is optional and, when present, last. */
+export const csvHeader = "quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel";
+export const csvCodColumn = "cod_expected_cents";
+
 export const csvFileErrors = [
   "ENCODING_INVALID",
   "MALFORMED_QUOTING",
@@ -40,6 +44,7 @@ export const csvRowErrorCodes = [
   "PRIVACY_VERSION_INVALID",
   "ACCEPTED_AT_INVALID",
   "ACCEPTANCE_CHANNEL_INVALID",
+  "COD_EXPECTED_CENTS_INVALID",
 ] as const;
 export type CsvRowErrorCode = (typeof csvRowErrorCodes)[number];
 
@@ -57,6 +62,8 @@ export interface CsvRowPreview {
   readonly payer_type: string | null;
   readonly valid: boolean;
   readonly errors: readonly CsvRowError[];
+  /** Integer MXN cents the row declares as COD (0 = none); null for an invalid row. */
+  readonly cod_expected_cents: number | null;
 }
 
 export interface CsvImportPreview {
@@ -105,6 +112,7 @@ export const csvRowErrorLabels: Readonly<Record<CsvRowErrorCode, string>> = {
   PRIVACY_VERSION_INVALID: "Versión de aviso de privacidad inválida",
   ACCEPTED_AT_INVALID: "Fecha de aceptación inválida",
   ACCEPTANCE_CHANNEL_INVALID: "Canal de aceptación inválido",
+  COD_EXPECTED_CENTS_INVALID: "Cobro contra entrega inválido: usa centavos enteros, sin punto, comas ni signos",
 };
 
 export const csvRowOutcomeLabels: Readonly<Record<CsvRowOutcomeError, string>> = {
@@ -160,13 +168,21 @@ function parseRowError(value: unknown): CsvRowError {
 }
 
 function parseRowPreview(value: unknown): CsvRowPreview {
-  const object = exactObject(value, ["row_number", "quote_id", "payer_type", "valid", "errors"]);
+  const object = exactObject(
+    value,
+    ["row_number", "quote_id", "payer_type", "valid", "errors"],
+    ["cod_expected_cents"],
+  );
+  const valid = boolean(object.valid);
+  // AI-05: cod_expected_cents (int64 cents, minimum 0) is present exactly on valid rows.
+  if (valid !== Object.hasOwn(object, "cod_expected_cents")) fail();
   const row: CsvRowPreview = {
     row_number: rowNumber(object.row_number),
     quote_id: nullable(object.quote_id, uuid),
     payer_type: nullable(object.payer_type, (text) => boundedString(text, 1, 64)),
-    valid: boolean(object.valid),
+    valid,
     errors: array(object.errors, 16).map(parseRowError),
+    cod_expected_cents: valid ? integer(object.cod_expected_cents, 0) : null,
   };
   // A valid row names its quote and payer and carries no error.
   if (row.valid && (row.errors.length > 0 || row.quote_id === null || row.payer_type === null)) fail();

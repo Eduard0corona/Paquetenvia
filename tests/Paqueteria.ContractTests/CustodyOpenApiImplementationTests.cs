@@ -97,6 +97,65 @@ public sealed class CustodyOpenApiImplementationTests
                 .Select(node => Assert.IsType<YamlScalarNode>(node).Value!));
     }
 
+    /// <summary>
+    /// API-INC-LIST-PROOFS-2026-09-29: listOrderProofs publishes exactly the route, statuses, query parameter and
+    /// page the read endpoint implements, and each item is the existing Proof representation.
+    /// </summary>
+    [Fact]
+    public void List_order_proofs_publishes_the_metadata_page_the_read_endpoint_implements()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var operation = root.Mapping("paths").Mapping("/orders/{orderId}/proofs").Mapping("get");
+        Assert.Equal("listOrderProofs", operation.Scalar("operationId"));
+        var responses = operation.Mapping("responses");
+        var declared = responses.Children.Keys.Select(key => Assert.IsType<YamlScalarNode>(key).Value!)
+            .Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(["200", "401", "403", "404", "409", "503"], declared);
+
+        var source = ReadEndpointSource();
+        Assert.Contains("endpoints.MapGet(\"/api/v1/orders/{orderId}/proofs\", ListOrderProofsAsync)", source, StringComparison.Ordinal);
+        Assert.Contains(".WithName(\"listOrderProofs\")", source, StringComparison.Ordinal);
+        Assert.Equal(
+            declared,
+            Regex.Matches(source, @"\.Produces(?:Problem)?(?:<[^>]+>)?\(StatusCodes\.Status(\d{3})")
+                .Select(match => match.Groups[1].Value)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+        Assert.Equal("#/components/responses/UniformNotFound", responses.Mapping("404").Scalar("$ref"));
+        Assert.Equal("#/components/responses/ProofConflict", responses.Mapping("409").Scalar("$ref"));
+        Assert.Equal(
+            "#/components/schemas/ProofPage",
+            responses.Mapping("200").Mapping("content").Mapping("application/json").Mapping("schema").Scalar("$ref"));
+
+        // The only query parameter is the cursor, bounded as the codec bounds it.
+        var parameters = operation.Sequence("parameters").Children.Cast<YamlMappingNode>().ToArray();
+        Assert.Equal(
+            ["#/components/parameters/OrganizationContext", "#/components/parameters/OrderId"],
+            parameters.Take(2).Select(parameter => parameter.Scalar("$ref")));
+        var cursor = Assert.Single(parameters.Skip(2));
+        Assert.Equal("cursor", cursor.Scalar("name"));
+        Assert.Equal("query", cursor.Scalar("in"));
+        Assert.Equal(
+            Custody.Application.ProofUploads.ProofCursorCodec.MaximumLength,
+            int.Parse(cursor.Mapping("schema").Scalar("maxLength"), System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Contains("!string.Equals(key, \"cursor\", StringComparison.Ordinal)", source, StringComparison.Ordinal);
+
+        // Each item is exactly the Proof representation finalizeProof returns.
+        var page = Schemas().Mapping("ProofPage");
+        Assert.Equal(["items", "next_cursor"], PropertyNames(page));
+        Assert.Equal(["items", "next_cursor"], RequiredPropertyNames(page));
+        Assert.Equal(
+            "#/components/schemas/Proof",
+            page.Mapping("properties").Mapping("items").Mapping("items").Scalar("$ref"));
+        Assert.Equal(["captured_at", "id", "proof_type", "sha256"], PropertyNames(Schemas().Mapping("Proof")));
+        Assert.Contains("new ProofResponse(proof.Id, proof.ProofType, proof.Sha256, proof.CapturedAt)", source, StringComparison.Ordinal);
+    }
+
+    private static string ReadEndpointSource() =>
+        File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root, "src", "Modules", "Custody", "Custody.Endpoints", "ProofReadEndpoints.cs"));
+
     private static YamlMappingNode Schemas() =>
         YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"))
             .Mapping("components").Mapping("schemas");

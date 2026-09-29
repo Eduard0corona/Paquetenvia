@@ -164,6 +164,7 @@ app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapRealtimeHubs();
 app.MapProofEndpoints();
+app.MapProofReadEndpoints();
 app.MapIncidentEndpoints();
 app.MapOperationsDashboardEndpoints();
 app.MapRouteEndpoints();

@@ -78,6 +78,38 @@ public sealed class CustodyArchitectureTests
         Assert.DoesNotContain("IProofDownloadService", source, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// API-INC-LIST-PROOFS-2026-09-29: the only GET of the Custody module is listOrderProofs, kept in its own
+    /// endpoint file. It lists metadata only: no download service, storage, object key, signed URL, capture
+    /// point or recipient name is reachable from it, and its service only reads.
+    /// </summary>
+    [Fact]
+    public void Proof_listing_returns_metadata_only_and_never_writes()
+    {
+        var endpoint = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Custody/Custody.Endpoints/ProofReadEndpoints.cs"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(endpoint, @"\bMap(?:Get|Post|Put|Patch|Delete)\("));
+        Assert.Contains("MapGet(\"/api/v1/orders/{orderId}/proofs\"", endpoint, StringComparison.Ordinal);
+        Assert.DoesNotContain("IProofDownloadService", endpoint, StringComparison.Ordinal);
+        Assert.DoesNotContain("IProofObjectStorage", endpoint, StringComparison.Ordinal);
+        Assert.DoesNotContain("multipart", endpoint, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("IFormFile", endpoint, StringComparison.Ordinal);
+
+        var service = File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Custody/Custody.Infrastructure/Proofs/PostgreSqlProofReadService.cs"));
+        Assert.Contains("SELECT p.id,p.proof_type,p.sha256,p.captured_at,p.created_at", service, StringComparison.Ordinal);
+        foreach (var forbidden in new[]
+                 {
+                     "object_key", "recipient_name", "captured_point", "IProofObjectStorage", "IProofDownloadService",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, service, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotMatch(@"(?i)\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", service);
+        Assert.Contains("transactionContext.ExecuteAsync", service, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Adoption_migration_is_assertive_and_non_destructive()
     {

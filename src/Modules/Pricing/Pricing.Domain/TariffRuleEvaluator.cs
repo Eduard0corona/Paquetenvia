@@ -93,23 +93,30 @@ public sealed class TariffRuleEvaluator
             return TariffEvaluationResult.Failed(TariffEvaluationFailure.PolicyVersionMissing);
         }
 
-        if (rule.TaxMode != TaxMode.Exempt)
+        // GATE-011-VAT-INCLUDED-2026-09-29: prices are presented with IVA included for every organization.
+        // A rule in any other tax mode fails closed after selection (it is not skipped in favor of a less
+        // specific rule, which would silently change the price).
+        if (!PilotTaxPolicy.IsSelectable(rule.TaxMode))
         {
             return TariffEvaluationResult.Failed(TariffEvaluationFailure.TaxModeBlocked);
         }
 
-        var subtotal = new Money(rule.AmountCents);
-        var discount = new Money(0);
-        var tax = new Money(0);
-        var total = Money.Add(Money.Subtract(subtotal, discount), tax);
+        var amounts = TariffTaxCalculator.Calculate(rule.TaxMode, rule.AmountCents);
+        if (Money.Add(Money.Subtract(amounts.Subtotal, amounts.Discount), amounts.Tax) != amounts.Total)
+        {
+            throw new InvalidOperationException("The taxed amounts are inconsistent.");
+        }
+
+        // The frozen floor (ADR-021) is the total the customer pays for the selected rule: with IVA included
+        // it is the tariff amount itself, never the pre-tax subtotal.
         return new TariffEvaluationResult(
             TariffEvaluationFailure.None,
             rule,
-            subtotal,
-            discount,
-            tax,
-            total,
-            subtotal);
+            amounts.Subtotal,
+            amounts.Discount,
+            amounts.Tax,
+            amounts.Total,
+            amounts.Total);
     }
 
     public static bool RequiresConsolidatedRoute(PricingTier tier) =>

@@ -84,6 +84,12 @@ public static class TenantCapabilities
     public static readonly TenantCapability FinalizeProof = Create("finalizeProof", Dispatcher, PlatformAdminMfa, Driver);
     public static readonly TenantCapability OpenIncident = Create("openIncident", Dispatcher, PlatformAdminMfa, Driver);
     public static readonly TenantCapability ResolveIncident = Create("resolveIncident", Dispatcher, PlatformAdminMfa);
+
+    // x-capability-matrix incident_operations (API-INC-LIST-PROOFS-2026-09-29): the incident and proof reads of
+    // the incident desk admit exactly who may resolve an incident; a DRIVER, a VIEWER and every other role never.
+    public static readonly TenantCapability ListIncidents = Create("listIncidents", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability GetIncident = Create("getIncident", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability ListOrderProofs = Create("listOrderProofs", Dispatcher, PlatformAdminMfa);
     public static readonly TenantCapability RecordCodCollection =
         Create("recordCodCollection", Dispatcher, PlatformAdminMfa, Driver);
 

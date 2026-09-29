@@ -3,8 +3,11 @@ import { acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
+  codExpectedCents,
+  confirmationBlockerLabels,
   CreateOrderContractError,
   evaluateConfirmation,
+  lowPriceGuardTotalCents,
   parseCreatedOrder,
   parseQuote,
 } from "./create-order";
@@ -82,6 +85,36 @@ describe("createOrder request", () => {
     expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, versions, new Date()).ok).toBe(false);
   });
 
+  it.each([
+    ["150.50", 15_050],
+    ["150.5", 15_050],
+    ["150", 15_000],
+    ["0.01", 1],
+    [" 1234567.89 ", 123_456_789],
+    ["0.1", 10],
+    ["0.29", 29],
+  ])("sends the typed COD %s as exact integer cents (D6-COD-EXPECTED)", (typed, cents) => {
+    const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+    expect(result.ok && result.body.cod_expected_cents).toBe(cents);
+    expect(Number.isSafeInteger(cents)).toBe(true);
+  });
+
+  it.each(["", "   ", "0", "0.00", undefined])("sends no COD field for %o", (typed) => {
+    const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+    expect(result.ok).toBe(true);
+    expect(result.ok && "cod_expected_cents" in result.body).toBe(false);
+  });
+
+  it.each(["-1", "+1", "1,500", "1 500", "150.505", "$150", "1e3", "150,50", "abc", "150.", ".5", "99999999999999"])(
+    "refuses the COD %s instead of reinterpreting it",
+    (typed) => {
+      const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.errors.join(" ")).toContain("cobro contra entrega");
+      expect(codExpectedCents(typed)).toBeNull();
+    },
+  );
+
   it("always sends the ASSISTED channel for the operator-assisted flow", () => {
     const tampered = { ...acceptance, acceptanceChannel: "WEB" };
     const result = buildCreateOrderBody(quoteId, tampered, versions, new Date());
@@ -114,14 +147,28 @@ describe("confirmation guard (AI-07 create_order)", () => {
     expect(evaluateConfirmation(parseQuote(quoteResponse({ status: "USED" })), now)).toEqual(["inactive"]);
   });
 
-  it("blocks at 52 MXN net or less unless the quote is a consolidated route", () => {
-    const at52 = quoteResponse({ net: { currency: "MXN", amount_cents: 5_200 } });
-    const at45 = quoteResponse({ net: { currency: "MXN", amount_cents: 4_500 } });
-    const at5201 = quoteResponse({ net: { currency: "MXN", amount_cents: 5_201 } });
+  // GATE-011-VAT-INCLUDED-2026-09-29: "52 con IVA incluido" — the guard reads the VAT-included total.
+  const vatIncluded = (net: number, tax: number) => quoteResponse({
+    net: { currency: "MXN", amount_cents: net },
+    tax: { currency: "MXN", amount_cents: tax },
+    total: { currency: "MXN", amount_cents: net + tax },
+  });
+
+  it("blocks at 52 MXN total, IVA included, or less unless the quote is a consolidated route", () => {
+    const at52 = vatIncluded(4_483, 717);
+    const at45 = vatIncluded(3_879, 621);
+    const at5201 = vatIncluded(4_484, 717);
     expect(evaluateConfirmation(parseQuote(at52), now)).toEqual(["low_price"]);
     expect(evaluateConfirmation(parseQuote(at45), now)).toEqual(["low_price"]);
     expect(evaluateConfirmation(parseQuote(at5201), now)).toEqual([]);
     expect(evaluateConfirmation(parseQuote({ ...at52, consolidated_route: true }), now)).toEqual([]);
+  });
+
+  it("never applies the guard to the pre-tax net", () => {
+    // 60.32 MXN total is 52.00 net + 8.32 IVA: above the guard, because the customer pays 60.32.
+    expect(evaluateConfirmation(parseQuote(vatIncluded(5_200, 832)), now)).toEqual([]);
+    expect(lowPriceGuardTotalCents).toBe(5_200);
+    expect(confirmationBlockerLabels.low_price).toContain("IVA incluido");
   });
 });
 
@@ -129,7 +176,7 @@ describe("quote and order parsers", () => {
   it("keeps the displayed fields and drops the redacted request snapshot", () => {
     const quote = parseQuote(quoteResponse());
     expect(quote.net.amount_cents).toBe(8_000);
-    expect(quote.breakdown).toEqual([{ line_type: "BASE_TARIFF", amount_cents: 8_000 }]);
+    expect(quote.breakdown).toEqual([{ line_type: "BASE_TARIFF", amount_cents: 9_280 }]);
     expect(quote.package_count).toBe(1);
     expect(quote).not.toHaveProperty("request_snapshot_redacted");
     expect(quote).not.toHaveProperty("package_snapshot");
