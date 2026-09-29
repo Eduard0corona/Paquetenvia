@@ -162,6 +162,8 @@ public static class DependencyInjection
         services.AddScoped<IProofUploadSessionService, PostgreSqlProofUploadSessionService>();
         services.AddScoped<IProofFinalizationService, PostgreSqlProofFinalizationService>();
         services.AddScoped<IProofDownloadService, PostgreSqlProofDownloadService>();
+        // API-INC-LIST-PROOFS-2026-09-29: listOrderProofs, metadata only and read-only.
+        services.AddScoped<IProofReadService, PostgreSqlProofReadService>();
         services.AddHealthChecks()
             .AddCheck<ProofStorageHealthCheck>("proof_storage", tags: ["ready"])
             .AddCheck<ProofScannerHealthCheck>("proof_scanner", tags: ["ready"]);

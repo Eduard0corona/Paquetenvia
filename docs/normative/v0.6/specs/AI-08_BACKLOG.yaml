@@ -1513,7 +1513,7 @@ items:
   - controlled load of cities, service areas, operating zones, tariffs and driver profiles
   acceptance_criteria:
   - master data loads are idempotent, audited and tenant-scoped
-  - real zones and tariffs require GATE-010 and GATE-011 resolution or explicit owner scoping
+  - real zones require GATE-010 resolution or explicit owner scoping; tariffs follow GATE-011-VAT-INCLUDED-2026-09-29
   required_tests:
   - idempotent reload
   - cross-tenant isolation

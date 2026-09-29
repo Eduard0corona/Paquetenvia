@@ -80,6 +80,17 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     }
   });
 
+  it("mirrors AI-05 incident_operations for the incident desk (API-INC-LIST-PROOFS-2026-09-29)", () => {
+    const published = publishedSection("incident_operations", "\nx-pilot-contract-deltas:");
+    // The API also admits DRIVER to openIncident, only for its own assignment and only from /driver.
+    expect(published.openIncident).toEqual(["DISPATCHER", "PLATFORM_ADMIN", "DRIVER"]);
+    for (const operation of ["resolveIncident", "listIncidents", "getIncident", "listOrderProofs"] as const) {
+      expect(published[operation], operation).toEqual([...screenOperationsMatrix[operation]]);
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+      expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
+    }
+  });
+
   it("each mirrored operation exists in AI-05", () => {
     for (const operation of [
       ...Object.keys(capabilityMatrix),
@@ -113,6 +124,12 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     ["PLATFORM_ADMIN", "resolveIncident", true],
     ["DRIVER", "openIncident", false],
     ["VIEWER", "resolveIncident", false],
+    ["DISPATCHER", "listIncidents", true],
+    ["PLATFORM_ADMIN", "getIncident", true],
+    ["DISPATCHER", "listOrderProofs", true],
+    ["DRIVER", "listIncidents", false],
+    ["VIEWER", "listOrderProofs", false],
+    ["FINANCE", "getIncident", false],
     ["FINANCE", "getOrderFinancials", true],
     ["FINANCE", "reconcileCod", true],
     ["FINANCE", "recordCodCollection", false],

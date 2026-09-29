@@ -1,5 +1,19 @@
 # Changelog
 
+## Lectura de incidencias y pruebas; roles de openIncident (API-INC-LIST-PROOFS-2026-09-29) — 2026-09-29
+
+- Respuesta literal del project owner: "El punto I apruebo todos los puntos listados."
+- AI-05: `listIncidents` (`GET /incidents`, paginación por cursor, filtros `status` y `order_id`),
+  `getIncident` (`GET /incidents/{incidentId}`) y `listOrderProofs` (`GET /orders/{orderId}/proofs`). Devuelven
+  las representaciones existentes `Incident` y `Proof` (esquemas nuevos `IncidentPage` y `ProofPage`); nunca la
+  descripción, el motivo de resolución, bytes, llaves de almacenamiento, URLs firmadas, punto de captura ni nombre
+  del destinatario. Solo DISPATCHER y PLATFORM_ADMIN con MFA, como `resolveIncident`; capacidad antes de leer
+  cualquier orden, incidencia o prueba; 404 uniforme para lo ajeno o inexistente; solo lectura.
+- `x-capability-matrix.incident_operations` publica quién abre incidencias: DISPATCHER, PLATFORM_ADMIN con MFA y
+  DRIVER solo para una orden con asignación ACCEPTED o ACTIVE; es la regla que el servidor ya aplicaba.
+- AI-07 `incident_desk`: la pantalla lista y elige incidencias y evidencias en lugar de pedir UUID escritos.
+- Sin migraciones, estados, eventos ni roles de base de datos nuevos.
+
 ## Presentación de impuestos con IVA incluido (GATE-011-VAT-INCLUDED-2026-09-29) — 2026-09-29
 
 - Respuestas literales del project owner: "Presentación de impuestos, IVA incluido"; "52 con IVA incluido";
