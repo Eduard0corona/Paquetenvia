@@ -1,4 +1,5 @@
 using System.Buffers.Text;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -59,7 +60,7 @@ public static class CsvOrderImportPrevalidator
             return FileFailure(digest, CsvOrderImportFileErrorCodes.FileEmpty);
         }
 
-        if (!IsCanonicalHeader(records[0].Fields))
+        if (!TryReadCanonicalHeader(records[0].Fields, out var header))
         {
             return FileFailure(digest, CsvOrderImportFileErrorCodes.HeaderInvalid);
         }
@@ -80,7 +81,7 @@ public static class CsvOrderImportPrevalidator
         var seenQuoteIds = new HashSet<Guid>();
         foreach (var record in dataRecords)
         {
-            previews.Add(ValidateRow(record, seenQuoteIds, validRows));
+            previews.Add(ValidateRow(record, header.Length, seenQuoteIds, validRows));
         }
 
         return new CsvOrderImportPrevalidation(digest, [], previews, validRows);
@@ -95,10 +96,11 @@ public static class CsvOrderImportPrevalidator
 
     private static CsvOrderImportRowPreview ValidateRow(
         CsvRecord record,
+        int columnCount,
         HashSet<Guid> seenQuoteIds,
         List<CsvOrderImportOrderRow> validRows)
     {
-        if (record.Fields.Count != CsvOrderImportContract.Header.Length)
+        if (record.Fields.Count != columnCount)
         {
             return new CsvOrderImportRowPreview(
                 record.LineNumber,
@@ -116,6 +118,7 @@ public static class CsvOrderImportPrevalidator
         var privacyVersion = record.Fields[3].Trim();
         var acceptedAtText = record.Fields[4].Trim();
         var acceptanceChannel = record.Fields[5].Trim();
+        var codText = columnCount > CsvOrderImportContract.Header.Length ? record.Fields[6].Trim() : string.Empty;
         var errors = new List<CsvOrderImportRowError>();
 
         var hasQuoteId = Guid.TryParseExact(quoteIdText, "D", out var quoteId) && quoteId != Guid.Empty;
@@ -167,6 +170,13 @@ public static class CsvOrderImportPrevalidator
                 CsvOrderImportRowErrorCodes.AcceptanceChannelInvalid));
         }
 
+        if (!TryParseCodExpectedCents(codText, out var codExpectedCents))
+        {
+            errors.Add(new CsvOrderImportRowError(
+                CsvOrderImportContract.ColumnCodExpectedCents,
+                CsvOrderImportRowErrorCodes.CodExpectedCentsInvalid));
+        }
+
         var reportedQuoteId = hasQuoteId ? quoteId.ToString("D") : null;
         if (errors.Count > 0 ||
             !OrderAcceptanceInputPolicy.IsValid(
@@ -185,16 +195,52 @@ public static class CsvOrderImportPrevalidator
             termsVersion,
             privacyVersion,
             acceptedAt,
-            acceptanceChannel));
-        return new CsvOrderImportRowPreview(record.LineNumber, reportedQuoteId, payerType, true, []);
+            acceptanceChannel,
+            codExpectedCents));
+        return new CsvOrderImportRowPreview(
+            record.LineNumber,
+            reportedQuoteId,
+            payerType,
+            true,
+            [],
+            codExpectedCents);
     }
 
-    private static bool IsCanonicalHeader(IReadOnlyList<string> fields) =>
-        fields.Count == CsvOrderImportContract.Header.Length &&
-        !fields.Where((field, index) => !string.Equals(
-            field.Trim(),
-            CsvOrderImportContract.Header[index],
-            StringComparison.OrdinalIgnoreCase)).Any();
+    /// <summary>
+    /// Accepts exactly the six-column header or the six-column header followed by <c>cod_expected_cents</c>.
+    /// Anything else (reordered, extra or missing columns) is still <c>HEADER_INVALID</c>.
+    /// </summary>
+    private static bool TryReadCanonicalHeader(
+        IReadOnlyList<string> fields,
+        out ImmutableArray<string> header)
+    {
+        foreach (var candidate in new[] { CsvOrderImportContract.Header, CsvOrderImportContract.HeaderWithCod })
+        {
+            if (fields.Count == candidate.Length &&
+                !fields.Where((field, index) => !string.Equals(
+                    field.Trim(),
+                    candidate[index],
+                    StringComparison.OrdinalIgnoreCase)).Any())
+            {
+                header = candidate;
+                return true;
+            }
+        }
+
+        header = default;
+        return false;
+    }
+
+    /// <summary>
+    /// D6-COD-EXPECTED: an empty cell (or a file without the column) is no COD. A filled cell must be a plain
+    /// non-negative integer number of MXN cents: <c>150.50</c>, <c>1,500</c>, <c>+100</c>, <c>-1</c>, <c>$100</c>
+    /// and <c>1e3</c> are rejected rather than reinterpreted, by the same policy <c>POST /orders</c> applies.
+    /// </summary>
+    private static bool TryParseCodExpectedCents(string value, out long cents)
+    {
+        cents = 0;
+        return value.Length == 0 || OrderInputPolicy.TryParseCodExpectedCents(value, out cents);
+    }
 
     private static bool IsVersion(string value) => OrderAcceptanceInputPolicy.IsVersion(value);
 

@@ -106,6 +106,42 @@ describe("quote to order", () => {
     expect(controller.getSnapshot()).toMatchObject({ quote: null, order: { public_id: "PQ-000123" } });
   });
 
+  it("sends the declared COD in cents and shows it with the created order (D6-COD-EXPECTED)", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder({ ...acceptance, codAmount: "150.50" });
+    const body = vi.mocked(orders.createOrder).mock.calls[0]![0];
+    expect(body.cod_expected_cents).toBe(15_050);
+    expect(controller.getSnapshot()).toMatchObject({ order: { public_id: "PQ-000123" }, orderCodExpectedCents: 15_050 });
+    controller.reset();
+    expect(controller.getSnapshot().orderCodExpectedCents).toBeNull();
+  });
+
+  it("uses a new idempotency key when only the COD changes after a retryable failure", async () => {
+    const createOrder = vi
+      .fn()
+      .mockRejectedValueOnce(new TenantApiError("network"))
+      .mockResolvedValueOnce(parseCreatedOrder(orderResponse()));
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { createOrder });
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder({ ...acceptance, codAmount: "100" });
+    await controller.confirmOrder({ ...acceptance, codAmount: "101" });
+    expect(createOrder.mock.calls[0][0].cod_expected_cents).toBe(10_000);
+    expect(createOrder.mock.calls[1][0].cod_expected_cents).toBe(10_100);
+    expect(createOrder.mock.calls[0][1]).not.toBe(createOrder.mock.calls[1][1]);
+  });
+
+  it("does not call createOrder with an invalid COD", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder({ ...acceptance, codAmount: "150.505" });
+    expect(orders.createOrder).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().errors.join(" ")).toContain("cobro contra entrega");
+  });
+
   it("takes versions from server config and the channel as ASSISTED, never from the form", async () => {
     const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
     await controller.start();

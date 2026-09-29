@@ -237,6 +237,64 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         }
     }
 
+    /// <summary>
+    /// D6-COD-EXPECTED on real PostgreSQL through the runtime role and RLS: the dispatcher-declared amount lands in
+    /// orders.cod_expected_cents and the ORDER_CREATED audit, never in the order event or the outbox payload; the
+    /// same key and amount replays, another amount under that key is IDEMPOTENCY_CONFLICT without side effects, and
+    /// a negative amount is refused before any row is written.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Declared_COD_is_persisted_audited_bound_to_the_key_and_kept_out_of_events()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(createOrder: false);
+        var generator = new SequencePublicIdGenerator("ORD_CCCCCCCCCCCCCCCCCCCCCD", "ORD_CCCCCCCCCCCCCCCCCCCCCE");
+        await using var scope = CreateScope(generator);
+
+        var negative = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            CreateCommand(scenario, "orders-pg-cod-negative") with { CodExpectedCents = -1 },
+            CancellationToken.None));
+        Assert.Equal(OrderConflictCode.InvalidRequest, negative.Code);
+        Assert.Equal(0, generator.CallCount);
+
+        const long declared = 9_000_000_000_050L;
+        var command = CreateCommand(scenario, "orders-pg-cod-0001") with { CodExpectedCents = declared };
+        var created = await scope.Service.CreateAsync(command, CancellationToken.None);
+        var replay = await scope.Service.CreateAsync(command, CancellationToken.None);
+        Assert.Equal(created, replay);
+
+        var otherAmount = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            command with { CodExpectedCents = declared + 1 }, CancellationToken.None));
+        Assert.Equal(OrderConflictCode.IdempotencyConflict, otherAmount.Code);
+        var noAmount = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            command with { CodExpectedCents = 0 }, CancellationToken.None));
+        Assert.Equal(OrderConflictCode.IdempotencyConflict, noAmount.Code);
+
+        await using var verify = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT o.cod_expected_cents,
+              (SELECT count(*) FROM orders.orders WHERE owner_org_id=@org),
+              (SELECT (payload_redacted->>'cod_expected_cents')::bigint FROM platform.audit_logs a
+                WHERE a.entity_id=o.id AND a.action='ORDER_CREATED'),
+              (SELECT count(*) FROM platform.audit_logs a WHERE a.entity_id=o.id AND a.action='ORDER_CREATED'),
+              (SELECT payload::text FROM orders.order_events e WHERE e.order_id=o.id),
+              (SELECT payload::text FROM platform.outbox_events x WHERE x.aggregate_id=o.id)
+            FROM orders.orders o
+            WHERE o.id=@order;
+            """);
+        verify.Parameters.AddWithValue("org", scenario.OrganizationId);
+        verify.Parameters.AddWithValue("order", created.Id);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(declared, reader.GetInt64(0));
+        Assert.Equal(1L, reader.GetInt64(1));
+        Assert.Equal(declared, reader.GetInt64(2));
+        Assert.Equal(1L, reader.GetInt64(3));
+        Assert.DoesNotContain("cod", reader.GetString(4), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("cod", reader.GetString(5), StringComparison.OrdinalIgnoreCase);
+    }
+
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
     public async Task Concurrency_hash_conflict_collision_retry_and_migration_contract_hold()

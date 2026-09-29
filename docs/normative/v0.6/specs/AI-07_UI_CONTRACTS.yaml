@@ -252,6 +252,8 @@ screen_contracts:
     - total
     - rule explanation
     low_price_guard: block confirmation at <=52 MXN net unless route flag or authorized override
+    cod_expected: D6-COD-EXPECTED - optional COD amount typed in MXN with at most two decimals, converted to integer
+      cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -363,6 +365,7 @@ screen_contracts:
     - a commit 422 replaces the preview with the returned per-row report and creates nothing
     - a commit response whose content_digest differs from the previewed one fails closed
     - per-row outcomes show CREATED with public_id or FAILED with error_code
+    - each previewed row shows the server-reported cod_expected_cents (D6-COD-EXPECTED) as MXN, or no COD for 0
     idempotency:
     - Idempotency-Key names the batch and is reused for a retry of the same content_digest after a network or 5xx failure
     - a new file or a definitive server answer drops the key

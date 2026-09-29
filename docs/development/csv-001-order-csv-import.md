@@ -25,10 +25,11 @@ El handler de preview no resuelve `ICsvOrderImportCommitService` ni `IOrderServi
 | Filas de datos | de 1 a 500 |
 | Líneas en blanco | se ignoran |
 
-La primera línea es el encabezado y debe contener exactamente estas seis columnas en este orden. La comparación ignora mayúsculas y espacios alrededor de cada nombre.
+La primera línea es el encabezado y debe contener exactamente estas seis columnas en este orden, opcionalmente seguidas de una séptima, `cod_expected_cents` (D6-COD-EXPECTED). La comparación ignora mayúsculas y espacios alrededor de cada nombre. Cualquier otro encabezado (columnas reordenadas, extra o faltantes) es `HEADER_INVALID`.
 
 ```text
 quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel
+quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel,cod_expected_cents
 ```
 
 Ejemplo:
@@ -37,6 +38,14 @@ Ejemplo:
 quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel
 81000000-0000-0000-0000-00000000000a,SENDER,terms-synthetic-v1,privacy-synthetic-v1,2026-07-22T12:00:00.1234567Z,WEB
 81000000-0000-0000-0000-00000000000b,BUSINESS_ACCOUNT,terms-synthetic-v1,privacy-synthetic-v1,2026-07-22T12:00:00.1234567Z,API
+```
+
+Ejemplo con cobro contra entrega (la primera fila cobra 150.50 MXN; la segunda no lleva COD):
+
+```csv
+quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel,cod_expected_cents
+81000000-0000-0000-0000-00000000000a,RECIPIENT,terms-synthetic-v1,privacy-synthetic-v1,2026-07-22T12:00:00Z,ASSISTED,15050
+81000000-0000-0000-0000-00000000000b,SENDER,terms-synthetic-v1,privacy-synthetic-v1,2026-07-22T12:00:00Z,ASSISTED,
 ```
 
 Cada fila corresponde a una cotización `ACTIVE` ya existente del tenant. CSV-001 no cotiza: `quote_id` es el insumo, igual que en ORD-001.
@@ -60,7 +69,8 @@ Las reglas de columna delegan en las políticas autoritativas de ORD-001 (`Order
 | `privacy_version` | no vacío, 64 caracteres como máximo | `PRIVACY_VERSION_INVALID` |
 | `accepted_at` | una de las cuatro formas ISO-8601 contratadas, distinta de `default` | `ACCEPTED_AT_INVALID` |
 | `acceptance_channel` | `WEB`, `PWA`, `ASSISTED` o `API` | `ACCEPTANCE_CHANNEL_INVALID` |
-| fila completa | exactamente seis campos | `COLUMN_COUNT_INVALID` |
+| `cod_expected_cents` (opcional) | vacío (sin COD) o solo dígitos ASCII que quepan en int64, en centavos MXN | `COD_EXPECTED_CENTS_INVALID` |
+| fila completa | exactamente tantos campos como el encabezado (seis o siete) | `COLUMN_COUNT_INVALID` |
 
 `accepted_at` se compara contra la lista cerrada de formatos que AI-05 contrata para `format: date-time`, no contra un parser permisivo:
 
@@ -71,6 +81,8 @@ yyyy-MM-ddTHH:mm:ss±HH:MM     yyyy-MM-ddTHH:mm:ss.fffffff±HH:MM
 
 La fracción admite de uno a siete dígitos. Un timestamp sin offset se rechaza: resolverlo contra la zona del servidor volvería ambiguo el instante de aceptación legal. Formas cercanas pero ajenas al contrato —`2026/07/22T12:00:00Z`, `2026-07-22 12:00:00Z`, `2026-07-22T12:00:00-0700`— se rechazan en lugar de reinterpretarse, porque ORD-001 tampoco las acepta en `POST /orders`.
 
+`cod_expected_cents` es dinero y nunca se interpreta como punto flotante: `150.50`, `1,500`, `1 500`, `+100`, `-1`, `$100` y `1e3` se rechazan en lugar de convertirse. La celda vacía, o un archivo de seis columnas, es una orden sin COD (`0`). La regla es la misma `OrderInputPolicy.TryParseCodExpectedCents` que aplica `POST /orders` al literal JSON de `cod_expected_cents`. El monto se copia a `orders.cod_expected_cents` por el mismo `IOrderService` y de ahí lo leen FIN-001 y SET-001; `Order` no lo expone (VIEWER lee órdenes y no tiene lectura financiera).
+
 `QUOTE_ID_DUPLICATED` se reporta en la segunda aparición y siguientes; la primera permanece válida, y como el commit exige el archivo completamente válido, el duplicado bloquea todo el lote.
 
 Errores de archivo, que invalidan el documento entero y devuelven `rows` vacío:
@@ -79,7 +91,7 @@ Errores de archivo, que invalidan el documento entero y devuelven `rows` vacío:
 | --- | --- |
 | `ENCODING_INVALID` | bytes que no son UTF-8 válido |
 | `MALFORMED_QUOTING` | campo entrecomillado sin cerrar, comilla dentro de un campo sin comillas, o caracteres después de la comilla de cierre |
-| `HEADER_INVALID` | encabezado ausente, incompleto, reordenado o con columnas extra |
+| `HEADER_INVALID` | encabezado ausente, incompleto, reordenado o con columnas extra distintas de `cod_expected_cents` al final |
 | `FILE_EMPTY` | sin filas de datos |
 | `ROW_LIMIT_EXCEEDED` | más de 500 filas de datos |
 
@@ -97,7 +109,8 @@ Devuelve `200` con el reporte completo, incluso cuando el archivo es inválido: 
   "invalid_rows": 2,
   "file_errors": [],
   "rows": [
-    { "row_number": 2, "quote_id": "8100…000a", "payer_type": "SENDER", "valid": true, "errors": [] },
+    { "row_number": 2, "quote_id": "8100…000a", "payer_type": "SENDER", "valid": true, "errors": [],
+      "cod_expected_cents": 15050 },
     { "row_number": 3, "quote_id": null, "payer_type": null, "valid": false,
       "errors": [{ "column": "quote_id", "code": "QUOTE_ID_INVALID" }] }
   ]
@@ -105,6 +118,8 @@ Devuelve `200` con el reporte completo, incluso cuando el archivo es inválido: 
 ```
 
 `content_digest` es `Base64URL(SHA-256(bytes crudos))`, sin padding. Es el identificador del lote revisado.
+
+Cada fila válida devuelve `cod_expected_cents` (0 si no declara COD) para que el despachador revise el monto antes de confirmar; una fila inválida no lo incluye.
 
 Los rechazos de transporte —contenido que no es multipart, parte `file` ausente o vacía, archivo por encima del límite de bytes— devuelven el `409` uniforme del módulo con `code: "CONFLICT"`, sin evidencia adicional.
 
@@ -165,6 +180,8 @@ La key de cada fila es determinista:
 CSV1. + Base64URL(SHA-256(owner_org_id "\n" batch_key "\n" content_digest "\n" row_number))
 ```
 
+Como el digest cubre los bytes del archivo, cambiar el COD de una fila cambia el digest: reutilizar la `Idempotency-Key` del lote con ese archivo es `IDEMPOTENCY_CONFLICT`. Además, ORD-001 incluye `cod_expected_cents` (cuando no es 0) en el `request_hash` de cada fila, así que una key de fila repetida con otro monto también es conflicto y nunca crea una orden con un COD distinto al confirmado.
+
 Reenviar el mismo archivo con la misma `Idempotency-Key` reproduce exactamente las mismas keys de fila, que replican los registros existentes de `platform.idempotency_keys` en el scope `ORD-001:CREATE_ORDER`. La respuesta es idéntica byte a byte y no se crea ninguna orden nueva.
 
 El tenant forma parte de la preimagen, de modo que dos organizaciones que elijan la misma `Idempotency-Key` nunca comparten keys de fila ni pueden replicar el resultado de la otra.
@@ -181,6 +198,7 @@ Ambos endpoints exigen `OrganizationPolicies.ActiveOrganizationMember` y `Requir
 - `tests/Paqueteria.IntegrationTests/Orders/CsvOrderImportHttpTests.cs`: pruebas HTTP sobre el host de la API mediante `OrderHttpWebApplicationFactory`, que sustituye `IOrderService`/`IOrderTransitionService` por un `StubOrderService` en memoria y el almacén de idempotencia por lote por un doble en memoria, con autenticación `Mock`; no ejercitan ORD-001 ni PostgreSQL reales (la reserva por lote real se cubre en el contrato PostgreSQL siguiente) — preview sin efectos, errores por fila, rechazo por digest, `422` sin efectos, commit, replay que no toca ORD-001, key reutilizada con otro archivo, commits concurrentes de un mismo lote y aislamiento entre tenants.
 - `tests/Paqueteria.ContractTests/PostgreSql/CsvOrderImportBatchIdempotencyPostgreSqlContractTests.cs`: la reserva por lote sobre PostgreSQL real — reserva, completado, replay, conflicto, concurrencia y dos tenants con la misma key.
 - `tests/Paqueteria.ContractTests/OrdersOpenApiImplementationTests.cs`: la superficie CSV y sus DTOs contra AI-05.
+- D6-COD-EXPECTED: `tests/Paqueteria.UnitTests/Orders/OrderCodExpectedTests.cs` (gramática del monto, encabezado de siete columnas, celda vacía, errores por fila, digest, hash de ORD-001 y commit), `tests/Paqueteria.IntegrationTests/Orders/OrderCodExpectedHttpTests.cs` y `CsvOrderImportCodHttpTests.cs` (literales JSON aceptados y rechazados, preview por fila, `422`, conflicto de key) y `OrdersPostgreSqlContractTests.Declared_COD_is_persisted_audited_bound_to_the_key_and_kept_out_of_events` sobre PostgreSQL real.
 - `tests/Paqueteria.IntegrationTests/HttpSurfaceOpenApiCoverageTests.cs`: toda operación `/api/v1` que el host enruta está declarada en AI-05, sin importar en qué archivo de endpoints se declaró.
 
 ## Contrato normativo
@@ -189,5 +207,4 @@ Ambos endpoints exigen `OrganizationPolicies.ActiveOrganizationMember` y `Requir
 
 ## Pendientes
 
-- No hay UI de operaciones para la carga; el vertical es de API.
 - El commit procesa las filas en serie dentro de la petición. Para el límite contratado de 500 filas es suficiente; un lote mayor exigiría el procesamiento en segundo plano que CSV-001 deja fuera de alcance.

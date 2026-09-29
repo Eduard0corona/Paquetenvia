@@ -28,13 +28,15 @@ Cualquier excepción revierte todo: quote `ACTIVE`, `consumed_at` nulo y cero or
 
 ## Idempotencia y single-use
 
-El scope es `ORD-001:CREATE_ORDER`; la key usa la política compartida de 16 a 128 caracteres. El SHA-256 canónico contiene tenant, quote ID, payer type, versiones sintéticas, `accepted_at` normalizado y canal. Excluye actor derivado, request ID, headers, PII y tiempos de servidor.
+El scope es `ORD-001:CREATE_ORDER`; la key usa la política compartida de 16 a 128 caracteres. El SHA-256 canónico contiene tenant, quote ID, payer type, versiones sintéticas, `accepted_at` normalizado, canal y, solo cuando no es 0, `cod_expected_cents` (D6-COD-EXPECTED; omitir el 0 deja idénticos los hashes previos al COD y hace equivalentes el campo ausente y el 0 explícito). Excluye actor derivado, request ID, headers, PII y tiempos de servidor.
 
 Misma organización, key y hash reproduce la respuesta 201 sin insertar ni consumir otra vez. Hash diferente devuelve 409. Dos keys para una quote compiten bajo `FOR UPDATE`; una sola crea y `orders.quote_id` unique es el backstop. Quote no disponible, expirada, usada, revocada, cross-tenant o inexistente devuelve el mismo 409.
 
 ## Copia de quote y packages
 
 Se copian sin recalcular ni inferir desde `breakdown`: quote ID, owner, client account, city, service area, origin, destination, service type, pricing tier, consolidated route, subtotal, discount, tax, total, minimum snapshot, currency, policy version, package snapshot y financial override.
+
+`cod_expected_cents` no viene de la quote (QUOTE-NO-COD): lo declara el despachador en `CreateOrderRequest` o en la columna opcional del CSV-001 (D6-COD-EXPECTED) y se escribe en `orders.cod_expected_cents`. El literal JSON debe ser un entero simple no negativo que quepa en int64 (`1.5`, `1e3`, `150.0`, `-1` o `"150"` son 409 uniforme). `Order` no lo devuelve porque VIEWER lee órdenes; se consulta en `getOrderFinancials`/`getRouteFinancials` y en liquidaciones.
 
 `orders.package_items` se deriva solo de `quote.package_snapshot`. Cada item recibe UUID de aplicación, owner de order y operator nulo; copia descripción redactada, gramos, valor `bigint` y dimensiones JSONB, incluidas nulas. Un snapshot inválido falla cerrado y no consume la quote.
 
@@ -61,7 +63,7 @@ Base64:  KgkXbicN3MUuD+4Vfz1b2GnzYEf3+Ubap8rtSBauCzc=
 
 Se inserta solo `ORDER_CREATED`, versión 1, con payload mínimo. El outbox usa topic `orders.created`, aggregate `Order`, status `PENDING`, attempts 0 y valores explícitos. No se implementa claim, dispatch, settle ni Worker PostgreSQL.
 
-AUD-001 registra `ORDER_CREATED` con actor, organización, order/quote IDs, payer type, pricing tier, total y request ID. Evento, outbox, auditoría y replay excluyen acceptance completa, packages, direcciones, contactos, teléfonos, ciphertext y PII.
+AUD-001 registra `ORDER_CREATED` con actor, organización, order/quote IDs, payer type, pricing tier, total, `cod_expected_cents` y request ID. El COD no viaja en el evento ni en el outbox. Evento, outbox, auditoría y replay excluyen acceptance completa, packages, direcciones, contactos, teléfonos, ciphertext y PII.
 
 ## Endpoints y paginación
 

@@ -37,7 +37,7 @@ export function previewResponse(overrides: Record<string, unknown> = {}): Record
     valid_rows: 1,
     invalid_rows: 0,
     file_errors: [],
-    rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] }],
+    rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 0 }],
     ...overrides,
   };
 }
@@ -48,7 +48,7 @@ export function invalidPreviewResponse(): Record<string, unknown> {
     valid_rows: 1,
     invalid_rows: 1,
     rows: [
-      { row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [] },
+      { row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 15_050 },
       {
         row_number: 3,
         quote_id: null,

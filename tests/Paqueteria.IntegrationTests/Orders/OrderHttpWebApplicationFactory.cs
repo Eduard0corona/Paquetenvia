@@ -163,7 +163,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 command.OrganizationId, command.QuoteId, command.PayerType,
                 command.Acceptance.TermsVersion, command.Acceptance.PrivacyVersion,
                 command.Acceptance.AcceptedAt.ToUniversalTime().ToString("O"),
-                command.Acceptance.AcceptanceChannel);
+                command.Acceptance.AcceptanceChannel,
+                command.CodExpectedCents);
             lock (gate)
             {
                 if (responses.TryGetValue((command.OrganizationId, command.IdempotencyKey), out var stored))

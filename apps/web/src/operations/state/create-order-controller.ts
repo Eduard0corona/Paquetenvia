@@ -26,6 +26,12 @@ export interface CreateOrderState {
   readonly canOrder: boolean;
   readonly quote: Quote | null;
   readonly order: CreatedOrder | null;
+  /**
+   * D6-COD-EXPECTED: the COD (integer cents, 0 = none) sent with the order the server
+   * created. Order responses do not carry it (VIEWER reads orders), so the screen shows
+   * the amount it submitted and FIN-001 remains the authority afterwards.
+   */
+  readonly orderCodExpectedCents: number | null;
   readonly busy: boolean;
   readonly errors: readonly string[];
   readonly message: string | null;
@@ -50,6 +56,7 @@ const initialState: CreateOrderState = {
   canOrder: false,
   quote: null,
   order: null,
+  orderCodExpectedCents: null,
   busy: false,
   errors: [],
   message: null,
@@ -124,7 +131,7 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
     }
     const generation = this.generation;
     const submission = this.pending.prepare("quote", JSON.stringify(result.body), () => result.body);
-    this.update({ busy: true, errors: [], message: null, stepUpHref: null, order: null });
+    this.update({ busy: true, errors: [], message: null, stepUpHref: null, order: null, orderCodExpectedCents: null });
     try {
       const quote = await api.createQuote(submission.payload, submission.key, this.controller?.signal);
       if (generation !== this.generation) return;
@@ -171,7 +178,13 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
       const order = await api.createOrder(submission.payload, submission.key, this.controller?.signal);
       if (generation !== this.generation) return;
       this.pending.settle("order");
-      this.update({ order, quote: null, busy: false, message: "Orden creada y confirmada por el servidor." });
+      this.update({
+        order,
+        orderCodExpectedCents: submission.payload.cod_expected_cents ?? 0,
+        quote: null,
+        busy: false,
+        message: "Orden creada y confirmada por el servidor.",
+      });
     } catch (error) {
       if (generation !== this.generation) return;
       this.settleUnlessRetryable("order", error);
@@ -191,6 +204,7 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
     this.update({
       quote: null,
       order: null,
+      orderCodExpectedCents: null,
       errors: [],
       message: null,
       stepUpHref: null,

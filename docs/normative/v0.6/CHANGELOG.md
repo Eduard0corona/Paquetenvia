@@ -1,5 +1,16 @@
 # Changelog
 
+## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
+
+- Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para
+  el CSV de pedidos el 2026-09-29; registrado en `decision-log.md` (`D6-COD-EXPECTED-IMPLEMENTED-2026-09-29`).
+- AI-05: `CreateOrderRequest.cod_expected_cents` opcional (int64 en centavos MXN, mínimo 0; ausente o 0 es sin COD; cualquier literal que no sea un entero simple es 409). `CsvImportPreviewRequest.file` documenta la columna
+  opcional `cod_expected_cents` al final del encabezado; `CsvImportRowError` agrega `COD_EXPECTED_CENTS_INVALID` y
+  `CsvImportRowPreview` devuelve `cod_expected_cents` en cada fila válida. La entrada D6-COD-EXPECTED de `x-pilot-contract-deltas` queda
+  marcada como implementada. `Order` no expone el monto: VIEWER lee órdenes y no tiene lectura financiera.
+- AI-07: `create_order.cod_expected` y una validación de `csv_order_import` para mostrar el COD por fila.
+- Sin migración: `orders.cod_expected_cents` ya existe en AI-06 con `CHECK >= 0`. AI-06 y AI-18 sin cambios.
+
 ## Enlaces de tracking automáticos y derivados (TRK-002-AUTO-LINK) — 2026-09-29
 
 - Decisión literal del project owner registrada en `decision-log.md` (`TRK-002-AUTO-LINK`); sustituye el emitir y
