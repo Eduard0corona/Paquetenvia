@@ -256,6 +256,7 @@ internal sealed class MissingPostgreSqlConnectionWebApplicationFactory : WebAppl
                 ["Authentication:Provider"] = "Mock",
                 ["IdentityBootstrap:Provider"] = "PostgreSql",
                 ["PublicTracking:Provider"] = "PostgreSql",
+                ["PublicTracking:PublicBaseUrl"] = "https://tracking.synthetic.local",
                 ["ConnectionStrings:Paqueteria"] = null,
             }));
     }

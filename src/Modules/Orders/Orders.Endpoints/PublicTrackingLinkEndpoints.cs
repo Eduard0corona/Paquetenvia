@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
 using Orders.Application.Tracking;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
@@ -9,13 +10,16 @@ using Paqueteria.Application.Tenancy;
 namespace Orders.Endpoints;
 
 /// <summary>
-/// TRK-002-ISSUE-ENDPOINT: authenticated issuance and revocation of an order's public tracking link.
+/// TRK-002-AUTO-LINK: the authenticated read (get-or-create) and revocation of an order's public tracking link.
 /// </summary>
 /// <remarks>
+/// Every order gets its link when it is created; <c>issueTrackingLink</c> returns that same link, re-derived for the
+/// current generation, for any retry and any Idempotency-Key, and never rotates it. It creates one only when the
+/// order has none that can be shown, and never for a finished order (409 <c>TRACKING_LINK_ORDER_FINISHED</c>).
 /// The order must be owned by the selected organization; any other order, missing or cross-tenant, is the uniform
-/// 404. The plaintext token exists only in the 201 body, served with <c>Cache-Control: no-store</c>: it is never
-/// logged, never placed in a problem response and never stored (the service persists only its SHA-256 hash).
-/// Nothing is sent to customers here; delivery over WhatsApp or email waits on GATE-004 and GATE-007.
+/// 404. The plaintext token exists only in the 200 body, served with <c>Cache-Control: no-store</c>: it is never
+/// logged, never placed in a problem response and never stored (only its SHA-256 is). Nothing is sent to customers
+/// here; delivery over WhatsApp or email waits on GATE-004 and GATE-007.
 /// </remarks>
 public static class PublicTrackingLinkEndpoints
 {
@@ -29,7 +33,7 @@ public static class PublicTrackingLinkEndpoints
             .RequireTenantContext(StatusCodes.Status403Forbidden)
             .WithName("issueTrackingLink")
             .WithTags("Tracking")
-            .Produces<PublicTrackingLinkResponse>(StatusCodes.Status201Created)
+            .Produces<PublicTrackingLinkResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -57,6 +61,7 @@ public static class PublicTrackingLinkEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IPublicTrackingTokenService service,
+        IOptions<PublicTrackingOptions> options,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) || orderId == Guid.Empty)
@@ -74,15 +79,21 @@ public static class PublicTrackingLinkEndpoints
             return denied;
         }
 
+        var publicBaseUrl = options.Value.PublicBaseUrl;
+        if (publicBaseUrl is null)
+        {
+            return Unavailable();
+        }
+
         PublicTrackingTokenGrant grant;
         try
         {
-            grant = await IssueOrRotateAsync(
-                service,
-                actorId,
-                tenantContext.OrganizationId,
-                orderId,
-                idempotencyKey,
+            grant = await service.GetOrCreateAsync(
+                new GetOrCreatePublicTrackingLinkCommand(
+                    actorId,
+                    tenantContext.OrganizationId,
+                    orderId,
+                    idempotencyKey),
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -93,6 +104,10 @@ public static class PublicTrackingLinkEndpoints
         {
             return NotFound();
         }
+        catch (PublicTrackingLinkOrderFinishedException)
+        {
+            return OrderFinished();
+        }
         catch (PublicTrackingTokenConflictException)
         {
             return Conflict();
@@ -102,14 +117,14 @@ public static class PublicTrackingLinkEndpoints
             return Unavailable();
         }
 
-        // The body carries the only copy of the plaintext token: no shared or private cache may keep it.
+        // The body carries the plaintext token: no shared or private cache may keep it.
         var headers = httpContext.Response.Headers;
         headers.CacheControl = "no-store";
         headers.Pragma = "no-cache";
         headers["Referrer-Policy"] = "no-referrer";
         return Results.Json(
-            new PublicTrackingLinkResponse(grant.TokenId, grant.OrderId, grant.Token, grant.ExpiresAt),
-            statusCode: StatusCodes.Status201Created);
+            PublicTrackingLinkResponse.From(grant, publicBaseUrl),
+            statusCode: StatusCodes.Status200OK);
     }
 
     private static async Task<IResult> RevokeAsync(
@@ -164,33 +179,6 @@ public static class PublicTrackingLinkEndpoints
         }
     }
 
-    /// <summary>
-    /// The first link of an order is audited as TRACKING_TOKEN_ISSUED. When an active link already exists the
-    /// service refuses a plain issue inside its own transaction, which rolls back without writing anything, and
-    /// the request becomes a rotation audited as TRACKING_TOKEN_ROTATED that revokes every earlier link.
-    /// </summary>
-    private static async Task<PublicTrackingTokenGrant> IssueOrRotateAsync(
-        IPublicTrackingTokenService service,
-        Guid actorId,
-        Guid organizationId,
-        Guid orderId,
-        string requestId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await service.IssueAsync(
-                new IssuePublicTrackingTokenCommand(actorId, organizationId, orderId, requestId),
-                cancellationToken);
-        }
-        catch (PublicTrackingTokenConflictException)
-        {
-            return await service.RotateAsync(
-                new RotatePublicTrackingTokenCommand(actorId, organizationId, orderId, requestId),
-                cancellationToken);
-        }
-    }
-
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
     {
         value = string.Empty;
@@ -207,6 +195,16 @@ public static class PublicTrackingLinkEndpoints
     private static IResult Conflict() =>
         Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Conflict.");
 
+    /// <summary>The one coded 409; its only extension is the constant AI-05 problem code.</summary>
+    private static IResult OrderFinished() =>
+        Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Conflict.",
+            extensions: new Dictionary<string, object?>
+            {
+                ["code"] = PublicTrackingLinkOrderFinishedException.ProblemCode,
+            });
+
     private static IResult NotFound() =>
         Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not found.");
 
@@ -215,16 +213,30 @@ public static class PublicTrackingLinkEndpoints
 }
 
 /// <summary>
-/// The one response that ever carries a plaintext public tracking token. It is never logged or stored; the
-/// public link is <c>/track/{token}</c> on the tracking origin.
+/// The one response that carries a plaintext public tracking token (AI-05 <c>PublicTrackingLink</c>). It is never
+/// logged or stored. <c>url</c> is the public page, <c>{PublicTracking:PublicBaseUrl}/track/{token}</c>.
 /// </summary>
 public sealed record PublicTrackingLinkResponse(
     [property: JsonPropertyName("token_id")] Guid TokenId,
     [property: JsonPropertyName("order_id")] Guid OrderId,
     [property: JsonPropertyName("token")] string Token,
-    [property: JsonPropertyName("expires_at")] DateTimeOffset ExpiresAt)
+    [property: JsonPropertyName("url")] string Url,
+    [property: JsonPropertyName("generation")] int Generation,
+    [property: JsonPropertyName("valid_until")] DateTimeOffset? ValidUntil)
 {
+    public static PublicTrackingLinkResponse From(PublicTrackingTokenGrant grant, string publicBaseUrl)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        return new PublicTrackingLinkResponse(
+            grant.TokenId,
+            grant.OrderId,
+            grant.Token,
+            PublicTrackingLinkPolicy.BuildUrl(publicBaseUrl, grant.Token),
+            grant.Generation,
+            grant.ValidUntil);
+    }
+
     /// <summary>Keeps the token out of any accidental <c>ToString()</c>, such as a structured log argument.</summary>
     public override string ToString() =>
-        $"{nameof(PublicTrackingLinkResponse)} {{ TokenId = {TokenId}, OrderId = {OrderId}, Token = [redacted], ExpiresAt = {ExpiresAt:O} }}";
+        $"{nameof(PublicTrackingLinkResponse)} {{ TokenId = {TokenId}, OrderId = {OrderId}, Token = [redacted], Url = [redacted], Generation = {Generation}, ValidUntil = {ValidUntil:O} }}";
 }

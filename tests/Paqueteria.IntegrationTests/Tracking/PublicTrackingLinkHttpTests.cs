@@ -16,10 +16,10 @@ using Orders.Application.Tracking;
 namespace Paqueteria.IntegrationTests.Tracking;
 
 /// <summary>
-/// TRK-002-ISSUE-ENDPOINT over HTTP with the token service replaced by a recording stub: request shape, then
-/// capability (DISPATCHER without MFA, PLATFORM_ADMIN only with MFA), then the service; the uniform 404, 409 and 503
-/// mappings; the no-store 201 that carries the only plaintext copy; and no plaintext in any log line, scope or
-/// problem body.
+/// TRK-002-AUTO-LINK over HTTP with the token service replaced by a recording stub: request shape, then capability
+/// (DISPATCHER without MFA, PLATFORM_ADMIN only with MFA), then the service; the uniform 404, the uncoded 409, the
+/// coded 409 TRACKING_LINK_ORDER_FINISHED and the 503 mappings; the no-store 200 get-or-create that returns the same
+/// link on every call with its public URL; and no plaintext in any log line, scope or problem body.
 /// </summary>
 public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLinkHttpTests.Factory>
 {
@@ -98,7 +98,7 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
     [Theory]
     [InlineData(MockIdentityProfiles.ActiveDispatcher, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10")]
     [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")]
-    public async Task Dispatcher_and_platform_admin_with_MFA_receive_the_token_once_with_no_store(
+    public async Task Dispatcher_and_platform_admin_with_MFA_get_the_link_and_its_public_url_with_no_store(
         string profile,
         string actor)
     {
@@ -106,7 +106,7 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         var key = Key();
         using var response = await SendAsync(profile, IssuePath(orderId), key);
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         Assert.Contains("no-cache", response.Headers.Pragma.Select(value => value.Name));
         Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
@@ -115,35 +115,69 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         using var json = JsonDocument.Parse(body);
         var root = json.RootElement;
         Assert.Equal(
-            ["expires_at", "order_id", "token", "token_id"],
+            ["generation", "order_id", "token", "token_id", "url", "valid_until"],
             root.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         var grant = factory.Service.LastGrant(orderId);
         Assert.Equal(grant.Token, root.GetProperty("token").GetString());
+        Assert.Equal($"{Factory.PublicBaseUrl}/track/{grant.Token}", root.GetProperty("url").GetString());
         Assert.Equal(grant.TokenId, root.GetProperty("token_id").GetGuid());
         Assert.Equal(orderId, root.GetProperty("order_id").GetGuid());
+        Assert.Equal(1, root.GetProperty("generation").GetInt32());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("valid_until").ValueKind);
 
-        var command = factory.Service.LastIssue(orderId);
+        var command = factory.Service.LastGetOrCreate(orderId);
         Assert.Equal(Guid.Parse(actor), command.ActorId);
         Assert.Equal(MockIdentityProfiles.ViewerOrganizationId, command.OrganizationId);
         Assert.Equal(key, command.RequestId);
-        Assert.Null(command.RequestedExpiration);
-        Assert.Equal(0, factory.Service.RotationsFor(orderId));
+        Assert.Equal(1, factory.Service.CreationsFor(orderId));
     }
 
     [Fact]
-    public async Task Issuing_when_a_link_is_active_rotates_and_returns_only_the_new_token()
+    public async Task Get_or_create_returns_the_same_link_for_a_retry_or_another_key_and_never_rotates()
     {
         var orderId = Guid.NewGuid();
-        using var first = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
-        var firstToken = ReadToken(await first.Content.ReadAsStringAsync());
+        var key = Key();
+        using var first = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), key);
+        using var retry = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), key);
+        using var other = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
 
-        using var second = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
+        var bodies = new[] { first, retry, other }.Select(response =>
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            return response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        }).ToArray();
+        Assert.Single(bodies.Select(ReadToken).Distinct(StringComparer.Ordinal));
+        Assert.Equal(1, factory.Service.CreationsFor(orderId));
 
-        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
-        var secondToken = ReadToken(await second.Content.ReadAsStringAsync());
-        Assert.NotEqual(firstToken, secondToken);
-        Assert.Equal(1, factory.Service.RotationsFor(orderId));
-        Assert.Equal(secondToken, factory.Service.LastGrant(orderId).Token);
+        // Revocation retires the generation; the next call derives generation 2, a different link.
+        using var revoked = await SendAsync(MockIdentityProfiles.ActiveDispatcher, RevokePath(orderId), Key());
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        using var next = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
+        var nextBody = await next.Content.ReadAsStringAsync();
+        Assert.NotEqual(ReadToken(bodies[0]), ReadToken(nextBody));
+        using var nextJson = JsonDocument.Parse(nextBody);
+        Assert.Equal(2, nextJson.RootElement.GetProperty("generation").GetInt32());
+    }
+
+    [Fact]
+    public async Task A_finished_order_is_the_coded_409_and_a_shape_conflict_is_uncoded()
+    {
+        using var finished = await SendAsync(
+            MockIdentityProfiles.ActiveDispatcher,
+            IssuePath(Stub.FinishedOrderId),
+            Key());
+        Assert.Equal(HttpStatusCode.Conflict, finished.StatusCode);
+        Assert.Equal("application/problem+json", finished.Content.Headers.ContentType?.MediaType);
+        using (var json = JsonDocument.Parse(await finished.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("TRACKING_LINK_ORDER_FINISHED", json.RootElement.GetProperty("code").GetString());
+            Assert.False(json.RootElement.TryGetProperty("token", out _));
+        }
+
+        using var uncoded = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(Stub.ConflictOrderId), Key());
+        Assert.Equal(HttpStatusCode.Conflict, uncoded.StatusCode);
+        using var body = JsonDocument.Parse(await uncoded.Content.ReadAsStringAsync());
+        Assert.False(body.RootElement.TryGetProperty("code", out _));
     }
 
     [Theory]
@@ -195,19 +229,23 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
     {
         var orderId = Guid.NewGuid();
         using var issued = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
-        using var rotated = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
+        using var repeated = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
         using var revoked = await SendAsync(MockIdentityProfiles.ActiveDispatcher, RevokePath(orderId), Key());
+        using var next = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(orderId), Key());
         using var failed = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(Stub.UnavailableOrderId), Key());
-        Assert.Equal(HttpStatusCode.Created, issued.StatusCode);
-        Assert.Equal(HttpStatusCode.Created, rotated.StatusCode);
+        using var finished = await SendAsync(MockIdentityProfiles.ActiveDispatcher, IssuePath(Stub.FinishedOrderId), Key());
+        Assert.Equal(HttpStatusCode.OK, issued.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, next.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, finished.StatusCode);
 
         var tokens = factory.Service.AllTokens();
-        Assert.True(tokens.Count >= 3);
+        Assert.True(tokens.Count >= 2);
         Assert.NotEmpty(factory.Logs.Entries);
         Assert.Contains(factory.Logs.Entries, entry => entry.Contains("tracking-link", StringComparison.Ordinal));
-        var failure = await failed.Content.ReadAsStringAsync();
+        var failure = await failed.Content.ReadAsStringAsync() + await finished.Content.ReadAsStringAsync();
         foreach (var token in tokens)
         {
             Assert.DoesNotContain(factory.Logs.Entries, entry => entry.Contains(token, StringComparison.Ordinal));
@@ -249,6 +287,8 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
 
     public sealed class Factory : WebApplicationFactory<Program>
     {
+        internal const string PublicBaseUrl = "https://tracking.synthetic.test";
+
         internal Stub Service { get; } = new();
         internal CapturingLoggerProvider Logs { get; } = new();
 
@@ -260,6 +300,7 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
                 {
                     ["Authentication:Provider"] = "Mock",
                     ["IdentityBootstrap:Provider"] = "Mock",
+                    ["PublicTracking:PublicBaseUrl"] = PublicBaseUrl,
                     // Everything the host can log, framework categories included, is captured and searched.
                     ["Logging:LogLevel:Default"] = "Trace",
                     ["Logging:LogLevel:Microsoft"] = "Trace",
@@ -279,55 +320,58 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
         internal static readonly Guid NotFoundOrderId = Guid.Parse("92000000-0000-0000-0000-000000000404");
         internal static readonly Guid UnavailableOrderId = Guid.Parse("92000000-0000-0000-0000-000000000503");
         internal static readonly Guid ConflictOrderId = Guid.Parse("92000000-0000-0000-0000-000000000409");
+        internal static readonly Guid FinishedOrderId = Guid.Parse("92000000-0000-0000-0000-000000000410");
 
         private readonly ConcurrentDictionary<Guid, PublicTrackingTokenGrant> active = new();
-        private readonly ConcurrentDictionary<Guid, IssuePublicTrackingTokenCommand> issues = new();
+        private readonly ConcurrentDictionary<Guid, int> generations = new();
+        private readonly ConcurrentDictionary<Guid, GetOrCreatePublicTrackingLinkCommand> reads = new();
         private readonly ConcurrentDictionary<Guid, RevokePublicTrackingTokenCommand> revokes = new();
         private readonly ConcurrentDictionary<Guid, int> calls = new();
-        private readonly ConcurrentDictionary<Guid, int> rotations = new();
+        private readonly ConcurrentDictionary<Guid, int> creations = new();
         private readonly ConcurrentDictionary<Guid, PublicTrackingTokenGrant> last = new();
         private readonly ConcurrentBag<string> tokens = [];
+        private readonly object gate = new();
 
         internal int CallsFor(Guid orderId) => calls.GetValueOrDefault(orderId);
 
-        internal int RotationsFor(Guid orderId) => rotations.GetValueOrDefault(orderId);
+        internal int CreationsFor(Guid orderId) => creations.GetValueOrDefault(orderId);
 
         internal PublicTrackingTokenGrant LastGrant(Guid orderId) => last[orderId];
 
-        internal IssuePublicTrackingTokenCommand LastIssue(Guid orderId) => issues[orderId];
+        internal GetOrCreatePublicTrackingLinkCommand LastGetOrCreate(Guid orderId) => reads[orderId];
 
         internal RevokePublicTrackingTokenCommand LastRevoke(Guid orderId) => revokes[orderId];
 
         internal IReadOnlyCollection<string> AllTokens() => tokens.ToArray();
 
-        public Task<PublicTrackingTokenGrant> IssueAsync(
-            IssuePublicTrackingTokenCommand command,
+        public Task<PublicTrackingTokenGrant> GetOrCreateAsync(
+            GetOrCreatePublicTrackingLinkCommand command,
             CancellationToken cancellationToken)
         {
             Touch(command.OrderId);
-            issues[command.OrderId] = command;
-            Fail(command.OrderId);
-            if (command.OrderId == ConflictOrderId || active.ContainsKey(command.OrderId))
-            {
-                throw new PublicTrackingTokenConflictException("An active public tracking token already exists.");
-            }
-
-            return Task.FromResult(Grant(command.OrderId));
-        }
-
-        public Task<PublicTrackingTokenGrant> RotateAsync(
-            RotatePublicTrackingTokenCommand command,
-            CancellationToken cancellationToken)
-        {
-            Touch(command.OrderId);
+            reads[command.OrderId] = command;
             Fail(command.OrderId);
             if (command.OrderId == ConflictOrderId)
             {
-                throw new PublicTrackingTokenConflictException("The requested expiration is outside the supported range.");
+                throw new PublicTrackingTokenConflictException("The public tracking token command is invalid.");
             }
 
-            rotations.AddOrUpdate(command.OrderId, 1, (_, value) => value + 1);
-            return Task.FromResult(Grant(command.OrderId));
+            if (command.OrderId == FinishedOrderId)
+            {
+                throw new PublicTrackingLinkOrderFinishedException();
+            }
+
+            lock (gate)
+            {
+                if (!active.TryGetValue(command.OrderId, out var grant))
+                {
+                    grant = Grant(command.OrderId, generations.AddOrUpdate(command.OrderId, 1, (_, value) => value + 1));
+                    creations.AddOrUpdate(command.OrderId, 1, (_, value) => value + 1);
+                }
+
+                last[command.OrderId] = grant;
+                return Task.FromResult(grant);
+            }
         }
 
         public Task RevokeAsync(RevokePublicTrackingTokenCommand command, CancellationToken cancellationToken)
@@ -350,20 +394,19 @@ public sealed class PublicTrackingLinkHttpTests : IClassFixture<PublicTrackingLi
 
             if (orderId == UnavailableOrderId)
             {
-                throw new PublicTrackingTokenInfrastructureException("Public tracking token issuance failed safely.");
+                throw new PublicTrackingTokenInfrastructureException("Public tracking link retrieval failed safely.");
             }
         }
 
-        private PublicTrackingTokenGrant Grant(Guid orderId)
+        private PublicTrackingTokenGrant Grant(Guid orderId, int generation)
         {
             var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
                 .TrimEnd('=')
                 .Replace('+', '-')
                 .Replace('/', '_');
-            var grant = new PublicTrackingTokenGrant(Guid.NewGuid(), orderId, token, DateTimeOffset.UtcNow.AddHours(168));
+            var grant = new PublicTrackingTokenGrant(Guid.NewGuid(), orderId, token, generation, null);
             tokens.Add(token);
             active[orderId] = grant;
-            last[orderId] = grant;
             return grant;
         }
     }

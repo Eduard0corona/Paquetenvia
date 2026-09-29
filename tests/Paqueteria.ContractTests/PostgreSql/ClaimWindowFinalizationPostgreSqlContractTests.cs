@@ -417,12 +417,14 @@ public sealed class ClaimWindowFinalizationPostgreSqlContractTests(PostgreSqlCon
         try
         {
             // Roll this database back to what an installation provisioned before AI-18 knew the
-            // lifecycle executor looks like: no role, no function, Orders history at RTM-002.
+            // lifecycle executor looks like: no role, no function, Orders history at RTM-002. The later
+            // TRK-002-AUTO-LINK step leaves the history with it and reapplies by adopting its AI-06 shape.
             await ExecuteAdminAsync(
                 $"""
                 DROP OWNED BY {Executor};
                 DROP ROLE {Executor};
-                DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId"='{AddOrderLifecycleFinalizationExecutor.MigrationId}';
+                DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId" IN (
+                  '{AddOrderLifecycleFinalizationExecutor.MigrationId}','{AddTrackingLinkGenerations.MigrationId}');
                 """);
             await using (var connection = await fixture.AdminDataSource.OpenConnectionAsync())
             {

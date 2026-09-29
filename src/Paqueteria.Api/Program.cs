@@ -62,7 +62,7 @@ builder.Services.AddDriversInfrastructure(builder.Configuration);
 builder.Services.AddDriversEndpoints(builder.Configuration);
 builder.Services.AddDispatchInfrastructure(builder.Configuration);
 builder.Services.AddDispatchEndpoints();
-builder.Services.AddOrdersInfrastructure(builder.Configuration);
+builder.Services.AddOrdersInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddOrdersEndpoints(builder.Configuration);
 builder.Services.AddOrganizationsInfrastructure(builder.Configuration);
 builder.Services.AddOrganizationsEndpoints();

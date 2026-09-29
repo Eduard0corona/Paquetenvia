@@ -299,6 +299,7 @@ internal sealed class UnavailableDatabaseWebApplicationFactory : WebApplicationF
                 ["IdentityBootstrap:Provider"] = "PostgreSql",
                 ["IdentityBootstrap:CommandTimeoutSeconds"] = "1",
                 ["PublicTracking:Provider"] = "PostgreSql",
+                ["PublicTracking:PublicBaseUrl"] = "https://tracking.synthetic.local",
                 ["PublicTracking:CommandTimeoutSeconds"] = "1",
                 ["Tenancy:Provider"] = "PostgreSql",
                 ["Tenancy:CommandTimeoutSeconds"] = "1",

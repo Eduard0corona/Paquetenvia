@@ -1,13 +1,7 @@
-using System.Buffers.Binary;
-using System.Data.Common;
 using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
-using Microsoft.Extensions.Options;
 using Npgsql;
-using NpgsqlTypes;
 using Orders.Application.Tracking;
 using Orders.Infrastructure.Persistence;
 using Paqueteria.Application;
@@ -20,14 +14,8 @@ namespace Orders.Infrastructure.Tracking;
 
 public sealed class DisabledPublicTrackingTokenService : IPublicTrackingTokenService
 {
-    public Task<PublicTrackingTokenGrant> IssueAsync(
-        IssuePublicTrackingTokenCommand command,
-        CancellationToken cancellationToken) =>
-        Task.FromException<PublicTrackingTokenGrant>(
-            new PublicTrackingTokenInfrastructureException("Public tracking is unavailable."));
-
-    public Task<PublicTrackingTokenGrant> RotateAsync(
-        RotatePublicTrackingTokenCommand command,
+    public Task<PublicTrackingTokenGrant> GetOrCreateAsync(
+        GetOrCreatePublicTrackingLinkCommand command,
         CancellationToken cancellationToken) =>
         Task.FromException<PublicTrackingTokenGrant>(
             new PublicTrackingTokenInfrastructureException("Public tracking is unavailable."));
@@ -39,56 +27,77 @@ public sealed class DisabledPublicTrackingTokenService : IPublicTrackingTokenSer
             new PublicTrackingTokenInfrastructureException("Public tracking is unavailable."));
 }
 
+/// <summary>
+/// TRK-002-AUTO-LINK: get-or-create and revoke of an order's public tracking link, inside one tenant transaction
+/// that locks the order (owned by the selected organization, otherwise the uniform 404).
+/// </summary>
+/// <remarks>
+/// <para>
+/// Get-or-create re-derives the token of the current generation and writes nothing, so a retry with the same or
+/// another Idempotency-Key returns the same link and adds no audit row. It creates a link (audited
+/// <c>TRACKING_TOKEN_ISSUED</c>) only when the order has none that can be re-derived: none yet, a revoked one (the
+/// next generation), a pre-derivation random one, or one whose key version is no longer configured (those two are
+/// retired in the same transaction). A finished order never gets a new link.
+/// </para>
+/// <para>
+/// Revoke retires the live link (audited <c>TRACKING_TOKEN_REVOKED</c>); the public lookup then answers the uniform
+/// 404, and a later get-or-create derives the next generation, never the revoked one.
+/// </para>
+/// </remarks>
 public sealed class PostgreSqlPublicTrackingTokenService(
     TenantTransactionContext<OrdersDbContext> transactionContext,
     TrackingTokenHasher tokenHasher,
+    PublicTrackingLinkKeyRing keyRing,
     IAppendOnlyAuditWriter auditWriter,
     IAuditPayloadRedactor auditRedactor,
-    IOptions<PublicTrackingOptions> options,
     IClock clock) : IPublicTrackingTokenService
 {
-    internal const int AdvisoryLockNamespace = 0x54524B31; // TRK1
-    private static readonly TimeSpan MinimumLifetime = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan MaximumLifetime = TimeSpan.FromDays(30);
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
+    private readonly PublicOrderStatusPolicy statusPolicy = new();
 
-    public Task<PublicTrackingTokenGrant> IssueAsync(
-        IssuePublicTrackingTokenCommand command,
+    public async Task<PublicTrackingTokenGrant> GetOrCreateAsync(
+        GetOrCreatePublicTrackingLinkCommand command,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var now = clock.UtcNow;
-        var expiresAt = Validate(command, command.RequestedExpiration, now);
-        return ExecuteGrantAsync(
-            command.ActorId,
-            command.OrganizationId,
-            command.OrderId,
-            command.RequestId,
-            now,
-            expiresAt,
-            rotate: false,
-            cancellationToken);
-    }
+        ValidateShape(command.ActorId, command.OrganizationId, command.OrderId, command.RequestId);
+        var now = RequireUtc(clock.UtcNow);
+        if (!keyRing.IsAvailable)
+        {
+            throw new PublicTrackingTokenInfrastructureException("Public tracking links are unavailable.");
+        }
 
-    public Task<PublicTrackingTokenGrant> RotateAsync(
-        RotatePublicTrackingTokenCommand command,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        var now = clock.UtcNow;
-        var expiresAt = Validate(command, command.RequestedExpiration, now);
-        return ExecuteGrantAsync(
-            command.ActorId,
-            command.OrganizationId,
-            command.OrderId,
-            command.RequestId,
-            now,
-            expiresAt,
-            rotate: true,
-            cancellationToken);
+        try
+        {
+            return await transactionContext.ExecuteAsync(
+                new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
+                (dbContext, token) => GetOrCreateWithinTransactionAsync(dbContext, command, now, token),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is PublicTrackingTokenNotFoundException
+                or PublicTrackingTokenConflictException
+                or PublicTrackingLinkOrderFinishedException
+                or PublicTrackingTokenInfrastructureException)
+        {
+            throw;
+        }
+        catch (PublicStatusMappingException exception)
+        {
+            // AI-01 invariant 12: an unmapped internal status fails loudly, never as a link.
+            throw new PublicTrackingTokenInfrastructureException(
+                "The order status has no public mapping.",
+                exception);
+        }
+        catch (Exception exception) when (exception is PostgresException or NpgsqlException or DbUpdateException)
+        {
+            throw new PublicTrackingTokenInfrastructureException(
+                "Public tracking link retrieval failed safely.",
+                exception);
+        }
     }
 
     public async Task RevokeAsync(
@@ -97,7 +106,7 @@ public sealed class PostgreSqlPublicTrackingTokenService(
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateShape(command.ActorId, command.OrganizationId, command.OrderId, command.RequestId);
-        var now = clock.UtcNow;
+        var now = RequireUtc(clock.UtcNow);
         try
         {
             await transactionContext.ExecuteAsync(
@@ -105,14 +114,18 @@ public sealed class PostgreSqlPublicTrackingTokenService(
                 async (dbContext, token) =>
                 {
                     var (connection, transaction) = GetDatabase(dbContext);
-                    await AcquireOrderLockAsync(connection, transaction, command.OrderId, token);
-                    await RequireOwnedOrderAsync(
-                        connection,
-                        transaction,
-                        command.OrganizationId,
-                        command.OrderId,
-                        token);
-                    var revoked = await RevokeActiveAsync(
+                    await PublicTrackingLinkStore.AcquireOrderLockAsync(connection, transaction, command.OrderId, token);
+                    if (await PublicTrackingLinkStore.ReadOwnedOrderStatusForUpdateAsync(
+                            connection,
+                            transaction,
+                            command.OrganizationId,
+                            command.OrderId,
+                            token) is null)
+                    {
+                        throw new PublicTrackingTokenNotFoundException();
+                    }
+
+                    var revoked = await PublicTrackingLinkStore.RetireActiveLinksAsync(
                         connection,
                         transaction,
                         command.OrderId,
@@ -123,16 +136,15 @@ public sealed class PostgreSqlPublicTrackingTokenService(
                         return true;
                     }
 
-                    await WriteAuditAsync(
+                    await PublicTrackingLinkStore.WriteRevokedAuditAsync(
+                        auditWriter,
+                        auditRedactor,
                         connection,
                         transaction,
                         command.ActorId,
                         command.OrganizationId,
                         command.OrderId,
                         command.RequestId,
-                        "TRACKING_TOKEN_REVOKED",
-                        tokenId: null,
-                        expiresAt: null,
                         revoked,
                         now,
                         token);
@@ -159,138 +171,119 @@ public sealed class PostgreSqlPublicTrackingTokenService(
         }
     }
 
-    private async Task<PublicTrackingTokenGrant> ExecuteGrantAsync(
-        Guid actorId,
-        Guid organizationId,
-        Guid orderId,
-        string requestId,
+    private async Task<PublicTrackingTokenGrant> GetOrCreateWithinTransactionAsync(
+        OrdersDbContext dbContext,
+        GetOrCreatePublicTrackingLinkCommand command,
         DateTimeOffset now,
-        DateTimeOffset expiresAt,
-        bool rotate,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            return await transactionContext.ExecuteAsync(
-                new TenantDatabaseExecutionContext(actorId, [organizationId]),
-                async (dbContext, token) =>
-                {
-                    var (connection, transaction) = GetDatabase(dbContext);
-                    await AcquireOrderLockAsync(connection, transaction, orderId, token);
-                    await RequireOwnedOrderAsync(
-                        connection,
-                        transaction,
-                        organizationId,
-                        orderId,
-                        token);
+        var (connection, transaction) = GetDatabase(dbContext);
+        await PublicTrackingLinkStore.AcquireOrderLockAsync(connection, transaction, command.OrderId, cancellationToken);
+        var status = await PublicTrackingLinkStore.ReadOwnedOrderStatusForUpdateAsync(
+            connection,
+            transaction,
+            command.OrganizationId,
+            command.OrderId,
+            cancellationToken) ?? throw new PublicTrackingTokenNotFoundException();
 
-                    var revoked = 0;
-                    if (rotate)
-                    {
-                        revoked = await RevokeUnrevokedAsync(
-                            connection,
-                            transaction,
-                            orderId,
-                            now,
-                            token);
-                    }
-                    else if (await HasActiveTokenAsync(
-                                 connection,
-                                 transaction,
-                                 orderId,
-                                 now,
-                                 token))
-                    {
-                        throw new PublicTrackingTokenConflictException(
-                            "An active public tracking token already exists.");
-                    }
+        var publicStatus = statusPolicy.Map(status);
+        var finished = PublicTrackingLinkPolicy.IsFinal(publicStatus);
+        var validUntil = finished
+            ? PublicTrackingLinkPolicy.ValidUntil(
+                publicStatus,
+                await PublicTrackingLinkStore.ReadFirstFinalEventAtAsync(
+                    connection,
+                    transaction,
+                    command.OrderId,
+                    cancellationToken),
+                now)
+            : null;
 
-                    var grant = await InsertGrantWithCollisionRetryAsync(
-                        connection,
-                        transaction,
-                        orderId,
-                        organizationId,
-                        expiresAt,
-                        now,
-                        token);
-                    await WriteAuditAsync(
-                        connection,
-                        transaction,
-                        actorId,
-                        organizationId,
-                        orderId,
-                        requestId,
-                        rotate ? "TRACKING_TOKEN_ROTATED" : "TRACKING_TOKEN_ISSUED",
-                        grant.TokenId,
-                        expiresAt,
-                        revoked,
-                        now,
-                        token);
-                    return grant;
-                },
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        // A finished order whose grace is over has no link the public lookup would still show.
+        if (validUntil is { } end && end <= now)
         {
-            throw;
+            throw new PublicTrackingLinkOrderFinishedException();
         }
-        catch (Exception exception) when (
-            exception is PublicTrackingTokenNotFoundException
-                or PublicTrackingTokenConflictException
-                or PublicTrackingTokenInfrastructureException)
+
+        var active = await PublicTrackingLinkStore.ReadActiveLinksAsync(
+            connection,
+            transaction,
+            command.OrderId,
+            now,
+            cancellationToken);
+        var derived = active.FirstOrDefault(link => link.KeyVersion is not null);
+        if (derived is not null &&
+            keyRing.TryDerive(derived.KeyVersion!.Value, command.OrderId, derived.Generation, out var existing))
         {
-            throw;
+            if (!CryptographicOperations.FixedTimeEquals(tokenHasher.HashToken(existing), derived.TokenHash))
+            {
+                // The configured key of that version is not the one the link was derived with: fail closed rather
+                // than hand out a link that does not resolve or silently replace the one customers hold.
+                throw new PublicTrackingTokenInfrastructureException(
+                    "The public tracking link key does not match its recorded version.");
+            }
+
+            return new PublicTrackingTokenGrant(
+                derived.Id,
+                command.OrderId,
+                existing,
+                derived.Generation,
+                validUntil);
         }
-        catch (Exception exception) when (exception is PostgresException or NpgsqlException or DbUpdateException)
+
+        if (finished)
         {
-            throw new PublicTrackingTokenInfrastructureException(
-                "Public tracking token issuance failed safely.",
-                exception);
+            throw new PublicTrackingLinkOrderFinishedException();
         }
+
+        // No link that can be re-derived: retire whatever the lookup could still accept (a pre-derivation random
+        // token, or a link whose key version is no longer configured) and derive the next generation.
+        var revoked = await PublicTrackingLinkStore.RetireActiveLinksAsync(
+            connection,
+            transaction,
+            command.OrderId,
+            now,
+            cancellationToken);
+        var generation = await PublicTrackingLinkStore.ReadNextGenerationAsync(
+            connection,
+            transaction,
+            command.OrderId,
+            cancellationToken);
+        var token = keyRing.DeriveCurrent(command.OrderId, generation);
+        var tokenId = Guid.NewGuid();
+        await PublicTrackingLinkStore.InsertDerivedLinkAsync(
+            connection,
+            transaction,
+            tokenId,
+            command.OrderId,
+            command.OrganizationId,
+            generation,
+            keyRing.CurrentKeyVersion,
+            tokenHasher.HashToken(token),
+            now,
+            cancellationToken);
+        await PublicTrackingLinkStore.WriteIssuedAuditAsync(
+            auditWriter,
+            auditRedactor,
+            connection,
+            transaction,
+            command.ActorId,
+            command.OrganizationId,
+            command.OrderId,
+            command.RequestId,
+            tokenId,
+            generation,
+            keyRing.CurrentKeyVersion,
+            revoked,
+            now,
+            cancellationToken);
+        return new PublicTrackingTokenGrant(tokenId, command.OrderId, token, generation, null);
     }
 
-    private DateTimeOffset Validate(
-        object command,
-        DateTimeOffset? requestedExpiration,
-        DateTimeOffset now)
-    {
-        switch (command)
-        {
-            case IssuePublicTrackingTokenCommand issue:
-                ValidateShape(
-                    issue.ActorId,
-                    issue.OrganizationId,
-                    issue.OrderId,
-                    issue.RequestId);
-                break;
-            case RotatePublicTrackingTokenCommand rotate:
-                ValidateShape(
-                    rotate.ActorId,
-                    rotate.OrganizationId,
-                    rotate.OrderId,
-                    rotate.RequestId);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(command));
-        }
-
-        if (now.Offset != TimeSpan.Zero)
-        {
-            throw new PublicTrackingTokenConflictException("The server clock must be UTC.");
-        }
-
-        var expiresAt = requestedExpiration ?? now.AddHours(options.Value.TokenLifetimeHours);
-        var lifetime = expiresAt - now;
-        if (expiresAt.Offset != TimeSpan.Zero ||
-            lifetime < MinimumLifetime ||
-            lifetime > MaximumLifetime)
-        {
-            throw new PublicTrackingTokenConflictException(
-                "The requested expiration is outside the supported range.");
-        }
-
-        return expiresAt;
-    }
+    private static DateTimeOffset RequireUtc(DateTimeOffset now) =>
+        now.Offset == TimeSpan.Zero
+            ? now
+            : throw new PublicTrackingTokenConflictException("The server clock must be UTC.");
 
     private static void ValidateShape(
         Guid actorId,
@@ -306,235 +299,6 @@ public sealed class PostgreSqlPublicTrackingTokenService(
             throw new PublicTrackingTokenConflictException(
                 "The public tracking token command is invalid.");
         }
-    }
-
-    private async Task<PublicTrackingTokenGrant> InsertGrantWithCollisionRetryAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid orderId,
-        Guid organizationId,
-        DateTimeOffset expiresAt,
-        DateTimeOffset now,
-        CancellationToken cancellationToken)
-    {
-        for (var attempt = 0; attempt < options.Value.TokenCollisionRetryCount; attempt++)
-        {
-            var token = tokenHasher.CreateToken();
-            var tokenHash = tokenHasher.HashToken(token);
-            var tokenId = Guid.NewGuid();
-            var savepoint = $"trk_token_{attempt}";
-            await transaction.SaveAsync(savepoint, cancellationToken);
-            try
-            {
-                await using var command = new NpgsqlCommand(
-                    """
-                    INSERT INTO orders.public_tracking_tokens
-                        (id,order_id,owner_org_id,token_hash,expires_at,revoked_at,created_at)
-                    VALUES
-                        (@id,@order_id,@owner_org_id,@token_hash,@expires_at,NULL,@created_at);
-                    """,
-                    connection,
-                    transaction);
-                command.Parameters.Add(
-                    new NpgsqlParameter<Guid>("id", NpgsqlDbType.Uuid)
-                    { TypedValue = tokenId });
-                command.Parameters.Add(
-                    new NpgsqlParameter<Guid>("order_id", NpgsqlDbType.Uuid)
-                    { TypedValue = orderId });
-                command.Parameters.Add(
-                    new NpgsqlParameter<Guid>("owner_org_id", NpgsqlDbType.Uuid)
-                    { TypedValue = organizationId });
-                command.Parameters.Add(
-                    new NpgsqlParameter<byte[]>("token_hash", NpgsqlDbType.Bytea)
-                    { TypedValue = tokenHash });
-                command.Parameters.Add(
-                    new NpgsqlParameter<DateTimeOffset>(
-                        "expires_at",
-                        NpgsqlDbType.TimestampTz)
-                    { TypedValue = expiresAt });
-                command.Parameters.Add(
-                    new NpgsqlParameter<DateTimeOffset>(
-                        "created_at",
-                        NpgsqlDbType.TimestampTz)
-                    { TypedValue = now });
-                await command.ExecuteNonQueryAsync(cancellationToken);
-                await transaction.ReleaseAsync(savepoint, cancellationToken);
-                return new PublicTrackingTokenGrant(tokenId, orderId, token, expiresAt);
-            }
-            catch (PostgresException exception)
-                when (exception.SqlState == PostgresErrorCodes.UniqueViolation)
-            {
-                await transaction.RollbackAsync(savepoint, cancellationToken);
-                await transaction.ReleaseAsync(savepoint, cancellationToken);
-            }
-        }
-
-        throw new PublicTrackingTokenInfrastructureException(
-            "Public tracking token generation failed safely.");
-    }
-
-    private static async Task AcquireOrderLockAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid orderId,
-        CancellationToken cancellationToken)
-    {
-        Span<byte> digest = stackalloc byte[32];
-        SHA256.HashData(orderId.ToByteArray(), digest);
-        var orderKey = BinaryPrimitives.ReadInt32BigEndian(digest);
-        await using var command = new NpgsqlCommand(
-            "SELECT pg_catalog.pg_advisory_xact_lock(@namespace,@order_key);",
-            connection,
-            transaction);
-        command.Parameters.Add(
-            new NpgsqlParameter<int>("namespace", NpgsqlDbType.Integer)
-            { TypedValue = AdvisoryLockNamespace });
-        command.Parameters.Add(
-            new NpgsqlParameter<int>("order_key", NpgsqlDbType.Integer)
-            { TypedValue = orderKey });
-        await command.ExecuteScalarAsync(cancellationToken);
-    }
-
-    private static async Task RequireOwnedOrderAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid organizationId,
-        Guid orderId,
-        CancellationToken cancellationToken)
-    {
-        await using var command = new NpgsqlCommand(
-            """
-            SELECT 1
-            FROM orders.orders
-            WHERE id=@order_id
-              AND owner_org_id=@owner_org_id
-            FOR UPDATE;
-            """,
-            connection,
-            transaction);
-        command.Parameters.Add(
-            new NpgsqlParameter<Guid>("order_id", NpgsqlDbType.Uuid)
-            { TypedValue = orderId });
-        command.Parameters.Add(
-            new NpgsqlParameter<Guid>("owner_org_id", NpgsqlDbType.Uuid)
-            { TypedValue = organizationId });
-        if (await command.ExecuteScalarAsync(cancellationToken) is null)
-        {
-            throw new PublicTrackingTokenNotFoundException();
-        }
-    }
-
-    private static async Task<bool> HasActiveTokenAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid orderId,
-        DateTimeOffset now,
-        CancellationToken cancellationToken)
-    {
-        await using var command = new NpgsqlCommand(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                FROM orders.public_tracking_tokens
-                WHERE order_id=@order_id
-                  AND revoked_at IS NULL
-                  AND expires_at>@now);
-            """,
-            connection,
-            transaction);
-        command.Parameters.Add(
-            new NpgsqlParameter<Guid>("order_id", NpgsqlDbType.Uuid)
-            { TypedValue = orderId });
-        command.Parameters.Add(
-            new NpgsqlParameter<DateTimeOffset>("now", NpgsqlDbType.TimestampTz)
-            { TypedValue = now });
-        return (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
-    }
-
-    private static Task<int> RevokeUnrevokedAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid orderId,
-        DateTimeOffset now,
-        CancellationToken cancellationToken) =>
-        RevokeAsync(connection, transaction, orderId, now, activeOnly: false, cancellationToken);
-
-    private static Task<int> RevokeActiveAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid orderId,
-        DateTimeOffset now,
-        CancellationToken cancellationToken) =>
-        RevokeAsync(connection, transaction, orderId, now, activeOnly: true, cancellationToken);
-
-    private static async Task<int> RevokeAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid orderId,
-        DateTimeOffset now,
-        bool activeOnly,
-        CancellationToken cancellationToken)
-    {
-        var sql = activeOnly
-            ? """
-              UPDATE orders.public_tracking_tokens
-              SET revoked_at=@now
-              WHERE order_id=@order_id
-                AND revoked_at IS NULL
-                AND expires_at>@now;
-              """
-            : """
-              UPDATE orders.public_tracking_tokens
-              SET revoked_at=@now
-              WHERE order_id=@order_id
-                AND revoked_at IS NULL;
-              """;
-        await using var command = new NpgsqlCommand(sql, connection, transaction);
-        command.Parameters.Add(
-            new NpgsqlParameter<Guid>("order_id", NpgsqlDbType.Uuid)
-            { TypedValue = orderId });
-        command.Parameters.Add(
-            new NpgsqlParameter<DateTimeOffset>("now", NpgsqlDbType.TimestampTz)
-            { TypedValue = now });
-        return await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private async Task WriteAuditAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        Guid actorId,
-        Guid organizationId,
-        Guid orderId,
-        string requestId,
-        string action,
-        Guid? tokenId,
-        DateTimeOffset? expiresAt,
-        int previousTokensRevokedCount,
-        DateTimeOffset occurredAt,
-        CancellationToken cancellationToken)
-    {
-        var payload = JsonSerializer.SerializeToElement(new
-        {
-            order_id = orderId,
-            token_id = tokenId,
-            expires_at = expiresAt,
-            previous_tokens_revoked_count = previousTokensRevokedCount,
-            request_id = requestId,
-        }, JsonOptions);
-        await auditWriter.WriteAsync(
-            connection,
-            transaction,
-            new AuditEntry(
-                Guid.NewGuid(),
-                organizationId,
-                actorId,
-                action,
-                "PublicTrackingToken",
-                orderId,
-                requestId,
-                auditRedactor.Redact(payload),
-                occurredAt),
-            cancellationToken);
     }
 
     private static (NpgsqlConnection Connection, NpgsqlTransaction Transaction) GetDatabase(

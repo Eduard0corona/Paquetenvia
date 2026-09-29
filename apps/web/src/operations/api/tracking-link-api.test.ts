@@ -6,8 +6,9 @@ import {
   canManageTrackingLink,
   createTrackingLinkApi,
   createTrackingLinkIdempotencyKey,
+  isPublicTrackingUrl,
   parsePublicTrackingLink,
-  publicTrackingUrl,
+  trackingLinkOrderFinishedCode,
   trackingLinkRoles,
 } from "./tracking-link-api";
 import { TenantApiError } from "./tenant-request";
@@ -39,19 +40,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const publicUrl = `https://paquetenvia.test/track/${token}`;
+
 function linkBody(overrides: Record<string, unknown> = {}) {
   return {
     token_id: "77777777-7777-7777-7777-777777777777",
     order_id: orderId,
     token,
-    expires_at: "2026-10-05T12:00:00.000Z",
+    url: publicUrl,
+    generation: 1,
+    valid_until: null,
     ...overrides,
   };
 }
 
-function created(body: unknown = linkBody()): Response {
+function ok(body: unknown = linkBody()): Response {
   return new Response(JSON.stringify(body), {
-    status: 201,
+    status: 200,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -59,7 +64,7 @@ function created(body: unknown = linkBody()): Response {
   });
 }
 
-describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
+describe("tracking link API (TRK-002-AUTO-LINK)", () => {
   it("matches the AI-05 operations, paths and capability roles", () => {
     expect(openApi).toContain("  /orders/{orderId}/tracking-link:");
     expect(openApi).toContain("      operationId: issueTrackingLink");
@@ -104,11 +109,19 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
     expect(canManageTrackingLink([], organizationId, organizationId)).toBe(false);
   });
 
-  it("issues with a bearer, the tenant, a fresh idempotency key and no caching", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(created());
+  it("declares get-or-create with a 200 link, its public URL and the finished-order conflict", () => {
+    expect(openApi).toContain("TRK-002-AUTO-LINK");
+    expect(openApi).toContain("get-or-create");
+    expect(openApi).toContain("          $ref: '#/components/responses/TrackingLinkConflict'");
+    expect(openApi).toContain(`          - ${trackingLinkOrderFinishedCode}`);
+    expect(openApi).toContain("          pattern: ^https://[^/?#]+/track/[A-Za-z0-9_-]{43}$");
+  });
+
+  it("gets the link with a bearer, the tenant, a fresh idempotency key and no caching", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
     vi.stubGlobal("fetch", fetchMock);
 
-    const link = await createTrackingLinkApi("https://api.synthetic.test", bearer).issue(
+    const link = await createTrackingLinkApi("https://api.synthetic.test", bearer).getOrCreate(
       orderId,
       "tracking-link-key-0001",
     );
@@ -117,7 +130,9 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
       tokenId: "77777777-7777-7777-7777-777777777777",
       orderId,
       token,
-      expiresAt: "2026-10-05T12:00:00.000Z",
+      url: publicUrl,
+      generation: 1,
+      validUntil: null,
     });
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(url.toString()).toBe(
@@ -167,7 +182,7 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
       ),
     );
     const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
-    await expect(api.issue(orderId, "k")).rejects.toEqual(
+    await expect(api.getOrCreate(orderId, "k")).rejects.toEqual(
       new TenantApiError(category),
     );
     await expect(api.revoke(orderId, "k")).rejects.toEqual(
@@ -189,15 +204,39 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
     vi.stubGlobal("fetch", fetchMock);
     const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
 
-    for (const attempt of [api.issue(orderId, "k"), api.revoke(orderId, "k")]) {
+    for (const attempt of [api.getOrCreate(orderId, "k"), api.revoke(orderId, "k")]) {
       const error = await attempt.catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(TenantApiError);
       expect((error as TenantApiError).category).toBe("forbidden");
       expect((error as TenantApiError).mfaRequired).toBe(true);
     }
-    const generic = await api.issue(orderId, "k").catch((caught: unknown) => caught);
+    const generic = await api.getOrCreate(orderId, "k").catch((caught: unknown) => caught);
     expect((generic as TenantApiError).category).toBe("forbidden");
     expect((generic as TenantApiError).mfaRequired).toBe(false);
+  });
+
+  it("carries the finished-order problem code on a 409", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ status: 409, code: trackingLinkOrderFinishedCode }),
+          { status: 409, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    const error = await createTrackingLinkApi("https://api.synthetic.test", bearer)
+      .getOrCreate(orderId, "k")
+      .catch((caught: unknown) => caught);
+    expect(error).toEqual(new TenantApiError("conflict", trackingLinkOrderFinishedCode));
+  });
+
+  it("parses a finished order's grace end and a later generation", () => {
+    expect(
+      parsePublicTrackingLink(
+        linkBody({ generation: 3, valid_until: "2026-10-01T18:00:00Z" }),
+      ),
+    ).toMatchObject({ generation: 3, validUntil: "2026-10-01T18:00:00.000Z" });
   });
 
   it("rejects malformed responses and never echoes the token in the error", async () => {
@@ -205,12 +244,20 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
       linkBody({ token: "short" }),
       linkBody({ extra: true }),
       linkBody({ order_id: "88888888-8888-8888-8888-888888888888" }),
-      linkBody({ expires_at: "not-a-date" }),
+      linkBody({ valid_until: "not-a-date" }),
+      linkBody({ generation: 0 }),
+      linkBody({ generation: 1.5 }),
+      linkBody({ url: `http://paquetenvia.test/track/${token}` }),
+      linkBody({ url: `https://paquetenvia.test/track/${"A".repeat(43)}` }),
+      linkBody({ url: `https://paquetenvia.test/track/${token}?x=1` }),
+      linkBody({ url: `https://user@paquetenvia.test/track/${token}` }),
+      linkBody({ url: `javascript:alert(1)//track/${token}` }),
+      linkBody({ expires_at: "2026-10-05T12:00:00.000Z" }),
       [linkBody()],
     ]) {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(created(body)));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
       const error = await createTrackingLinkApi("https://api.synthetic.test", bearer)
-        .issue(orderId, "k")
+        .getOrCreate(orderId, "k")
         .catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(TenantApiError);
       expect((error as TenantApiError).category).toBe("invalid");
@@ -223,23 +270,21 @@ describe("tracking link API (TRK-002-ISSUE-ENDPOINT)", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const api = createTrackingLinkApi("https://api.synthetic.test", bearer);
-    await expect(api.issue("not-a-uuid", "k")).rejects.toBeInstanceOf(TenantApiError);
+    await expect(api.getOrCreate("not-a-uuid", "k")).rejects.toBeInstanceOf(TenantApiError);
     await expect(
       api.revoke("00000000-0000-0000-0000-000000000000", "k"),
     ).rejects.toBeInstanceOf(TenantApiError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("builds the public /track URL on the given origin and a namespaced key", () => {
-    expect(publicTrackingUrl("https://ops.synthetic.test/ops/orders/x", token)).toBe(
-      `https://ops.synthetic.test/track/${token}`,
-    );
-    expect(() => publicTrackingUrl("https://ops.synthetic.test", "../x")).toThrow(
-      TenantApiError,
-    );
-    expect(() => publicTrackingUrl("javascript:alert(1)", token)).toThrow(
-      TenantApiError,
-    );
+  it("accepts only the server's https /track URL for the same token, and a namespaced key", () => {
+    expect(isPublicTrackingUrl(publicUrl, token)).toBe(true);
+    expect(isPublicTrackingUrl(`http://127.0.0.1:3000/track/${token}`, token)).toBe(true);
+    expect(isPublicTrackingUrl(`http://paquetenvia.test/track/${token}`, token)).toBe(false);
+    expect(isPublicTrackingUrl(`https://paquetenvia.test/track/${token}#x`, token)).toBe(false);
+    expect(isPublicTrackingUrl(`https://paquetenvia.test/other/${token}`, token)).toBe(false);
+    expect(isPublicTrackingUrl(`https://paquetenvia.test/track/../x`, "../x")).toBe(false);
+    expect(isPublicTrackingUrl("not a url", token)).toBe(false);
     expect(createTrackingLinkIdempotencyKey(() => "uuid-1")).toBe(
       "tracking-link-uuid-1",
     );

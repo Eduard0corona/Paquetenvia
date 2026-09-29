@@ -203,7 +203,8 @@ public sealed partial class PilotContractDeltasPostgreSqlContractTests(PostgreSq
         var lane = Assert.Single(verified, state => state.Module == Module);
 
         Assert.Equal(HistoryTable, lane.HistoryTable);
-        Assert.Equal(ApplyPilotContractDeltas.MigrationId, lane.MigrationId);
+        // TRK-002-AUTO-LINK: the lane's latest step bounds public tracking links to the order lifecycle.
+        Assert.Equal(BoundTrackingLinksToOrderLifecycle.MigrationId, lane.MigrationId);
         Assert.Equal("VERIFIED", lane.Status);
 
         // It must run after the Orders lane, whose RTM-002 migration rewrites the tracking projection.
@@ -229,6 +230,18 @@ public sealed partial class PilotContractDeltasPostgreSqlContractTests(PostgreSq
                 state => Assert.Equal("APPLIED", state.Status));
             await AssertDeltasAsync(connectionString, present: true);
             await AssertBaselineAsync(connectionString);
+
+            // The TRK-002-AUTO-LINK step after the pilot deltas never rolls back (its Down fails closed), so the
+            // pilot deltas' own Down is exercised from an installation that predates that step.
+            var blocked = await Assert.ThrowsAnyAsync<Exception>(
+                () => MigrateLaneAsync(connectionString, ApplyPilotContractDeltas.MigrationId));
+            Assert.Equal("TRK002_LIFECYCLE_DOWNGRADE_NOT_SUPPORTED", FindPostgresException(blocked).MessageText);
+            Assert.Equal("APPLIED", await LaneStatusAsync(coordinator, connectionString));
+            await ExecuteAsync(
+                connectionString,
+                $"""
+                DELETE FROM {HistoryTable} WHERE "MigrationId"='{BoundTrackingLinksToOrderLifecycle.MigrationId}';
+                """);
 
             // Down returns the installation to the pre-decision contract, exactly.
             await MigrateLaneAsync(connectionString, Migration.InitialDatabase);

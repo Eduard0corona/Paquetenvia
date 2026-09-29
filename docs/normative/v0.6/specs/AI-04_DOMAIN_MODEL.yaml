@@ -482,7 +482,11 @@ public_tracking_contract:
   - C# mapping throws PublicStatusMappingException on missing mapping and emits operational alert
   - CI contract test compares SQL and C# outputs for exactly all 17 internal states
 token_hash_contract:
-  token_entropy: 32 cryptographically random bytes
+  token_entropy: 32 bytes; since TRK-002-AUTO-LINK the HMAC-SHA256 output over the versioned canonical input under
+    a Key Vault key (AI-24 tracking_token.derivation); tokens issued before it were 32 cryptographically random bytes
+  link_lifetime: AI-24 public_tracking.link_lifetime - valid while the order is in progress (RESCHEDULED included) and
+    for 24 hours after its first DELIVERED, RETURNED or CANCELLED public event; no new link for an order in a final
+    public status; a revoked generation never comes back
   token_encoding: Base64URL without padding
   hash_algorithm: SHA-256
   hash_input: exact UTF-8 bytes of the encoded token, without trim or normalization

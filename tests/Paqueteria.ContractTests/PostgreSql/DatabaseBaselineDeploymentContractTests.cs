@@ -906,7 +906,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             REVOKE SELECT (id,status,claim_window_ends_at,finalized_at), UPDATE (finalized_at)
               ON orders.orders FROM paqueteria_lifecycle_executor;
             DELETE FROM platform."__ef_migrations_history_orders"
-              WHERE "MigrationId"='{E002LifecycleStateReader.Lif001MigrationId}';
+              WHERE "MigrationId" IN ('{E002LifecycleStateReader.Lif001MigrationId}',
+                '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";

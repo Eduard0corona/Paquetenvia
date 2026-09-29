@@ -53,6 +53,7 @@ var apiSecretNames = [
   'authcenter-paquetenvia-client-secret'
   'paquetenvia-email-lookup-key-1'
   'google-maps-api-key'
+  'public-tracking-link-key'
 ]
 var workerSecretNames = [
   'pg-worker-runtime-connection'
@@ -204,6 +205,15 @@ var apiKeyVaultEnv = [
     name: 'KeyVaultSecrets__Mappings__3__ConfigurationKey'
     value: 'Locations:GoogleMaps:ApiKey'
   }
+  // TRK-002-AUTO-LINK: the owner-written key public tracking links are derived with (HMAC-SHA256).
+  {
+    name: 'KeyVaultSecrets__Mappings__4__SecretName'
+    value: 'public-tracking-link-key'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__4__ConfigurationKey'
+    value: 'PublicTracking:LinkKeys:1'
+  }
 ]
 
 var workerKeyVaultEnv = [
@@ -308,6 +318,15 @@ var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, apiKeyVau
   {
     name: 'PublicTracking__AllowedOrigins__0'
     value: publicOrigin
+  }
+  // TRK-002-AUTO-LINK: links are {PublicBaseUrl}/track/{token}, derived with key version 1.
+  {
+    name: 'PublicTracking__PublicBaseUrl'
+    value: publicOrigin
+  }
+  {
+    name: 'PublicTracking__CurrentLinkKeyVersion'
+    value: '1'
   }
   {
     name: 'Drivers__Provider'

@@ -1531,10 +1531,13 @@ items:
   - authenticated issuance endpoint for public tracking links
   - delivery of the link through an approved channel
   acceptance_criteria:
-  - the plaintext token is returned once and never persisted or logged
+  - the plaintext token is never persisted or logged (TRK-002-AUTO-LINK - it is re-derived for authenticated reads)
   - issuance and revocation are audited
   - sending links to customers requires GATE-004 and GATE-007
+  - TRK-002-AUTO-LINK - every order gets its link when it is created; get-or-create returns the same link and never rotates
+  - TRK-002-AUTO-LINK - a link lives with the order and 24 hours after its first final public status; finished orders get no new link
   required_tests:
-  - token issued exactly once
-  - revoked token returns the uniform 404
+  - link issued once per generation, with the order, and returned unchanged by get-or-create
+  - revoked token returns the uniform 404 and the next generation differs
+  - a finished order resolves for 24 hours after its final event, then the uniform 404
   approval_gate: GATE-004

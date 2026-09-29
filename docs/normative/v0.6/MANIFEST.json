@@ -4,7 +4,7 @@
   "bundle_revision": "v0.6-full-canonical-sync-7-fin001-mvp1",
   "date": "2026-07-31",
   "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_FIN001_MVP1",
-  "canonical_sql_sha256": "a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4",
+  "canonical_sql_sha256": "4e441d1165c17611abe317811278eb2932c27758685d768629855ab78de39da4",
   "file_count": 74,
   "files": [
     {
@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4272,
-      "sha256": "f1fa8df1072e760b126faf3e2566482c2994abfa40e6ea42b76020da77ea5a64"
+      "sha256": "2089a8a13248464363cb56b10edb9aa1ebd9a2f3fdb2b34b79f2a98329d8d16f"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,18 +34,18 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 43048,
-      "sha256": "d067a14f21455d790b57b2e463e7bec1f277fb438d2e2de606a6c2e5b44212a1"
+      "bytes": 45022,
+      "sha256": "9cc15dbd9c19e4fb0e0e900785eb701e9f43af67bf77580af3abe598c5210b96"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "94386973feda23da09038ddeb106087d039630bb1ba4f1a4a5ba746faf82b3a5"
+      "sha256": "e2e2b8f952be4ff9974e46a82991be6ee4ecd10c82db64eb164c56628757f51a"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
       "bytes": 2634,
-      "sha256": "8e943f739337d4dbbf889afd56ec49f99da2307adc927c19ef79df61c7ffaacf"
+      "sha256": "608f7668264896ccfb7cf71fb9d21cbd3e4bdd3280b0597b5cb752614caba881"
     },
     {
       "path": "VALIDATION_RESULTS.txt",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 178967,
-      "sha256": "0e192d4d6524ab26fecd381691929eb2f0cd5e683d60198301aa27408374b685"
+      "bytes": 182447,
+      "sha256": "7ba52d5a6891e32fc81120feaf45ffa914dbc108a5ffe1d522a2baded98dc646"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -64,8 +64,8 @@
     },
     {
       "path": "database/AI-06_SCHEMA.sql",
-      "bytes": 65200,
-      "sha256": "a8efc8e9aea6a00a90027a5a7d422fcb445e8c70465227772d7411b6e2947ad4"
+      "bytes": 66977,
+      "sha256": "4e441d1165c17611abe317811278eb2932c27758685d768629855ab78de39da4"
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 76963,
-      "sha256": "9456eb614c8a7898788692e5d8cea6a1e099a9c549f0ce3790a0c50a551a2535"
+      "bytes": 80747,
+      "sha256": "f2136f65a559d2c82bd78bd8bd064567ea11c398a0ed473a262428e7ca8c324d"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -329,8 +329,8 @@
     },
     {
       "path": "specs/AI-04_DOMAIN_MODEL.yaml",
-      "bytes": 17658,
-      "sha256": "d820c9d6b867dcf7014302127ccae54f49455e0cea378104ac6c8a8fc334776c"
+      "bytes": 18132,
+      "sha256": "0c02aec09e53427f5ab75354126e8b9099daf9c85c325af539552fe2205d723b"
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
@@ -339,8 +339,8 @@
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 52652,
-      "sha256": "1b1b79b7c9f2d2e570533457d48702a13879f5329b0e8fe4f29d61caf970639d"
+      "bytes": 53137,
+      "sha256": "db8f1969bbbd8ca011577e732e8178907e4caa1f2e68ca66687d7062fd972c05"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
@@ -349,8 +349,8 @@
     },
     {
       "path": "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",
-      "bytes": 12415,
-      "sha256": "e83989ae775943007bf715340d638660d1ee71f0c009a41b85a5200ce4b07895"
+      "bytes": 12903,
+      "sha256": "dbbadb211515f75576a81948918442045019c0bb7280bccbc3fdaab321c7cc61"
     },
     {
       "path": "specs/AI-15_SCALABILITY_CONTRACT.yaml",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 11058,
-      "sha256": "f6f4c7e9d7b6e3513a4af73ac35702603bdb458ec5acbc5fc8edf4039e93e92d"
+      "bytes": 13767,
+      "sha256": "eda36a03c825becbfbd29a12bd14e44621c06935abd665ef4c7d07b1750f692d"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",

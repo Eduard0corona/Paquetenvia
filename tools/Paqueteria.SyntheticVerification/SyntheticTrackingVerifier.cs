@@ -9,20 +9,28 @@ public sealed record SyntheticTrackingVerificationRequest(
     Guid OrderId,
     string RunId);
 
+/// <summary>
+/// TRK-002-AUTO-LINK evidence: the link is stable across get-or-create calls, a revoked link stops resolving and
+/// the next get-or-create derives the next generation. It holds identifiers only, never a token.
+/// </summary>
 public sealed record SyntheticTrackingVerificationResult(
     Guid ActorId,
     Guid OrganizationId,
     Guid OrderId,
     string RunId,
-    string RotationARequestId,
-    string RotationBRequestId,
-    Guid RotationATokenId,
-    Guid RotationBTokenId,
+    string FirstRequestId,
+    string RepeatRequestId,
+    string RevokeRequestId,
+    string NextRequestId,
+    Guid FirstTokenId,
+    Guid NextTokenId,
+    int FirstGeneration,
+    int NextGeneration,
     string PublicId,
-    bool ProjectionAFound,
-    bool ProjectionBFound,
-    bool TokenAInvalidAfterRotationB,
-    bool TokenBValidAfterRotationB);
+    bool FirstLinkFound,
+    bool RepeatReturnedSameLink,
+    bool FirstLinkInvalidAfterRevoke,
+    bool NextLinkValid);
 
 public sealed class SyntheticTrackingVerificationUnauthorizedException : Exception
 {
@@ -54,67 +62,102 @@ public sealed class SyntheticTrackingVerifier(
         EnsureAuthorized();
         Validate(request);
 
-        var requestA = CreateRequestId(request.RunId, "rotation-a");
-        var requestB = CreateRequestId(request.RunId, "rotation-b");
-        PublicTrackingTokenGrant? grantA = null;
-        PublicTrackingTokenGrant? grantB = null;
-        string? tokenA = null;
-        string? tokenB = null;
-        var tokenAId = Guid.Empty;
-        var tokenBId = Guid.Empty;
+        var firstRequest = CreateRequestId(request.RunId, "first");
+        var repeatRequest = CreateRequestId(request.RunId, "repeat");
+        var revokeRequest = CreateRequestId(request.RunId, "revoke");
+        var nextRequest = CreateRequestId(request.RunId, "next");
+        PublicTrackingTokenGrant? first = null;
+        PublicTrackingTokenGrant? repeat = null;
+        PublicTrackingTokenGrant? next = null;
+        string? firstToken = null;
+        string? nextToken = null;
         try
         {
-            grantA = await tokenService.RotateAsync(
-                new RotatePublicTrackingTokenCommand(
+            first = await tokenService.GetOrCreateAsync(
+                new GetOrCreatePublicTrackingLinkCommand(
                     request.ActorId,
                     request.OrganizationId,
                     request.OrderId,
-                    requestA),
+                    firstRequest),
                 cancellationToken);
-            tokenA = grantA.Token;
-            tokenAId = grantA.TokenId;
-            grantA = null;
-            var lookupA = await projectionReader.FindAsync(tokenA, cancellationToken);
-            if (!lookupA.IsFound)
+            firstToken = first.Token;
+            var firstTokenId = first.TokenId;
+            var firstGeneration = first.Generation;
+            first = null;
+            var firstLookup = await projectionReader.FindAsync(firstToken, cancellationToken);
+            if (!firstLookup.IsFound)
             {
                 throw new SyntheticTrackingVerificationException(
-                    "Rotation A did not produce the expected public projection.");
+                    "The first link did not produce the expected public projection.");
             }
 
-            var publicId = lookupA.Projection!.PublicId;
-            grantB = await tokenService.RotateAsync(
-                new RotatePublicTrackingTokenCommand(
+            var publicId = firstLookup.Projection!.PublicId;
+
+            // Another Idempotency-Key must return the same link: get-or-create never rotates.
+            repeat = await tokenService.GetOrCreateAsync(
+                new GetOrCreatePublicTrackingLinkCommand(
                     request.ActorId,
                     request.OrganizationId,
                     request.OrderId,
-                    requestB),
+                    repeatRequest),
                 cancellationToken);
-            tokenB = grantB.Token;
-            tokenBId = grantB.TokenId;
-            grantB = null;
-            var lookupB = await projectionReader.FindAsync(tokenB, cancellationToken);
-            if (!lookupB.IsFound ||
-                !string.Equals(lookupB.Projection!.PublicId, publicId, StringComparison.Ordinal))
+            var sameLink = repeat.TokenId == firstTokenId &&
+                repeat.Generation == firstGeneration &&
+                string.Equals(repeat.Token, firstToken, StringComparison.Ordinal);
+            repeat = null;
+            if (!sameLink)
             {
                 throw new SyntheticTrackingVerificationException(
-                    "Rotation B did not produce the expected public projection.");
+                    "A repeated get-or-create did not return the same link.");
             }
 
-            var supersededLookup = await projectionReader.FindAsync(tokenA, cancellationToken);
-            tokenA = null;
+            await tokenService.RevokeAsync(
+                new RevokePublicTrackingTokenCommand(
+                    request.ActorId,
+                    request.OrganizationId,
+                    request.OrderId,
+                    revokeRequest),
+                cancellationToken);
+            var revokedLookup = await projectionReader.FindAsync(firstToken, cancellationToken);
+            if (revokedLookup.IsFound)
+            {
+                throw new SyntheticTrackingVerificationException(
+                    "The first link remained valid after revocation.");
+            }
+
+            next = await tokenService.GetOrCreateAsync(
+                new GetOrCreatePublicTrackingLinkCommand(
+                    request.ActorId,
+                    request.OrganizationId,
+                    request.OrderId,
+                    nextRequest),
+                cancellationToken);
+            nextToken = next.Token;
+            var nextTokenId = next.TokenId;
+            var nextGeneration = next.Generation;
+            next = null;
+            if (nextGeneration != firstGeneration + 1 ||
+                string.Equals(nextToken, firstToken, StringComparison.Ordinal))
+            {
+                throw new SyntheticTrackingVerificationException(
+                    "The link issued after revocation is not the next generation.");
+            }
+
+            var supersededLookup = await projectionReader.FindAsync(firstToken, cancellationToken);
+            firstToken = null;
             if (supersededLookup.IsFound)
             {
                 throw new SyntheticTrackingVerificationException(
-                    "Rotation A remained valid after rotation B.");
+                    "The revoked link came back after the next generation.");
             }
 
-            var currentLookup = await projectionReader.FindAsync(tokenB, cancellationToken);
-            tokenB = null;
-            if (!currentLookup.IsFound ||
-                !string.Equals(currentLookup.Projection!.PublicId, publicId, StringComparison.Ordinal))
+            var nextLookup = await projectionReader.FindAsync(nextToken, cancellationToken);
+            nextToken = null;
+            if (!nextLookup.IsFound ||
+                !string.Equals(nextLookup.Projection!.PublicId, publicId, StringComparison.Ordinal))
             {
                 throw new SyntheticTrackingVerificationException(
-                    "Rotation B did not remain valid after verification.");
+                    "The next link did not produce the expected public projection.");
             }
 
             return new SyntheticTrackingVerificationResult(
@@ -122,22 +165,27 @@ public sealed class SyntheticTrackingVerifier(
                 request.OrganizationId,
                 request.OrderId,
                 request.RunId,
-                requestA,
-                requestB,
-                tokenAId,
-                tokenBId,
+                firstRequest,
+                repeatRequest,
+                revokeRequest,
+                nextRequest,
+                firstTokenId,
+                nextTokenId,
+                firstGeneration,
+                nextGeneration,
                 publicId,
-                ProjectionAFound: true,
-                ProjectionBFound: true,
-                TokenAInvalidAfterRotationB: true,
-                TokenBValidAfterRotationB: true);
+                FirstLinkFound: true,
+                RepeatReturnedSameLink: true,
+                FirstLinkInvalidAfterRevoke: true,
+                NextLinkValid: true);
         }
         finally
         {
-            tokenA = null;
-            tokenB = null;
-            grantA = null;
-            grantB = null;
+            firstToken = null;
+            nextToken = null;
+            first = null;
+            repeat = null;
+            next = null;
         }
     }
 
@@ -169,6 +217,6 @@ public sealed class SyntheticTrackingVerifier(
         }
     }
 
-    private static string CreateRequestId(string runId, string rotation) =>
-        $"{runId}:{rotation}:{Guid.NewGuid():N}";
+    private static string CreateRequestId(string runId, string step) =>
+        $"{runId}:{step}:{Guid.NewGuid():N}";
 }

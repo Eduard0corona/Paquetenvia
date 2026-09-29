@@ -331,3 +331,9 @@ byte[] HashToken(string token); // SHA256(UTF8 exacto)
 ```
 
 No aplicar trim, normalización ni conversión hexadecimal. El repositorio almacena `byte[]` de longitud 32.
+
+Desde `TRK-002-AUTO-LINK` los enlaces de las órdenes no se generan con `CreateToken()` sino con
+`TrackingLinkTokenDerivation.DeriveToken(key, keyVersion, orderId, generation)`: Base64URL sin padding de
+HMAC-SHA256 sobre `paquetenvia-trk-v1|{key_version}|{order_id}|{generation}` (AI-24 `tracking_token.derivation`).
+`HashToken` no cambia. La emisión del primer enlace dentro de `quote_snapshot_to_order` es una escritura interna de
+Orders en ese flujo, no un sexto flujo cross-module.

@@ -334,6 +334,9 @@ function Set-HostConfiguration([string] $Kind) {
     $env:Notifications__Provider = "PostgreSql"
     $env:Notifications__WorkerId = "local-worker"
     $env:PublicTracking__AllowedOrigins__0 = $webUrl
+    # TRK-002-AUTO-LINK: required with PublicTracking:Provider=PostgreSql; Development allows the http loopback web
+    # origin and derives links with the synthetic runtime key (no LinkKeys configured locally).
+    $env:PublicTracking__PublicBaseUrl = $webUrl
     $env:AWS_ACCESS_KEY_ID = $connections.Context.Environment["AWS_ACCESS_KEY_ID"]
     $env:AWS_SECRET_ACCESS_KEY = $connections.Context.Environment["AWS_SECRET_ACCESS_KEY"]
     foreach ($key in @("ServiceUrl", "PublicPresignUrl", "Region", "Bucket")) {

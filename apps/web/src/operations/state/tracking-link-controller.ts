@@ -1,18 +1,21 @@
 import {
   createTrackingLinkIdempotencyKey,
-  publicTrackingUrl,
+  trackingLinkOrderFinishedCode,
   type TrackingLinkApi,
 } from "../api/tracking-link-api";
 import { TenantApiError } from "../api/tenant-request";
 import { describeFailure } from "./tenant-error-messages";
 
 /**
- * TRK-002-ISSUE-ENDPOINT: the order detail's tracking link actions.
+ * TRK-002-AUTO-LINK: the order detail's tracking link panel.
  *
- * The link lives only in this controller's memory, for as long as it is shown:
- * hiding it, revoking it, issuing another one or disposing the controller drops
- * it. Nothing is written to browser storage and nothing is logged. A 403
- * MFA_REQUIRED (PLATFORM_ADMIN without a second factor) offers the step-up
+ * Every order already has its link; "show" reads it through get-or-create, which
+ * returns the same link every time and never rotates it. Revoking retires it; the
+ * next "show" gets a new generation, unless the order is finished (409
+ * TRACKING_LINK_ORDER_FINISHED). The link lives only in this controller's memory
+ * while it is shown: hiding it, revoking it or disposing the controller drops it.
+ * Nothing is written to browser storage and nothing is logged. A 403 MFA_REQUIRED
+ * (PLATFORM_ADMIN without a second factor) offers the step-up
  * `/login?mfa=required&return_url=/ops/orders/{orderId}`.
  */
 export type TrackingLinkState =
@@ -22,11 +25,13 @@ export type TrackingLinkState =
       /** `/login?mfa=required&return_url=…` when the only missing requirement is MFA. */
       readonly stepUpHref: string | null;
     }
-  | { readonly kind: "busy"; readonly action: "issue" | "revoke" }
+  | { readonly kind: "busy"; readonly action: "show" | "revoke" }
   | {
       readonly kind: "shown";
       readonly url: string;
-      readonly expiresAt: string;
+      readonly generation: number;
+      /** Null while the order is in progress. */
+      readonly validUntil: string | null;
       readonly copied: boolean;
     };
 
@@ -42,7 +47,6 @@ export class TrackingLinkController {
   public constructor(
     private readonly api: TrackingLinkApi,
     private readonly orderId: string,
-    private readonly origin: string,
     private readonly onChange: (state: TrackingLinkState) => void,
     private readonly randomUuid: () => string = () => crypto.randomUUID(),
   ) {}
@@ -51,25 +55,26 @@ export class TrackingLinkController {
     return this.state;
   }
 
-  public async issue(): Promise<void> {
+  public async show(): Promise<void> {
     if (this.disposed || this.state.kind === "busy") return;
     const generation = ++this.generation;
-    this.set({ kind: "busy", action: "issue" });
+    this.set({ kind: "busy", action: "show" });
     try {
-      const link = await this.api.issue(
+      const link = await this.api.getOrCreate(
         this.orderId,
         createTrackingLinkIdempotencyKey(this.randomUuid),
       );
       if (!this.isCurrent(generation)) return;
       this.set({
         kind: "shown",
-        url: publicTrackingUrl(this.origin, link.token),
-        expiresAt: link.expiresAt,
+        url: link.url,
+        generation: link.generation,
+        validUntil: link.validUntil,
         copied: false,
       });
     } catch (error: unknown) {
       if (!this.isCurrent(generation)) return;
-      this.set(this.failure(error, "issue"));
+      this.set(this.failure(error, "show"));
     }
   }
 
@@ -83,7 +88,11 @@ export class TrackingLinkController {
         createTrackingLinkIdempotencyKey(this.randomUuid),
       );
       if (!this.isCurrent(generation)) return;
-      this.set(idle("Enlace revocado. El enlace anterior ya no muestra la orden."));
+      this.set(
+        idle(
+          "Enlace revocado: ya no muestra la orden. Si la orden sigue en curso, al volver a verlo se genera uno nuevo.",
+        ),
+      );
     } catch (error: unknown) {
       if (!this.isCurrent(generation)) return;
       this.set(this.failure(error, "revoke"));
@@ -105,15 +114,11 @@ export class TrackingLinkController {
     }
   }
 
-  /** Drops the link from memory; it stays valid until it expires or is revoked. */
+  /** Drops the link from memory; it stays the order's link and can be shown again. */
   public hide(): void {
     if (this.disposed || this.state.kind !== "shown") return;
     this.generation += 1;
-    this.set(
-      idle(
-        "El enlace se ocultó y no se puede volver a mostrar. Genera uno nuevo si lo necesitas.",
-      ),
-    );
+    this.set(idle(null));
   }
 
   public dispose(): void {
@@ -122,7 +127,7 @@ export class TrackingLinkController {
     this.state = idle(null);
   }
 
-  private failure(error: unknown, action: "issue" | "revoke"): TrackingLinkState {
+  private failure(error: unknown, action: "show" | "revoke"): TrackingLinkState {
     if (error instanceof TenantApiError && error.mfaRequired) {
       const view = describeFailure(error, trackingLinkReturnUrl(this.orderId));
       return { kind: "idle", message: view.message, stepUpHref: view.stepUpHref };
@@ -149,13 +154,19 @@ function idle(message: string | null): TrackingLinkState {
   return { kind: "idle", message, stepUpHref: null };
 }
 
-function failureMessage(error: unknown, action: "issue" | "revoke"): string {
+function failureMessage(error: unknown, action: "show" | "revoke"): string {
   const category =
     error instanceof TenantApiError ? error.category : "unavailable";
   if (category === "forbidden" || category === "unauthorized")
     return "No tienes permiso para gestionar el enlace de seguimiento.";
   if (category === "not_found") return "La orden no está disponible.";
-  return action === "issue"
-    ? "No fue posible generar el enlace. Intenta de nuevo."
+  if (
+    category === "conflict" &&
+    error instanceof TenantApiError &&
+    error.code === trackingLinkOrderFinishedCode
+  )
+    return "La orden ya terminó y su enlace ya no está vigente; no se generan enlaces nuevos.";
+  return action === "show"
+    ? "No fue posible obtener el enlace. Intenta de nuevo."
     : "No fue posible revocar el enlace. Intenta de nuevo.";
 }

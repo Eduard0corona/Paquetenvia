@@ -18,12 +18,14 @@ import {
 } from "../state/tracking-link-controller";
 
 /**
- * TRK-002-ISSUE-ENDPOINT: issue (or rotate) and revoke the order's public
- * tracking link. Offered only to DISPATCHER and PLATFORM_ADMIN members of the
- * organization that owns the order; the backend is still the barrier, and a
- * PLATFORM_ADMIN without a second factor is offered the MFA step-up. The link
- * is shown once, kept only in component memory and never persisted or logged.
- * Sending it to the customer is not available (GATE-004, GATE-007).
+ * TRK-002-AUTO-LINK: show, copy and revoke the order's public tracking link.
+ * Every order gets its link when it is created; "Ver enlace" reads it with
+ * get-or-create, which always returns the same link (never a rotation).
+ * Offered only to DISPATCHER and PLATFORM_ADMIN members of the organization
+ * that owns the order; the backend is still the barrier, and a PLATFORM_ADMIN
+ * without a second factor is offered the MFA step-up. The link is kept only in
+ * component memory while shown and never persisted or logged. Sending it to
+ * the customer is not available (GATE-004, GATE-007).
  */
 export function OperationsTrackingLink({
   orderId,
@@ -76,7 +78,6 @@ export function OperationsTrackingLink({
       controllerRef.current = new TrackingLinkController(
         createTrackingLinkApi(apiBaseUrl, session),
         orderId,
-        window.location.origin,
         (next) => {
           if (!cancelled) setState(next);
         },
@@ -103,8 +104,9 @@ export function OperationsTrackingLink({
     <section aria-labelledby="tracking-link-title" className="opsTrackingLink">
       <h2 id="tracking-link-title">Enlace de seguimiento</h2>
       <p>
-        Genera un enlace público para esta orden. Se muestra una sola vez;
-        generar otro revoca el anterior. El envío al cliente por WhatsApp o
+        La orden tiene su enlace público desde que se creó; siempre es el mismo.
+        Funciona mientras la orden está en curso y 24 horas después de
+        entregarse, devolverse o cancelarse. El envío al cliente por WhatsApp o
         correo todavía no está disponible.
       </p>
       <div className="opsHeaderStatus">
@@ -112,11 +114,11 @@ export function OperationsTrackingLink({
           type="button"
           className="opsPrimary"
           disabled={busy}
-          onClick={() => void controllerRef.current?.issue()}
+          onClick={() => void controllerRef.current?.show()}
         >
-          {state.kind === "busy" && state.action === "issue"
-            ? "Generando…"
-            : "Generar o rotar enlace"}
+          {state.kind === "busy" && state.action === "show"
+            ? "Cargando…"
+            : "Ver enlace"}
         </button>
         <button
           type="button"
@@ -138,9 +140,7 @@ export function OperationsTrackingLink({
       </div>
       {state.kind === "shown" && (
         <div role="status" aria-live="polite">
-          <label htmlFor="tracking-link-url">
-            Copia el enlace ahora; no se volverá a mostrar.
-          </label>
+          <label htmlFor="tracking-link-url">Enlace público de la orden</label>
           <input
             id="tracking-link-url"
             type="text"
@@ -150,7 +150,11 @@ export function OperationsTrackingLink({
             value={state.url}
             onFocus={(event) => event.currentTarget.select()}
           />
-          <p>Vence: {formatMazatlanTime(state.expiresAt)}</p>
+          <p>
+            {state.validUntil === null
+              ? "Vigente mientras la orden esté en curso."
+              : `Vigente hasta: ${formatMazatlanTime(state.validUntil)}`}
+          </p>
           <div className="opsHeaderStatus">
             <button
               type="button"
