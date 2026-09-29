@@ -685,7 +685,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
               WHERE "MigrationId" IN ('{E002MasterDataStateReader.MigrationId}',
                 '{VersionPricingPolicyPerOrganization.MigrationId}',
                 '{StoreTariffPolicyVersionInMasterDataLoader.MigrationId}',
-                '{HardenMasterDataLoaderOperatorBoundary.MigrationId}');
+                '{HardenMasterDataLoaderOperatorBoundary.MigrationId}',
+                '{RequireVatIncludedTariffsInMasterDataLoader.MigrationId}');
             """);
         Assert.Equal("PENDING", await PricingLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";

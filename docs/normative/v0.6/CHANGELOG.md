@@ -11,6 +11,35 @@
 - AI-07: `create_order.cod_expected` y una validación de `csv_order_import` para mostrar el COD por fila.
 - Sin migración: `orders.cod_expected_cents` ya existe en AI-06 con `CHECK >= 0`. AI-06 y AI-18 sin cambios.
 
+## Lectura de incidencias y pruebas; roles de openIncident (API-INC-LIST-PROOFS-2026-09-29) — 2026-09-29
+
+- Respuesta literal del project owner: "El punto I apruebo todos los puntos listados."
+- AI-05: `listIncidents` (`GET /incidents`, paginación por cursor, filtros `status` y `order_id`),
+  `getIncident` (`GET /incidents/{incidentId}`) y `listOrderProofs` (`GET /orders/{orderId}/proofs`). Devuelven
+  las representaciones existentes `Incident` y `Proof` (esquemas nuevos `IncidentPage` y `ProofPage`); nunca la
+  descripción, el motivo de resolución, bytes, llaves de almacenamiento, URLs firmadas, punto de captura ni nombre
+  del destinatario. Solo DISPATCHER y PLATFORM_ADMIN con MFA, como `resolveIncident`; capacidad antes de leer
+  cualquier orden, incidencia o prueba; 404 uniforme para lo ajeno o inexistente; solo lectura.
+- `x-capability-matrix.incident_operations` publica quién abre incidencias: DISPATCHER, PLATFORM_ADMIN con MFA y
+  DRIVER solo para una orden con asignación ACCEPTED o ACTIVE; es la regla que el servidor ya aplicaba.
+- AI-07 `incident_desk`: la pantalla lista y elige incidencias y evidencias en lugar de pedir UUID escritos.
+- Sin migraciones, estados, eventos ni roles de base de datos nuevos.
+
+## Presentación de impuestos con IVA incluido (GATE-011-VAT-INCLUDED-2026-09-29) — 2026-09-29
+
+- Respuestas literales del project owner: "Presentación de impuestos, IVA incluido"; "52 con IVA incluido";
+  "Igual para todas". AI-10 mueve GATE-011 a `resolved_decisions`.
+- Todas las organizaciones cotizan con IVA incluido: la tarifa es el total; `subtotal = floor((100 * total + 58) / 116)`
+  (redondeo half-up al centavo, aritmética entera, IVA 16 %), `tax = total - subtotal`, `discount = 0`. El piso
+  congelado `minimum_total_cents_snapshot` es el total con IVA. `PLUS_VAT` conserva su aritmética probada y `EXEMPT`
+  se conserva en el vocabulario, pero ninguno es seleccionable: una regla seleccionada así falla cerrado.
+- El umbral de 52 MXN de AI-07 (`low_price_guard`) compara el total con IVA incluido, no el neto; se conserva el
+  límite no estricto (52.00 exactos se bloquean salvo ruta consolidada).
+- Lane Pricing `20260929000200_RequireVatIncludedTariffsInMasterDataLoader`: `security.load_master_data` no crea reglas
+  `PLUS_VAT` ni `EXEMPT` (`MDM001_TARIFF_TAX_MODE_NOT_ALLOWED`); una regla guardada se puede cerrar. Sin permisos,
+  tablas ni roles nuevos; rollback restaura la función anterior. AI-06 y AI-18 sin cambios.
+- AI-04, AI-07 y AI-19 registran la resolución. Las cotizaciones y órdenes existentes conservan sus montos congelados.
+
 ## Enlaces de tracking sin revocación (TRK-002-NO-REVOCATION) — 2026-09-29
 
 - Decisión literal del project owner registrada en `decision-log.md` (`TRK-002-NO-REVOCATION`): "La liga la puede

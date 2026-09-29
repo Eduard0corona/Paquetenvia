@@ -96,6 +96,16 @@ export function incidentResponse(overrides: Record<string, unknown> = {}): Recor
   };
 }
 
+export function proofResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: proofId,
+    proof_type: "DELIVERY_PHOTO",
+    sha256: "0a".repeat(32),
+    captured_at: "2026-09-28T15:55:00Z",
+    ...overrides,
+  };
+}
+
 export function financialsResponse(
   overrides: Record<string, unknown> = {},
   cod: Record<string, unknown> = {},

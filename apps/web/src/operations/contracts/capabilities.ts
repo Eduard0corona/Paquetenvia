@@ -45,6 +45,11 @@ export const financeOperationsMatrix = {
 export const screenOperationsMatrix = {
   openIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
   resolveIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // x-capability-matrix incident_operations (API-INC-LIST-PROOFS-2026-09-29): the
+  // incident desk reads admit exactly the resolveIncident roles.
+  listIncidents: ["DISPATCHER", "PLATFORM_ADMIN"],
+  getIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listOrderProofs: ["DISPATCHER", "PLATFORM_ADMIN"],
   recordCodCollection: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
@@ -73,6 +78,9 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     // PLATFORM_ADMIN keeps MFA wherever the operation already demanded it.
     "openIncident",
     "resolveIncident",
+    "listIncidents",
+    "getIncident",
+    "listOrderProofs",
     "recordCodCollection",
     "getOrderFinancials",
     "reconcileCod",

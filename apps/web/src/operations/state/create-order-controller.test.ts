@@ -176,7 +176,13 @@ describe("quote to order", () => {
   it("does not call createOrder while the low price guard blocks", async () => {
     const { controller, orders } = setup(
       { [orgA]: "DISPATCHER" },
-      { createQuote: vi.fn(async () => parseQuote(quoteResponse({ net: { currency: "MXN", amount_cents: 5_200 } }))) },
+      {
+        createQuote: vi.fn(async () => parseQuote(quoteResponse({
+          net: { currency: "MXN", amount_cents: 4_483 },
+          tax: { currency: "MXN", amount_cents: 717 },
+          total: { currency: "MXN", amount_cents: 5_200 },
+        }))),
+      },
     );
     await controller.start();
     await controller.requestQuote(draft());

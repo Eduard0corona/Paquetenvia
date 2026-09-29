@@ -7,7 +7,8 @@ MDM-001 aplica la decisión del owner `MDM-001-OPERATOR-LOADER` ("Herramienta de
 lee un archivo revisado y lo carga de forma idempotente y auditada, para una organización a la vez. No hay
 API pública nueva, ni estados, eventos, SignalR o UI nuevos.
 
-Se construye y prueba sólo con datos sintéticos. Las zonas y tarifas reales esperan GATE-010 y GATE-011;
+Se construye y prueba sólo con datos sintéticos. Las zonas y tarifas reales esperan GATE-010 (GATE-011 quedó
+resuelta: toda tarifa nueva es `VAT_INCLUDED`, ver abajo);
 los perfiles de repartidor reales, GATE-007. Los únicos archivos de ejemplo están en
 `tests/fixtures/mdm-001/` (`classification: SYNTHETIC`), nunca en `database/seeds`:
 `synthetic-platform-cities.json` (ciudades, carga de una organización `PLATFORM`) y
@@ -235,6 +236,16 @@ principales de despliegue y el seudónimo aleatorio. Como el paso de `policy_ver
 permisos son de la lane y no de AI-06/AI-18: los pasos publicados verifican conteos exactos (116 y 118)
 antes, en toda instalación. Su `Down` revoca los cuatro permisos y restaura la función anterior; la tabla y
 sus filas se quedan (resuelven los seudónimos de filas de auditoría append-only) y sin permisos son inertes.
+
+La lane `20260929000200_RequireVatIncludedTariffsInMasterDataLoader` (`GATE-011-VAT-INCLUDED-2026-09-29`:
+"Presentación de impuestos, IVA incluido", "Igual para todas") reemplaza la función con el cuerpo del paso
+anterior más una edición revisada de coincidencia única: al crear una regla de tarifa, un `tax_mode` distinto de
+`VAT_INCLUDED` falla con `MDM001_TARIFF_TAX_MODE_NOT_ALLOWED` (también en dry run, sin escribir nada). Una regla
+guardada `PLUS_VAT` o `EXEMPT` puede recargarse para cerrarla o desactivarla; su monto y su `tax_mode` siguen
+inmutables. No agrega permisos, tablas ni roles (el ejecutor conserva 122 permisos) y AI-06 conserva el
+vocabulario y el CHECK de `tax_mode`. Su `Down` restaura la función del paso de endurecimiento; las reglas
+cargadas se quedan. El validador del job sigue aceptando los tres valores de AI-06 porque solo la base sabe si
+la regla ya existe.
 
 Mantienen el contrato: `DatabaseBaselineAssertions` (límite exacto del ejecutor, del beneficiario, de la
 marca y de la tabla de seudónimos), el mapa E-002 (`_PLUS_MDM001`, por historial del carril Pricing), la ACL de `security`, el puente

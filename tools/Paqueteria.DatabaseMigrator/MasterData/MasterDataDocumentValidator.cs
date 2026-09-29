@@ -270,6 +270,9 @@ internal static partial class MasterDataDocumentValidator
             var tier = Enum(item, "pricing_tier", reference,
                 "OCCASIONAL", "BUSINESS_1_49", "BUSINESS_50_199", "BUSINESS_200_499", "BUSINESS_500_PLUS", "CUSTOM");
             var serviceType = Enum(item, "service_type", reference, "SAME_DAY", "URGENT", "SCHEDULED_ROUTE");
+            // AI-06 vocabulary. GATE-011-VAT-INCLUDED-2026-09-29: the database creates only VAT_INCLUDED rules
+            // (MDM001_TARIFF_TAX_MODE_NOT_ALLOWED); another value may only name a stored rule being closed, which
+            // only the database can tell.
             Enum(item, "tax_mode", reference, "PLUS_VAT", "VAT_INCLUDED", "EXEMPT");
             var status = Enum(item, "status", reference, "ACTIVE", "INACTIVE");
 
