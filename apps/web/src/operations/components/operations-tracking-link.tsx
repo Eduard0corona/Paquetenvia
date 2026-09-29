@@ -18,7 +18,9 @@ import {
 } from "../state/tracking-link-controller";
 
 /**
- * TRK-002-AUTO-LINK: show, copy and revoke the order's public tracking link.
+ * TRK-002-AUTO-LINK: show and copy the order's public tracking link. Nobody
+ * revokes it (TRK-002-NO-REVOCATION): it lives until 24 hours after the order
+ * reaches a final state.
  * Every order gets its link when it is created; "Ver enlace" reads it with
  * get-or-create, which always returns the same link (never a rotation).
  * Offered only to DISPATCHER and PLATFORM_ADMIN members of the organization
@@ -116,26 +118,7 @@ export function OperationsTrackingLink({
           disabled={busy}
           onClick={() => void controllerRef.current?.show()}
         >
-          {state.kind === "busy" && state.action === "show"
-            ? "Cargando…"
-            : "Ver enlace"}
-        </button>
-        <button
-          type="button"
-          className="opsSecondary"
-          disabled={busy}
-          onClick={() => {
-            if (
-              window.confirm(
-                "¿Revocar el enlace de seguimiento? Quien lo tenga dejará de ver la orden.",
-              )
-            )
-              void controllerRef.current?.revoke();
-          }}
-        >
-          {state.kind === "busy" && state.action === "revoke"
-            ? "Revocando…"
-            : "Revocar enlace"}
+          {busy ? "Cargando…" : "Ver enlace"}
         </button>
       </div>
       {state.kind === "shown" && (

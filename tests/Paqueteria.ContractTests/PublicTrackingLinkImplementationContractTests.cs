@@ -7,9 +7,9 @@ using YamlDotNet.RepresentationModel;
 namespace Paqueteria.ContractTests;
 
 /// <summary>
-/// TRK-002-ISSUE-ENDPOINT and TRK-002-AUTO-LINK: the two authenticated tracking link operations are served exactly
-/// as AI-05 contracts them (get-or-create 200 and revoke 204), and the one response that carries the plaintext token
-/// is declared no-store.
+/// TRK-002-ISSUE-ENDPOINT, TRK-002-AUTO-LINK and TRK-002-NO-REVOCATION: the one authenticated tracking link operation
+/// is served exactly as AI-05 contracts it (get-or-create 200), no revocation operation exists in the contract or the
+/// code, and the one response that carries the plaintext token is declared no-store.
 /// </summary>
 public sealed class PublicTrackingLinkImplementationContractTests
 {
@@ -21,16 +21,25 @@ public sealed class PublicTrackingLinkImplementationContractTests
     {
         var paths = Contract.Mapping("paths");
         var issue = paths.Mapping("/orders/{orderId}/tracking-link").Mapping("post");
-        var revoke = paths.Mapping("/orders/{orderId}/tracking-link/revoke").Mapping("post");
         Assert.Equal("issueTrackingLink", issue.Scalar("operationId"));
-        Assert.Equal("revokeTrackingLink", revoke.Scalar("operationId"));
         Assert.Equal("/api/v1/orders/{orderId:guid}/tracking-link", PublicTrackingLinkEndpoints.IssueRoute);
-        Assert.Equal("/api/v1/orders/{orderId:guid}/tracking-link/revoke", PublicTrackingLinkEndpoints.RevokeRoute);
+        Assert.Equal(
+            ["post"],
+            paths.Mapping("/orders/{orderId}/tracking-link").Children.Keys.Cast<YamlScalarNode>().Select(key => key.Value!));
+
+        // TRK-002-NO-REVOCATION: no path below the tracking link and no operation revokes it.
+        Assert.DoesNotContain(
+            paths.Children.Keys.Cast<YamlScalarNode>().Select(key => key.Value!),
+            path => path.StartsWith("/orders/{orderId}/tracking-link/", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "revokeTrackingLink",
+            File.ReadAllText(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml")),
+            StringComparison.Ordinal);
+        Assert.Contains("TRK-002-NO-REVOCATION", issue.Scalar("description"), StringComparison.Ordinal);
 
         foreach (var (operation, success, conflict) in new[]
                  {
                      (issue, "200", "#/components/responses/TrackingLinkConflict"),
-                     (revoke, "204", "#/components/responses/Conflict"),
                  })
         {
             Assert.Equal(
@@ -110,21 +119,22 @@ public sealed class PublicTrackingLinkImplementationContractTests
     }
 
     [Fact]
-    public void Endpoints_file_maps_only_the_two_operations_with_capability_and_tenant_gates()
+    public void Endpoints_file_maps_only_the_get_or_create_operation_with_capability_and_tenant_gates()
     {
         var source = File.ReadAllText(Path.Combine(
             RepositoryPaths.Root, "src", "Modules", "Orders", "Orders.Endpoints", "PublicTrackingLinkEndpoints.cs"));
-        Assert.Equal(2, Count(source, "endpoints.MapPost("));
+        Assert.Equal(1, Count(source, "endpoints.MapPost("));
         Assert.DoesNotContain("MapGet(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPut(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("MapDelete(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("AllowAnonymous", source, StringComparison.Ordinal);
-        Assert.Equal(2, Count(source, ".RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)"));
-        Assert.Equal(2, Count(source, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
+        Assert.Equal(1, Count(source, ".RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)"));
+        Assert.Equal(1, Count(source, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
         Assert.Contains(".WithName(\"issueTrackingLink\")", source, StringComparison.Ordinal);
-        Assert.Contains(".WithName(\"revokeTrackingLink\")", source, StringComparison.Ordinal);
         Assert.Contains("TenantCapabilities.IssueTrackingLink", source, StringComparison.Ordinal);
-        Assert.Contains("TenantCapabilities.RevokeTrackingLink", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("revokeTrackingLink", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RevokeTrackingLink", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RevokeAsync", source, StringComparison.Ordinal);
         Assert.Contains("headers.CacheControl = \"no-store\"", source, StringComparison.Ordinal);
         Assert.Contains("request.Headers[\"Idempotency-Key\"]", source, StringComparison.Ordinal);
     }

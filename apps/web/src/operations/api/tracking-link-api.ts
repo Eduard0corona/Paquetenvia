@@ -8,10 +8,12 @@ import {
 } from "./tenant-request";
 
 /**
- * TRK-002-AUTO-LINK: issueTrackingLink (get-or-create) and revokeTrackingLink (AI-05).
+ * TRK-002-AUTO-LINK: issueTrackingLink (get-or-create, AI-05).
  *
  * Every order receives its public tracking link when it is created; issueTrackingLink
  * returns that same link, with its public URL, on every call and never rotates it.
+ * TRK-002-NO-REVOCATION: nobody revokes a link; it lives until 24 hours after the
+ * order reaches a final state, so this module has no revoke call.
  * The plaintext token and the URL exist only in the value this module returns. They
  * are never written to browser storage, never logged and never placed in an error:
  * every failure is a {@link TenantApiError} carrying a category, the stable problem
@@ -35,20 +37,16 @@ export interface TrackingLinkApi {
     idempotencyKey: string,
     signal?: AbortSignal,
   ): Promise<PublicTrackingLink>;
-  revoke(
-    orderId: string,
-    idempotencyKey: string,
-    signal?: AbortSignal,
-  ): Promise<void>;
 }
 
 /** AI-05 TrackingLinkConflictProblem: the order is finished and gets no new link. */
 export const trackingLinkOrderFinishedCode = "TRACKING_LINK_ORDER_FINISHED";
 
 /**
- * Roles that hold issueTrackingLink and revokeTrackingLink in AI-05 x-capability-matrix
- * tracking_link_operations. PLATFORM_ADMIN also needs a satisfied MFA challenge; the
- * API answers 403 MFA_REQUIRED and the panel offers the step-up.
+ * Roles that hold issueTrackingLink in AI-05 x-capability-matrix
+ * tracking_link_operations. PLATFORM_ADMIN also needs a satisfied MFA challenge
+ * (TRK-002-NO-REVOCATION, owner: "Sí, con MFA"); the API answers 403 MFA_REQUIRED
+ * and the panel offers the step-up.
  */
 export const trackingLinkRoles: readonly string[] = capabilityMatrix.issueTrackingLink;
 
@@ -176,15 +174,6 @@ export function createTrackingLinkApi(
       const link = parsePublicTrackingLink(body);
       if (link.orderId !== orderId) throw new TenantApiError("invalid");
       return link;
-    },
-    async revoke(orderId, idempotencyKey, signal) {
-      assertUuid(orderId);
-      const response = await post(
-        `/api/v1/orders/${encodeURIComponent(orderId)}/tracking-link/revoke`,
-        idempotencyKey,
-        signal,
-      );
-      if (response.status !== 204) throw new TenantApiError("invalid");
     },
   };
 }

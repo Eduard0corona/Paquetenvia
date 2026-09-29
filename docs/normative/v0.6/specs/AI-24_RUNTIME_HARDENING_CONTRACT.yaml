@@ -33,7 +33,9 @@ tracking_token:
     fail_closed: the API refuses to start with PublicTracking:Provider=PostgreSql and no valid key, except
       Development and Testing, which derive a synthetic key at runtime from a public label
     stored: token_hash only, plus generation (starting at 1) and key_version; plaintext never persisted or logged
-    generation: a revoked generation is never derived again; the next link of the order is max(generation)+1
+    generation: a retired generation is never derived again; the next link of the order is max(generation)+1.
+      TRK-002-NO-REVOCATION - nobody revokes a link, so generation stays at its initial value 1 and grows only when
+      a pre-derivation token or a link of a key version no longer configured is replaced
     rotation: a new key version becomes current for new generations; stored links keep resolving (the lookup is by
       hash); a link whose key version is no longer configured is retired and replaced by the next generation on the
       next get-or-create; a key whose bytes changed under the same version fails closed
