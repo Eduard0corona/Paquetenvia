@@ -16,7 +16,7 @@ export function quoteResponse(overrides: Record<string, unknown> = {}): Record<s
     total: { currency: "MXN", amount_cents: 9_280 },
     rule_ids: [ruleId],
     breakdown: [
-      { line_type: "BASE_TARIFF", rule_id: ruleId, amount_cents: 8_000, pricing_tier: "OCCASIONAL", tax_mode: "PLUS_VAT" },
+      { line_type: "BASE_TARIFF", rule_id: ruleId, amount_cents: 9_280, pricing_tier: "OCCASIONAL", tax_mode: "VAT_INCLUDED" },
     ],
     expires_at: "2026-09-28T18:00:00+00:00",
     origin_location_id: locationId,
