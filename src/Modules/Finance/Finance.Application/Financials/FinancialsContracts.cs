@@ -1,3 +1,4 @@
+using Finance.Application.Cod;
 using Finance.Domain;
 
 namespace Finance.Application.Financials;
@@ -50,20 +51,39 @@ public sealed record OrderFinancialsResult(
     long MarginCents,
     long? MarginBasisPoints,
     IReadOnlyList<ModalityCostResult> CostByModality,
-    CodPositionResult Cod)
+    CodPositionResult Cod,
+    CodTransactionResult? CodRecord)
 {
     public IReadOnlyList<ModalityCostResult> CostByModality { get; } = CostByModality.ToArray();
 
-    public static OrderFinancialsResult From(string orderStatus, OrderUnitEconomics economics) => new(
-        economics.OrderId,
-        orderStatus,
-        MoneyCents.Currency,
-        economics.Revenue.AmountCents,
-        economics.Cost.AmountCents,
-        economics.Margin.AmountCents,
-        economics.MarginBasisPoints,
-        economics.CostByModality.Select(ModalityCostResult.From).ToArray(),
-        CodPositionResult.From(economics.Cod));
+    /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29: <paramref name="codRecord"/> is the order's COD collection record, the
+    /// same row the COD position is derived from, so it is null exactly when the position has no status.
+    /// </summary>
+    public static OrderFinancialsResult From(
+        string orderStatus,
+        OrderUnitEconomics economics,
+        CodTransactionResult? codRecord)
+    {
+        ArgumentNullException.ThrowIfNull(economics);
+        if ((codRecord is null) != (economics.Cod.Status is null) ||
+            (codRecord is not null && codRecord.OrderId != economics.OrderId))
+        {
+            throw new InvalidOperationException("The COD record does not match the order's COD position.");
+        }
+
+        return new(
+            economics.OrderId,
+            orderStatus,
+            MoneyCents.Currency,
+            economics.Revenue.AmountCents,
+            economics.Cost.AmountCents,
+            economics.Margin.AmountCents,
+            economics.MarginBasisPoints,
+            economics.CostByModality.Select(ModalityCostResult.From).ToArray(),
+            CodPositionResult.From(economics.Cod),
+            codRecord);
+    }
 }
 
 public sealed record RouteOrderFinancialsResult(

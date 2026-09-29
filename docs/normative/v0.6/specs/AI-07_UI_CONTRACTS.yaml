@@ -431,11 +431,14 @@ screen_contracts:
       read: GET /orders/{orderId}/financials (getOrderFinancials)
       record: POST /orders/{orderId}/cod-records (recordCodCollection)
       reconcile: POST /cod-records/{codId}/reconcile (reconcileCod)
+      pending_list: GET /orders?cod_pending_reconciliation=true (listOrders, API-FIN-COD-VISIBILITY-2026-09-29)
     roles:
       read: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
       record: [DISPATCHER, PLATFORM_ADMIN with MFA]
       reconcile: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
-      note: FINANCE never records a COD collection; DRIVER records from its own assignment, not from this screen
+      pending_list: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      note: FINANCE never records a COD collection; DRIVER records from its own assignment, not from this screen;
+        FINANCE holds no listOrders capability, so it opens an order by id and reconciles from its financials
     states:
     - no_session
     - access_unavailable
@@ -451,19 +454,21 @@ screen_contracts:
     - record is offered only when the COD position expects a positive amount and no collection is recorded
     - the recorded amount must equal expected_cents exactly; reference has 1 to 200 characters without surrounding
       whitespace
-    - reconcile is offered for a RECORDED collection whose id the screen received from recordCodCollection, or for a
-      COD record id typed by the operator
+    - reconcile is offered for a RECORDED collection whose id the screen received from recordCodCollection or from
+      getOrderFinancials cod_record (API-FIN-COD-VISIBILITY-2026-09-29); the operator never types a COD record id
+    - reconcile from the pending list first reads getOrderFinancials for that order and reconciles only the RECORDED
+      cod_record it returns
     recovery:
     - load and refresh fetch getOrderFinancials
-    - every successful or conflicting write refetches getOrderFinancials; optimistic UI is never authoritative
+    - every successful or conflicting write refetches getOrderFinancials and the pending list; optimistic UI is never
+      authoritative
     idempotency:
     - record and reconcile reuse their Idempotency-Key for a retry of the same payload after a network or 5xx failure
     privacy:
     - no browser persistence; a tenant switch clears the loaded order, COD records and keys
     - the COD reference is never echoed back after submission nor logged
     not_supported:
-    - reading or listing COD records; AI-05 CodPosition carries no COD record id
-    - listing orders with pending COD; AI-05 listOrders has no COD filter
+    - listing COD records across orders other than through the listOrders pending filter
 prototype_file: prototype/index.html
 meta:
   version: '0.6'

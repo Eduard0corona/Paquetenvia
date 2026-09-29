@@ -161,6 +161,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         string? status,
         Guid? ownerOrganizationId,
         string? cursor,
+        bool codPendingReconciliation,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty ||
@@ -183,6 +184,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             (dbContext, token) => ListWithinTransactionAsync(
                 dbContext,
                 status,
+                codPendingReconciliation,
                 hasCursor,
                 cursorCreatedAt,
                 cursorId,
@@ -428,6 +430,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     private async Task<OrderPageResult> ListWithinTransactionAsync(
         OrdersDbContext dbContext,
         string? status,
+        bool codPendingReconciliation,
         bool hasCursor,
         DateTimeOffset cursorCreatedAt,
         Guid cursorId,
@@ -438,17 +441,19 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         await using var command = CreateCommand(
             connection,
             transaction,
-            """
+            $"""
             SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
                    origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
                    pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at
             FROM orders.orders
             WHERE (@status IS NULL OR status=@status)
+              AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
               AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
             ORDER BY created_at DESC,id DESC
             LIMIT @take
             """);
         command.Parameters.Add(P("status", NpgsqlDbType.Text, status));
+        command.Parameters.Add(P("cod_pending", NpgsqlDbType.Boolean, codPendingReconciliation));
         command.Parameters.Add(P("has_cursor", NpgsqlDbType.Boolean, hasCursor));
         command.Parameters.Add(P("cursor_created_at", NpgsqlDbType.TimestampTz, cursorCreatedAt));
         command.Parameters.Add(P("cursor_id", NpgsqlDbType.Uuid, cursorId));

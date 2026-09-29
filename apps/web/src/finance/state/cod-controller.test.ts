@@ -26,6 +26,7 @@ function setup(roles: Record<string, string>, overrides: Partial<CodApi> = {}, i
   let current: OperationsSession | null = bearerSession(orgA);
   const api: CodApi = {
     financials: vi.fn(async () => expected()),
+    pendingReconciliation: vi.fn(async () => ({ items: [], next_cursor: null })),
     record: vi.fn(async () => parseCodTransaction(codTransactionResponse())),
     reconcile: vi.fn(async () =>
       parseCodTransaction(codTransactionResponse({ status: "RECONCILED", reconciled_at: "2026-09-28T18:00:00Z" })),
@@ -176,6 +177,106 @@ describe("COD flows", () => {
     await controller.start();
     expect(api.financials).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().financials?.order_id).toBe(orderId);
+  });
+});
+
+describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
+  const pendingOrder = { id: orderId, public_id: "PQ-000123", status: "DELIVERED" };
+  const otherOrder = { id: syntheticUuid(0x102), public_id: "PQ-000124", status: "DELIVERED" };
+
+  it.each(["DISPATCHER", "PLATFORM_ADMIN"])("lists pending collections for %s on start", async (role) => {
+    const pendingReconciliation = vi.fn<CodApi["pendingReconciliation"]>(async () => ({
+      items: [pendingOrder],
+      next_cursor: null,
+    }));
+    const { controller } = setup({ [orgA]: role }, { pendingReconciliation });
+    await controller.start();
+    expect(pendingReconciliation).toHaveBeenCalledWith(null, expect.anything());
+    expect(controller.getSnapshot()).toMatchObject({ canListPending: true, pending: [pendingOrder], pendingCursor: null });
+  });
+
+  it.each(["FINANCE", "VIEWER", "DRIVER"])("never requests the pending list for %s", async (role) => {
+    const { controller, api } = setup({ [orgA]: role });
+    await controller.start();
+    await controller.loadPending();
+    expect(api.pendingReconciliation).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ canListPending: false, pending: null });
+  });
+
+  it("appends the next page by cursor without duplicates", async () => {
+    const pendingReconciliation = vi
+      .fn<CodApi["pendingReconciliation"]>()
+      .mockResolvedValueOnce({ items: [pendingOrder], next_cursor: "page-2" })
+      .mockResolvedValueOnce({ items: [pendingOrder, otherOrder], next_cursor: null });
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { pendingReconciliation });
+    await controller.start();
+    await controller.loadPending(true);
+    expect(pendingReconciliation.mock.calls[1][0]).toBe("page-2");
+    expect(controller.getSnapshot().pending).toEqual([pendingOrder, otherOrder]);
+    expect(controller.getSnapshot().pendingCursor).toBeNull();
+  });
+
+  it("offers the MFA step-up when the list is refused for a missing second factor", async () => {
+    const { controller } = setup(
+      { [orgA]: "PLATFORM_ADMIN" },
+      { pendingReconciliation: vi.fn(async () => { throw new TenantApiError("forbidden", "MFA_REQUIRED", true); }) },
+    );
+    await controller.start();
+    expect(controller.getSnapshot().pending).toBeNull();
+    expect(controller.getSnapshot().stepUpHref).toContain(encodeURIComponent("/finance/cod"));
+  });
+
+  it("reconciles from the list with the record the financials name and refreshes the list", async () => {
+    const financials = vi
+      .fn<CodApi["financials"]>()
+      .mockResolvedValueOnce(recorded())
+      .mockResolvedValue(
+        parseOrderFinancials(
+          financialsResponse({}, { status: "RECONCILED", amount_cents: 25_050, recorded: true, reconciled: true }),
+        ),
+      );
+    const pendingReconciliation = vi
+      .fn<CodApi["pendingReconciliation"]>()
+      .mockResolvedValueOnce({ items: [pendingOrder], next_cursor: null })
+      .mockResolvedValue({ items: [], next_cursor: null });
+    const { controller, api } = setup({ [orgA]: "DISPATCHER" }, { financials, pendingReconciliation });
+    await controller.start();
+    await controller.reconcileFromList(orderId);
+    expect(financials.mock.calls[0][0]).toBe(orderId);
+    expect(vi.mocked(api.reconcile).mock.calls[0][0]).toBe(codId);
+    expect(pendingReconciliation).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot()).toMatchObject({ pending: [], message: "Cobro conciliado por el servidor." });
+    expect(controller.getSnapshot().financials?.cod.status).toBe("RECONCILED");
+  });
+
+  it("shows the recorded collection as reconcilable once its order is opened", async () => {
+    const { controller, api } = setup({ [orgA]: "FINANCE" }, { financials: vi.fn(async () => recorded()) });
+    await controller.start();
+    await controller.load(orderId);
+    expect(controller.getSnapshot().transaction).toMatchObject({ id: codId, status: "RECORDED" });
+    await controller.reconcile();
+    expect(vi.mocked(api.reconcile).mock.calls[0][0]).toBe(codId);
+  });
+
+  it("does not reconcile when the order is no longer pending and refreshes the list", async () => {
+    const { controller, api } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await controller.reconcileFromList(orderId);
+    expect(api.reconcile).not.toHaveBeenCalled();
+    expect(api.pendingReconciliation).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot().errors[0]).toContain("ya no está pendiente");
+  });
+
+  it("drops the pending list on a tenant switch", async () => {
+    const context = setup(
+      { [orgA]: "DISPATCHER", [orgB]: "FINANCE" },
+      { pendingReconciliation: vi.fn(async () => ({ items: [pendingOrder], next_cursor: null })) },
+    );
+    await context.controller.start();
+    expect(context.controller.getSnapshot().pending).toHaveLength(1);
+    context.switchTo(orgB);
+    await context.controller.start();
+    expect(context.controller.getSnapshot()).toMatchObject({ pending: null, canListPending: false });
   });
 });
 

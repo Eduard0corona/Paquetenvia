@@ -176,6 +176,37 @@ public sealed class CapabilityMatrixContractTests
     }
 
     /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29: the listOrders COD pending filter is honored only for the roles that hold
+    /// both listOrders and getOrderFinancials; FINANCE gains no listOrders access through it.
+    /// </summary>
+    [Fact]
+    public void Cod_pending_filter_takes_the_intersection_of_listOrders_and_getOrderFinancials()
+    {
+        var decision = Matrix.Scalar("cod_pending_reconciliation_filter");
+        Assert.StartsWith("API-FIN-COD-VISIBILITY-2026-09-29", decision, StringComparison.Ordinal);
+        Assert.Contains("both listOrders and getOrderFinancials", decision, StringComparison.Ordinal);
+        Assert.Contains("FINANCE keeps no access to listOrders", decision, StringComparison.Ordinal);
+
+        var published = Published();
+        Assert.DoesNotContain("FINANCE", published["listOrders"]);
+        var admitted = TenantCapabilities.ListOrders.Grants.Select(grant => grant.Role)
+            .Intersect(TenantCapabilities.GetOrderFinancials.Grants.Select(grant => grant.Role))
+            .ToArray();
+        Assert.Equal([OrganizationRole.Dispatcher, OrganizationRole.PlatformAdmin], admitted);
+        Assert.Contains(
+            TenantCapabilities.GetOrderFinancials.Grants,
+            grant => grant.Role == OrganizationRole.PlatformAdmin && grant.RequiresMfa);
+
+        var listOrders = Contract.Mapping("paths").Mapping("/orders").Mapping("get");
+        var parameter = listOrders.Sequence("parameters").Children.Cast<YamlMappingNode>()
+            .Single(node => node.Children.ContainsKey(new YamlScalarNode("name")) &&
+                node.Scalar("name") == "cod_pending_reconciliation");
+        Assert.Equal("query", parameter.Scalar("in"));
+        Assert.Equal("boolean", parameter.Mapping("schema").Scalar("type"));
+        Assert.Contains("getOrderFinancials", parameter.Scalar("description"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// API-INC-LIST-PROOFS-2026-09-29: AI-05 publishes who may open an incident exactly as the server already
     /// enforces it — the capability catalog and the SQL authorization of the incident service agree role for role —
     /// and the three incident desk reads admit exactly the resolveIncident grants, MFA included.

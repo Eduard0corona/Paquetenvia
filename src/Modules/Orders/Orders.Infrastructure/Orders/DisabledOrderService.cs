@@ -16,6 +16,7 @@ public sealed class DisabledOrderService : IOrderService
         string? status,
         Guid? ownerOrganizationId,
         string? cursor,
+        bool codPendingReconciliation,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

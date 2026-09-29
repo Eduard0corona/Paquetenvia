@@ -10,6 +10,7 @@ export const capabilityMatrix = {
   createQuote: ["DISPATCHER", "PLATFORM_ADMIN"],
   getQuote: ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER"],
   createOrder: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listOrders: ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER"],
   previewOrderCsv: ["DISPATCHER", "PLATFORM_ADMIN"],
   commitOrderCsv: ["DISPATCHER", "PLATFORM_ADMIN"],
   createSettlement: ["FINANCE", "PLATFORM_ADMIN"],
@@ -110,6 +111,16 @@ export function requiresMfa(
 ): boolean {
   if (role === null) return false;
   return mfaOperations[role]?.includes(operation) ?? false;
+}
+
+/**
+ * API-FIN-COD-VISIBILITY-2026-09-29 (x-capability-matrix cod_pending_reconciliation_filter):
+ * listOrders honors cod_pending_reconciliation only for a role holding both listOrders
+ * and getOrderFinancials, so DISPATCHER and PLATFORM_ADMIN (with MFA); FINANCE and
+ * VIEWER never request the pending list.
+ */
+export function canListPendingCod(role: string | null): boolean {
+  return canPerform(role, "listOrders") && canPerform(role, "getOrderFinancials");
 }
 
 /** The role the signed-in person holds in the organization selected with X-Organization-Id. */

@@ -254,6 +254,64 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
         }
     }
 
+    /// <summary>
+    /// API-FIN-COD-VISIBILITY-2026-09-29: the COD pending filter reveals financial state, so listOrders honors it
+    /// only for a caller that also holds getOrderFinancials: DISPATCHER, and PLATFORM_ADMIN with MFA.
+    /// </summary>
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveDispatcher)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminMfa)]
+    [InlineData(MockIdentityProfiles.ActiveDispatcherPlatformAdminNoMfa)]
+    public async Task ListOrders_cod_pending_filter_reaches_the_service_for(string profile)
+    {
+        using var response = await client.SendAsync(
+            CapabilityMatrix.Request(HttpMethod.Get, "/api/v1/orders?cod_pending_reconciliation=true", profile));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(factory.LastListCodPendingReconciliation);
+
+        using var unfiltered = await client.SendAsync(
+            CapabilityMatrix.Request(HttpMethod.Get, "/api/v1/orders?cod_pending_reconciliation=false", profile));
+        Assert.Equal(HttpStatusCode.OK, unfiltered.StatusCode);
+        Assert.False(factory.LastListCodPendingReconciliation);
+    }
+
+    /// <summary>
+    /// Any presence of the parameter, whatever its value, is refused before any order is read for a role outside
+    /// getOrderFinancials; a PLATFORM_ADMIN whose only missing requirement is MFA is told so. FINANCE never gains
+    /// listOrders through the filter, with or without MFA.
+    /// </summary>
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveViewer, false)]
+    [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa, true)]
+    [InlineData(MockIdentityProfiles.ActiveFinance, false)]
+    [InlineData(MockIdentityProfiles.ActiveFinanceMfa, false)]
+    [InlineData(MockIdentityProfiles.ActiveDriver, false)]
+    public async Task ListOrders_cod_pending_filter_is_403_before_any_order_is_read_for(string profile, bool mfaRequired)
+    {
+        foreach (var value in new[] { "true", "false", "not-a-boolean", string.Empty })
+        {
+            var before = factory.ListCallCount;
+            using var response = await client.SendAsync(CapabilityMatrix.Request(
+                HttpMethod.Get, $"/api/v1/orders?cod_pending_reconciliation={value}", profile));
+            await CapabilityMatrix.AssertForbiddenAsync(response, mfaRequired);
+            Assert.Equal(before, factory.ListCallCount);
+        }
+    }
+
+    [Fact]
+    public async Task ListOrders_cod_pending_filter_with_an_unknown_value_is_an_empty_page_for_an_allowed_caller()
+    {
+        await CreateOrderIdAsync();
+        var before = factory.ListCallCount;
+        using var response = await client.SendAsync(CapabilityMatrix.Request(
+            HttpMethod.Get, "/api/v1/orders?cod_pending_reconciliation=yes", MockIdentityProfiles.ActiveDispatcher));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, body.RootElement.GetProperty("items").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("next_cursor").ValueKind);
+        Assert.Equal(before, factory.ListCallCount);
+    }
+
     [Theory]
     [MemberData(nameof(WriteAllowed))]
     public async Task PreviewOrderCsv_and_CommitOrderCsv_are_open_to(string role)

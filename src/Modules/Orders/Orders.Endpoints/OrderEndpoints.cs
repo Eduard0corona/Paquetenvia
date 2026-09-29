@@ -125,6 +125,7 @@ public static class OrderEndpoints
     private static async Task<IResult> ListAsync(
         string? status,
         Guid? owner_org_id,
+        string? cod_pending_reconciliation,
         string? cursor,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
@@ -141,6 +142,19 @@ public static class OrderEndpoints
             return denied;
         }
 
+        // API-FIN-COD-VISIBILITY-2026-09-29: the COD filter reveals financial state, so its mere presence also
+        // requires the getOrderFinancials capability, decided before any order is read.
+        if (cod_pending_reconciliation is not null &&
+            TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.GetOrderFinancials) is { } financeDenied)
+        {
+            return financeDenied;
+        }
+
+        if (!OrderListCodFilter.TryParse(cod_pending_reconciliation, out var codPendingReconciliation))
+        {
+            return Results.Ok(new OrderPageResponse([], null));
+        }
+
         try
         {
             var page = await service.ListAsync(
@@ -149,6 +163,7 @@ public static class OrderEndpoints
                 status,
                 owner_org_id,
                 cursor,
+                codPendingReconciliation,
                 cancellationToken);
             return Results.Ok(new OrderPageResponse(
                 page.Items.Select(ToResponse).ToArray(),
@@ -459,3 +474,27 @@ public sealed record OrderDetailResponse(
 public sealed record OrderPageResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<OrderResponse> Items,
     [property: JsonPropertyName("next_cursor")] string? NextCursor);
+
+/// <summary>
+/// API-FIN-COD-VISIBILITY-2026-09-29: <c>cod_pending_reconciliation</c> accepts exactly <c>true</c> or <c>false</c>;
+/// absent means no filter. Any other value is an unmatched filter, answered like an unknown status with an empty
+/// page, and only after the capability gate.
+/// </summary>
+public static class OrderListCodFilter
+{
+    public static bool TryParse(string? value, out bool codPendingReconciliation)
+    {
+        codPendingReconciliation = false;
+        switch (value)
+        {
+            case null:
+            case "false":
+                return true;
+            case "true":
+                codPendingReconciliation = true;
+                return true;
+            default:
+                return false;
+        }
+    }
+}

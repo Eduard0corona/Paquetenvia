@@ -56,12 +56,18 @@ public interface IOrderService
 {
     Task<OrderResult> CreateAsync(CreateOrderCommand command, CancellationToken cancellationToken);
 
+    /// <param name="codPendingReconciliation">
+    /// API-FIN-COD-VISIBILITY-2026-09-29: true keeps only orders whose COD collection is RECORDED and not yet
+    /// RECONCILED. It reveals financial state, so the endpoint admits it only for a caller that also holds
+    /// getOrderFinancials, decided before this service is reached.
+    /// </param>
     Task<OrderPageResult> ListAsync(
         Guid actorId,
         Guid organizationId,
         string? status,
         Guid? ownerOrganizationId,
         string? cursor,
+        bool codPendingReconciliation,
         CancellationToken cancellationToken);
 
     Task<OrderDetailResult> GetAsync(
