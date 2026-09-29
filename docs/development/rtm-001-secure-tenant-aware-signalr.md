@@ -203,6 +203,7 @@ $env:Realtime__Provider = "SignalR"
 $env:Realtime__Backplane = "InProcess"
 $env:Realtime__AllowedOrigins__0 = "https://web.synthetic.local"
 $env:PublicTracking__Provider = "PostgreSql"
+$env:PublicTracking__PublicBaseUrl = "https://web.synthetic.local"
 $env:ConnectionStrings__Paqueteria = "<synthetic-local-connection-string>"
 ```
 

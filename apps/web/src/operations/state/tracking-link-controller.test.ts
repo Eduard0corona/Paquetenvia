@@ -12,12 +12,14 @@ const token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
 // A second, obviously synthetic token of the contracted shape (43 Base64URL characters), built at runtime.
 const secondToken = "s".repeat(43);
 
-function link(value = token): PublicTrackingLink {
+function link(value = token, generation = 1, validUntil: string | null = null): PublicTrackingLink {
   return {
     tokenId: "77777777-7777-7777-7777-777777777777",
     orderId,
     token: value,
-    expiresAt: "2026-10-05T12:00:00.000Z",
+    url: `https://paquetenvia.test/track/${value}`,
+    generation,
+    validUntil,
   };
 }
 
@@ -26,52 +28,76 @@ function setup(api: Partial<TrackingLinkApi>) {
   let counter = 0;
   const controller = new TrackingLinkController(
     {
-      issue: vi.fn().mockResolvedValue(link()),
+      getOrCreate: vi.fn().mockResolvedValue(link()),
       revoke: vi.fn().mockResolvedValue(undefined),
       ...api,
     },
     orderId,
-    "https://ops.synthetic.test",
     (state) => states.push(state),
     () => `uuid-${++counter}`,
   );
   return { controller, states };
 }
 
-describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
-  it("shows the public link once with a fresh key per click", async () => {
-    const issue = vi
-      .fn()
-      .mockResolvedValueOnce(link())
-      .mockResolvedValueOnce(link(secondToken));
-    const { controller, states } = setup({ issue });
+describe("tracking link controller (TRK-002-AUTO-LINK)", () => {
+  it("shows the server's public link, the same one on every show, with a fresh key per click", async () => {
+    const getOrCreate = vi.fn().mockResolvedValue(link());
+    const { controller, states } = setup({ getOrCreate });
 
-    await controller.issue();
+    await controller.show();
     expect(controller.current).toEqual({
       kind: "shown",
-      url: `https://ops.synthetic.test/track/${token}`,
-      expiresAt: "2026-10-05T12:00:00.000Z",
+      url: `https://paquetenvia.test/track/${token}`,
+      generation: 1,
+      validUntil: null,
       copied: false,
     });
-    expect(states[0]).toEqual({ kind: "busy", action: "issue" });
+    expect(states[0]).toEqual({ kind: "busy", action: "show" });
 
-    // Issuing again rotates: only the new link is shown.
-    await controller.issue();
+    // Showing again is get-or-create: the same link, never a rotation.
+    controller.hide();
+    await controller.show();
     expect(controller.current).toMatchObject({
-      url: `https://ops.synthetic.test/track/${secondToken}`,
+      url: `https://paquetenvia.test/track/${token}`,
+      generation: 1,
     });
-    expect(issue.mock.calls.map((call) => call[1])).toEqual([
+    expect(getOrCreate.mock.calls.map((call) => call[1])).toEqual([
       "tracking-link-uuid-1",
       "tracking-link-uuid-2",
     ]);
   });
 
+  it("shows the next generation after a revocation and a finished order's grace end", async () => {
+    const getOrCreate = vi
+      .fn()
+      .mockResolvedValueOnce(link())
+      .mockResolvedValueOnce(link(secondToken, 2, "2026-10-01T18:00:00.000Z"));
+    const { controller } = setup({ getOrCreate });
+    await controller.show();
+    await controller.revoke();
+    expect(controller.current).toEqual({
+      kind: "idle",
+      message:
+        "Enlace revocado: ya no muestra la orden. Si la orden sigue en curso, al volver a verlo se genera uno nuevo.",
+      stepUpHref: null,
+    });
+    expect(JSON.stringify(controller.current)).not.toContain(token);
+    await controller.show();
+    expect(controller.current).toEqual({
+      kind: "shown",
+      url: `https://paquetenvia.test/track/${secondToken}`,
+      generation: 2,
+      validUntil: "2026-10-01T18:00:00.000Z",
+      copied: false,
+    });
+  });
+
   it("copies to the clipboard and reports it, or stays uncopied without a clipboard", async () => {
     const { controller } = setup({});
-    await controller.issue();
+    await controller.show();
     const writeText = vi.fn().mockResolvedValue(undefined);
     await controller.copy({ writeText });
-    expect(writeText).toHaveBeenCalledWith(`https://ops.synthetic.test/track/${token}`);
+    expect(writeText).toHaveBeenCalledWith(`https://paquetenvia.test/track/${token}`);
     expect(controller.current).toMatchObject({ kind: "shown", copied: true });
 
     await controller.copy(undefined);
@@ -82,35 +108,27 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
 
   it("forgets the link when hidden, revoked or disposed", async () => {
     const { controller, states } = setup({});
-    await controller.issue();
+    await controller.show();
     controller.hide();
-    expect(controller.current.kind).toBe("idle");
+    expect(controller.current).toEqual({ kind: "idle", message: null, stepUpHref: null });
     expect(JSON.stringify(controller.current)).not.toContain(token);
 
-    await controller.issue();
-    await controller.revoke();
-    expect(controller.current).toEqual({
-      kind: "idle",
-      message: "Enlace revocado. El enlace anterior ya no muestra la orden.",
-      stepUpHref: null,
-    });
-
-    await controller.issue();
+    await controller.show();
     const notifications = states.length;
     controller.dispose();
     expect(controller.current).toEqual({ kind: "idle", message: null, stepUpHref: null });
     expect(states.length).toBe(notifications);
-    await controller.issue();
+    await controller.show();
     expect(states.length).toBe(notifications);
   });
 
-  it("drops a response that arrives after the link was hidden or the controller disposed", async () => {
+  it("drops a response that arrives after the controller was disposed", async () => {
     let resolve: (value: PublicTrackingLink) => void = () => undefined;
-    const issue = vi.fn(
+    const getOrCreate = vi.fn(
       () => new Promise<PublicTrackingLink>((done) => (resolve = done)),
     );
-    const { controller, states } = setup({ issue });
-    const pending = controller.issue();
+    const { controller, states } = setup({ getOrCreate });
+    const pending = controller.show();
     controller.dispose();
     resolve(link());
     await pending;
@@ -118,23 +136,28 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
   });
 
   it.each([
-    ["forbidden", "No tienes permiso para gestionar el enlace de seguimiento."],
-    ["not_found", "La orden no está disponible."],
-    ["unavailable", "No fue posible generar el enlace. Intenta de nuevo."],
-  ] as const)("maps %s to a message without the token", async (category, message) => {
+    [new TenantApiError("forbidden"), "No tienes permiso para gestionar el enlace de seguimiento."],
+    [new TenantApiError("not_found"), "La orden no está disponible."],
+    [
+      new TenantApiError("conflict", "TRACKING_LINK_ORDER_FINISHED"),
+      "La orden ya terminó y su enlace ya no está vigente; no se generan enlaces nuevos.",
+    ],
+    [new TenantApiError("conflict"), "No fue posible obtener el enlace. Intenta de nuevo."],
+    [new TenantApiError("unavailable"), "No fue posible obtener el enlace. Intenta de nuevo."],
+  ] as const)("maps %o to a message without the token", async (error, message) => {
     const { controller } = setup({
-      issue: vi.fn().mockRejectedValue(new TenantApiError(category)),
+      getOrCreate: vi.fn().mockRejectedValue(error),
     });
-    await controller.issue();
+    await controller.show();
     expect(controller.current).toEqual({ kind: "idle", message, stepUpHref: null });
   });
 
-  it.each(["issue", "revoke"] as const)(
+  it.each(["show", "revoke"] as const)(
     "offers the MFA step-up back to the order when %s answers 403 MFA_REQUIRED",
     async (action) => {
       const mfa = new TenantApiError("forbidden", "MFA_REQUIRED", true);
       const { controller } = setup({
-        issue: vi.fn().mockRejectedValue(mfa),
+        getOrCreate: vi.fn().mockRejectedValue(mfa),
         revoke: vi.fn().mockRejectedValue(mfa),
       });
       await controller[action]();
@@ -148,29 +171,29 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
 
   it("keeps a generic 403 without the step-up", async () => {
     const { controller } = setup({
-      issue: vi.fn().mockRejectedValue(new TenantApiError("forbidden")),
+      getOrCreate: vi.fn().mockRejectedValue(new TenantApiError("forbidden")),
     });
-    await controller.issue();
+    await controller.show();
     expect(controller.current).toMatchObject({ stepUpHref: null });
   });
 
   it("ignores a second action while one is in flight", async () => {
     let resolve: (value: PublicTrackingLink) => void = () => undefined;
-    const issue = vi.fn(
+    const getOrCreate = vi.fn(
       () => new Promise<PublicTrackingLink>((done) => (resolve = done)),
     );
     const revoke = vi.fn().mockResolvedValue(undefined);
-    const { controller } = setup({ issue, revoke });
-    const pending = controller.issue();
-    await controller.issue();
+    const { controller } = setup({ getOrCreate, revoke });
+    const pending = controller.show();
+    await controller.show();
     await controller.revoke();
     resolve(link());
     await pending;
-    expect(issue).toHaveBeenCalledOnce();
+    expect(getOrCreate).toHaveBeenCalledOnce();
     expect(revoke).not.toHaveBeenCalled();
   });
 
-  it("never persists or logs the link in the browser", () => {
+  it("never persists or logs the link in the browser and offers no rotation", () => {
     const sources = [
       "src/operations/api/tracking-link-api.ts",
       "src/operations/state/tracking-link-controller.ts",
@@ -181,6 +204,7 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
     expect(sources).not.toMatch(
       /localStorage|sessionStorage|indexedDB|caches\.|document\.cookie|console\.|postMessage|history\.(push|replace)State|searchParams/,
     );
+    expect(sources).not.toMatch(/Generar o rotar|\.rotate\(|\.issue\(/);
     const component = readFileSync(
       "src/operations/components/operations-tracking-link.tsx",
       "utf8",
@@ -188,7 +212,8 @@ describe("tracking link controller (TRK-002-ISSUE-ENDPOINT)", () => {
     expect(component).toContain('autoComplete="off"');
     expect(component).toContain("canManageTrackingLink(");
     expect(component).toContain("href={state.stepUpHref}");
-    expect(component).toContain("no se volverá a mostrar");
+    expect(component).toContain("siempre es el mismo");
     expect(component).toContain("todavía no está disponible");
+    expect(component).not.toContain("window.location.origin,");
   });
 });

@@ -1,6 +1,7 @@
 using Npgsql;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting.Internal;
 using Orders.Application.Tracking;
 using Orders.Infrastructure;
 using Paqueteria.Application.Security;
@@ -72,17 +73,21 @@ static async Task IssueTrackingAsync(Guid orderId, string appConnection)
             ["Orders:Provider"] = "PostgreSql",
             ["PublicTracking:Provider"] = "PostgreSql",
             ["PublicTracking:AllowedOrigins:0"] = "http://127.0.0.1:3000",
+            // TRK-002-AUTO-LINK: local links point at the local web; the link key is the Development synthetic one.
+            ["PublicTracking:PublicBaseUrl"] = "http://127.0.0.1:3000",
         })
         .Build();
     var services = new ServiceCollection();
     services.AddSingleton<IConfiguration>(configuration);
-    services.AddOrdersInfrastructure(configuration);
+    services.AddOrdersInfrastructure(
+        configuration,
+        new HostingEnvironment { EnvironmentName = RequiredEnvironment });
     await using var provider = services.BuildServiceProvider();
     await using var scope = provider.CreateAsyncScope();
     var grant = await scope.ServiceProvider
         .GetRequiredService<IPublicTrackingTokenService>()
-        .IssueAsync(
-            new IssuePublicTrackingTokenCommand(
+        .GetOrCreateAsync(
+            new GetOrCreatePublicTrackingLinkCommand(
                 Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa20"),
                 Guid.Parse("11111111-1111-1111-1111-111111111111"),
                 orderId,

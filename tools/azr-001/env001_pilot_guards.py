@@ -62,6 +62,8 @@ REQUIRED_SECRET_MAPPINGS = {
         "EmailLookup:Keys:1": "paquetenvia-email-lookup-key-1",
         # GATE-003-PROVIDER-GOOGLE: owner-written Google Maps Platform key for the Locations adapter.
         "Locations:GoogleMaps:ApiKey": "google-maps-api-key",
+        # TRK-002-AUTO-LINK: owner-written HMAC key public tracking links are derived with.
+        "PublicTracking:LinkKeys:1": "public-tracking-link-key",
     },
     WORKER_APP: {
         "ConnectionStrings:PaqueteriaWorker": "pg-worker-runtime-connection",
@@ -88,7 +90,7 @@ SECRET_RBAC_VARIABLE = {
 }
 MAPPING_KEY = re.compile(r"^KeyVaultSecrets__Mappings__(\d+)__(SecretName|ConfigurationKey)$")
 SENSITIVE_SETTINGS = re.compile(
-    r"^(ConnectionStrings__.*|.*Secret|EmailLookup__Keys__.*|PAQUETERIA_MIGRATION_CONNECTION|.*_VERIFIER|.*Password.*|.*ApiKey.*|.*Token)$")
+    r"^(ConnectionStrings__.*|.*Secret|EmailLookup__Keys__.*|PublicTracking__LinkKeys__.*|PAQUETERIA_MIGRATION_CONNECTION|.*_VERIFIER|.*Password.*|.*ApiKey.*|.*Token)$")
 
 AUTHORIZED_RESOURCE_TYPES = frozenset(
     {

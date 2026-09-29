@@ -16,7 +16,7 @@ public sealed class SyntheticTrackingVerifierTests
         "sec003-unit-run");
 
     [Fact]
-    public async Task Guard_rejects_every_incomplete_or_non_synthetic_combination_before_rotation()
+    public async Task Guard_rejects_every_incomplete_or_non_synthetic_combination_before_any_link_call()
     {
         await AssertRejectedAsync(null, "DEV_SYNTHETIC", "true");
         await AssertRejectedAsync("DevSynthetic", null, "true");
@@ -29,7 +29,7 @@ public sealed class SyntheticTrackingVerifierTests
     }
 
     [Fact]
-    public async Task Double_rotation_returns_only_non_secret_evidence_and_emits_nothing()
+    public async Task Stable_link_revoke_and_next_generation_return_only_non_secret_evidence_and_emit_nothing()
     {
         using var environment = new ProcessEnvironmentVariable("DOTNET_ENVIRONMENT", "DevSynthetic");
         using var deployment = new ProcessEnvironmentVariable(
@@ -50,13 +50,20 @@ public sealed class SyntheticTrackingVerifierTests
             Console.SetError(error);
             var result = await verifier.VerifyAsync(Request);
 
-            Assert.Equal(2, fake.RotateCalls);
+            Assert.Equal(3, fake.GetOrCreateCalls);
+            Assert.Equal(1, fake.RevokeCalls);
             Assert.Equal(4, fake.LookupCalls);
-            Assert.NotEqual(result.RotationARequestId, result.RotationBRequestId);
-            Assert.True(result.ProjectionAFound);
-            Assert.True(result.ProjectionBFound);
-            Assert.True(result.TokenAInvalidAfterRotationB);
-            Assert.True(result.TokenBValidAfterRotationB);
+            Assert.Equal(
+                4,
+                new[] { result.FirstRequestId, result.RepeatRequestId, result.RevokeRequestId, result.NextRequestId }
+                    .Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(1, result.FirstGeneration);
+            Assert.Equal(2, result.NextGeneration);
+            Assert.NotEqual(result.FirstTokenId, result.NextTokenId);
+            Assert.True(result.FirstLinkFound);
+            Assert.True(result.RepeatReturnedSameLink);
+            Assert.True(result.FirstLinkInvalidAfterRevoke);
+            Assert.True(result.NextLinkValid);
             var evidence = JsonSerializer.Serialize(result);
             Assert.DoesNotContain(TrackingFake.TokenA, evidence, StringComparison.Ordinal);
             Assert.DoesNotContain(TrackingFake.TokenB, evidence, StringComparison.Ordinal);
@@ -71,6 +78,23 @@ public sealed class SyntheticTrackingVerifierTests
 
         Assert.Equal(string.Empty, output.ToString());
         Assert.Equal(string.Empty, error.ToString());
+    }
+
+    [Fact]
+    public async Task A_get_or_create_that_rotates_the_link_fails_the_verification()
+    {
+        using var environment = new ProcessEnvironmentVariable("DOTNET_ENVIRONMENT", "DevSynthetic");
+        using var deployment = new ProcessEnvironmentVariable(
+            SyntheticEnvironmentPolicy.DeploymentClassVariable,
+            SyntheticEnvironmentPolicy.DeploymentClass);
+        using var optIn = new ProcessEnvironmentVariable(
+            SyntheticTrackingVerifier.TrackingOptInVariable,
+            "true");
+        var fake = new TrackingFake { RotateOnEveryCall = true };
+
+        await Assert.ThrowsAsync<SyntheticTrackingVerificationException>(
+            () => new SyntheticTrackingVerifier(fake, fake).VerifyAsync(Request));
+        Assert.Equal(0, fake.RevokeCalls);
     }
 
     private static async Task AssertRejectedAsync(
@@ -90,39 +114,52 @@ public sealed class SyntheticTrackingVerifierTests
 
         await Assert.ThrowsAsync<SyntheticTrackingVerificationUnauthorizedException>(
             () => verifier.VerifyAsync(Request));
-        Assert.Equal(0, fake.RotateCalls);
+        Assert.Equal(0, fake.GetOrCreateCalls);
+        Assert.Equal(0, fake.RevokeCalls);
         Assert.Equal(0, fake.LookupCalls);
     }
 
     private sealed class TrackingFake : IPublicTrackingTokenService, IPublicTrackingProjectionReader
     {
-        internal const string TokenA = "SEC003_SENTINEL_PLAINTEXT_ROTATION_A_0000001";
-        internal const string TokenB = "SEC003_SENTINEL_PLAINTEXT_ROTATION_B_0000002";
+        internal const string TokenA = "SEC003_SENTINEL_PLAINTEXT_GENERATION_1_0001";
+        internal const string TokenB = "SEC003_SENTINEL_PLAINTEXT_GENERATION_2_0002";
+        private readonly Guid firstTokenId = Guid.NewGuid();
+        private readonly Guid nextTokenId = Guid.NewGuid();
         private string? activeToken;
+        private int generation;
 
-        internal int RotateCalls { get; private set; }
+        internal bool RotateOnEveryCall { get; init; }
+        internal int GetOrCreateCalls { get; private set; }
+        internal int RevokeCalls { get; private set; }
         internal int LookupCalls { get; private set; }
 
-        public Task<PublicTrackingTokenGrant> IssueAsync(
-            IssuePublicTrackingTokenCommand command,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
-
-        public Task<PublicTrackingTokenGrant> RotateAsync(
-            RotatePublicTrackingTokenCommand command,
+        public Task<PublicTrackingTokenGrant> GetOrCreateAsync(
+            GetOrCreatePublicTrackingLinkCommand command,
             CancellationToken cancellationToken)
         {
-            RotateCalls++;
-            activeToken = RotateCalls == 1 ? TokenA : TokenB;
+            GetOrCreateCalls++;
+            if (activeToken is null || RotateOnEveryCall)
+            {
+                generation++;
+                activeToken = generation == 1 ? TokenA : TokenB;
+            }
+
             return Task.FromResult(new PublicTrackingTokenGrant(
-                Guid.NewGuid(),
+                generation == 1 ? firstTokenId : nextTokenId,
                 command.OrderId,
                 activeToken,
-                DateTimeOffset.UtcNow.AddHours(1)));
+                generation,
+                null));
         }
 
         public Task RevokeAsync(
             RevokePublicTrackingTokenCommand command,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            CancellationToken cancellationToken)
+        {
+            RevokeCalls++;
+            activeToken = null;
+            return Task.CompletedTask;
+        }
 
         public ValueTask<PublicTrackingLookupResult> FindAsync(
             string token,

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Orders.Application.Csv;
@@ -28,8 +29,10 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddOrdersInfrastructure(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
+        ArgumentNullException.ThrowIfNull(environment);
         services.AddOptions<OrdersOptions>()
             .Bind(configuration.GetSection(OrdersOptions.SectionName))
             .Validate(options => Enum.IsDefined(options.Provider), "Orders:Provider is unsupported.")
@@ -54,6 +57,9 @@ public static class DependencyInjection
         services.AddOptions<OrderTransitionDriverEligibilityOptions>()
             .Bind(configuration.GetSection(OrderTransitionDriverEligibilityOptions.SectionName));
 
+        // TRK-002-AUTO-LINK: only Development and Testing may derive links with the synthetic runtime key or build
+        // them on an http loopback origin.
+        var allowSyntheticLinkKey = environment.IsDevelopment() || environment.IsEnvironment("Testing");
         var section = configuration.GetSection(PublicTrackingOptions.SectionName);
         services
             .AddOptions<PublicTrackingOptions>()
@@ -62,12 +68,18 @@ public static class DependencyInjection
                 "PublicTracking:Provider must be Disabled or PostgreSql.")
             .Validate(options => options.CommandTimeoutSeconds is >= 1 and <= 60,
                 "PublicTracking:CommandTimeoutSeconds must be between 1 and 60.")
-            .Validate(options => double.IsFinite(options.TokenLifetimeHours) &&
-                    options.TokenLifetimeHours >= 5d / 60d &&
-                    options.TokenLifetimeHours <= 24d * 30d,
-                "PublicTracking:TokenLifetimeHours must be between 5 minutes and 30 days.")
-            .Validate(options => options.TokenCollisionRetryCount is >= 1 and <= 10,
-                "PublicTracking:TokenCollisionRetryCount must be between 1 and 10.")
+            .Validate(options => options.Provider != PublicTrackingProviderKind.PostgreSql ||
+                    PublicTrackingLinkPolicy.IsValidPublicBaseUrl(options.PublicBaseUrl, allowSyntheticLinkKey),
+                "PublicTracking:Provider=PostgreSql requires PublicTracking:PublicBaseUrl, an absolute https origin.")
+            .Validate(options => options.PublicBaseUrl is null ||
+                    PublicTrackingLinkPolicy.IsValidPublicBaseUrl(options.PublicBaseUrl, allowSyntheticLinkKey),
+                "PublicTracking:PublicBaseUrl must be an absolute https origin without path, query or fragment.")
+            .Validate(options => options.Provider != PublicTrackingProviderKind.PostgreSql ||
+                    options.LinkKeys.Count > 0 ||
+                    allowSyntheticLinkKey,
+                "PublicTracking:LinkKeys is required outside Development and Testing when PublicTracking:Provider=PostgreSql.")
+            .Validate(PublicTrackingLinkKeyRing.IsValid,
+                "PublicTracking must hold 1 to 8 LinkKeys with versions 1 to 32767, each Base64 of 32 to 128 bytes, and CurrentLinkKeyVersion must be one of them.")
             .Validate(options => options.LookupPermitLimit is >= 1 and <= 1_000,
                 "PublicTracking:LookupPermitLimit must be between 1 and 1000.")
             .Validate(options => options.LookupWindowSeconds is >= 1 and <= 300,
@@ -86,6 +98,18 @@ public static class DependencyInjection
             serviceProvider.GetRequiredService<PublicTrackingTelemetry>());
         services.AddScoped<PostgreSqlPublicTrackingProjectionReader>();
         services.AddScoped<PostgreSqlPublicTrackingTokenService>();
+        services.AddSingleton(serviceProvider => new PublicTrackingLinkKeyRing(
+            serviceProvider.GetRequiredService<IOptions<PublicTrackingOptions>>().Value,
+            allowSyntheticLinkKey));
+        services.AddSingleton<DisabledOrderTrackingLinkIssuer>();
+        services.AddScoped<PostgreSqlOrderTrackingLinkIssuer>();
+        services.AddScoped<IOrderTrackingLinkIssuer>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<PublicTrackingOptions>>().Value.Provider switch
+            {
+                PublicTrackingProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlOrderTrackingLinkIssuer>(),
+                _ => serviceProvider.GetRequiredService<DisabledOrderTrackingLinkIssuer>(),
+            });
         services.TryAddSingleton<TrackingTokenHasher>();
         services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
             serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")

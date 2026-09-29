@@ -13,10 +13,11 @@ using Paqueteria.IntegrationTests.Security;
 namespace Paqueteria.IntegrationTests.Tracking;
 
 /// <summary>
-/// TRK-002-ISSUE-ENDPOINT end to end: authenticated HTTP, the real tenant pipeline, the least-privilege runtime role
-/// under RLS and the anonymous public lookup. The plaintext is returned once, only its hash is stored, every issue,
-/// rotation and revocation is audited, a revoked link is the uniform 404 and another organization is refused with
-/// the same 404 without any effect.
+/// TRK-002-AUTO-LINK end to end: authenticated HTTP, the real tenant pipeline, the least-privilege runtime role
+/// under RLS and the anonymous public lookup. Get-or-create returns the same link and its public URL on every call,
+/// only the hash is stored, creation and revocation are audited (reads are not), a revoked link is the uniform 404,
+/// the next call derives the next generation, a finished order is the coded 409, and another organization is
+/// refused with the same 404 without any effect.
 /// </summary>
 [Collection(PublicTrackingPostgreSqlCollection.Name)]
 [Trait("Category", "PublicTrackingPostgreSql")]
@@ -26,7 +27,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
     private static readonly Guid PlatformAdminMfaId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2");
 
     [Fact]
-    public async Task Issue_rotate_and_revoke_over_HTTP_return_the_token_once_audit_and_close_the_public_link()
+    public async Task Get_or_create_revoke_and_next_generation_over_HTTP_keep_one_link_audit_changes_and_close_the_public_link()
     {
         // The authenticated operations run on a host whose every log line and scope is captured. The anonymous
         // lookups run on the plain host: the public URL carries the token by design (TRK-001), so the framework's
@@ -40,37 +41,50 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
 
         var issueKey = Key();
         using var issued = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), issueKey);
-        Assert.Equal(HttpStatusCode.Created, issued.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, issued.StatusCode);
         Assert.Equal("no-store", issued.Headers.CacheControl?.ToString());
         var first = await ReadLinkAsync(issued);
         Assert.Equal(orderId, first.OrderId);
         Assert.Matches("^[A-Za-z0-9_-]{43}$", first.Token);
+        Assert.Equal(
+            $"{PostgreSqlSecurityWebApplicationFactory.TrackingLinkPublicBaseUrl}/track/{first.Token}",
+            first.Url);
+        Assert.Equal(1, first.Generation);
         await AssertLookupAsync(lookup, first.Token, HttpStatusCode.OK);
 
-        var rotateKey = Key();
-        using var rotated = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), rotateKey);
-        Assert.Equal(HttpStatusCode.Created, rotated.StatusCode);
-        var second = await ReadLinkAsync(rotated);
-        Assert.NotEqual(first.Token, second.Token);
-        await AssertLookupAsync(lookup, first.Token, HttpStatusCode.NotFound);
-        await AssertLookupAsync(lookup, second.Token, HttpStatusCode.OK);
+        // A retry with the same key, or a call with another key, returns the same link and writes nothing.
+        foreach (var key in new[] { issueKey, Key() })
+        {
+            using var again = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), key);
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+            Assert.Equal(first, await ReadLinkAsync(again));
+        }
 
         var revokeKey = Key();
         using var revoked = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, RevokePath(orderId), revokeKey);
         Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
-        await AssertLookupAsync(lookup, second.Token, HttpStatusCode.NotFound);
+        await AssertLookupAsync(lookup, first.Token, HttpStatusCode.NotFound);
 
-        // Only hashes are stored; the audit trail names each step and the key of the request that caused it.
+        var nextKey = Key();
+        using var next = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), nextKey);
+        Assert.Equal(HttpStatusCode.OK, next.StatusCode);
+        var second = await ReadLinkAsync(next);
+        Assert.Equal(2, second.Generation);
+        Assert.NotEqual(first.Token, second.Token);
+        await AssertLookupAsync(lookup, first.Token, HttpStatusCode.NotFound);
+        await AssertLookupAsync(lookup, second.Token, HttpStatusCode.OK);
+
+        // Only hashes are stored; the audit trail names each change and the key of the request that caused it.
         var state = await ReadTokenStateAsync(orderId);
         Assert.Equal(2, state.Hashes.Count);
         Assert.Contains(state.Hashes, hash => hash.SequenceEqual(SHA256.HashData(Encoding.UTF8.GetBytes(first.Token))));
         Assert.Contains(state.Hashes, hash => hash.SequenceEqual(SHA256.HashData(Encoding.UTF8.GetBytes(second.Token))));
-        Assert.Equal(0, state.Active);
+        Assert.Equal(1, state.Active);
         Assert.Equal(
             [
                 ("TRACKING_TOKEN_ISSUED", issueKey),
-                ("TRACKING_TOKEN_ROTATED", rotateKey),
                 ("TRACKING_TOKEN_REVOKED", revokeKey),
+                ("TRACKING_TOKEN_ISSUED", nextKey),
             ],
             await ReadAuditsAsync(orderId, PlatformAdminMfaId));
         foreach (var token in new[] { first.Token, second.Token })
@@ -83,10 +97,25 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
             Assert.True(leaked.Length == 0, string.Join('\n', leaked));
         }
 
-        // Replaying the revocation succeeds without another audit row.
+        // Replaying the revocation of the retired generation succeeds without another audit row.
         using var replay = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, RevokePath(orderId), revokeKey);
         Assert.Equal(HttpStatusCode.NoContent, replay.StatusCode);
-        Assert.Equal(3, (await ReadAuditsAsync(orderId, PlatformAdminMfaId)).Count);
+        Assert.Equal(4, (await ReadAuditsAsync(orderId, PlatformAdminMfaId)).Count);
+    }
+
+    [Fact]
+    public async Task A_finished_order_without_a_live_link_is_the_coded_409_without_a_token()
+    {
+        using var client = factory.CreateClient();
+        var orderId = await CreateOrderAsync("CANCELLED");
+
+        using var refused = await PostAsync(client, MockIdentityProfiles.ActivePlatformAdminMfa, IssuePath(orderId), Key());
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        Assert.Equal("application/problem+json", refused.Content.Headers.ContentType?.MediaType);
+        using var problem = JsonDocument.Parse(await refused.Content.ReadAsStringAsync());
+        Assert.Equal("TRACKING_LINK_ORDER_FINISHED", problem.RootElement.GetProperty("code").GetString());
+        Assert.False(problem.RootElement.TryGetProperty("token", out _));
+        Assert.Empty((await ReadTokenStateAsync(orderId)).Hashes);
     }
 
     [Fact]
@@ -147,10 +176,16 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         return await client.SendAsync(request);
     }
 
-    private static async Task<(Guid OrderId, string Token)> ReadLinkAsync(HttpResponseMessage response)
+    private static async Task<(Guid OrderId, string Token, string Url, int Generation)> ReadLinkAsync(
+        HttpResponseMessage response)
     {
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        return (json.RootElement.GetProperty("order_id").GetGuid(), json.RootElement.GetProperty("token").GetString()!);
+        var root = json.RootElement;
+        return (
+            root.GetProperty("order_id").GetGuid(),
+            root.GetProperty("token").GetString()!,
+            root.GetProperty("url").GetString()!,
+            root.GetProperty("generation").GetInt32());
     }
 
     private static async Task AssertLookupAsync(HttpClient client, string token, HttpStatusCode expected)
@@ -163,7 +198,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         }
     }
 
-    private async Task<Guid> CreateOrderAsync()
+    private async Task<Guid> CreateOrderAsync(string status = "DELIVERING")
     {
         var orderId = Guid.NewGuid();
         var quoteId = Guid.NewGuid();
@@ -187,7 +222,8 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
                 pg_catalog.jsonb_build_object(
                     'id',@order_id::text,
                     'quote_id',@quote_id::text,
-                    'public_id',@public_id))).*
+                    'public_id',@public_id,
+                    'status',@status))).*
             FROM orders.orders source
             WHERE id='66666666-6666-6666-6666-666666666666';
             """,
@@ -195,6 +231,7 @@ public sealed class PublicTrackingLinkPostgreSqlHttpTests(PostgreSqlSecurityWebA
         command.Parameters.AddWithValue("quote_id", quoteId);
         command.Parameters.AddWithValue("order_id", orderId);
         command.Parameters.AddWithValue("public_id", publicId);
+        command.Parameters.AddWithValue("status", status);
         Assert.Equal(2, await command.ExecuteNonQueryAsync());
         return orderId;
     }

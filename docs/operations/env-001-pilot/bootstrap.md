@@ -125,8 +125,10 @@ It never receives a crypto role, so it cannot unwrap PII or Data Protection keys
 
 ### Owner access to the vault (for §6.6 of the README)
 
-The vault uses RBAC and denies public traffic (PILOT-KEYVAULT-PRIVATE-APP-READ). To write the AuthCenter
-client secret after the first run creates the vault, the owner needs two things:
+The vault uses RBAC and denies public traffic (PILOT-KEYVAULT-PRIVATE-APP-READ). To write the owner
+secrets after the first run creates the vault (the AuthCenter client secret, `google-maps-api-key` and,
+since TRK-002-AUTO-LINK, `public-tracking-link-key`: 32 random bytes, base64, see README §6.6), the
+owner needs two things:
 - a temporary firewall rule for their own IP (`deploy/azure/pilot/kv-firewall.sh open|close <kv>`,
   see README §6.6);
 - a temporary *Key Vault Secrets Officer* role on the vault:

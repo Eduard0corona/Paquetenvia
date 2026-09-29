@@ -11,6 +11,42 @@ u outbox. Un canal futuro, previsiblemente NTF-001 o un portal contratado,
 deberá invocar el servicio interno y entregar el grant. Este alcance no afirma
 que el destinatario ya recibe el enlace.
 
+## Actualización TRK-002-AUTO-LINK (2026-09-29)
+
+La decisión `TRK-002-AUTO-LINK` sustituye la emisión aleatoria, la rotación y la vida fija de 168 horas
+descritas más abajo; el endpoint público, el hash y la proyección no cambian de forma.
+
+- **Emisión automática.** `QuoteSnapshotToOrderCoordinator` escribe la generación 1 del enlace y su
+  auditoría `TRACKING_TOKEN_ISSUED` dentro de la transacción de `createOrder` (flujo 1 de AI-13 §4;
+  escritura interna de Orders, no un flujo cross-module nuevo) cuando `PublicTracking:Provider=PostgreSql`.
+  La respuesta de `createOrder` no cambia y no lleva el token.
+- **Derivación.** `TrackingLinkTokenDerivation` calcula Base64URL sin padding de HMAC-SHA256(llave,
+  `paquetenvia-trk-v1|{key_version}|{order_id}|{generation}`): 32 bytes, 43 caracteres. La fila guarda solo
+  `token_hash` (SHA-256 de los bytes UTF-8 del token, sin cambio), `generation` y `key_version`. La llave
+  (`PublicTracking:LinkKeys:{n}`, Key Vault `public-tracking-link-key`) nunca llega a la base de datos; el
+  lookup público no la necesita. Sin llave válida la API no arranca con el proveedor PostgreSql, salvo en
+  Development y Testing, que derivan una llave sintética en tiempo de ejecución a partir de una etiqueta
+  pública.
+- **Obtener o crear.** `IPublicTrackingTokenService` expone `GetOrCreateAsync` y `RevokeAsync`.
+  `issueTrackingLink` devuelve 200 `no-store` con `token`, `url`
+  (`{PublicTracking:PublicBaseUrl}/track/{token}`), `generation` y `valid_until`; el mismo enlace para
+  cualquier reintento o Idempotency-Key, sin escribir nada. Solo crea (y audita) cuando la orden no tiene
+  un enlace re-derivable: ninguno, uno revocado (siguiente generación) o uno previo a la derivación o de una
+  versión de llave retirada (se retira en la misma transacción). Una llave distinta bajo la misma versión
+  falla cerrado (503). Revocar retira la generación actual; una generación revocada nunca vuelve.
+- **Vigencia.** Mientras la orden avanza (RESCHEDULED incluido) y 24 horas después de su primer evento
+  público DELIVERED, RETURNED o CANCELLED; lo verifica `security.get_public_tracking_projection` junto
+  con el hash (lane PlatformEvolution `20260929000200_BoundTrackingLinksToOrderLifecycle`). Una orden en
+  estado público final sin enlace vigente recibe 409 `TRACKING_LINK_ORDER_FINISHED` y nunca un enlace
+  nuevo. Las filas derivadas guardan `expires_at='infinity'`; los tokens previos conservan su techo fijo.
+- **Esquema.** Lane Orders `20260929000100_AddTrackingLinkGenerations`: columnas `generation`
+  (`NOT NULL DEFAULT 1`) y `key_version` (`NULL` = token previo) e índices únicos parciales por generación
+  derivada y por enlace derivado vivo. Ambas migraciones tienen rollback que falla cerrado; el release
+  anterior funciona con ellas aplicadas.
+- **Configuración.** Se eliminan `PublicTracking:TokenLifetimeHours` y `TokenCollisionRetryCount`; se
+  agregan `PublicBaseUrl` (origen https; loopback http solo en Development/Testing),
+  `CurrentLinkKeyVersion` y `LinkKeys`.
+
 ## Token, persistencia y ciclo de vida
 
 Se reutiliza exclusivamente `orders.public_tracking_tokens`; no hay DDL,
@@ -172,8 +208,9 @@ order, tenant, timeline o estado por orden.
 {
   "PublicTracking": {
     "Provider": "PostgreSql",
-    "TokenLifetimeHours": 168,
-    "TokenCollisionRetryCount": 3,
+    "PublicBaseUrl": "https://tracking.example",
+    "CurrentLinkKeyVersion": 1,
+    "LinkKeys": { "1": "<Key Vault public-tracking-link-key; never in appsettings>" },
     "AllowedOrigins": ["https://tracking.example"],
     "LookupPermitLimit": 60,
     "LookupWindowSeconds": 60

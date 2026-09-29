@@ -1,11 +1,16 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Orders.Application.Orders;
 using Orders.Application.Tracking;
+using Orders.Infrastructure;
+using Orders.Infrastructure.Orders;
 using Orders.Infrastructure.Persistence;
 using Orders.Infrastructure.Tracking;
+using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Contracts.Tracking;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
@@ -16,126 +21,311 @@ using Paqueteria.Infrastructure.Tenancy;
 namespace Paqueteria.ContractTests.PostgreSql.Tracking;
 
 /// <summary>
-/// TRK-002-ISSUE-ENDPOINT against the real schema and the least-privilege runtime role (NOBYPASSRLS): the service
-/// behind issueTrackingLink and revokeTrackingLink stores only the SHA-256 of the token, hands the plaintext out
-/// exactly once, audits every issue, rotation and revocation, makes a revoked link the uniform not-found of the
-/// public lookup and refuses every other organization without touching its rows.
+/// TRK-002-AUTO-LINK against the real schema and the least-privilege runtime role (NOBYPASSRLS). Every order gets
+/// generation 1 of its link in the order-creation transaction, audited; get-or-create re-derives the same link and
+/// writes nothing; revocation is the uniform public 404 and the next get-or-create derives the next generation; a
+/// finished order gets no new link and its link lasts 24 hours after the order first reaches a final public status;
+/// only the SHA-256 of a token is ever stored, and every other organization is refused without touching a row.
 /// </summary>
 [Collection(PostgreSqlContractCollection.Name)]
 [Trait("Category", "PostgreSqlContract")]
 public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
+    /// <summary>A synthetic key derived at runtime from a public label; it protects nothing.</summary>
+    private static readonly byte[] KeyOne = SHA256.HashData(Encoding.UTF8.GetBytes("trk-002 auto-link contract key one"));
+    private static readonly byte[] KeyTwo = SHA256.HashData(Encoding.UTF8.GetBytes("trk-002 auto-link contract key two"));
+    private static readonly byte[] KeyThree = SHA256.HashData(Encoding.UTF8.GetBytes("trk-002 auto-link contract key three"));
+
+    private static readonly DateTimeOffset AcceptedAtClient = new DateTimeOffset(
+        DateTimeOffset.UtcNow.AddHours(-1).UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond,
+        TimeSpan.Zero);
+
     [PostgreSqlContractFact]
-    public async Task Token_is_issued_exactly_once_audited_and_revocation_is_the_uniform_public_not_found()
+    public async Task Derivation_matches_an_independent_PostgreSQL_HMAC_of_the_canonical_input()
+    {
+        var orderId = Guid.NewGuid();
+        foreach (var (keyVersion, generation) in new[] { (1, 1), (1, 2), (7, 1), (32767, 2_000_000_000) })
+        {
+            var input = $"paquetenvia-trk-v1|{keyVersion}|{orderId.ToString("D").ToLowerInvariant()}|{generation}";
+            Assert.Equal(input, TrackingLinkTokenDerivation.CanonicalInput(keyVersion, orderId, generation));
+            await using var command = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT pg_catalog.rtrim(pg_catalog.translate(pg_catalog.encode(
+                  extensions.hmac(pg_catalog.convert_to(@input,'UTF8'),@key,'sha256'),'base64'),'+/','-_'),'=');
+                """);
+            command.Parameters.AddWithValue("input", input);
+            command.Parameters.AddWithValue("key", KeyOne);
+            var expected = (string)(await command.ExecuteScalarAsync())!;
+            var derived = TrackingLinkTokenDerivation.DeriveToken(KeyOne, keyVersion, orderId, generation);
+            Assert.Equal(expected, derived);
+            Assert.Matches("^[A-Za-z0-9_-]{43}$", derived);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Order_creation_issues_generation_one_with_audit_and_get_or_create_returns_it_without_writing()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(createOrder: false);
+        var created = await CreateOrderAsync(scenario, "trk002-auto-create-0001", "trk002-auto-request-0001");
+
+        var row = Assert.Single(await ReadTokenRowsAsync(created.Id));
+        Assert.Equal(1, row.Generation);
+        Assert.Equal(1, row.KeyVersion);
+        Assert.False(row.Revoked);
+        Assert.True(row.ExpiresAtInfinity);
+        var expected = TrackingLinkTokenDerivation.DeriveToken(KeyOne, 1, created.Id, 1);
+        Assert.Equal(SHA256.HashData(Encoding.UTF8.GetBytes(expected)), row.Hash);
+        Assert.DoesNotContain(expected, row.Json, StringComparison.Ordinal);
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(expected));
+
+        var audit = Assert.Single(await ReadAuditsAsync(created.Id));
+        Assert.Equal("TRACKING_TOKEN_ISSUED", audit.Action);
+        Assert.Equal(scenario.UserId, audit.ActorId);
+        Assert.Equal("trk002-auto-request-0001", audit.RequestId);
+        AssertAuditPayload(audit.Payload, row.Id, generation: 1, keyVersion: 1, revokedCount: 0);
+        Assert.DoesNotContain(expected, audit.Payload, StringComparison.Ordinal);
+
+        // Get-or-create, with any Idempotency-Key, returns that same link and writes nothing.
+        foreach (var key in new[] { "trk002-auto-read-0001", "trk002-auto-read-0001", "trk002-auto-read-0002" })
+        {
+            var grant = await GetOrCreateAsync(scenario, created.Id, key);
+            Assert.Equal(row.Id, grant.TokenId);
+            Assert.Equal(expected, grant.Token);
+            Assert.Equal(1, grant.Generation);
+            Assert.Null(grant.ValidUntil);
+            Assert.DoesNotContain(grant.Token, grant.ToString(), StringComparison.Ordinal);
+        }
+
+        Assert.Single(await ReadTokenRowsAsync(created.Id));
+        Assert.Single(await ReadAuditsAsync(created.Id));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Revocation_is_the_uniform_404_and_the_next_get_or_create_derives_the_next_generation()
     {
         await using var scenario = new SyntheticOrderScenario(fixture);
         await scenario.InitializeAsync(orderStatus: "DELIVERING");
 
-        var issued = await WithServiceAsync(service => service.IssueAsync(
-            new IssuePublicTrackingTokenCommand(
-                scenario.UserId, scenario.OrganizationId, scenario.OrderId, "trk002-contract-issue-0001"),
-            CancellationToken.None));
-        Assert.Matches("^[A-Za-z0-9_-]{43}$", issued.Token);
-        Assert.DoesNotContain(issued.Token, issued.ToString(), StringComparison.Ordinal);
+        // An order created before TRK-002-AUTO-LINK (no row yet) gets generation 1 on first read, audited.
+        var first = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-revoke-read-0001");
+        Assert.Equal(1, first.Generation);
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(first.Token));
 
-        // Only the hash is stored: one row whose hash is SHA-256 over the exact UTF-8 bytes of the token, and no
-        // column of the token row or of any audit row of the order carries the plaintext.
-        var stored = await ReadTokenRowsAsync(scenario.OrderId);
-        var row = Assert.Single(stored);
-        Assert.Equal(issued.TokenId, row.Id);
-        Assert.Equal(SHA256.HashData(Encoding.UTF8.GetBytes(issued.Token)), row.Hash);
-        Assert.DoesNotContain(issued.Token, row.Json, StringComparison.Ordinal);
-        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(issued.Token));
+        await RevokeAsync(scenario, scenario.OrderId, "trk002-revoke-0001");
+        Assert.Null(await ReadProjectionPublicIdKeyAsync(first.Token));
+        await RevokeAsync(scenario, scenario.OrderId, "trk002-revoke-0001");
 
-        // Exactly once: a second plain issue is refused inside its own transaction and writes nothing.
-        await Assert.ThrowsAsync<PublicTrackingTokenConflictException>(() => WithServiceAsync(service =>
-            service.IssueAsync(
-                new IssuePublicTrackingTokenCommand(
-                    scenario.UserId, scenario.OrganizationId, scenario.OrderId, "trk002-contract-issue-0002"),
-                CancellationToken.None)));
-        Assert.Single(await ReadTokenRowsAsync(scenario.OrderId));
+        var second = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-revoke-read-0002");
+        Assert.Equal(2, second.Generation);
+        Assert.NotEqual(first.Token, second.Token);
+        Assert.NotEqual(first.TokenId, second.TokenId);
+        Assert.Equal(TrackingLinkTokenDerivation.DeriveToken(KeyOne, 1, scenario.OrderId, 2), second.Token);
+        Assert.Null(await ReadProjectionPublicIdKeyAsync(first.Token));
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(second.Token));
+        Assert.Equal(second.Token, (await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-revoke-read-0003")).Token);
 
-        var rotated = await WithServiceAsync(service => service.RotateAsync(
-            new RotatePublicTrackingTokenCommand(
-                scenario.UserId, scenario.OrganizationId, scenario.OrderId, "trk002-contract-rotate-0001"),
-            CancellationToken.None));
-        Assert.NotEqual(issued.Token, rotated.Token);
-        Assert.Null(await ReadProjectionPublicIdKeyAsync(issued.Token));
-        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(rotated.Token));
-
-        await WithServiceAsync(async service =>
-        {
-            await service.RevokeAsync(
-                new RevokePublicTrackingTokenCommand(
-                    scenario.UserId, scenario.OrganizationId, scenario.OrderId, "trk002-contract-revoke-0001"),
-                CancellationToken.None);
-            return true;
-        });
-        Assert.Null(await ReadProjectionPublicIdKeyAsync(rotated.Token));
-        Assert.All(await ReadTokenRowsAsync(scenario.OrderId), token => Assert.True(token.Revoked));
-
-        // A replayed revocation is harmless: nothing is left to revoke and no audit row is added.
-        await WithServiceAsync(async service =>
-        {
-            await service.RevokeAsync(
-                new RevokePublicTrackingTokenCommand(
-                    scenario.UserId, scenario.OrganizationId, scenario.OrderId, "trk002-contract-revoke-0001"),
-                CancellationToken.None);
-            return true;
-        });
-
+        var rows = await ReadTokenRowsAsync(scenario.OrderId);
+        Assert.Equal([1, 2], rows.Select(row => row.Generation));
+        Assert.Equal([true, false], rows.Select(row => row.Revoked));
         var audits = await ReadAuditsAsync(scenario.OrderId);
         Assert.Equal(
-            ["TRACKING_TOKEN_ISSUED", "TRACKING_TOKEN_ROTATED", "TRACKING_TOKEN_REVOKED"],
+            ["TRACKING_TOKEN_ISSUED", "TRACKING_TOKEN_REVOKED", "TRACKING_TOKEN_ISSUED"],
             audits.Select(audit => audit.Action));
+        Assert.Equal(
+            ["trk002-revoke-read-0001", "trk002-revoke-0001", "trk002-revoke-read-0002"],
+            audits.Select(audit => audit.RequestId));
+        AssertAuditPayload(audits[2].Payload, second.TokenId, generation: 2, keyVersion: 1, revokedCount: 0);
         Assert.All(audits, audit =>
         {
-            Assert.Equal(scenario.OrganizationId, audit.OrganizationId);
-            Assert.Equal(scenario.UserId, audit.ActorId);
-            Assert.Equal("PublicTrackingToken", audit.EntityType);
-            Assert.DoesNotContain(issued.Token, audit.Payload, StringComparison.Ordinal);
-            Assert.DoesNotContain(rotated.Token, audit.Payload, StringComparison.Ordinal);
+            Assert.DoesNotContain(first.Token, audit.Payload, StringComparison.Ordinal);
+            Assert.DoesNotContain(second.Token, audit.Payload, StringComparison.Ordinal);
             Assert.DoesNotContain(
-                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rotated.Token))),
+                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(second.Token))),
                 audit.Payload,
                 StringComparison.OrdinalIgnoreCase);
         });
-        Assert.Equal(
-            ["trk002-contract-issue-0001", "trk002-contract-rotate-0001", "trk002-contract-revoke-0001"],
-            audits.Select(audit => audit.RequestId));
-        AssertAuditTokenId(issued.TokenId, audits[0].Payload);
-        AssertAuditTokenId(rotated.TokenId, audits[1].Payload);
+
+        // The database itself keeps one live derived link per order and one row per derived generation.
+        await Assert.ThrowsAsync<PostgresException>(() => scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO orders.public_tracking_tokens(order_id,owner_org_id,token_hash,expires_at,generation,key_version)
+            VALUES (@order,@org,extensions.digest('trk002-second-live','sha256'),'infinity',3,1);
+            """,
+            SyntheticOrderScenario.P("order", scenario.OrderId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId)));
+        await Assert.ThrowsAsync<PostgresException>(() => scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO orders.public_tracking_tokens(
+              order_id,owner_org_id,token_hash,expires_at,revoked_at,generation,key_version)
+            VALUES (@order,@org,extensions.digest('trk002-same-generation','sha256'),'infinity',clock_timestamp(),1,1);
+            """,
+            SyntheticOrderScenario.P("order", scenario.OrderId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId)));
     }
 
     [PostgreSqlContractFact]
-    public async Task Another_organization_can_neither_see_issue_rotate_nor_revoke_the_link()
+    public async Task A_finished_order_keeps_its_link_for_24_hours_after_its_final_event_and_gets_no_new_one()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(orderStatus: "DELIVERING");
+        var link = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-final-read-0001");
+
+        var finishedAt = await DatabaseNowAsync() - TimeSpan.FromHours(23);
+        await FinishAsync(scenario, "DELIVERED", "DELIVERED", finishedAt);
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(link.Token));
+        var withinGrace = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-final-read-0002");
+        Assert.Equal(link.Token, withinGrace.Token);
+        Assert.Equal(finishedAt + TimeSpan.FromHours(24), withinGrace.ValidUntil);
+
+        // CLOSED, CLAIM_OPEN and CLAIM_RESOLVED are DELIVERED for the public: the same first event still bounds it.
+        await SetStatusAsync(scenario, "CLOSED");
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(link.Token));
+
+        // A revoked link of a finished order is never replaced.
+        await RevokeAsync(scenario, scenario.OrderId, "trk002-final-revoke-0001");
+        await Assert.ThrowsAsync<PublicTrackingLinkOrderFinishedException>(() =>
+            GetOrCreateAsync(scenario, scenario.OrderId, "trk002-final-read-0003"));
+        Assert.Single(await ReadTokenRowsAsync(scenario.OrderId));
+
+        // Past the grace the link is the uniform 404 and get-or-create refuses.
+        await using var expired = new SyntheticOrderScenario(fixture);
+        await expired.InitializeAsync(orderStatus: "DELIVERING");
+        var expiredLink = await GetOrCreateAsync(expired, expired.OrderId, "trk002-final-read-0004");
+        await FinishAsync(expired, "DELIVERED", "DELIVERED", await DatabaseNowAsync() - TimeSpan.FromHours(25));
+        Assert.Null(await ReadProjectionPublicIdKeyAsync(expiredLink.Token));
+        await Assert.ThrowsAsync<PublicTrackingLinkOrderFinishedException>(() =>
+            GetOrCreateAsync(expired, expired.OrderId, "trk002-final-read-0005"));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Cancelled_returned_and_eventless_finished_orders_fail_closed_while_rescheduled_stays_alive()
+    {
+        // CANCELLED and RETURNED end the link after 24 hours exactly like DELIVERED (order events are append-only,
+        // so each side of the boundary is its own order).
+        foreach (var status in new[] { "CANCELLED", "RETURNED" })
+        {
+            foreach (var (ago, resolves) in new[]
+                     {
+                         (TimeSpan.FromHours(24) - TimeSpan.FromMinutes(1), true),
+                         (TimeSpan.FromHours(24) + TimeSpan.FromSeconds(1), false),
+                     })
+            {
+                await using var scenario = new SyntheticOrderScenario(fixture);
+                await scenario.InitializeAsync(orderStatus: "READY_FOR_PICKUP");
+                var link = await GetOrCreateAsync(scenario, scenario.OrderId, $"trk002-{status.ToLowerInvariant()}-0001");
+                await FinishAsync(scenario, status, status, await DatabaseNowAsync() - ago);
+                Assert.Equal(resolves ? "public_id" : null, await ReadProjectionPublicIdKeyAsync(link.Token));
+            }
+        }
+
+        // A finished order without a link never gets one.
+        await using (var cancelled = new SyntheticOrderScenario(fixture))
+        {
+            await cancelled.InitializeAsync(orderStatus: "CANCELLED");
+            await Assert.ThrowsAsync<PublicTrackingLinkOrderFinishedException>(() =>
+                GetOrCreateAsync(cancelled, cancelled.OrderId, "trk002-cancelled-read-0001"));
+            Assert.Empty(await ReadTokenRowsAsync(cancelled.OrderId));
+            Assert.Empty(await ReadAuditsAsync(cancelled.OrderId));
+        }
+
+        // A final status without its final event fails closed in SQL and in the service.
+        await using (var eventless = new SyntheticOrderScenario(fixture))
+        {
+            await eventless.InitializeAsync(orderStatus: "IN_TRANSIT");
+            var link = await GetOrCreateAsync(eventless, eventless.OrderId, "trk002-eventless-read-0001");
+            await SetStatusAsync(eventless, "DELIVERED");
+            Assert.Null(await ReadProjectionPublicIdKeyAsync(link.Token));
+            await Assert.ThrowsAsync<PublicTrackingLinkOrderFinishedException>(() =>
+                GetOrCreateAsync(eventless, eventless.OrderId, "trk002-eventless-read-0002"));
+        }
+
+        // RESCHEDULED is not final: the order is assigned again and its link stays alive, unchanged.
+        await using var rescheduled = new SyntheticOrderScenario(fixture);
+        await rescheduled.InitializeAsync(orderStatus: "FAILED_ATTEMPT");
+        var alive = await GetOrCreateAsync(rescheduled, rescheduled.OrderId, "trk002-rescheduled-read-0001");
+        await FinishAsync(rescheduled, "RESCHEDULED", "RESCHEDULED", await DatabaseNowAsync() - TimeSpan.FromDays(3));
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(alive.Token));
+        var again = await GetOrCreateAsync(rescheduled, rescheduled.OrderId, "trk002-rescheduled-read-0002");
+        Assert.Equal(alive.Token, again.Token);
+        Assert.Null(again.ValidUntil);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task A_pre_derivation_random_link_is_retired_and_replaced_by_the_next_derived_generation()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(orderStatus: "IN_TRANSIT");
+        var legacy = new TrackingTokenHasher().CreateToken();
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO orders.public_tracking_tokens(id,order_id,owner_org_id,token_hash,expires_at)
+            VALUES (gen_random_uuid(),@order,@org,@hash,clock_timestamp()+interval '7 days');
+            """,
+            SyntheticOrderScenario.P("order", scenario.OrderId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId),
+            SyntheticOrderScenario.P("hash", SHA256.HashData(Encoding.UTF8.GetBytes(legacy))));
+        var legacyRow = Assert.Single(await ReadTokenRowsAsync(scenario.OrderId));
+        Assert.Equal(1, legacyRow.Generation);
+        Assert.Null(legacyRow.KeyVersion);
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(legacy));
+
+        var derived = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-legacy-read-0001");
+        Assert.Equal(2, derived.Generation);
+        Assert.Null(await ReadProjectionPublicIdKeyAsync(legacy));
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(derived.Token));
+        var audit = Assert.Single(await ReadAuditsAsync(scenario.OrderId));
+        AssertAuditPayload(audit.Payload, derived.TokenId, generation: 2, keyVersion: 1, revokedCount: 1);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Key_rotation_keeps_configured_versions_replaces_removed_ones_and_fails_closed_on_changed_key()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(orderStatus: "ASSIGNED");
+        var first = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-rotation-read-0001");
+
+        // Version 2 becomes current while version 1 stays configured: the version-1 link is still re-derived.
+        var both = Ring((1, KeyOne), (2, KeyTwo));
+        Assert.Equal(first.Token, (await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-rotation-read-0002", both)).Token);
+
+        // Version 1 removed: the link can no longer be shown, so it is retired and version 2 derives generation 2.
+        var onlyTwo = Ring((2, KeyTwo));
+        var replaced = await GetOrCreateAsync(scenario, scenario.OrderId, "trk002-rotation-read-0003", onlyTwo);
+        Assert.Equal(2, replaced.Generation);
+        Assert.Equal(TrackingLinkTokenDerivation.DeriveToken(KeyTwo, 2, scenario.OrderId, 2), replaced.Token);
+        Assert.Null(await ReadProjectionPublicIdKeyAsync(first.Token));
+        Assert.Equal(2, (await ReadTokenRowsAsync(scenario.OrderId)).Last().KeyVersion);
+
+        // Different bytes under the same version never hand out a link that does not resolve: fail closed.
+        var before = await ReadTokenRowsAsync(scenario.OrderId);
+        await Assert.ThrowsAsync<PublicTrackingTokenInfrastructureException>(() =>
+            GetOrCreateAsync(scenario, scenario.OrderId, "trk002-rotation-read-0004", Ring((2, KeyThree))));
+        Assert.Equal(before, await ReadTokenRowsAsync(scenario.OrderId));
+        Assert.Equal("public_id", await ReadProjectionPublicIdKeyAsync(replaced.Token));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Another_organization_can_neither_see_get_nor_revoke_the_link()
     {
         await using var owner = new SyntheticOrderScenario(fixture);
         await owner.InitializeAsync(orderStatus: "DELIVERING");
         await using var foreign = new SyntheticOrderScenario(fixture);
         await foreign.InitializeAsync(orderStatus: "DELIVERING");
 
-        var grant = await WithServiceAsync(service => service.IssueAsync(
-            new IssuePublicTrackingTokenCommand(
-                owner.UserId, owner.OrganizationId, owner.OrderId, "trk002-contract-owner-0001"),
-            CancellationToken.None));
+        var grant = await GetOrCreateAsync(owner, owner.OrderId, "trk002-contract-owner-0001");
         var before = await ReadTokenRowsAsync(owner.OrderId);
 
-        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() => WithServiceAsync(service =>
-            service.IssueAsync(
-                new IssuePublicTrackingTokenCommand(
+        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() => WithServiceAsync(Ring((1, KeyOne)), service =>
+            service.GetOrCreateAsync(
+                new GetOrCreatePublicTrackingLinkCommand(
                     foreign.UserId, foreign.OrganizationId, owner.OrderId, "trk002-contract-foreign-0001"),
                 CancellationToken.None)));
-        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() => WithServiceAsync(service =>
-            service.RotateAsync(
-                new RotatePublicTrackingTokenCommand(
-                    foreign.UserId, foreign.OrganizationId, owner.OrderId, "trk002-contract-foreign-0002"),
-                CancellationToken.None)));
-        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() => WithServiceAsync(async service =>
+        await Assert.ThrowsAsync<PublicTrackingTokenNotFoundException>(() => WithServiceAsync(Ring((1, KeyOne)), async service =>
         {
             await service.RevokeAsync(
                 new RevokePublicTrackingTokenCommand(
-                    foreign.UserId, foreign.OrganizationId, owner.OrderId, "trk002-contract-foreign-0003"),
+                    foreign.UserId, foreign.OrganizationId, owner.OrderId, "trk002-contract-foreign-0002"),
                 CancellationToken.None);
             return true;
         }));
@@ -150,20 +340,57 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
         Assert.Equal(1L, await CountTokenRowsAsTenantAsync(owner.UserId, owner.OrganizationId, owner.OrderId));
     }
 
-    /// <summary>
-    /// The audit names the token row it created. The audit redactor keeps well-formed UUIDs (AUD-001), so the
-    /// stored value is exactly the id.
-    /// </summary>
-    private static void AssertAuditTokenId(Guid tokenId, string payload)
+    private static PublicTrackingLinkKeyRing Ring(params (int Version, byte[] Key)[] keys)
     {
-        using var document = System.Text.Json.JsonDocument.Parse(payload);
-        Assert.Equal(
-            tokenId.ToString("D"),
-            document.RootElement.GetProperty("token_id").GetString(),
-            ignoreCase: true);
+        var options = new PublicTrackingOptions
+        {
+            Provider = PublicTrackingProviderKind.PostgreSql,
+            CurrentLinkKeyVersion = keys.Max(key => key.Version),
+        };
+        foreach (var (version, key) in keys)
+        {
+            options.LinkKeys[version] = Convert.ToBase64String(key);
+        }
+
+        var ring = new PublicTrackingLinkKeyRing(options, allowSyntheticKey: false);
+        Assert.True(ring.IsAvailable);
+        Assert.False(ring.IsSynthetic);
+        return ring;
     }
 
-    private async Task<T> WithServiceAsync<T>(Func<IPublicTrackingTokenService, Task<T>> operation)
+    private static void AssertAuditPayload(string payload, Guid tokenId, int generation, int keyVersion, int revokedCount)
+    {
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        Assert.Equal(tokenId.ToString("D"), root.GetProperty("token_id").GetString(), ignoreCase: true);
+        Assert.Equal(generation, root.GetProperty("generation").GetInt32());
+        Assert.Equal(keyVersion, root.GetProperty("key_version").GetInt32());
+        Assert.Equal(revokedCount, root.GetProperty("previous_tokens_revoked_count").GetInt32());
+        Assert.False(root.TryGetProperty("token", out _));
+        Assert.False(root.TryGetProperty("token_hash", out _));
+    }
+
+    private Task<PublicTrackingTokenGrant> GetOrCreateAsync(
+        SyntheticOrderScenario scenario,
+        Guid orderId,
+        string requestId,
+        PublicTrackingLinkKeyRing? ring = null) =>
+        WithServiceAsync(ring ?? Ring((1, KeyOne)), service => service.GetOrCreateAsync(
+            new GetOrCreatePublicTrackingLinkCommand(scenario.UserId, scenario.OrganizationId, orderId, requestId),
+            CancellationToken.None));
+
+    private Task RevokeAsync(SyntheticOrderScenario scenario, Guid orderId, string requestId) =>
+        WithServiceAsync(Ring((1, KeyOne)), async service =>
+        {
+            await service.RevokeAsync(
+                new RevokePublicTrackingTokenCommand(scenario.UserId, scenario.OrganizationId, orderId, requestId),
+                CancellationToken.None);
+            return true;
+        });
+
+    private async Task<T> WithServiceAsync<T>(
+        PublicTrackingLinkKeyRing ring,
+        Func<IPublicTrackingTokenService, Task<T>> operation)
     {
         var state = new TenantDatabaseExecutionState();
         var options = new DbContextOptionsBuilder<OrdersDbContext>()
@@ -176,25 +403,104 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
         var service = new PostgreSqlPublicTrackingTokenService(
             new TenantTransactionContext<OrdersDbContext>(context, state),
             new TrackingTokenHasher(),
+            ring,
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
-            Options.Create(new PublicTrackingOptions
-            {
-                Provider = PublicTrackingProviderKind.PostgreSql,
-                CommandTimeoutSeconds = 30,
-            }),
             new SystemClock());
         return await operation(service);
+    }
+
+    private async Task<OrderResult> CreateOrderAsync(SyntheticOrderScenario scenario, string idempotencyKey, string requestId)
+    {
+        var state = new TenantDatabaseExecutionState();
+        var options = new DbContextOptionsBuilder<OrdersDbContext>()
+            .UseNpgsql(fixture.AppDataSource)
+            .AddInterceptors(
+                new TenantTransactionGuardInterceptor(state),
+                new TenantSaveChangesGuardInterceptor(state))
+            .Options;
+        await using var context = new OrdersDbContext(options, state);
+        var coordinator = new QuoteSnapshotToOrderCoordinator(
+            new TenantTransactionContext<OrdersDbContext>(context, state),
+            new CryptographicOrderPublicIdGenerator(),
+            new NoOpOrderCreationFailureInjector(),
+            new PostgreSqlAppendOnlyAuditWriter(state),
+            new AuditPayloadRedactor(),
+            Options.Create(new OrdersOptions
+            {
+                Provider = OrdersProviderKind.PostgreSql,
+                CommandTimeoutSeconds = 30,
+                PageSize = 2,
+                IdempotencyLifetimeMinutes = 60,
+                PublicIdCollisionRetryCount = 2,
+            }),
+            new SystemClock(),
+            new PostgreSqlOrderTrackingLinkIssuer(
+                new TrackingTokenHasher(),
+                Ring((1, KeyOne)),
+                new PostgreSqlAppendOnlyAuditWriter(state),
+                new AuditPayloadRedactor()));
+        return await coordinator.CreateAsync(
+            new CreateOrderCommand(
+                scenario.UserId,
+                scenario.OrganizationId,
+                idempotencyKey,
+                scenario.QuoteId,
+                "SENDER",
+                new OrderAcceptanceInput("terms-synthetic-v1", "privacy-synthetic-v1", AcceptedAtClient, "WEB"),
+                requestId),
+            CancellationToken.None);
+    }
+
+    private async Task<DateTimeOffset> DatabaseNowAsync()
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand("SELECT clock_timestamp();");
+        var value = await command.ExecuteScalarAsync();
+        return value switch
+        {
+            DateTime dateTime => new DateTimeOffset(DateTime.SpecifyKind(dateTime, DateTimeKind.Utc)),
+            DateTimeOffset offset => offset,
+            _ => throw new InvalidOperationException("No database clock."),
+        };
+    }
+
+    private static Task SetStatusAsync(SyntheticOrderScenario scenario, string status) =>
+        scenario.ExecuteAdminAsync(
+            "UPDATE orders.orders SET status=@status WHERE id=@order;",
+            SyntheticOrderScenario.P("status", status),
+            SyntheticOrderScenario.P("order", scenario.OrderId));
+
+    /// <summary>What the productive transition writes: the new status and its ORDER_STATUS_CHANGED public event.</summary>
+    private static async Task FinishAsync(
+        SyntheticOrderScenario scenario,
+        string status,
+        string publicEventCode,
+        DateTimeOffset occurredAt)
+    {
+        await SetStatusAsync(scenario, status);
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO orders.order_events(id,order_id,owner_org_id,aggregate_version,event_type,public_event_code,payload,occurred_at)
+            VALUES (gen_random_uuid(),@order,@org,
+              (SELECT COALESCE(max(aggregate_version),0)+1 FROM orders.order_events WHERE order_id=@order),
+              'ORDER_STATUS_CHANGED',@code,jsonb_build_object('new_status',@status::text),@at);
+            """,
+            SyntheticOrderScenario.P("order", scenario.OrderId),
+            SyntheticOrderScenario.P("org", scenario.OrganizationId),
+            SyntheticOrderScenario.P("code", publicEventCode),
+            SyntheticOrderScenario.P("status", status),
+            SyntheticOrderScenario.P("at", occurredAt));
     }
 
     private async Task<IReadOnlyList<TokenRow>> ReadTokenRowsAsync(Guid orderId)
     {
         await using var command = fixture.AdminDataSource.CreateCommand(
             """
-            SELECT id, token_hash, revoked_at IS NOT NULL, pg_catalog.to_jsonb(t)::text
+            SELECT id, token_hash, revoked_at IS NOT NULL, generation, key_version, expires_at='infinity',
+                   pg_catalog.to_jsonb(t)::text
             FROM orders.public_tracking_tokens t
             WHERE order_id=@order
-            ORDER BY created_at, id;
+            ORDER BY generation, created_at, id;
             """);
         command.Parameters.AddWithValue("order", orderId);
         var rows = new List<TokenRow>();
@@ -205,7 +511,10 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
                 reader.GetGuid(0),
                 reader.GetFieldValue<byte[]>(1),
                 reader.GetBoolean(2),
-                reader.GetString(3)));
+                reader.GetInt32(3),
+                reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                reader.GetBoolean(5),
+                reader.GetString(6)));
         }
 
         return rows;
@@ -285,20 +594,30 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
             return null;
         }
 
-        using var document = System.Text.Json.JsonDocument.Parse((string)result);
+        using var document = JsonDocument.Parse((string)result);
         return document.RootElement.TryGetProperty("public_id", out _) ? "public_id" : "unexpected";
     }
 
-    private sealed record TokenRow(Guid Id, byte[] Hash, bool Revoked, string Json)
+    private sealed record TokenRow(
+        Guid Id,
+        byte[] Hash,
+        bool Revoked,
+        int Generation,
+        int? KeyVersion,
+        bool ExpiresAtInfinity,
+        string Json)
     {
         public bool Equals(TokenRow? other) =>
             other is not null &&
             Id == other.Id &&
             Hash.AsSpan().SequenceEqual(other.Hash) &&
             Revoked == other.Revoked &&
+            Generation == other.Generation &&
+            KeyVersion == other.KeyVersion &&
+            ExpiresAtInfinity == other.ExpiresAtInfinity &&
             Json == other.Json;
 
-        public override int GetHashCode() => HashCode.Combine(Id, Revoked, Json);
+        public override int GetHashCode() => HashCode.Combine(Id, Revoked, Generation, Json);
     }
 
     private sealed record AuditRow(

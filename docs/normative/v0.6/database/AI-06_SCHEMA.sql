@@ -374,6 +374,11 @@ CREATE TABLE orders.order_events (
 CREATE INDEX order_events_tenant_order_time_idx ON orders.order_events(owner_org_id,order_id,occurred_at);
 CREATE INDEX order_events_operator_time_idx ON orders.order_events(operator_org_id,occurred_at) WHERE operator_org_id IS NOT NULL;
 
+-- TRK-002-AUTO-LINK: a link is derived as HMAC-SHA256(key, "paquetenvia-trk-v1|key_version|order_id|generation")
+-- and only the SHA-256 of the token is stored. generation starts at 1 and a revoked generation is never derived
+-- again; key_version names the Key Vault key version (NULL: a random token issued before TRK-002-AUTO-LINK).
+-- Derived links store expires_at='infinity': security.get_public_tracking_projection ends them 24 hours after the
+-- order first reaches a final public status. expires_at stays the hard ceiling of pre-derivation tokens.
 CREATE TABLE orders.public_tracking_tokens (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id uuid NOT NULL REFERENCES orders.orders(id),
@@ -381,9 +386,16 @@ CREATE TABLE orders.public_tracking_tokens (
   token_hash bytea NOT NULL UNIQUE CHECK (octet_length(token_hash)=32),
   expires_at timestamptz NOT NULL,
   revoked_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  generation integer NOT NULL DEFAULT 1 CONSTRAINT public_tracking_tokens_generation_check CHECK (generation >= 1),
+  key_version integer CONSTRAINT public_tracking_tokens_key_version_check CHECK (key_version IS NULL OR key_version BETWEEN 1 AND 32767)
 );
 CREATE INDEX tracking_tokens_order_idx ON orders.public_tracking_tokens(order_id);
+-- TRK-002-AUTO-LINK: each derived generation exists once, and an order has at most one live derived link.
+CREATE UNIQUE INDEX tracking_tokens_order_generation_uq
+  ON orders.public_tracking_tokens(order_id,generation) WHERE key_version IS NOT NULL;
+CREATE UNIQUE INDEX tracking_tokens_one_active_derived_uq
+  ON orders.public_tracking_tokens(order_id) WHERE key_version IS NOT NULL AND revoked_at IS NULL;
 
 
 CREATE TABLE orders.order_acceptances (
@@ -858,7 +870,16 @@ BEGIN
   WHERE t.token_hash=extensions.digest(pg_catalog.convert_to(p_token,'UTF8'),'sha256')
     AND t.revoked_at IS NULL
     AND t.expires_at > clock_timestamp()
-    AND security.map_public_order_status(o.status) IS NOT NULL;
+    AND security.map_public_order_status(o.status) IS NOT NULL
+    -- TRK-002-AUTO-LINK: valid while the order is in progress, then for 24 hours after the first event that took
+    -- it to DELIVERED, RETURNED or CANCELLED (public statuses that cannot be left). No such event: fail closed.
+    AND (security.map_public_order_status(o.status) NOT IN ('DELIVERED','RETURNED','CANCELLED')
+      OR clock_timestamp() < (
+        SELECT min(f.occurred_at)
+        FROM orders.order_events f
+        WHERE f.order_id=o.id
+          AND f.public_event_code IN ('DELIVERED','RETURNED','CANCELLED')
+      ) + interval '24 hours');
   RETURN v_result;
 END $$;
 

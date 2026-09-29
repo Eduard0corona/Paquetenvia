@@ -51,8 +51,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
         ("Pricing", "__ef_migrations_history_pricing", HardenMasterDataLoaderOperatorBoundary.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000400_HardenMasterDataLoaderOperatorBoundary.cs"),
-        ("Orders", "__ef_migrations_history_orders", AddOrderLifecycleFinalizationExecutor.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddTrackingLinkGenerations.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260929000100_AddTrackingLinkGenerations.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
@@ -68,8 +68,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
         // Runs last: it re-establishes the AI-06 bootstrap functions after every module lane.
         ("PlatformEvolution", PlatformEvolutionSchema.MigrationsHistoryTable,
-            ApplyPilotContractDeltas.MigrationId,
-            "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations/20260927000100_ApplyPilotContractDeltas.cs"),
+            BoundTrackingLinksToOrderLifecycle.MigrationId,
+            "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations/20260929000200_BoundTrackingLinksToOrderLifecycle.cs"),
     ];
 
     public static IReadOnlyList<ModuleMigrationState> VerifySources()
@@ -116,12 +116,17 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // LIF-001/ADR-034: the lane only adds the lifecycle executor and its function; every
-                // finalized_at it writes is a lifecycle fact, so its rollback fails closed.
+                // TRK-002-AUTO-LINK: the lane only adds the two link-generation columns and their two partial
+                // unique indexes (or adopts the AI-06 ones); generations keep revoked links from coming back, so
+                // its rollback fails closed. LIF-001 is verified below with its own fail-closed rollback.
                 "Orders" =>
-                    source.Contains("LIF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
+                    source.Contains("TRK002_GENERATION_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+                    !source.Contains("UPDATE orders", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
@@ -155,18 +160,12 @@ internal sealed class ModuleMigrationCoordinator
                 "DataProtection" =>
                     source.Contains("SCL001_SCHEMA_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
-                // Pilot contract deltas: bootstrap function bodies, bootstrap column grants and indexes
-                // only. No table, role or row is created, dropped or rewritten in either direction.
+                // TRK-002-AUTO-LINK: only the tracking projection body, with the lifecycle bound; without it
+                // derived links would never end, so its rollback fails closed. The pilot deltas before it are
+                // verified below with their own rule.
                 "PlatformEvolution" =>
-                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("UPDATE ", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                    source.Contains("TRK002_LIFECYCLE_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
+                    IsPlatformEvolutionSource(source),
                 _ =>
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
@@ -185,6 +184,16 @@ internal sealed class ModuleMigrationCoordinator
                 "VERIFIED"));
         }
 
+        VerifyFailClosedSource(
+            root,
+            "Orders",
+            AddOrderLifecycleFinalizationExecutor.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260925020000_AddOrderLifecycleFinalizationExecutor.cs",
+            "LIF001_SCHEMA_DOWNGRADE_NOT_SUPPORTED");
+        VerifyPlatformEvolutionSource(
+            root,
+            ApplyPilotContractDeltas.MigrationId,
+            "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations/20260927000100_ApplyPilotContractDeltas.cs");
         VerifyAdoptionSource(
             root,
             "Identity",
@@ -463,6 +472,7 @@ internal sealed class ModuleMigrationCoordinator
                     AdoptCanonicalOrdersBaseline.MigrationId,
                     AddRealtimeResynchronizationCursor.MigrationId,
                     AddOrderLifecycleFinalizationExecutor.MigrationId,
+                    AddTrackingLinkGenerations.MigrationId,
                 ],
             "Notifications" =>
                 [
@@ -489,6 +499,8 @@ internal sealed class ModuleMigrationCoordinator
                 [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
+            "PlatformEvolution" =>
+                [ApplyPilotContractDeltas.MigrationId, BoundTrackingLinksToOrderLifecycle.MigrationId],
             _ => [contract.MigrationId],
         };
         var status = ids.SequenceEqual(expectedIds, StringComparer.Ordinal)
@@ -570,6 +582,38 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Platform evolution steps change bootstrap function bodies, bootstrap column grants and indexes only. No
+    /// table, role or row is created, dropped or rewritten in either direction.
+    /// </summary>
+    private static bool IsPlatformEvolutionSource(string source) =>
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>An earlier platform evolution migration that must keep its reviewed shape.</summary>
+    private static void VerifyPlatformEvolutionSource(string root, string migrationId, string sourcePath)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException("PlatformEvolution evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) || !IsPlatformEvolutionSource(source))
+        {
+            throw new BaselineVerificationException(
+                "PlatformEvolution evolution migration is destructive or has an unexpected identifier.");
+        }
+    }
 
     /// <summary>An earlier Pricing lane migration that must keep its reviewed shape.</summary>
     private static void VerifyPricingSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)
