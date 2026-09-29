@@ -60,6 +60,8 @@ public static class DependencyInjection
         // TRK-002-AUTO-LINK: only Development and Testing may derive links with the synthetic runtime key or build
         // them on an http loopback origin.
         var allowSyntheticLinkKey = environment.IsDevelopment() || environment.IsEnvironment("Testing");
+        var baseUrlPolicy = new PublicTrackingBaseUrlPolicy(allowLoopbackHttp: allowSyntheticLinkKey);
+        services.AddSingleton(baseUrlPolicy);
         var section = configuration.GetSection(PublicTrackingOptions.SectionName);
         services
             .AddOptions<PublicTrackingOptions>()
@@ -69,10 +71,10 @@ public static class DependencyInjection
             .Validate(options => options.CommandTimeoutSeconds is >= 1 and <= 60,
                 "PublicTracking:CommandTimeoutSeconds must be between 1 and 60.")
             .Validate(options => options.Provider != PublicTrackingProviderKind.PostgreSql ||
-                    PublicTrackingLinkPolicy.IsValidPublicBaseUrl(options.PublicBaseUrl, allowSyntheticLinkKey),
+                    baseUrlPolicy.IsValid(options.PublicBaseUrl),
                 "PublicTracking:Provider=PostgreSql requires PublicTracking:PublicBaseUrl, an absolute https origin.")
             .Validate(options => options.PublicBaseUrl is null ||
-                    PublicTrackingLinkPolicy.IsValidPublicBaseUrl(options.PublicBaseUrl, allowSyntheticLinkKey),
+                    baseUrlPolicy.IsValid(options.PublicBaseUrl),
                 "PublicTracking:PublicBaseUrl must be an absolute https origin without path, query or fragment.")
             .Validate(options => options.Provider != PublicTrackingProviderKind.PostgreSql ||
                     options.LinkKeys.Count > 0 ||

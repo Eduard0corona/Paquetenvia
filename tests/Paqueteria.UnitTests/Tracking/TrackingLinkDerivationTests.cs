@@ -242,13 +242,73 @@ public sealed class TrackingLinkDerivationTests
     public void Public_url_is_the_base_origin_track_and_the_token()
     {
         var token = TrackingLinkTokenDerivation.DeriveToken(Key, 1, OrderId, 1);
-        Assert.Equal($"https://paquetenvia.com/track/{token}", PublicTrackingLinkPolicy.BuildUrl("https://paquetenvia.com", token));
-        Assert.Equal($"https://paquetenvia.com/track/{token}", PublicTrackingLinkPolicy.BuildUrl("https://paquetenvia.com/", token));
-        Assert.Throws<ArgumentException>(() => PublicTrackingLinkPolicy.BuildUrl("https://paquetenvia.com", "short"));
-        Assert.Throws<ArgumentException>(() => PublicTrackingLinkPolicy.BuildUrl("ftp://paquetenvia.com", token));
+        foreach (var allowLoopbackHttp in new[] { false, true })
+        {
+            Assert.Equal(
+                $"https://paquetenvia.com/track/{token}",
+                PublicTrackingLinkPolicy.BuildUrl("https://paquetenvia.com", token, allowLoopbackHttp));
+            Assert.Equal(
+                $"https://paquetenvia.com/track/{token}",
+                PublicTrackingLinkPolicy.BuildUrl("https://paquetenvia.com/", token, allowLoopbackHttp));
+            Assert.Throws<ArgumentException>(() =>
+                PublicTrackingLinkPolicy.BuildUrl("https://paquetenvia.com", "short", allowLoopbackHttp));
+            Assert.Throws<ArgumentException>(() =>
+                PublicTrackingLinkPolicy.BuildUrl("ftp://paquetenvia.com", token, allowLoopbackHttp));
+            Assert.Throws<ArgumentException>(() =>
+                PublicTrackingLinkPolicy.BuildUrl("http://paquetenvia.com", token, allowLoopbackHttp));
+        }
+
         Assert.False(PublicTrackingLinkPolicy.IsValidPublicBaseUrl("http://127.0.0.1:3000"));
         Assert.True(PublicTrackingLinkPolicy.IsValidPublicBaseUrl("http://127.0.0.1:3000", allowLoopbackHttp: true));
         Assert.False(PublicTrackingLinkPolicy.IsValidPublicBaseUrl("http://paquetenvia.com", allowLoopbackHttp: true));
+    }
+
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Staging")]
+    [InlineData("DevSynthetic")]
+    public void Outside_development_and_testing_an_http_loopback_base_never_builds_a_link(string environment)
+    {
+        var token = TrackingLinkTokenDerivation.DeriveToken(Key, 1, OrderId, 1);
+        var policy = ResolveBaseUrlPolicy(environment);
+        Assert.False(policy.AllowLoopbackHttp);
+        foreach (var baseUrl in new[] { "http://127.0.0.1:3000", "http://localhost:3000", "http://[::1]:3000" })
+        {
+            Assert.False(policy.IsValid(baseUrl));
+            Assert.Throws<ArgumentException>(() => policy.BuildUrl(baseUrl, token));
+            Assert.Throws<ArgumentException>(() =>
+                PublicTrackingLinkPolicy.BuildUrl(baseUrl, token, allowLoopbackHttp: false));
+        }
+
+        Assert.Equal($"https://paquetenvia.com/track/{token}", policy.BuildUrl("https://paquetenvia.com", token));
+    }
+
+    [Theory]
+    [InlineData("Development")]
+    [InlineData("Testing")]
+    public void Development_and_testing_build_links_on_an_http_loopback_base(string environment)
+    {
+        var token = TrackingLinkTokenDerivation.DeriveToken(Key, 1, OrderId, 1);
+        var policy = ResolveBaseUrlPolicy(environment);
+        Assert.True(policy.AllowLoopbackHttp);
+        Assert.Equal($"http://127.0.0.1:3000/track/{token}", policy.BuildUrl("http://127.0.0.1:3000", token));
+        Assert.Equal($"http://127.0.0.1:3000/track/{token}", policy.BuildUrl("http://127.0.0.1:3000/", token));
+        Assert.Equal($"https://paquetenvia.com/track/{token}", policy.BuildUrl("https://paquetenvia.com", token));
+
+        // Only loopback: a public http host is refused even here.
+        Assert.Throws<ArgumentException>(() => policy.BuildUrl("http://paquetenvia.com", token));
+    }
+
+    private static PublicTrackingBaseUrlPolicy ResolveBaseUrlPolicy(string environmentName)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Paqueteria"] = "Host=127.0.0.1;Database=unused;Username=unused",
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddOrdersInfrastructure(configuration, new HostingEnvironment { EnvironmentName = environmentName });
+        using var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<PublicTrackingBaseUrlPolicy>();
     }
 
     private static PublicTrackingLinkKeyRing Resolve(string environmentName, Dictionary<string, string?> values)

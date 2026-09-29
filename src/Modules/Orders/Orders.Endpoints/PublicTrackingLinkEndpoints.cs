@@ -62,6 +62,7 @@ public static class PublicTrackingLinkEndpoints
         ITenantContext tenantContext,
         IPublicTrackingTokenService service,
         IOptions<PublicTrackingOptions> options,
+        PublicTrackingBaseUrlPolicy baseUrlPolicy,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) || orderId == Guid.Empty)
@@ -79,8 +80,10 @@ public static class PublicTrackingLinkEndpoints
             return denied;
         }
 
+        // Fail closed before any token is issued: a base this environment does not accept (http outside
+        // Development and Testing) never becomes a link.
         var publicBaseUrl = options.Value.PublicBaseUrl;
-        if (publicBaseUrl is null)
+        if (publicBaseUrl is null || !baseUrlPolicy.IsValid(publicBaseUrl))
         {
             return Unavailable();
         }
@@ -123,7 +126,7 @@ public static class PublicTrackingLinkEndpoints
         headers.Pragma = "no-cache";
         headers["Referrer-Policy"] = "no-referrer";
         return Results.Json(
-            PublicTrackingLinkResponse.From(grant, publicBaseUrl),
+            PublicTrackingLinkResponse.From(grant, publicBaseUrl, baseUrlPolicy),
             statusCode: StatusCodes.Status200OK);
     }
 
@@ -224,14 +227,18 @@ public sealed record PublicTrackingLinkResponse(
     [property: JsonPropertyName("generation")] int Generation,
     [property: JsonPropertyName("valid_until")] DateTimeOffset? ValidUntil)
 {
-    public static PublicTrackingLinkResponse From(PublicTrackingTokenGrant grant, string publicBaseUrl)
+    public static PublicTrackingLinkResponse From(
+        PublicTrackingTokenGrant grant,
+        string publicBaseUrl,
+        PublicTrackingBaseUrlPolicy baseUrlPolicy)
     {
         ArgumentNullException.ThrowIfNull(grant);
+        ArgumentNullException.ThrowIfNull(baseUrlPolicy);
         return new PublicTrackingLinkResponse(
             grant.TokenId,
             grant.OrderId,
             grant.Token,
-            PublicTrackingLinkPolicy.BuildUrl(publicBaseUrl, grant.Token),
+            baseUrlPolicy.BuildUrl(publicBaseUrl, grant.Token),
             grant.Generation,
             grant.ValidUntil);
     }

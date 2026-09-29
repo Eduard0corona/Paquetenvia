@@ -41,11 +41,13 @@ public static class PublicTrackingLinkPolicy
 
     /// <summary>
     /// The public page of a token: <c>{PublicBaseUrl}/track/{token}</c>. The base is validated at start with
-    /// <see cref="IsValidPublicBaseUrl"/>; here it only has to be an absolute http(s) origin.
+    /// <see cref="IsValidPublicBaseUrl"/> and again here, on its own: <paramref name="allowLoopbackHttp"/> is the
+    /// same Development/Testing decision the start validation uses (<see cref="PublicTrackingBaseUrlPolicy"/>), so
+    /// outside those environments an http base, loopback or not, throws and no link is built.
     /// </summary>
-    public static string BuildUrl(string publicBaseUrl, string token)
+    public static string BuildUrl(string publicBaseUrl, string token, bool allowLoopbackHttp)
     {
-        if (!IsValidPublicBaseUrl(publicBaseUrl, allowLoopbackHttp: true))
+        if (!IsValidPublicBaseUrl(publicBaseUrl, allowLoopbackHttp))
         {
             throw new ArgumentException("The public tracking base URL is invalid.", nameof(publicBaseUrl));
         }
@@ -73,4 +75,23 @@ public static class PublicTrackingLinkPolicy
         !string.IsNullOrEmpty(uri.Host) &&
         string.IsNullOrEmpty(uri.UserInfo) &&
         uri.AbsolutePath == "/";
+}
+
+/// <summary>
+/// TRK-002-AUTO-LINK: the environment decision for public tracking base URLs. Only Development and Testing may use an
+/// http loopback origin; every other environment requires https. Orders' DependencyInjection creates the one
+/// instance from the host environment, with the same flag that allows the synthetic link key, and both the start
+/// validation and <see cref="PublicTrackingLinkPolicy.BuildUrl"/> read it. It is never bound from configuration.
+/// </summary>
+public sealed class PublicTrackingBaseUrlPolicy
+{
+    public PublicTrackingBaseUrlPolicy(bool allowLoopbackHttp) => AllowLoopbackHttp = allowLoopbackHttp;
+
+    public bool AllowLoopbackHttp { get; }
+
+    public bool IsValid(string? publicBaseUrl) =>
+        PublicTrackingLinkPolicy.IsValidPublicBaseUrl(publicBaseUrl, AllowLoopbackHttp);
+
+    public string BuildUrl(string publicBaseUrl, string token) =>
+        PublicTrackingLinkPolicy.BuildUrl(publicBaseUrl, token, AllowLoopbackHttp);
 }

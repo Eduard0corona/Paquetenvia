@@ -99,7 +99,8 @@ public sealed class PublicTrackingLinkImplementationContractTests
         const string token = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
         var grant = new Orders.Application.Tracking.PublicTrackingTokenGrant(
             Guid.NewGuid(), Guid.NewGuid(), token, 2, DateTimeOffset.UnixEpoch);
-        var response = PublicTrackingLinkResponse.From(grant, "https://paquetenvia.com");
+        var response = PublicTrackingLinkResponse.From(
+            grant, "https://paquetenvia.com", new Orders.Application.Tracking.PublicTrackingBaseUrlPolicy(allowLoopbackHttp: false));
         Assert.Equal($"https://paquetenvia.com/track/{token}", response.Url);
         Assert.Matches(schema.Mapping("properties").Mapping("url").Scalar("pattern"), response.Url);
         Assert.Equal(2, response.Generation);
