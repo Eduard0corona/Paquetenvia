@@ -921,7 +921,11 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
             ("function", AddMasterDataLoader.FunctionSignature));
         var expected = HardenMasterDataLoaderOperatorBoundary.FunctionSql;
-        Assert.Equal(FunctionBody(expected), installed);
+        // The installed function is the GATE-011 VAT_INCLUDED step's, which keeps every hardening edit (see
+        // New_tariff_rules_must_be_VAT_INCLUDED_and_a_stored_rule_in_another_tax_mode_can_still_be_closed).
+        Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), installed);
+        Assert.All(HardenMasterDataLoaderOperatorBoundary.FunctionEdits, edit =>
+            Assert.Contains(edit.Replacement, installed, StringComparison.Ordinal));
         Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
         Assert.Contains(HardenMasterDataLoaderOperatorBoundary.OperatorRefTable, installed, StringComparison.Ordinal);
         Assert.DoesNotContain(AddMasterDataLoader.OperatorReferencePrefix, installed, StringComparison.Ordinal);
@@ -1172,6 +1176,172 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
     }
 
     [PostgreSqlContractFact]
+    public async Task New_tariff_rules_must_be_VAT_INCLUDED_and_a_stored_rule_in_another_tax_mode_can_still_be_closed()
+    {
+        // GATE-011-VAT-INCLUDED-2026-09-29: every organization presents prices with IVA included, so a load never
+        // creates a PLUS_VAT or EXEMPT rule (the job and a direct call are both refused and nothing is written).
+        var organization = await NewOrganizationAsync();
+        var suffix = Suffix();
+        await EnsureCityAsync(suffix);
+        foreach (var (index, taxMode) in new[] { (0, "EXEMPT"), (1, "PLUS_VAT") })
+        {
+            var refusedDocument = Document(organization, suffix);
+            refusedDocument["tariff_rules"]![index]!["tax_mode"] = taxMode;
+            var refused = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(refusedDocument, organization));
+            Assert.Equal(MasterDataLoader.DatabaseExitCode, refused.ExitCode);
+            Assert.Contains(
+                $"{RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed} at tariff_rules[{index + 1}]",
+                refused.Message);
+            await SetGateAsync(Synthetic, false);
+            foreach (var dryRun in new[] { true, false })
+            {
+                var direct = await Assert.ThrowsAsync<PostgresException>(
+                    () => CallFunctionAsync(organization, refusedDocument.ToJsonString(), dryRun));
+                Assert.Equal(RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed, direct.MessageText);
+                Assert.Equal($"tariff_rules[{index + 1}]", direct.Hint);
+            }
+
+            Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
+        }
+
+        Assert.Equal(0, await ScalarAsync<long>(
+            "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org", ("org", organization)));
+
+        // The same file with VAT_INCLUDED rules loads.
+        var document = Document(organization, suffix);
+        var loaded = await LoadAsync(document, organization);
+        Assert.Contains("tariff_rules: created=2 updated=0 unchanged=0", loaded.Output);
+        Assert.Equal("VAT_INCLUDED,VAT_INCLUDED", await ScalarAsync<string>(
+            "SELECT string_agg(tax_mode, ',' ORDER BY tax_mode) FROM pricing.tariff_rules WHERE owner_org_id=@org",
+            ("org", organization)));
+
+        // A rule stored before the decision keeps its tax mode (no stored row is rewritten) and can still be
+        // reloaded to close it; its tax mode stays immutable like its amount.
+        var legacyRule = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO pricing.tariff_rules(id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,
+              service_type,amount_cents,tax_mode,active_from,active_to,status,policy_version)
+            SELECT @id,@org,c.id,NULL,NULL,'OCCASIONAL','SCHEDULED_ROUTE',9900,'EXEMPT','2026-01-01T00:00:00Z',NULL,
+              'ACTIVE','synthetic-v1'
+            FROM locations.cities c WHERE c.name=@city AND c.state_code='SIN' AND c.country_code='MX'
+            """,
+            ("id", legacyRule), ("org", organization), ("city", CityName(suffix)));
+        var closing = Document(organization, suffix);
+        closing["tariff_rules"]!.AsArray().Add(
+            Tariff(suffix, "SCHEDULED_ROUTE", 9900, "2026-01-01T00:00:00Z", "2026-10-01T00:00:00Z"));
+        closing["tariff_rules"]![2]!["tax_mode"] = "EXEMPT";
+        var closed = await LoadAsync(closing, organization);
+        Assert.Contains("tariff_rules: created=0 updated=1 unchanged=2", closed.Output);
+        Assert.Equal("EXEMPT|2026-10-01 00:00:00+00", await ScalarAsync<string>(
+            "SELECT tax_mode || '|' || (active_to AT TIME ZONE 'UTC')::text || '+00' FROM pricing.tariff_rules WHERE id=@id",
+            ("id", legacyRule)));
+
+        var rewritten = Document(organization, suffix);
+        rewritten["tariff_rules"]!.AsArray().Add(
+            Tariff(suffix, "SCHEDULED_ROUTE", 9900, "2026-01-01T00:00:00Z", "2026-10-01T00:00:00Z"));
+        var immutable = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(rewritten, organization));
+        Assert.Contains("MDM001_TARIFF_AMOUNT_IMMUTABLE at tariff_rules[3]", immutable.Message);
+        Assert.Equal("EXEMPT", await ScalarAsync<string>(
+            "SELECT tax_mode FROM pricing.tariff_rules WHERE id=@id", ("id", legacyRule)));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task The_loader_function_differs_from_the_hardened_one_only_by_the_reviewed_VAT_INCLUDED_edit()
+    {
+        var installed = await ScalarAsync<string>(
+            "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
+            ("function", AddMasterDataLoader.FunctionSignature));
+        var expected = RequireVatIncludedTariffsInMasterDataLoader.FunctionSql;
+        Assert.Equal(FunctionBody(expected), installed);
+        Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed, installed, StringComparison.Ordinal);
+        Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.DecisionId, installed, StringComparison.Ordinal);
+        Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
+        Assert.Contains(StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError, installed, StringComparison.Ordinal);
+        // The AI-06 vocabulary is still validated for every rule (a stored rule may be reloaded).
+        Assert.Contains("v_tax_mode NOT IN ('PLUS_VAT','VAT_INCLUDED','EXEMPT')", installed, StringComparison.Ordinal);
+
+        // Undoing the single edit gives back the hardening step's function byte for byte.
+        var edit = Assert.Single(RequireVatIncludedTariffsInMasterDataLoader.FunctionEdits);
+        Assert.Equal(1, Occurrences(expected, edit.Replacement));
+        Assert.Equal(
+            HardenMasterDataLoaderOperatorBoundary.FunctionSql,
+            expected.Replace(edit.Replacement, edit.Published, StringComparison.Ordinal));
+        Assert.Equal(1, Occurrences(expected, "INSERT INTO platform.audit_logs"));
+        Assert.DoesNotContain("platform.audit_logs", edit.Replacement, StringComparison.Ordinal);
+        // No grant of its own: apart from the published function ACL it re-applies, neither direction grants or
+        // revokes anything, so the executor keeps the hardening step's 122 column grants.
+        foreach (var sql in new[] { RequireVatIncludedTariffsInMasterDataLoader.UpSql, RequireVatIncludedTariffsInMasterDataLoader.DownSql })
+        {
+            var withoutAcl = sql.Replace(StoreTariffPolicyVersionInMasterDataLoader.FunctionAclSql, string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("GRANT ", withoutAcl, StringComparison.Ordinal);
+            Assert.DoesNotContain("REVOKE ", withoutAcl, StringComparison.Ordinal);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task VAT_INCLUDED_loader_step_rolls_back_and_reapplies_on_real_postgresql()
+    {
+        var connectionString = await fixture.CreateIsolatedDatabaseAsync("gate011vat");
+        try
+        {
+            var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+            await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+            await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
+            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            var rule = Guid.NewGuid();
+            await ExecuteAsync(connectionString, $"""
+                INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
+                  VALUES ('{rule}','MDM Sintética','MDM Sintética','ALLY');
+                INSERT INTO locations.cities(id,country_code,state_code,name,timezone,status)
+                  VALUES ('{rule}','MX','SIN','GATE-011 Synthetic City','America/Mazatlan','ACTIVE');
+                INSERT INTO pricing.tariff_rules(id,owner_org_id,city_id,pricing_tier,service_type,amount_cents,tax_mode,
+                  active_from,status,policy_version)
+                  VALUES ('{rule}','{rule}','{rule}','OCCASIONAL','SAME_DAY',5200,'VAT_INCLUDED',now(),'ACTIVE','synthetic-v1');
+                """);
+
+            // Down to the hardening step: its function, ACL and 122 grants; loaded rules stay untouched.
+            await MigratePricingAsync(connectionString, HardenMasterDataLoaderOperatorBoundary.MigrationId);
+            Assert.Equal(FunctionBody(HardenMasterDataLoaderOperatorBoundary.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal("5200|VAT_INCLUDED", await ScalarAsync<string>(connectionString,
+                $"SELECT amount_cents || '|' || tax_mode FROM pricing.tariff_rules WHERE id='{rule}'"));
+            Assert.Equal("PENDING", (await new ModuleMigrationCoordinator().PlanAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+
+            // Up again reinstalls the VAT_INCLUDED function.
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal("5200|VAT_INCLUDED", await ScalarAsync<string>(connectionString,
+                $"SELECT amount_cents || '|' || tax_mode FROM pricing.tariff_rules WHERE id='{rule}'"));
+            Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+        }
+        finally
+        {
+            await fixture.DropIsolatedDatabaseAsync(connectionString);
+        }
+    }
+
+    [PostgreSqlContractFact]
     public async Task Hardening_step_rolls_back_and_reapplies_on_real_postgresql_keeping_references_and_audit()
     {
         var connectionString = await fixture.CreateIsolatedDatabaseAsync("mdmharden");
@@ -1181,7 +1351,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
             await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
-            Assert.Equal(FunctionBody(HardenMasterDataLoaderOperatorBoundary.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
 
             // A reference and an audit row in the former hash format (append-only): neither is touched by the lane.
             var organization = Guid.NewGuid();
@@ -1214,10 +1384,14 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 await transaction.RollbackAsync();
             }
 
-            // Up again adopts the existing table and reinstalls the hardened function and the four grants.
-            await MigratePricingAsync(connectionString, null);
+            // Up again adopts the existing table and reinstalls the hardened function and the four grants (then
+            // the GATE-011 VAT_INCLUDED step on top of it).
+            await MigratePricingAsync(connectionString, HardenMasterDataLoaderOperatorBoundary.MigrationId);
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
             Assert.Equal(FunctionBody(HardenMasterDataLoaderOperatorBoundary.FunctionSql), await LoaderSourceAsync(connectionString));
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
             Assert.Equal(reference, await ScalarAsync<Guid>(connectionString,
                 "SELECT operator_ref FROM platform.master_data_operator_refs WHERE operator_login='paqueteria_mdm_x2_login'"));
             Assert.Equal(legacy, await ScalarAsync<string>(connectionString,
@@ -1425,7 +1599,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         ["pricing_tier"] = "OCCASIONAL",
         ["service_type"] = serviceType,
         ["amount_cents"] = amount,
-        ["tax_mode"] = "EXEMPT",
+        ["tax_mode"] = "VAT_INCLUDED",
         ["policy_version"] = "synthetic-v1",
         ["active_from"] = from,
         ["active_to"] = to,

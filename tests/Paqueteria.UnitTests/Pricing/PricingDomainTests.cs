@@ -101,22 +101,112 @@ public sealed class PricingDomainTests
         Assert.Equal(TariffEvaluationFailure.NoRule, Evaluate([]).Failure);
     }
 
+    // GATE-011-VAT-INCLUDED-2026-09-29: only VAT_INCLUDED is quoted, the same for every organization.
     [Theory]
     [InlineData(TaxMode.PlusVat)]
-    [InlineData(TaxMode.VatIncluded)]
+    [InlineData(TaxMode.Exempt)]
     public void Unapproved_tax_modes_fail_closed(TaxMode taxMode) =>
         Assert.Equal(TariffEvaluationFailure.TaxModeBlocked, Evaluate([Rule(taxMode: taxMode)]).Failure);
 
     [Fact]
-    public void Exempt_calculation_uses_int64_cents_and_zero_tax()
+    public void An_unapproved_tax_mode_on_the_most_specific_rule_is_not_skipped_for_a_less_specific_one()
     {
-        var result = Evaluate([Rule(amount: long.MaxValue)]);
+        var city = Rule();
+        var zone = Rule(serviceArea: AreaId, operatingZone: ZoneId, taxMode: TaxMode.Exempt);
+        Assert.Equal(TariffEvaluationFailure.TaxModeBlocked, Evaluate([city, zone]).Failure);
+    }
+
+    [Fact]
+    public void Only_VAT_INCLUDED_is_selectable_in_the_pilot()
+    {
+        Assert.Equal(TaxMode.VatIncluded, PilotTaxPolicy.SelectableTaxMode);
+        Assert.True(PilotTaxPolicy.IsSelectable(TaxMode.VatIncluded));
+        Assert.False(PilotTaxPolicy.IsSelectable(TaxMode.PlusVat));
+        Assert.False(PilotTaxPolicy.IsSelectable(TaxMode.Exempt));
+    }
+
+    // GATE-011 tests VAT_INCLUDED: the tariff amount is the total the customer pays; the pre-tax subtotal is
+    // round_half_up(total / 1.16) in integer cents and the tax is the remainder.
+    [Theory]
+    [InlineData(0L, 0L, 0L)]
+    [InlineData(1L, 1L, 0L)]
+    [InlineData(4_500L, 3_879L, 621L)]
+    [InlineData(5_200L, 4_483L, 717L)]
+    [InlineData(5_201L, 4_484L, 717L)]
+    [InlineData(6_032L, 5_200L, 832L)]
+    [InlineData(11_600L, 10_000L, 1_600L)]
+    [InlineData(12_000L, 10_345L, 1_655L)]
+    [InlineData(12_345L, 10_642L, 1_703L)]
+    public void Vat_included_extracts_the_tax_from_the_total_in_integer_cents(long total, long subtotal, long tax)
+    {
+        var amounts = TariffTaxCalculator.Calculate(TaxMode.VatIncluded, total);
+        Assert.Equal(subtotal, amounts.Subtotal.AmountCents);
+        Assert.Equal(0, amounts.Discount.AmountCents);
+        Assert.Equal(tax, amounts.Tax.AmountCents);
+        Assert.Equal(total, amounts.Total.AmountCents);
+
+        var result = Evaluate([Rule(amount: total, taxMode: TaxMode.VatIncluded)]);
         Assert.Equal(TariffEvaluationFailure.None, result.Failure);
-        Assert.Equal(long.MaxValue, result.Subtotal.AmountCents);
-        Assert.Equal(0, result.Discount.AmountCents);
-        Assert.Equal(0, result.Tax.AmountCents);
-        Assert.Equal(long.MaxValue, result.Total.AmountCents);
-        Assert.Equal(long.MaxValue, result.MinimumTotal.AmountCents);
+        Assert.Equal(subtotal, result.Subtotal.AmountCents);
+        Assert.Equal(tax, result.Tax.AmountCents);
+        Assert.Equal(total, result.Total.AmountCents);
+        // The frozen floor is the VAT-included total, never the pre-tax subtotal.
+        Assert.Equal(total, result.MinimumTotal.AmountCents);
+    }
+
+    // GATE-011 tests PLUS_VAT: not selectable in the pilot, but its arithmetic stays exact and tested.
+    [Theory]
+    [InlineData(0L, 0L, 0L)]
+    [InlineData(1L, 0L, 1L)]
+    [InlineData(3L, 0L, 3L)]
+    [InlineData(4L, 1L, 5L)]
+    [InlineData(4_483L, 717L, 5_200L)]
+    [InlineData(5_200L, 832L, 6_032L)]
+    [InlineData(10_000L, 1_600L, 11_600L)]
+    [InlineData(12_345L, 1_975L, 14_320L)]
+    public void Plus_vat_adds_the_tax_to_the_subtotal_in_integer_cents(long subtotal, long tax, long total)
+    {
+        var amounts = TariffTaxCalculator.Calculate(TaxMode.PlusVat, subtotal);
+        Assert.Equal(subtotal, amounts.Subtotal.AmountCents);
+        Assert.Equal(0, amounts.Discount.AmountCents);
+        Assert.Equal(tax, amounts.Tax.AmountCents);
+        Assert.Equal(total, amounts.Total.AmountCents);
+    }
+
+    [Fact]
+    public void Tax_arithmetic_property_sample_is_exact_integer_round_half_up_and_int64_safe()
+    {
+        var random = new Random(20260929);
+        for (var index = 0; index < 20_000; index++)
+        {
+            var amount = index switch
+            {
+                < 10_000 => (long)index,
+                < 15_000 => random.NextInt64(0, 100_000_000),
+                _ => random.NextInt64(0, long.MaxValue / 2),
+            };
+
+            var included = TariffTaxCalculator.Calculate(TaxMode.VatIncluded, amount);
+            Assert.Equal(amount, included.Total.AmountCents);
+            Assert.Equal(amount, checked(included.Subtotal.AmountCents - included.Discount.AmountCents + included.Tax.AmountCents));
+            // |116 * subtotal - 100 * total| < 58: the subtotal is the nearest cent to total / 1.16, and a
+            // half-cent tie never occurs, so the rounding direction never decides a result.
+            var includedError = (Int128)116 * included.Subtotal.AmountCents - (Int128)100 * amount;
+            Assert.True(includedError > -58 && includedError < 58);
+
+            var plus = TariffTaxCalculator.Calculate(TaxMode.PlusVat, amount);
+            Assert.Equal(amount, plus.Subtotal.AmountCents);
+            Assert.Equal(plus.Total.AmountCents, checked(plus.Subtotal.AmountCents + plus.Tax.AmountCents));
+            // |100 * tax - 16 * subtotal| < 50: the tax is the nearest cent to 16% of the subtotal, never a tie.
+            var plusError = (Int128)100 * plus.Tax.AmountCents - (Int128)16 * amount;
+            Assert.True(plusError > -50 && plusError < 50);
+        }
+
+        var maximum = TariffTaxCalculator.Calculate(TaxMode.VatIncluded, long.MaxValue);
+        Assert.Equal(long.MaxValue, maximum.Total.AmountCents);
+        Assert.Equal(long.MaxValue, checked(maximum.Subtotal.AmountCents + maximum.Tax.AmountCents));
+        Assert.Throws<OverflowException>(() => TariffTaxCalculator.Calculate(TaxMode.PlusVat, long.MaxValue));
+        Assert.Throws<ArgumentOutOfRangeException>(() => TariffTaxCalculator.Calculate(TaxMode.VatIncluded, -1));
     }
 
     [Fact]
@@ -411,7 +501,7 @@ public sealed class PricingDomainTests
         PricingTier tier = PricingTier.Occasional,
         ServiceType serviceType = ServiceType.SameDay,
         long amount = 12_345,
-        TaxMode taxMode = TaxMode.Exempt,
+        TaxMode taxMode = TaxMode.VatIncluded,
         DateTimeOffset? activeFrom = null,
         DateTimeOffset? activeTo = null,
         TariffRuleStatus status = TariffRuleStatus.Active,

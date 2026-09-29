@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
-        ("Pricing", "__ef_migrations_history_pricing", HardenMasterDataLoaderOperatorBoundary.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000400_HardenMasterDataLoaderOperatorBoundary.cs"),
+        ("Pricing", "__ef_migrations_history_pricing", RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260929000200_RequireVatIncludedTariffsInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddTrackingLinkGenerations.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260929000100_AddTrackingLinkGenerations.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
@@ -99,11 +99,11 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // MDM-001 loader hardening: the lane's latest migration adds the platform-only operator reference
-                // table, four executor column grants and the loader function derived from the previous one by
-                // reviewed edits; its rollback revokes the grants and restores the previous function. No table,
-                // role or row is dropped, deleted or rewritten.
-                "Pricing" => IsMasterDataLoaderHardeningSource(source),
+                // GATE-011-VAT-INCLUDED-2026-09-29: the lane's latest migration only replaces the loader function
+                // with one derived from the hardened one by a reviewed edit (new tariff rules are VAT_INCLUDED
+                // only); its rollback restores the previous function. No grant, table, role or row is added,
+                // dropped, deleted or rewritten.
+                "Pricing" => IsVatIncludedLoaderSource(source),
                 "Notifications" =>
                     source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
@@ -236,6 +236,11 @@ internal sealed class ModuleMigrationCoordinator
             StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000300_StoreTariffPolicyVersionInMasterDataLoader.cs",
             IsPricingLoaderPolicyVersionSource);
+        VerifyPricingSource(
+            root,
+            HardenMasterDataLoaderOperatorBoundary.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000400_HardenMasterDataLoaderOperatorBoundary.cs",
+            IsMasterDataLoaderHardeningSource);
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -466,6 +471,7 @@ internal sealed class ModuleMigrationCoordinator
                     VersionPricingPolicyPerOrganization.MigrationId,
                     StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
                     HardenMasterDataLoaderOperatorBoundary.MigrationId,
+                    RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
                 ],
             "Orders" =>
                 [
@@ -570,6 +576,27 @@ internal sealed class ModuleMigrationCoordinator
     private static bool IsMasterDataLoaderHardeningSourceWithoutLegacyDrop(string source) =>
         source.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, StringComparison.Ordinal) &&
         source.Contains("StoreTariffPolicyVersionInMasterDataLoader.FunctionSql", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>GATE-011-VAT-INCLUDED-2026-09-29: the loader function derived from the hardened one by the
+    /// reviewed VAT_INCLUDED edit, and nothing else: no grant, table, role, policy or row is dropped, deleted,
+    /// truncated or rewritten, and no function is dropped.</summary>
+    private static bool IsVatIncludedLoaderSource(string source) =>
+        source.Contains(RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed, StringComparison.Ordinal) &&
+        source.Contains("HardenMasterDataLoaderOperatorBoundary.FunctionSql", StringComparison.Ordinal) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
         !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&

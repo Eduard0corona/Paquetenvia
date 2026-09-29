@@ -180,6 +180,10 @@ Una alternativa válida es un único schema físico, pero tendría que aprobarse
 
 **Evidencia:** el CHECK usa `net_cents > 5200`, mientras GATE-011 aún decide si la tarifa pública incluye IVA.
 
+**Estado posterior (2026-09-29):** GATE-011 quedó resuelta (`GATE-011-VAT-INCLUDED-2026-09-29`): IVA incluido para
+todas las organizaciones y el umbral de 52 MXN se compara contra el total con IVA incluido. v0.6 ya no tiene el CHECK
+por importe: guarda `pricing_tier` y `minimum_total_cents_snapshot` (ADR-021).
+
 **Mejor corrección:** no inferir la regla por importe. Guardar `pricing_tier_code` o `tariff_rule_class` en quote/order y exigir ruta consolidada/override para tiers de volumen. Esto también evita falsos positivos por descuentos, redondeos o cambios futuros de tarifa.
 
 ### 14. COD y liquidaciones sin detalle — CONFIRMADO

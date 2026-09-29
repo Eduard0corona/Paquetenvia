@@ -52,6 +52,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                      VersionPricingPolicyPerOrganization.MigrationId,
                      StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
                      HardenMasterDataLoaderOperatorBoundary.MigrationId,
+                     RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
                  })
         {
             Assert.True(await reader.ReadAsync());
@@ -85,9 +86,12 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             var replay = await scope.Service.CreateAsync(command, default);
 
             Assert.Equal(created.Id, replay.Id);
-            Assert.Equal(34_567, created.Net.AmountCents);
-            Assert.Equal(0, created.Tax.AmountCents);
+            // GATE-011-VAT-INCLUDED-2026-09-29: the rule amount is the total with IVA included; the pre-tax
+            // net is round_half_up(34567 / 1.16) = 29799 cents and the tax is the remainder.
+            Assert.Equal(29_799, created.Net.AmountCents);
+            Assert.Equal(4_768, created.Tax.AmountCents);
             Assert.Equal(34_567, created.Total.AmountCents);
+            Assert.Equal(34_567, created.MinimumTotalCentsSnapshot);
             Assert.Equal("OCCASIONAL", created.PricingTier);
             Assert.Equal(data.PolicyVersion, created.PricingPolicyVersion);
             Assert.Equal([data.ZoneRuleId], created.RuleIds);
@@ -501,7 +505,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             INSERT INTO pricing.tariff_rules(
               id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
               amount_cents,tax_mode,active_from,active_to,status,policy_version)
-              VALUES (@rule,@org,@city,@area,@zone,'CUSTOM','SAME_DAY',45678,'EXEMPT',@active_from,NULL,'ACTIVE','PRC-001-private.v7');
+              VALUES (@rule,@org,@city,@area,@zone,'CUSTOM','SAME_DAY',45678,'VAT_INCLUDED',@active_from,NULL,'ACTIVE','PRC-001-private.v7');
             INSERT INTO clients.client_accounts(id,owner_org_id,name,status,private_tariff_id,created_at)
               VALUES (@account,@org,'Synthetic private account','ACTIVE',@rule,@created);
             INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
@@ -658,7 +662,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                 INSERT INTO pricing.tariff_rules(
                   id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
                   amount_cents,tax_mode,active_from,active_to,status,policy_version)
-                VALUES (@id,@owner,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',1,'EXEMPT',@now,NULL,'ACTIVE','PRC-001-v1')
+                VALUES (@id,@owner,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',1,'VAT_INCLUDED',@now,NULL,'ACTIVE','PRC-001-v1')
                 """,
                 P("id", Guid.NewGuid()), P("owner", data.OrganizationId), P("city", data.CityId),
                 new NpgsqlParameter<DateTimeOffset>("now", NpgsqlDbType.TimestampTz) { TypedValue = DateTimeOffset.UtcNow });
@@ -811,6 +815,59 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
     }
 
     [PostgreSqlContractFact]
+    public async Task Quote_persists_VAT_INCLUDED_amounts_and_refuses_a_rule_in_another_tax_mode()
+    {
+        // GATE-011-VAT-INCLUDED-2026-09-29: the persisted quote satisfies total = subtotal - discount + tax with
+        // the IVA-included total as frozen floor, and a selected rule in another tax mode fails closed instead of
+        // falling back to a less specific rule.
+        var data = SyntheticPricingData.Create();
+        await SeedAsync(data);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 6, applicationName: "PRC.Gate011.VatIncluded");
+        try
+        {
+            QuoteResult quote;
+            await using (var scope = CreateScope(appDataSource))
+            {
+                quote = await scope.Service.CreateAsync(CreateCommand(data, "prc-gate011-vat-included-01"), default);
+            }
+
+            Assert.Equal("29799|0|4768|34567|34567", await ScalarAdminAsync<string>(
+                """
+                SELECT concat_ws('|',subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot)
+                FROM pricing.quotes WHERE id=@id
+                """,
+                P("id", quote.Id)));
+            Assert.Equal("VAT_INCLUDED|34567", await ScalarAdminAsync<string>(
+                "SELECT concat_ws('|',breakdown->0->>'tax_mode',breakdown->0->>'amount_cents') FROM pricing.quotes WHERE id=@id",
+                P("id", quote.Id)));
+
+            foreach (var taxMode in new[] { "EXEMPT", "PLUS_VAT" })
+            {
+                await ExecuteAdminAsync(
+                    "UPDATE pricing.tariff_rules SET tax_mode=@tax_mode WHERE id=@rule",
+                    new NpgsqlParameter<string>("tax_mode", NpgsqlDbType.Text) { TypedValue = taxMode },
+                    P("rule", data.ZoneRuleId));
+                await using var scope = CreateScope(appDataSource);
+                var blocked = await Assert.ThrowsAsync<QuoteValidationException>(() =>
+                    scope.Service.CreateAsync(CreateCommand(data, $"prc-gate011-{taxMode.ToLowerInvariant()}-01"), default));
+                Assert.Equal(QuoteValidationCode.TaxModeBlocked, blocked.Code);
+            }
+
+            // The quote created before the rule changed keeps its frozen amounts.
+            Assert.Equal("29799|0|4768|34567|34567", await ScalarAdminAsync<string>(
+                """
+                SELECT concat_ws('|',subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot)
+                FROM pricing.quotes WHERE id=@id
+                """,
+                P("id", quote.Id)));
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    [PostgreSqlContractFact]
     public async Task Quote_freezes_the_policy_version_of_the_selected_rule_and_the_order_keeps_it()
     {
         // PRC-POLICY-VERSION-PER-ORG: the version comes from the rule the engine selected, not from
@@ -947,7 +1004,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                 INSERT INTO pricing.tariff_rules(
                   id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
                   amount_cents,tax_mode,active_from,active_to,status,policy_version)
-                VALUES (@id,@owner,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',1,'EXEMPT',@now,NULL,'ACTIVE','ORG-A-2026.09')
+                VALUES (@id,@owner,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',1,'VAT_INCLUDED',@now,NULL,'ACTIVE','ORG-A-2026.09')
                 """,
                 P("id", Guid.NewGuid()), P("owner", second.OrganizationId), P("city", second.CityId),
                 new NpgsqlParameter<DateTimeOffset>("now", NpgsqlDbType.TimestampTz) { TypedValue = DateTimeOffset.UtcNow });
@@ -1024,8 +1081,8 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                   id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
                   amount_cents,tax_mode,active_from,active_to,status,policy_version)
                 VALUES
-                  (@urgent_rule,@org,@city,NULL,NULL,'OCCASIONAL','URGENT',11111,'EXEMPT',now()-interval '1 day',NULL,'ACTIVE',NULL),
-                  (@private_rule,@org,@city,@area,@zone,'CUSTOM','SAME_DAY',45678,'EXEMPT',now()-interval '1 day',NULL,'ACTIVE',NULL);
+                  (@urgent_rule,@org,@city,NULL,NULL,'OCCASIONAL','URGENT',11111,'VAT_INCLUDED',now()-interval '1 day',NULL,'ACTIVE',NULL),
+                  (@private_rule,@org,@city,@area,@zone,'CUSTOM','SAME_DAY',45678,'VAT_INCLUDED',now()-interval '1 day',NULL,'ACTIVE',NULL);
                 INSERT INTO clients.client_accounts(id,owner_org_id,name,status,private_tariff_id,created_at)
                   VALUES (@account,@org,'Synthetic legacy private account','ACTIVE',@private_rule,now());
                 ALTER TABLE pricing.tariff_rules ADD CONSTRAINT {VersionPricingPolicyPerOrganization.RequiredConstraint}
@@ -1082,7 +1139,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             INSERT INTO pricing.tariff_rules(
               id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
               amount_cents,tax_mode,active_from,active_to,status,policy_version)
-            VALUES (@id,@org,@city,NULL,NULL,'OCCASIONAL','URGENT',1,'EXEMPT',now(),NULL,'INACTIVE',@version)
+            VALUES (@id,@org,@city,NULL,NULL,'OCCASIONAL','URGENT',1,'VAT_INCLUDED',now(),NULL,'INACTIVE',@version)
             """);
         command.Parameters.Add(P("id", Guid.NewGuid()));
         command.Parameters.Add(P("org", data.OrganizationId));
@@ -1238,9 +1295,9 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
               id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
               amount_cents,tax_mode,active_from,active_to,status,policy_version)
               VALUES
-                (@city_rule,@org,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',12345,'EXEMPT',@active_from,NULL,'ACTIVE',@version),
-                (@area_rule,@org,@city,@area,NULL,'OCCASIONAL','SAME_DAY',23456,'EXEMPT',@active_from,NULL,'ACTIVE',@version),
-                (@zone_rule,@org,@city,@area,@zone,'OCCASIONAL','SAME_DAY',34567,'EXEMPT',@active_from,NULL,'ACTIVE',@version);
+                (@city_rule,@org,@city,NULL,NULL,'OCCASIONAL','SAME_DAY',12345,'VAT_INCLUDED',@active_from,NULL,'ACTIVE',@version),
+                (@area_rule,@org,@city,@area,NULL,'OCCASIONAL','SAME_DAY',23456,'VAT_INCLUDED',@active_from,NULL,'ACTIVE',@version),
+                (@zone_rule,@org,@city,@area,@zone,'OCCASIONAL','SAME_DAY',34567,'VAT_INCLUDED',@active_from,NULL,'ACTIVE',@version);
             """);
         command.Parameters.Add(new NpgsqlParameter<string>("version", NpgsqlDbType.Text) { TypedValue = data.PolicyVersion });
         command.Parameters.Add(P("org", data.OrganizationId));

@@ -326,7 +326,7 @@ No se implementan todavía: login con un proveedor OIDC real (GATE-002 decidió
 AuthCenter con patrón BFF, pendiente de implementación; la autenticación
 disponible es `Mock` en Development, Testing y DevSynthetic), proveedores
 reales de mapas, mensajería, pagos o facturación (GATE-003 a GATE-006),
-pricing público e impuestos (GATE-011), PII real (GATE-007), sellos y
+tarifas reales (GATE-010; GATE-011 quedó resuelta: IVA incluido), PII real (GATE-007), sellos y
 ADR-032/ADR-033, backplane SignalR multi-instancia (GATE-013), aliados
 (ALY-*), clientes empresariales (BUS-*), piloto, staging ni despliegue
 productivo. ARC-001 aporta estructura, catálogo y reglas de arquitectura;

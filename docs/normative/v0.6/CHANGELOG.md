@@ -1,5 +1,20 @@
 # Changelog
 
+## Presentación de impuestos con IVA incluido (GATE-011-VAT-INCLUDED-2026-09-29) — 2026-09-29
+
+- Respuestas literales del project owner: "Presentación de impuestos, IVA incluido"; "52 con IVA incluido";
+  "Igual para todas". AI-10 mueve GATE-011 a `resolved_decisions`.
+- Todas las organizaciones cotizan con IVA incluido: la tarifa es el total; `subtotal = floor((100 * total + 58) / 116)`
+  (redondeo half-up al centavo, aritmética entera, IVA 16 %), `tax = total - subtotal`, `discount = 0`. El piso
+  congelado `minimum_total_cents_snapshot` es el total con IVA. `PLUS_VAT` conserva su aritmética probada y `EXEMPT`
+  se conserva en el vocabulario, pero ninguno es seleccionable: una regla seleccionada así falla cerrado.
+- El umbral de 52 MXN de AI-07 (`low_price_guard`) compara el total con IVA incluido, no el neto; se conserva el
+  límite no estricto (52.00 exactos se bloquean salvo ruta consolidada).
+- Lane Pricing `20260929000200_RequireVatIncludedTariffsInMasterDataLoader`: `security.load_master_data` no crea reglas
+  `PLUS_VAT` ni `EXEMPT` (`MDM001_TARIFF_TAX_MODE_NOT_ALLOWED`); una regla guardada se puede cerrar. Sin permisos,
+  tablas ni roles nuevos; rollback restaura la función anterior. AI-06 y AI-18 sin cambios.
+- AI-04, AI-07 y AI-19 registran la resolución. Las cotizaciones y órdenes existentes conservan sus montos congelados.
+
 ## Enlaces de tracking sin revocación (TRK-002-NO-REVOCATION) — 2026-09-29
 
 - Decisión literal del project owner registrada en `decision-log.md` (`TRK-002-NO-REVOCATION`): "La liga la puede

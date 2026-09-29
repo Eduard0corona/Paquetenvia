@@ -83,11 +83,11 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
 
         private static QuoteResult Result(Guid id, string status) => new(
             id,
-            new MoneyResult("MXN", 12_345),
-            new MoneyResult("MXN", 0),
+            new MoneyResult("MXN", 10_642),
+            new MoneyResult("MXN", 1_703),
             new MoneyResult("MXN", 12_345),
             [Guid.Parse("71000000-0000-0000-0000-000000000001")],
-            [new QuoteBreakdownLine("BASE_TARIFF", Guid.Parse("71000000-0000-0000-0000-000000000001"), 12_345, "OCCASIONAL", "EXEMPT")],
+            [new QuoteBreakdownLine("BASE_TARIFF", Guid.Parse("71000000-0000-0000-0000-000000000001"), 12_345, "OCCASIONAL", "VAT_INCLUDED")],
             new DateTimeOffset(2026, 7, 22, 13, 0, 0, TimeSpan.Zero),
             Guid.Parse("72000000-0000-0000-0000-000000000001"),
             Guid.Parse("72000000-0000-0000-0000-000000000002"),

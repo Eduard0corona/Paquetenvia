@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 46311,
-      "sha256": "611fa104d6f23335867382431a812c2fc5fc899cc64f58188db45837838929a5"
+      "bytes": 47681,
+      "sha256": "eb17af2649e75275eb76b9736fafe2358ad53fc314e8de6ff25711684eb622f6"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "afeea3350037b7cfee7c8ed572a934ce7d3337757e469b804a26710ba4f7859e"
+      "sha256": "579a608a46ed39971dc3130e0b4f5faab13443bbd64590424d8ac74cba3a5811"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 82812,
-      "sha256": "3f39a762a4cec234b21783502b0282d48d5df7eb77a3c0534c2d655df6944800"
+      "bytes": 84608,
+      "sha256": "e64bcfc2989e802453b1f367bab7d6d5781e590afb662d4529d1453cdbf80416"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -94,8 +94,8 @@
     },
     {
       "path": "docs/AI-19_VERIFICATION_REPORT_V0.4.md",
-      "bytes": 17572,
-      "sha256": "88daa08cdcf35e60d48edd167c4ee2c0a0dc1decc5d6eedd91cdb45f8ff54fb4"
+      "bytes": 17886,
+      "sha256": "52e56a11f621353505ccaad108a253738a5883e08079225831846b3145b978e0"
     },
     {
       "path": "docs/AI-21_V0.5_CHANGESET.md",
@@ -329,13 +329,13 @@
     },
     {
       "path": "specs/AI-04_DOMAIN_MODEL.yaml",
-      "bytes": 18318,
-      "sha256": "0e9814e7bbbc7969974f5d090777af93d68fab89f8cdb253757f882a670ee24a"
+      "bytes": 18641,
+      "sha256": "7799979dfe4ec41d291e0314a432c081b7e4510f18d8c6a3806c6524859662a5"
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 15805,
-      "sha256": "d8780517387a1ff0b66a442035eb5dddc388c1ca5ea3aeff4f42c92b1d1dd25b"
+      "bytes": 15995,
+      "sha256": "7dae3c3f25e4c0358f186cd43265a999f94ed178f356badef5f79b6fee702825"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
@@ -344,8 +344,8 @@
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
-      "bytes": 16275,
-      "sha256": "30bdcdb45925ccb51064d37527d3ab480650b09f260654066a3ff7257e084c15"
+      "bytes": 18420,
+      "sha256": "ab3f778528fa4335458cf9681727e7fa7a24d99b3598054ee99420dfd4314f3e"
     },
     {
       "path": "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",
