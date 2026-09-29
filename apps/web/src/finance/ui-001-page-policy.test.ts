@@ -82,6 +82,7 @@ describe("UI-001 page policy", () => {
     }
     expect([...paths].sort()).toEqual([
       "/api/v1/cod-records/",
+      "/api/v1/incidents",
       "/api/v1/incidents/",
       "/api/v1/orders",
       "/api/v1/orders/",
@@ -98,6 +99,8 @@ describe("UI-001 page policy", () => {
       ["/orders/csv/commit:", "commitOrderCsv"],
       ["/orders/{orderId}/incidents:", "openIncident"],
       ["/incidents/{incidentId}/resolution:", "resolveIncident"],
+      ["/incidents:", "listIncidents"],
+      ["/incidents/{incidentId}:", "getIncident"],
       ["/orders/{orderId}/cod-records:", "recordCodCollection"],
       ["/cod-records/{codId}/reconcile:", "reconcileCod"],
       ["/orders/{orderId}/financials:", "getOrderFinancials"],
@@ -114,8 +117,11 @@ describe("UI-001 page policy", () => {
       expect(openApi.slice(start, start + 600), path).toContain(`operationId: ${operationId}`);
     }
     expect(openApi).toContain("operationId: listSettlements");
+    // API-INC-LIST-PROOFS-2026-09-29: listOrderProofs shares its path with finalizeProof.
+    expect(openApi).toContain("operationId: listOrderProofs");
     const incidentsApi = read("src/operations/api/incidents-api.ts");
-    for (const suffix of ["/incidents`", "/resolution`"]) expect(incidentsApi).toContain(suffix);
+    for (const suffix of ["/incidents`", "/resolution`", "/proofs`", '"/api/v1/incidents"'])
+      expect(incidentsApi).toContain(suffix);
     const codApi = read("src/finance/api/cod-api.ts");
     for (const suffix of ["/financials`", "/cod-records`", "/reconcile`"]) expect(codApi).toContain(suffix);
     const settlementsApi = read("src/finance/api/settlements-api.ts");

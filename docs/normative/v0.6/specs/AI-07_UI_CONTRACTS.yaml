@@ -374,13 +374,18 @@ screen_contracts:
     release: MVP-1
     route: /ops/incidents
     decision: UI-001-SCREENS-CSV-INC-COD
+    decision_amendment: API-INC-LIST-PROOFS-2026-09-29
     authority: REST API + PostgreSQL
     sources:
       open: POST /orders/{orderId}/incidents (openIncident)
       resolve: POST /incidents/{incidentId}/resolution (resolveIncident)
+      list: GET /incidents (listIncidents)
+      read: GET /incidents/{incidentId} (getIncident)
+      evidence: GET /orders/{orderId}/proofs (listOrderProofs)
     roles:
       open: [DISPATCHER, PLATFORM_ADMIN with MFA]
       resolve: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      list_and_read: [DISPATCHER, PLATFORM_ADMIN with MFA]
       note: DRIVER opens incidents from /driver/stops/:id and never resolves; this screen does not admit DRIVER
     states:
     - no_session
@@ -396,19 +401,22 @@ screen_contracts:
     - description has 1 to 2000 characters
     - occurred_at is captured in America/Mazatlan and sent as UTC; later than now plus 5 minutes or older than 72 hours
       is refused client-side, and the server remains authoritative for its configured window
-    - evidence_proof_ids are 1 to 10 unique canonical UUIDs
+    - evidence_proof_ids are 1 to 10 unique canonical UUIDs, picked from the listOrderProofs page of the order
+    - the incident to resolve is picked from the pending incidents listIncidents returned
     - resolution outcome is RESOLVED or REJECTED and reason follows the AI-05 ResolveIncidentRequest pattern, sent
       exactly as typed
     display:
-    - only the Incident returned by openIncident or resolveIncident in the current tenant session is shown
+    - the incidents listIncidents returns for the active organization, newest first, filterable by status and order,
+      with further pages loaded through next_cursor; an Incident returned by openIncident or resolveIncident replaces
+      the listed one with the same id
     - status, severity, reason_code, next_action, custody_acquired, occurred_at and sla_due_at
+    - proofs show proof_type and captured_at only; no image, download or signed URL is requested or rendered
     - description and resolution reason are never echoed back after submission
     idempotency:
     - each open and each resolution reuses its Idempotency-Key for a retry of the same payload after a network or 5xx
       failure
     not_supported:
-    - listing incidents or reading one incident; AI-05 exposes no incident read operation
-    - discovering proof ids for evidence; AI-05 exposes no proof read operation
+    - viewing or downloading proof images; listOrderProofs returns metadata only
   cod_control:
     release: MVP-1
     route: /finance/cod

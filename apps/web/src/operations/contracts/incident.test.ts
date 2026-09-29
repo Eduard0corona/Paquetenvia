@@ -2,13 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
   buildOpenIncidentBody,
   buildResolveIncidentBody,
+  incidentListSearch,
   mazatlanLocalToUtc,
   parseIncident,
+  parseIncidentPage,
   parseProofIds,
+  parseProofPage,
   type OpenIncidentDraft,
 } from "./incident";
 import { ContractViolationError } from "./strict-json";
-import { incidentId, incidentResponse, orderId, proofId, syntheticUuid } from "./ui-001-screens.fixtures";
+import {
+  incidentId,
+  incidentResponse,
+  orderId,
+  proofId,
+  proofResponse,
+  syntheticUuid,
+} from "./ui-001-screens.fixtures";
 
 const now = new Date("2026-09-28T17:00:00Z");
 
@@ -119,5 +129,53 @@ describe("Incident parser", () => {
     ["a timestamp without offset", incidentResponse({ sla_due_at: "2026-09-29T16:00:00" })],
   ])("fails closed on %s", (_label, body) => {
     expect(() => parseIncident(body)).toThrow(ContractViolationError);
+  });
+});
+
+describe("incident desk read parsers (API-INC-LIST-PROOFS-2026-09-29)", () => {
+  it("reads an incident page and its cursor", () => {
+    const page = parseIncidentPage({ items: [incidentResponse()], next_cursor: null });
+    expect(page.items.map((item) => item.id)).toEqual([incidentId]);
+    expect(page.next_cursor).toBeNull();
+    expect(parseIncidentPage({ items: [], next_cursor: "abc_DEF-1" }).next_cursor).toBe("abc_DEF-1");
+  });
+
+  it.each([
+    { items: [] },
+    { items: [], next_cursor: null, total: 1 },
+    { items: [incidentResponse(), incidentResponse()], next_cursor: null },
+    { items: [incidentResponse({ description: "texto" })], next_cursor: null },
+    { items: [], next_cursor: "has space" },
+    { items: [], next_cursor: "x".repeat(129) },
+  ])("fails closed on incident page %#", (value) => {
+    expect(() => parseIncidentPage(value)).toThrow(ContractViolationError);
+  });
+
+  it("reads proof metadata only", () => {
+    const page = parseProofPage({ items: [proofResponse()], next_cursor: null });
+    expect(page.items).toEqual([
+      { id: proofId, proof_type: "DELIVERY_PHOTO", sha256: "0a".repeat(32), captured_at: "2026-09-28T15:55:00Z" },
+    ]);
+  });
+
+  it.each([
+    proofResponse({ object_key: "proofs/x" }),
+    proofResponse({ recipient_name: "Nombre" }),
+    proofResponse({ proof_type: "SELFIE" }),
+    proofResponse({ sha256: "0A".repeat(32) }),
+    proofResponse({ sha256: "0a" }),
+    proofResponse({ id: "not-a-uuid" }),
+  ])("fails closed on proof %#", (proof) => {
+    expect(() => parseProofPage({ items: [proof], next_cursor: null })).toThrow(ContractViolationError);
+  });
+
+  it("builds only the published list filters", () => {
+    expect(incidentListSearch({ status: "OPEN", orderId }, "c1").toString()).toBe(
+      `status=OPEN&order_id=${orderId}&cursor=c1`,
+    );
+    expect(incidentListSearch({}).toString()).toBe("");
+    expect(() => incidentListSearch({ status: "CLOSED" as never })).toThrow(ContractViolationError);
+    expect(() => incidentListSearch({ orderId: "not-a-uuid" })).toThrow(ContractViolationError);
+    expect(() => incidentListSearch({}, "bad cursor")).toThrow(ContractViolationError);
   });
 });
