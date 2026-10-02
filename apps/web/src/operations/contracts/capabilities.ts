@@ -114,13 +114,22 @@ export function requiresMfa(
 }
 
 /**
- * API-FIN-COD-VISIBILITY-2026-09-29 (x-capability-matrix cod_pending_reconciliation_filter):
- * listOrders honors cod_pending_reconciliation only for a role holding both listOrders
- * and getOrderFinancials, so DISPATCHER and PLATFORM_ADMIN (with MFA); FINANCE and
- * VIEWER never request the pending list.
+ * FIN-PENDING-COD-LIST-FINANCE-2026-10-02 (literal "finanzas sí ve la lista"): FINANCE
+ * may call listOrders only with cod_pending_reconciliation=true, and only with MFA. It
+ * never gains any other listOrders call, so it is not in `capabilityMatrix.listOrders`.
+ */
+export const codPendingListOnlyRoles = ["FINANCE"] as const;
+
+/**
+ * API-FIN-COD-VISIBILITY-2026-09-29 and FIN-PENDING-COD-LIST-FINANCE-2026-10-02
+ * (x-capability-matrix cod_pending_reconciliation_filter): the COD pending list is
+ * requested by a role holding both listOrders and getOrderFinancials (DISPATCHER,
+ * PLATFORM_ADMIN with MFA) and by FINANCE (with MFA); VIEWER and DRIVER never request
+ * it. A missing second factor is answered by the API with 403 MFA_REQUIRED.
  */
 export function canListPendingCod(role: string | null): boolean {
-  return canPerform(role, "listOrders") && canPerform(role, "getOrderFinancials");
+  if (!canPerform(role, "getOrderFinancials")) return false;
+  return canPerform(role, "listOrders") || (codPendingListOnlyRoles as readonly (string | null)[]).includes(role);
 }
 
 /** The role the signed-in person holds in the organization selected with X-Organization-Id. */

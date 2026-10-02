@@ -184,7 +184,7 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
   const pendingOrder = { id: orderId, public_id: "PQ-000123", status: "DELIVERED" };
   const otherOrder = { id: syntheticUuid(0x102), public_id: "PQ-000124", status: "DELIVERED" };
 
-  it.each(["DISPATCHER", "PLATFORM_ADMIN"])("lists pending collections for %s on start", async (role) => {
+  it.each(["DISPATCHER", "PLATFORM_ADMIN", "FINANCE"])("lists pending collections for %s on start", async (role) => {
     const pendingReconciliation = vi.fn<CodApi["pendingReconciliation"]>(async () => ({
       items: [pendingOrder],
       next_cursor: null,
@@ -195,7 +195,7 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
     expect(controller.getSnapshot()).toMatchObject({ canListPending: true, pending: [pendingOrder], pendingCursor: null });
   });
 
-  it.each(["FINANCE", "VIEWER", "DRIVER"])("never requests the pending list for %s", async (role) => {
+  it.each(["VIEWER", "DRIVER"])("never requests the pending list for %s", async (role) => {
     const { controller, api } = setup({ [orgA]: role });
     await controller.start();
     await controller.loadPending();
@@ -216,9 +216,9 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
     expect(controller.getSnapshot().pendingCursor).toBeNull();
   });
 
-  it("offers the MFA step-up when the list is refused for a missing second factor", async () => {
+  it.each(["PLATFORM_ADMIN", "FINANCE"])("offers the MFA step-up to %s when the list is refused for a missing second factor", async (role) => {
     const { controller } = setup(
-      { [orgA]: "PLATFORM_ADMIN" },
+      { [orgA]: role },
       { pendingReconciliation: vi.fn(async () => { throw new TenantApiError("forbidden", "MFA_REQUIRED", true); }) },
     );
     await controller.start();
@@ -269,7 +269,7 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
 
   it("drops the pending list on a tenant switch", async () => {
     const context = setup(
-      { [orgA]: "DISPATCHER", [orgB]: "FINANCE" },
+      { [orgA]: "DISPATCHER", [orgB]: "VIEWER" },
       { pendingReconciliation: vi.fn(async () => ({ items: [pendingOrder], next_cursor: null })) },
     );
     await context.controller.start();
@@ -277,6 +277,32 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
     context.switchTo(orgB);
     await context.controller.start();
     expect(context.controller.getSnapshot()).toMatchObject({ pending: null, canListPending: false });
+  });
+
+  it("replaces the pending list with the new tenant's own for FINANCE after a switch", async () => {
+    const pendingReconciliation = vi
+      .fn<CodApi["pendingReconciliation"]>()
+      .mockResolvedValueOnce({ items: [pendingOrder], next_cursor: null })
+      .mockResolvedValueOnce({ items: [otherOrder], next_cursor: null });
+    const context = setup({ [orgA]: "DISPATCHER", [orgB]: "FINANCE" }, { pendingReconciliation });
+    await context.controller.start();
+    context.switchTo(orgB);
+    await context.controller.start();
+    expect(context.controller.getSnapshot()).toMatchObject({ canListPending: true, pending: [otherOrder] });
+  });
+
+  it("lets FINANCE reconcile from the pending list without ever recording", async () => {
+    const financials = vi.fn<CodApi["financials"]>().mockResolvedValue(recorded());
+    const pendingReconciliation = vi
+      .fn<CodApi["pendingReconciliation"]>()
+      .mockResolvedValueOnce({ items: [pendingOrder], next_cursor: null })
+      .mockResolvedValue({ items: [], next_cursor: null });
+    const { controller, api } = setup({ [orgA]: "FINANCE" }, { financials, pendingReconciliation });
+    await controller.start();
+    await controller.reconcileFromList(orderId);
+    expect(vi.mocked(api.reconcile).mock.calls[0][0]).toBe(codId);
+    expect(api.record).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ canRecord: false, pending: [] });
   });
 });
 

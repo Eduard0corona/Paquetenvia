@@ -1,5 +1,18 @@
 # Changelog
 
+## Finanzas ve la lista de cobros pendientes de conciliar (FIN-PENDING-COD-LIST-FINANCE-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Tope COD 20,000 pesos, finanzas sí ve la lista". Esta entrada cubre solo
+  "finanzas sí ve la lista"; registrado en `decision-log.md` (`FIN-PENDING-COD-LIST-FINANCE-2026-10-02`).
+- AI-05: FINANCE con MFA puede llamar `listOrders` únicamente con `cod_pending_reconciliation=true` (sin MFA,
+  `403 MFA_REQUIRED`); cualquier otra llamada de FINANCE a `listOrders` sigue en 403. Se documentan la descripción
+  de `listOrders`, su `x-authorization-precedence` y `x-capability-matrix.cod_pending_reconciliation_filter`; la
+  fila `operations.listOrders` no cambia. La lista vuelve a verificar los roles de `getOrderFinancials` dentro de
+  la transacción tenant antes de leer órdenes. FINANCE recibe la misma representación `Order` que los demás
+  lectores, sin datos personales ni `cod_expected_cents`, y sigue sin crear ni modificar órdenes.
+- AI-07 `cod_control.pending_list`: agrega FINANCE con MFA.
+- Sin migraciones, esquemas, roles de base de datos ni flujos nuevos.
+
 ## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
 
 - Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para
