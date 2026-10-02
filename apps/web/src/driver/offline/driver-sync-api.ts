@@ -376,6 +376,7 @@ function parseTransitionReceipt(value: unknown): DriverTransitionReceipt {
       "total",
       "claim_window_ends_at",
       "finalized_at",
+      "service_window",
     ]),
   );
   const id = readUuid(record.id);
@@ -395,6 +396,13 @@ function parseTransitionReceipt(value: unknown): DriverTransitionReceipt {
   readMoney(record.total);
   readNullableUtcTimestamp(record.claim_window_ends_at);
   readNullableUtcTimestamp(record.finalized_at);
+  // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: validated as part of the Order contract, not kept.
+  if (record.service_window !== null) {
+    const window = readExactRecord(record.service_window, new Set(["from", "to"]));
+    if (Date.parse(readUtcTimestamp(window.from)) >= Date.parse(readUtcTimestamp(window.to))) {
+      throw new DriverSyncApiError("invalid-contract");
+    }
+  }
   return Object.freeze({ id, status, version });
 }
 

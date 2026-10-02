@@ -908,7 +908,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
               ON orders.orders FROM paqueteria_lifecycle_executor;
             DELETE FROM platform."__ef_migrations_history_orders"
               WHERE "MigrationId" IN ('{E002LifecycleStateReader.Lif001MigrationId}',
-                '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}');
+                '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}',
+                '{Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";

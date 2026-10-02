@@ -1,5 +1,6 @@
 import { isAcceptanceVersion, type AcceptanceVersions, acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import { parseMxnToCents } from "./money";
+import { buildServiceWindow, type ServiceWindowBody } from "./service-window";
 
 /**
  * /ops/orders/new (AI-07 create_order) against AI-05 createQuote and createOrder.
@@ -75,6 +76,8 @@ export interface CreatedOrder {
   readonly price_net: Money;
   readonly total: Money;
   readonly service_type: ServiceType;
+  /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: null means the zone's schedule applies. */
+  readonly service_window: ServiceWindowBody | null;
 }
 
 export interface AddressDraft {
@@ -113,6 +116,12 @@ export interface AcceptanceDraft {
    * empty or absent means no COD. Converted to integer cents without floating point.
    */
   readonly codAmount?: string;
+  /**
+   * ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: optional delivery window as `datetime-local`
+   * values read as America/Mazatlan wall-clock time; both empty means no window.
+   */
+  readonly serviceWindowFrom?: string;
+  readonly serviceWindowTo?: string;
 }
 
 interface AddressBody {
@@ -153,6 +162,8 @@ export interface CreateOrderBody {
   };
   /** D6-COD-EXPECTED: integer MXN cents, sent only when the order carries COD. */
   cod_expected_cents?: number;
+  /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: UTC instants, sent only when a window was typed. */
+  service_window?: ServiceWindowBody;
 }
 
 export type DraftResult<T> =
@@ -305,6 +316,8 @@ export function buildCreateOrderBody(
   if (Number.isNaN(acceptedAt.getTime())) errors.push("La hora de aceptación no es válida.");
   const codCents = codExpectedCents(draft.codAmount);
   if (codCents === null) errors.push(invalidCodAmountMessage);
+  const serviceWindow = buildServiceWindow(draft.serviceWindowFrom, draft.serviceWindowTo, acceptedAt);
+  if (!serviceWindow.ok) errors.push(serviceWindow.error);
   if (errors.length > 0) return { ok: false, errors };
   const body: CreateOrderBody = {
     quote_id: quoteId,
@@ -318,6 +331,8 @@ export function buildCreateOrderBody(
   };
   // Zero is "no COD": the field is left out, which the server treats identically.
   if (codCents! > 0) body.cod_expected_cents = codCents!;
+  // Both empty is "no window": the field is left out and the zone's schedule applies.
+  if (serviceWindow.ok && serviceWindow.window !== null) body.service_window = serviceWindow.window;
   return { ok: true, body };
 }
 
@@ -450,6 +465,7 @@ export function parseCreatedOrder(value: unknown): CreatedOrder {
       "service_area_id",
       "claim_window_ends_at",
       "finalized_at",
+      "service_window",
     ],
   );
   uuid(object.owner_org_id);
@@ -467,7 +483,20 @@ export function parseCreatedOrder(value: unknown): CreatedOrder {
     price_net: money(object.price_net),
     total: money(object.total),
     service_type: oneOf(object.service_type, serviceTypes),
+    service_window:
+      object.service_window === undefined || object.service_window === null
+        ? null
+        : parseServiceWindow(object.service_window),
   };
+}
+
+/** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: exactly `from` and `to`, offset-qualified, from before to. */
+export function parseServiceWindow(value: unknown): ServiceWindowBody {
+  const object = knownObject(value, ["from", "to"], []);
+  const from = utc(object.from);
+  const to = utc(object.to);
+  if (Date.parse(from) >= Date.parse(to)) fail();
+  return { from, to };
 }
 
 function breakdownLine(value: unknown): QuoteBreakdownLine {

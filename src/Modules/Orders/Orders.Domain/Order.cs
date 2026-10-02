@@ -30,7 +30,9 @@ public sealed class Order
         string packageSnapshot,
         string? financialOverride,
         DateTimeOffset createdAt,
-        long codExpectedCents)
+        long codExpectedCents,
+        DateTimeOffset? serviceWindowFrom,
+        DateTimeOffset? serviceWindowTo)
     {
         if (id == Guid.Empty || quoteId == Guid.Empty || ownerOrganizationId == Guid.Empty ||
             cityId == Guid.Empty || originLocationId == Guid.Empty || destinationLocationId == Guid.Empty ||
@@ -39,7 +41,9 @@ public sealed class Order
             string.IsNullOrWhiteSpace(packageSnapshot) || currency != "MXN" ||
             subtotalCents < 0 || discountCents < 0 || taxCents < 0 || totalCents < 0 ||
             minimumTotalCentsSnapshot < 0 || codExpectedCents < 0 ||
-            totalCents != checked(subtotalCents - discountCents + taxCents))
+            totalCents != checked(subtotalCents - discountCents + taxCents) ||
+            serviceWindowFrom.HasValue != serviceWindowTo.HasValue ||
+            (serviceWindowFrom is { } from && serviceWindowTo is { } to && from >= to))
         {
             throw new ArgumentException("The order snapshot is invalid.");
         }
@@ -69,6 +73,8 @@ public sealed class Order
         PackageSnapshot = packageSnapshot;
         FinancialOverride = financialOverride;
         CodExpectedCents = codExpectedCents;
+        ServiceWindowFrom = serviceWindowFrom;
+        ServiceWindowTo = serviceWindowTo;
         Version = 1;
         ClaimWindowEndsAt = null;
         FinalizedAt = null;
@@ -102,6 +108,13 @@ public sealed class Order
     public string PackageSnapshot { get; private set; } = string.Empty;
     public string? FinancialOverride { get; private set; }
     public long CodExpectedCents { get; private set; }
+
+    /// <summary>
+    /// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the optional delivery window (UTC); both bounds are set or both are
+    /// null, and null means the zone's schedule applies.
+    /// </summary>
+    public DateTimeOffset? ServiceWindowFrom { get; private set; }
+    public DateTimeOffset? ServiceWindowTo { get; private set; }
     public int Version { get; private set; }
     public DateTimeOffset? ClaimWindowEndsAt { get; private set; }
     public DateTimeOffset? FinalizedAt { get; private set; }
@@ -112,6 +125,8 @@ public sealed class Order
     /// <summary>
     /// Creates a DRAFT order from its quote snapshot. <paramref name="codExpectedCents"/> is the dispatcher-declared
     /// COD expectation in MXN cents (D6-COD-EXPECTED); zero means the order carries no COD.
+    /// <paramref name="serviceWindowFrom"/> and <paramref name="serviceWindowTo"/> are the optional delivery window
+    /// (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02): both or neither, with from strictly before to.
     /// </summary>
     public static Order Create(
         Guid id,
@@ -137,7 +152,9 @@ public sealed class Order
         string packageSnapshot,
         string? financialOverride,
         DateTimeOffset createdAt,
-        long codExpectedCents = 0) =>
+        long codExpectedCents = 0,
+        DateTimeOffset? serviceWindowFrom = null,
+        DateTimeOffset? serviceWindowTo = null) =>
         new(
             id,
             publicId,
@@ -162,5 +179,7 @@ public sealed class Order
             packageSnapshot,
             financialOverride,
             createdAt,
-            codExpectedCents);
+            codExpectedCents,
+            serviceWindowFrom,
+            serviceWindowTo);
 }

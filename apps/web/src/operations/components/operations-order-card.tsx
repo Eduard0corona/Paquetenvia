@@ -8,6 +8,7 @@ import {
   orderStatusLabels,
   serviceTypeLabel,
 } from "../contracts/operations-formatters";
+import { formatServiceWindow } from "../contracts/service-window";
 import { operationsOrderHref } from "../routing/operations-routing";
 
 export function OperationsOrderCard({
@@ -47,7 +48,7 @@ export function OperationsOrderCard({
         />
         <Row label="Servicio" value={serviceTypeLabel(order.service_type)} />
         <Row label="Recolección" value="Por confirmar" />
-        <Row label="Entrega" value="Por confirmar" />
+        <Row label="Entrega" value={formatServiceWindow(order.delivery_window)} />
         <Row
           label="Asignación"
           value={assignmentLabel(order.assignment?.assignment_type)}

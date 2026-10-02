@@ -3060,6 +3060,34 @@ components:
             replaying a key with another amount is a conflict. It is read back only through the finance operations
             (CodPosition.expected_cents, cod_expected_cents_total) and settlements, never through Order, which
             VIEWER can read.
+        service_window:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - from
+          - to
+          properties:
+            from:
+              type: string
+              format: date-time
+              maxLength: 33
+            to:
+              type: string
+              format: date-time
+              maxLength: 33
+          description: >-
+            ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 - optional delivery window the dispatcher commits to; absent or
+            null means the order has no window of its own and the zone's schedule applies. from and to are RFC 3339
+            date-times with an explicit offset (Z or +hh:mm/-hh:mm; a local time without offset is rejected) and
+            whole-second precision, normalized to UTC; the pilot zone is America/Mazatlan and clients convert the
+            wall-clock time typed by the dispatcher with that zone. The window must satisfy from < to, to - from at
+            most 12 hours, and against server time with the 5-minute clock tolerance from >= now - 5 minutes, to >
+            now and from <= now + 30 days; no same-calendar-day rule applies. Anything else, including any other
+            member, is rejected with 409 before any order is created. It is stored on the order, returned as
+            Order.service_window and is part of the Idempotency-Key request hash, so replaying a key with another
+            window is a conflict.
     Order:
       type: object
       required:
@@ -3133,6 +3161,23 @@ components:
           - string
           - 'null'
           format: date-time
+        service_window:
+          type:
+          - object
+          - 'null'
+          required:
+          - from
+          - to
+          properties:
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+          description: >-
+            ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 - the delivery window given on createOrder, as UTC instants; null
+            means the order has no window of its own and the zone's schedule applies.
     OrderDetail:
       allOf:
       - $ref: '#/components/schemas/Order'
@@ -5863,6 +5908,16 @@ x-pilot-contract-deltas:
       declared by the dispatcher; it is copied to orders.cod_expected_cents and flows to FIN-001 and SET-001
     quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the
       order and in the CSV
+  - id: ORD-SERVICE-WINDOW-OPTIONAL
+    status: DECIDED
+    decision: ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02
+    literal: 'Ventana de servicio (horario de entrega): la pantalla la pide pero la API no la guarda. ¿La agrego a la
+      API? - Sí, opcional'
+    implementation: shipped by feature/ord-service-window together with its code and tests - CreateOrderRequest.service_window,
+      Order.service_window, the window in the ORD-001 request hash and the Orders lane 20261002000100_AddOrderServiceWindow
+    delta: CreateOrderRequest accepts an optional service_window {from, to}; it is stored on orders.service_window_from and
+      orders.service_window_to and returned on Order and OrderDetail; absent means the zone's schedule applies. The CSV-001
+      template has no window column and is unchanged
   - id: D7-SETTLEMENT-CLOSED-PERIOD
     status: DECIDED
     decision: D7-SETTLEMENT-RULES

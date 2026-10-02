@@ -17,7 +17,14 @@ public sealed record CreateOrderCommand(
     string PayerType,
     OrderAcceptanceInput Acceptance,
     string? RequestId,
-    long CodExpectedCents = 0);
+    long CodExpectedCents = 0,
+    OrderServiceWindow? ServiceWindow = null);
+
+/// <summary>
+/// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the delivery window the dispatcher committed to, as two UTC instants.
+/// Absent means the order carries no window of its own and the zone's schedule applies.
+/// </summary>
+public sealed record OrderServiceWindow(DateTimeOffset From, DateTimeOffset To);
 
 public sealed record MoneyResult(string Currency, long AmountCents);
 
@@ -38,7 +45,8 @@ public sealed record OrderResult(
     string PricingTier,
     MoneyResult Total,
     DateTimeOffset? ClaimWindowEndsAt,
-    DateTimeOffset? FinalizedAt);
+    DateTimeOffset? FinalizedAt,
+    OrderServiceWindow? ServiceWindow = null);
 
 public sealed record OrderTimelineItem(string EventType, DateTimeOffset OccurredAt);
 
@@ -193,4 +201,82 @@ public static class OrderAcceptanceInputPolicy
     /// <summary>Both bounds are inclusive: exactly +5 minutes and exactly -72 hours are accepted.</summary>
     public static bool IsWithinAcceptanceWindow(DateTimeOffset acceptedAt, DateTimeOffset serverNow) =>
         acceptedAt <= serverNow + MaximumFutureSkew && acceptedAt >= serverNow - MaximumAge;
+}
+
+/// <summary>
+/// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 (owner: "Sí, opcional"): <c>CreateOrderRequest.service_window</c> is an
+/// optional delivery window <c>{from, to}</c>. Each bound is an RFC 3339 date-time with an explicit offset
+/// (<c>Z</c> or <c>±hh:mm</c>; a local time without offset is ambiguous and rejected) and whole-second precision, and
+/// is normalized to UTC before it is stored, hashed or returned. The pilot operates in
+/// <see cref="PilotTimeZone"/>; the client converts the wall-clock time the dispatcher types into an instant with
+/// that zone, never with the browser's zone. The window must satisfy <c>from &lt; to</c>,
+/// <c>to - from &lt;= </c><see cref="MaximumSpan"/>, and, against the server clock with the repository's 5-minute
+/// tolerance (<see cref="OrderAcceptanceInputPolicy.MaximumFutureSkew"/>), <c>from &gt;= now - 5 min</c>,
+/// <c>to &gt; now</c> and <c>from &lt;= now + </c><see cref="MaximumLeadTime"/>. AI-04 defines no same-calendar-day
+/// rule, so none is enforced; the span and lead-time bounds are the implementing session's proposal pending owner
+/// confirmation. Any violation is the uniform 409 before a transaction opens.
+/// </summary>
+public static class OrderServiceWindowPolicy
+{
+    public const string PilotTimeZone = "America/Mazatlan";
+    public static readonly TimeSpan ClockTolerance = OrderAcceptanceInputPolicy.MaximumFutureSkew;
+    public static readonly TimeSpan MaximumSpan = TimeSpan.FromHours(12);
+    public static readonly TimeSpan MaximumLeadTime = TimeSpan.FromDays(30);
+
+    /// <summary>The longest accepted bound text (<c>yyyy-MM-ddTHH:mm:ss.fffffff+hh:mm</c>).</summary>
+    public const int MaximumInstantLength = 33;
+
+    private static readonly System.Text.RegularExpressions.Regex InstantPattern = new(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?<fraction>\d{1,7}))?(?:Z|[+-]\d{2}:\d{2})$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant |
+        System.Text.RegularExpressions.RegexOptions.ExplicitCapture,
+        TimeSpan.FromMilliseconds(100));
+
+    /// <summary>
+    /// Reads one bound: an RFC 3339 date-time with an explicit offset and no sub-second part (an all-zero fraction
+    /// is accepted), returned as a UTC instant.
+    /// </summary>
+    public static bool TryParseInstant(string? text, out DateTimeOffset instant)
+    {
+        instant = default;
+        if (string.IsNullOrEmpty(text) || text.Length > MaximumInstantLength)
+        {
+            return false;
+        }
+
+        var match = InstantPattern.Match(text);
+        if (!match.Success ||
+            (match.Groups["fraction"].Success && match.Groups["fraction"].Value.Any(digit => digit != '0')) ||
+            !DateTimeOffset.TryParse(
+                text,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var parsed))
+        {
+            return false;
+        }
+
+        instant = parsed.ToUniversalTime();
+        return true;
+    }
+
+    /// <summary>The shape rules that do not depend on the clock: UTC, whole seconds, from before to, bounded span.</summary>
+    public static bool IsWellFormed(OrderServiceWindow? window) =>
+        window is not null &&
+        window.From.Offset == TimeSpan.Zero &&
+        window.To.Offset == TimeSpan.Zero &&
+        window.From.UtcTicks % TimeSpan.TicksPerSecond == 0 &&
+        window.To.UtcTicks % TimeSpan.TicksPerSecond == 0 &&
+        window.From < window.To &&
+        window.To - window.From <= MaximumSpan;
+
+    /// <summary>The window has not ended, does not start before now minus the tolerance and is not too far ahead.</summary>
+    public static bool IsWithinServerTime(OrderServiceWindow window, DateTimeOffset serverNow) =>
+        window.From >= serverNow - ClockTolerance &&
+        window.To > serverNow &&
+        window.From <= serverNow + MaximumLeadTime;
+
+    /// <summary>The canonical UTC text of a bound, used in the idempotency request hash.</summary>
+    public static string Format(DateTimeOffset instant) =>
+        instant.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
 }

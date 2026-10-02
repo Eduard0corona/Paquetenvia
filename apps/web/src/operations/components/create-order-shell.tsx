@@ -18,6 +18,7 @@ import {
 } from "../contracts/create-order";
 import { mayHandleExactCoordinates } from "../contracts/capabilities";
 import { formatMxnCentsWithCurrency } from "../contracts/money";
+import { maximumServiceWindowHours, serviceWindowTimeZone } from "../contracts/service-window";
 import { formatMazatlanTime, serviceTypeLabel } from "../contracts/operations-formatters";
 import { operationsOrderHref } from "../routing/operations-routing";
 import type { CreateOrderController, CreateOrderState } from "../state/create-order-controller";
@@ -81,6 +82,12 @@ export function CreateOrderShell({
             )}
           </dl>
           <p>Servicio: {serviceTypeLabel(state.order.service_type)} · versión {state.order.version}</p>
+          <p>
+            Ventana de entrega:{" "}
+            {state.order.service_window === null
+              ? "horario de la zona"
+              : `${formatMazatlanTime(state.order.service_window.from)} a ${formatMazatlanTime(state.order.service_window.to)} (hora de Mazatlán)`}
+          </p>
           <div className="opsFormActions">
             <Link className="opsPrimary" href={operationsOrderHref(state.order.id)}>Abrir orden</Link>
             <button type="button" className="opsSecondary" onClick={() => controller.reset()}>Capturar otra orden</button>
@@ -296,9 +303,24 @@ function QuoteSummary({
               payerType: String(data.get("payer_type") ?? ""),
               accepted: data.get("accepted") === "on",
               codAmount: String(data.get("cod_amount") ?? ""),
+              serviceWindowFrom: String(data.get("service_window_from") ?? ""),
+              serviceWindowTo: String(data.get("service_window_to") ?? ""),
             });
           }}
         >
+          <fieldset aria-describedby="service-window-help">
+            <legend>Ventana de entrega (opcional)</legend>
+            <label>Desde (hora de Mazatlán)
+              <input name="service_window_from" type="datetime-local" step={60} />
+            </label>
+            <label>Hasta (hora de Mazatlán)
+              <input name="service_window_to" type="datetime-local" step={60} />
+            </label>
+            <p id="service-window-help">
+              Déjala vacía para usar el horario de la zona. Máximo {maximumServiceWindowHours} horas; las horas se
+              interpretan en {serviceWindowTimeZone}, no en la zona de este equipo.
+            </p>
+          </fieldset>
           <fieldset>
             <legend>6. Aceptación</legend>
             <label>Quién paga

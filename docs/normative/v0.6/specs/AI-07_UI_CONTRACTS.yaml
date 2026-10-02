@@ -256,6 +256,10 @@ screen_contracts:
       (GATE-011-VAT-INCLUDED-2026-09-29; compares the total the customer pays, never the pre-tax net)
     cod_expected: D6-COD-EXPECTED - optional COD amount typed in MXN with at most two decimals, converted to integer
       cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD
+    service_window: ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 - optional delivery window (from and to) typed as wall-clock
+      time in America/Mazatlan, converted with that zone (never the browser's) to instants sent as service_window;
+      both empty means the zone's schedule applies; one bound alone, from not before to, a span over 12 hours or a
+      window already over is refused before sending; the order view shows the window in Mazatlan time
   driver_stop:
     offline_cache:
     - assigned stop minimum data

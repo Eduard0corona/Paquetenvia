@@ -54,6 +54,7 @@ export function orderResponse(overrides: Record<string, unknown> = {}): Record<s
     total: { currency: "MXN", amount_cents: 9_280 },
     claim_window_ends_at: null,
     finalized_at: null,
+    service_window: null,
     ...overrides,
   };
 }

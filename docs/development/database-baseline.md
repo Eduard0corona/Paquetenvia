@@ -13,7 +13,7 @@ role model. Their mandatory hashes and order are declared in
 `database/migrations/v0.6-baseline.json`:
 
 ```text
-AI-06 4e441d1165c17611abe317811278eb2932c27758685d768629855ab78de39da4
+AI-06 7c79413882c7d163eb398800c23b04381e6187fcc353f45b95fee200875259de
 AI-18 53c486c12178a470aa35764be2b117105f3ac077f384f7f3d0b7cca01a2b810f
 ```
 
@@ -195,3 +195,9 @@ decisión (cuerpos, grants e índices) y solo debe acompañar al release anterio
 `generation` y `key_version` de `orders.public_tracking_tokens` llegan por la lane Orders
 (`20260929000100_AddTrackingLinkGenerations`), que adopta la forma de AI-06 si ya existe. Los `Down` de
 ambos pasos fallan cerrado.
+
+`ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02` agrega a la lane Orders `20261002000100_AddOrderServiceWindow`:
+`orders.orders.service_window_from` y `service_window_to` (`timestamptz` nulos, sin default) con
+`orders_service_window_check` (ambos o ninguno, `from < to`). Adopta la forma de AI-06 si ya existe, rechaza una
+forma parcial o distinta y no reescribe filas (las existentes quedan sin ventana: aplica el horario de la zona).
+Su `Down` falla cerrado; el release anterior funciona con las columnas presentes.

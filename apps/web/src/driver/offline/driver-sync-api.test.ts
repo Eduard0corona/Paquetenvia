@@ -336,5 +336,6 @@ function transitionResponse(): Record<string, unknown> {
     total: { currency: "MXN", amount_cents: 11_600 },
     claim_window_ends_at: null,
     finalized_at: "2026-07-26T12:00:00.000Z",
+    service_window: null,
   };
 }

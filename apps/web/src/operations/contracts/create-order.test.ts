@@ -213,3 +213,62 @@ describe("quote and order parsers", () => {
     expect(() => parseCreatedOrder(orderResponse({ driver_phone: "x" }))).toThrow(CreateOrderContractError);
   });
 });
+
+describe("service window on createOrder (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)", () => {
+  const acceptance = { payerType: "SENDER", accepted: true };
+  const versions = { termsVersion: "terms-2026.09", privacyVersion: "privacy_v3" };
+  const acceptedAt = new Date("2026-10-02T17:00:00Z");
+
+  it("sends the window typed in Mazatlan time as UTC instants", () => {
+    const result = buildCreateOrderBody(
+      quoteId,
+      { ...acceptance, serviceWindowFrom: "2026-10-02T12:00", serviceWindowTo: "2026-10-02T14:00" },
+      versions,
+      acceptedAt,
+    );
+    expect(result.ok && result.body.service_window).toEqual({
+      from: "2026-10-02T19:00:00Z",
+      to: "2026-10-02T21:00:00Z",
+    });
+  });
+
+  it("leaves the field out when no window is typed", () => {
+    const result = buildCreateOrderBody(
+      quoteId,
+      { ...acceptance, serviceWindowFrom: "", serviceWindowTo: "" },
+      versions,
+      acceptedAt,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.ok && "service_window" in result.body).toBe(false);
+  });
+
+  it("refuses half a window", () => {
+    const result = buildCreateOrderBody(
+      quoteId,
+      { ...acceptance, serviceWindowFrom: "2026-10-02T12:00" },
+      versions,
+      acceptedAt,
+    );
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.errors.join(" ")).toContain("ventana de entrega");
+  });
+
+  it("parses the order window and fails closed on a malformed one", () => {
+    const window = { from: "2026-10-02T19:00:00+00:00", to: "2026-10-02T21:00:00+00:00" };
+    expect(parseCreatedOrder(orderResponse({ service_window: window })).service_window).toEqual(window);
+    expect(parseCreatedOrder(orderResponse()).service_window).toBeNull();
+    const withoutWindow = orderResponse();
+    delete withoutWindow.service_window;
+    expect(parseCreatedOrder(withoutWindow).service_window).toBeNull();
+    for (const bad of [
+      { from: window.from },
+      { ...window, extra: "x" },
+      { from: window.to, to: window.from },
+      { from: "2026-10-02T19:00:00", to: window.to },
+      "2026-10-02",
+    ]) {
+      expect(() => parseCreatedOrder(orderResponse({ service_window: bad }))).toThrow(CreateOrderContractError);
+    }
+  });
+});

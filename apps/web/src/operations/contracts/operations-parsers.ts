@@ -72,6 +72,7 @@ export function parseOperationsOrderDetail(
     "total",
     "claim_window_ends_at",
     "finalized_at",
+    "service_window",
     "timeline",
   ]);
   const timeline = array(object.timeline);
@@ -100,6 +101,8 @@ export function parseOperationsOrderDetail(
         : utc(object.claim_window_ends_at),
     finalized_at:
       object.finalized_at === null ? null : utc(object.finalized_at),
+    service_window:
+      object.service_window === null ? null : serviceWindow(object.service_window),
     timeline: timeline.map(parseTimeline),
   };
 }
@@ -251,6 +254,13 @@ function timeWindow(value: unknown): OperationsTimeWindow {
   const to = utc(object.to);
   if (Date.parse(from) > Date.parse(to)) fail();
   return { from, to };
+}
+
+/** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: an order's own window has from strictly before to. */
+function serviceWindow(value: unknown): OperationsTimeWindow {
+  const window = timeWindow(value);
+  if (Date.parse(window.from) >= Date.parse(window.to)) fail();
+  return window;
 }
 
 function parseTimeline(value: unknown): OperationsOrderTimelineItem {

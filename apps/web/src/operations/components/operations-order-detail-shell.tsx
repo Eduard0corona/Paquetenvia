@@ -8,6 +8,7 @@ import {
   serviceTypeLabel,
   timelineLabel,
 } from "../contracts/operations-formatters";
+import { formatServiceWindow } from "../contracts/service-window";
 import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
 import { OperationsTrackingLink } from "./operations-tracking-link";
 
@@ -88,7 +89,7 @@ export function OperationsOrderDetailShell({
           value={projection.delivery_zone?.name ?? "Sin zona asignada"}
         />
         <Detail label="Recolección" value="Por confirmar" />
-        <Detail label="Entrega" value="Por confirmar" />
+        <Detail label="Entrega" value={formatServiceWindow(order.service_window)} />
         <Detail
           label="Asignación"
           value={assignmentText(projection)}

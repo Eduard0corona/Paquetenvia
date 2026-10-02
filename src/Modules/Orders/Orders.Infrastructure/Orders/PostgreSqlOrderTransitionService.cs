@@ -665,7 +665,7 @@ public sealed class PostgreSqlOrderTransitionService(
                    claim_window_ends_at,finalized_at,cod_expected_cents,
                    subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot,
                    financial_override IS NOT NULL,currency,origin_location_id,destination_location_id,
-                   service_type,service_area_id,pricing_tier
+                   service_type,service_area_id,pricing_tier,service_window_from,service_window_to
             FROM orders.orders
             WHERE id=@id AND owner_org_id=@org
             FOR UPDATE
@@ -701,7 +701,12 @@ public sealed class PostgreSqlOrderTransitionService(
             reader.GetGuid(19),
             reader.GetString(20),
             reader.IsDBNull(21) ? null : reader.GetGuid(21),
-            reader.GetString(22));
+            reader.GetString(22),
+            QuoteSnapshotToOrderCoordinator.ReadServiceWindow(
+                reader,
+                23,
+                24,
+                () => new OrderTransitionInfrastructureException("The order service window is inconsistent.")));
     }
 
     private async Task<int> UpdateOrderAsync(
@@ -1106,7 +1111,8 @@ public sealed class PostgreSqlOrderTransitionService(
             order.PricingTier,
             new MoneyResult(order.Currency, order.TotalCents),
             claimWindowEndsAt,
-            finalizedAt);
+            finalizedAt,
+            order.ServiceWindow);
 
     private NpgsqlCommand CreateCommand(
         NpgsqlConnection connection,
@@ -1160,5 +1166,6 @@ public sealed class PostgreSqlOrderTransitionService(
         Guid DestinationLocationId,
         string ServiceType,
         Guid? ServiceAreaId,
-        string PricingTier);
+        string PricingTier,
+        OrderServiceWindow? ServiceWindow);
 }

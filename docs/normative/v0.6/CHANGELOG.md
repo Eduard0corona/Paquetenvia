@@ -1,5 +1,20 @@
 # Changelog
 
+## Ventana de servicio opcional en la orden (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner a "Ventana de servicio (horario de entrega): la pantalla la pide pero la API no
+  la guarda. ¿La agrego a la API?": "Sí, opcional". Registrado en `decision-log.md`.
+- AI-05: `CreateOrderRequest.service_window` opcional (`from`, `to` en RFC 3339 con zona explícita, segundos enteros,
+  normalizados a UTC; `from < to`, máximo 12 horas, `from >= ahora - 5 min`, `to > ahora`, `from <= ahora + 30 días`;
+  cualquier otra forma es 409). `Order.service_window` (null si no hay ventana: aplica el horario de la zona). Entra
+  en el hash de idempotencia solo si está presente. Nueva entrada ORD-SERVICE-WINDOW-OPTIONAL en
+  `x-pilot-contract-deltas`.
+- AI-06: `orders.orders` agrega `service_window_from` y `service_window_to` (timestamptz, nulos) con
+  `orders_service_window_check`. Lane Orders `20261002000100_AddOrderServiceWindow` adopta la forma de AI-06 y su
+  rollback falla cerrado. AI-18 sin cambios.
+- AI-04: regla de `Order.service_window`. AI-07: `create_order.service_window` (hora de Mazatlán).
+- El CSV de pedidos no cambia: su plantilla no tiene columna de ventana (pregunta pendiente al owner).
+
 ## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
 
 - Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para
