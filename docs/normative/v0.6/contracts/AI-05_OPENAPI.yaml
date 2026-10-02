@@ -2838,6 +2838,13 @@ components:
           type: string
         phone:
           type: string
+          maxLength: 32
+          pattern: ^[ -]*(?:[0-9][ -]*){10}$
+          description: >-
+            ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - a 10-digit Mexican number. ASCII spaces and hyphens are
+            removed and exactly ten ASCII digits must remain; a +52 or 52 prefix, parentheses, dots or any other
+            character is rejected with 422 before any effect. The normalized ten digits are what the quote hashes,
+            protects and stores; the value is never logged.
         lat:
           type: number
           minimum: -90
@@ -3003,6 +3010,7 @@ components:
       - quote_id
       - payer_type
       - acceptance
+      - restricted_goods_acknowledged
       properties:
         quote_id:
           type: string
@@ -3060,6 +3068,16 @@ components:
             replaying a key with another amount is a conflict. It is read back only through the finance operations
             (CodPosition.expected_cents, cod_expected_cents_total) and settlements, never through Order, which
             VIEWER can read.
+        restricted_goods_acknowledged:
+          type: boolean
+          const: true
+          description: >-
+            ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - the dispatcher's confirmation that the shipment contains no
+            prohibited goods. Required, and the JSON literal true is the only accepted value; absent, null, false or
+            a string is rejected with 409 before any order is created. It is a dispatcher attestation, not part of
+            the customer's acceptance, so OrderAcceptanceCanonicalForm v1 is unchanged; it is recorded in the
+            append-only ORDER_CREATED order event (its actor and occurred_at say who confirmed and when) and in the
+            ORDER_CREATED audit entry, and it is part of the Idempotency-Key request hash.
     Order:
       type: object
       required:
@@ -3779,6 +3797,7 @@ components:
       required:
       - file
       - content_digest
+      - restricted_goods_acknowledged
       properties:
         file:
           type: string
@@ -3787,6 +3806,15 @@ components:
         content_digest:
           type: string
           description: Base64url SHA-256 of the file, as returned by the preview.
+        restricted_goods_acknowledged:
+          type: string
+          enum:
+          - 'true'
+          description: >-
+            ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - the dispatcher's confirmation, given once for every shipment
+            in the file, that none contains prohibited goods. Exactly one field with the value true; absent, repeated
+            or any other value is the uniform 409 CONFLICT before the batch is reserved or any order is created.
+            Every created order records it as POST /orders does.
     CsvImportRowError:
       type: object
       required:
@@ -5863,6 +5891,16 @@ x-pilot-contract-deltas:
       declared by the dispatcher; it is copied to orders.cod_expected_cents and flows to FIN-001 and SET-001
     quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the
       order and in the CSV
+  - id: ORD-PROHIBITED-GOODS-PHONE-MX
+    status: DECIDED
+    decision: ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02
+    literal: Sí, ambas
+    implementation: shipped by feature/ord-prohibited-goods-phone together with its code and tests
+    delta: CreateOrderRequest requires restricted_goods_acknowledged (JSON true only) and CsvImportCommitRequest requires the
+      form field restricted_goods_acknowledged=true, both rejected with the uniform 409 otherwise; the confirmation is in
+      the ORD-001 request hash and is recorded in the append-only ORDER_CREATED order event and audit entry, never in
+      order_acceptances or OrderAcceptanceCanonicalForm v1; AddressInput.phone (createQuote) is a 10-digit Mexican number
+      after removing ASCII spaces and hyphens, otherwise 422, and only the normalized digits are hashed and stored
   - id: D7-SETTLEMENT-CLOSED-PERIOD
     status: DECIDED
     decision: D7-SETTLEMENT-RULES

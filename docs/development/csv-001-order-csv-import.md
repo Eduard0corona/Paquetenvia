@@ -127,6 +127,8 @@ Los rechazos de transporte —contenido que no es multipart, parte `file` ausent
 
 `POST /api/v1/orders/csv/commit` — requiere sesión activa, tenant seleccionado, header `Idempotency-Key` (16 a 128 caracteres, política compartida), la parte `file` y el campo `content_digest`.
 
+Desde ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 también requiere exactamente un campo de formulario `restricted_goods_acknowledged=true`: la confirmación del despachador, dada una vez para todo el archivo, de que ningún envío contiene artículos prohibidos. No es una columna del CSV, así que los archivos de seis y siete columnas no cambian. Si falta, se repite o tiene otro valor, el commit responde el `409` uniforme `CONFLICT` antes de reservar el lote o crear órdenes; la misma key puede reenviarse después con la confirmación. Cada fila la entrega a ORD-001, que la registra en el evento `ORDER_CREATED` y en su auditoría. El CSV no tiene teléfonos, así que la regla de 10 dígitos no añade errores por fila.
+
 El paso de confirmación es explícito en dos sentidos: es una llamada distinta, y solo acepta el archivo cuyo digest coincide con el que devolvió el preview. Un archivo modificado después de revisarlo produce `409` y cero efectos.
 
 El commit exige que el archivo prevalide por completo. Si hay un error de archivo o una sola fila inválida, responde `422` con el mismo reporte del preview y no crea ninguna orden. El operador corrige y vuelve a revisar.

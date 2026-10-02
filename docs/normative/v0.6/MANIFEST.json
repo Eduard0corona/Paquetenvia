@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 50047,
-      "sha256": "756f5d8ad555b76a95a05f774171ea2d3fad78ae3bf19e084bd2f84797716f76"
+      "bytes": 51070,
+      "sha256": "3e7af296ba43a9f976f7f9ef3ce9c231832f42065cd664b6034c2de136f43ed0"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "46f4b5448ed65daa37f696771e55f6a59e19146f90b109317eb202d7641c7cb2"
+      "sha256": "84d5b6e619ea17c656edbb9b4b8e7298ef8078b5f86e3cf8f67d4a5aac2dc962"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 193790,
-      "sha256": "72b625bce70e6e0771e2ec15c688e2141b0cb9a4157e08e19106227f38f5ccd8"
+      "bytes": 196509,
+      "sha256": "3d476d249ce1bc8ee2559d5f624ce776e7fc5e586519ec5f2bfdd2aa5329ca41"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 90823,
-      "sha256": "2bf3e0940270ebd195f397fbdfea927f3163e2fc7799d422201336f703dedbef"
+      "bytes": 92962,
+      "sha256": "621a9d1117f40cc9504ceed0a2658779090794bbbe7046c6b4b6589bf6adfe9c"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -334,8 +334,8 @@
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 17392,
-      "sha256": "9fbeecd209d33070a02c5d05c45a95cc1d8d6e2fb2c68f367558038de32fa7ba"
+      "bytes": 17940,
+      "sha256": "2c8622dfd3e6123175c7d3c46b77962787c1e8f367773d54e38096b2b6b92624"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",

@@ -9,6 +9,12 @@ public sealed record OrderAcceptanceInput(
     DateTimeOffset AcceptedAt,
     string AcceptanceChannel);
 
+/// <param name="RestrictedGoodsAcknowledged">
+/// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher's confirmation that the shipment contains no
+/// prohibited goods. It must be true; false is rejected with the uniform conflict before any effect. It is a
+/// dispatcher attestation, not part of the customer's legal acceptance, so OrderAcceptanceCanonicalForm v1 is
+/// unchanged; it is recorded in the append-only ORDER_CREATED order event and its audit entry.
+/// </param>
 public sealed record CreateOrderCommand(
     Guid ActorId,
     Guid OrganizationId,
@@ -17,7 +23,8 @@ public sealed record CreateOrderCommand(
     string PayerType,
     OrderAcceptanceInput Acceptance,
     string? RequestId,
-    long CodExpectedCents = 0);
+    long CodExpectedCents = 0,
+    bool RestrictedGoodsAcknowledged = false);
 
 public sealed record MoneyResult(string Currency, long AmountCents);
 

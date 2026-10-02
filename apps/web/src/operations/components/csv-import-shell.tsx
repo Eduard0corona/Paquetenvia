@@ -139,11 +139,25 @@ function PreviewReport({
         </table>
       )}
       {committable && state.canCommit && (
-        <div className="opsFormActions">
-          <button className="opsPrimary" type="button" disabled={state.busy} onClick={() => void controller.commit()}>
-            {state.busy ? "Confirmando…" : `Confirmar lote de ${preview.valid_rows} orden(es)`}
-          </button>
-        </div>
+        <form
+          className="opsForm"
+          autoComplete="off"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            void controller.commit(data.get("restricted_goods_acknowledged") === "on");
+          }}
+        >
+          <label className="opsCheckbox">
+            <input type="checkbox" name="restricted_goods_acknowledged" required /> Confirmo que ningún envío del
+            archivo contiene artículos prohibidos
+          </label>
+          <div className="opsFormActions">
+            <button className="opsPrimary" type="submit" disabled={state.busy}>
+              {state.busy ? "Confirmando…" : `Confirmar lote de ${preview.valid_rows} orden(es)`}
+            </button>
+          </div>
+        </form>
       )}
     </>
   );

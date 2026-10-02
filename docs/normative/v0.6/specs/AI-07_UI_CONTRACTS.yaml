@@ -256,6 +256,9 @@ screen_contracts:
       (GATE-011-VAT-INCLUDED-2026-09-29; compares the total the customer pays, never the pre-tax net)
     cod_expected: D6-COD-EXPECTED - optional COD amount typed in MXN with at most two decimals, converted to integer
       cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD
+    phone_and_restricted_goods: ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - each contact phone is 10 Mexican digits
+      (spaces and hyphens removed, no +52) and is sent normalized; confirming requires ticking that the shipment holds
+      no prohibited goods, sent as restricted_goods_acknowledged true and recorded on the order by the server
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -363,6 +366,8 @@ screen_contracts:
     - committed
     validations:
     - commit is offered only when file_errors is empty, invalid_rows is 0 and valid_rows is at least 1
+    - commit also requires the dispatcher to tick that no shipment in the file contains prohibited goods; it is sent as
+      restricted_goods_acknowledged=true (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)
     - file_errors and per-row errors are shown by row_number, column and code in Spanish
     - a commit 422 replaces the preview with the returned per-row report and creates nothing
     - a commit response whose content_digest differs from the previewed one fails closed

@@ -42,6 +42,7 @@ describe("CSV import api", () => {
     expect(file.name).toBe("orders.csv");
     expect(await file.text()).toBe("quote_id,payer_type\n");
     expect(form.get("content_digest")).toBeNull();
+    expect(form.get("restricted_goods_acknowledged")).toBeNull();
     expect(preview.valid_rows).toBe(1);
   });
 
@@ -58,6 +59,8 @@ describe("CSV import api", () => {
     expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe(key);
     const form = init.body as FormData;
     expect(form.get("content_digest")).toBe(syntheticDigest());
+    // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: exactly one confirmation field on commit.
+    expect(form.getAll("restricted_goods_acknowledged")).toEqual(["true"]);
     expect(result).toMatchObject({ kind: "committed" });
   });
 
