@@ -1,5 +1,15 @@
 # Changelog
 
+## Zona horaria del piloto solo America/Mazatlan en el cargador MDM-001 (MDM-001-TZ-MAZATLAN-ONLY-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Solo America/Mazatlan"; registrada en `decision-log.md`
+  (`MDM-001-TZ-MAZATLAN-ONLY-2026-10-02`).
+- Lane Pricing `20261002000100_RequireMazatlanTimeZoneInMasterDataLoader`: `security.load_master_data` rechaza una entrada de
+  ciudad con zona distinta de `America/Mazatlan` (`MDM001_CITY_TIMEZONE_NOT_IN_PILOT`, también en dry run); el validador del
+  job repite la regla. Una zona fuera de la lista mexicana sigue siendo `MDM001_CITY_TIMEZONE_NOT_ALLOWED`.
+- Ninguna fila guardada se reescribe. Sin permisos, tablas ni roles nuevos; rollback restaura la función anterior. AI-06 y AI-18
+  sin cambios.
+
 ## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
 
 - Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para

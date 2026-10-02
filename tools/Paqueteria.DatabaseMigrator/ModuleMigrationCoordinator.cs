@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
-        ("Pricing", "__ef_migrations_history_pricing", RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260929000200_RequireVatIncludedTariffsInMasterDataLoader.cs"),
+        ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddTrackingLinkGenerations.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260929000100_AddTrackingLinkGenerations.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
@@ -99,11 +99,11 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // GATE-011-VAT-INCLUDED-2026-09-29: the lane's latest migration only replaces the loader function
-                // with one derived from the hardened one by a reviewed edit (new tariff rules are VAT_INCLUDED
-                // only); its rollback restores the previous function. No grant, table, role or row is added,
-                // dropped, deleted or rewritten.
-                "Pricing" => IsVatIncludedLoaderSource(source),
+                // MDM-001-TZ-MAZATLAN-ONLY-2026-10-02: the lane's latest migration only replaces the loader
+                // function with one derived from the VAT_INCLUDED one by a reviewed edit (a city entry is
+                // America/Mazatlan only); its rollback restores the previous function. No grant, table, role or
+                // row is added, dropped, deleted or rewritten.
+                "Pricing" => IsMazatlanTimeZoneLoaderSource(source),
                 "Notifications" =>
                     source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
@@ -241,6 +241,11 @@ internal sealed class ModuleMigrationCoordinator
             HardenMasterDataLoaderOperatorBoundary.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000400_HardenMasterDataLoaderOperatorBoundary.cs",
             IsMasterDataLoaderHardeningSource);
+        VerifyPricingSource(
+            root,
+            RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260929000200_RequireVatIncludedTariffsInMasterDataLoader.cs",
+            IsVatIncludedLoaderSource);
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -472,6 +477,7 @@ internal sealed class ModuleMigrationCoordinator
                     StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
                     HardenMasterDataLoaderOperatorBoundary.MigrationId,
                     RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
+                    RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
                 ],
             "Orders" =>
                 [
@@ -606,6 +612,28 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>MDM-001-TZ-MAZATLAN-ONLY-2026-10-02: the loader function derived from the VAT_INCLUDED one by the
+    /// reviewed America/Mazatlan edit, and nothing else: no grant, table, role, policy or row is dropped, deleted,
+    /// truncated or rewritten, and no function is dropped.</summary>
+    private static bool IsMazatlanTimeZoneLoaderSource(string source) =>
+        source.Contains(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, StringComparison.Ordinal) &&
+        source.Contains("RequireVatIncludedTariffsInMasterDataLoader.FunctionSql", StringComparison.Ordinal) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE locations", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
