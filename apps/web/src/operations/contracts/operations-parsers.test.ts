@@ -197,7 +197,7 @@ describe("operations labels and timeline", () => {
     expect(parseOperationsOrderDetail(detail).service_window).toBeNull();
     const missing: Record<string, unknown> = { ...detail };
     delete missing.service_window;
-    expect(() => parseOperationsOrderDetail(missing)).toThrow(OperationsContractError);
+    expect(parseOperationsOrderDetail(missing).service_window).toBeNull();
     expect(() =>
       parseOperationsOrderDetail({ ...detail, service_window: { from: window.to, to: window.to } }),
     ).toThrow(OperationsContractError);

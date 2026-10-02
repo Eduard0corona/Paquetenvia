@@ -356,9 +356,14 @@ function assertJsonContentType(response: Response): void {
 }
 
 function parseTransitionReceipt(value: unknown): DriverTransitionReceipt {
+  // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: an API released before the window omits
+  // service_window; that response is still the exact pre-window contract, so a rolling
+  // deploy never strands the offline queue. When present it is validated below.
+  const hasServiceWindow = readRecord(value).service_window !== undefined;
   const record = readExactRecord(
     value,
     new Set([
+      ...(hasServiceWindow ? ["service_window"] : []),
       "id",
       "public_id",
       "owner_org_id",
@@ -376,7 +381,6 @@ function parseTransitionReceipt(value: unknown): DriverTransitionReceipt {
       "total",
       "claim_window_ends_at",
       "finalized_at",
-      "service_window",
     ]),
   );
   const id = readUuid(record.id);
@@ -397,7 +401,7 @@ function parseTransitionReceipt(value: unknown): DriverTransitionReceipt {
   readNullableUtcTimestamp(record.claim_window_ends_at);
   readNullableUtcTimestamp(record.finalized_at);
   // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: validated as part of the Order contract, not kept.
-  if (record.service_window !== null) {
+  if (hasServiceWindow && record.service_window !== null) {
     const window = readExactRecord(record.service_window, new Set(["from", "to"]));
     if (Date.parse(readUtcTimestamp(window.from)) >= Date.parse(readUtcTimestamp(window.to))) {
       throw new DriverSyncApiError("invalid-contract");

@@ -54,7 +54,12 @@ export function parseOperationsDashboard(
 export function parseOperationsOrderDetail(
   value: unknown,
 ): OperationsOrderDetail {
+  // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: an API released before the window omits
+  // service_window, which reads as no window (the zone's schedule).
+  const hasServiceWindow =
+    typeof value === "object" && value !== null && !Array.isArray(value) && "service_window" in value;
   const object = exactObject(value, [
+    ...(hasServiceWindow ? ["service_window"] : []),
     "id",
     "public_id",
     "owner_org_id",
@@ -72,7 +77,6 @@ export function parseOperationsOrderDetail(
     "total",
     "claim_window_ends_at",
     "finalized_at",
-    "service_window",
     "timeline",
   ]);
   const timeline = array(object.timeline);
@@ -102,7 +106,9 @@ export function parseOperationsOrderDetail(
     finalized_at:
       object.finalized_at === null ? null : utc(object.finalized_at),
     service_window:
-      object.service_window === null ? null : serviceWindow(object.service_window),
+      object.service_window === undefined || object.service_window === null
+        ? null
+        : serviceWindow(object.service_window),
     timeline: timeline.map(parseTimeline),
   };
 }

@@ -1059,6 +1059,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                     finalized_at = target == "DELIVERED"
                         ? DateTimeOffset.Parse("2026-07-26T12:00:00.000Z")
                         : (DateTimeOffset?)null,
+                    // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the API always returns the order window.
+                    service_window = (object?)null,
                 },
                 200));
         }
