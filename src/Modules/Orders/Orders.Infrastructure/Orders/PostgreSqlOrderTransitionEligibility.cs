@@ -12,7 +12,9 @@ public sealed class OrderTransitionDriverEligibilityOptions
 {
     public const string SectionName = "Drivers:Eligibility";
 
-    public string PolicyVersion { get; set; } = "synthetic-v1";
+    // POLICY-VERSIONS-PER-ORG-2026-10-02: there is no global eligibility policy version any more; each
+    // organization versions its own policy (organizations.organizations.driver_eligibility_policy_version)
+    // and it arrives with the driver snapshot.
     public Dictionary<string, List<string>> RequiredDocumentTypesByVehicleType { get; set; } =
         new(StringComparer.Ordinal);
     public List<string> NonExpiringDocumentTypes { get; set; } = [];
@@ -20,7 +22,6 @@ public sealed class OrderTransitionDriverEligibilityOptions
         new(StringComparer.Ordinal);
 
     public DriverEligibilityPolicyConfiguration ToPolicy() => new(
-        PolicyVersion,
         RequiredDocumentTypesByVehicleType.ToDictionary(
             pair => pair.Key,
             pair => (IReadOnlyList<string>)pair.Value.ToArray(),

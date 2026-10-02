@@ -17,6 +17,8 @@ entities:
     - legal_name
     - display_name
     - status
+    - assignment_policy_version
+    - driver_eligibility_policy_version
     statuses:
     - ACTIVE
     - PENDING_APPROVAL
@@ -27,6 +29,9 @@ entities:
     - a self-registered ALLY is PENDING_APPROVAL until a PLATFORM_ADMIN approves it (ACTIVE) or rejects it (CLOSED); approval creates no ally relationship (REG-ALLY-APPROVAL-ACTIVATE-ONLY)
     - a self-registered BUSINESS is ACTIVE at creation
     - at most one self-created organization that is not CLOSED per person (REG-ONE-ORGANIZATION-PER-PERSON)
+    - assignment_policy_version and driver_eligibility_policy_version are the versions of the organization's own assignment and driver eligibility policies; every organization starts at piloto-2026-10-v1 (POLICY-VERSIONS-PER-ORG-2026-10-02)
+    - both match ^[A-Za-z0-9._-]{1,64}$; there is no global assignment or driver eligibility policy version
+    - the versions applied are those of the organization of the driver being assigned or evaluated, which is the organization that performs the assignment (the order owner when it assigns its own driver, the operator when the operator does); an assignment audit records that assignment_policy_version
   User:
     required:
     - id

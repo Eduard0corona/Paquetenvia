@@ -54,8 +54,10 @@ public sealed class PostgreSqlDriverEligibilityService(
                      WHERE dsa.driver_id=p.id AND dsa.service_area_id=@service_area_id
                        AND dsa.org_id=p.org_id AND dsa.status='ACTIVE'
                        AND sa.owner_org_id=p.org_id AND sa.city_id=@city_id AND sa.status='ACTIVE'
-                   ) END
+                   ) END,
+                   o.driver_eligibility_policy_version
             FROM drivers.driver_profiles p
+            JOIN organizations.organizations o ON o.id=p.org_id
             LEFT JOIN identity.users u ON u.id=p.user_id
             WHERE p.id=@driver_id AND p.org_id=@organization_id;
             """;
@@ -70,6 +72,7 @@ public sealed class PostgreSqlDriverEligibilityService(
         string? userStatus;
         bool membershipActive;
         bool? serviceAreaEligible;
+        string policyVersion;
 
         await using (var profile = new NpgsqlCommand(profileSql, connection, transaction))
         {
@@ -106,6 +109,7 @@ public sealed class PostgreSqlDriverEligibilityService(
             userStatus = reader.IsDBNull(7) ? null : reader.GetString(7);
             membershipActive = reader.GetBoolean(8);
             serviceAreaEligible = reader.IsDBNull(9) ? null : reader.GetBoolean(9);
+            policyVersion = reader.GetString(10);
         }
 
         const string documentsSql =
@@ -151,6 +155,7 @@ public sealed class PostgreSqlDriverEligibilityService(
             userStatus,
             membershipActive,
             serviceAreaEligible,
-            documents);
+            documents,
+            policyVersion);
     }
 }

@@ -290,8 +290,10 @@ public sealed class PostgreSqlOrderAssignmentGuardReader(
                      WHERE dsa.driver_id=p.id AND dsa.service_area_id=@service_area
                        AND dsa.org_id=p.org_id AND dsa.status='ACTIVE'
                        AND sa.owner_org_id=p.org_id AND sa.city_id=@city AND sa.status='ACTIVE'
-                   ) END
+                   ) END,
+                   o.driver_eligibility_policy_version
             FROM drivers.driver_profiles p
+            JOIN organizations.organizations o ON o.id=p.org_id
             LEFT JOIN identity.users u ON u.id=p.user_id
             WHERE p.id=@driver AND p.org_id=@org;
 
@@ -320,7 +322,8 @@ public sealed class PostgreSqlOrderAssignmentGuardReader(
                 reader.IsDBNull(7) ? null : reader.GetString(7),
                 reader.GetBoolean(8),
                 reader.IsDBNull(9) ? null : reader.GetBoolean(9),
-                new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal));
+                new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal),
+                reader.GetString(10));
         }
 
         if (!await reader.NextResultAsync(cancellationToken))
