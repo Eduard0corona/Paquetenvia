@@ -1,5 +1,17 @@
 # Changelog
 
+## Tope de COD declarado por orden: 20,000 MXN (COD-CAP-20000-2026-10-02) — 2026-10-02
+
+- Literal del project owner: "Tope COD 20,000 pesos, finanzas sí ve la lista". Esta entrada cubre solo el tope;
+  registrado en `decision-log.md` (`COD-CAP-20000-2026-10-02`).
+- AI-05: `CreateOrderRequest.cod_expected_cents` y `CsvImportRowPreview.cod_expected_cents` agregan
+  `maximum: 2000000` (20,000.00 MXN, inclusivo). Un monto mayor en `POST /orders` es el mismo 409 uniforme que
+  cualquier literal COD inválido; en el CSV es el error de fila `COD_EXPECTED_CENTS_INVALID` (sin código nuevo) y
+  bloquea la confirmación. La entrada D6-COD-EXPECTED de `x-pilot-contract-deltas` documenta el tope.
+- AI-07: `create_order.cod_expected` y `csv_order_import` muestran el tope.
+- Sin migración ni CHECK nuevo: AI-06 conserva `CHECK (cod_expected_cents >= 0)`; el tope vive en
+  `OrderInputPolicy` y en el guard de dominio de `Order.Create`. AI-06 y AI-18 sin cambios.
+
 ## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
 
 - Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para

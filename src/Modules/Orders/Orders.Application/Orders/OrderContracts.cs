@@ -117,28 +117,36 @@ public static class OrderInputPolicy
 
     /// <summary>
     /// D6-COD-EXPECTED: the dispatcher-declared COD expectation is MXN integer cents (int64), zero meaning no COD.
-    /// A negative amount is never a valid expectation.
+    /// A negative amount is never a valid expectation, and COD-CAP-20000-2026-10-02 caps it at 2,000,000 cents
+    /// (20,000.00 MXN) per order, inclusive.
     /// </summary>
-    public static bool IsCodExpectedCents(long value) => value >= 0;
+    public static bool IsCodExpectedCents(long value) => OrderCodExpectationPolicy.IsValid(value);
 
     /// <summary>
     /// Reads a COD expectation written as text, on a CSV-001 row or as the raw JSON number of
     /// <c>POST /orders</c>. Only a plain run of ASCII digits that fits int64 is accepted: signs, decimal points,
     /// exponents, thousands separators, currency symbols and whitespace are all rejected, so no fractional or
-    /// floating-point value can ever become an amount of cents.
+    /// floating-point value can ever become an amount of cents. A well-formed amount above the
+    /// COD-CAP-20000-2026-10-02 cap is rejected exactly like a malformed one.
     /// </summary>
     public static bool TryParseCodExpectedCents(string? text, out long cents)
     {
-        cents = 0;
-        return !string.IsNullOrEmpty(text) &&
+        if (!string.IsNullOrEmpty(text) &&
             text.Length <= MaximumCodExpectedCentsDigits &&
             text.All(char.IsAsciiDigit) &&
             long.TryParse(
                 text,
                 System.Globalization.NumberStyles.None,
                 System.Globalization.CultureInfo.InvariantCulture,
-                out cents) &&
-            IsCodExpectedCents(cents);
+                out var parsed) &&
+            IsCodExpectedCents(parsed))
+        {
+            cents = parsed;
+            return true;
+        }
+
+        cents = 0;
+        return false;
     }
 
     public static bool IsPayerType(string? value) =>
