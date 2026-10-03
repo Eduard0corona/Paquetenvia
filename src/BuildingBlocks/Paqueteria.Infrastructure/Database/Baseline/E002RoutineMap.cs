@@ -127,6 +127,17 @@ public static class E002RoutineMap
         new("security.load_master_data(uuid,uuid,json,bytea,boolean)", "paqueteria_master_data_executor", ["paqueteria_master_data_loader"]),
     ];
 
+    /// <summary>
+    /// DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: installed by the Dispatch lane migration
+    /// 20261003000100_AddOperatorOwnerOutboxExecutor, owned by paqueteria_operator_outbox_executor and executable
+    /// only by paqueteria_app.
+    /// </summary>
+    private static readonly E002RoutineEntry[] OperatorOutboxEntries =
+    [
+        new("security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)", "paqueteria_operator_outbox_executor", ["paqueteria_app"]),
+        new("security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)", "paqueteria_operator_outbox_executor", ["paqueteria_app"]),
+    ];
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -147,7 +158,8 @@ public static class E002RoutineMap
             BffSessionEntries.Length != 6 || BffSessionEntries.Sum(entry => 1 + entry.Grantees.Count) != 12 ||
             BffPurgeEntries.Length != 1 || BffPurgeEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             Reg002Entries.Length != 4 || Reg002Entries.Sum(entry => 1 + entry.Grantees.Count) != 8 ||
-            Mdm001Entries.Length != 1 || Mdm001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2)
+            Mdm001Entries.Length != 1 || Mdm001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
+            OperatorOutboxEntries.Length != 2 || OperatorOutboxEntries.Sum(entry => 1 + entry.Grantees.Count) != 4)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
@@ -162,7 +174,8 @@ public static class E002RoutineMap
         bool bffSessionApplied = false,
         bool bffPurgeApplied = false,
         bool reg002Applied = false,
-        bool mdm001Applied = false)
+        bool mdm001Applied = false,
+        bool operatorOutboxApplied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -211,6 +224,11 @@ public static class E002RoutineMap
             selected = selected.Concat(Mdm001Entries);
         }
 
+        if (operatorOutboxApplied)
+        {
+            selected = selected.Concat(OperatorOutboxEntries);
+        }
+
         return Array.AsReadOnly(selected.ToArray());
     }
 
@@ -223,7 +241,8 @@ public static class E002RoutineMap
         bool bffSessionApplied = false,
         bool bffPurgeApplied = false,
         bool reg002Applied = false,
-        bool mdm001Applied = false)
+        bool mdm001Applied = false,
+        bool operatorOutboxApplied = false)
     {
         var prefix = state switch
         {
@@ -241,6 +260,7 @@ public static class E002RoutineMap
             (bffPurgeApplied ? "_PLUS_BFFPURGE" : string.Empty) +
             (reg002Applied ? "_PLUS_REG002" : string.Empty) +
             (mdm001Applied ? "_PLUS_MDM001" : string.Empty) +
+            (operatorOutboxApplied ? "_PLUS_DSPOPOUTBOX" : string.Empty) +
             "_V1";
     }
 }

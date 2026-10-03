@@ -46,6 +46,28 @@ class ExecutorGrantRuleTests(unittest.TestCase):
     def test_canonical_role_model_satisfies_both_executor_grant_sets(self) -> None:
         self.assertEqual([], self.validator.executor_grant_errors(self.role_sql))
 
+    def test_operator_outbox_executor_contract_holds_and_any_widening_fails(self) -> None:
+        self.assertEqual([], self.validator.operator_outbox_errors(self.schema_sql, self.role_sql))
+        for widening in [
+            "GRANT UPDATE (status) ON platform.outbox_events TO paqueteria_operator_outbox_executor;",
+            "GRANT SELECT ON platform.outbox_events TO paqueteria_operator_outbox_executor;",
+            "GRANT SELECT (payload) ON platform.outbox_events TO paqueteria_operator_outbox_executor;",
+            "GRANT SELECT ON orders.orders TO paqueteria_app, paqueteria_operator_outbox_executor;",
+            "GRANT paqueteria_operator_outbox_executor TO paqueteria_app;",
+            "GRANT EXECUTE ON FUNCTION security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamptz,timestamptz) TO paqueteria_worker;",
+        ]:
+            with self.subTest(widening=widening):
+                widened = self.role_sql + "\n" + widening + "\n"
+                self.assertTrue(
+                    self.validator.executor_grant_errors(widened)
+                    or self.validator.operator_outbox_errors(self.schema_sql, widened)
+                )
+        missing = self.role_sql.replace(
+            "GRANT SELECT (org_id,action,entity_type,entity_id,payload_redacted) ON platform.audit_logs TO paqueteria_operator_outbox_executor;",
+            "",
+        )
+        self.assertTrue(self.validator.executor_grant_errors(missing))
+
     def test_multi_grantee_grants_fail_for_either_executor(self) -> None:
         for widening in [
             "GRANT SELECT ON orders.order_events TO paqueteria_app, paqueteria_cleanup_executor;",

@@ -73,13 +73,15 @@ public sealed class E002SemanticAssertions
             .IsReg002AppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var mdm001Applied = await E002MasterDataStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
             .ConfigureAwait(false);
+        var operatorOutboxApplied = await E002OperatorOutboxStateReader
+            .IsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await AssertSchemaAclAsync(connection, transaction, "security",
             await SecurityAclAsync(connection, transaction, cancellationToken).ConfigureAwait(false), violations,
             cancellationToken).ConfigureAwait(false);
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
             connection, transaction, mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied,
-            bffSessionApplied, bffPurgeApplied, reg002Applied, mdm001Applied, violations, cancellationToken)
-            .ConfigureAwait(false);
+            bffSessionApplied, bffPurgeApplied, reg002Applied, mdm001Applied, operatorOutboxApplied, violations,
+            cancellationToken).ConfigureAwait(false);
         await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
@@ -90,7 +92,7 @@ public sealed class E002SemanticAssertions
             state,
             E002RoutineMap.Name(
                 mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-                reg002Applied, mdm001Applied),
+                reg002Applied, mdm001Applied, operatorOutboxApplied),
             identities,
             aclRows);
     }
@@ -122,11 +124,13 @@ public sealed class E002SemanticAssertions
             .IsReg002AppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var mdm001Applied = await E002MasterDataStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
             .ConfigureAwait(false);
+        var operatorOutboxApplied = await E002OperatorOutboxStateReader
+            .IsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         // D8-OUTBOX-LANE-DISPATCH: the NTF-001 target is asserted when its own history row is written,
         // before the later DISPATCH lane migration of the same lane has run.
         await AssertRoutineMapCoreAsync(connection, transaction, E002RoutineMapState.Ntf001TargetApplied,
             lif001Applied, dispatchLaneApplied: false, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-            reg002Applied, mdm001Applied, violations, cancellationToken).ConfigureAwait(false);
+            reg002Applied, mdm001Applied, operatorOutboxApplied, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
             throw new E002SemanticException(violations.AsReadOnly());
@@ -331,12 +335,12 @@ public sealed class E002SemanticAssertions
     private static async Task<(int Identities, int ExecuteRows)> AssertRoutineMapCoreAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, E002RoutineMapState mapState,
         bool lif001Applied, bool dispatchLaneApplied, bool ops003Applied, bool reg001Applied, bool bffSessionApplied,
-        bool bffPurgeApplied, bool reg002Applied, bool mdm001Applied, ICollection<string> violations,
-        CancellationToken cancellationToken)
+        bool bffPurgeApplied, bool reg002Applied, bool mdm001Applied, bool operatorOutboxApplied,
+        ICollection<string> violations, CancellationToken cancellationToken)
     {
         var map = E002RoutineMap.Select(
             mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-            reg002Applied, mdm001Applied);
+            reg002Applied, mdm001Applied, operatorOutboxApplied);
         var expectedOids = new HashSet<uint>();
         var totalRows = 0;
         foreach (var routine in map)

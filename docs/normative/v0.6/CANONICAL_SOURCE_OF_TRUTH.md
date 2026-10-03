@@ -16,8 +16,8 @@ Este ZIP completo es la única entrega que debe validarse. No mezclar archivos s
 
 ## Archivos críticos
 
-- `database/AI-06_SCHEMA.sql` SHA-256: `1cd2a0cfc6da3a855857bc1d4d07857cdfd6f8e61fb1ee7ab8e65cf31f4a239a`
-- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `53c486c12178a470aa35764be2b117105f3ac077f384f7f3d0b7cca01a2b810f`
+- `database/AI-06_SCHEMA.sql` SHA-256: `f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7`
+- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `e13dc633db9a96565245f0f80917f006e5b7aaec01d549e1d01942a06ce4e759`
 
 El SQL canónico contiene:
 
@@ -53,7 +53,9 @@ Los hashes de "Archivos críticos" son los vigentes en `MANIFEST.json` y
 (AI-18, PR #83), y por OPS-003 (`OPS-003-CLEANUP-ROLE`: AI-18; AI-05
 `x-offline-operation-age`), por los deltas del piloto (AI-06 y AI-18) y por el
 almacén PostgreSQL de sesiones BFF (`BFF-SESSION-STORE-IMPLEMENTATION`: AI-06
-`identity.bff_sessions`; AI-18 `paqueteria_session_executor`). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
+`identity.bff_sessions`; AI-18 `paqueteria_session_executor`) y por el ejecutor de outbox y auditoría del
+operador (`DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03`: AI-06 nota de política; AI-18
+`paqueteria_operator_outbox_executor`). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
 CSV-001, INC-001, FIN-001 y SET-001; ver `CHANGELOG.md` y `decision-log.md`.
 El identificador de bundle no se reemitió.
 

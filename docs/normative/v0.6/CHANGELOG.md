@@ -1,5 +1,44 @@
 # Changelog
 
+## El repartidor del operador recibe los cambios de estado del dueño (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03) — 2026-10-03
+
+- Respuesta literal del project owner: "Solo avisar a su repartidor"; registrada en `decision-log.md`.
+- ORD-002 sigue siendo solo del dueño. Si la orden tiene operador distinto del dueño y la asignación vigente
+  (OWN/EXTERNAL, ACCEPTED o ACTIVE) es de ese operador, el `orders.status-changed` (etiquetado con el dueño) nombra a
+  su repartidor; Realtime solo lo entrega tras verificar en el contexto del propio operador la asignación, la orden y
+  el repartidor exactos, que el operador de la asignación siga siendo el de la orden y que perfil, usuario y membresía
+  DRIVER estén activos. Ningún repartidor de un tercero y ninguna otra audiencia cambian.
+- AI-04 `outbox_invariants` registra la regla. Sin migración, rol, grant ni función nuevos; AI-06, AI-12 y AI-18 sin
+  cambios.
+
+## Outbox y auditoría a nombre del dueño cuando asigna el operador (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03) — 2026-10-03
+
+- Respuestas literales del project owner: "Función segura a nombre del dueño" y "Sí, el dueño lo ve"; registradas en
+  `decision-log.md`.
+- Corrige un fallo confirmado: cuando la organización operadora de un pedido ajeno asignaba a su repartidor (DSP-002),
+  RLS rechazaba las filas de outbox y auditoría etiquetadas con el dueño (42501) y la asignación se revertía.
+- AI-18: nuevo rol `paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS` con `SELECT`/`INSERT` por columna exactos
+  (sin UPDATE/DELETE, sin CREATE, sin membresía runtime) y aserciones 29-31. AI-06: solo una nota junto a
+  `audit_logs_tenant`/`outbox_tenant` (políticas sin cambio). AI-03 §25.2 y AI-04 `outbox_invariants` registran la regla.
+- Lane Dispatch `20261003000100_AddOperatorOwnerOutboxExecutor`: `security.append_operator_order_outbox` y
+  `security.append_operator_order_audit` (SECURITY DEFINER, `search_path=pg_catalog, pg_temp`, EXECUTE solo para
+  `paqueteria_app`); escriben una fila cada una solo si el contexto es exactamente el operador de la orden, el actor es
+  despachador o admin activo del operador y la fila corresponde a la asignación recién hecha (tema/acción, audiencia,
+  payload y versión en lista permitida, sin repetidos); si no, 42501. Rollback: solo elimina las dos funciones.
+- DSP-002 usa esas funciones únicamente cuando actúa el operador; el dueño conserva los inserts directos. Realtime
+  autoriza como audiencia de conductor al repartidor del operador de esa asignación exacta; no se amplía otra audiencia.
+- ORD-002 sin cambios (solo el dueño transiciona); extenderlo a operadores queda como decisión aparte.
+
+## AI-02 y AI-15 alineados con la excepción WhatsApp de leases vencidos (DOC-AI02-AI15-STALE-LEASE-SYNC-2026-10-03) — 2026-10-03
+
+- Respuesta literal del project owner: "Sí, actualizarlo"; registrada en `decision-log.md`
+  (`DOC-AI02-AI15-STALE-LEASE-SYNC-2026-10-03`).
+- AI-02 `outbox_lifecycle.recovery` y AI-15 `outbox_operations.lease_recovery`: el PROCESSING vencido se sigue
+  reencolando, salvo el `notifications.send-requested` de WhatsApp, que queda DEAD con su Notification FAILED
+  (`AMBIGUOUS_TIMEOUT`) y un `notifications.status-changed` que avisa al despachador, como ya dice AI-04
+  `outbox_invariants` (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03, PR #186).
+- Solo redacción: sin cambio de comportamiento ni migración; AI-04, AI-05, AI-06, AI-12 y AI-18 sin cambios.
+
 ## WhatsApp con lease vencido: fallido sin reencolar y aviso al despachador (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03) — 2026-10-03
 
 - Respuesta literal del project owner (GATE-004): "Sí, marcar fallido y avisar"; registrada en `decision-log.md`

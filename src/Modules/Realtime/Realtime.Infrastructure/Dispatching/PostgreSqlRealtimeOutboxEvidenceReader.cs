@@ -50,7 +50,16 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
             },
             cancellationToken);
 
-    public Task<AssignmentEvidence?> ReadAssignmentAsync(
+    public async Task<AssignmentEvidence?> ReadAssignmentAsync(
+        Guid ownerOrganizationId,
+        Guid assignmentId,
+        CancellationToken cancellationToken) =>
+        await WithOperatorDriverAudienceAsync(
+            await ReadOwnerAssignmentAsync(ownerOrganizationId, assignmentId, cancellationToken),
+            ActiveAssignmentStatuses,
+            cancellationToken);
+
+    private Task<AssignmentEvidence?> ReadOwnerAssignmentAsync(
         Guid ownerOrganizationId,
         Guid assignmentId,
         CancellationToken cancellationToken) =>
@@ -78,7 +87,7 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                                  AND m.role='DRIVER'
                                  AND m.status='ACTIVE'
                              )
-                           ) AS driver_authorized
+                           ) IS TRUE AS driver_authorized
                     FROM dispatch.assignments a
                     JOIN orders.orders o
                       ON o.id=a.order_id AND o.owner_org_id=a.owner_org_id
@@ -115,7 +124,17 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
             },
             cancellationToken);
 
-    public Task<AssignmentEvidence?> ReadClosedAssignmentAsync(
+    public async Task<AssignmentEvidence?> ReadClosedAssignmentAsync(
+        Guid ownerOrganizationId,
+        Guid assignmentId,
+        long orderVersion,
+        CancellationToken cancellationToken) =>
+        await WithOperatorDriverAudienceAsync(
+            await ReadOwnerClosedAssignmentAsync(ownerOrganizationId, assignmentId, orderVersion, cancellationToken),
+            ClosedAssignmentStatuses,
+            cancellationToken);
+
+    private Task<AssignmentEvidence?> ReadOwnerClosedAssignmentAsync(
         Guid ownerOrganizationId,
         Guid assignmentId,
         long orderVersion,
@@ -182,7 +201,65 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
             },
             cancellationToken);
 
-    public Task<bool> IsDriverAudienceAuthorizedAsync(
+    public async Task<bool> IsDriverAudienceAuthorizedAsync(
+        Guid ownerOrganizationId,
+        Guid orderId,
+        Guid assignmentId,
+        Guid driverId,
+        CancellationToken cancellationToken)
+    {
+        if (await IsOwnerDriverAudienceAuthorizedAsync(
+                ownerOrganizationId,
+                orderId,
+                assignmentId,
+                driverId,
+                cancellationToken))
+        {
+            return true;
+        }
+
+        // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator's own driver of this exact active
+        // assignment. The operator is read from the owner's persisted assignment, never from the payload, and
+        // must still be the order's stored operator (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03).
+        var operatorOrganizationId = await ExecuteTenantReadAsync(
+            ownerOrganizationId,
+            async (connection, transaction, token) =>
+            {
+                const string sql =
+                    """
+                    SELECT a.operator_org_id
+                    FROM dispatch.assignments a
+                    JOIN orders.orders o
+                      ON o.id=a.order_id
+                     AND o.owner_org_id=a.owner_org_id
+                     AND o.operator_org_id=a.operator_org_id
+                    WHERE a.id=@assignment_id
+                      AND a.order_id=@order_id
+                      AND a.driver_id=@driver_id
+                      AND a.owner_org_id=@owner
+                      AND a.status IN ('ACCEPTED','ACTIVE')
+                    """;
+                await using var command = new NpgsqlCommand(sql, connection, transaction);
+                command.Parameters.Add(P("assignment_id", NpgsqlDbType.Uuid, assignmentId));
+                command.Parameters.Add(P("order_id", NpgsqlDbType.Uuid, orderId));
+                command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, driverId));
+                command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+                return await command.ExecuteScalarAsync(token) as Guid?;
+            },
+            cancellationToken);
+        return operatorOrganizationId is { } operatorId &&
+            operatorId != ownerOrganizationId &&
+            await IsOperatorDriverAuthorizedAsync(
+                ownerOrganizationId,
+                operatorId,
+                orderId,
+                assignmentId,
+                driverId,
+                ActiveAssignmentStatuses,
+                cancellationToken);
+    }
+
+    private Task<bool> IsOwnerDriverAudienceAuthorizedAsync(
         Guid ownerOrganizationId,
         Guid orderId,
         Guid assignmentId,
@@ -382,6 +459,100 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                     version,
                     updatedAt,
                     stopIds);
+            },
+            cancellationToken);
+
+    private static readonly string[] ActiveAssignmentStatuses = ["ACCEPTED", "ACTIVE"];
+    private static readonly string[] ClosedAssignmentStatuses = ["COMPLETED", "CANCELLED"];
+
+    /// <summary>
+    /// DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 ("Sí, el dueño lo ve"): an assignment of the owner's order
+    /// made by its operator organization (distinct from the owner) carries the operator's driver, whose profile,
+    /// user and membership the owner's tenant context cannot read. When the owner-scope read did not authorize
+    /// the driver, the driver audience is decided in the operator's own tenant context, for the operator taken from
+    /// the persisted assignment, and only for that exact assignment, order and driver. Nothing else changes: the
+    /// operations audience stays the owner and no other driver is ever added.
+    /// </summary>
+    private async Task<AssignmentEvidence?> WithOperatorDriverAudienceAsync(
+        AssignmentEvidence? evidence,
+        IReadOnlyList<string> assignmentStatuses,
+        CancellationToken cancellationToken)
+    {
+        if (evidence is null ||
+            evidence.DriverAudienceAuthorized ||
+            evidence.OperatorOrganizationId is not { } operatorId ||
+            operatorId == evidence.OwnerOrganizationId)
+        {
+            return evidence;
+        }
+
+        return await IsOperatorDriverAuthorizedAsync(
+                evidence.OwnerOrganizationId,
+                operatorId,
+                evidence.OrderId,
+                evidence.AssignmentId,
+                evidence.DriverId,
+                assignmentStatuses,
+                cancellationToken)
+            ? evidence with { DriverAudienceAuthorized = true }
+            : evidence;
+    }
+
+    private Task<bool> IsOperatorDriverAuthorizedAsync(
+        Guid ownerOrganizationId,
+        Guid operatorOrganizationId,
+        Guid orderId,
+        Guid assignmentId,
+        Guid driverId,
+        IReadOnlyList<string> assignmentStatuses,
+        CancellationToken cancellationToken) =>
+        ExecuteTenantReadAsync(
+            operatorOrganizationId,
+            async (connection, transaction, token) =>
+            {
+                const string sql =
+                    """
+                    SELECT EXISTS (
+                      SELECT 1
+                      FROM dispatch.assignments a
+                      -- ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03: the assignment's operator must still be the
+                      -- order's stored operator, for every driver-audience path (status, assignment, closed).
+                      JOIN orders.orders o
+                        ON o.id=a.order_id
+                       AND o.owner_org_id=a.owner_org_id
+                       AND o.operator_org_id=a.operator_org_id
+                      JOIN drivers.driver_profiles p
+                        ON p.id=a.driver_id
+                       AND p.org_id=a.operator_org_id
+                       AND p.driver_type=a.assignment_type
+                       AND p.status='ACTIVE'
+                      JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
+                      JOIN organizations.organization_memberships m
+                        ON m.user_id=p.user_id
+                       AND m.organization_id=p.org_id
+                       AND m.role='DRIVER'
+                       AND m.status='ACTIVE'
+                      WHERE a.id=@assignment_id
+                        AND a.order_id=@order_id
+                        AND a.driver_id=@driver_id
+                        AND a.owner_org_id=@owner
+                        AND a.operator_org_id=@operator
+                        AND a.operator_org_id<>a.owner_org_id
+                        AND a.assignment_type IN ('OWN','EXTERNAL')
+                        AND a.status=ANY(@statuses)
+                    )
+                    """;
+                await using var command = new NpgsqlCommand(sql, connection, transaction);
+                command.Parameters.Add(P("assignment_id", NpgsqlDbType.Uuid, assignmentId));
+                command.Parameters.Add(P("order_id", NpgsqlDbType.Uuid, orderId));
+                command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, driverId));
+                command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+                command.Parameters.Add(P("operator", NpgsqlDbType.Uuid, operatorOrganizationId));
+                command.Parameters.Add(new NpgsqlParameter<string[]>("statuses", NpgsqlDbType.Array | NpgsqlDbType.Text)
+                {
+                    TypedValue = assignmentStatuses.ToArray(),
+                });
+                return await command.ExecuteScalarAsync(token) is true;
             },
             cancellationToken);
 

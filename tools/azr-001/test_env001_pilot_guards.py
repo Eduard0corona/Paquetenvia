@@ -155,6 +155,90 @@ class ObservabilityParametersTests(unittest.TestCase):
         self.assertEqual(0, allowed.returncode, allowed.stdout)
 
 
+class WebParametersTests(unittest.TestCase):
+    """UI-001: the accepted terms/privacy versions are owner values (with the approved notice, GATE-007);
+    the file carries exactly those two, in the AI-05 format, and the deploy fails closed without them."""
+
+    @staticmethod
+    def document(**parameters):
+        return {"$schema": "x", "contentVersion": "1.0.0.0", "parameters": {k: {"value": v} for k, v in parameters.items()}}
+
+    def test_repository_parameters_are_well_formed_but_await_the_owner(self):
+        document = json.loads((REPO_ROOT / guards.WEB_PARAMETERS_FILE).read_text(encoding="utf-8"))
+        self.assertEqual({"webTermsVersion", "webPrivacyVersion"}, set(document["parameters"]))
+        for name in ("webTermsVersion", "webPrivacyVersion"):
+            self.assertEqual(guards.OWNER_SENTINEL, document["parameters"][name]["value"])
+        self.assertEqual([], guards.validate_web_parameters(document, allow_sentinel=True))
+        failures = guards.validate_web_parameters(document, allow_sentinel=False)
+        self.assertEqual(2, len(failures), failures)
+        self.assertTrue(any("PAQUETERIA_TERMS_VERSION" in f and guards.OWNER_SENTINEL in f for f in failures), failures)
+        self.assertTrue(any("PAQUETERIA_PRIVACY_VERSION" in f and guards.OWNER_SENTINEL in f for f in failures), failures)
+
+    def test_versions_in_the_ai05_format_pass(self):
+        for terms, privacy in (("2026-10-01", "2026-10-01"), ("terminos.v1", "aviso_privacidad-v1"), ("A" * 64, "z"), ("1", "a.B_c-9")):
+            with self.subTest(terms=terms, privacy=privacy):
+                self.assertEqual([], guards.validate_web_parameters(
+                    self.document(webTermsVersion=terms, webPrivacyVersion=privacy), allow_sentinel=False))
+
+    def test_malformed_missing_or_unexpected_values_fail(self):
+        good = "2026-10-01"
+        cases = {
+            "empty terms": self.document(webTermsVersion="", webPrivacyVersion=good),
+            "empty privacy": self.document(webTermsVersion=good, webPrivacyVersion=""),
+            "65 characters": self.document(webTermsVersion="a" * 65, webPrivacyVersion=good),
+            "space": self.document(webTermsVersion="v 1", webPrivacyVersion=good),
+            "padded": self.document(webTermsVersion=good, webPrivacyVersion=" 2026-10-01"),
+            "trailing newline": self.document(webTermsVersion="2026-10-01\n", webPrivacyVersion=good),
+            "slash": self.document(webTermsVersion="2026/10/01", webPrivacyVersion=good),
+            "colon": self.document(webTermsVersion=good, webPrivacyVersion="v:1"),
+            "non-ascii": self.document(webTermsVersion="términos-1", webPrivacyVersion=good),
+            "plus": self.document(webTermsVersion="v1+2", webPrivacyVersion=good),
+            "missing privacy": self.document(webTermsVersion=good),
+            "missing terms": self.document(webPrivacyVersion=good),
+            "number": self.document(webTermsVersion=20261001, webPrivacyVersion=good),
+            "null": self.document(webTermsVersion=None, webPrivacyVersion=good),
+            "unknown parameter": self.document(webTermsVersion=good, webPrivacyVersion=good, webPricingVersion=good),
+            "extra key": {"parameters": {"webTermsVersion": {"value": good, "reference": "x"}, "webPrivacyVersion": {"value": good}}},
+            "not a parameters file": {"webTermsVersion": good, "webPrivacyVersion": good},
+        }
+        for name, document in cases.items():
+            with self.subTest(name=name):
+                self.assertTrue(guards.validate_web_parameters(document, allow_sentinel=True))
+
+    def test_the_sentinel_never_passes_the_deploy_check(self):
+        for value in (guards.OWNER_SENTINEL, "owner_decision_required", " OWNER_DECISION_REQUIRED "):
+            with self.subTest(value=value):
+                failures = guards.validate_web_parameters(
+                    self.document(webTermsVersion=value, webPrivacyVersion="2026-10-01"), allow_sentinel=False)
+                self.assertEqual(1, len(failures), failures)
+                self.assertIn("PAQUETERIA_TERMS_VERSION", failures[0])
+
+    def test_cli_stops_for_the_owner_decision(self):
+        result = subprocess.run([sys.executable, guards.__file__, "web-check", "--file",
+                                 str(REPO_ROOT / guards.WEB_PARAMETERS_FILE)], capture_output=True, text=True)
+        self.assertEqual(1, result.returncode)
+        self.assertIn("STOP_FOR_OWNER_DECISION: webTermsVersion (PAQUETERIA_TERMS_VERSION)", result.stdout)
+        self.assertIn("STOP_FOR_OWNER_DECISION: webPrivacyVersion (PAQUETERIA_PRIVACY_VERSION)", result.stdout)
+        self.assertIn("ENV001_WEB_VERSIONS=FAIL", result.stdout)
+        allowed = subprocess.run([sys.executable, guards.__file__, "web-check", "--allow-owner-sentinel", "--file",
+                                  str(REPO_ROOT / guards.WEB_PARAMETERS_FILE)], capture_output=True, text=True)
+        self.assertEqual(0, allowed.returncode, allowed.stdout)
+
+    def test_cli_passes_owner_values_and_fails_on_unreadable_files(self):
+        with tempfile.TemporaryDirectory(prefix="env001-web-") as directory:
+            path = Path(directory) / "web.parameters.json"
+            path.write_text(json.dumps(self.document(webTermsVersion="2026-10-01", webPrivacyVersion="2026-10-01")), encoding="utf-8")
+            ok = subprocess.run([sys.executable, guards.__file__, "web-check", "--file", str(path)], capture_output=True, text=True)
+            self.assertEqual(0, ok.returncode, ok.stdout)
+            self.assertIn("ENV001_WEB_VERSIONS=PASS", ok.stdout)
+            path.write_text("{not json", encoding="utf-8")
+            bad = subprocess.run([sys.executable, guards.__file__, "web-check", "--file", str(path)], capture_output=True, text=True)
+            self.assertEqual(1, bad.returncode)
+            missing = subprocess.run([sys.executable, guards.__file__, "web-check", "--file", str(Path(directory) / "none.json")],
+                                     capture_output=True, text=True)
+            self.assertEqual(1, missing.returncode)
+
+
 SAMPLE_LOG = """# Decision log
 
 | Date | ID | Type | Decision | Impacted files | Approved by |
@@ -490,6 +574,40 @@ class TemplateGuardTests(unittest.TestCase):
 
         text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
         self.assert_fails(21, self.context(workflow_text=text.replace("observability-check", "true")), "observability.parameters.json")
+
+    def test_web_acceptance_versions_fail_closed(self):
+        def web(t):
+            return self.resource(t, "apps", "Microsoft.App/containerApps", "ca-pv-pilot-web")
+
+        def default_terms(t):
+            t["apps"]["parameters"]["webTermsVersion"]["defaultValue"] = "2026-10-01"
+        self.assert_fails(22, self.context(default_terms), "webTermsVersion as a string parameter")
+
+        def no_max_length(t):
+            del t["apps"]["parameters"]["webPrivacyVersion"]["maxLength"]
+        self.assert_fails(22, self.context(no_max_length), "webPrivacyVersion as a string parameter")
+
+        def literal_value(t):
+            env = web(t)["properties"]["template"]["containers"][0]["env"]
+            next(e for e in env if e["name"] == "PAQUETERIA_TERMS_VERSION")["value"] = "2026-10-01"
+        self.assert_fails(22, self.context(literal_value), "PAQUETERIA_TERMS_VERSION from parameters('webTermsVersion')")
+
+        def dropped(t):
+            container = web(t)["properties"]["template"]["containers"][0]
+            container["env"] = [e for e in container["env"] if e["name"] != "PAQUETERIA_PRIVACY_VERSION"]
+        self.assert_fails(22, self.context(dropped), "PAQUETERIA_PRIVACY_VERSION")
+
+        def on_the_api(t):
+            t["apps"]["variables"]["productionEnv"].append({"name": "PAQUETERIA_TERMS_VERSION", "value": "x"})
+        self.assert_fails(22, self.context(on_the_api), "must not receive PAQUETERIA_TERMS_VERSION")
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        not_checked = text.replace("web-check --file tested/deploy/azure/pilot/web.parameters.json", "true")
+        self.assertNotEqual(text, not_checked)
+        self.assert_fails(22, self.context(workflow_text=not_checked), "web.parameters.json")
+        not_deployed = text.replace('"@deploy/azure/pilot/web.parameters.json" \\\n', "")
+        self.assertNotEqual(text, not_deployed)
+        self.assert_fails(22, self.context(workflow_text=not_deployed), "web.parameters.json")
 
     def test_observability_template_is_required(self):
         def drop(t):

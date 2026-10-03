@@ -92,7 +92,8 @@ Anything unregistered still fails closed: an extra transitive package, another v
   - Runs by `workflow_dispatch` from `main` only, with the same `tested_git_sha` / `foundation_run_id`
     inputs and the same 13/13 gate.
   - Needs the `azure-pilot` GitHub Environment, owner-recorded GATE-007/GATE-012 decision ids, and
-    `deploy/azure/pilot/apps.settings.json` without `OWNER_DECISION_REQUIRED`.
+    `deploy/azure/pilot/apps.settings.json`, `observability.parameters.json` and `web.parameters.json`
+    without `OWNER_DECISION_REQUIRED`.
   - Runbook: `docs/operations/env-001-pilot/README.md`.
   - Its templates and workflow belong to the `AZURE` / `DEPLOY_WORKFLOW` domains, so `azr-static` checks
     them. The Bicep build/lint step covers both `deploy/azure/*.bicep` and `deploy/azure/pilot/*.bicep`.

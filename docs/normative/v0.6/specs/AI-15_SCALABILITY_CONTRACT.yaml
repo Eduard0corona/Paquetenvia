@@ -230,7 +230,7 @@ claim_lifecycle:
   finalization_job: sets finalized_at after window
   archival: after retention gate; does not mutate evidentiary events
 outbox_operations:
-  lease_recovery: stale PROCESSING rows are requeued by bounded scheduled functions
+  lease_recovery: stale PROCESSING rows are requeued by bounded scheduled functions, except a stale WHATSAPP notifications.send-requested, which is never requeued; it becomes DEAD and its Notification FAILED with AMBIGUOUS_TIMEOUT plus a notifications.status-changed event that alerts the dispatcher (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03)
   dead_letter: messages exceeding max attempts become DEAD and alert
   retention: OPS-004 purges only old PROCESSED/DEAD rows; active states are never deleted
   lane_isolation: business and location lanes have independent workers, lag budgets and purge policy

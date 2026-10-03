@@ -227,6 +227,34 @@ política, y `ORDER_STATUS_CHANGED` con versiones/assignment. Ambas usan writer
 y redacción centrales. El objetivo
 `assignments_with_cost_owner_audit=1.00` queda cubierto.
 
+### Operador de un pedido ajeno (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03)
+
+Decisión del owner (2026-10-03): "Función segura a nombre del dueño" y "Sí, el dueño lo ve". Cuando la
+organización activa es el `operator_org_id` de la orden (distinto del dueño), la transacción solo lleva al
+operador en `app.current_org_ids`, así que `outbox_tenant` y `audit_logs_tenant` rechazaban (42501) las filas
+etiquetadas con el dueño y toda la asignación se revertía. Ahora, solo en ese caso, el coordinador escribe los tres
+outbox (`orders.status-changed`, `orders.timeline-event-added`, `dispatch.assignment-changed`) y las dos
+auditorías (`ASSIGNMENT_CREATED`, `ORDER_STATUS_CHANGED`) mediante `OperatorOwnerEventWriter`, que llama a
+`security.append_operator_order_outbox` y `security.append_operator_order_audit` (lane Dispatch
+`20261003000100_AddOperatorOwnerOutboxExecutor`, dueño `paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS`,
+EXECUTE solo para `paqueteria_app`). Los valores, UUID y timestamps siguen viniendo de la aplicación, sin
+`RETURNING`, en la misma transacción y con las mismas etapas de inyección de fallos. Cada función rechaza con
+42501 (código en el mensaje, sin datos) cualquier llamada cuyo contexto no sea exactamente ese operador, cuyo actor
+no sea despachador o admin activo del operador, cuya orden no esté `ASSIGNED` con el evento de esa versión escrito
+por el actor para el operador y una asignación `ACCEPTED` `OWN` del operador, cuyo tema, acción, audiencia,
+prioridad, timestamps o payload no coincidan con esa evidencia, o que repita una fila ya escrita.
+
+Cuando actúa el dueño no cambia nada: inserta directamente bajo RLS. La idempotencia sigue en
+`platform.idempotency_keys` de la organización que actúa, y el replay del operador lee su propio evento de orden
+(`owner_org_id` u `operator_org_id`). En Realtime, el dueño recibe los eventos en su OperationsHub (filas del
+dueño) y el repartidor del operador recibe los suyos en DriverHub: la evidencia de asignación autoriza al
+repartidor cuyo perfil, usuario y membresía DRIVER activos pertenecen al operador de esa asignación exacta,
+verificado en el contexto del propio operador. Ninguna otra audiencia se amplía.
+
+Rollback: el `Down` del lane elimina solo las dos funciones (rol y grants de AI-18 quedan inertes); con él, la
+asignación del operador vuelve a fallar cerrada como antes. ORD-002 no cambia: solo el dueño transiciona sus
+órdenes, así que nunca escribe filas del dueño desde el contexto del operador.
+
 ## GET de paradas y privacidad
 
 `GET /api/v1/driver/me/stops` requiere autenticación y tenant. Resuelve solo el

@@ -1235,6 +1235,10 @@ CREATE POLICY settlements_tenant ON finance.settlements USING (security.app_allo
 CREATE POLICY settlement_lines_tenant ON finance.settlement_lines USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 CREATE POLICY notifications_tenant ON notifications.notifications USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 CREATE POLICY report_exports_tenant ON reporting.report_exports USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
+-- DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: audit_logs_tenant and outbox_tenant stay unchanged. When the
+-- operator of an order (operator_org_id <> owner_org_id) assigns it, the owner-tagged audit and outbox rows are
+-- written only by security.append_operator_order_audit and security.append_operator_order_outbox, owned by
+-- paqueteria_operator_outbox_executor (AI-18) and installed by the Dispatch lane after this baseline.
 CREATE POLICY audit_logs_tenant ON platform.audit_logs USING (security.app_allowed_org(org_id)) WITH CHECK (security.app_allowed_org(org_id));
 CREATE POLICY outbox_tenant ON platform.outbox_events USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 CREATE POLICY location_outbox_tenant ON platform.location_outbox_events USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));

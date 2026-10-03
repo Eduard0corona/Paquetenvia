@@ -7,7 +7,8 @@ Base: rama `origin/development` (2026-10-03). Fuentes principales:
 - `docs/operations/env-001-pilot/README.md` (§4 secretos, §6.1 primer despliegue, §6.6 secretos del owner)
 - `.github/workflows/deploy-azure-pilot.yml` (el workflow que despliega)
 - `tools/azr-001/env001_pilot_guards.py` (validadores que detienen el deploy)
-- `deploy/azure/pilot/*.bicep`, `apps.settings.json`, `observability.parameters.json`, `kv-firewall.sh`
+- `deploy/azure/pilot/*.bicep`, `apps.settings.json`, `observability.parameters.json`, `web.parameters.json`,
+  `kv-firewall.sh`
 
 Convenciones:
 - `<ASI>` = valor que solo tú conoces. Nunca pegues un secreto real en un archivo, issue, PR ni chat.
@@ -24,6 +25,7 @@ Convenciones:
 |---|---|---|---|
 | `apps.settings.json` con `OWNER_DECISION_REQUIRED` | `env001_pilot_guards.py settings-check` (job `provenance`) | Antes de tocar Azure | 0.2 |
 | `observability.parameters.json` con `OWNER_DECISION_REQUIRED` o correo inválido | `observability-check` (job `provenance` y Stage 5) | Antes de tocar Azure | 6 |
+| `web.parameters.json` con `OWNER_DECISION_REQUIRED` o versión inválida (términos / aviso de privacidad) | `web-check` (job `provenance` y Stage 4) | Antes de tocar Azure | 6.1 |
 | SHA no certificado 13/13 por Foundation CI en `main`, o workflow no lanzado desde `main` | `azr001_static_guards.py deploy-gate` | Antes de tocar Azure | 7 |
 | Variables del environment faltantes o con formato inválido | Paso "Validate inputs and environment variables" (job `deploy`) | Antes del login en Azure | 3 |
 | `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` sin una fila válida en `decision-log.md` | `env001_pilot_guards.py gate-decision` | Antes del login en Azure | 0.1 y 3 |
@@ -64,10 +66,10 @@ en el PR #174**, que implementa tu decisión del 2 de octubre (versión por empr
 guard rechaza esos nombres si reaparecen. No tienes que hacer nada aquí; queda resuelto al fusionar #174
 y promoverlo a `main`.
 
-> **Pregunta abierta (no bloquea el deploy, sí la creación de órdenes):** `PAQUETERIA_TERMS_VERSION` y
-> `PAQUETERIA_PRIVACY_VERSION` en el contenedor web todavía no están cableados en `apps.bicep`
-> (README §4, "Accepted terms and privacy versions"). Sin ellos, la confirmación de órdenes queda
-> deshabilitada. Requiere una tarea aparte.
+> **Versiones de términos y aviso de privacidad (bloquea el deploy):** `PAQUETERIA_TERMS_VERSION` y
+> `PAQUETERIA_PRIVACY_VERSION` del contenedor web ya están cableados en `apps.bicep`. Sus valores van en
+> `deploy/azure/pilot/web.parameters.json`, que hoy tiene `OWNER_DECISION_REQUIRED` en ambos. El deploy se
+> detiene hasta que los llenes (paso 6.1; README §4, "Accepted terms and privacy versions").
 
 ---
 
@@ -326,7 +328,7 @@ El workflow genera solo `pg-admin-password`, `pg-*-connection`, `pg-*-login-veri
 Los tres deben existir **antes del segundo run**. La API lee `google-maps-api-key` al arrancar aunque
 `Locations__GeocodingProvider=Manual`, y un secreto mapeado que falte detiene el host (README §4 y §6.6).
 
-> Nota: README §6.1 paso 6 solo menciona el secreto de AuthCenter. El workflow exige los tres. Escríbelos
+> Nota: el workflow exige los tres (README §6.1 paso 6) y solo reporta el primero que falta. Escríbelos
 > todos de una vez para no gastar un run por cada uno.
 
 ### 5.1 Obtener los valores (fuera de Azure)
@@ -498,11 +500,59 @@ python3 tools/azr-001/env001_pilot_guards.py observability-check --file deploy/a
 > Nota: el correo queda en un archivo versionado del repo. Usa un buzón operativo, no uno personal,
 > si eso te preocupa.
 
+### 6.1 Versiones de términos y aviso de privacidad en `deploy/azure/pilot/web.parameters.json`
+
+Fuente: README §4 ("Accepted terms and privacy versions") y §6.1 paso 3; `env001_pilot_guards.py`
+(`validate_web_parameters`, guard P22).
+
+La pantalla "Nuevo pedido" (`/ops/orders/new`) registra, en cada orden, qué versión de los términos y del
+aviso de privacidad aceptó el cliente. Lee dos variables del contenedor web: `PAQUETERIA_TERMS_VERSION` y
+`PAQUETERIA_PRIVACY_VERSION`. Si alguna falta o es inválida, el botón de confirmar queda deshabilitado.
+
+> **Importante:** estos valores **salen del aviso de privacidad aprobado** (GATE-007, paso 0.1) y de los
+> términos vigentes. No los inventes ni pongas una fecha provisional: cada orden guarda la versión como
+> evidencia de lo que el cliente aceptó. Defínelos cuando tengas el aviso aprobado por tu abogado.
+
+Hoy el archivo tiene `OWNER_DECISION_REQUIRED` en ambos parámetros. Cámbialos por las versiones reales:
+
+```json
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "webTermsVersion": {
+      "value": "<VERSION_TERMINOS>"
+    },
+    "webPrivacyVersion": {
+      "value": "<VERSION_AVISO_PRIVACIDAD>"
+    }
+  }
+}
+```
+
+Reglas del validador:
+- Formato AI-05 `^[A-Za-z0-9._-]{1,64}$`: solo letras sin acento, dígitos, `.`, `_` y `-`; de 1 a 64
+  caracteres. Ejemplo: `2026-10-01`. Sin espacios, `/`, `:` ni acentos.
+- Nunca vacío. No hay valor por defecto.
+- Solo se permiten esos dos parámetros; cualquier otra clave falla.
+- Mientras alguno siga en `OWNER_DECISION_REQUIRED`, el job `provenance` se detiene antes de tocar Azure con
+  `STOP_FOR_OWNER_DECISION: webTermsVersion (PAQUETERIA_TERMS_VERSION) ...` (o `webPrivacyVersion`).
+
+Cómo: igual que el paso 6 (rama de tarea → PR en borrador a `development` → promoción a `main`).
+Compruébalo localmente:
+
+```bash
+python3 tools/azr-001/env001_pilot_guards.py web-check --file deploy/azure/pilot/web.parameters.json
+```
+
+Para cambiar una versión más adelante (nuevo aviso o nuevos términos): otro PR a este archivo y un redeploy.
+Las órdenes nuevas guardan la versión nueva; las anteriores conservan la que aceptaron.
+
 ---
 
 ## 7. Primer despliegue y verificación
 
-Fuente: README §6.1 pasos 4–9; `deploy-azure-pilot.yml`.
+Fuente: README §6.1 pasos 4–10; `deploy-azure-pilot.yml`.
 
 ### 7.1 Certificar el SHA en `main`
 
@@ -567,8 +617,9 @@ az resource list -g rg-pv-pilot -o table
 az consumption budget list --resource-group rg-pv-pilot -o table      # budget-pv-pilot, 100 USD
 ```
 
-Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 paso 9):
+Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 pasos 9 y 10):
 - Login por AuthCenter (requiere las URIs del paso 5.1 registradas).
+- `/ops/orders/new` permite confirmar una orden (versiones de términos y aviso del paso 6.1 cargadas).
 - DevTools → Network → WS: `/hubs/...` responde `101 Switching Protocols`.
 - Subir una foto de prueba y comprobar que el blob tiene el index tag del escaneo de Defender.
 - `http://paquetenvia.com` redirige a HTTPS o se rechaza (no verificado aún, README §9).
@@ -581,10 +632,9 @@ Si algo falla: README §6.7 (logs en Log Analytics:
 > **Riesgo conocido (README §9):** varias piezas nunca se han probado contra Azure real: propiedades ARM
 > de Defender `2025-01-01`, `customDomains` con `bindingType: Auto` en la ruta, PostgreSQL 18 con acceso
 > privado en `mexicocentral`, `SSL Mode=VerifyFull` y la aceptación ARM de las alertas OBS-002. Un fallo
-> en el primer run puede deberse a eso y no a tu configuración. README §9 también dice que los adaptadores
-> ADP-001 "no están fusionados", pero en `origin/development` ya existen `AzureKeyVaultPiiKeyWrapClient`,
-> `AzureBlobProofObjectStorage` y `DefenderForStorageThreatScanner`. Esa nota del README parece
-> desactualizada.
+> en el primer run puede deberse a eso y no a tu configuración. Los adaptadores ADP-001
+> (`AzureKeyVaultPiiKeyWrapClient`, `AzureBlobProofObjectStorage`, `DefenderForStorageThreatScanner`) ya
+> están fusionados, pero nunca se han ejecutado contra Azure real (README §9).
 
 ---
 
@@ -594,18 +644,20 @@ Si algo falla: README §6.7 (logs en Log Analytics:
    en `decision-log.md`. Sin ella el deploy no inicia sesión en Azure. ¿Qué se registra y con qué ID?
    Implica tocar `docs/normative/**` con checksums y manifest sincronizados.
 2. ~~apps.settings.json~~: resuelto por el PR #174 (versión por empresa, `piloto-2026-10-v1`).
-3. **Términos y privacidad web** (`PAQUETERIA_TERMS_VERSION`/`PAQUETERIA_PRIVACY_VERSION`): no están
-   cableados. No bloquean el deploy, pero sin ellos no se pueden crear órdenes.
+3. **Términos y privacidad web** (`PAQUETERIA_TERMS_VERSION`/`PAQUETERIA_PRIVACY_VERSION`): ya están
+   cableados (`web.parameters.json`, paso 6.1). **Bloquean el deploy** hasta que definas ambas versiones,
+   que dependen del aviso de privacidad aprobado (GATE-007).
 4. **GATE-003 Google:** cuota diaria, tope mensual y umbrales del presupuesto; registrar la decisión.
 5. **Restricción de aplicación de la Google key:** sin IP de salida fija documentada, ¿solo restricción
    por API más cuota?
 6. **Transferencia de direcciones a Google** depende de GATE-007.
-7. **Orden de AuthCenter:** registrar las URIs de `paquetenvia-web-prod` antes de la prueba de login,
-   no después como dice README §6.1.
-8. **README §6.1 paso 6** solo menciona el secreto de AuthCenter, pero el workflow exige los tres.
-   Conviene corregir el README.
+7. ~~Orden de AuthCenter~~: corregido; README §6.1 ahora registra las URIs de `paquetenvia-web-prod`
+   (paso 9) antes de la prueba de login (paso 10).
+8. ~~README §6.1 paso 6~~: corregido; ahora nombra los tres secretos del owner
+   (`authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key`).
 9. **Prevent self-review** en el environment, con un único revisor.
 10. **CAA en el DNS** de `paquetenvia.com`: el repo no lo menciona; revisar antes del `bind`.
 11. **Clonar el repo en Cloud Shell** para usar `kv-firewall.sh` (repo privado). Hay alternativa manual
     en 5.3.
-12. **README §9 desactualizado** sobre los adaptadores ADP-001 (ya existen en `development`).
+12. ~~README §9 desactualizado~~: corregido; los adaptadores ADP-001 constan como fusionados y pendientes
+    solo de verificación contra Azure real.

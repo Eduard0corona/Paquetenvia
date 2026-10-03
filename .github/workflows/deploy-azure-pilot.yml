@@ -150,6 +150,12 @@ jobs:
         shell: bash
         run: python ./tools/azr-001/env001_pilot_guards.py observability-check --file tested/deploy/azure/pilot/observability.parameters.json
 
+      # UI-001: the web needs the accepted terms and privacy notice versions to confirm orders; stop before
+      # touching Azure while either is missing, malformed or still OWNER_DECISION_REQUIRED.
+      - name: Require the accepted terms and privacy versions (STOP_FOR_OWNER_DECISION)
+        shell: bash
+        run: python ./tools/azr-001/env001_pilot_guards.py web-check --file tested/deploy/azure/pilot/web.parameters.json
+
   deploy:
     name: Deploy pilot (deployed_git_sha = tested_git_sha)
     needs: provenance
@@ -189,7 +195,7 @@ jobs:
           ref: ${{ inputs.tested_git_sha }}
           fetch-depth: 1
 
-      # tools/azr-001/env001_pilot_guards.py (gate-decision, scram-verifier, settings-check) imports PyYAML
+      # tools/azr-001/env001_pilot_guards.py (gate-decision, scram-verifier, settings-check, web-check) imports PyYAML
       # at module scope: same interpreter and pin as the provenance job.
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -468,12 +474,14 @@ jobs:
             [[ "${image##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::image is not digest-pinned"; exit 1; }
           done
           python3 ./tools/azr-001/env001_pilot_guards.py settings-check --file deploy/azure/pilot/apps.settings.json
+          python3 ./tools/azr-001/env001_pilot_guards.py web-check --file deploy/azure/pilot/web.parameters.json
           az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-apps \
             --template-file "${RUNNER_TEMP}/arm/apps.json" \
             --parameters "apiImage=${API_IMAGE}" "workerImage=${WORKER_IMAGE}" "webImage=${WEB_IMAGE}" \
               "publicHost=${PILOT_HOST}" "customDomainPhase=${CUSTOM_DOMAIN_PHASE}" \
               "piiKeyUri=${PII_KEY_URI}" "dataProtectionKeyUri=${DP_KEY_URI}" "blobServiceUri=${BLOB_URI}" \
               "trustedProxyNetwork=${PROXY_NETWORK}" "businessSettings=@deploy/azure/pilot/apps.settings.json" \
+              "@deploy/azure/pilot/web.parameters.json" \
             --only-show-errors --output none
           if [[ "${ROTATE_RUNTIME_LOGINS}" == "true" ]]; then
             # The apps read Key Vault secrets once at startup; restart so the re-keyed logins take effect now.

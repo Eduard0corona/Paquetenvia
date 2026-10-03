@@ -26,7 +26,92 @@ public sealed class DatabaseBaselineAssertions
         // MDM-001-OPERATOR-LOADER: neither the executor nor the operator grantee may be assumed by a runtime role.
         "paqueteria_master_data_executor",
         "paqueteria_master_data_loader",
+        // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator outbox executor is never assumable at runtime.
+        "paqueteria_operator_outbox_executor",
     ];
+
+    /// <summary>DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the two operator outbox functions.</summary>
+    public static IReadOnlyList<string> OperatorOutboxFunctions { get; } = Array.AsReadOnly(new[]
+    {
+        "security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)",
+        "security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)",
+    });
+
+    /// <summary>
+    /// DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator outbox executor's exact column grants
+    /// (schema.table.column:privilege), as AI-18 declares them and the Dispatch lane verifies them.
+    /// </summary>
+    public static IReadOnlyList<string> OperatorOutboxExecutorGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "dispatch.assignments.assignment_type:SELECT",
+        "dispatch.assignments.cost_cents:SELECT",
+        "dispatch.assignments.driver_id:SELECT",
+        "dispatch.assignments.id:SELECT",
+        "dispatch.assignments.operator_org_id:SELECT",
+        "dispatch.assignments.order_id:SELECT",
+        "dispatch.assignments.owner_org_id:SELECT",
+        "dispatch.assignments.status:SELECT",
+        "identity.users.id:SELECT",
+        "identity.users.status:SELECT",
+        "orders.order_events.actor_id:SELECT",
+        "orders.order_events.aggregate_version:SELECT",
+        "orders.order_events.event_type:SELECT",
+        "orders.order_events.id:SELECT",
+        "orders.order_events.occurred_at:SELECT",
+        "orders.order_events.operator_org_id:SELECT",
+        "orders.order_events.order_id:SELECT",
+        "orders.order_events.owner_org_id:SELECT",
+        "orders.order_events.payload:SELECT",
+        "orders.order_events.public_event_code:SELECT",
+        "orders.orders.id:SELECT",
+        "orders.orders.operator_org_id:SELECT",
+        "orders.orders.owner_org_id:SELECT",
+        "orders.orders.public_id:SELECT",
+        "orders.orders.status:SELECT",
+        "orders.orders.version:SELECT",
+        "organizations.organization_memberships.organization_id:SELECT",
+        "organizations.organization_memberships.role:SELECT",
+        "organizations.organization_memberships.status:SELECT",
+        "organizations.organization_memberships.user_id:SELECT",
+        "platform.audit_logs.action:INSERT",
+        "platform.audit_logs.action:SELECT",
+        "platform.audit_logs.actor_id:INSERT",
+        "platform.audit_logs.entity_id:INSERT",
+        "platform.audit_logs.entity_id:SELECT",
+        "platform.audit_logs.entity_type:INSERT",
+        "platform.audit_logs.entity_type:SELECT",
+        "platform.audit_logs.id:INSERT",
+        "platform.audit_logs.occurred_at:INSERT",
+        "platform.audit_logs.org_id:INSERT",
+        "platform.audit_logs.org_id:SELECT",
+        "platform.audit_logs.payload_redacted:INSERT",
+        "platform.audit_logs.payload_redacted:SELECT",
+        "platform.audit_logs.request_id:INSERT",
+        "platform.outbox_events.aggregate_id:INSERT",
+        "platform.outbox_events.aggregate_id:SELECT",
+        "platform.outbox_events.aggregate_type:INSERT",
+        "platform.outbox_events.aggregate_type:SELECT",
+        "platform.outbox_events.aggregate_version:INSERT",
+        "platform.outbox_events.aggregate_version:SELECT",
+        "platform.outbox_events.attempts:INSERT",
+        "platform.outbox_events.available_at:INSERT",
+        "platform.outbox_events.created_at:INSERT",
+        "platform.outbox_events.id:INSERT",
+        "platform.outbox_events.last_error:INSERT",
+        "platform.outbox_events.lease_expires_at:INSERT",
+        "platform.outbox_events.lease_token:INSERT",
+        "platform.outbox_events.locked_at:INSERT",
+        "platform.outbox_events.locked_by:INSERT",
+        "platform.outbox_events.owner_org_id:INSERT",
+        "platform.outbox_events.owner_org_id:SELECT",
+        "platform.outbox_events.payload:INSERT",
+        "platform.outbox_events.priority:INSERT",
+        "platform.outbox_events.processed_at:INSERT",
+        "platform.outbox_events.status:INSERT",
+        "platform.outbox_events.tenant_context:INSERT",
+        "platform.outbox_events.topic:INSERT",
+        "platform.outbox_events.topic:SELECT",
+    });
 
     /// <summary>MDM-001-OPERATOR-LOADER: the executor's exact column grants (schema.table.column:privilege).</summary>
     private static readonly string[] MasterDataExecutorColumnGrants =
@@ -335,13 +420,21 @@ public sealed class DatabaseBaselineAssertions
                   UNION ALL
                   SELECT 'paqueteria_master_data_loader',false
                   WHERE pg_catalog.to_regrole('paqueteria_master_data_loader') IS NOT NULL
-                     OR pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,json,bytea,boolean)') IS NOT NULL)
+                     OR pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,json,bytea,boolean)') IS NOT NULL),
+                -- DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the same rule for installations that predate the
+                -- operator outbox executor.
+                operator_outbox(name,bypass_rls) AS (
+                  SELECT 'paqueteria_operator_outbox_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_operator_outbox_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
                 FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
                       UNION ALL SELECT name,bypass_rls FROM cleanup
                       UNION ALL SELECT name,bypass_rls FROM registration
                       UNION ALL SELECT name,bypass_rls FROM session_store
-                      UNION ALL SELECT name,bypass_rls FROM master_data) expected
+                      UNION ALL SELECT name,bypass_rls FROM master_data
+                      UNION ALL SELECT name,bypass_rls FROM operator_outbox) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
@@ -403,6 +496,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertMasterDataBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertOperatorOutboxExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -624,6 +720,13 @@ public sealed class DatabaseBaselineAssertions
               -- MDM-001-OPERATOR-LOADER: installed by the Pricing lane after the baseline.
               SELECT 'security.load_master_data(uuid,uuid,json,bytea,boolean)','paqueteria_master_data_executor'
               WHERE to_regprocedure('security.load_master_data(uuid,uuid,json,bytea,boolean)') IS NOT NULL
+              UNION ALL
+              -- DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: installed by the Dispatch lane after the baseline.
+              SELECT signature,'paqueteria_operator_outbox_executor'
+              FROM (VALUES
+                ('security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)'),
+                ('security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)')) operator_outbox(signature)
+              WHERE to_regprocedure(signature) IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
@@ -637,7 +740,8 @@ public sealed class DatabaseBaselineAssertions
             JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
                 'paqueteria_lifecycle_executor','paqueteria_cleanup_executor','paqueteria_registration_executor',
-                'paqueteria_session_executor','paqueteria_master_data_executor','paqueteria_master_data_loader')
+                'paqueteria_session_executor','paqueteria_master_data_executor','paqueteria_master_data_loader',
+                'paqueteria_operator_outbox_executor')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -1335,6 +1439,156 @@ public sealed class DatabaseBaselineAssertions
             cancellationToken,
             new NpgsqlParameter<bool>("hardened", hardened),
             new NpgsqlParameter<string[]>("grants", grants),
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 lane contract: after the Dispatch lane (and after any E-002
+    /// temporary grant is revoked) the role and both functions must exist and satisfy the exact executor boundary.
+    /// </summary>
+    public static async Task AssertOperatorOutboxExecutorInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'operator outbox executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_operator_outbox_executor') IS NULL
+            UNION ALL
+            SELECT 'operator outbox function is missing: ' || signature
+            FROM unnest(@functions::text[]) signature
+            WHERE pg_catalog.to_regprocedure(signature) IS NULL
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("functions", OperatorOutboxFunctions.ToArray())).ConfigureAwait(false);
+        await AssertOperatorOutboxExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
+    /// DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: once the operator outbox executor exists it holds exactly
+    /// USAGE on identity, organizations, orders, dispatch and platform and the AI-18 column grants, none
+    /// grantable, no table-wide grant and no CREATE anywhere; it inherits nothing, no runtime or bootstrap role
+    /// can reach it, and it owns no relation, schema or type and no function but its two. Each installed function
+    /// is a SECURITY DEFINER with search_path=pg_catalog, pg_temp, contains no dynamic SQL and no RETURNING, and
+    /// its ACL is exactly the owner and <c>paqueteria_app</c>. Privileges are read from the catalog ACLs. The role
+    /// may exist without the functions (fresh AI-18 before the lane, or after the lane is rolled back).
+    /// </summary>
+    private static async Task AssertOperatorOutboxExecutorBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_operator_outbox_executor'
+            ),
+            expected AS (
+              SELECT split_part(grant_text, '.', 1) AS table_schema,
+                     split_part(grant_text, '.', 2) AS table_name,
+                     split_part(split_part(grant_text, '.', 3), ':', 1) AS column_name,
+                     split_part(grant_text, ':', 2) AS privilege_type
+              FROM unnest(@grants::text[]) grant_text),
+            actual AS (
+              SELECT n.nspname::text AS table_schema, c.relname::text AS table_name, att.attname::text AS column_name,
+                     acl.privilege_type, acl.is_grantable
+              FROM pg_catalog.pg_attribute att
+              JOIN pg_catalog.pg_class c ON c.oid=att.attrelid
+              JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+              CROSS JOIN LATERAL pg_catalog.aclexplode(att.attacl) acl
+              WHERE att.attacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM executor)),
+            installed AS (
+              SELECT signature,p.oid,p.proowner,p.prosecdef,p.proconfig,p.prosrc,
+                     (SELECT string_agg(entry, ',' ORDER BY entry COLLATE "C")
+                      FROM (SELECT CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee) END
+                                     || ':' || acl.privilege_type || ':' || acl.is_grantable::text AS entry
+                            FROM pg_catalog.aclexplode(p.proacl) acl) entries) AS acl
+              FROM unnest(@functions::text[]) signature
+              JOIN pg_catalog.pg_proc p ON p.oid=pg_catalog.to_regprocedure(signature))
+            SELECT 'missing operator outbox executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected operator outbox executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'operator outbox executor column grant is grantable: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name
+            FROM actual a WHERE a.is_grantable
+            UNION ALL
+            SELECT 'unexpected operator outbox executor table grant: ' || n.nspname || '.' || c.relname || ':' || acl.privilege_type
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+            CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) acl
+            WHERE c.relacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'operator outbox executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM
+                   (n.nspname IN ('identity','organizations','orders','dispatch','platform')))
+            UNION ALL
+            SELECT 'operator outbox executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m WHERE m.member IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'operator outbox executor is reachable from ' || member.rolname
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles member ON member.oid=m.member
+            WHERE m.roleid IN (SELECT oid FROM executor)
+              AND member.rolname IN ('paqueteria_app','paqueteria_worker','paqueteria_bootstrap')
+            UNION ALL
+            SELECT 'operator outbox executor owns a relation, schema or type'
+            FROM executor
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
+            UNION ALL
+            SELECT 'operator outbox executor owns another function: ' || p.oid::regprocedure::text
+            FROM pg_catalog.pg_proc p
+            WHERE p.proowner IN (SELECT oid FROM executor)
+              AND NOT EXISTS (SELECT 1 FROM installed WHERE installed.oid=p.oid)
+            UNION ALL
+            SELECT 'operator outbox function is unsafe: ' || installed.signature
+            FROM installed
+            WHERE NOT installed.prosecdef
+               OR installed.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, pg_temp']
+               OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR installed.prosrc ~* 'RETURNING'
+               OR installed.proowner IS DISTINCT FROM (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'operator outbox function ACL differs: ' || installed.signature || ' ' || COALESCE(installed.acl, 'default')
+            FROM installed
+            WHERE installed.acl IS DISTINCT FROM
+              'paqueteria_app:EXECUTE:false,paqueteria_operator_outbox_executor:EXECUTE:false'
+            UNION ALL
+            SELECT 'operator outbox function exists without the operator outbox executor role: ' || installed.signature
+            FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
+            UNION ALL
+            SELECT 'operator outbox functions are only partially installed'
+            FROM (SELECT count(*) AS present FROM installed) c
+            WHERE c.present = 1
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("grants", OperatorOutboxExecutorGrants.ToArray()),
+            new NpgsqlParameter<string[]>("functions", OperatorOutboxFunctions.ToArray()),
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }
 
