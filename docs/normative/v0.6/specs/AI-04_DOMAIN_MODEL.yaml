@@ -454,6 +454,12 @@ outbox_invariants:
   paqueteria_operator_outbox_executor, in the same transaction as the assignment; they refuse any caller whose
   only tenant is not that order's operator, any other topic, action, audience or payload, and a repeated row; when
   the owner acts it keeps inserting directly under RLS (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03)
+- only the owner transitions an order (ORD-002); when the order's operator_org_id differs from its owner and the
+  current OWN/EXTERNAL assignment (ACCEPTED or ACTIVE) belongs to that stored operator, the owner-tagged
+  orders.status-changed row names that assignment's driver as the driver audience, and Realtime publishes to it only
+  after verifying, in the operator's own tenant context, the exact assignment, order and driver and the driver's
+  ACTIVE profile, user and DRIVER membership in that operator; no other audience changes
+  (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03)
 public_tracking_contract:
   public_statuses:
   - CREATED

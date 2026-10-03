@@ -31,7 +31,7 @@ namespace Paqueteria.ContractTests.PostgreSql;
 /// the real services with the synthetic dispatcher of each scenario.
 /// </summary>
 [Collection(PostgreSqlContractCollection.Name)]
-public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContractFixture fixture)
+public sealed partial class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
     // ------------------------------------------------------------ 1. proofs per attempt
 

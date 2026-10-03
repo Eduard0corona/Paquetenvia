@@ -219,7 +219,8 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
         }
 
         // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator's own driver of this exact active
-        // assignment. The operator is read from the owner's persisted assignment, never from the payload.
+        // assignment. The operator is read from the owner's persisted assignment, never from the payload, and
+        // must still be the order's stored operator (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03).
         var operatorOrganizationId = await ExecuteTenantReadAsync(
             ownerOrganizationId,
             async (connection, transaction, token) =>
@@ -228,6 +229,10 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                     """
                     SELECT a.operator_org_id
                     FROM dispatch.assignments a
+                    JOIN orders.orders o
+                      ON o.id=a.order_id
+                     AND o.owner_org_id=a.owner_org_id
+                     AND o.operator_org_id=a.operator_org_id
                     WHERE a.id=@assignment_id
                       AND a.order_id=@order_id
                       AND a.driver_id=@driver_id
