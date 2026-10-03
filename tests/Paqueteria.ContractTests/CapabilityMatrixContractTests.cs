@@ -176,8 +176,9 @@ public sealed class CapabilityMatrixContractTests
     }
 
     /// <summary>
-    /// API-FIN-COD-VISIBILITY-2026-09-29: the listOrders COD pending filter is honored only for the roles that hold
-    /// both listOrders and getOrderFinancials; FINANCE gains no listOrders access through it.
+    /// API-FIN-COD-VISIBILITY-2026-09-29: the listOrders COD pending filter is honored for the roles that hold both
+    /// listOrders and getOrderFinancials; FINANCE's narrower grant (FIN-PENDING-COD-LIST-FINANCE-2026-10-02) is
+    /// checked separately and never adds FINANCE to the listOrders row.
     /// </summary>
     [Fact]
     public void Cod_pending_filter_takes_the_intersection_of_listOrders_and_getOrderFinancials()
@@ -185,7 +186,6 @@ public sealed class CapabilityMatrixContractTests
         var decision = Matrix.Scalar("cod_pending_reconciliation_filter");
         Assert.StartsWith("API-FIN-COD-VISIBILITY-2026-09-29", decision, StringComparison.Ordinal);
         Assert.Contains("both listOrders and getOrderFinancials", decision, StringComparison.Ordinal);
-        Assert.Contains("FINANCE keeps no access to listOrders", decision, StringComparison.Ordinal);
 
         var published = Published();
         Assert.DoesNotContain("FINANCE", published["listOrders"]);
@@ -204,6 +204,50 @@ public sealed class CapabilityMatrixContractTests
         Assert.Equal("query", parameter.Scalar("in"));
         Assert.Equal("boolean", parameter.Mapping("schema").Scalar("type"));
         Assert.Contains("getOrderFinancials", parameter.Scalar("description"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02 ("finanzas sí ve la lista"): AI-05 publishes that FINANCE with MFA may
+    /// call listOrders only with cod_pending_reconciliation=true, and the server grant is exactly that: one FINANCE
+    /// grant needing MFA, a subset of getOrderFinancials, kept out of the listOrders capability row.
+    /// </summary>
+    [Fact]
+    public void Finance_sees_only_the_cod_pending_list_with_mfa()
+    {
+        var decision = Matrix.Scalar("cod_pending_reconciliation_filter");
+        Assert.Contains("FIN-PENDING-COD-LIST-FINANCE-2026-10-02", decision, StringComparison.Ordinal);
+        Assert.Contains("finanzas sí ve la lista", decision, StringComparison.Ordinal);
+        Assert.Contains(
+            "FINANCE members with a satisfied MFA challenge may also call listOrders, only with cod_pending_reconciliation=true",
+            decision,
+            StringComparison.Ordinal);
+        Assert.Contains("every other listOrders call by FINANCE stays 403", decision, StringComparison.Ordinal);
+        Assert.Contains("FINANCE still never creates or modifies orders", decision, StringComparison.Ordinal);
+
+        var refinement = TenantCapabilityRefinements.ListOrdersCodPendingReconciliationOnly;
+        Assert.Equal("listOrders", refinement.OperationId);
+        Assert.Equal([(OrganizationRole.Finance, true)], refinement.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Contains(
+            TenantCapabilities.GetOrderFinancials.Grants,
+            grant => grant.Role == OrganizationRole.Finance && grant.RequiresMfa);
+        Assert.Same(TenantCapabilities.ListOrders, TenantCapabilities.All["listOrders"]);
+        Assert.DoesNotContain(TenantCapabilities.ListOrders.Grants, grant => grant.Role == OrganizationRole.Finance);
+        foreach (var write in new[]
+                 {
+                     TenantCapabilities.CreateOrder, TenantCapabilities.PreviewOrderCsv, TenantCapabilities.CommitOrderCsv,
+                     TenantCapabilities.TransitionOrder, TenantCapabilities.GetOrder,
+                 })
+        {
+            Assert.DoesNotContain(write.Grants, grant => grant.Role == OrganizationRole.Finance);
+        }
+
+        var listOrders = Contract.Mapping("paths").Mapping("/orders").Mapping("get");
+        Assert.Equal("capability-before-persisted-state", listOrders.Scalar("x-authorization-precedence"));
+        Assert.Contains("FIN-PENDING-COD-LIST-FINANCE-2026-10-02", listOrders.Scalar("description"), StringComparison.Ordinal);
+        var parameter = listOrders.Sequence("parameters").Children.Cast<YamlMappingNode>()
+            .Single(node => node.Children.ContainsKey(new YamlScalarNode("name")) &&
+                node.Scalar("name") == "cod_pending_reconciliation");
+        Assert.Contains("FIN-PENDING-COD-LIST-FINANCE-2026-10-02", parameter.Scalar("description"), StringComparison.Ordinal);
     }
 
     /// <summary>

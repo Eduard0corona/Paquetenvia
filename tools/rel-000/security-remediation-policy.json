@@ -466,6 +466,7 @@
       "mode": "SECURITY_REMEDIATION",
       "authorized_base_sha": "ab45f24266584da314623c973527232fc3e89dee",
       "authorized_source_branch": "fix/security-2026-10-next-og-critical",
+      "validated_target_sha": "1ade580ac762cd0d1acdb4cc4d593c2cf5757c10",
       "tracked_issue": 175,
       "tracked_issue_title": "SEC-2026-10: remediate Next.js next/og critical and brace-expansion advisories",
       "issue_advisories": {
@@ -568,6 +569,79 @@
       ],
       "expected_lock_package_count": 475,
       "expected_lockfile_sha256": "a85a581a4b6b0a4169c8632091aa5bdc2981891c4fa40661344cbc8b43e4522d",
+      "target_sharp_version": "0.35.4",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
+    },
+    {
+      "id": "SEC-2026-10-BRACES-DOS-TRACKED",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "8100c87e154203a24f43714a2082fe279f1094c7",
+      "authorized_source_branch": "fix/security-2026-10-braces-dos-tracked",
+      "tracked_issue": 180,
+      "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
+      "issue_advisories": {
+        "180": [
+          "GHSA-vfj7-8cjw-p6xm"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "expected_base_packages": {
+        "GHSA-vfj7-8cjw-p6xm": "braces"
+      },
+      "expected_base_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [],
+      "allowed_dependency_files": [
+        "apps/web/pnpm-lock.yaml"
+      ],
+      "required_dependency_files": [],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "accepted_known_advisory": {
+        "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+        "package": "braces",
+        "severity": "high",
+        "installed_versions": ["3.0.3"],
+        "affected_range": "<=3.0.3",
+        "patched_range": ">=3.0.4",
+        "direct_or_transitive": "transitive",
+        "dependency_path_count": 1,
+        "dependency_scope": "dev",
+        "lock_path": [
+          "eslint-config-next@16.3.6",
+          "@next/eslint-plugin-next@16.3.6",
+          "fast-glob@3.3.1",
+          "micromatch@4.0.8",
+          "braces@3.0.3"
+        ],
+        "lockfile": "apps/web/pnpm-lock.yaml",
+        "expected_lockfile_sha256": "a85a581a4b6b0a4169c8632091aa5bdc2981891c4fa40661344cbc8b43e4522d",
+        "tracked_issue": 180,
+        "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
+        "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."
+      },
       "target_sharp_version": "0.35.4",
       "require_sharp_runtime_smoke": true,
       "prohibited_prereleases": true,

@@ -10,6 +10,31 @@
 - El correo de destino `alertEmailAddress` sigue siendo parámetro obligatorio del owner, sin valor por defecto, pendiente.
 - Sin cambios de contrato, esquema, roles ni migraciones.
 
+## Finanzas ve la lista de cobros pendientes de conciliar (FIN-PENDING-COD-LIST-FINANCE-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Tope COD 20,000 pesos, finanzas sí ve la lista". Esta entrada cubre solo
+  "finanzas sí ve la lista"; registrado en `decision-log.md` (`FIN-PENDING-COD-LIST-FINANCE-2026-10-02`).
+- AI-05: FINANCE con MFA puede llamar `listOrders` únicamente con `cod_pending_reconciliation=true` (sin MFA,
+  `403 MFA_REQUIRED`); cualquier otra llamada de FINANCE a `listOrders` sigue en 403. Se documentan la descripción
+  de `listOrders`, su `x-authorization-precedence` y `x-capability-matrix.cod_pending_reconciliation_filter`; la
+  fila `operations.listOrders` no cambia. La lista vuelve a verificar los roles de `getOrderFinancials` dentro de
+  la transacción tenant antes de leer órdenes. FINANCE recibe la misma representación `Order` que los demás
+  lectores, sin datos personales ni `cod_expected_cents`, y sigue sin crear ni modificar órdenes.
+- AI-07 `cod_control.pending_list`: agrega FINANCE con MFA.
+- Sin migraciones, esquemas, roles de base de datos ni flujos nuevos.
+
+## Tope de COD declarado por orden: 20,000 MXN (COD-CAP-20000-2026-10-02) — 2026-10-02
+
+- Literal del project owner: "Tope COD 20,000 pesos, finanzas sí ve la lista". Esta entrada cubre solo el tope;
+  registrado en `decision-log.md` (`COD-CAP-20000-2026-10-02`).
+- AI-05: `CreateOrderRequest.cod_expected_cents` y `CsvImportRowPreview.cod_expected_cents` agregan
+  `maximum: 2000000` (20,000.00 MXN, inclusivo). Un monto mayor en `POST /orders` es el mismo 409 uniforme que
+  cualquier literal COD inválido; en el CSV es el error de fila `COD_EXPECTED_CENTS_INVALID` (sin código nuevo) y
+  bloquea la confirmación. La entrada D6-COD-EXPECTED de `x-pilot-contract-deltas` documenta el tope.
+- AI-07: `create_order.cod_expected` y `csv_order_import` muestran el tope.
+- Sin migración ni CHECK nuevo: AI-06 conserva `CHECK (cod_expected_cents >= 0)`; el tope vive en
+  `OrderInputPolicy` y en el guard de dominio de `Order.Create`. AI-06 y AI-18 sin cambios.
+
 ## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
 
 - Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para
