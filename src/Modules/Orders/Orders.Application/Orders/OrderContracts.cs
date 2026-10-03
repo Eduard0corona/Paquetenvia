@@ -59,7 +59,13 @@ public interface IOrderService
     /// <param name="codPendingReconciliation">
     /// API-FIN-COD-VISIBILITY-2026-09-29: true keeps only orders whose COD collection is RECORDED and not yet
     /// RECONCILED. It reveals financial state, so the endpoint admits it only for a caller that also holds
-    /// getOrderFinancials, decided before this service is reached.
+    /// getOrderFinancials, decided before this service is reached. FIN-PENDING-COD-LIST-FINANCE-2026-10-02: when it
+    /// is true the service re-checks that authorization inside its tenant transaction, before any order is read,
+    /// and throws <see cref="OrderListForbiddenException"/> when it no longer holds.
+    /// </param>
+    /// <param name="mfaSatisfied">
+    /// Whether the session satisfied an MFA challenge; it only matters for that in-transaction re-check, where
+    /// PLATFORM_ADMIN and FINANCE need it and DISPATCHER does not (FINANCE-COD-MFA-2026-09-27).
     /// </param>
     Task<OrderPageResult> ListAsync(
         Guid actorId,
@@ -68,6 +74,7 @@ public interface IOrderService
         Guid? ownerOrganizationId,
         string? cursor,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         CancellationToken cancellationToken);
 
     Task<OrderDetailResult> GetAsync(
@@ -88,6 +95,18 @@ public sealed class OrderConflictException(OrderConflictCode code)
     : Exception("The order request conflicts with current state.")
 {
     public OrderConflictCode Code { get; } = code;
+}
+
+/// <summary>
+/// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the order list filtered by COD pending reconciliation was refused inside
+/// the tenant transaction because the actor no longer holds an active role that reads order financials there. It is
+/// raised before any order is read and is reported as the uniform 403.
+/// </summary>
+public sealed class OrderListForbiddenException : Exception
+{
+    public OrderListForbiddenException() : base("The order list is not permitted.")
+    {
+    }
 }
 
 public sealed class OrderNotFoundException : Exception

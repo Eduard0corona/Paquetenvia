@@ -433,14 +433,16 @@ screen_contracts:
       read: GET /orders/{orderId}/financials (getOrderFinancials)
       record: POST /orders/{orderId}/cod-records (recordCodCollection)
       reconcile: POST /cod-records/{codId}/reconcile (reconcileCod)
-      pending_list: GET /orders?cod_pending_reconciliation=true (listOrders, API-FIN-COD-VISIBILITY-2026-09-29)
+      pending_list: GET /orders?cod_pending_reconciliation=true (listOrders, API-FIN-COD-VISIBILITY-2026-09-29,
+        FIN-PENDING-COD-LIST-FINANCE-2026-10-02)
     roles:
       read: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
       record: [DISPATCHER, PLATFORM_ADMIN with MFA]
       reconcile: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
-      pending_list: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      pending_list: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
       note: FINANCE never records a COD collection; DRIVER records from its own assignment, not from this screen;
-        FINANCE holds no listOrders capability, so it opens an order by id and reconciles from its financials
+        FINANCE sees the pending list (FIN-PENDING-COD-LIST-FINANCE-2026-10-02), the only listOrders call it may
+        make, and a 403 MFA_REQUIRED on it offers the same MFA step-up as the other finance reads
     states:
     - no_session
     - access_unavailable

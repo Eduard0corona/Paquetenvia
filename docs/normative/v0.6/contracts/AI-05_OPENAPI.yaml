@@ -89,6 +89,17 @@ paths:
       tags:
       - Orders
       operationId: listOrders
+      description: >-
+        Tenant-filtered orders, newest first, in the Order representation.
+        x-capability-matrix admits DISPATCHER, PLATFORM_ADMIN and VIEWER. FIN-PENDING-COD-LIST-FINANCE-2026-10-02
+        additionally admits FINANCE members with a satisfied MFA challenge for exactly one request shape,
+        cod_pending_reconciliation=true (status, owner_org_id and cursor may still narrow it); without MFA that
+        call is 403 MFA_REQUIRED and every other FINANCE call, without the parameter, with false or with any other
+        value, is the uniform 403 (x-capability-matrix cod_pending_reconciliation_filter). The decision reads only
+        the request and the session, before any order is read; the COD pending list then re-checks the
+        getOrderFinancials roles inside the tenant transaction, before any order is read. FINANCE receives the
+        same Order fields as every other reader and never creates, imports, transitions or opens an order.
+      x-authorization-precedence: capability-before-persisted-state
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - name: status
@@ -111,6 +122,9 @@ paths:
           decided before any order is read; otherwise 403 (MFA_REQUIRED when a
           second factor is the only thing missing). A value other than true or
           false then returns an empty page, like an unknown status.
+          FIN-PENDING-COD-LIST-FINANCE-2026-10-02: exactly true is also the only
+          listOrders call a FINANCE member may make, and only with a satisfied
+          MFA challenge; any other value is 403 for FINANCE.
         schema:
           type: boolean
       - name: cursor
@@ -5800,9 +5814,12 @@ x-capability-matrix:
   cod_pending_reconciliation_filter: API-FIN-COD-VISIBILITY-2026-09-29 (project owner, 2026-09-29) - listOrders
     honors cod_pending_reconciliation only for a caller holding both listOrders and getOrderFinancials in the selected
     organization, that is DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA challenge; VIEWER and
-    every other role receive 403 whenever the parameter is present, decided before any order is read. FINANCE keeps
-    no access to listOrders, so the filter does not widen FINANCE beyond getOrderFinancials, getRouteFinancials and
-    reconcileCod
+    every other role receive 403 whenever the parameter is present, decided before any order is read.
+    FIN-PENDING-COD-LIST-FINANCE-2026-10-02 (project owner, 2026-10-02, "finanzas sí ve la lista") - FINANCE members
+    with a satisfied MFA challenge may also call listOrders, only with cod_pending_reconciliation=true (403
+    MFA_REQUIRED without MFA); every other listOrders call by FINANCE stays 403, so FINANCE gains the pending list and
+    nothing else of listOrders; the list re-checks the getOrderFinancials roles inside its tenant transaction before
+    any order is read, and FINANCE still never creates or modifies orders
   finance_operations_status: IMPLEMENTED (feature/pilot-contract-deltas, FinanceAuthorizationPolicy and its tests)
   finance_operations:
     getOrderFinancials: [DISPATCHER, PLATFORM_ADMIN, FINANCE]
