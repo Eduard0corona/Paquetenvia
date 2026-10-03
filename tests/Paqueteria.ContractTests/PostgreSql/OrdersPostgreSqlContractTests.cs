@@ -241,7 +241,8 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
     /// D6-COD-EXPECTED on real PostgreSQL through the runtime role and RLS: the dispatcher-declared amount lands in
     /// orders.cod_expected_cents and the ORDER_CREATED audit, never in the order event or the outbox payload; the
     /// same key and amount replays, another amount under that key is IDEMPOTENCY_CONFLICT without side effects, and
-    /// a negative amount is refused before any row is written.
+    /// a negative amount or one above the 2,000,000-cent cap (COD-CAP-20000-2026-10-02) is refused before any row
+    /// is written.
     /// </summary>
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
@@ -258,14 +259,22 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.Equal(OrderConflictCode.InvalidRequest, negative.Code);
         Assert.Equal(0, generator.CallCount);
 
-        const long declared = 9_000_000_000_050L;
+        // COD-CAP-20000-2026-10-02: one cent above 20,000.00 MXN is refused before any row is written.
+        var overCap = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            CreateCommand(scenario, "orders-pg-cod-over-cap") with { CodExpectedCents = 2_000_001 },
+            CancellationToken.None));
+        Assert.Equal(OrderConflictCode.InvalidRequest, overCap.Code);
+        Assert.Equal(0, generator.CallCount);
+
+        // The cap itself is inclusive.
+        const long declared = 2_000_000L;
         var command = CreateCommand(scenario, "orders-pg-cod-0001") with { CodExpectedCents = declared };
         var created = await scope.Service.CreateAsync(command, CancellationToken.None);
         var replay = await scope.Service.CreateAsync(command, CancellationToken.None);
         Assert.Equal(created, replay);
 
         var otherAmount = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
-            command with { CodExpectedCents = declared + 1 }, CancellationToken.None));
+            command with { CodExpectedCents = declared - 1 }, CancellationToken.None));
         Assert.Equal(OrderConflictCode.IdempotencyConflict, otherAmount.Code);
         var noAmount = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
             command with { CodExpectedCents = 0 }, CancellationToken.None));

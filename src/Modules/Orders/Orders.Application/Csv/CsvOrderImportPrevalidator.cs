@@ -234,7 +234,8 @@ public static class CsvOrderImportPrevalidator
     /// <summary>
     /// D6-COD-EXPECTED: an empty cell (or a file without the column) is no COD. A filled cell must be a plain
     /// non-negative integer number of MXN cents: <c>150.50</c>, <c>1,500</c>, <c>+100</c>, <c>-1</c>, <c>$100</c>
-    /// and <c>1e3</c> are rejected rather than reinterpreted, by the same policy <c>POST /orders</c> applies.
+    /// and <c>1e3</c> are rejected rather than reinterpreted, by the same policy <c>POST /orders</c> applies; so is
+    /// an amount above the 2,000,000-cent cap (COD-CAP-20000-2026-10-02), with the same COD_EXPECTED_CENTS_INVALID.
     /// </summary>
     private static bool TryParseCodExpectedCents(string value, out long cents)
     {

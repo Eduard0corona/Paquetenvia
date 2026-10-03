@@ -255,7 +255,8 @@ screen_contracts:
     low_price_guard: block confirmation at <=52 MXN total, IVA included, unless route flag or authorized override
       (GATE-011-VAT-INCLUDED-2026-09-29; compares the total the customer pays, never the pre-tax net)
     cod_expected: D6-COD-EXPECTED - optional COD amount typed in MXN with at most two decimals, converted to integer
-      cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD
+      cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD; more
+      than 20,000.00 MXN is refused with a message naming the cap before any request (COD-CAP-20000-2026-10-02)
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -368,6 +369,7 @@ screen_contracts:
     - a commit response whose content_digest differs from the previewed one fails closed
     - per-row outcomes show CREATED with public_id or FAILED with error_code
     - each previewed row shows the server-reported cod_expected_cents (D6-COD-EXPECTED) as MXN, or no COD for 0
+    - the format help states the COD cap of 20,000.00 MXN (2000000 cents) per row (COD-CAP-20000-2026-10-02)
     idempotency:
     - Idempotency-Key names the batch and is reused for a retry of the same content_digest after a network or 5xx failure
     - a new file or a definitive server answer drops the key

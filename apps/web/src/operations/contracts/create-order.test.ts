@@ -3,6 +3,7 @@ import { acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
+  codAmountAboveCapMessage,
   codExpectedCents,
   confirmationBlockerLabels,
   CreateOrderContractError,
@@ -11,6 +12,7 @@ import {
   parseCreatedOrder,
   parseQuote,
 } from "./create-order";
+import { maximumCodExpectedCents } from "./money";
 import { draft, orderResponse, quoteId, quoteResponse } from "./create-order.fixtures";
 
 const orderId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
@@ -90,7 +92,9 @@ describe("createOrder request", () => {
     ["150.5", 15_050],
     ["150", 15_000],
     ["0.01", 1],
-    [" 1234567.89 ", 123_456_789],
+    [" 19999.99 ", 1_999_999],
+    ["20000", 2_000_000],
+    ["20000.00", 2_000_000],
     ["0.1", 10],
     ["0.29", 29],
   ])("sends the typed COD %s as exact integer cents (D6-COD-EXPECTED)", (typed, cents) => {
@@ -98,6 +102,17 @@ describe("createOrder request", () => {
     expect(result.ok && result.body.cod_expected_cents).toBe(cents);
     expect(Number.isSafeInteger(cents)).toBe(true);
   });
+
+  it.each(["20000.01", "20001", "1234567.89", "9999999999999"])(
+    "refuses a COD above the 20,000 MXN cap (COD-CAP-20000-2026-10-02): %s",
+    (typed) => {
+      const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.errors).toContain(codAmountAboveCapMessage);
+      expect(codAmountAboveCapMessage).toBe("El cobro contra entrega no puede superar $20,000.00 MXN por pedido.");
+      expect(maximumCodExpectedCents).toBe(2_000_000);
+    },
+  );
 
   it.each(["", "   ", "0", "0.00", undefined])("sends no COD field for %o", (typed) => {
     const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());

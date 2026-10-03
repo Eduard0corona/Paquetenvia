@@ -327,9 +327,10 @@ public static class OrderEndpoints
 
     /// <summary>
     /// D6-COD-EXPECTED: an absent (or JSON null) <c>cod_expected_cents</c> is zero. A present value must be a JSON
-    /// number whose literal is a plain non-negative integer that fits int64; <c>1.5</c>, <c>1e3</c>, <c>150.0</c>,
-    /// <c>-1</c> and a quoted <c>"150"</c> are the uniform 409, the same as every other invalid contract value,
-    /// because the literal is checked rather than whatever a lenient number binder would coerce it to.
+    /// number whose literal is a plain non-negative integer of at most 2,000,000 cents (COD-CAP-20000-2026-10-02);
+    /// <c>1.5</c>, <c>1e3</c>, <c>150.0</c>, <c>-1</c>, <c>2000001</c> and a quoted <c>"150"</c> are the uniform
+    /// 409, the same as every other invalid contract value, because the literal is checked rather than whatever a
+    /// lenient number binder would coerce it to.
     /// </summary>
     private static bool TryReadCodExpectedCents(JsonElement? value, out long cents)
     {
