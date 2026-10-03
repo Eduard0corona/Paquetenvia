@@ -107,6 +107,32 @@ ADMITTED_DEPENDENCY_DIFF = "ADMITTED_DEPENDENCIES"
 SHARP_REMEDIATION_ID = "ISSUE-5-SHARP-035-REMEDIATION"
 WEB_TRANSITIVE_REMEDIATION_ID = "SEC-2026-08-SECURITY-BASELINE"
 NEXT_CRITICAL_REMEDIATION_ID = "SEC-2026-09-NEXT-CRITICAL"
+NEXT_OG_CRITICAL_REMEDIATION_ID = "SEC-2026-10-NEXT-OG-CRITICAL"
+# Exact SEC-2026-10 graph: the only packages whose lockfile versions may move.
+NEXT_OG_LOCK_VERSION_REPLACEMENTS = {
+    **{
+        package: {"from": ["16.3.3"], "to": ["16.3.6"]}
+        for package in (
+            "next",
+            "eslint-config-next",
+            "@next/env",
+            "@next/eslint-plugin-next",
+            "@next/swc-darwin-arm64",
+            "@next/swc-darwin-x64",
+            "@next/swc-linux-arm64-gnu",
+            "@next/swc-linux-arm64-musl",
+            "@next/swc-linux-x64-gnu",
+            "@next/swc-linux-x64-musl",
+            "@next/swc-win32-arm64-msvc",
+            "@next/swc-win32-x64-msvc",
+        )
+    },
+    "brace-expansion": {"from": ["1.1.18", "5.0.9"], "to": ["1.1.21", "5.0.12"]},
+}
+NEXT_OG_ESLINT_DEPRECATION = (
+    "    deprecated: This version is no longer supported. "
+    "Please see https://eslint.org/version-support for other options."
+)
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -654,6 +680,102 @@ def validate_remediation_policy(policy: Any) -> dict[str, Any]:
                 fail(
                     "REMEDIATION_POLICY_INVALID",
                     "The Next.js critical remediation authorization is incomplete or inconsistent.",
+                )
+        if authorization.get("id") == NEXT_OG_CRITICAL_REMEDIATION_ID:
+            expected_ids = [
+                "GHSA-vcvr-r3jv-pc5j",
+                "GHSA-qhr7-859c-m2p7",
+                "GHSA-6j4f-fj2g-mc7p",
+                "GHSA-q2hr-2g5m-vwhr",
+            ]
+            dependency_files = [
+                "apps/web/package.json",
+                "apps/web/pnpm-lock.yaml",
+                "apps/web/pnpm-workspace.yaml",
+            ]
+            if (
+                authorization.get("tracked_issue") != 175
+                or authorization.get("tracked_issue_title")
+                != "SEC-2026-10: remediate Next.js next/og critical and brace-expansion advisories"
+                or "related_tracked_issue" in authorization
+                or authorization.get("issue_advisories") != {"175": expected_ids}
+                or authorization.get("expected_base_advisories") != expected_ids
+                or authorization.get("expected_base_packages")
+                != {
+                    "GHSA-vcvr-r3jv-pc5j": "next",
+                    "GHSA-qhr7-859c-m2p7": "brace-expansion",
+                    "GHSA-6j4f-fj2g-mc7p": "brace-expansion",
+                    "GHSA-q2hr-2g5m-vwhr": "brace-expansion",
+                }
+                or authorization.get("expected_base_totals")
+                != {"total": 4, "critical": 1, "high": 2, "moderate": 1, "low": 0}
+                or authorization.get("expected_branch_totals")
+                != {"total": 0, "critical": 0, "high": 0, "moderate": 0, "low": 0}
+                or authorization.get("allowed_direct_packages") != ["next", "eslint-config-next"]
+                or authorization.get("allowed_dependency_files") != dependency_files
+                or authorization.get("required_dependency_files") != dependency_files
+                or authorization.get("allowed_non_dependency_files")
+                != [
+                    ".github/workflows/ci.yml",
+                    ".github/workflows/pr-validation.yml",
+                    "tests/fixtures/rel-000/security-tracking.json",
+                    "tools/rel-000/rel000.py",
+                    "tools/rel-000/security-remediation-policy.json",
+                    "tools/rel-000/test_rel000.py",
+                ]
+                or authorization.get("expected_direct_version_changes")
+                != {
+                    "next": {"from": "16.3.3", "to": "16.3.6"},
+                    "eslint-config-next": {"from": "16.3.3", "to": "16.3.6"},
+                }
+                or authorization.get("next_affected_range") != ">=16.2.0 <16.3.6"
+                or authorization.get("next_first_patched_version") != "16.3.6"
+                or authorization.get("expected_override_changes")
+                != {
+                    "brace-expansion@<1.1.18": {
+                        "selector": "brace-expansion@<1.1.21",
+                        "from": "1.1.18",
+                        "to": "1.1.21",
+                    },
+                    "brace-expansion@>=4.0.0 <5.0.9": {
+                        "selector": "brace-expansion@>=4.0.0 <5.0.12",
+                        "from": "5.0.9",
+                        "to": "5.0.12",
+                    },
+                    "next@16.3.3>sharp": {
+                        "selector": "next@16.3.6>sharp",
+                        "from": "0.35.4",
+                        "to": "0.35.4",
+                    },
+                }
+                or authorization.get("allowed_overrides")
+                != {
+                    "postcss": "8.5.23",
+                    "brace-expansion@<1.1.21": "1.1.21",
+                    "brace-expansion@>=4.0.0 <5.0.12": "5.0.12",
+                    "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+                    "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+                    "browserslist@<=4.28.6": "4.28.7",
+                    "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+                    "next@16.3.6>sharp": "0.35.4",
+                }
+                or authorization.get("expected_lock_version_replacements")
+                != NEXT_OG_LOCK_VERSION_REPLACEMENTS
+                or authorization.get("allowed_lock_metadata_additions")
+                != [{"package": "eslint@9.39.5", "line": NEXT_OG_ESLINT_DEPRECATION}]
+                or authorization.get("expected_lock_package_count") != 475
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", str(authorization.get("expected_lockfile_sha256", ""))
+                )
+                is None
+                or authorization.get("target_sharp_version") != "0.35.4"
+                or authorization.get("require_sharp_runtime_smoke") is not True
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The Next.js next/og remediation authorization is incomplete or inconsistent.",
                 )
     validate_dependency_admission_registry(policy, identifiers, branches)
     return policy
@@ -5647,6 +5769,335 @@ def validate_next_critical_remediation_diff(
     }
 
 
+def _lock_key_versions(lock_text: str, package: str) -> set[str]:
+    """Versions of `package` in the packages section, quoted scoped keys included."""
+
+    return {
+        key[len(package) + 1 :]
+        for key in _lock_package_keys(lock_text)
+        if _lock_package_name(key) == package
+    }
+
+
+def _lock_package_block_key(line: str) -> str | None:
+    match = re.fullmatch(r"  (\S.*):", line)
+    return match.group(1).strip("'\"") if match else None
+
+
+def _next_og_expected_lock_lines(
+    base_lock_text: str,
+    replacements: dict[str, Any],
+    override_changes: dict[str, dict[str, str]],
+) -> list[str]:
+    """Apply only the authorized SEC-2026-10 moves to the base lockfile lines."""
+
+    moves = [
+        (package, old, new)
+        for package, replacement in replacements.items()
+        for old, new in zip(replacement["from"], replacement["to"], strict=True)
+    ]
+    expected: list[str] = []
+    importer_dependency: str | None = None
+    for line in base_lock_text.splitlines():
+        override = re.fullmatch(r"  (['\"]?)(\S.*?)\1: (\S+)", line)
+        if override and override.group(2) in override_changes:
+            change = override_changes[override.group(2)]
+            if override.group(3) == change["from"]:
+                expected.append(f"  {change['selector']}: {change['to']}")
+                continue
+        importer = re.fullmatch(r"      (['\"]?)(\S+?)\1:", line)
+        if importer:
+            importer_dependency = importer.group(2)
+        elif not line.startswith("        "):
+            importer_dependency = None
+        value = line
+        for package, old, new in moves:
+            escaped = re.escape(package)
+            # Package keys, snapshot keys and dependency references for exactly this
+            # package and version; any other package keeps its base bytes.
+            value = re.sub(
+                rf"(^|[\s'\"(]){escaped}@{re.escape(old)}(?=[:'\"(]|$)",
+                lambda match, package=package, new=new: f"{match.group(1)}{package}@{new}",
+                value,
+            )
+            value = re.sub(
+                rf"^(\s+['\"]?){escaped}(['\"]?: ){re.escape(old)}(?=\(|$)",
+                lambda match, package=package, new=new: (
+                    f"{match.group(1)}{package}{match.group(2)}{new}"
+                ),
+                value,
+            )
+            if importer_dependency == package:
+                value = re.sub(
+                    rf"^(        (?:specifier|version): ){re.escape(old)}(?=\(|$)",
+                    lambda match, new=new: f"{match.group(1)}{new}",
+                    value,
+                )
+        expected.append(value)
+    return expected
+
+
+def validate_next_og_exact_lock_graph(
+    base_lock_text: str,
+    lock_text: str,
+    authorization: dict[str, Any],
+) -> None:
+    """Prove the regenerated lockfile is the base graph plus only the authorized moves.
+
+    Every line must equal the base line after the authorized package version moves and
+    override selector renames. The only other admitted differences are the registry
+    integrity of a moved package and the exact deprecation notice the registry now
+    publishes for eslint@9.39.5.
+    """
+
+    replacements = authorization["expected_lock_version_replacements"]
+    for package, replacement in replacements.items():
+        base_versions = _lock_key_versions(base_lock_text, package)
+        if base_versions != set(replacement["from"]):
+            fail(
+                "BASE_LOCK_GRAPH_UNEXPECTED",
+                "The base lockfile no longer matches the authorized vulnerable graph.",
+                package=package,
+                expected=sorted(replacement["from"]),
+                actual=sorted(base_versions),
+            )
+    moved_from = {
+        version for replacement in replacements.values() for version in replacement["from"]
+    }
+    for key in _lock_package_keys(base_lock_text):
+        name = _lock_package_name(key)
+        version = key[len(name) + 1 :].split("(", 1)[0]
+        if version in moved_from and name not in replacements:
+            fail(
+                "BASE_LOCK_GRAPH_UNEXPECTED",
+                "A base package outside the authorized graph shares a moved version.",
+                package=key,
+            )
+
+    expected_lines = _next_og_expected_lock_lines(
+        base_lock_text, replacements, authorization["expected_override_changes"]
+    )
+    moved_keys = {
+        f"{package}@{version}"
+        for package, replacement in replacements.items()
+        for version in replacement["to"]
+    }
+    metadata = {
+        (item["package"], item["line"]) for item in authorization["allowed_lock_metadata_additions"]
+    }
+    integrity = re.compile(r"    resolution: \{integrity: sha512-[A-Za-z0-9+/=]+\}")
+    added_metadata: set[tuple[str | None, str]] = set()
+    position = 0
+    current_key: str | None = None
+    for line in lock_text.splitlines():
+        block_key = _lock_package_block_key(line)
+        if block_key is not None:
+            current_key = block_key
+        if position < len(expected_lines) and line == expected_lines[position]:
+            position += 1
+            continue
+        if (
+            position < len(expected_lines)
+            and current_key in moved_keys
+            and integrity.fullmatch(line)
+            and integrity.fullmatch(expected_lines[position])
+        ):
+            position += 1
+            continue
+        if (current_key, line) in metadata and (current_key, line) not in added_metadata:
+            added_metadata.add((current_key, line))
+            continue
+        fail(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            "The lockfile changed outside the exact authorized Next.js and brace-expansion graph.",
+            package=current_key,
+            line=line[:200],
+        )
+    if position != len(expected_lines):
+        fail(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            "The lockfile dropped base content outside the exact authorized graph.",
+            line=expected_lines[position][:200],
+        )
+
+
+def validate_next_og_critical_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_all = set(authorization["allowed_dependency_files"]) | set(
+        authorization["allowed_non_dependency_files"]
+    )
+    unexpected = sorted(set(all_changed) - allowed_all)
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The Next.js next/og remediation changed a file outside its exact authorization.",
+            files=unexpected,
+        )
+    required = set(authorization["required_dependency_files"])
+    if set(changed_dependency_files) != required:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The Next.js next/og remediation dependency files do not match the exact authorization.",
+            expected=sorted(required),
+            actual=changed_dependency_files,
+        )
+
+    current_package = load_json(repository_root / "apps/web/package.json")
+    try:
+        base_package = json.loads(
+            run_git(repository_root, "show", f"{base_main_sha}:apps/web/package.json")
+        )
+    except json.JSONDecodeError as exc:
+        fail("BASE_DEPENDENCY_MANIFEST_INVALID", "The base package manifest is invalid.", error=str(exc))
+    version_changes = authorization["expected_direct_version_changes"]
+    if set(version_changes) != set(authorization["allowed_direct_packages"]):
+        fail(
+            "SECURITY_REMEDIATION_DIRECT_SCOPE_INVALID",
+            "The direct dependency authorization is inconsistent.",
+        )
+    next_version = current_package.get("dependencies", {}).get("next")
+    if current_package.get("devDependencies", {}).get("eslint-config-next") != next_version:
+        fail(
+            "NEXT_DEPENDENCY_ALIGNMENT_INVALID",
+            "Next.js and eslint-config-next must remain aligned stable versions.",
+        )
+    expected_package = copy.deepcopy(base_package)
+    for package, replacement in version_changes.items():
+        section = "dependencies" if package == "next" else "devDependencies"
+        actual_version = current_package.get(section, {}).get(package)
+        if _semver_tuple(str(actual_version)) is None:
+            fail(
+                "PRERELEASE_DEPENDENCY_REJECTED",
+                "Prerelease dependency versions are forbidden.",
+                package=package,
+            )
+        if base_package.get(section, {}).get(package) != replacement["from"]:
+            fail(
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+                "A base direct dependency differs from its exact authorization.",
+                package=package,
+            )
+        if actual_version != replacement["to"]:
+            fail(
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+                "A direct dependency differs from its exact minimum patched target.",
+                package=package,
+            )
+        expected_package[section][package] = replacement["to"]
+    if current_package != expected_package:
+        fail(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            "Only the two exact authorized direct dependency updates are permitted.",
+        )
+    if next_version != authorization["next_first_patched_version"]:
+        fail(
+            "SECURITY_REMEDIATION_VERSION_INVALID",
+            "Next.js must use the exact minimum patched version.",
+        )
+    if any(
+        "sharp" in (current_package.get(section) or {})
+        for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+    ):
+        fail("DIRECT_SHARP_DEPENDENCY_REJECTED", "Sharp must remain transitive and optional.")
+
+    override_changes = authorization["expected_override_changes"]
+    base_workspace = run_git(
+        repository_root, "show", f"{base_main_sha}:apps/web/pnpm-workspace.yaml"
+    )
+    current_workspace = (repository_root / "apps/web/pnpm-workspace.yaml").read_text(
+        encoding="utf-8"
+    )
+    base_overrides = _workspace_overrides(base_workspace)
+    if any(
+        base_overrides.get(selector) != change["from"]
+        for selector, change in override_changes.items()
+    ):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "A base override differs from its exact authorization.",
+        )
+    # Git output is stripped, so the workspace is compared line by line.
+    line_changes = {
+        f'  "{selector}": {change["from"]}': f'  "{change["selector"]}": {change["to"]}'
+        for selector, change in override_changes.items()
+    }
+    expected_workspace = [line_changes.get(line, line) for line in base_workspace.splitlines()]
+    current_overrides = _workspace_overrides(current_workspace)
+    if (
+        current_overrides != authorization["allowed_overrides"]
+        or current_workspace.splitlines() != expected_workspace
+        or not current_workspace.endswith("\n")
+    ):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "The workspace overrides differ from the exact Next.js next/og remediation authorization.",
+            expected=authorization["allowed_overrides"],
+            actual=current_overrides,
+        )
+
+    lock_bytes = (repository_root / "apps/web/pnpm-lock.yaml").read_bytes()
+    lock_text = lock_bytes.decode("utf-8")
+    validate_next_og_exact_lock_graph(
+        run_git(repository_root, "show", f"{base_main_sha}:apps/web/pnpm-lock.yaml"),
+        lock_text,
+        authorization,
+    )
+    lock_hash = hashlib.sha256(lock_bytes).hexdigest()
+    if lock_hash != authorization["expected_lockfile_sha256"]:
+        fail(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            "The pnpm lockfile differs from the exact authorized generated graph.",
+            expected=authorization["expected_lockfile_sha256"],
+            actual=lock_hash,
+        )
+    lock_keys = _lock_package_keys(lock_text)
+    if len(lock_keys) != authorization["expected_lock_package_count"]:
+        fail(
+            "LOCKFILE_PACKAGE_COUNT_CHANGED",
+            "The remediation lockfile package count changed.",
+            expected=authorization["expected_lock_package_count"],
+            actual=len(lock_keys),
+        )
+    exact_versions = {
+        package: set(replacement["to"])
+        for package, replacement in authorization["expected_lock_version_replacements"].items()
+    }
+    exact_versions["sharp"] = {authorization["target_sharp_version"]}
+    for package, expected_versions in exact_versions.items():
+        versions = _lock_key_versions(lock_text, package)
+        if versions != expected_versions:
+            fail(
+                "SECURITY_REMEDIATION_LOCK_VERSION_INVALID",
+                "A security target differs from its exact authorized lockfile version.",
+                package=package,
+                expected=sorted(expected_versions),
+                actual=sorted(versions),
+            )
+    if f"next@{next_version}>sharp: {authorization['target_sharp_version']}" not in lock_text:
+        fail("LOCKFILE_INCONSISTENT", "The lockfile does not apply the authorized Sharp edge.")
+
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": True,
+        "dependency_lockfile_changed": True,
+        "dependency_workspace_changed": True,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": changed_dependency_files,
+        "lockfile_consistency_verified": True,
+        "lockfile_sha256": lock_hash,
+        "lock_package_count": len(lock_keys),
+        "vulnerable_lock_versions": [],
+        "sharp_versions": [authorization["target_sharp_version"]],
+        "sharp_override_selector": f"next@{next_version}>sharp",
+        "sharp_override_version": authorization["target_sharp_version"],
+    }
+
+
 def validate_dependency_admission_source(
     all_changed: list[str],
     admissions: list[dict[str, Any]],
@@ -5851,6 +6302,14 @@ def validate_dependency_diff(
         )
     if authorization is not None and authorization.get("id") == NEXT_CRITICAL_REMEDIATION_ID:
         return validate_next_critical_remediation_diff(
+            repository_root,
+            base_main_sha,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if authorization is not None and authorization.get("id") == NEXT_OG_CRITICAL_REMEDIATION_ID:
+        return validate_next_og_critical_remediation_diff(
             repository_root,
             base_main_sha,
             all_changed,
