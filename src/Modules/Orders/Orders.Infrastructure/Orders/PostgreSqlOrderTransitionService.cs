@@ -1025,6 +1025,45 @@ public sealed class PostgreSqlOrderTransitionService(
             """);
         command.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
         command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+        var ownerDriver = await ReadSingleCandidateAsync(command, cancellationToken);
+        if (ownerDriver is not null)
+        {
+            return ownerDriver;
+        }
+
+        // ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03 ("Solo avisar a su repartidor"): only the owner transitions
+        // the order, but when the order is operated by another organization and the current assignment is that
+        // operator's (the stored orders.operator_org_id), its driver is named as the candidate audience. The
+        // owner's tenant context cannot read the operator's driver profile, user or membership, so nothing is
+        // decided here: Realtime publishes to the driver only after it proves, in the operator's own tenant
+        // context, that this exact assignment, order and driver belong to that operator and the driver's profile,
+        // user and DRIVER membership are ACTIVE (PostgreSqlRealtimeOutboxEvidenceReader). The row stays owner-tagged.
+        await using var operatorCommand = CreateCommand(
+            connection,
+            transaction,
+            """
+            SELECT a.id,a.driver_id
+            FROM dispatch.assignments a
+            JOIN orders.orders o
+              ON o.id=a.order_id
+             AND o.owner_org_id=a.owner_org_id
+             AND o.operator_org_id=a.operator_org_id
+            WHERE a.order_id=@order
+              AND a.owner_org_id=@owner
+              AND a.operator_org_id IS NOT NULL
+              AND a.operator_org_id<>a.owner_org_id
+              AND a.assignment_type IN ('OWN','EXTERNAL')
+              AND a.status IN ('ACCEPTED','ACTIVE')
+            """);
+        operatorCommand.Parameters.Add(P("order", NpgsqlDbType.Uuid, orderId));
+        operatorCommand.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+        return await ReadSingleCandidateAsync(operatorCommand, cancellationToken);
+    }
+
+    private static async Task<DriverAudienceCandidate?> ReadSingleCandidateAsync(
+        NpgsqlCommand command,
+        CancellationToken cancellationToken)
+    {
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {

@@ -1,5 +1,16 @@
 # Changelog
 
+## El repartidor del operador recibe los cambios de estado del dueño (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03) — 2026-10-03
+
+- Respuesta literal del project owner: "Solo avisar a su repartidor"; registrada en `decision-log.md`.
+- ORD-002 sigue siendo solo del dueño. Si la orden tiene operador distinto del dueño y la asignación vigente
+  (OWN/EXTERNAL, ACCEPTED o ACTIVE) es de ese operador, el `orders.status-changed` (etiquetado con el dueño) nombra a
+  su repartidor; Realtime solo lo entrega tras verificar en el contexto del propio operador la asignación, la orden y
+  el repartidor exactos, que el operador de la asignación siga siendo el de la orden y que perfil, usuario y membresía
+  DRIVER estén activos. Ningún repartidor de un tercero y ninguna otra audiencia cambian.
+- AI-04 `outbox_invariants` registra la regla. Sin migración, rol, grant ni función nuevos; AI-06, AI-12 y AI-18 sin
+  cambios.
+
 ## Outbox y auditoría a nombre del dueño cuando asigna el operador (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03) — 2026-10-03
 
 - Respuestas literales del project owner: "Función segura a nombre del dueño" y "Sí, el dueño lo ve"; registradas en
