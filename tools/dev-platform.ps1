@@ -343,7 +343,6 @@ function Set-HostConfiguration([string] $Kind) {
         $envName = "ProofStorage__$key"
         [Environment]::SetEnvironmentVariable($envName, $connections.Context.Environment["ProofStorage__$key"], "Process")
     }
-    $env:Drivers__Eligibility__PolicyVersion = "LOCAL-SYNTHETIC-v1"
     $env:Drivers__Eligibility__NonExpiringDocumentTypes__0 = "IDENTITY"
     foreach ($vehicleType in @("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")) {
         $prefix = "Drivers__Eligibility__VehicleCapacity__$vehicleType"

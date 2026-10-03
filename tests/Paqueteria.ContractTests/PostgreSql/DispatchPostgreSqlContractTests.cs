@@ -359,6 +359,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             snapshot.UserStatus,
             snapshot.HasActiveDriverMembership,
             snapshot.ServiceAreaEligible?.ToString() ?? "null",
+            snapshot.PolicyVersion,
             string.Join(
                 ";",
                 snapshot.LatestDocuments
@@ -425,6 +426,202 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Equal(1L, reader.GetInt64(10));
         Assert.Equal(1L, reader.GetInt64(11));
         Assert.Equal(1L, reader.GetInt64(12));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Coordinator_records_the_assignment_policy_version_of_the_owner_when_the_owner_assigns()
+    {
+        // POLICY-VERSIONS-PER-ORG-2026-10-02: a fresh organization starts at the owner's version.
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        Assert.Equal(
+            ("piloto-2026-10-v1", "piloto-2026-10-v1"),
+            await OrganizationPolicyVersionsAsync(scenario.OrganizationId));
+
+        var first = await CreateAssignmentService(fixture.AppDataSource)
+            .CreateOwnDriverAssignmentAsync(Command(scenario), default);
+        Assert.Equal("piloto-2026-10-v1", await AssignmentAuditPolicyVersionAsync(first.Id));
+
+        // A raised version applies to the next assignment; the earlier audit keeps the version it froze.
+        await scenario.ExecuteAdminAsync(
+            """
+            UPDATE dispatch.assignments SET status='CANCELLED' WHERE id=@assignment;
+            UPDATE orders.orders SET status='READY_FOR_PICKUP' WHERE id=@order;
+            UPDATE organizations.organizations
+            SET assignment_policy_version='owner-asg.2026-11-v2',
+                driver_eligibility_policy_version='owner-elig.2026-11-v2'
+            WHERE id=@org;
+            """,
+            P("assignment", first.Id),
+            P("order", scenario.OrderId),
+            P("org", scenario.OrganizationId));
+        var second = await CreateAssignmentService(fixture.AppDataSource)
+            .CreateOwnDriverAssignmentAsync(Command(scenario), default);
+
+        Assert.Equal("owner-asg.2026-11-v2", await AssignmentAuditPolicyVersionAsync(second.Id));
+        Assert.Equal("piloto-2026-10-v1", await AssignmentAuditPolicyVersionAsync(first.Id));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Operator_context_reads_the_operator_policy_versions_never_the_order_owner_versions()
+    {
+        // POLICY-VERSIONS-PER-ORG-2026-10-02: when the operator works an order with its own driver, the versions
+        // read are the operator's (the driver's organization, the active tenant), never the order owner's.
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var operatorId = Guid.NewGuid();
+        try
+        {
+            await scenario.ExecuteAdminAsync(
+                """
+                INSERT INTO organizations.organizations(
+                  id,legal_name,display_name,organization_type,assignment_policy_version,driver_eligibility_policy_version)
+                VALUES (@operator,'DSP operator','DSP operator','ALLY','operator-asg-v3','operator-elig-v3');
+                UPDATE organizations.organizations
+                SET assignment_policy_version='owner-asg-v9',driver_eligibility_policy_version='owner-elig-v9'
+                WHERE id=@org;
+                INSERT INTO organizations.organization_memberships(
+                  id,user_id,organization_id,role,status,is_default,granted_at)
+                VALUES (gen_random_uuid(),@dispatcher,@operator,'DISPATCHER','ACTIVE',false,now()),
+                       (gen_random_uuid(),@driver_user,@operator,'DRIVER','ACTIVE',false,now());
+                UPDATE drivers.driver_profiles SET org_id=@operator WHERE id=@driver;
+                UPDATE drivers.driver_documents SET org_id=@operator WHERE driver_id=@driver;
+                UPDATE orders.orders SET operator_org_id=@operator WHERE id=@order;
+                UPDATE orders.package_items SET operator_org_id=@operator WHERE order_id=@order;
+                """,
+                P("operator", operatorId),
+                P("org", scenario.OrganizationId),
+                P("dispatcher", scenario.DispatcherUserId),
+                P("driver_user", scenario.DriverUserId),
+                P("driver", scenario.DriverId),
+                P("order", scenario.OrderId));
+
+            var reader = new PostgreSqlDispatchDriverEligibilityReader();
+            var capacity = new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60);
+            await using (var tenant = await TenantTransaction.BeginAsync(
+                fixture.AppDataSource, "paqueteria_app", scenario.DispatcherUserId, [operatorId]))
+            {
+                var command = new Drivers.Application.Eligibility.EvaluateOwnDriverEligibilityCommand(
+                    scenario.DispatcherUserId, operatorId, scenario.DriverId, scenario.CityId, null, capacity, OccurredAt);
+                var snapshot = await reader.ReadAsync(tenant.Connection, tenant.Transaction, command, default);
+                var result = Drivers.Application.Eligibility.DriverEligibilityPolicy.Evaluate(
+                    command, snapshot, EligibilityOptions().ToPolicy());
+
+                Assert.True(result.IsEligible);
+                Assert.Equal("operator-elig-v3", result.PolicyVersion);
+
+                // The assignment version the coordinator reads for the active organization.
+                await using var version = new NpgsqlCommand(
+                    "SELECT assignment_policy_version FROM organizations.organizations WHERE id=@org",
+                    tenant.Connection,
+                    tenant.Transaction);
+                version.Parameters.AddWithValue("org", operatorId);
+                Assert.Equal("operator-asg-v3", await version.ExecuteScalarAsync());
+            }
+
+            // From the owner's context the operator's driver is not visible at all: the owner's version can never
+            // be applied to it.
+            await using (var owner = await TenantTransaction.BeginAsync(
+                fixture.AppDataSource, "paqueteria_app", scenario.DispatcherUserId, [scenario.OrganizationId]))
+            {
+                var command = new Drivers.Application.Eligibility.EvaluateOwnDriverEligibilityCommand(
+                    scenario.DispatcherUserId, scenario.OrganizationId, scenario.DriverId, scenario.CityId, null, capacity, OccurredAt);
+                Assert.Null(await reader.ReadAsync(owner.Connection, owner.Transaction, command, default));
+            }
+        }
+        finally
+        {
+            await scenario.ExecuteAdminAsync(
+                """
+                UPDATE orders.package_items SET operator_org_id=NULL WHERE order_id=@order;
+                UPDATE orders.orders SET operator_org_id=NULL WHERE id=@order;
+                UPDATE drivers.driver_documents SET org_id=@org WHERE driver_id=@driver;
+                UPDATE drivers.driver_profiles SET org_id=@org WHERE id=@driver;
+                DELETE FROM organizations.organization_memberships WHERE organization_id=@operator;
+                DELETE FROM organizations.organizations WHERE id=@operator;
+                """,
+                P("operator", operatorId),
+                P("org", scenario.OrganizationId),
+                P("driver", scenario.DriverId),
+                P("order", scenario.OrderId));
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Driver_snapshots_carry_the_driver_organization_eligibility_policy_version()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        await scenario.ExecuteAdminAsync(
+            "UPDATE organizations.organizations SET driver_eligibility_policy_version='org-elig.v4' WHERE id=@org",
+            P("org", scenario.OrganizationId));
+        var actors = await scenario.CreateExternalDriversAsync(2);
+        var driverId = await scenario.ReadDriverIdAsync(actors[0]);
+        var reader = new PostgreSqlDispatchDriverEligibilityReader();
+
+        await using var tenant = await TenantTransaction.BeginAsync(
+            fixture.AppDataSource,
+            "paqueteria_app",
+            scenario.DispatcherUserId,
+            [scenario.OrganizationId]);
+        var single = await reader.ReadAsync(
+            tenant.Connection,
+            tenant.Transaction,
+            new Drivers.Application.Eligibility.EvaluateExternalDriverEligibilityCommand(
+                scenario.DispatcherUserId,
+                scenario.OrganizationId,
+                driverId,
+                scenario.CityId,
+                null,
+                new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60),
+                OccurredAt),
+            default);
+        var batch = await reader.ReadExternalCandidatesAsync(
+            tenant.Connection,
+            tenant.Transaction,
+            scenario.OrganizationId,
+            scenario.CityId,
+            null,
+            10,
+            default);
+
+        Assert.Equal("org-elig.v4", Assert.IsType<Drivers.Application.Eligibility.DriverEligibilitySnapshot>(single).PolicyVersion);
+        Assert.NotEmpty(batch);
+        Assert.All(batch, snapshot => Assert.Equal("org-elig.v4", snapshot.PolicyVersion));
+        var result = Drivers.Application.Eligibility.DriverEligibilityPolicy.EvaluateExternal(
+            new Drivers.Application.Eligibility.EvaluateExternalDriverEligibilityCommand(
+                scenario.DispatcherUserId,
+                scenario.OrganizationId,
+                driverId,
+                scenario.CityId,
+                null,
+                new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60),
+                OccurredAt),
+            single,
+            EligibilityOptions().ToPolicy());
+        Assert.Equal("org-elig.v4", result.PolicyVersion);
+    }
+
+    private async Task<(string Assignment, string Eligibility)> OrganizationPolicyVersionsAsync(Guid organizationId)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT assignment_policy_version,driver_eligibility_policy_version
+            FROM organizations.organizations WHERE id=@org
+            """);
+        command.Parameters.AddWithValue("org", organizationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetString(0), reader.GetString(1));
+    }
+
+    private async Task<string?> AssignmentAuditPolicyVersionAsync(Guid assignmentId)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT payload_redacted->>'policy_version'
+            FROM platform.audit_logs
+            WHERE action='ASSIGNMENT_CREATED' AND entity_type='Assignment' AND entity_id=@assignment
+            """);
+        command.Parameters.AddWithValue("assignment", assignmentId);
+        return (string?)await command.ExecuteScalarAsync();
     }
 
     [PostgreSqlContractFact]
@@ -1110,7 +1307,6 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             Options.Create(new DispatchOptions
             {
                 Provider = DispatchProviderKind.PostgreSql,
-                AssignmentPolicyVersion = "dsp-002-contract-v1",
             }),
             Options.Create(EligibilityOptions()),
             new DispatchAssignmentAuthorizer(),
@@ -1146,7 +1342,6 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             Options.Create(new DispatchOptions
             {
                 Provider = DispatchProviderKind.PostgreSql,
-                AssignmentPolicyVersion = "ext-001-contract-v1",
             }),
             Options.Create(EligibilityOptions()),
             new DispatchAssignmentAuthorizer(),
@@ -1175,7 +1370,6 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
 
     private static DispatchDriverEligibilityOptions EligibilityOptions() => new()
     {
-        PolicyVersion = "dsp-001-contract-v1",
         RequiredDocumentTypesByVehicleType = new(StringComparer.Ordinal)
         {
             ["MOTORCYCLE"] = ["IDENTITY"],

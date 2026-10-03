@@ -1,5 +1,20 @@
 # Changelog
 
+## Versiones de política de asignación y de elegibilidad por organización (POLICY-VERSIONS-PER-ORG-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Por empresa, piloto-2026-10-v1"; registrada en `decision-log.md`.
+- AI-06: `organizations.organizations.assignment_policy_version` y `driver_eligibility_policy_version`, `text NOT NULL
+  DEFAULT 'piloto-2026-10-v1'` con el formato `^[A-Za-z0-9._-]{1,64}$`. Toda organización, existente o futura,
+  empieza en `piloto-2026-10-v1`.
+- AI-04 `Organization`: ambas versiones son de la organización; se aplica la de la organización del repartidor
+  asignado o evaluado (la dueña de la orden si asigna a su repartidor, la operadora si lo hace la operadora). No
+  existe versión global.
+- Se eliminan `Dispatch:AssignmentPolicyVersion` y `Drivers:Eligibility:PolicyVersion`: la API no arranca si siguen
+  configuradas y ya no bloquean el despliegue del piloto (el guard las rechaza en `apps.settings.json`). Las reglas
+  de elegibilidad (documentos y capacidad por vehículo) siguen siendo configuración compartida.
+- Lane Organizations `20261002000100_VersionDispatchPoliciesPerOrganization`: agrega o adopta ambas columnas sin
+  reescribir filas; el rollback se niega si alguna organización tiene otra versión. AI-18 sin cambios.
+
 ## Confirmación de artículos prohibidos y teléfonos de México (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) — 2026-10-02
 
 - Respuesta literal del project owner: "Sí, ambas"; registrada en `decision-log.md`.

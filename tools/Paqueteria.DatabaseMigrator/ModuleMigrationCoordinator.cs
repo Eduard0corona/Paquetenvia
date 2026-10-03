@@ -43,8 +43,8 @@ internal sealed class ModuleMigrationCoordinator
     [
         ("Identity", "__ef_migrations_history_identity", AddBffSessionStore.MigrationId,
             "src/Modules/Identity/Identity.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionStore.cs"),
-        ("Organizations", "__ef_migrations_history_organizations", AddPendingMemberships.MigrationId,
-            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000500_AddPendingMemberships.cs"),
+        ("Organizations", "__ef_migrations_history_organizations", VersionDispatchPoliciesPerOrganization.MigrationId,
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20261002000100_VersionDispatchPoliciesPerOrganization.cs"),
         ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
@@ -141,20 +141,11 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // REG-002: the lane adds organizations.pending_memberships (or adopts the AI-06 one) and four
-                // more registration-executor functions; its rollback removes only those functions. REG-001 is
-                // verified below with its own fail-closed rollback.
-                "Organizations" =>
-                    source.Contains("REG002_ADMIN_REQUIRED", StringComparison.Ordinal) &&
-                    source.Contains("DROP FUNCTION IF EXISTS security.apply_pending_memberships", StringComparison.Ordinal) &&
-                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // POLICY-VERSIONS-PER-ORG-2026-10-02: the lane's latest migration only adds the two per-organization
+                // policy version columns and their format checks (or adopts the AI-06 ones) without rewriting a
+                // row; its rollback refuses while any organization left the starting version. REG-001 and REG-002
+                // are verified below with their own rules.
+                "Organizations" => IsOrganizationPolicyVersionsSource(source),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -205,6 +196,11 @@ internal sealed class ModuleMigrationCoordinator
             AddOperationalCleanupExecutor.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000100_AddOperationalCleanupExecutor.cs",
             "OPS003_SCHEMA_DOWNGRADE_NOT_SUPPORTED");
+        VerifyOrganizationsSource(
+            root,
+            AddPendingMemberships.MigrationId,
+            "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000500_AddPendingMemberships.cs",
+            IsPendingMembershipsSource);
         VerifyFailClosedSource(
             root,
             "Organizations",
@@ -507,6 +503,7 @@ internal sealed class ModuleMigrationCoordinator
                     AdoptCanonicalOrganizationsBaseline.MigrationId,
                     AddSelfServiceRegistration.MigrationId,
                     AddPendingMemberships.MigrationId,
+                    VersionDispatchPoliciesPerOrganization.MigrationId,
                 ],
             "Incidents" =>
                 [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
@@ -685,6 +682,54 @@ internal sealed class ModuleMigrationCoordinator
         {
             throw new BaselineVerificationException(
                 "Pricing evolution migration is destructive or has an unexpected identifier.");
+        }
+    }
+
+    /// <summary>REG-002: the lane adds organizations.pending_memberships (or adopts the AI-06 one) and four more
+    /// registration-executor functions; its rollback removes only those functions.</summary>
+    private static bool IsPendingMembershipsSource(string source) =>
+        source.Contains("REG002_ADMIN_REQUIRED", StringComparison.Ordinal) &&
+        source.Contains("DROP FUNCTION IF EXISTS security.apply_pending_memberships", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>POLICY-VERSIONS-PER-ORG-2026-10-02: only the two policy version columns and their checks on the
+    /// canonical organizations table, no row rewritten, and a rollback that refuses while any organization
+    /// carries a version other than the starting one.</summary>
+    private static bool IsOrganizationPolicyVersionsSource(string source) =>
+        source.Contains(VersionDispatchPoliciesPerOrganization.DowngradeBlocked, StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE organizations", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>An earlier Organizations lane migration that must keep its reviewed shape.</summary>
+    private static void VerifyOrganizationsSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException("Organizations evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) || !isValid(source))
+        {
+            throw new BaselineVerificationException(
+                "Organizations evolution migration is destructive or has an unexpected identifier.");
         }
     }
 
