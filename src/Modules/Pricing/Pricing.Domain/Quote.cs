@@ -31,7 +31,9 @@ public sealed class Quote
         string breakdown,
         byte[] inputHash,
         DateTimeOffset expiresAt,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        LowPriceAuthorization? lowPriceAuthorization = null,
+        string? financialOverride = null)
     {
         if (id == Guid.Empty || ownerOrganizationId == Guid.Empty || cityId == Guid.Empty ||
             originLocationId == Guid.Empty || destinationLocationId == Guid.Empty ||
@@ -43,7 +45,26 @@ public sealed class Quote
             throw new ArgumentException("The quote aggregate is invalid.");
         }
 
-        if (TariffRuleEvaluator.RequiresConsolidatedRoute(pricingTier) && !consolidatedRoute)
+        // LOW-PRICE-MANUAL-AUTH-2026-10-02: the authorization is stored as the AI-06 financial_override (actor_id,
+        // reason, valid_until); financialOverride is its infrastructure serialization and travels with it.
+        if ((lowPriceAuthorization is null) != (financialOverride is null))
+        {
+            throw new ArgumentException("A low price authorization and its financial override travel together.");
+        }
+
+        if (lowPriceAuthorization is not null)
+        {
+            if (!LowPriceGuardPolicy.RequiresAuthorization(pricingTier, consolidatedRoute, evaluation.Total.AmountCents))
+            {
+                throw new ArgumentException("The quote does not need a low price authorization.");
+            }
+
+            if (lowPriceAuthorization.ValidUntil != expiresAt)
+            {
+                throw new ArgumentException("A low price authorization is valid exactly until the quote expires.");
+            }
+        }
+        else if (TariffRuleEvaluator.RequiresConsolidatedRoute(pricingTier) && !consolidatedRoute)
         {
             throw new ArgumentException("The selected pricing tier requires a consolidated route.");
         }
@@ -73,7 +94,7 @@ public sealed class Quote
             PackageSnapshot = packageSnapshot,
             Breakdown = breakdown,
             InputHash = inputHash.ToArray(),
-            FinancialOverride = null,
+            FinancialOverride = financialOverride,
             Status = QuoteStatus.Active,
             ExpiresAt = expiresAt,
             CreatedAt = createdAt,

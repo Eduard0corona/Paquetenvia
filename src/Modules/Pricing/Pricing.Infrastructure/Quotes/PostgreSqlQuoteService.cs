@@ -24,11 +24,15 @@ public sealed class PostgreSqlQuoteService(
     TenantTransactionContext<PricingDbContext> transactionContext,
     IQuoteLocationResolver locationResolver,
     IAuditPayloadRedactor redactor,
+    IAppendOnlyAuditWriter auditWriter,
     IOptions<PricingOptions> options,
     IClock clock,
     ILogger<PostgreSqlQuoteService> logger) : IQuoteService
 {
     internal const string IdempotencyScope = "PRC-001:CREATE_QUOTE";
+
+    /// <summary>LOW-PRICE-MANUAL-AUTH-2026-10-02: the append-only audit action of a manual low price authorization.</summary>
+    internal const string LowPriceAuthorizedAuditAction = "QUOTE_LOW_PRICE_AUTHORIZED";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -39,6 +43,7 @@ public sealed class PostgreSqlQuoteService(
     {
         ArgumentNullException.ThrowIfNull(command);
         Validate(command);
+        ValidateLowPriceAuthorization(command);
         // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: from here on only the normalized 10-digit phone exists, so the
         // idempotency hash, the protected location PII and the redacted snapshot all see the same value however the
         // separators were typed.
@@ -118,9 +123,13 @@ public sealed class PostgreSqlQuoteService(
         {
             throw;
         }
-        catch (Exception exception) when (exception is QuoteValidationException or QuoteServiceUnavailableException)
+        catch (Exception exception) when (exception is QuoteValidationException or QuoteConflictException or QuoteServiceUnavailableException)
         {
             throw;
+        }
+        catch (AuditRedactionException exception)
+        {
+            throw new QuoteServiceUnavailableException("The low price authorization audit could not be redacted.", exception);
         }
         catch (Exception exception) when (exception is PostgresException or NpgsqlException or DbUpdateException)
         {
@@ -184,6 +193,7 @@ public sealed class PostgreSqlQuoteService(
                 var rules = await dbContext.TariffRules.AsNoTracking()
                     .Where(rule => rule.CityId == originLocation.CityId && rule.ServiceType == serviceType)
                     .ToArrayAsync(token);
+                var authorizationInput = command.LowPriceAuthorization;
                 var evaluation = new TariffRuleEvaluator().Evaluate(
                     new TariffEvaluationContext(
                         command.OrganizationId,
@@ -194,15 +204,33 @@ public sealed class PostgreSqlQuoteService(
                         serviceType,
                         command.ConsolidatedRoute,
                         now,
-                        privateTariffId),
+                        privateTariffId,
+                        LowPriceAuthorized: authorizationInput is not null),
                     rules);
                 ThrowIfFailed(evaluation, command.OrganizationId, originLocation.CityId, serviceType);
+
+                // LOW-PRICE-MANUAL-AUTH-2026-10-02: an authorization that the selected price does not need is the
+                // uniform 409, decided before anything is written; it is never stored silently.
+                if (authorizationInput is not null &&
+                    !LowPriceGuardPolicy.RequiresAuthorization(tier, command.ConsolidatedRoute, evaluation.Total.AmountCents))
+                {
+                    throw new QuoteConflictException();
+                }
 
                 var selectedRule = evaluation.Rule!;
                 var expiresAt = QuoteExpirationPolicy.Calculate(
                     now,
                     TimeSpan.FromMinutes(options.Value.QuoteLifetimeMinutes),
                     selectedRule.ActiveTo);
+                LowPriceAuthorization? authorization = null;
+                if (authorizationInput is not null)
+                {
+                    // valid_until is the quote's own expiry. PostgreSQL keeps microseconds, so the expiry is
+                    // truncated to them first and the stored valid_until equals the stored expires_at exactly.
+                    expiresAt = TruncateToMicroseconds(expiresAt);
+                    authorization = new LowPriceAuthorization(command.ActorId, authorizationInput.Reason, expiresAt);
+                }
+
                 var packageSnapshot = CreatePackageSnapshot(command.Packages);
                 var requestSnapshot = CreateRequestSnapshot(
                     command,
@@ -236,11 +264,18 @@ public sealed class PostgreSqlQuoteService(
                     JsonSerializer.Serialize(breakdown, JsonOptions),
                     inputHash,
                     expiresAt,
-                    now);
+                    now,
+                    authorization,
+                    authorization is null ? null : SerializeFinancialOverride(authorization));
 
                 var response = ToResult(quote);
                 var responseJson = JsonSerializer.Serialize(response, JsonOptions);
                 await InsertQuoteAsync(dbContext, quote, token);
+                if (authorization is not null)
+                {
+                    await WriteLowPriceAuthorizationAuditAsync(dbContext, command, quote, authorization, now, token);
+                }
+
                 await CompleteIdempotencyReservationAsync(dbContext, command, inputHash, responseJson, quote, token);
                 return response;
             },
@@ -424,6 +459,18 @@ public sealed class PostgreSqlQuoteService(
             }
 
             writer.WriteEndArray();
+
+            // LOW-PRICE-MANUAL-AUTH-2026-10-02: the authorization is part of the fingerprint only when present, so
+            // a request without one keeps its previous hash. The caller is included: the override records who
+            // authorized, so another actor reusing the key with the same reason is a conflict, not a replay.
+            if (command.LowPriceAuthorization is { } authorization)
+            {
+                writer.WriteStartObject("low_price_authorization");
+                writer.WriteString("actor_id", command.ActorId);
+                writer.WriteString("reason", authorization.Reason);
+                writer.WriteEndObject();
+            }
+
             writer.WriteEndObject();
         }
 
@@ -475,7 +522,114 @@ public sealed class PostgreSqlQuoteService(
         quote.PricingPolicyVersion,
         quote.Status.ToContractValue(),
         JsonSerializer.Deserialize<Dictionary<string, object?>>(quote.RequestSnapshotRedacted, JsonOptions)
-            ?? new Dictionary<string, object?>());
+            ?? new Dictionary<string, object?>(),
+        ReadLowPriceAuthorization(quote.FinancialOverride));
+
+    /// <summary>
+    /// LOW-PRICE-MANUAL-AUTH-2026-10-02: the AI-06 financial_override of the quote (actor_id, reason, valid_until).
+    /// valid_until is UTC with microseconds, the precision PostgreSQL keeps for expires_at. The order created from
+    /// the quote copies the value unchanged.
+    /// </summary>
+    internal static string SerializeFinancialOverride(LowPriceAuthorization authorization)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("actor_id", authorization.ActorId);
+            writer.WriteString("reason", authorization.Reason);
+            writer.WriteString(
+                "valid_until",
+                authorization.ValidUntil.UtcDateTime.ToString(
+                    "yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'",
+                    System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Reads a stored financial_override back. A value that does not carry a valid actor, reason and validity
+    /// fails closed (503): it is never shown as an authorization it is not.
+    /// </summary>
+    internal static QuoteLowPriceAuthorizationResult? ReadLowPriceAuthorization(string? financialOverride)
+    {
+        if (financialOverride is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(financialOverride);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("actor_id", out var actor) && actor.ValueKind == JsonValueKind.String &&
+                actor.TryGetGuid(out var actorId) && actorId != Guid.Empty &&
+                root.TryGetProperty("reason", out var reason) && reason.ValueKind == JsonValueKind.String &&
+                LowPriceAuthorization.IsValidReason(reason.GetString()) &&
+                root.TryGetProperty("valid_until", out var validUntil) && validUntil.ValueKind == JsonValueKind.String &&
+                validUntil.TryGetDateTimeOffset(out var validUntilValue))
+            {
+                return new QuoteLowPriceAuthorizationResult(actorId, reason.GetString()!, validUntilValue.ToUniversalTime());
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        throw new QuoteServiceUnavailableException("The stored financial override is not a valid authorization.");
+    }
+
+    internal static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value) =>
+        new(value.UtcTicks - (value.UtcTicks % 10), TimeSpan.Zero);
+
+    /// <summary>
+    /// Append-only evidence of a manual low price authorization: who authorized, why, which quote and its total. The
+    /// audit action names the decision; every value here passes the audit redactor unchanged (a dated decision id
+    /// would not: its digit run reads as a phone number), so the stored evidence never holds "[REDACTED]".
+    /// </summary>
+    internal static JsonElement CreateLowPriceAuditPayload(Quote quote, LowPriceAuthorization authorization) =>
+        JsonSerializer.SerializeToElement(
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["quote_id"] = quote.Id,
+                ["actor_id"] = authorization.ActorId,
+                ["reason"] = authorization.Reason,
+                ["total_cents"] = quote.TotalCents,
+                ["currency"] = quote.Currency,
+                ["pricing_tier"] = quote.PricingTier.ToContractValue(),
+                ["consolidated_route"] = quote.ConsolidatedRoute,
+                ["valid_until"] = authorization.ValidUntil,
+            });
+
+    private async Task WriteLowPriceAuthorizationAuditAsync(
+        PricingDbContext dbContext,
+        CreateQuoteCommand command,
+        Quote quote,
+        LowPriceAuthorization authorization,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        var payload = CreateLowPriceAuditPayload(quote, authorization);
+        var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
+        await auditWriter.WriteAsync(
+            connection,
+            transaction,
+            new AuditEntry(
+                Guid.NewGuid(),
+                command.OrganizationId,
+                command.ActorId,
+                LowPriceAuthorizedAuditAction,
+                "QUOTE",
+                quote.Id,
+                command.RequestId,
+                redactor.Redact(payload),
+                occurredAt.ToUniversalTime()),
+            cancellationToken);
+    }
 
     private static async Task InsertQuoteAsync(PricingDbContext dbContext, Quote quote, CancellationToken cancellationToken)
     {
@@ -493,7 +647,7 @@ public sealed class PostgreSqlQuoteService(
               @id,@owner_org_id,@client_account_id,@city_id,@service_area_id,@origin_location_id,@destination_location_id,
               @service_type,@pricing_tier,@consolidated_route,@subtotal_cents,@discount_cents,@tax_cents,@total_cents,
               @minimum_total_cents_snapshot,@currency,@pricing_policy_version,@rule_ids,@request_snapshot_redacted,
-              @package_snapshot,NULL,NULL,@breakdown,@input_hash,NULL,@status,@expires_at,NULL,@created_at)
+              @package_snapshot,NULL,NULL,@breakdown,@input_hash,@financial_override,@status,@expires_at,NULL,@created_at)
             """,
             connection,
             transaction);
@@ -525,6 +679,7 @@ public sealed class PostgreSqlQuoteService(
         command.Parameters.Add(P("package_snapshot", NpgsqlDbType.Jsonb, quote.PackageSnapshot));
         command.Parameters.Add(P("breakdown", NpgsqlDbType.Jsonb, quote.Breakdown));
         command.Parameters.Add(P("input_hash", NpgsqlDbType.Bytea, quote.InputHash));
+        command.Parameters.Add(P("financial_override", NpgsqlDbType.Jsonb, quote.FinancialOverride));
         command.Parameters.Add(P("status", NpgsqlDbType.Text, quote.Status.ToContractValue()));
         command.Parameters.Add(P("expires_at", NpgsqlDbType.TimestampTz, quote.ExpiresAt));
         command.Parameters.Add(P("created_at", NpgsqlDbType.TimestampTz, quote.CreatedAt));
@@ -681,6 +836,45 @@ public sealed class PostgreSqlQuoteService(
                 package.HeightMm)).ToArray()))
         {
             throw new QuoteValidationException(QuoteValidationCode.InvalidRequest);
+        }
+    }
+
+    /// <summary>
+    /// LOW-PRICE-MANUAL-AUTH-2026-10-02: the reason arrives trimmed (1 to 200 characters) and must not carry
+    /// personal data. A reason the audit redactor would alter (an email, a phone number, an address, a credential)
+    /// is refused with 422 instead of being stored on the quote, the order and the audit log.
+    /// </summary>
+    private void ValidateLowPriceAuthorization(CreateQuoteCommand command)
+    {
+        if (command.LowPriceAuthorization is not { } authorization)
+        {
+            return;
+        }
+
+        if (!LowPriceAuthorization.IsValidReason(authorization.Reason))
+        {
+            throw new QuoteValidationException(QuoteValidationCode.InvalidRequest);
+        }
+
+        var probe = JsonSerializer.SerializeToElement(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["reason"] = authorization.Reason,
+        });
+        string redacted;
+        try
+        {
+            redacted = redactor.Redact(probe).Json;
+        }
+        catch (AuditRedactionException)
+        {
+            throw new QuoteValidationException(QuoteValidationCode.InvalidRequest);
+        }
+
+        using var redactedDocument = JsonDocument.Parse(redacted);
+        if (!redactedDocument.RootElement.TryGetProperty("reason", out var redactedReason) ||
+            !string.Equals(redactedReason.GetString(), authorization.Reason, StringComparison.Ordinal))
+        {
+            throw new QuoteValidationException(QuoteValidationCode.LowPriceAuthorizationReasonRejected);
         }
     }
 

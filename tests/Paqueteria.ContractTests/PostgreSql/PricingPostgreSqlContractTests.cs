@@ -1133,6 +1133,281 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         }
     }
 
+    /// <summary>
+    /// LOW-PRICE-MANUAL-AUTH-2026-10-02 on real PostgreSQL: a BUSINESS_200_499 quote of 52 MXN without a consolidated
+    /// route is refused without authorization and created with one. The financial_override satisfies the AI-06
+    /// tier/route and floor CHECKs, valid_until equals the stored expires_at, one append-only audit row is written in
+    /// the same transaction, the replay neither duplicates it nor changes the quote, a changed reason is an idempotency
+    /// conflict, and the order created from the quote copies the override unchanged.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Low_price_authorization_persists_the_override_audits_once_and_the_order_copies_it()
+    {
+        const string reason = "Cliente ancla, ruta en consolidación";
+        var data = SyntheticPricingData.Create();
+        var lowRuleId = Guid.NewGuid();
+        var accountId = Guid.NewGuid();
+        await SeedAsync(data);
+        await SeedLowPriceAccountAsync(data, lowRuleId, accountId, "BUSINESS_200_499", 5_200);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 8, applicationName: "PRC.LowPrice.Authorized");
+        try
+        {
+            var command = CreateCommand(data, "prc-low-price-authorized-01") with { ClientAccountId = accountId };
+            QuoteResult created;
+            await using (var scope = CreateScope(appDataSource))
+            {
+                var refused = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(
+                    CreateCommand(data, "prc-low-price-unauthorized-1") with { ClientAccountId = accountId },
+                    default));
+                Assert.Equal(QuoteValidationCode.ConsolidatedRouteRequired, refused.Code);
+
+                var authorized = command with { LowPriceAuthorization = new QuoteLowPriceAuthorizationInput(reason) };
+                created = await scope.Service.CreateAsync(authorized, default);
+                var replay = await scope.Service.CreateAsync(authorized, default);
+                Assert.Equal(created.Id, replay.Id);
+                Assert.Equal(created.LowPriceAuthorization, replay.LowPriceAuthorization);
+
+                var changed = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(
+                    authorized with { LowPriceAuthorization = new QuoteLowPriceAuthorizationInput("Otro motivo") },
+                    default));
+                Assert.Equal(QuoteValidationCode.IdempotencyConflict, changed.Code);
+                var withoutAuthorization = await Assert.ThrowsAsync<QuoteValidationException>(() =>
+                    scope.Service.CreateAsync(command, default));
+                Assert.Equal(QuoteValidationCode.IdempotencyConflict, withoutAuthorization.Code);
+
+                var fetched = await scope.Service.GetAsync(data.ActorId, data.OrganizationId, created.Id, default);
+                Assert.Equal(created.LowPriceAuthorization, fetched.LowPriceAuthorization);
+            }
+
+            Assert.Equal("BUSINESS_200_499", created.PricingTier);
+            Assert.False(created.ConsolidatedRoute);
+            Assert.Equal(5_200, created.Total.AmountCents);
+            Assert.Equal(5_200, created.MinimumTotalCentsSnapshot);
+            Assert.Equal(new QuoteLowPriceAuthorizationResult(data.ActorId, reason, created.ExpiresAt), created.LowPriceAuthorization);
+
+            await using (var stored = fixture.AdminDataSource.CreateCommand(
+                """
+                SELECT q.financial_override->>'actor_id',
+                       q.financial_override->>'reason',
+                       (q.financial_override->>'valid_until')::timestamptz = q.expires_at,
+                       q.financial_override ?& ARRAY['actor_id','reason','valid_until'],
+                       (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(q.financial_override) k),
+                       q.pricing_tier, q.consolidated_route, q.total_cents, q.minimum_total_cents_snapshot,
+                       q.expires_at
+                FROM pricing.quotes q WHERE q.id=@id
+                """))
+            {
+                stored.Parameters.Add(P("id", created.Id));
+                await using var reader = await stored.ExecuteReaderAsync();
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal(data.ActorId.ToString("D"), reader.GetString(0));
+                Assert.Equal(reason, reader.GetString(1));
+                Assert.True(reader.GetBoolean(2));
+                Assert.True(reader.GetBoolean(3));
+                Assert.Equal(["actor_id", "reason", "valid_until"], reader.GetFieldValue<string[]>(4));
+                Assert.Equal("BUSINESS_200_499", reader.GetString(5));
+                Assert.False(reader.GetBoolean(6));
+                Assert.Equal(5_200, reader.GetInt64(7));
+                Assert.Equal(5_200, reader.GetInt64(8));
+                Assert.Equal(created.ExpiresAt, reader.GetFieldValue<DateTimeOffset>(9));
+            }
+
+            // The AI-06 tier/route CHECK depends on the override: without it the stored row is invalid.
+            var check = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAdminAsync(
+                "UPDATE pricing.quotes SET financial_override=NULL WHERE id=@id", P("id", created.Id)));
+            Assert.Equal(PostgresErrorCodes.CheckViolation, check.SqlState);
+            var incomplete = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAdminAsync(
+                "UPDATE pricing.quotes SET financial_override=financial_override - 'reason' WHERE id=@id", P("id", created.Id)));
+            Assert.Equal(PostgresErrorCodes.CheckViolation, incomplete.SqlState);
+
+            await AssertLowPriceAuditAsync(data, created.Id, reason, 5_200, "BUSINESS_200_499");
+
+            var order = await CreateOrderAsync(data, created.Id, "prc-low-price-authorized-order");
+            Assert.Equal(created.Id, order.QuoteId);
+            Assert.True(await ScalarAdminAsync<bool>(
+                """
+                SELECT o.financial_override = q.financial_override
+                   AND o.financial_override IS NOT NULL
+                   AND o.pricing_tier='BUSINESS_200_499' AND NOT o.consolidated_route
+                   AND o.total_cents=5200 AND o.minimum_total_cents_snapshot=5200
+                   AND q.status='USED'
+                FROM orders.orders o JOIN pricing.quotes q ON q.id=o.quote_id
+                WHERE o.id=@order
+                """,
+                P("order", order.Id)));
+            var orderCheck = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAdminAsync(
+                "UPDATE orders.orders SET financial_override=NULL WHERE id=@id", P("id", order.Id)));
+            Assert.Equal(PostgresErrorCodes.CheckViolation, orderCheck.SqlState);
+
+            // The order creation adds no second authorization audit row.
+            await AssertLowPriceAuditAsync(data, created.Id, reason, 5_200, "BUSINESS_200_499");
+        }
+        finally
+        {
+            await CleanupOrdersAsync(data);
+            await CleanupLowPriceAccountAsync(data, accountId);
+            await CleanupAsync(data);
+        }
+    }
+
+    /// <summary>
+    /// LOW-PRICE-MANUAL-AUTH-2026-10-02: an OCCASIONAL quote of 52 MXN or less without a consolidated route accepts
+    /// an authorization; an authorization the price does not need (above 52 MXN, or on a consolidated route) is the
+    /// conflict and writes neither a quote, an override nor an audit row; a reason that looks like personal data is
+    /// refused before the idempotency reservation.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Low_price_authorization_is_refused_when_not_needed_or_personal_and_accepted_at_52_MXN()
+    {
+        var data = SyntheticPricingData.Create();
+        await SeedAsync(data);
+        await using var appDataSource = fixture.CreateAppDataSource(maxPoolSize: 6, applicationName: "PRC.LowPrice.Conflict");
+        try
+        {
+            var authorization = new QuoteLowPriceAuthorizationInput("Promoción autorizada");
+            await using (var scope = CreateScope(appDataSource))
+            {
+                // The zone rule is 345.67 MXN: nothing to authorize.
+                await Assert.ThrowsAsync<QuoteConflictException>(() => scope.Service.CreateAsync(
+                    CreateCommand(data, "prc-low-price-not-needed-01") with { LowPriceAuthorization = authorization },
+                    default));
+                await Assert.ThrowsAsync<QuoteConflictException>(() => scope.Service.CreateAsync(
+                    CreateCommand(data, "prc-low-price-consolidated-1") with
+                    {
+                        ConsolidatedRoute = true,
+                        LowPriceAuthorization = authorization,
+                    },
+                    default));
+
+                var personal = await Assert.ThrowsAsync<QuoteValidationException>(() => scope.Service.CreateAsync(
+                    CreateCommand(data, "prc-low-price-personal-0001") with
+                    {
+                        LowPriceAuthorization = new QuoteLowPriceAuthorizationInput("Llamar al 667 123 4567"),
+                    },
+                    default));
+                Assert.Equal(QuoteValidationCode.LowPriceAuthorizationReasonRejected, personal.Code);
+            }
+
+            Assert.Equal(0L, await ScalarAdminAsync<long>(
+                "SELECT count(*) FROM pricing.quotes WHERE owner_org_id=@org", P("org", data.OrganizationId)));
+            Assert.Equal(0L, await ScalarAdminAsync<long>(
+                "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='QUOTE_LOW_PRICE_AUTHORIZED'",
+                P("org", data.OrganizationId)));
+            Assert.Equal(0L, await ScalarAdminAsync<long>(
+                """
+                SELECT count(*) FROM platform.idempotency_keys
+                WHERE owner_org_id=@org AND idempotency_key='prc-low-price-personal-0001'
+                """,
+                P("org", data.OrganizationId)));
+
+            await ExecuteAdminAsync(
+                "UPDATE pricing.tariff_rules SET amount_cents=5200 WHERE id=@rule", P("rule", data.ZoneRuleId));
+            QuoteResult authorized;
+            QuoteResult plain;
+            await using (var scope = CreateScope(appDataSource))
+            {
+                authorized = await scope.Service.CreateAsync(
+                    CreateCommand(data, "prc-low-price-occasional-01") with { LowPriceAuthorization = authorization },
+                    default);
+                plain = await scope.Service.CreateAsync(CreateCommand(data, "prc-low-price-occasional-02"), default);
+            }
+
+            Assert.Equal("OCCASIONAL", authorized.PricingTier);
+            Assert.Equal(5_200, authorized.Total.AmountCents);
+            Assert.Equal("Promoción autorizada", authorized.LowPriceAuthorization!.Reason);
+            Assert.Null(plain.LowPriceAuthorization);
+            Assert.True(await ScalarAdminAsync<bool>(
+                "SELECT financial_override IS NULL FROM pricing.quotes WHERE id=@id", P("id", plain.Id)));
+            await AssertLowPriceAuditAsync(data, authorized.Id, "Promoción autorizada", 5_200, "OCCASIONAL");
+        }
+        finally
+        {
+            await CleanupAsync(data);
+        }
+    }
+
+    private async Task SeedLowPriceAccountAsync(
+        SyntheticPricingData data,
+        Guid ruleId,
+        Guid accountId,
+        string tier,
+        long amountCents)
+    {
+        await using var seed = fixture.AdminDataSource.CreateCommand(
+            """
+            INSERT INTO pricing.tariff_rules(
+              id,owner_org_id,city_id,service_area_id,operating_zone_id,pricing_tier,service_type,
+              amount_cents,tax_mode,active_from,active_to,status,policy_version)
+              VALUES (@rule,@org,@city,@area,@zone,@tier,'SAME_DAY',@amount,'VAT_INCLUDED',@active_from,NULL,'ACTIVE','PRC-low-price.v1');
+            INSERT INTO clients.client_accounts(id,owner_org_id,name,status,private_tariff_id,created_at)
+              VALUES (@account,@org,'Synthetic volume account','ACTIVE',@rule,@created);
+            """);
+        seed.Parameters.Add(P("rule", ruleId));
+        seed.Parameters.Add(P("org", data.OrganizationId));
+        seed.Parameters.Add(P("city", data.CityId));
+        seed.Parameters.Add(P("area", data.AreaId));
+        seed.Parameters.Add(P("zone", data.ZoneId));
+        seed.Parameters.Add(P("account", accountId));
+        seed.Parameters.Add(new NpgsqlParameter<string>("tier", NpgsqlDbType.Text) { TypedValue = tier });
+        seed.Parameters.Add(new NpgsqlParameter<long>("amount", NpgsqlDbType.Bigint) { TypedValue = amountCents });
+        seed.Parameters.Add(new NpgsqlParameter<DateTimeOffset>("created", NpgsqlDbType.TimestampTz) { TypedValue = DateTimeOffset.UtcNow.AddMinutes(-5) });
+        seed.Parameters.Add(new NpgsqlParameter<DateTimeOffset>("active_from", NpgsqlDbType.TimestampTz) { TypedValue = DateTimeOffset.UtcNow.AddDays(-1) });
+        await seed.ExecuteNonQueryAsync();
+    }
+
+    private async Task CleanupLowPriceAccountAsync(SyntheticPricingData data, Guid accountId)
+    {
+        await ExecuteAdminAsync(
+            """
+            DELETE FROM platform.idempotency_keys WHERE owner_org_id=@org;
+            DELETE FROM pricing.quotes WHERE owner_org_id=@org;
+            DELETE FROM clients.client_accounts WHERE id=@account;
+            """,
+            P("org", data.OrganizationId),
+            P("account", accountId));
+    }
+
+    private async Task AssertLowPriceAuditAsync(
+        SyntheticPricingData data,
+        Guid quoteId,
+        string reason,
+        long totalCents,
+        string pricingTier)
+    {
+        await using var audit = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT actor_id, entity_type, payload_redacted->>'reason', (payload_redacted->>'total_cents')::bigint,
+                   payload_redacted->>'quote_id', payload_redacted->>'actor_id', request_id,
+                   (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(payload_redacted) k),
+                   payload_redacted::text, payload_redacted->>'currency', payload_redacted->>'pricing_tier',
+                   (payload_redacted->>'consolidated_route')::boolean,
+                   (payload_redacted->>'valid_until')::timestamptz = (SELECT expires_at FROM pricing.quotes WHERE id=@quote)
+            FROM platform.audit_logs
+            WHERE org_id=@org AND action='QUOTE_LOW_PRICE_AUTHORIZED' AND entity_id=@quote
+            """);
+        audit.Parameters.Add(P("org", data.OrganizationId));
+        audit.Parameters.Add(P("quote", quoteId));
+        await using var reader = await audit.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(data.ActorId, reader.GetGuid(0));
+        Assert.Equal("QUOTE", reader.GetString(1));
+        Assert.Equal(reason, reader.GetString(2));
+        Assert.Equal(totalCents, reader.GetInt64(3));
+        Assert.Equal(quoteId.ToString("D"), reader.GetString(4));
+        Assert.Equal(data.ActorId.ToString("D"), reader.GetString(5));
+        Assert.Equal("prc001-contract-request", reader.GetString(6));
+        // The stored evidence is exactly the intended payload, and the redactor altered none of it.
+        Assert.Equal(
+            ["actor_id", "consolidated_route", "currency", "pricing_tier", "quote_id", "reason", "total_cents", "valid_until"],
+            reader.GetFieldValue<string[]>(7));
+        Assert.DoesNotContain(Paqueteria.Application.Auditing.AuditPayloadRedactor.Replacement, reader.GetString(8), StringComparison.Ordinal);
+        Assert.Equal("MXN", reader.GetString(9));
+        Assert.Equal(pricingTier, reader.GetString(10));
+        Assert.False(reader.GetBoolean(11));
+        Assert.True(reader.GetBoolean(12));
+        Assert.False(await reader.ReadAsync());
+    }
+
     private async Task InsertRuleAsync(SyntheticPricingData data, string? version)
     {
         await using var command = fixture.AdminDataSource.CreateCommand(
@@ -1264,6 +1539,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             new TenantTransactionContext<PricingDbContext>(pricing, pricingState),
             countingResolver,
             new AuditPayloadRedactor(),
+            new PostgreSqlAppendOnlyAuditWriter(pricingState),
             Options.Create(new PricingOptions
             {
                 Provider = PricingProviderKind.PostgreSql,
