@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 50047,
-      "sha256": "756f5d8ad555b76a95a05f774171ea2d3fad78ae3bf19e084bd2f84797716f76"
+      "bytes": 51665,
+      "sha256": "c95e8c00a4cf75c7f5257e49631656c83eb2cc62b1a056427f44b71027af6379"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "46f4b5448ed65daa37f696771e55f6a59e19146f90b109317eb202d7641c7cb2"
+      "sha256": "78f4cbbbf52b480e2862af1592b3a90f2c4afd9d9e5a5530c15796916f668b87"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 193790,
-      "sha256": "72b625bce70e6e0771e2ec15c688e2141b0cb9a4157e08e19106227f38f5ccd8"
+      "bytes": 198434,
+      "sha256": "3963e3d324eba4462bb8aae2b87daa2a1efcb5466311cb819948d28e3c3a4f41"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 90823,
-      "sha256": "2bf3e0940270ebd195f397fbdfea927f3163e2fc7799d422201336f703dedbef"
+      "bytes": 93547,
+      "sha256": "8aa4b0901599749f06e70850102dce13197992f5b04eecb0e5ec7052d74c1082"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -319,8 +319,8 @@
     },
     {
       "path": "specs/AI-02_PRODUCT_CONTRACT.yaml",
-      "bytes": 12082,
-      "sha256": "f08f20a618a30a8f62efc3c8c8b07a316edadfe2e74bcb22f141477a151d7303"
+      "bytes": 12639,
+      "sha256": "36fef8f571ca266163b80c474a37fc3855feed9ce1710d9529f0fdd7d4e7e6ec"
     },
     {
       "path": "specs/AI-03_ARCHITECTURE.md",
@@ -334,13 +334,13 @@
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 17392,
-      "sha256": "9fbeecd209d33070a02c5d05c45a95cc1d8d6e2fb2c68f367558038de32fa7ba"
+      "bytes": 18147,
+      "sha256": "7b585081cbfb61a3e3f52f0f67b62557d2bd1a1f39f7f828f7b448f01b66bda7"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 53405,
-      "sha256": "bb90ca4cbb21b16684ea41c314801ce2f2306d8d7d976bf3ef6ac7e865ad2834"
+      "bytes": 53993,
+      "sha256": "4a04ce7b2ee007a3fe9764efd9a0e65b0279def468400ead97563b034bcf4f7d"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",

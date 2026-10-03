@@ -245,9 +245,16 @@ items:
   - Pricing.Domain chooses tier and minimum snapshot
   - SQL backstops tier/route/override and total floor
   - GATE-011 tests PLUS_VAT and VAT_INCLUDED
+  - 'LOW-PRICE-MANUAL-AUTH-2026-10-02: the financial override workflow is the createQuote low_price_authorization -
+    DISPATCHER or PLATFORM_ADMIN with MFA, reason audited, override {actor_id, reason, valid_until = quote expiry} on the
+    quote and copied to the order; an override the price does not need is a 409'
   required_tests:
   - API authorization
   - audit assertion
+  implementation:
+    status: IMPLEMENTED for LOW-PRICE-MANUAL-AUTH-2026-10-02 (feature/low-price-manual-authorization); no other override
+      kind exists
+    migration: none (pricing.quotes.financial_override and the AI-06 tier/route and floor CHECKs already exist)
   approval_gate: null
 - id: ORD-001
   epic: Orders

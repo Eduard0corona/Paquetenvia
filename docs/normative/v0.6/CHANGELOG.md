@@ -1,5 +1,22 @@
 # Changelog
 
+## Autorización manual de envíos de bajo monto en la cotización (LOW-PRICE-MANUAL-AUTH-2026-10-02) — 2026-10-02
+
+- Respuestas literales del project owner: "Sí, con autorización"; "En la cotización". Registrado en `decision-log.md`
+  (`LOW-PRICE-MANUAL-AUTH-2026-10-02`); implementa PRC-002 (flujo de financial override) acotado a esa regla.
+- AI-05: `CreateQuoteRequest.low_price_authorization` opcional (`reason` recortado, 1 a 200 caracteres, sin datos
+  personales). Solo DISPATCHER o PLATFORM_ADMIN con MFA (`x-capability-matrix.low_price_authorization`); otro rol recibe
+  403 (`MFA_REQUIRED` si solo falta el segundo factor) antes de leer estado persistido. Si el precio la necesita (sin ruta
+  consolidada y tarifa 52/45 o total de 52 MXN o menos con IVA) la cotización guarda `financial_override` = {actor_id,
+  reason, valid_until = expires_at} y la orden lo copia; si no la necesita, 409 uniforme. createQuote declara 409.
+  `Quote.low_price_authorization` muestra `valid_until` a todo lector y `actor_id`/`reason` solo a quien tiene
+  getOrderFinancials.
+- Auditoría append-only `QUOTE_LOW_PRICE_AUTHORIZED` (actor, motivo, cotización, total en centavos) en la misma
+  transacción de createQuote; la autorización forma parte de la huella de idempotencia.
+- AI-07: `create_order.low_price_guard` deja pasar una cotización autorizada y `create_order.low_price_authorization`
+  describe el campo "Autorizar envío de bajo monto". AI-02 y AI-08 (PRC-002) registran la regla.
+- Sin migración: `financial_override` y los CHECK de tarifa/ruta y piso ya existen en AI-06. AI-06 y AI-18 sin cambios.
+
 ## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
 
 - Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para

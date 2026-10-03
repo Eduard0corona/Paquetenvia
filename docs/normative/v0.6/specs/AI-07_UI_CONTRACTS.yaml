@@ -253,7 +253,15 @@ screen_contracts:
     - rule explanation
     - totals labeled "IVA incluido" (GATE-011-VAT-INCLUDED-2026-09-29)
     low_price_guard: block confirmation at <=52 MXN total, IVA included, unless route flag or authorized override
-      (GATE-011-VAT-INCLUDED-2026-09-29; compares the total the customer pays, never the pre-tax net)
+      (GATE-011-VAT-INCLUDED-2026-09-29; compares the total the customer pays, never the pre-tax net); a quote whose
+      low_price_authorization is present carries the authorized override and passes the guard
+      (LOW-PRICE-MANUAL-AUTH-2026-10-02)
+    low_price_authorization: LOW-PRICE-MANUAL-AUTH-2026-10-02 - the quote form offers "Autorizar envío de bajo monto"
+      with a reason field (1 to 200 characters, no personal data) only to DISPATCHER and PLATFORM_ADMIN; the reason is
+      sent as createQuote low_price_authorization, never on createOrder. The server stays the barrier (PLATFORM_ADMIN
+      without MFA receives 403 MFA_REQUIRED and the screen offers step-up; an authorization the price does not need is
+      409). The quote summary states that the shipment is authorized and until when, and the reason when the API
+      returns it
     cod_expected: D6-COD-EXPECTED - optional COD amount typed in MXN with at most two decimals, converted to integer
       cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD
   driver_stop:

@@ -19,7 +19,8 @@ public sealed record TariffEvaluationContext(
     ServiceType ServiceType,
     bool ConsolidatedRoute,
     DateTimeOffset EvaluatedAt,
-    Guid? PrivateTariffId = null);
+    Guid? PrivateTariffId = null,
+    bool LowPriceAuthorized = false);
 
 public sealed record TariffEvaluationResult(
     TariffEvaluationFailure Failure,
@@ -46,7 +47,9 @@ public sealed class TariffRuleEvaluator
             throw new ArgumentException("Pricing context identifiers are required.");
         }
 
-        if (RequiresConsolidatedRoute(context.PricingTier) && !context.ConsolidatedRoute)
+        // LOW-PRICE-MANUAL-AUTH-2026-10-02: a manual low price authorization stands in for the consolidated route;
+        // whether it was needed is decided on the selected total (LowPriceGuardPolicy).
+        if (RequiresConsolidatedRoute(context.PricingTier) && !context.ConsolidatedRoute && !context.LowPriceAuthorized)
         {
             return TariffEvaluationResult.Failed(TariffEvaluationFailure.ConsolidatedRouteRequired);
         }

@@ -123,6 +123,26 @@ export function canListPendingCod(role: string | null): boolean {
   return canPerform(role, "listOrders") && canPerform(role, "getOrderFinancials");
 }
 
+/**
+ * AI-05 `x-capability-matrix.low_price_authorization` (LOW-PRICE-MANUAL-AUTH-2026-10-02): the
+ * createQuote field `low_price_authorization` admits DISPATCHER and PLATFORM_ADMIN with MFA. It
+ * is a field of createQuote, not an operation, so it is kept apart from the operation matrices.
+ */
+export const lowPriceAuthorizationMatrix = {
+  "createQuote.low_price_authorization": ["DISPATCHER", "PLATFORM_ADMIN"],
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
+/** Whether the "Autorizar envío de bajo monto" option is shown; the API remains the barrier. */
+export function canAuthorizeLowPrice(role: string | null): boolean {
+  if (role === null) return false;
+  return (lowPriceAuthorizationMatrix["createQuote.low_price_authorization"] as readonly string[]).includes(role);
+}
+
+/** PLATFORM_ADMIN needs a satisfied MFA challenge to authorize; DISPATCHER never does. */
+export function lowPriceAuthorizationRequiresMfa(role: string | null): boolean {
+  return role === "PLATFORM_ADMIN";
+}
+
 /** The role the signed-in person holds in the organization selected with X-Organization-Id. */
 export function resolveActiveRole(
   contexts: readonly OperationsOrganizationContext[],

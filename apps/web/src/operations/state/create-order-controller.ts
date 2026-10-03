@@ -1,12 +1,13 @@
 import type { OrdersApi } from "../api/orders-api";
 import type { AcceptanceVersions } from "../contracts/acceptance-versions";
 import { TenantApiError } from "../api/tenant-request";
-import { canPerform } from "../contracts/capabilities";
+import { canAuthorizeLowPrice, canPerform } from "../contracts/capabilities";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
   confirmationBlockerLabels,
   evaluateConfirmation,
+  lowPriceAuthorizationNotNeededMessage,
   type AcceptanceDraft,
   type CreatedOrder,
   type Quote,
@@ -24,6 +25,8 @@ export interface CreateOrderState {
   readonly role: string | null;
   readonly canQuote: boolean;
   readonly canOrder: boolean;
+  /** LOW-PRICE-MANUAL-AUTH-2026-10-02: shows "Autorizar envío de bajo monto" (DISPATCHER, PLATFORM_ADMIN). */
+  readonly canAuthorizeLowPrice: boolean;
   readonly quote: Quote | null;
   readonly order: CreatedOrder | null;
   /**
@@ -54,6 +57,7 @@ const initialState: CreateOrderState = {
   role: null,
   canQuote: false,
   canOrder: false,
+  canAuthorizeLowPrice: false,
   quote: null,
   order: null,
   orderCodExpectedCents: null,
@@ -112,6 +116,7 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
       role,
       canQuote,
       canOrder: canPerform(role, "createOrder"),
+      canAuthorizeLowPrice: canQuote && canAuthorizeLowPrice(role),
     });
   }
 
@@ -124,7 +129,10 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
   public async requestQuote(draft: QuoteDraft): Promise<void> {
     const api = this.api;
     if (api === null || !this.getSnapshot().canQuote || this.getSnapshot().busy) return;
-    const result = buildCreateQuoteBody(draft);
+    // A role that cannot authorize never sends the field, whatever the form held.
+    const result = buildCreateQuoteBody(
+      this.getSnapshot().canAuthorizeLowPrice ? draft : { ...draft, authorizeLowPrice: false },
+    );
     if (!result.ok) {
       this.update({ errors: result.errors, message: null, stepUpHref: null });
       return;
@@ -140,7 +148,14 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
     } catch (error) {
       if (generation !== this.generation) return;
       this.settleUnlessRetryable("quote", error);
-      const view = describeFailure(error, createOrderPath, {}, "El servidor rechazó la cotización.");
+      const view = describeFailure(
+        error,
+        createOrderPath,
+        {},
+        result.body.low_price_authorization === undefined
+          ? "El servidor rechazó la cotización."
+          : lowPriceAuthorizationNotNeededMessage,
+      );
       const message =
         error instanceof TenantApiError && error.category === "invalid"
           ? "El servidor rechazó la cotización: revisa cobertura en Culiacán, direcciones, teléfonos y límites de paquetes."

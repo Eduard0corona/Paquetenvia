@@ -7,6 +7,7 @@ import {
   confirmationBlockerLabels,
   CreateOrderContractError,
   evaluateConfirmation,
+  lowPriceAuthorizationReasonMaximum,
   lowPriceGuardTotalCents,
   parseCreatedOrder,
   parseQuote,
@@ -211,5 +212,92 @@ describe("quote and order parsers", () => {
     });
     expect(() => parseCreatedOrder(orderResponse({ version: 0 }))).toThrow(CreateOrderContractError);
     expect(() => parseCreatedOrder(orderResponse({ driver_phone: "x" }))).toThrow(CreateOrderContractError);
+  });
+});
+
+describe("low price authorization (LOW-PRICE-MANUAL-AUTH-2026-10-02)", () => {
+  const now = new Date("2026-09-28T17:00:00Z");
+  const at52 = quoteResponse({
+    net: { currency: "MXN", amount_cents: 4_483 },
+    tax: { currency: "MXN", amount_cents: 717 },
+    total: { currency: "MXN", amount_cents: 5_200 },
+    pricing_tier: "BUSINESS_200_499",
+  });
+  const actorId = "99999999-9999-4999-8999-999999999999";
+
+  it("sends the trimmed reason only when the option is checked", () => {
+    const authorized = buildCreateQuoteBody(
+      draft({ authorizeLowPrice: true, lowPriceReason: "  Cliente ancla, ruta en consolidación  " }),
+    );
+    expect(authorized.ok).toBe(true);
+    if (!authorized.ok) return;
+    expect(authorized.body.low_price_authorization).toEqual({ reason: "Cliente ancla, ruta en consolidación" });
+
+    const unchecked = buildCreateQuoteBody(draft({ authorizeLowPrice: false, lowPriceReason: "Motivo" }));
+    expect(unchecked.ok).toBe(true);
+    if (!unchecked.ok) return;
+    expect(unchecked.body).not.toHaveProperty("low_price_authorization");
+    const plain = buildCreateQuoteBody(draft());
+    expect(plain.ok && plain.body).not.toHaveProperty("low_price_authorization");
+  });
+
+  it.each([
+    ["an empty reason", "   "],
+    ["a reason above 200 characters", "a".repeat(201)],
+    ["a multi-line reason", "línea uno\nlínea dos"],
+  ])("refuses %s before calling the API", (_label, reason) => {
+    const result = buildCreateQuoteBody(draft({ authorizeLowPrice: true, lowPriceReason: reason }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.join(" ")).toContain("autorización");
+    expect(result.errors.join(" ")).not.toContain(reason.trim() === "" ? "\u0000" : reason);
+  });
+
+  it("accepts exactly 200 characters after trimming", () => {
+    expect(lowPriceAuthorizationReasonMaximum).toBe(200);
+    expect(buildCreateQuoteBody(draft({ authorizeLowPrice: true, lowPriceReason: ` ${"a".repeat(200)} ` })).ok).toBe(true);
+  });
+
+  it("lets an authorized quote of 52 MXN or less pass the guard and keeps blocking one without it", () => {
+    expect(evaluateConfirmation(parseQuote(at52), now)).toEqual(["low_price"]);
+    const authorized = parseQuote({
+      ...at52,
+      low_price_authorization: {
+        valid_until: "2026-09-28T18:00:00+00:00",
+        actor_id: actorId,
+        reason: "Cliente ancla",
+      },
+    });
+    expect(authorized.low_price_authorization).toEqual({
+      valid_until: "2026-09-28T18:00:00+00:00",
+      actor_id: actorId,
+      reason: "Cliente ancla",
+    });
+    expect(evaluateConfirmation(authorized, now)).toEqual([]);
+    // The authorization never outlives the quote: an expired authorized quote is still blocked.
+    expect(evaluateConfirmation(parseQuote({ ...at52, expires_at: "2026-09-28T17:00:00Z", low_price_authorization: { valid_until: "2026-09-28T17:00:00Z" } }), now)).toEqual(["expired"]);
+  });
+
+  it("reads the withheld actor and reason as null and a missing or null field as no authorization", () => {
+    const withheld = parseQuote({ ...at52, low_price_authorization: { valid_until: "2026-09-28T18:00:00Z" } });
+    expect(withheld.low_price_authorization).toEqual({
+      valid_until: "2026-09-28T18:00:00Z",
+      actor_id: null,
+      reason: null,
+    });
+    expect(evaluateConfirmation(withheld, now)).toEqual([]);
+    expect(parseQuote({ ...at52, low_price_authorization: null }).low_price_authorization).toBeNull();
+    expect(parseQuote(quoteResponse()).low_price_authorization).toBeNull();
+  });
+
+  it.each([
+    ["an unknown property", { valid_until: "2026-09-28T18:00:00Z", financial_override: {} }],
+    ["a missing validity", { reason: "Cliente ancla" }],
+    ["a local validity", { valid_until: "2026-09-28T18:00:00" }],
+    ["a malformed actor", { valid_until: "2026-09-28T18:00:00Z", actor_id: "not-a-uuid" }],
+    ["an oversized reason", { valid_until: "2026-09-28T18:00:00Z", reason: "a".repeat(201) }],
+    ["a non-object", "AUTHORIZED"],
+  ])("fails closed on %s", (_label, value) => {
+    expect(() => parseQuote({ ...at52, low_price_authorization: value })).toThrow(CreateOrderContractError);
   });
 });
