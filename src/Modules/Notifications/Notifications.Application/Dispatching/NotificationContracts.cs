@@ -301,6 +301,9 @@ public static class NotificationRetryPolicy
 /// retried, so the customer never receives it twice; the FAILED status reaches the dispatchers through
 /// the existing <c>notifications.status-changed</c> → <c>NotificationStatusChanged.v1</c> operations event
 /// written in the same settle transaction. Email keeps the AMBIGUOUS retry (open owner question).
+/// NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03 ("Sí, marcar fallido y avisar"): a WhatsApp send whose lease expired
+/// mid-send is settled the same way by <c>security.recover_stale_notifications_outbox</c> (FAILED/DEAD with
+/// <see cref="NotificationErrorCodes.AmbiguousTimeout"/>, status-changed row) instead of being requeued.
 /// </summary>
 public static class NotificationDeliveryOutcome
 {

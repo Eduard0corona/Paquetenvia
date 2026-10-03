@@ -93,6 +93,11 @@ Con intentos disponibles reprograma RETRY; agotados, entrega un lease nuevo de
 finalización. Esa finalización no llama provider ni incrementa attempts, cambia
 a FAILED, incrementa version, agrega historial/status outbox y deja el
 send-request DEAD de forma atómica. Cancelación del host no fabrica settlements.
+Excepción WhatsApp (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03, lane
+`20261003000100_FailStaleWhatsAppNotificationLeases`): un send-request WHATSAPP con
+lease vencido pudo llegar a Meta, así que no se reencola: queda DEAD y su
+Notification FAILED con `AMBIGUOUS_TIMEOUT`, con historial y `status-changed` en la
+misma transacción.
 
 ## Realtime y observabilidad
 

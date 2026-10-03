@@ -1,5 +1,19 @@
 # Changelog
 
+## WhatsApp con lease vencido: fallido sin reencolar y aviso al despachador (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03) — 2026-10-03
+
+- Respuesta literal del project owner (GATE-004): "Sí, marcar fallido y avisar"; registrada en `decision-log.md`
+  (`NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03`).
+- Si el proceso que envía un WhatsApp se cae a mitad del envío, la recuperación de leases vencidos ya no lo reencola:
+  el `notifications.send-requested` queda DEAD (`AMBIGUOUS_TIMEOUT`, bajo su propio `lease_token`), la Notification
+  FAILED con `AMBIGUOUS_TIMEOUT` y el mismo `notifications.status-changed` (audiencia operations, sin PII) se escribe
+  en la misma transacción. Una fila bloqueada por un settle concurrente se omite y nunca se reencola.
+- Lane Notifications `20261003000100_FailStaleWhatsAppNotificationLeases`: reemplaza solo el cuerpo de
+  `security.recover_stale_notifications_outbox` (misma firma, dueño, search_path y permisos); rollback restaura el
+  cuerpo de NTF-001. IN_APP y email conservan la recuperación de NTF-001.
+- AI-04 `outbox_invariants`: la excepción WhatsApp en la recuperación de PROCESSING vencido. AI-06, AI-12 y AI-18 sin
+  cambios.
+
 ## Confirmación de artículos prohibidos y teléfonos de México (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) — 2026-10-02
 
 - Respuesta literal del project owner: "Sí, ambas"; registrada en `decision-log.md`.

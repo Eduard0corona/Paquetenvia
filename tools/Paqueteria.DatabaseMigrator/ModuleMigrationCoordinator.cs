@@ -61,8 +61,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260927000100_IndexIncidentEvidenceByOrderProof.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", FailAmbiguousWhatsAppNotifications.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261002000100_FailAmbiguousWhatsAppNotifications.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", FailStaleWhatsAppNotificationLeases.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261003000100_FailStaleWhatsAppNotificationLeases.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
@@ -493,6 +493,7 @@ internal sealed class ModuleMigrationCoordinator
                     RouteManualRouteRealtime.MigrationId,
                     AddDispatchOutboxLane.MigrationId,
                     FailAmbiguousWhatsAppNotifications.MigrationId,
+                    FailStaleWhatsAppNotificationLeases.MigrationId,
                 ],
             "Identity" =>
                 [AdoptCanonicalIdentityBaseline.MigrationId, AddBffSessionStore.MigrationId],

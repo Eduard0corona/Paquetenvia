@@ -436,6 +436,8 @@ outbox_invariants:
 - Worker credential is NOBYPASSRLS and mutates lifecycle only through SECURITY DEFINER functions
 - claim assigns lease_token; settle rejects stale or mismatched leases
 - stale PROCESSING is requeued; max-attempt poison messages become DEAD
+- a stale PROCESSING WHATSAPP notifications.send-requested is never requeued; it becomes DEAD and its Notification FAILED
+  with AMBIGUOUS_TIMEOUT plus a notifications.status-changed event (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03)
 - purge is owned by paqueteria_maintenance and can delete only old PROCESSED/DEAD rows
 - runtime producers provide all inserted values and emit no INSERT RETURNING
 public_tracking_contract:
