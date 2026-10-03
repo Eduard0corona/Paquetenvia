@@ -197,7 +197,8 @@ class ImpactModelTests(unittest.TestCase):
 
     def test_pilot_deploy_workflow_and_templates(self):
         # ENV-001: the pilot workflow and deploy/azure/pilot/** are validated by the same azr-static job.
-        for paths in ([".github/workflows/deploy-azure-pilot.yml"], ["deploy/azure/pilot/apps.bicep", "deploy/azure/pilot/Dockerfile.db-ops"]):
+        for paths in ([".github/workflows/deploy-azure-pilot.yml"], ["deploy/azure/pilot/apps.bicep", "deploy/azure/pilot/Dockerfile.db-ops"],
+                      ["deploy/azure/pilot/web.parameters.json"]):
             with self.subTest(paths=paths):
                 plan = classify(paths)
                 self.assertEqual({"secret-scan", "azr-static"}, jobs(plan))

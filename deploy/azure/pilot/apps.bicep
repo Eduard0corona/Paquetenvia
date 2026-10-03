@@ -27,6 +27,19 @@ param authCenterClientId string = 'paquetenvia-web-prod'
 @description('Business and operating-policy settings reviewed by the owner (name/value pairs, .NET double-underscore names).')
 param businessSettings array
 
+// UI-001: terms and privacy notice versions the customer accepts on an operator-assisted order. Owner
+// values from web.parameters.json (no default); env001_pilot_guards.py web-check refuses to deploy while
+// either is OWNER_DECISION_REQUIRED or does not match the AI-05 format ^[A-Za-z0-9._-]{1,64}$.
+@description('Accepted terms version for PAQUETERIA_TERMS_VERSION on the web container (AI-05 terms_version).')
+@minLength(1)
+@maxLength(64)
+param webTermsVersion string
+
+@description('Accepted privacy notice version for PAQUETERIA_PRIVACY_VERSION on the web container (AI-05 privacy_version).')
+@minLength(1)
+@maxLength(64)
+param webPrivacyVersion string
+
 @description('Versionless Key Vault key URIs from security.bicep.')
 param piiKeyUri string
 param dataProtectionKeyUri string
@@ -609,6 +622,15 @@ resource web 'Microsoft.App/containerApps@2025-07-01' = {
             {
               name: 'PAQUETERIA_CSP_CONNECT_SOURCES'
               value: blobServiceUri
+            }
+            // UI-001: server-only settings read by /ops/orders/new; a missing or invalid value disables confirmation.
+            {
+              name: 'PAQUETERIA_TERMS_VERSION'
+              value: webTermsVersion
+            }
+            {
+              name: 'PAQUETERIA_PRIVACY_VERSION'
+              value: webPrivacyVersion
             }
           ]
           resources: {

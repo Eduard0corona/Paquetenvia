@@ -8,9 +8,10 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P21)
+  check            evaluate every pilot guard (P00..P22)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   observability-check  validate deploy/azure/pilot/observability.parameters.json (OBS-002 alert e-mail)
+  web-check        validate deploy/azure/pilot/web.parameters.json (UI-001 accepted terms/privacy versions)
   scram-verifier   read a password on stdin, print its PostgreSQL SCRAM-SHA-256 verifier
   gate-decision    require a decision-log row that resolves or scopes GATE-007 / GATE-012
 """
@@ -37,6 +38,7 @@ PILOT_ENVIRONMENT = "azure-pilot"
 PILOT_REGION = "mexicocentral"
 SETTINGS_FILE = PILOT_DIR / "apps.settings.json"
 OBSERVABILITY_PARAMETERS_FILE = PILOT_DIR / "observability.parameters.json"
+WEB_PARAMETERS_FILE = PILOT_DIR / "web.parameters.json"
 OWNER_SENTINEL = "OWNER_DECISION_REQUIRED"
 FORBIDDEN_TRIGGERS = ("push", "pull_request", "pull_request_target", "schedule", "repository_dispatch", "workflow_run")
 
@@ -969,6 +971,47 @@ def guard_21_observability(ctx: Context) -> GuardResult:
                    f"{len(rules)} alert rules at {monthly:.2f} USD/month, e-mail only")
 
 
+# ---------------------------------------------------------------------------------------------- UI-001 web
+# Accepted terms/privacy notice versions on the web container: apps.bicep parameter -> web env variable.
+# The values are owner decisions (they come with the approved privacy notice, GATE-007) kept in
+# web.parameters.json; the format is AI-05 CreateOrderRequest.acceptance terms_version/privacy_version.
+WEB_VERSION_PARAMETERS = {
+    "webTermsVersion": "PAQUETERIA_TERMS_VERSION",
+    "webPrivacyVersion": "PAQUETERIA_PRIVACY_VERSION",
+}
+ACCEPTANCE_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
+
+
+def guard_22_web_acceptance_versions(ctx: Context) -> GuardResult:
+    """UI-001: the web container receives both versions from apps.bicep parameters without a default
+    (1-64 chars), only the web receives them, and the workflow checks and deploys web.parameters.json."""
+    failures: list[str] = []
+    parameters = ctx.templates.get("apps", {}).get("parameters", {}) or {}
+    web = ctx.workload(WEB_APP)
+    for parameter, variable in WEB_VERSION_PARAMETERS.items():
+        definition = parameters.get(parameter)
+        if (not isinstance(definition, dict) or definition.get("type") != "string" or "defaultValue" in definition
+                or definition.get("minLength") != 1 or definition.get("maxLength") != 64):
+            failures.append(f"apps.bicep must take {parameter} as a string parameter (minLength 1, maxLength 64) without a default")
+        if web.env.get(variable) != ("value", f"[parameters('{parameter}')]"):
+            failures.append(f"web must set {variable} from parameters('{parameter}'), found {web.env.get(variable)}")
+        for workload in ctx.workloads:
+            if workload.name != WEB_APP and variable in workload.env:
+                failures.append(f"{workload.name} must not receive {variable} (web only)")
+    try:
+        document = json.loads((ctx.repo_root / WEB_PARAMETERS_FILE).read_text(encoding="utf-8"))
+        failures.extend(validate_web_parameters(document, allow_sentinel=True))
+    except (OSError, ValueError) as error:
+        failures.append(f"{WEB_PARAMETERS_FILE}: {error}")
+    for needle in ("web-check --file tested/deploy/azure/pilot/web.parameters.json",
+                   "web-check --file deploy/azure/pilot/web.parameters.json",
+                   '"@deploy/azure/pilot/web.parameters.json"'):
+        if needle not in ctx.workflow_text:
+            failures.append(f"workflow must check and deploy web.parameters.json ({needle})")
+    return _result(22, "UI-001 accepted terms/privacy versions on the web", failures,
+                   "web versions bound to owner parameters without defaults")
+
+
 GUARD_TOOLS = ("env001_pilot_guards.py", "azr001_static_guards.py")
 PYYAML_INSTALL = re.compile(r"pip install\s+PyYAML==6\.0\.3\b")
 
@@ -1024,6 +1067,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_19_cleanups_enabled,
     guard_20_guard_tool_dependencies,
     guard_21_observability,
+    guard_22_web_acceptance_versions,
 )
 
 
@@ -1107,6 +1151,33 @@ def validate_observability_parameters(document: Any, *, allow_sentinel: bool) ->
             failures.append(f"alertEmailAddress still awaits an owner decision ({OWNER_SENTINEL})")
     elif not EMAIL_ADDRESS.match(email):
         failures.append("alertEmailAddress is not a single e-mail address")
+    return failures
+
+
+def validate_web_parameters(document: Any, *, allow_sentinel: bool) -> list[str]:
+    """web.parameters.json: an ARM parameters file with exactly the two accepted versions, each matching
+    ^[A-Za-z0-9._-]{1,64}$. There is no default and no empty value; OWNER_DECISION_REQUIRED passes only with
+    allow_sentinel (the static guard), never for the deploy."""
+    if not isinstance(document, dict) or not isinstance(document.get("parameters"), dict):
+        return ["web parameters must be an ARM parameters file with a `parameters` object"]
+    failures = []
+    parameters = document["parameters"]
+    for name in parameters:
+        if name not in WEB_VERSION_PARAMETERS:
+            failures.append(f"parameter {name} is not a UI-001 web parameter (allowed: {sorted(WEB_VERSION_PARAMETERS)})")
+    for name, variable in WEB_VERSION_PARAMETERS.items():
+        entry = parameters.get(name)
+        label = f"{name} ({variable})"
+        if not isinstance(entry, dict) or set(entry) != {"value"} or not isinstance(entry["value"], str):
+            failures.append(f"{label} is required as {{\"value\": <string>}}")
+            continue
+        value = entry["value"]
+        if is_owner_sentinel(value):
+            if not allow_sentinel:
+                failures.append(f"{label} still awaits an owner decision ({OWNER_SENTINEL}); it comes with the approved "
+                                "privacy notice (GATE-007)")
+        elif not ACCEPTANCE_VERSION.match(value):
+            failures.append(f"{label} must match ^[A-Za-z0-9._-]{{1,64}}$ (AI-05 terms_version/privacy_version), found {value!r}")
     return failures
 
 
@@ -1241,6 +1312,18 @@ def command_observability_check(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def command_web_check(args: argparse.Namespace) -> int:
+    try:
+        document = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        failures = validate_web_parameters(document, allow_sentinel=args.allow_owner_sentinel)
+    except (OSError, ValueError) as error:
+        failures = [f"{args.file}: {error}"]
+    for failure in failures:
+        print(f"STOP_FOR_OWNER_DECISION: {failure}")
+    print("ENV001_WEB_VERSIONS=" + ("FAIL" if failures else "PASS"))
+    return 1 if failures else 0
+
+
 def command_gate_decision(args: argparse.Namespace) -> int:
     try:
         text = Path(args.decision_log).read_text(encoding="utf-8")
@@ -1278,6 +1361,10 @@ def build_parser() -> argparse.ArgumentParser:
     observability.add_argument("--file", default=str(OBSERVABILITY_PARAMETERS_FILE))
     observability.add_argument("--allow-owner-sentinel", action="store_true")
     observability.set_defaults(func=command_observability_check)
+    web = sub.add_parser("web-check", help="validate the UI-001 accepted terms/privacy versions (owner values)")
+    web.add_argument("--file", default=str(WEB_PARAMETERS_FILE))
+    web.add_argument("--allow-owner-sentinel", action="store_true")
+    web.set_defaults(func=command_web_check)
     gate = sub.add_parser("gate-decision", help="require a GATE-007/012 resolution or scoping row")
     gate.add_argument("--gate", required=True, choices=("007", "012"))
     gate.add_argument("--decision-id", default="", help="decision-log ID (from the environment variable)")

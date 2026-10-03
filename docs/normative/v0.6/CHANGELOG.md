@@ -18,6 +18,16 @@
   autoriza como audiencia de conductor al repartidor del operador de esa asignación exacta; no se amplía otra audiencia.
 - ORD-002 sin cambios (solo el dueño transiciona); extenderlo a operadores queda como decisión aparte.
 
+## AI-02 y AI-15 alineados con la excepción WhatsApp de leases vencidos (DOC-AI02-AI15-STALE-LEASE-SYNC-2026-10-03) — 2026-10-03
+
+- Respuesta literal del project owner: "Sí, actualizarlo"; registrada en `decision-log.md`
+  (`DOC-AI02-AI15-STALE-LEASE-SYNC-2026-10-03`).
+- AI-02 `outbox_lifecycle.recovery` y AI-15 `outbox_operations.lease_recovery`: el PROCESSING vencido se sigue
+  reencolando, salvo el `notifications.send-requested` de WhatsApp, que queda DEAD con su Notification FAILED
+  (`AMBIGUOUS_TIMEOUT`) y un `notifications.status-changed` que avisa al despachador, como ya dice AI-04
+  `outbox_invariants` (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03, PR #186).
+- Solo redacción: sin cambio de comportamiento ni migración; AI-04, AI-05, AI-06, AI-12 y AI-18 sin cambios.
+
 ## WhatsApp con lease vencido: fallido sin reencolar y aviso al despachador (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03) — 2026-10-03
 
 - Respuesta literal del project owner (GATE-004): "Sí, marcar fallido y avisar"; registrada en `decision-log.md`
