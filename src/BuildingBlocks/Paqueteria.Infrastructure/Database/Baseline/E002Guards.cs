@@ -82,6 +82,7 @@ internal static class E002Guards
         ("paqueteria_session_executor", true),
         ("paqueteria_master_data_executor", true),
         ("paqueteria_master_data_loader", false),
+        ("paqueteria_operator_outbox_executor", true),
     ];
 
     /// <summary>
@@ -91,14 +92,25 @@ internal static class E002Guards
     /// </summary>
     internal static readonly string[] LaneIntroducedRoles =
     [
-        "paqueteria_master_data_executor", "paqueteria_master_data_loader",
+        "paqueteria_master_data_executor", "paqueteria_master_data_loader", "paqueteria_operator_outbox_executor",
     ];
+
+    /// <summary>
+    /// The function whose presence proves the lane that introduces each <see cref="LaneIntroducedRoles"/> role
+    /// ran. DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 follows the MDM-001 rule for the operator outbox executor.
+    /// </summary>
+    private static string LaneFunction(string role) => role switch
+    {
+        "paqueteria_operator_outbox_executor" =>
+            "security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)",
+        _ => "security.load_master_data(uuid,uuid,json,bytea,boolean)",
+    };
 
     internal static readonly string[] SpecializedOwners =
     [
         "paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
         "paqueteria_cleanup_executor", "paqueteria_registration_executor", "paqueteria_session_executor",
-        "paqueteria_master_data_executor",
+        "paqueteria_master_data_executor", "paqueteria_operator_outbox_executor",
     ];
 
     /// <summary>E-002 v0.8 §11: an ACL entry whose grantee/grantor cannot be resolved is a normalization failure.</summary>
@@ -113,7 +125,7 @@ internal static class E002Guards
         return new E002AclEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
     }
 
-    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor; MDM-001-OPERATOR-LOADER the eleventh and twelfth, the master data executor and its operator grantee). Returns the names of roles that differ.</summary>
+    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor; MDM-001-OPERATOR-LOADER the eleventh and twelfth, the master data executor and its operator grantee; DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 the thirteenth, the operator outbox executor). Returns the names of roles that differ.</summary>
     internal static async Task<IReadOnlyList<string>> RoleAttributeMismatchesAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
     {
@@ -130,7 +142,8 @@ internal static class E002Guards
             if (!found && LaneIntroducedRoles.Contains(name, StringComparer.Ordinal))
             {
                 await reader.DisposeAsync().ConfigureAwait(false);
-                if (!await MasterDataFunctionExistsAsync(connection, transaction, cancellationToken).ConfigureAwait(false))
+                if (!await LaneFunctionExistsAsync(connection, transaction, LaneFunction(name), cancellationToken)
+                        .ConfigureAwait(false))
                 {
                     continue;
                 }
@@ -151,12 +164,12 @@ internal static class E002Guards
         return mismatches;
     }
 
-    private static async Task<bool> MasterDataFunctionExistsAsync(
-        NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
+    private static async Task<bool> LaneFunctionExistsAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, string signature, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            "SELECT pg_catalog.to_regprocedure('security.load_master_data(uuid,uuid,json,bytea,boolean)') IS NOT NULL",
-            connection, transaction);
+            "SELECT pg_catalog.to_regprocedure(@signature) IS NOT NULL", connection, transaction);
+        command.Parameters.AddWithValue("signature", signature);
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }
 
@@ -177,7 +190,8 @@ internal static class E002Guards
         foreach (var role in new[] { "paqueteria_migrator", "paqueteria_bootstrap",
                      "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
                      "paqueteria_cleanup_executor", "paqueteria_registration_executor",
-                     "paqueteria_session_executor", "paqueteria_master_data_executor" })
+                     "paqueteria_session_executor", "paqueteria_master_data_executor",
+                     "paqueteria_operator_outbox_executor" })
         {
             if (LaneIntroducedRoles.Contains(role, StringComparer.Ordinal) &&
                 !await RoleExistsAsync(connection, transaction, role, cancellationToken).ConfigureAwait(false))

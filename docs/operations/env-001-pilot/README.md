@@ -96,6 +96,12 @@ Otherwise the deploy job stops before logging in to Azure.
   privileged `NOLOGIN` role that AI-18 declares, including `paqueteria_lifecycle_executor`, the
   cleanup, registration and session executors, and the roles the adoption lanes re-declare
   (`PilotAzureOwnershipBridgeContractTests`).
+- DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: on a pilot database whose baseline predates the operator
+  outbox executor, the Dispatch lane `20261003000100_AddOperatorOwnerOutboxExecutor` stops in its E-002 bridge
+  with `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_operator_outbox_executor` until an Azure
+  administrator has created `paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS` with SET for the deployment
+  role (like the lifecycle executor); nothing is written before that check. The role is never granted to the API,
+  the Worker or an operator login.
 - `job-pv-pilot-logins` runs the new migrator command `runtime-logins`. It creates or re-keys
   `pv_pilot_api` → `paqueteria_app` and `pv_pilot_worker` → `paqueteria_worker` as
   `LOGIN NOINHERIT NOBYPASSRLS` with exactly one membership. It receives **SCRAM-SHA-256 verifiers

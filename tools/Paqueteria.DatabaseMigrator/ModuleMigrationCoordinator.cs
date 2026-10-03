@@ -53,8 +53,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderServiceWindow.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261002000100_AddOrderServiceWindow.cs"),
-        ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
-            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
+        ("Dispatch", "__ef_migrations_history_dispatch", AddOperatorOwnerOutboxExecutor.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261003000100_AddOperatorOwnerOutboxExecutor.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionPurge.cs"),
         ("Incidents", "__ef_migrations_history_incidents", IndexIncidentEvidenceByOrderProof.MigrationId,
@@ -147,6 +147,11 @@ internal sealed class ModuleMigrationCoordinator
                 // row; its rollback refuses while any organization left the starting version. REG-001 and REG-002
                 // are verified below with their own rules.
                 "Organizations" => IsOrganizationPolicyVersionsSource(source),
+                // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the lane's latest migration only adds the operator
+                // outbox executor, its column grants and its two functions; its rollback drops exactly those two
+                // functions (role and grants are declared by AI-18 and stay inert). No table, column, policy, role
+                // or row is dropped, deleted or rewritten.
+                "Dispatch" => IsOperatorOwnerOutboxSource(source),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -251,6 +256,11 @@ internal sealed class ModuleMigrationCoordinator
             IsVatIncludedLoaderSource);
         VerifyAdoptionSource(
             root,
+            "Dispatch",
+            AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs");
+        VerifyAdoptionSource(
+            root,
             "Drivers",
             AdoptCanonicalDriversBaseline.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDriversBaseline.cs");
@@ -330,7 +340,7 @@ internal sealed class ModuleMigrationCoordinator
         }
         if (before.Single(state => state.Module == "Dispatch").Status == "PENDING")
         {
-            await MigrateDispatchAsync(connectionString, cancellationToken);
+            await MigrateDispatchAsync(connectionString, cancellationToken, azureOwnershipBridge);
         }
         if (before.Single(state => state.Module == "Custody").Status == "PENDING")
         {
@@ -516,6 +526,8 @@ internal sealed class ModuleMigrationCoordinator
                 ],
             "Incidents" =>
                 [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
+            "Dispatch" =>
+                [AdoptCanonicalDispatchAssignmentsBaseline.MigrationId, AddOperatorOwnerOutboxExecutor.MigrationId],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
             "PlatformEvolution" =>
@@ -530,6 +542,26 @@ internal sealed class ModuleMigrationCoordinator
                 : "DRIFT";
         return new ModuleMigrationState(contract.Module, $"platform.{contract.HistoryTable}", contract.MigrationId, status);
     }
+
+    /// <summary>DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: only the operator outbox executor, its exact column
+    /// grants and its two functions; the rollback drops exactly those two functions and nothing else.</summary>
+    private static bool IsOperatorOwnerOutboxSource(string source) =>
+        source.Contains(AddOperatorOwnerOutboxExecutor.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("DROP FUNCTION IF EXISTS {{OutboxFunctionSignature}};", StringComparison.Ordinal) &&
+        source.Contains("DROP FUNCTION IF EXISTS {{AuditFunctionSignature}};", StringComparison.Ordinal) &&
+        source.Split("DROP FUNCTION", StringSplitOptions.None).Length - 1 == 2 &&
+        source.Contains("DSP_OPERATOR_OWNER_CONTEXT_REFUSED", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ROW LEVEL SECURITY;", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
 
     /// <summary>MDM-001-OPERATOR-LOADER: only the two master-data roles, their grants and the loader function;
     /// its rollback removes only the function. Loaded rows and audit rows stay.</summary>
@@ -1345,7 +1377,8 @@ internal sealed class ModuleMigrationCoordinator
         }
     }
 
-    private static async Task MigrateDispatchAsync(string connectionString, CancellationToken cancellationToken)
+    private static async Task MigrateDispatchAsync(string connectionString, CancellationToken cancellationToken,
+        bool azureOwnershipBridge)
     {
         await using var connection = await OpenAsMigratorAsync(connectionString, cancellationToken);
         var options = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -1355,8 +1388,124 @@ internal sealed class ModuleMigrationCoordinator
                 postgres.MigrationsHistoryTable("__ef_migrations_history_dispatch", "platform");
             })
             .Options;
-        await using var context = new DispatchDbContext(options, new TenantDatabaseExecutionState());
-        await context.Database.MigrateAsync(cancellationToken);
+        if (!azureOwnershipBridge)
+        {
+            await using (var context = new DispatchDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            await using var verification = await connection.BeginTransactionAsync(cancellationToken);
+            await DatabaseBaselineAssertions.AssertOperatorOutboxExecutorInstalledAsync(
+                connection, verification, cancellationToken);
+            await verification.RollbackAsync(cancellationToken);
+            return;
+        }
+
+        // E-002/DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: transferring the two operator outbox functions to
+        // the operator outbox executor as a non-superuser needs SET on the executor and a transaction-scoped
+        // CREATE on schema security, exactly like the Orders LIF-001 bridge; nothing else is granted and nothing
+        // survives the commit.
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var stage = "lock";
+        try
+        {
+            await using (var advisory = new NpgsqlCommand(
+                "SELECT pg_catalog.pg_advisory_xact_lock(@key)", connection, transaction))
+            {
+                advisory.Parameters.AddWithValue("key", CanonicalBaselineContract.AdvisoryLockKey);
+                await advisory.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "capability-gate";
+            await using (var capability = new NpgsqlCommand("""
+                SELECT pg_catalog.to_regrole('paqueteria_operator_outbox_executor') IS NOT NULL
+                   AND pg_catalog.pg_has_role(session_user,'paqueteria_operator_outbox_executor','SET')
+                """, connection, transaction))
+            {
+                if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_operator_outbox_executor; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "create-prestate";
+            await using (var prestate = new NpgsqlCommand(
+                "SELECT pg_catalog.has_schema_privilege('paqueteria_operator_outbox_executor','security','CREATE')",
+                connection, transaction))
+            {
+                if (await prestate.ExecuteScalarAsync(cancellationToken) is true)
+                {
+                    throw new InvalidOperationException(
+                        "E002_CREATE_PRESTATE_PRESENT role=paqueteria_operator_outbox_executor schema=security; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
+            stage = "grant-temporary-create";
+            await using (var grant = new NpgsqlCommand(
+                "GRANT CREATE ON SCHEMA security TO paqueteria_operator_outbox_executor", connection, transaction))
+            {
+                await grant.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "dsp-operator-outbox-ef-migration";
+            await using (var context = new DispatchDbContext(options, new TenantDatabaseExecutionState()))
+            {
+                await using (var historyExists = new NpgsqlCommand(
+                    "SELECT to_regclass('platform.__ef_migrations_history_dispatch') IS NOT NULL",
+                    connection, transaction))
+                {
+                    if (await historyExists.ExecuteScalarAsync(cancellationToken) is not true)
+                    {
+                        var createHistory = context.GetService<IHistoryRepository>().GetCreateScript();
+                        await using var create = new NpgsqlCommand(createHistory, connection, transaction);
+                        await create.ExecuteNonQueryAsync(cancellationToken);
+                    }
+                }
+
+                await context.Database.UseTransactionAsync(transaction, cancellationToken);
+                await context.Database.MigrateAsync(cancellationToken);
+            }
+
+            // Revoke as the schema owner that granted it, whatever role the migration left active.
+            stage = "revoke-temporary-create";
+            await using (var revoke = new NpgsqlCommand("""
+                SET LOCAL ROLE paqueteria_migrator;
+                REVOKE CREATE ON SCHEMA security FROM paqueteria_operator_outbox_executor;
+                RESET ROLE;
+                """, connection, transaction))
+            {
+                await revoke.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            stage = "assert-operator-outbox-boundary";
+            await DatabaseBaselineAssertions.AssertOperatorOutboxExecutorInstalledAsync(
+                connection, transaction, cancellationToken);
+            stage = "commit";
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (PostgresException exception)
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw new InvalidOperationException(
+                $"E002_DISPATCH_BRIDGE_FAILED stage={stage} SQLSTATE={exception.SqlState} message={exception.MessageText}; " +
+                "STOP_FOR_CONTRACT_REVIEW",
+                exception);
+        }
+        catch
+        {
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
+            throw;
+        }
     }
 
     private static async Task MigrateCustodyAsync(string connectionString, CancellationToken cancellationToken,

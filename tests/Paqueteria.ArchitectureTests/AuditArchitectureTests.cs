@@ -37,6 +37,11 @@ public sealed class AuditArchitectureTests
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20260927000500_AddPendingMemberships.cs");
         var masterDataLane = TestRepository.GetPath(
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260928000100_AddMasterDataLoader.cs");
+        // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 is the fourth: the operator of another owner's order cannot
+        // write the owner's audit row under its own tenant context, so the row is inserted by the operator
+        // outbox executor's SECURITY DEFINER audit function, in the same transaction as the assignment.
+        var operatorOutboxLane = TestRepository.GetPath(
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261003000100_AddOperatorOwnerOutboxExecutor.cs");
         Assert.Equal(
             new[]
             {
@@ -44,6 +49,7 @@ public sealed class AuditArchitectureTests
                 registrationLane,
                 pendingMembershipLane,
                 masterDataLane,
+                operatorOutboxLane,
             }.Order(StringComparer.OrdinalIgnoreCase),
             sources.Select(source => source.Path).Order(StringComparer.OrdinalIgnoreCase),
             StringComparer.OrdinalIgnoreCase);
@@ -104,6 +110,32 @@ public sealed class AuditArchitectureTests
         Assert.DoesNotContain("RETURNING", loaderDefinition, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, loaderDefinition.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
         Assert.Equal(1, masterData.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+
+        // DSP-OPERATOR-OWNER-OUTBOX: exactly one audit insert, inside the SECURITY DEFINER audit function, and
+        // exactly one outbox insert, inside the SECURITY DEFINER outbox function; none in a DO block or rollback.
+        var operatorOutbox = sources.Single(source =>
+            string.Equals(source.Path, operatorOutboxLane, StringComparison.OrdinalIgnoreCase)).Source;
+        var operatorFunctions = operatorOutbox.Split("CREATE OR REPLACE FUNCTION ", StringSplitOptions.None).Skip(1)
+            .ToDictionary(body => body[..body.IndexOf('(', StringComparison.Ordinal)], StringComparer.Ordinal);
+        Assert.Equal(
+            ["security.append_operator_order_audit", "security.append_operator_order_outbox"],
+            operatorFunctions.Keys.Order(StringComparer.Ordinal));
+        foreach (var (name, body) in operatorFunctions)
+        {
+            var definition = body[..body.IndexOf("$function$;", StringComparison.Ordinal)];
+            Assert.Contains("SECURITY DEFINER", definition, StringComparison.Ordinal);
+            Assert.Contains("SET search_path = pg_catalog, pg_temp", definition, StringComparison.Ordinal);
+            Assert.DoesNotContain("RETURNING", definition, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(
+                name == "security.append_operator_order_audit" ? 1 : 0,
+                definition.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+            Assert.Equal(
+                name == "security.append_operator_order_outbox" ? 1 : 0,
+                definition.Split("INSERT INTO platform.outbox_events", StringSplitOptions.None).Length - 1);
+        }
+
+        Assert.Equal(1, operatorOutbox.Split("INSERT INTO platform.audit_logs", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, operatorOutbox.Split("INSERT INTO platform.outbox_events", StringSplitOptions.None).Length - 1);
     }
 
     [Fact]

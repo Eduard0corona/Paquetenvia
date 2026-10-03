@@ -523,7 +523,7 @@ public sealed class PostgreSqlAssignmentReplayEvidenceReader : IAssignmentReplay
             SELECT count(*)::integer,min(payload->>'previous_status'),min(payload->>'new_status')
             FROM orders.order_events
             WHERE order_id=@order_id AND event_type='ORDER_STATUS_CHANGED'
-              AND owner_org_id=@organization_id
+              AND (owner_org_id=@organization_id OR operator_org_id=@organization_id)
               AND payload->>'assignment_id'=@assignment_id_text
             """;
         int eventCount;

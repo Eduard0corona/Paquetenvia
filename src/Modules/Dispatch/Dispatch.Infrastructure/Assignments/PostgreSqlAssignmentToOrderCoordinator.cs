@@ -230,6 +230,11 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         throw new AssignmentForbiddenException();
                     }
 
+                    // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator of another owner's order cannot
+                    // write the owner-tagged outbox and audit rows under its own tenant context; they go through
+                    // the operator outbox executor's SECURITY DEFINER functions. The owner keeps the direct path.
+                    var actingAsOperator = operatorOrganizationId is not null;
+
                     var assignment = ManualOwnAssignmentPolicy.CreateAccepted(
                         assignmentId,
                         order.Id,
@@ -304,6 +309,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         source,
                         newVersion,
                         occurredAt,
+                        actingAsOperator,
                         token);
                     await failureInjector.OnStageAsync(AssignmentTransactionStage.OutboxInserted, token);
                     await InsertTimelineOutboxAsync(
@@ -314,6 +320,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         order,
                         newVersion,
                         occurredAt,
+                        actingAsOperator,
                         token);
                     await failureInjector.OnStageAsync(
                         AssignmentTransactionStage.TimelineOutboxInserted,
@@ -325,6 +332,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         assignment,
                         newVersion,
                         occurredAt,
+                        actingAsOperator,
                         token);
                     await failureInjector.OnStageAsync(
                         AssignmentTransactionStage.AssignmentOutboxInserted,
@@ -336,6 +344,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         assignment,
                         assignmentPolicyVersion,
                         occurredAt,
+                        actingAsOperator,
                         token);
                     await failureInjector.OnStageAsync(
                         AssignmentTransactionStage.AssignmentAuditInserted,
@@ -349,6 +358,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         source,
                         newVersion,
                         occurredAt,
+                        actingAsOperator,
                         token);
                     await failureInjector.OnStageAsync(
                         AssignmentTransactionStage.TransitionAuditInserted,
@@ -691,6 +701,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         OrderStatus source,
         int newVersion,
         DateTimeOffset occurredAt,
+        bool actingAsOperator,
         CancellationToken cancellationToken)
     {
         var tenantContext = JsonSerializer.Serialize(new
@@ -710,6 +721,24 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             authorized_driver_id = driverId,
             assignment_id = assignmentId,
         }, JsonOptions);
+        if (actingAsOperator)
+        {
+            await OperatorOwnerEventWriter.AppendOutboxAsync(
+                connection,
+                transaction,
+                options.Value.CommandTimeoutSeconds,
+                outboxId,
+                order.OwnerOrganizationId,
+                tenantContext,
+                OutboxTopic,
+                order.Id,
+                newVersion,
+                payload,
+                occurredAt,
+                cancellationToken);
+            return;
+        }
+
         await using var command = CreateCommand(
             connection,
             transaction,
@@ -741,6 +770,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         AssignmentVisibilityOrder order,
         int newVersion,
         DateTimeOffset occurredAt,
+        bool actingAsOperator,
         CancellationToken cancellationToken)
     {
         var tenantContext = JsonSerializer.Serialize(new
@@ -756,6 +786,24 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             summary = "Order status changed to ASSIGNED.",
             occurred_at = occurredAt,
         }, JsonOptions);
+        if (actingAsOperator)
+        {
+            await OperatorOwnerEventWriter.AppendOutboxAsync(
+                connection,
+                transaction,
+                options.Value.CommandTimeoutSeconds,
+                outboxId,
+                order.OwnerOrganizationId,
+                tenantContext,
+                TimelineOutboxTopic,
+                order.Id,
+                newVersion,
+                payload,
+                occurredAt,
+                cancellationToken);
+            return;
+        }
+
         await using var command = CreateCommand(
             connection,
             transaction,
@@ -786,6 +834,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         Assignment assignment,
         int newVersion,
         DateTimeOffset occurredAt,
+        bool actingAsOperator,
         CancellationToken cancellationToken)
     {
         var tenantContext = JsonSerializer.Serialize(new
@@ -801,6 +850,24 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             assignment_status = assignment.Status.ToContractValue(),
             occurred_at = occurredAt,
         }, JsonOptions);
+        if (actingAsOperator)
+        {
+            await OperatorOwnerEventWriter.AppendOutboxAsync(
+                connection,
+                transaction,
+                options.Value.CommandTimeoutSeconds,
+                outboxId,
+                assignment.OwnerOrganizationId,
+                tenantContext,
+                AssignmentOutboxTopic,
+                assignment.OrderId,
+                newVersion,
+                payload,
+                occurredAt,
+                cancellationToken);
+            return;
+        }
+
         await using var command = CreateCommand(
             connection,
             transaction,
@@ -831,6 +898,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         Assignment assignment,
         string assignmentPolicyVersion,
         DateTimeOffset occurredAt,
+        bool actingAsOperator,
         CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.SerializeToElement(new
@@ -846,20 +914,28 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             policy_version = assignmentPolicyVersion,
             request_id = command.RequestId,
         }, JsonOptions);
-        await auditWriter.WriteAsync(
-            connection,
-            transaction,
-            new AuditEntry(
-                Guid.NewGuid(),
-                assignment.OwnerOrganizationId,
-                command.ActorId,
-                "ASSIGNMENT_CREATED",
-                "Assignment",
-                assignment.Id,
-                command.RequestId,
-                auditRedactor.Redact(payload),
-                occurredAt),
-            cancellationToken);
+        var entry = new AuditEntry(
+            Guid.NewGuid(),
+            assignment.OwnerOrganizationId,
+            command.ActorId,
+            "ASSIGNMENT_CREATED",
+            "Assignment",
+            assignment.Id,
+            command.RequestId,
+            auditRedactor.Redact(payload),
+            occurredAt);
+        if (actingAsOperator)
+        {
+            await OperatorOwnerEventWriter.AppendAuditAsync(
+                connection,
+                transaction,
+                options.Value.CommandTimeoutSeconds,
+                entry,
+                cancellationToken);
+            return;
+        }
+
+        await auditWriter.WriteAsync(connection, transaction, entry, cancellationToken);
     }
 
     private async Task WriteTransitionAuditAsync(
@@ -871,6 +947,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         OrderStatus source,
         int newVersion,
         DateTimeOffset occurredAt,
+        bool actingAsOperator,
         CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.SerializeToElement(new
@@ -883,20 +960,28 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             assignment_id = assignmentId,
             request_id = command.RequestId,
         }, JsonOptions);
-        await auditWriter.WriteAsync(
-            connection,
-            transaction,
-            new AuditEntry(
-                Guid.NewGuid(),
-                order.OwnerOrganizationId,
-                command.ActorId,
-                "ORDER_STATUS_CHANGED",
-                "Order",
-                order.Id,
-                command.RequestId,
-                auditRedactor.Redact(payload),
-                occurredAt),
-            cancellationToken);
+        var entry = new AuditEntry(
+            Guid.NewGuid(),
+            order.OwnerOrganizationId,
+            command.ActorId,
+            "ORDER_STATUS_CHANGED",
+            "Order",
+            order.Id,
+            command.RequestId,
+            auditRedactor.Redact(payload),
+            occurredAt);
+        if (actingAsOperator)
+        {
+            await OperatorOwnerEventWriter.AppendAuditAsync(
+                connection,
+                transaction,
+                options.Value.CommandTimeoutSeconds,
+                entry,
+                cancellationToken);
+            return;
+        }
+
+        await auditWriter.WriteAsync(connection, transaction, entry, cancellationToken);
     }
 
     private async Task CompleteIdempotencyAsync(

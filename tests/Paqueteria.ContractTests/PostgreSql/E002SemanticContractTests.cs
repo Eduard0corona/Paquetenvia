@@ -50,11 +50,13 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                 // REG-001 adds the Organizations lane: five registration routines, owner + paqueteria_app.
                 // The Identity BFF session lane (BFF-SESSION-TABLE-SHAPE, BFF-LOGOUT-JTI-PERSISTENCE) adds six
                 // routines, owner + paqueteria_app, and the Custody BFF purge one routine, owner + Worker.
+                // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 adds the Dispatch lane: two operator outbox
+                // routines, owner + paqueteria_app.
                 Assert.Equal(
-                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_V1",
+                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1",
                     applied.RoutineMap);
-                Assert.Equal(48, applied.ControlledIdentities);
-                Assert.Equal(94, applied.NormalizedExecuteRows);
+                Assert.Equal(50, applied.ControlledIdentities);
+                Assert.Equal(98, applied.NormalizedExecuteRows);
             }
 
             Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString,
