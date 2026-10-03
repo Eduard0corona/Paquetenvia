@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Identity.Infrastructure.Mock;
+using Orders.Application.Orders;
 
 namespace Paqueteria.IntegrationTests.Orders;
 
@@ -14,9 +15,25 @@ namespace Paqueteria.IntegrationTests.Orders;
 /// </summary>
 public sealed class OrderServiceWindowHttpTests : IClassFixture<OrderHttpWebApplicationFactory>
 {
-    private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
+    /// <summary>
+    /// The server checks the window against its own clock when the request arrives, so every instant is computed
+    /// from the clock at the moment it is used, never from a value captured when the class or its member data were
+    /// first initialized (which can be minutes before the test runs).
+    /// </summary>
+    private static DateTimeOffset Now => DateTimeOffset.UtcNow;
 
-    private static readonly string RecentUtc = Text(WholeSeconds(Now.AddHours(-1)));
+    /// <summary>
+    /// How far inside the 5-minute clock tolerance the accepted early start lies. The exact boundaries are pinned
+    /// with a fixed clock in <c>OrderServiceWindowTests</c>; over HTTP the margin absorbs the time between building
+    /// the request and the server reading its clock.
+    /// </summary>
+    private static readonly TimeSpan ToleranceMargin = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// One acceptance instant for the whole class, an hour back: replays must resend the same request, and it stays
+    /// inside the 72-hour acceptance window however long the run takes.
+    /// </summary>
+    private static readonly string RecentUtc = Text(WholeSeconds(DateTimeOffset.UtcNow.AddHours(-1)));
 
     private readonly HttpClient client;
     private readonly OrderHttpWebApplicationFactory factory;
@@ -71,7 +88,8 @@ public sealed class OrderServiceWindowHttpTests : IClassFixture<OrderHttpWebAppl
     public async Task A_window_of_exactly_twelve_hours_starting_within_the_clock_tolerance_is_accepted()
     {
         factory.ResetCreateObservations();
-        var from = WholeSeconds(Now.AddMinutes(-4));
+        var from = WholeSeconds(Now - OrderServiceWindowPolicy.ClockTolerance + ToleranceMargin);
+        Assert.True(from < Now);
 
         using var response = await PostAsync(Guid.NewGuid(), Key(), Window(Text(from), Text(from.AddHours(12))));
 
