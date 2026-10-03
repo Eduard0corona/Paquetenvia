@@ -12,9 +12,11 @@ namespace Locations.Infrastructure.Geocoding.GoogleMaps;
 /// Geocoding API (plain <see cref="HttpClient"/> and System.Text.Json, no provider SDK).
 /// <para>
 /// The client pin stays mandatory (AI-05 <c>CreateLocationRequest</c>) and is validated first. The
-/// provider is asked to geocode <c>address_text</c>; its coordinates replace the pin only when the
-/// answer is a single, non-partial <c>ROOFTOP</c> or <c>RANGE_INTERPOLATED</c> result. Every other
-/// outcome (no match, ambiguous or imprecise match, timeout, HTTP or provider error, open circuit,
+/// provider is asked to geocode <c>address_text</c>, always restricted with <c>components=country:MX</c>;
+/// its coordinates replace the pin only on an exact match (GATE-003-MAPS-PILOT-RULES-2026-10-02):
+/// exactly one result, <c>partial_match</c> not true, <c>location_type</c> <c>ROOFTOP</c> and a
+/// <c>country</c> address component whose <c>short_name</c> is <c>MX</c>. Every other outcome (no
+/// match, ambiguous, imprecise or non-Mexican match, timeout, HTTP or provider error, open circuit,
 /// saturated bulkhead) degrades to the GATE-003 <c>work_allowed</c> behaviour, the manual pin, exactly
 /// as <see cref="ManualGeocodingProvider"/> returns it. Caller cancellation is never swallowed.
 /// </para>
@@ -31,11 +33,15 @@ public sealed partial class GoogleMapsGeocodingProvider : IGeocodingProvider, ID
     public const string ProviderMode = "GOOGLE_MAPS";
     internal const int MaxResponseBytes = 256 * 1024;
 
-    private static readonly HashSet<string> PreciseLocationTypes = new(StringComparer.Ordinal)
-    {
-        "ROOFTOP",
-        "RANGE_INTERPOLATED",
-    };
+    /// <summary>
+    /// GATE-003-MAPS-PILOT-RULES-2026-10-02 (owner: "Solo ROOFTOP"): the only <c>location_type</c>
+    /// that counts as exact. <c>RANGE_INTERPOLATED</c>, <c>GEOMETRIC_CENTER</c> and
+    /// <c>APPROXIMATE</c> keep the manual pin.
+    /// </summary>
+    internal const string ExactLocationType = "ROOFTOP";
+
+    /// <summary>The only request path this adapter ever calls (no Directions, Routes or Distance Matrix).</summary>
+    internal const string GeocodePath = "maps/api/geocode/json";
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GoogleMapsGeocodingOptions _options;
@@ -90,6 +96,7 @@ public sealed partial class GoogleMapsGeocodingProvider : IGeocodingProvider, ID
         ZeroResults,
         Ambiguous,
         Imprecise,
+        OutsideCountry,
         CircuitOpen,
         ConcurrencyLimit,
         Timeout,
@@ -136,6 +143,7 @@ public sealed partial class GoogleMapsGeocodingProvider : IGeocodingProvider, ID
         Outcome.ZeroResults => "zero_results",
         Outcome.Ambiguous => "ambiguous",
         Outcome.Imprecise => "imprecise",
+        Outcome.OutsideCountry => "outside_country",
         Outcome.CircuitOpen => "circuit_open",
         Outcome.ConcurrencyLimit => "concurrency_limit",
         Outcome.Timeout => "timeout",
@@ -329,12 +337,17 @@ public sealed partial class GoogleMapsGeocodingProvider : IGeocodingProvider, ID
 
             var partial = result.TryGetProperty("partial_match", out var partialElement) &&
                 partialElement.ValueKind == JsonValueKind.True;
-            var precise = geometry.TryGetProperty("location_type", out var typeElement) &&
+            var exact = geometry.TryGetProperty("location_type", out var typeElement) &&
                 typeElement.ValueKind == JsonValueKind.String &&
-                PreciseLocationTypes.Contains(typeElement.GetString()!);
-            return partial || !precise
-                ? (Outcome.Imprecise, null)
-                : (Outcome.Resolved, (latitude, longitude));
+                string.Equals(typeElement.GetString(), ExactLocationType, StringComparison.Ordinal);
+            if (partial || !exact)
+            {
+                return (Outcome.Imprecise, null);
+            }
+
+            return IsInPilotCountry(result)
+                ? (Outcome.Resolved, (latitude, longitude))
+                : (Outcome.OutsideCountry, null);
         }
         catch (JsonException)
         {
@@ -342,14 +355,47 @@ public sealed partial class GoogleMapsGeocodingProvider : IGeocodingProvider, ID
         }
     }
 
+    /// <summary>
+    /// Fails closed: a missing or malformed <c>address_components</c>, or one without a
+    /// <c>country</c> component whose <c>short_name</c> is exactly <c>MX</c>, keeps the manual pin.
+    /// </summary>
+    private static bool IsInPilotCountry(JsonElement result)
+    {
+        if (!result.TryGetProperty("address_components", out var components) ||
+            components.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var component in components.EnumerateArray())
+        {
+            if (component.ValueKind != JsonValueKind.Object ||
+                !component.TryGetProperty("types", out var types) || types.ValueKind != JsonValueKind.Array ||
+                !component.TryGetProperty("short_name", out var shortName) || shortName.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var isCountry = types.EnumerateArray().Any(type =>
+                type.ValueKind == JsonValueKind.String &&
+                string.Equals(type.GetString(), "country", StringComparison.Ordinal));
+            if (isCountry && string.Equals(shortName.GetString(), GoogleMapsGeocodingOptions.PilotCountry, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal Uri BuildRequestUri(string addressText)
     {
-        var query = new StringBuilder("maps/api/geocode/json?address=")
-            .Append(Uri.EscapeDataString(addressText.Trim()));
-        if (_options.ComponentsCountry.Length > 0)
-        {
-            query.Append("&components=").Append(Uri.EscapeDataString("country:" + _options.ComponentsCountry));
-        }
+        // GATE-003-MAPS-PILOT-RULES-2026-10-02: fixed path and fixed country restriction.
+        var query = new StringBuilder(GeocodePath)
+            .Append("?address=")
+            .Append(Uri.EscapeDataString(addressText.Trim()))
+            .Append("&components=")
+            .Append(Uri.EscapeDataString("country:" + GoogleMapsGeocodingOptions.PilotCountry));
 
         if (_options.Region.Length > 0)
         {
@@ -364,7 +410,7 @@ public sealed partial class GoogleMapsGeocodingProvider : IGeocodingProvider, ID
         outcome is Outcome.Timeout or Outcome.NetworkError or Outcome.HttpError or Outcome.RateLimited or Outcome.ProviderError;
 
     /// <summary>
-    /// Provider health, not address quality: a no-match, an ambiguous or imprecise answer or an
+    /// Provider health, not address quality: a no-match, an ambiguous, imprecise or non-Mexican answer or an
     /// invalid request for one address is a healthy provider and never opens the circuit.
     /// </summary>
     private static bool CountsAsFailure(Outcome outcome) =>
@@ -405,6 +451,6 @@ public sealed partial class GoogleMapsGeocodingProvider : IGeocodingProvider, ID
     private static partial void LogProviderUnavailable(ILogger logger, string outcome);
 
     [LoggerMessage(EventId = 4302, Level = LogLevel.Information,
-        Message = "Google Maps geocoding gave no precise single match; the manual pin is used ({Outcome}).")]
+        Message = "Google Maps geocoding gave no exact single match in Mexico; the manual pin is used ({Outcome}).")]
     private static partial void LogManualPinKept(ILogger logger, string outcome);
 }

@@ -41,7 +41,7 @@ public static class DependencyInjection
                 "The mock geocoding provider is allowed only in Development, Testing, or authorized DevSynthetic.")
             .Validate(options => options.GeocodingProvider != GeocodingProviderKind.GoogleMaps ||
                     GoogleMapsGeocodingOptions.IsValid(options.GoogleMaps),
-                "Locations:GeocodingProvider=GoogleMaps requires Locations:GoogleMaps (ApiKey from Key Vault, https BaseUri, bounded resilience settings).")
+                "Locations:GeocodingProvider=GoogleMaps requires Locations:GoogleMaps (ApiKey from Key Vault, https BaseUri, ComponentsCountry locked to MX, bounded resilience settings).")
             .Validate(options => options.PiiProtector != LocationPiiProtectorKind.Mock || IsMockProviderAllowed(environment),
                 "The mock PII protector is DEV_SYNTHETIC_ONLY outside Development and Testing; it is not a Staging or Production pattern.")
             .Validate(options => options.Provider != LocationsProviderKind.PostgreSql ||

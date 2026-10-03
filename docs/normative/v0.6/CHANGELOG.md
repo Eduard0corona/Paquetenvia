@@ -1,5 +1,19 @@
 # Changelog
 
+## Reglas del piloto para Google Maps (GATE-003-MAPS-PILOT-RULES-2026-10-02) — 2026-10-02
+
+- Respuestas literales del project owner: "Sí, las 4" (key restringida a la Geocoding API, sin rutas ni ETAs en el
+  piloto, reemplazar el pin solo con coincidencia exacta, búsquedas restringidas a México) y, sobre qué es "exacta",
+  "Solo ROOFTOP".
+- Adaptador Google Maps: el pin del cliente se reemplaza solo con un único resultado, sin `partial_match` y
+  `location_type` `ROOFTOP` cuyo `address_components` tenga el país `MX`; todo lo demás conserva el pin manual.
+  `components=country:MX` se envía siempre desde una constante y `Locations:GoogleMaps:ComponentsCountry` solo
+  admite `MX` (otro valor, o vacío, falla la validación al arrancar).
+- Prueba de arquitectura: ningún endpoint de Directions, Routes o Distance Matrix ni puerto de ruteo/ETA en `src`.
+- GATE-003 sigue abierto: tope de gasto, cuotas diarias, alertas de facturación y la key restringida en Key Vault
+  (`google-maps-api-key`) quedan pendientes del owner; el piloto mantiene `Locations__GeocodingProvider=Manual`.
+- Sin cambios en AI-05, AI-06, AI-18 ni migraciones.
+
 ## Versiones de política de asignación y de elegibilidad por organización (POLICY-VERSIONS-PER-ORG-2026-10-02) — 2026-10-02
 
 - Respuesta literal del project owner: "Por empresa, piloto-2026-10-v1"; registrada en `decision-log.md`.
