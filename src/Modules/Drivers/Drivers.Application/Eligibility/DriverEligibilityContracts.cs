@@ -34,7 +34,7 @@ public sealed record DriverEligibilityResult(
     bool IsEligible,
     Guid? DriverId,
     string? VehicleType,
-    string PolicyVersion,
+    string? PolicyVersion,
     IReadOnlyList<DriverEligibilityRejection> Rejections)
 {
     public IReadOnlyList<DriverEligibilityRejection> Rejections { get; } =

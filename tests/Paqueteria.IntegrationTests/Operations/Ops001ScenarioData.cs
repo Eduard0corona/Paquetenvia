@@ -85,7 +85,7 @@ internal sealed record Ops001ScenarioData(
     internal string SyntheticPhone(int orderNumber)
     {
         ValidateOrderNumber(orderNumber);
-        return $"+520000{RunNumber:D2}{orderNumber:D2}00";
+        return $"0000{RunNumber:D2}{orderNumber:D2}00";
     }
 
     internal Guid ResourceGuid(string resource)

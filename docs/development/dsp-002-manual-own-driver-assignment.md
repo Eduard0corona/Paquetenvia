@@ -297,11 +297,17 @@ Configuración base:
 ```json
 {
   "Dispatch": {
-    "Provider": "Disabled",
-    "AssignmentPolicyVersion": "synthetic-v1"
+    "Provider": "Disabled"
   }
 }
 ```
+
+POLICY-VERSIONS-PER-ORG-2026-10-02 eliminó `Dispatch:AssignmentPolicyVersion` y
+`Drivers:Eligibility:PolicyVersion` (la API no arranca si siguen configuradas). La auditoría
+`ASSIGNMENT_CREATED` registra como `policy_version` la `assignment_policy_version` de la organización que
+asigna (la del repartidor, que es la organización activa), y el resultado de elegibilidad lleva la
+`driver_eligibility_policy_version` de esa misma organización. Toda organización empieza en
+`piloto-2026-10-v1`.
 
 PostgreSQL exige también `Drivers:Provider=PostgreSql`; `ValidateOnStart`
 rechaza la combinación insegura.

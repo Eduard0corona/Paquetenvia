@@ -1,8 +1,21 @@
 # GATE-003-PROVIDER-GOOGLE: adaptador de geocodificación Google Maps Platform
 
-Decisión: `GATE-003-PROVIDER-GOOGLE` (decision-log, 2026-09-27). Google Maps Platform es el
-proveedor de geocodificación y ruteo; su API key vive en Key Vault. GATE-003 sigue **abierto**
-hasta que el owner registre el tope de gasto, así que el piloto mantiene `Locations__GeocodingProvider=Manual`.
+Decisiones: `GATE-003-PROVIDER-GOOGLE` (decision-log, 2026-09-27). Google Maps Platform es el
+proveedor de geocodificación y ruteo; su API key vive en Key Vault.
+`GATE-003-MAPS-PILOT-RULES-2026-10-02` (decision-log, 2026-10-02): reglas del piloto, ver abajo.
+GATE-003 sigue **abierto** hasta que el owner registre los pendientes de la sección "Pasos del
+owner", así que el piloto mantiene `Locations__GeocodingProvider=Manual`.
+
+## Reglas del piloto (GATE-003-MAPS-PILOT-RULES-2026-10-02)
+
+Literales del owner: "Sí, las 4" y, sobre qué es una coincidencia exacta, "Solo ROOFTOP".
+
+| # | Regla | Dónde se aplica | Prueba |
+|---|---|---|---|
+| 1 | API key restringida **solo** a la Geocoding API | Paso del owner en Google Cloud Console | — (fuera del software) |
+| 2 | Sin rutas ni ETAs en el piloto | Solo se llama `GET maps/api/geocode/json`; no existe `IRoutingProvider` | `MapsPilotScopeArchitectureTests`; `Every_request_targets_only_the_geocoding_path_and_is_restricted_to_Mexico` |
+| 3 | El pin del cliente se reemplaza solo con coincidencia exacta: un único resultado, `partial_match` distinto de `true` y `location_type == ROOFTOP` | `GoogleMapsGeocodingProvider.Parse` | `Only_a_non_partial_rooftop_match_moves_the_pin` |
+| 4 | Búsquedas restringidas a México: siempre `components=country:MX`; el resultado debe traer un componente `country` con `short_name` `MX` | `BuildRequestUri` (constante `PilotCountry`), `IsInPilotCountry`, validación de opciones | `The_country_restriction_cannot_be_changed_or_emptied`; `A_rooftop_match_outside_Mexico_or_without_a_Mexican_country_component_keeps_the_pin` |
 
 ## Alcance
 
@@ -12,20 +25,27 @@ hasta que el owner registre el tope de gasto, así que el piloto mantiene `Locat
   paquetes NuGet nuevos.
 - Selección por configuración: `Locations:GeocodingProvider=GoogleMaps`. `Manual`, `Mock` y
   `Disabled` no cambian; el mock determinista sigue siendo el de pruebas y CI.
-- **No** se implementa `IRoutingProvider`/ETA: AI-03 §15 lo lista, pero no existe puerto en el
-  código ni consumidor (Pricing es por zonas). Queda como pregunta al owner.
+- **No** se implementa `IRoutingProvider`/ETA: AI-03 §15 lo lista, pero el owner decidió que el
+  piloto no tiene rutas ni ETAs (regla 2). Una prueba de arquitectura prohíbe en `src` los endpoints
+  de Directions, Routes y Distance Matrix y cualquier puerto de ruteo/ETA de proveedor. El módulo
+  interno `Routing` (rutas manuales en PostgreSQL, `IRouteService`) no es un proveedor y no cambia.
 
 ## Comportamiento
 
 1. Valida el pin del cliente (obligatorio en AI-05 `CreateLocationRequest`) antes de cualquier
    llamada; un pin inválido sigue siendo 400.
-2. Geocodifica `address_text` (`GET /maps/api/geocode/json`, `components=country:MX`,
-   `region=mx`, ambos configurables).
-3. Las coordenadas del proveedor reemplazan al pin solo con **un único** resultado, sin
-   `partial_match`, de tipo `ROOFTOP` o `RANGE_INTERPOLATED` (`ProviderMode=GOOGLE_MAPS`).
+2. Geocodifica `address_text` (`GET /maps/api/geocode/json`, siempre `components=country:MX`
+   desde la constante `GoogleMapsGeocodingOptions.PilotCountry`; `region=mx` como sesgo, configurable).
+   `Locations:GoogleMaps:ComponentsCountry` solo admite `MX`: cualquier otro valor, vacío incluido,
+   falla la validación de opciones al arrancar (falla cerrado en lugar de ignorarse).
+3. Las coordenadas del proveedor reemplazan al pin solo con coincidencia **exacta**: **un único**
+   resultado, sin `partial_match`, `location_type` exactamente `ROOFTOP` y un componente de
+   `address_components` con tipo `country` y `short_name` `MX` (`ProviderMode=GOOGLE_MAPS`).
+   `RANGE_INTERPOLATED`, `GEOMETRIC_CENTER` y `APPROXIMATE` conservan el pin.
 4. Cualquier otro resultado degrada al comportamiento `work_allowed` de GATE-003: el pin manual,
    igual que `ManualGeocodingProvider` (`ProviderMode=MANUAL`, `UsedManualCoordinates=true`).
-   Esto incluye sin coincidencia, ambiguo, impreciso, timeout, error HTTP/red, `OVER_QUERY_LIMIT`,
+   Esto incluye sin coincidencia, ambiguo, impreciso, fuera de México o sin país (`outside_country`),
+   timeout, error HTTP/red, `OVER_QUERY_LIMIT`,
    `REQUEST_DENIED`, respuesta malformada o > 256 KiB, circuito abierto y bulkhead saturado.
    La creación de la ubicación nunca falla por el proveedor.
 5. `address_summary` siempre es el resumen normalizado del cliente; `formatted_address` (dirección
@@ -42,7 +62,7 @@ hasta que el owner registre el tope de gasto, así que el piloto mantiene `Locat
 | Circuit breaker (fallas consecutivas; un probe half-open) | `CircuitBreakerFailureThreshold` / `CircuitBreakerBreakSeconds` | 5 / 30 | 1–50 / 1–600 |
 | Bulkhead (llamadas concurrentes; excedente degrada al pin) | `MaxConcurrentRequests` | 8 | 1–64 |
 
-Sin coincidencia, ambiguo, impreciso o `INVALID_REQUEST` son respuestas de un proveedor sano y no
+Sin coincidencia, ambiguo, impreciso, fuera de México o `INVALID_REQUEST` son respuestas de un proveedor sano y no
 abren el circuito. El cliente nombrado no tiene timeout global, redirecciones, cookies ni loggers
 por defecto.
 
@@ -65,23 +85,27 @@ por defecto.
 
 ```bash
 dotnet test tests/Paqueteria.UnitTests --filter "FullyQualifiedName~GoogleMaps"
-dotnet test tests/Paqueteria.ArchitectureTests
+dotnet test tests/Paqueteria.ArchitectureTests --filter "FullyQualifiedName~MapsPilotScope|FullyQualifiedName~LocationsArchitecture"
 python3 tools/azr-001/env001_pilot_guards.py check --arm-dir <bicep build output>
 ```
 
 Las pruebas usan un `HttpMessageHandler` falso; ninguna llama a la API real de Google.
 
-## Preguntas abiertas para el owner
+## Pasos del owner (GATE-003 sigue abierto)
 
-- Tope de gasto, cuotas diarias y alertas de facturación en Google Cloud (cierra GATE-003).
-- Qué APIs habilitar y restringir en la key (este cambio solo usa la Geocoding API).
-- Si el ruteo/ETA (`IRoutingProvider`) entra en el piloto, con qué consumidor y qué API
-  (Routes API o Distance Matrix).
-- Si las coordenadas de Google deben reemplazar el pin del cliente y con qué precisión mínima
-  (hoy: un único resultado `ROOFTOP`/`RANGE_INTERPOLATED` sin `partial_match`), o si hace falta un
-  umbral de distancia entre pin y resultado.
-- Restricción geográfica: `country:MX` y `region=mx` por defecto.
-- GATE-007: aviso de privacidad y transferencia de direcciones de clientes a Google como encargado.
+- **Restringir la key** `google-maps-api-key` en Google Cloud Console (*APIs & Services → Credentials*)
+  a **solo** la Geocoding API (regla 1). El software no puede verificarlo; es un paso del owner.
+- Pendientes que cierran GATE-003 (sin ellos el piloto sigue en `Manual`):
+  - tope de gasto (budget) del proyecto de Google Cloud;
+  - cuotas diarias de la Geocoding API;
+  - alertas de facturación;
+  - escribir la key restringida en Key Vault como `google-maps-api-key`
+    (`docs/operations/env-001-pilot/README.md` §6.6).
+- Abierta aparte: GATE-007, aviso de privacidad y transferencia de direcciones de clientes a Google
+  como encargado.
+- Resueltas por `GATE-003-MAPS-PILOT-RULES-2026-10-02`: APIs de la key (solo Geocoding), ruteo/ETA
+  (no en el piloto), precisión mínima para reemplazar el pin (solo `ROOFTOP`) y restricción
+  geográfica (`country:MX`, fija).
 
 ## Rollback
 

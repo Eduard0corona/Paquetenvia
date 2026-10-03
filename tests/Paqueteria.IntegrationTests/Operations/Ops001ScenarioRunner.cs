@@ -487,6 +487,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         {
             quote_id = quoteId,
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "ops001-synthetic-terms-v1",

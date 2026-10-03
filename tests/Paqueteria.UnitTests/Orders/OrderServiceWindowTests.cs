@@ -105,7 +105,8 @@ public sealed class OrderServiceWindowTests
             "\"terms_version\":\"synthetic-v1\"," +
             "\"privacy_version\":\"synthetic-v1\"," +
             "\"accepted_at\":\"2026-07-20T12:34:56.1234560Z\"," +
-            "\"acceptance_channel\":\"WEB\"}";
+            "\"acceptance_channel\":\"WEB\"," +
+            "\"restricted_goods_acknowledged\":true}";
         var from = new DateTimeOffset(2026, 10, 2, 19, 0, 0, TimeSpan.Zero);
         var window = new OrderServiceWindow(from, from.AddHours(2));
 
@@ -150,5 +151,6 @@ public sealed class OrderServiceWindowTests
         "SENDER",
         new OrderAcceptanceInput("synthetic-v1", "synthetic-v1", AcceptedAt, "WEB"),
         "request",
+        RestrictedGoodsAcknowledged: true,
         ServiceWindow: window);
 }

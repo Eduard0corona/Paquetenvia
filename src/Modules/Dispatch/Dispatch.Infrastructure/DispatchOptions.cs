@@ -13,14 +13,17 @@ public sealed class DispatchOptions
     public const string SectionName = "Dispatch";
 
     public DispatchProviderKind Provider { get; set; } = DispatchProviderKind.Disabled;
-    public string AssignmentPolicyVersion { get; set; } = "synthetic-v1";
+    // POLICY-VERSIONS-PER-ORG-2026-10-02: there is no global assignment policy version any more; each
+    // organization versions its own (organizations.organizations.assignment_policy_version).
     public int CommandTimeoutSeconds { get; set; } = 30;
     public int IdempotencyLifetimeMinutes { get; set; } = 1440;
 }
 
 public sealed class DispatchDriverEligibilityOptions
 {
-    public string PolicyVersion { get; set; } = "synthetic-v1";
+    // POLICY-VERSIONS-PER-ORG-2026-10-02: there is no global eligibility policy version any more; each
+    // organization versions its own policy (organizations.organizations.driver_eligibility_policy_version)
+    // and it arrives with the driver snapshot.
     public Dictionary<string, List<string>> RequiredDocumentTypesByVehicleType { get; set; } =
         new(StringComparer.Ordinal);
     public List<string> NonExpiringDocumentTypes { get; set; } = [];
@@ -28,7 +31,6 @@ public sealed class DispatchDriverEligibilityOptions
         new(StringComparer.Ordinal);
 
     public DriverEligibilityPolicyConfiguration ToPolicy() => new(
-        PolicyVersion,
         RequiredDocumentTypesByVehicleType.ToDictionary(
             pair => pair.Key,
             pair => (IReadOnlyList<string>)pair.Value.ToArray(),

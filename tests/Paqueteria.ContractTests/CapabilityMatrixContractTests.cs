@@ -176,8 +176,9 @@ public sealed class CapabilityMatrixContractTests
     }
 
     /// <summary>
-    /// API-FIN-COD-VISIBILITY-2026-09-29: the listOrders COD pending filter is honored only for the roles that hold
-    /// both listOrders and getOrderFinancials; FINANCE gains no listOrders access through it.
+    /// API-FIN-COD-VISIBILITY-2026-09-29: the listOrders COD pending filter is honored for the roles that hold both
+    /// listOrders and getOrderFinancials; FINANCE's narrower grant (FIN-PENDING-COD-LIST-FINANCE-2026-10-02) is
+    /// checked separately and never adds FINANCE to the listOrders row.
     /// </summary>
     [Fact]
     public void Cod_pending_filter_takes_the_intersection_of_listOrders_and_getOrderFinancials()
@@ -185,7 +186,6 @@ public sealed class CapabilityMatrixContractTests
         var decision = Matrix.Scalar("cod_pending_reconciliation_filter");
         Assert.StartsWith("API-FIN-COD-VISIBILITY-2026-09-29", decision, StringComparison.Ordinal);
         Assert.Contains("both listOrders and getOrderFinancials", decision, StringComparison.Ordinal);
-        Assert.Contains("FINANCE keeps no access to listOrders", decision, StringComparison.Ordinal);
 
         var published = Published();
         Assert.DoesNotContain("FINANCE", published["listOrders"]);
@@ -204,6 +204,50 @@ public sealed class CapabilityMatrixContractTests
         Assert.Equal("query", parameter.Scalar("in"));
         Assert.Equal("boolean", parameter.Mapping("schema").Scalar("type"));
         Assert.Contains("getOrderFinancials", parameter.Scalar("description"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02 ("finanzas sí ve la lista"): AI-05 publishes that FINANCE with MFA may
+    /// call listOrders only with cod_pending_reconciliation=true, and the server grant is exactly that: one FINANCE
+    /// grant needing MFA, a subset of getOrderFinancials, kept out of the listOrders capability row.
+    /// </summary>
+    [Fact]
+    public void Finance_sees_only_the_cod_pending_list_with_mfa()
+    {
+        var decision = Matrix.Scalar("cod_pending_reconciliation_filter");
+        Assert.Contains("FIN-PENDING-COD-LIST-FINANCE-2026-10-02", decision, StringComparison.Ordinal);
+        Assert.Contains("finanzas sí ve la lista", decision, StringComparison.Ordinal);
+        Assert.Contains(
+            "FINANCE members with a satisfied MFA challenge may also call listOrders, only with cod_pending_reconciliation=true",
+            decision,
+            StringComparison.Ordinal);
+        Assert.Contains("every other listOrders call by FINANCE stays 403", decision, StringComparison.Ordinal);
+        Assert.Contains("FINANCE still never creates or modifies orders", decision, StringComparison.Ordinal);
+
+        var refinement = TenantCapabilityRefinements.ListOrdersCodPendingReconciliationOnly;
+        Assert.Equal("listOrders", refinement.OperationId);
+        Assert.Equal([(OrganizationRole.Finance, true)], refinement.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Contains(
+            TenantCapabilities.GetOrderFinancials.Grants,
+            grant => grant.Role == OrganizationRole.Finance && grant.RequiresMfa);
+        Assert.Same(TenantCapabilities.ListOrders, TenantCapabilities.All["listOrders"]);
+        Assert.DoesNotContain(TenantCapabilities.ListOrders.Grants, grant => grant.Role == OrganizationRole.Finance);
+        foreach (var write in new[]
+                 {
+                     TenantCapabilities.CreateOrder, TenantCapabilities.PreviewOrderCsv, TenantCapabilities.CommitOrderCsv,
+                     TenantCapabilities.TransitionOrder, TenantCapabilities.GetOrder,
+                 })
+        {
+            Assert.DoesNotContain(write.Grants, grant => grant.Role == OrganizationRole.Finance);
+        }
+
+        var listOrders = Contract.Mapping("paths").Mapping("/orders").Mapping("get");
+        Assert.Equal("capability-before-persisted-state", listOrders.Scalar("x-authorization-precedence"));
+        Assert.Contains("FIN-PENDING-COD-LIST-FINANCE-2026-10-02", listOrders.Scalar("description"), StringComparison.Ordinal);
+        var parameter = listOrders.Sequence("parameters").Children.Cast<YamlMappingNode>()
+            .Single(node => node.Children.ContainsKey(new YamlScalarNode("name")) &&
+                node.Scalar("name") == "cod_pending_reconciliation");
+        Assert.Contains("FIN-PENDING-COD-LIST-FINANCE-2026-10-02", parameter.Scalar("description"), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -279,6 +323,53 @@ public sealed class CapabilityMatrixContractTests
         var codes = problem.Mapping("properties").Mapping("code").Sequence("enum").Children
             .Select(node => ((YamlScalarNode)node).Value);
         Assert.Equal([TenantCapabilityGate.MfaRequiredCode], codes);
+    }
+
+    /// <summary>
+    /// LOW-PRICE-MANUAL-AUTH-2026-10-02: AI-05 publishes the createQuote field capability in its own section and the
+    /// server enforces exactly it - DISPATCHER without MFA, PLATFORM_ADMIN only with MFA - while createQuote itself
+    /// keeps its D5 roles; createQuote declares the uniform 409 and both the request and the Quote carry the field.
+    /// </summary>
+    [Fact]
+    public void Low_price_authorization_field_capability_matches_AI05_and_the_server()
+    {
+        Assert.StartsWith("LOW-PRICE-MANUAL-AUTH-2026-10-02", Matrix.Scalar("low_price_authorization_decision"), StringComparison.Ordinal);
+        Assert.StartsWith("IMPLEMENTED", Matrix.Scalar("low_price_authorization_status"), StringComparison.Ordinal);
+        var section = Matrix.Mapping("low_price_authorization");
+        var (key, value) = Assert.Single(section.Children);
+        Assert.Equal("createQuote.low_price_authorization", ((YamlScalarNode)key).Value);
+        var published = ((YamlSequenceNode)value).Children.Select(node => ((YamlScalarNode)node).Value!).ToArray();
+
+        var capability = TenantFieldCapabilities.CreateQuoteLowPriceAuthorization;
+        Assert.Equal("createQuote", capability.OperationId);
+        Assert.Equal(published, capability.Grants.Select(grant => ContractValue(grant.Role)));
+        Assert.Equal(
+            [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true)],
+            capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Same(TenantCapabilities.CreateQuote, TenantCapabilities.All["createQuote"]);
+
+        var createQuote = Contract.Mapping("paths").Mapping("/quotes").Mapping("post");
+        Assert.Contains("LOW-PRICE-MANUAL-AUTH-2026-10-02", createQuote.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal("#/components/responses/Conflict", createQuote.Mapping("responses").Mapping("409").Scalar("$ref"));
+        Assert.Equal("#/components/responses/Forbidden", createQuote.Mapping("responses").Mapping("403").Scalar("$ref"));
+
+        var schemas = Contract.Mapping("components").Mapping("schemas");
+        Assert.Equal(
+            "#/components/schemas/LowPriceAuthorizationInput",
+            schemas.Mapping("CreateQuoteRequest").Mapping("properties").Mapping("low_price_authorization").Scalar("$ref"));
+        var reason = schemas.Mapping("LowPriceAuthorizationInput").Mapping("properties").Mapping("reason");
+        Assert.Equal("1", reason.Scalar("minLength"));
+        Assert.Equal(
+            Pricing.Application.Quotes.QuoteLowPriceAuthorizationPolicy.MaximumReasonLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            reason.Scalar("maxLength"));
+        var quoteField = schemas.Mapping("Quote").Mapping("properties").Mapping("low_price_authorization");
+        Assert.Equal(
+            ["valid_until"],
+            quoteField.Sequence("required").Children.Select(node => ((YamlScalarNode)node).Value));
+        Assert.Equal(
+            ["valid_until", "actor_id", "reason"],
+            quoteField.Mapping("properties").Children.Keys.Select(node => ((YamlScalarNode)node).Value));
+        Assert.Contains("getOrderFinancials", quoteField.Scalar("description"), StringComparison.Ordinal);
     }
 
     private static bool IsMatrixOperationWithoutMfa(string operationId) =>

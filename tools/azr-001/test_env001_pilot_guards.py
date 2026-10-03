@@ -67,10 +67,13 @@ class ScramVerifierTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    def test_repository_settings_are_well_formed_but_await_the_owner(self):
+    def test_repository_settings_are_well_formed_and_await_no_owner_decision(self):
+        # POLICY-VERSIONS-PER-ORG-2026-10-02 removed the last two OWNER_DECISION_REQUIRED settings (the
+        # global assignment and eligibility policy versions); the sentinel itself is still refused below.
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertEqual([], guards.validate_settings(entries, allow_sentinel=True))
-        self.assertTrue(any(guards.OWNER_SENTINEL in f for f in guards.validate_settings(entries, allow_sentinel=False)))
+        self.assertEqual([], guards.validate_settings(entries, allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": guards.OWNER_SENTINEL}], allow_sentinel=False))
 
     def test_platform_managed_mock_and_secret_settings_are_rejected(self):
         cases = {
@@ -86,10 +89,10 @@ class SettingsTests(unittest.TestCase):
         for name, value in cases.items():
             with self.subTest(name=name):
                 self.assertTrue(guards.validate_settings([{"name": name, "value": value}], allow_sentinel=False))
-        self.assertTrue(guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "v1", "extra": 1}], allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan", "extra": 1}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "A__B", "value": "1"}, {"name": "A__B", "value": "2"}], allow_sentinel=False))
-        self.assertEqual([], guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "DSP-PILOT-v1"}], allow_sentinel=False))
-        self.assertTrue(guards.validate_settings([{"name": "Dispatch__AssignmentPolicyVersion", "value": "owner_decision_required"}], allow_sentinel=False))
+        self.assertEqual([], guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"}], allow_sentinel=False))
+        self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "owner_decision_required"}], allow_sentinel=False))
 
     def test_removed_global_pricing_policy_version_is_rejected(self):
         # PRC-POLICY-VERSION-PER-ORG: the version comes from each organization's tariff rules.
@@ -97,6 +100,17 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(any("PRC-POLICY-VERSION-PER-ORG" in failure for failure in failures))
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertNotIn("Pricing__PricingPolicyVersion", {entry["name"] for entry in entries})
+
+    def test_removed_global_assignment_and_eligibility_policy_versions_are_rejected(self):
+        # POLICY-VERSIONS-PER-ORG-2026-10-02: each organization versions its own assignment and driver
+        # eligibility policies, so neither global setting may come back, with any value.
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        for name in ("Dispatch__AssignmentPolicyVersion", "Drivers__Eligibility__PolicyVersion"):
+            for value in ("piloto-2026-10-v1", guards.OWNER_SENTINEL):
+                with self.subTest(name=name, value=value):
+                    failures = guards.validate_settings([{"name": name, "value": value}], allow_sentinel=True)
+                    self.assertTrue(any("POLICY-VERSIONS-PER-ORG-2026-10-02" in failure for failure in failures))
+            self.assertNotIn(name, {entry["name"] for entry in entries})
 
 
 class ObservabilityParametersTests(unittest.TestCase):

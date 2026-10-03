@@ -72,7 +72,8 @@ public sealed class CsvOrderImportCommitService(
                         row.AcceptedAt,
                         row.AcceptanceChannel),
                     command.RequestId,
-                    row.CodExpectedCents),
+                    row.CodExpectedCents,
+                    command.RestrictedGoodsAcknowledged),
                 cancellationToken);
             return new CsvOrderImportRowOutcome(
                 row.RowNumber,

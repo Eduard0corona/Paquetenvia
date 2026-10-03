@@ -233,7 +233,6 @@ public sealed class DriversEligibilityPostgreSqlContractTests(PostgreSqlContract
         Provider = DriversProviderKind.PostgreSql,
         Eligibility = new DriverEligibilityOptions
         {
-            PolicyVersion = "dsp-contract-v1",
             RequiredDocumentTypesByVehicleType = new(StringComparer.Ordinal)
             {
                 ["MOTORCYCLE"] = ["IDENTITY"],

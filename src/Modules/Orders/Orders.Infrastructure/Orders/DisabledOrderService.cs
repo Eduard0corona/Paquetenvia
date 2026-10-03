@@ -17,6 +17,7 @@ public sealed class DisabledOrderService : IOrderService
         Guid? ownerOrganizationId,
         string? cursor,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -107,7 +107,8 @@ public static class OrderEndpoints
                         request.Acceptance.AcceptanceChannel),
                     httpContext.TraceIdentifier,
                     codExpectedCents,
-                    serviceWindow),
+                    RestrictedGoodsAcknowledged: true,
+                    ServiceWindow: serviceWindow),
                 cancellationToken);
             return Results.Created($"/api/v1/orders/{result.Id:D}", ToResponse(result));
         }
@@ -142,7 +143,22 @@ public static class OrderEndpoints
 
         if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListOrders) is { } denied)
         {
-            return denied;
+            // FIN-PENDING-COD-LIST-FINANCE-2026-10-02: a caller without listOrders is admitted only to the COD
+            // pending list itself, exactly cod_pending_reconciliation=true, and only as FINANCE with MFA
+            // (MFA_REQUIRED without it). Every other shape keeps the refusal listOrders already gives. Both
+            // decisions read the request and the session only, before any order is read.
+            if (!OrderListCodFilter.IsPendingOnly(cod_pending_reconciliation))
+            {
+                return denied;
+            }
+
+            if (TenantCapabilityGate.Deny(
+                    session,
+                    tenantContext,
+                    TenantCapabilityRefinements.ListOrdersCodPendingReconciliationOnly) is { } pendingDenied)
+            {
+                return pendingDenied;
+            }
         }
 
         // API-FIN-COD-VISIBILITY-2026-09-29: the COD filter reveals financial state, so its mere presence also
@@ -167,6 +183,7 @@ public static class OrderEndpoints
                 owner_org_id,
                 cursor,
                 codPendingReconciliation,
+                session.MfaSatisfied,
                 cancellationToken);
             return Results.Ok(new OrderPageResponse(
                 page.Items.Select(ToResponse).ToArray(),
@@ -175,6 +192,10 @@ public static class OrderEndpoints
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OrderListForbiddenException)
+        {
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.GetOrderFinancials);
         }
         catch (OrderServiceUnavailableException)
         {
@@ -306,13 +327,23 @@ public static class OrderEndpoints
             request.Acceptance.TermsVersion,
             request.Acceptance.PrivacyVersion,
             request.Acceptance.AcceptedAt,
-            request.Acceptance.AcceptanceChannel);
+            request.Acceptance.AcceptanceChannel) &&
+        IsRestrictedGoodsAcknowledged(request.RestrictedGoodsAcknowledged);
+
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher must confirm the shipment contains no prohibited
+    /// goods with the JSON literal <c>true</c>. Absent, null, <c>false</c>, a quoted <c>"true"</c> or any other
+    /// value is the uniform 409 before any effect.
+    /// </summary>
+    private static bool IsRestrictedGoodsAcknowledged(JsonElement? value) =>
+        value is { ValueKind: JsonValueKind.True };
 
     /// <summary>
     /// D6-COD-EXPECTED: an absent (or JSON null) <c>cod_expected_cents</c> is zero. A present value must be a JSON
-    /// number whose literal is a plain non-negative integer that fits int64; <c>1.5</c>, <c>1e3</c>, <c>150.0</c>,
-    /// <c>-1</c> and a quoted <c>"150"</c> are the uniform 409, the same as every other invalid contract value,
-    /// because the literal is checked rather than whatever a lenient number binder would coerce it to.
+    /// number whose literal is a plain non-negative integer of at most 2,000,000 cents (COD-CAP-20000-2026-10-02);
+    /// <c>1.5</c>, <c>1e3</c>, <c>150.0</c>, <c>-1</c>, <c>2000001</c> and a quoted <c>"150"</c> are the uniform
+    /// 409, the same as every other invalid contract value, because the literal is checked rather than whatever a
+    /// lenient number binder would coerce it to.
     /// </summary>
     private static bool TryReadCodExpectedCents(JsonElement? value, out long cents)
     {
@@ -470,6 +501,8 @@ public static class OrderEndpoints
 /// AI-05 CreateOrderRequest. <c>cod_expected_cents</c> (D6-COD-EXPECTED) is the optional COD the dispatcher
 /// declares, in MXN integer cents; absent means zero. It is written to <c>orders.cod_expected_cents</c> and is read
 /// back only through the finance operations (FIN-001/SET-001), never through the Order response a VIEWER can read.
+/// <c>restricted_goods_acknowledged</c> (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) is required and must be the JSON
+/// literal <c>true</c>.
 /// <c>service_window</c> (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) is the optional delivery window <c>{from, to}</c>;
 /// absent means the zone's schedule applies. It is stored on the order and returned as <c>Order.service_window</c>.
 /// </summary>
@@ -478,6 +511,7 @@ public sealed record CreateOrderRequest(
     [property: JsonPropertyName("payer_type")] string PayerType,
     [property: JsonPropertyName("acceptance")] OrderAcceptanceRequest Acceptance,
     [property: JsonPropertyName("cod_expected_cents")] JsonElement? CodExpectedCents = null,
+    [property: JsonPropertyName("restricted_goods_acknowledged")] JsonElement? RestrictedGoodsAcknowledged = null,
     [property: JsonPropertyName("service_window")] JsonElement? ServiceWindow = null);
 
 public sealed record OrderAcceptanceRequest(
@@ -558,6 +592,12 @@ public sealed record OrderPageResponse(
 /// </summary>
 public static class OrderListCodFilter
 {
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the single request shape a caller without listOrders may use, the
+    /// parameter present with exactly the value <c>true</c>. Absent, <c>false</c> or any other value is not it.
+    /// </summary>
+    public static bool IsPendingOnly(string? value) => string.Equals(value, "true", StringComparison.Ordinal);
+
     public static bool TryParse(string? value, out bool codPendingReconciliation)
     {
         codPendingReconciliation = false;

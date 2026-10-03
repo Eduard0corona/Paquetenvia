@@ -237,7 +237,6 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
         settings["Orders:Provider"] = "PostgreSql";
         settings["Drivers:Provider"] = "PostgreSql";
         settings["Dispatch:Provider"] = "PostgreSql";
-        settings["Dispatch:AssignmentPolicyVersion"] = "OPS-001-synthetic-v1";
         settings["Realtime:OutboxDispatcher:WorkerId"] =
             $"ops001-r{data.RunNumber:D2}";
         settings["Realtime:OutboxDispatcher:Business:BatchSize"] = "10";
@@ -267,7 +266,6 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
                 "2000";
         }
 
-        settings["Drivers:Eligibility:PolicyVersion"] = "OPS-001-synthetic-v1";
         settings["Drivers:Eligibility:NonExpiringDocumentTypes:0"] = "IDENTITY";
         return settings;
     }

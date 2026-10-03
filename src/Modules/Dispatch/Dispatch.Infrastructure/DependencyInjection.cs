@@ -29,8 +29,9 @@ public static class DependencyInjection
         services.AddOptions<DispatchOptions>()
             .Bind(configuration.GetSection(DispatchOptions.SectionName))
             .Validate(options => Enum.IsDefined(options.Provider), "Dispatch:Provider is unsupported.")
-            .Validate(options => !string.IsNullOrWhiteSpace(options.AssignmentPolicyVersion),
-                "Dispatch:AssignmentPolicyVersion is required.")
+            .Validate(_ => configuration.GetSection(DispatchOptions.SectionName)["AssignmentPolicyVersion"] is null,
+                "Dispatch:AssignmentPolicyVersion was removed (POLICY-VERSIONS-PER-ORG-2026-10-02): each " +
+                "organization versions its own assignment policy.")
             .Validate(options => options.CommandTimeoutSeconds is >= 1 and <= 60,
                 "Dispatch:CommandTimeoutSeconds must be between 1 and 60.")
             .Validate(options => options.IdempotencyLifetimeMinutes is >= 1 and <= 10_080,

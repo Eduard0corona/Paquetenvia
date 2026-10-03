@@ -16,6 +16,14 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal static readonly Guid MissingQuoteId = Guid.Parse("70000000-0000-0000-0000-000000000003");
     internal static readonly Guid ExpiredQuoteId = Guid.Parse("70000000-0000-0000-0000-000000000004");
     internal static readonly Guid RevokedQuoteId = Guid.Parse("70000000-0000-0000-0000-000000000005");
+    internal static readonly Guid AuthorizedQuoteId = Guid.Parse("70000000-0000-0000-0000-000000000006");
+    internal static readonly Guid AuthorizingActorId = Guid.Parse("7a000000-0000-0000-0000-000000000001");
+    internal const string AuthorizedReason = "Cliente ancla, ruta en consolidación";
+    internal static readonly DateTimeOffset QuoteExpiresAt = new(2026, 7, 22, 13, 0, 0, TimeSpan.Zero);
+
+    /// <summary>Every command the stub service received, so a test can prove a refusal happened before it.</summary>
+    internal ConcurrentQueue<CreateQuoteCommand> ReceivedCommands =>
+        ((StubQuoteService)Services.GetRequiredService<IQuoteService>()).Received;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -37,10 +45,15 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
     {
         private readonly ConcurrentDictionary<string, (string Signature, QuoteResult Result)> responses = new(StringComparer.Ordinal);
 
+        internal ConcurrentQueue<CreateQuoteCommand> Received { get; } = new();
+
         public Task<QuoteResult> CreateAsync(CreateQuoteCommand command, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Received.Enqueue(command);
             var signature = string.Join('|',
+                command.LowPriceAuthorization?.Reason,
+                command.LowPriceAuthorization is null ? null : command.ActorId,
                 command.ClientAccountId,
                 command.Origin.AddressText,
                 command.Origin.Lat,
@@ -53,7 +66,20 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
                 command.Packages.Count,
                 string.Join(',', command.Packages.Select(package => package.Description)),
                 command.Packages.Sum(package => package.DeclaredValueCents));
-            var result = Result(Guid.NewGuid(), "ACTIVE");
+            // LOW-PRICE-MANUAL-AUTH-2026-10-02: the stub mirrors the service, which refuses an authorization the
+            // price does not need with QuoteConflictException.
+            if (command.LowPriceAuthorization is not null &&
+                command.Origin.AddressText.Contains("NOT_NEEDED", StringComparison.Ordinal))
+            {
+                throw new QuoteConflictException();
+            }
+
+            var result = Result(
+                Guid.NewGuid(),
+                "ACTIVE",
+                command.LowPriceAuthorization is { } authorization
+                    ? new QuoteLowPriceAuthorizationResult(command.ActorId, authorization.Reason, QuoteExpiresAt)
+                    : null);
             var existing = responses.GetOrAdd(command.IdempotencyKey, (signature, result));
             if (!string.Equals(existing.Signature, signature, StringComparison.Ordinal))
             {
@@ -78,17 +104,28 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
             cancellationToken.ThrowIfCancellationRequested();
             if (quoteId == ActiveQuoteId) return Task.FromResult(Result(quoteId, "ACTIVE"));
             if (quoteId == UsedQuoteId) return Task.FromResult(Result(quoteId, "USED"));
+            if (quoteId == AuthorizedQuoteId)
+            {
+                return Task.FromResult(Result(
+                    quoteId,
+                    "ACTIVE",
+                    new QuoteLowPriceAuthorizationResult(AuthorizingActorId, AuthorizedReason, QuoteExpiresAt)));
+            }
+
             throw new QuoteNotFoundException();
         }
 
-        private static QuoteResult Result(Guid id, string status) => new(
+        private static QuoteResult Result(
+            Guid id,
+            string status,
+            QuoteLowPriceAuthorizationResult? authorization = null) => new(
             id,
             new MoneyResult("MXN", 10_642),
             new MoneyResult("MXN", 1_703),
             new MoneyResult("MXN", 12_345),
             [Guid.Parse("71000000-0000-0000-0000-000000000001")],
             [new QuoteBreakdownLine("BASE_TARIFF", Guid.Parse("71000000-0000-0000-0000-000000000001"), 12_345, "OCCASIONAL", "VAT_INCLUDED")],
-            new DateTimeOffset(2026, 7, 22, 13, 0, 0, TimeSpan.Zero),
+            QuoteExpiresAt,
             Guid.Parse("72000000-0000-0000-0000-000000000001"),
             Guid.Parse("72000000-0000-0000-0000-000000000002"),
             "SAME_DAY",
@@ -104,6 +141,7 @@ public sealed class QuoteHttpWebApplicationFactory : WebApplicationFactory<Progr
             {
                 ["package_count"] = 1,
                 ["service_type"] = "SAME_DAY",
-            });
+            },
+            authorization);
     }
 }

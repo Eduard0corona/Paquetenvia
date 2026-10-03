@@ -5407,12 +5407,13 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             {
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.NEXT_CRITICAL_REMEDIATION_ID,
-                rel000.NEXT_OG_CRITICAL_REMEDIATION_ID,
+                rel000.BRACES_KNOWN_ADVISORY_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
         historical = {item["id"]: item for item in policy["historical_remediations"]}
         self.assertEqual("MERGED", historical[rel000.SHARP_REMEDIATION_ID]["status"])
+        self.assertEqual("MERGED", historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["status"])
 
     def test_web_transitive_mode_requires_exact_branch_and_id(self):
         policy = self.policy()
@@ -5681,19 +5682,21 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         )
         self.assertEqual(38, fixture["issue_number"])
         self.assertEqual(48, fixture["remediation_issues"][rel000.NEXT_CRITICAL_REMEDIATION_ID])
-        self.assertEqual(
-            175, fixture["remediation_issues"][rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]
+        self.assertNotIn(
+            rel000.NEXT_OG_CRITICAL_REMEDIATION_ID, fixture["remediation_issues"]
         )
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
         self.assertIn("fix/security-2026-09-next-critical", workflow)
         self.assertIn("SEC-2026-09-NEXT-CRITICAL", workflow)
-        self.assertIn(
-            "github.head_ref == 'fix/security-2026-10-next-og-critical' "
-            "&& 'SEC-2026-10-NEXT-OG-CRITICAL'",
-            workflow,
-        )
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
+        for name in ("ci.yml", "pr-validation.yml"):
+            retired = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertNotIn(
+                    "github.head_ref == 'fix/security-2026-10-next-og-critical'", retired
+                )
+                self.assertNotIn("SEC-2026-10-NEXT-OG-CRITICAL", retired)
 
 
 class NextCriticalRemediationPolicyTests(unittest.TestCase):
@@ -5971,8 +5974,38 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-next-og-critical-tests-")
         self.root = Path(self.temp.name)
-        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
-        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+        self.repository_policy_path = (
+            REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
+        )
+        current_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # PR #176 merged, so the authorization is historical; the regression suite replays it
+        # as the active authorization it was while the remediation branch was open.
+        next_og = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.NEXT_OG_CRITICAL_REMEDIATION_ID
+            )
+        )
+        next_og.pop("status", None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.NEXT_OG_CRITICAL_REMEDIATION_ID
+        ]
+        active = self.policy_value["active_remediations"]
+        braces_index = next(
+            (
+                index
+                for index, item in enumerate(active)
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            ),
+            len(active),
+        )
+        active.insert(braces_index, next_og)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -6020,8 +6053,15 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
         base = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip()
+        # Later remediations may move the checkout past this graph, so the regression
+        # suite replays the exact target that PR #176 validated (validated_target_sha).
         for relative in files:
-            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+            (root / relative).write_bytes(
+                subprocess.check_output(
+                    ["git", "show", f"{authorization['validated_target_sha']}:{relative}"],
+                    cwd=REPOSITORY_ROOT,
+                )
+            )
         return root, base, authorization
 
     def validate_dependency(self, root, base, authorization=None):
@@ -6120,6 +6160,31 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
                 "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
                 "vulnerable_lock_versions": [],
             },
+        )
+
+    def test_merged_authorization_is_historical_and_not_active(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        historical = {item["id"]: item for item in policy["historical_remediations"]}
+        self.assertEqual("MERGED", historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["status"])
+        self.assertEqual(
+            "1ade580ac762cd0d1acdb4cc4d593c2cf5757c10",
+            historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["validated_target_sha"],
+        )
+        self.assertNotIn(
+            rel000.NEXT_OG_CRITICAL_REMEDIATION_ID,
+            {item["id"] for item in policy["active_remediations"]},
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy,
+                "fix/security-2026-10-next-og-critical",
+                rel000.NEXT_OG_CRITICAL_REMEDIATION_ID,
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-10-next-og-critical"),
         )
 
     def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
@@ -6332,7 +6397,14 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
         root2 = self.root / "second"
         shutil.copytree(root, root2)
         (root2 / "apps/web/pnpm-lock.yaml").write_bytes(
-            (REPOSITORY_ROOT / "apps/web/pnpm-lock.yaml").read_bytes()
+            subprocess.check_output(
+                [
+                    "git",
+                    "show",
+                    f"{authorization['validated_target_sha']}:apps/web/pnpm-lock.yaml",
+                ],
+                cwd=REPOSITORY_ROOT,
+            )
         )
         self.assert_reason(
             "LOCKFILE_GENERATED_GRAPH_INVALID",
@@ -6407,6 +6479,665 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
                 self.authorization(),
             ),
         )
+
+
+class BracesKnownAdvisoryTests(unittest.TestCase):
+    """SEC-2026-10: braces GHSA-vfj7-8cjw-p6xm accepted as a tracked known advisory.
+
+    No braces release patches the advisory, so the owner accepted it ("Registrarlo
+    como aviso conocido") only on its exact package, severity, dev-only lock path,
+    pinned lock graph and open Issue #180. Everything else fails closed.
+    """
+
+    ADVISORY = "GHSA-vfj7-8cjw-p6xm"
+    # Sanitized pnpm 11.15.1 base audit of the development base (REL000_BASE_MAIN_SHA
+    # 84420a1), byte-for-byte the shape the REL-000 job produced for that run.
+    REAL_DEVELOPMENT_BASE_AUDIT = {
+        "format_version": "paquetenvia-rel000-audit-v1",
+        "command_executed": True,
+        "command_exit_code": 1,
+        "parse_succeeded": True,
+        "totals": {"critical": 0, "high": 1, "moderate": 0, "low": 0, "total": 1},
+        "affected_packages": ["braces"],
+        "advisories": [
+            {
+                "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+                "package": "braces",
+                "installed_versions": ["3.0.3"],
+                "severity": "high",
+                "affected_range": "<=3.0.3",
+                "patched_range": ">=3.0.4",
+                "direct_or_transitive": "transitive",
+                "dependency_path_count": 1,
+                "fix_available": True,
+                "fix_compatibility": "requires_compatibility_assessment",
+            }
+        ],
+    }
+    # Raw `pnpm audit --json` advisory for the same run (findings carry the dev path).
+    REAL_RAW_AUDIT = {
+        "actions": [],
+        "advisories": {
+            "1240992": {
+                "findings": [
+                    {
+                        "version": "3.0.3",
+                        "paths": [
+                            ".>eslint-config-next>@next/eslint-plugin-next>fast-glob>micromatch>braces"
+                        ],
+                        "dev": True,
+                        "optional": False,
+                        "bundled": False,
+                    }
+                ],
+                "id": 1240992,
+                "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+                "module_name": "braces",
+                "vulnerable_versions": "<=3.0.3",
+                "patched_versions": ">=3.0.4",
+                "severity": "high",
+                "cwe": "CWE-674",
+                "github_advisory_id": "GHSA-vfj7-8cjw-p6xm",
+                "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            }
+        },
+        "muted": [],
+        "metadata": {
+            "vulnerabilities": {"info": 0, "low": 0, "moderate": 0, "high": 1, "critical": 0},
+            "dependencies": 75,
+            "devDependencies": 363,
+            "optionalDependencies": 94,
+            "totalDependencies": 475,
+        },
+    }
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-braces-known-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
+        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        mutate(value)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def base_lock(self) -> bytes:
+        return subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{self.authorization()['authorized_base_sha']}:apps/web/pnpm-lock.yaml",
+            ],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def repo(self, base_lock: bytes | None = None, branch_lock: bytes | None = None):
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        files = ["apps/web/pnpm-lock.yaml", *authorization["allowed_non_dependency_files"]]
+        for relative in files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(
+                base_lock
+                if base_lock is not None and relative == "apps/web/pnpm-lock.yaml"
+                else subprocess.check_output(
+                    ["git", "show", f"{authorization['authorized_base_sha']}:{relative}"],
+                    cwd=REPOSITORY_ROOT,
+                )
+            )
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        for relative in authorization["allowed_non_dependency_files"]:
+            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+        if branch_lock is not None:
+            (root / "apps/web/pnpm-lock.yaml").write_bytes(branch_lock)
+        return root, base
+
+    def known_issue(self, **changes):
+        authorization = self.authorization()
+        issue = {
+            "number": 180,
+            "state": "OPEN",
+            "title": authorization["tracked_issue_title"],
+            "url": "https://github.com/example/issues/180",
+            "tracked_advisory_ids": [self.ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def normal_tracking(self, known_issues=None):
+        """The development PR tracking input: closed #38/#40 plus the known Issue."""
+
+        web = next(
+            item
+            for item in self.policy_value["active_remediations"]
+            if item["id"] == rel000.WEB_TRANSITIVE_REMEDIATION_ID
+        )
+        return {
+            "number": 38,
+            "state": "CLOSED",
+            "title": web["tracked_issue_title"],
+            "url": "https://github.com/example/issues/38",
+            "tracked_advisory_ids": web["issue_advisories"]["38"],
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": web["related_tracked_issue_title"],
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": web["issue_advisories"]["40"],
+            },
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    def remediation_tracking(self, **changes):
+        tracking = self.known_issue(**changes)
+        tracking["related_issue"] = self.normal_tracking()["related_issue"]
+        tracking["known_advisory_issues"] = [self.known_issue(**changes)]
+        return tracking
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def real_audit(self, mutate=None):
+        audit = copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT)
+        if mutate is not None:
+            mutate(audit["advisories"][0])
+        return audit
+
+    @staticmethod
+    def with_advisory(audit, advisory):
+        audit = copy.deepcopy(audit)
+        audit["advisories"].append(advisory)
+        audit["totals"][advisory["severity"]] += 1
+        audit["totals"]["total"] += 1
+        return audit
+
+    def accepted(self, root, base, tracking, base_audit=None, branch_audit=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            self.policy(),
+            tracking,
+            base_audit if base_audit is not None else self.real_audit(),
+            branch_audit if branch_audit is not None else self.real_audit(),
+        )
+
+    def normal(self, base_audit=None, branch_audit=None, tracking=None, accepted=None):
+        root, base = self.repo()
+        tracking = tracking if tracking is not None else self.normal_tracking()
+        base_audit = base_audit if base_audit is not None else self.real_audit()
+        branch_audit = branch_audit if branch_audit is not None else self.real_audit()
+        if accepted is None:
+            accepted = self.accepted(root, base, tracking, base_audit, branch_audit)
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base_audit,
+            branch_audit,
+            {"dependency_diff_against_base": "CLEAN", "vulnerable_lock_versions": []},
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            accepted,
+        )
+
+    def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            "fix/security-2026-10-braces-dos-tracked", authorization["authorized_source_branch"]
+        )
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], authorization["id"]
+            ),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED",
+            lambda: rel000.resolve_rel000_mode(policy, authorization["authorized_source_branch"]),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", ""),
+        )
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                "0" * 40,
+                authorization["id"],
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        accepted = self.authorization()["accepted_known_advisory"]
+        self.assertEqual(self.ADVISORY, accepted["advisory_id"])
+        self.assertEqual("braces", accepted["package"])
+        self.assertEqual("high", accepted["severity"])
+        self.assertEqual("dev", accepted["dependency_scope"])
+        self.assertEqual(180, accepted["tracked_issue"])
+
+        def braces(value):
+            return next(
+                item
+                for item in value["active_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+
+        mutations = [
+            lambda value: braces(value).update(tracked_issue=175),
+            lambda value: braces(value).update(tracked_issue_title="other"),
+            lambda value: braces(value)["expected_base_advisories"].append("GHSA-aaaa-bbbb-cccc"),
+            lambda value: braces(value)["expected_branch_totals"].update(high=2, total=2),
+            lambda value: braces(value)["allowed_dependency_files"].append("apps/web/package.json"),
+            lambda value: braces(value)["required_dependency_files"].append("apps/web/pnpm-lock.yaml"),
+            lambda value: braces(value)["allowed_non_dependency_files"].append("apps/web/next.config.ts"),
+            lambda value: braces(value).update(related_tracked_issue=40),
+            lambda value: braces(value)["accepted_known_advisory"].update(severity="critical"),
+            lambda value: braces(value)["accepted_known_advisory"].update(package="micromatch"),
+            lambda value: braces(value)["accepted_known_advisory"].update(dependency_scope="prod"),
+            lambda value: braces(value)["accepted_known_advisory"].update(dependency_path_count=2),
+            lambda value: braces(value)["accepted_known_advisory"].update(installed_versions=["3.0.2"]),
+            lambda value: braces(value)["accepted_known_advisory"]["lock_path"].pop(1),
+            lambda value: braces(value)["accepted_known_advisory"].update(tracked_issue=38),
+            lambda value: braces(value)["accepted_known_advisory"].update(expected_lockfile_sha256="x"),
+            lambda value: braces(value)["accepted_known_advisory"].update(exit_condition="never"),
+            lambda value: braces(value)["accepted_known_advisory"].update(extra=True),
+            lambda value: braces(value).pop("accepted_known_advisory"),
+            lambda value: braces(value).update(manual_lockfile_edits_allowed=True),
+            lambda value: value["active_remediations"][0].update(
+                accepted_known_advisory=copy.deepcopy(braces(value)["accepted_known_advisory"])
+            ),
+        ]
+        for mutate in mutations:
+            path = self.policy_with(mutate)
+            self.assert_reason(
+                "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+            )
+
+    def test_exit_condition_is_recorded_in_the_policy(self):
+        exit_condition = self.authorization()["accepted_known_advisory"]["exit_condition"]
+        self.assertIn("braces>=3.0.4", exit_condition)
+        self.assertIn('"braces@<3.0.4": 3.0.4', exit_condition)
+        self.assertIn("close Issue #180", exit_condition)
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(180, fixture["remediation_issues"][rel000.BRACES_KNOWN_ADVISORY_ID])
+        self.assertEqual(
+            {rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"]
+        )
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-10-braces-dos-tracked' "
+                    "&& 'SEC-2026-10-BRACES-DOS-TRACKED'",
+                    workflow,
+                )
+                self.assertIn('data.get("known_advisory_issues", {})', workflow)
+                self.assertIn("--known-advisory-input", workflow)
+                self.assertIn("rel000-known-advisory-tracking-raw-*.json", workflow)
+
+    def test_sanitize_issue_attaches_the_known_advisory_issue(self):
+        raw = {
+            "number": 180,
+            "state": "open",
+            "title": self.authorization()["tracked_issue_title"],
+            "html_url": "https://github.com/example/issues/180",
+            "updated_at": "2026-10-03T00:00:00Z",
+            "body": f"Tracks `{self.ADVISORY}` until braces 3.0.4 ships.",
+        }
+        tracking = dict(raw, number=38, title="tracking", body="none")
+        (self.root / "known.json").write_text(json.dumps(raw), encoding="utf-8")
+        (self.root / "tracking.json").write_text(json.dumps(tracking), encoding="utf-8")
+        rel000.sanitize_issue(
+            self.root / "tracking.json",
+            self.root / "out.json",
+            None,
+            [self.root / "known.json"],
+        )
+        sanitized = json.loads((self.root / "out.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            [
+                {
+                    "number": 180,
+                    "state": "OPEN",
+                    "title": raw["title"],
+                    "url": raw["html_url"],
+                    "updated_at": raw["updated_at"],
+                    "tracked_advisory_ids": [self.ADVISORY.upper()],
+                }
+            ],
+            sanitized["known_advisory_issues"],
+        )
+        self.assertEqual(
+            {"known.json", "out.json", "tracking.json"},
+            {path.name for path in self.root.iterdir()},
+        )
+        rel000.sanitize_issue(self.root / "tracking.json", self.root / "plain.json")
+        self.assertNotIn(
+            "known_advisory_issues",
+            json.loads((self.root / "plain.json").read_text(encoding="utf-8")),
+        )
+
+    def test_real_audit_shape_is_what_the_sanitizer_produces(self):
+        (self.root / "raw.json").write_text(json.dumps(self.REAL_RAW_AUDIT), encoding="utf-8")
+        rel000.sanitize_audit(self.root / "raw.json", self.root / "sanitized.json", True, 1)
+        self.assertEqual(
+            self.REAL_DEVELOPMENT_BASE_AUDIT,
+            json.loads((self.root / "sanitized.json").read_text(encoding="utf-8")),
+        )
+
+    def test_real_development_base_audit_passes_normal_release_evidence(self):
+        result = self.normal()
+        self.assertEqual(rel000.NORMAL_RELEASE_EVIDENCE, result["mode"])
+        self.assertEqual("PASSED", result["dependency_security_status"])
+        self.assertEqual("BLOCKED_BY_OWNER_DECISION", result["release_candidate_status"])
+        self.assertEqual([self.ADVISORY], result["remaining_advisory_ids"])
+        self.assertEqual("Issue #180", result["dependency_advisories"][0]["tracking_issue"])
+        self.assertEqual(
+            [
+                {
+                    "advisory_id": self.ADVISORY,
+                    "package": "braces",
+                    "severity": "high",
+                    "dependency_scope": "dev",
+                    "tracking_issue": "Issue #180",
+                    "remediation_id": rel000.BRACES_KNOWN_ADVISORY_ID,
+                    "lockfile_sha256": self.authorization()["accepted_known_advisory"][
+                        "expected_lockfile_sha256"
+                    ],
+                }
+            ],
+            result["accepted_known_advisories"],
+        )
+        known = result["known_security_issues"][-1]
+        self.assertEqual(
+            ("Issue #180", "OPEN", "ACCEPTED_KNOWN_ADVISORY"),
+            (known["id"], known["state"], known["remediation_status"]),
+        )
+        rel000.assert_redacted(result["accepted_known_advisories"])
+
+    def test_real_development_base_audit_without_acceptance_still_fails(self):
+        self.assert_reason(
+            "UNTRACKED_DEPENDENCY_ADVISORY",
+            lambda: self.normal(accepted=[]),
+        )
+
+    def test_acceptance_is_unused_when_the_advisory_is_absent(self):
+        root, base = self.repo()
+        empty = self.real_audit()
+        empty["advisories"] = []
+        empty["totals"] = {"critical": 0, "high": 0, "moderate": 0, "low": 0, "total": 0}
+        self.assertEqual([], self.accepted(root, base, self.normal_tracking([]), empty, empty))
+        self.assertEqual(
+            "PASSED", self.normal(empty, empty, accepted=[])["dependency_security_status"]
+        )
+
+    def test_any_other_new_advisory_fails_closed(self):
+        other = {
+            **copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT["advisories"][0]),
+            "advisory_id": "GHSA-aaaa-bbbb-cccc",
+            "package": "micromatch",
+            "installed_versions": ["4.0.8"],
+        }
+        self.assert_reason(
+            "UNTRACKED_DEPENDENCY_ADVISORY",
+            lambda: self.normal(
+                self.with_advisory(self.real_audit(), other),
+                self.with_advisory(self.real_audit(), other),
+            ),
+        )
+        self.assert_reason(
+            "NEW_DEPENDENCY_ADVISORY",
+            lambda: self.normal(branch_audit=self.with_advisory(self.real_audit(), other)),
+        )
+
+    def test_same_advisory_outside_its_exact_scope_fails_closed(self):
+        cases = {
+            "another package": lambda item: item.update(package="micromatch"),
+            "higher severity": lambda item: item.update(severity="critical"),
+            "other version": lambda item: item.update(installed_versions=["3.0.2"]),
+            "direct path": lambda item: item.update(direct_or_transitive="direct"),
+            "second path": lambda item: item.update(dependency_path_count=2),
+            "other range": lambda item: item.update(affected_range="<=3.0.9"),
+        }
+        for name, mutate in cases.items():
+            audit = self.real_audit(mutate)
+            if name == "higher severity":
+                audit["totals"].update(high=0, critical=1)
+            for label, inputs in (
+                ("base", {"base_audit": audit, "branch_audit": audit}),
+                ("branch", {"branch_audit": audit}),
+            ):
+                with self.subTest(case=name, audit=label):
+                    self.assert_reason(
+                        "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(**inputs)
+                    )
+
+    def test_lock_path_outside_the_dev_only_chain_fails_closed(self):
+        lock = self.base_lock().decode("utf-8")
+        production = lock.replace(
+            "    dependencies:\n      '@microsoft/signalr':",
+            "    dependencies:\n      braces:\n        specifier: 3.0.3\n        version: 3.0.3\n"
+            "      '@microsoft/signalr':",
+            1,
+        )
+        second_parent = lock.replace(
+            "      micromatch: 4.0.8\n", "      micromatch: 4.0.8\n      braces: 3.0.3\n", 1
+        )
+        moved_root = lock.replace(
+            "    devDependencies:\n", "    devDependencies:\n      fast-glob:\n"
+            "        specifier: 3.3.1\n        version: 3.3.1\n", 1
+        )
+        other_version = lock.replace("\n  braces@3.0.3:\n", "\n  braces@3.0.3:\n\n  braces@3.0.2:\n", 1)
+        for name, text in {
+            "production dependency": production,
+            "second parent": second_parent,
+            "direct chain member": moved_root,
+            "second version": other_version,
+        }.items():
+            self.assertNotEqual(lock, text, name)
+            with self.subTest(case=name):
+                accepted = self.authorization()["accepted_known_advisory"]
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                    lambda: rel000.validate_known_advisory_lock_graph(
+                        text.encode("utf-8"), accepted, "branch"
+                    ),
+                )
+                root, base = self.repo(branch_lock=text.encode("utf-8"))
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                    lambda: self.accepted(root, base, self.normal_tracking()),
+                )
+                shutil.rmtree(root)
+
+    def test_changed_lock_graph_fails_closed(self):
+        changed = self.base_lock() + b"\n"
+        for name, kwargs in {
+            "branch": {"branch_lock": changed},
+            "base": {"base_lock": changed},
+        }.items():
+            with self.subTest(lock=name):
+                root, base = self.repo(**kwargs)
+                failure = self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    lambda: self.accepted(root, base, self.normal_tracking()),
+                )
+                self.assertIn(name, str(failure))
+                shutil.rmtree(root)
+
+    def test_tracking_issue_must_be_open_exact_and_consulted(self):
+        root, base = self.repo()
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(
+                root, base, self.normal_tracking([self.known_issue(state="CLOSED")])
+            ),
+        )
+        for issues in (
+            [self.known_issue(title="SEC-2026-10: something else")],
+            [self.known_issue(tracked_advisory_ids=[self.ADVISORY, "GHSA-aaaa-bbbb-cccc"])],
+            [self.known_issue(number=175)],
+            [self.known_issue(), self.known_issue()],
+            [],
+        ):
+            with self.subTest(issues=issues):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_TRACKING_INVALID",
+                    lambda: self.accepted(root, base, self.normal_tracking(issues)),
+                )
+        tracking = self.normal_tracking()
+        tracking.pop("known_advisory_issues")
+        self.assert_reason(
+            "KNOWN_ADVISORY_TRACKING_INVALID", lambda: self.accepted(root, base, tracking)
+        )
+
+    def test_tracking_only_dependency_diff_is_accepted(self):
+        root, base = self.repo()
+        result = rel000.validate_dependency_diff(
+            root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+        )
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual([], result["changed_dependency_files"])
+        self.assertFalse(result["dependency_lockfile_changed"])
+
+    def test_dependency_or_out_of_scope_change_is_rejected(self):
+        root, base = self.repo(branch_lock=self.base_lock().replace(b"braces@3.0.3", b"braces@3.0.4"))
+        self.assert_reason(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+        shutil.rmtree(root)
+        root, base = self.repo()
+        (root / "apps/web/package.json").parent.mkdir(parents=True, exist_ok=True)
+        (root / "apps/web/package.json").write_text("{}\n", encoding="utf-8")
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+        (root / "apps/web/package.json").unlink()
+        (root / "docs").mkdir()
+        (root / "docs/other.md").write_text("x\n", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+
+    def test_remediation_mode_is_ready_for_merge_with_the_open_issue(self):
+        root, base = self.repo()
+        tracking = self.remediation_tracking()
+        accepted = self.accepted(root, base, tracking)
+        diff = rel000.validate_dependency_diff(
+            root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+        )
+        result = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            accepted,
+        )
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual("ACCEPTED_KNOWN_ADVISORY", result["additional_security_remediation_status"])
+        self.assertEqual(
+            ["Issue #5", "Issue #180"], [item["id"] for item in result["known_security_issues"]]
+        )
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: rel000.validate_issue_and_audit(
+                self.issue5(),
+                self.remediation_tracking(state="CLOSED"),
+                self.real_audit(),
+                self.real_audit(),
+                diff,
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+                accepted,
+            ),
+        )
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(root, base, self.remediation_tracking(state="CLOSED")),
+        )
+        # Without the accepted advisory the open finding keeps the remediation blocked.
+        blocked = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            [],
+        )
+        self.assertEqual("BLOCKED", blocked["dependency_security_status"])
 
 
 class TestedProvenanceResolutionTests(unittest.TestCase):

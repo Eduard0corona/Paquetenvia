@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canAuthorizeLowPrice,
   canListPendingCod,
+  lowPriceAuthorizationMatrix,
+  lowPriceAuthorizationRequiresMfa,
   canPerform,
   capabilityMatrix,
   financeOperationsMatrix,
@@ -210,7 +213,63 @@ describe("API-FIN-COD-VISIBILITY-2026-09-29 COD pending filter", () => {
     expect(openApi.slice(start, start + 800)).toContain("both listOrders and getOrderFinancials");
     expect(openApi).toContain("- name: cod_pending_reconciliation");
     for (const role of ["DISPATCHER", "PLATFORM_ADMIN"]) expect(canListPendingCod(role), role).toBe(true);
-    for (const role of ["FINANCE", "VIEWER", "DRIVER", "ALLY_ADMIN", null]) expect(canListPendingCod(role), String(role)).toBe(false);
+    for (const role of ["VIEWER", "DRIVER", "ALLY_ADMIN", null]) expect(canListPendingCod(role), String(role)).toBe(false);
     expect(requiresMfa("PLATFORM_ADMIN", "getOrderFinancials")).toBe(true);
+  });
+});
+
+describe("low price authorization field capability (LOW-PRICE-MANUAL-AUTH-2026-10-02)", () => {
+  const fieldCapabilities = readFileSync(
+    resolve(
+      process.cwd(),
+      "../../src/Modules/Organizations/Organizations.Endpoints/Authorization/TenantFieldCapabilities.cs",
+    ),
+    "utf8",
+  );
+
+  it("mirrors the AI-05 low_price_authorization row", () => {
+    const start = openApi.indexOf("\n  low_price_authorization:\n");
+    expect(start).toBeGreaterThan(openApi.indexOf("x-capability-matrix:"));
+    const row = /^ {4}createQuote\.low_price_authorization: \[([A-Z_, ]+)\]$/m.exec(openApi.slice(start));
+    expect(row).not.toBeNull();
+    expect(row![1].split(",").map((role) => role.trim())).toEqual([
+      ...lowPriceAuthorizationMatrix["createQuote.low_price_authorization"],
+    ]);
+  });
+
+  it("matches the server grants: DISPATCHER without MFA, PLATFORM_ADMIN with MFA", () => {
+    const grants = fieldCapabilities.replace(/\s+/g, " ");
+    expect(grants).toContain("new TenantCapabilityGrant(OrganizationRole.Dispatcher, false)");
+    expect(grants).toContain("new TenantCapabilityGrant(OrganizationRole.PlatformAdmin, true)");
+    expect(lowPriceAuthorizationRequiresMfa("PLATFORM_ADMIN")).toBe(true);
+    expect(lowPriceAuthorizationRequiresMfa("DISPATCHER")).toBe(false);
+  });
+
+  it.each([
+    ["DISPATCHER", true],
+    ["PLATFORM_ADMIN", true],
+    ["VIEWER", false],
+    ["FINANCE", false],
+    ["DRIVER", false],
+    ["BUSINESS_ADMIN", false],
+    [null, false],
+  ])("shows the option to %s: %s", (role, expected) => {
+    expect(canAuthorizeLowPrice(role)).toBe(expected);
+  });
+});
+
+describe("FIN-PENDING-COD-LIST-FINANCE-2026-10-02 FINANCE pending list", () => {
+  it("offers FINANCE the pending list, with MFA, and no other listOrders call", () => {
+    const start = openApi.indexOf("\n  cod_pending_reconciliation_filter:");
+    const decision = openApi.slice(start, openApi.indexOf("\n  finance_operations_status:", start));
+    expect(decision).toContain("FIN-PENDING-COD-LIST-FINANCE-2026-10-02");
+    expect(decision).toContain("only with cod_pending_reconciliation=true");
+    expect(decision).toContain("every other listOrders call by FINANCE stays 403");
+    expect(canListPendingCod("FINANCE")).toBe(true);
+    expect(canPerform("FINANCE", "listOrders")).toBe(false);
+    expect(capabilityMatrix.listOrders).not.toContain("FINANCE");
+    expect(requiresMfa("FINANCE", "getOrderFinancials")).toBe(true);
+    for (const operation of ["createOrder", "previewOrderCsv", "commitOrderCsv", "recordCodCollection"] as const)
+      expect(canPerform("FINANCE", operation), operation).toBe(false);
   });
 });

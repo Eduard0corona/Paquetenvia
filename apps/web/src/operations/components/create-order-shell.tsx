@@ -9,14 +9,16 @@ import {
 import {
   evaluateConfirmation,
   confirmationBlockerLabels,
+  lowPriceAuthorizationReasonMaximum,
   maximumPackages,
+  maximumPhoneInputLength,
   payerTypes,
   type AddressDraft,
   type PackageDraft,
   type Quote,
   vatIncludedLabel,
 } from "../contracts/create-order";
-import { mayHandleExactCoordinates } from "../contracts/capabilities";
+import { lowPriceAuthorizationRequiresMfa, mayHandleExactCoordinates } from "../contracts/capabilities";
 import { formatMxnCentsWithCurrency } from "../contracts/money";
 import { maximumServiceWindowHours, serviceWindowTimeZone } from "../contracts/service-window";
 import { formatMazatlanTime, serviceTypeLabel } from "../contracts/operations-formatters";
@@ -102,6 +104,8 @@ export function CreateOrderShell({
             controller={controller}
             disabled={state.busy}
             coordinates={mayHandleExactCoordinates(state.role)}
+            lowPriceAuthorization={state.canAuthorizeLowPrice}
+            lowPriceAuthorizationNeedsMfa={lowPriceAuthorizationRequiresMfa(state.role)}
           />
           {state.quote !== null && (
             <QuoteSummary
@@ -141,13 +145,19 @@ function QuoteForm({
   controller,
   disabled,
   coordinates,
+  lowPriceAuthorization,
+  lowPriceAuthorizationNeedsMfa,
 }: {
   readonly controller: CreateOrderController;
   readonly disabled: boolean;
   /** Exact coordinates are only ever handled by DISPATCHER and PLATFORM_ADMIN (D5). */
   readonly coordinates: boolean;
+  /** LOW-PRICE-MANUAL-AUTH-2026-10-02: only DISPATCHER and PLATFORM_ADMIN see the option. */
+  readonly lowPriceAuthorization: boolean;
+  readonly lowPriceAuthorizationNeedsMfa: boolean;
 }) {
   const [packages, setPackages] = useState(1);
+  const [authorizeLowPrice, setAuthorizeLowPrice] = useState(false);
   return (
     <form
       className="opsForm"
@@ -179,6 +189,8 @@ function QuoteForm({
           serviceType: text("service_type"),
           consolidatedRoute: data.get("consolidated_route") === "on",
           packages: packageDrafts,
+          authorizeLowPrice: lowPriceAuthorization && data.get("authorize_low_price") === "on",
+          lowPriceReason: text("low_price_reason"),
         });
       }}
     >
@@ -217,6 +229,35 @@ function QuoteForm({
         <label className="opsCheckbox"><input type="checkbox" name="consolidated_route" /> Ruta consolidada</label>
         <label>Cuenta cliente (UUID, opcional)<input name="client_account_id" /></label>
       </fieldset>
+      {lowPriceAuthorization && (
+        <fieldset>
+          <legend>Autorizar envío de bajo monto</legend>
+          <label className="opsCheckbox">
+            <input
+              type="checkbox"
+              name="authorize_low_price"
+              checked={authorizeLowPrice}
+              onChange={(event) => setAuthorizeLowPrice(event.currentTarget.checked)}
+            />{" "}
+            Autorizar envío de bajo monto
+          </label>
+          {authorizeLowPrice && (
+            <label>Motivo de la autorización
+              <input
+                name="low_price_reason"
+                maxLength={lowPriceAuthorizationReasonMaximum}
+                required
+                aria-describedby="low-price-reason-help"
+              />
+            </label>
+          )}
+          <p id="low-price-reason-help">
+            Solo para envíos de 52 MXN o menos (IVA incluido) sin ruta consolidada. El motivo queda auditado
+            con tu usuario; no escribas nombres, teléfonos, correos ni direcciones.
+            {lowPriceAuthorizationNeedsMfa && " Requiere verificar tu identidad (MFA)."}
+          </p>
+        </fieldset>
+      )}
       <button className="opsPrimary" type="submit" disabled={disabled}>
         {disabled ? "Cotizando..." : "5. Cotizar"}
       </button>
@@ -238,7 +279,18 @@ function AddressFieldset({
       <legend>{legend}</legend>
       <label>Dirección<input name={`${prefix}_address`} minLength={8} required /></label>
       <label>Contacto<input name={`${prefix}_contact`} required /></label>
-      <label>Teléfono<input name={`${prefix}_phone`} type="tel" required /></label>
+      <label>Teléfono (10 dígitos)
+        <input
+          name={`${prefix}_phone`}
+          type="tel"
+          inputMode="tel"
+          maxLength={maximumPhoneInputLength}
+          pattern="[ \-]*(?:[0-9][ \-]*){10}"
+          title="10 dígitos de México, sin +52; puedes separarlos con espacios o guiones."
+          placeholder="667 123 4567"
+          required
+        />
+      </label>
       {coordinates && (
         <>
           <label>Latitud<input name={`${prefix}_lat`} inputMode="decimal" required /></label>
@@ -287,6 +339,12 @@ function QuoteSummary({
         {serviceTypeLabel(quote.service_type)} · {quote.package_count} paquete(s) ·
         {quote.consolidated_route ? " ruta consolidada" : " sin ruta consolidada"} · vence {formatMazatlanTime(quote.expires_at)} (hora de Mazatlán)
       </p>
+      {quote.low_price_authorization !== null && (
+        <p className="opsWarning" role="status">
+          Envío de bajo monto autorizado; vigente hasta {formatMazatlanTime(quote.low_price_authorization.valid_until)} (hora de Mazatlán).
+          {quote.low_price_authorization.reason !== null && <> Motivo: {quote.low_price_authorization.reason}</>}
+        </p>
+      )}
       {blockers.length > 0 && (
         <ul className="opsWarning" role="status">
           {blockers.map((blocker) => <li key={blocker}>{confirmationBlockerLabels[blocker]}</li>)}
@@ -302,6 +360,7 @@ function QuoteSummary({
             void controller.confirmOrder({
               payerType: String(data.get("payer_type") ?? ""),
               accepted: data.get("accepted") === "on",
+              restrictedGoodsAcknowledged: data.get("restricted_goods_acknowledged") === "on",
               codAmount: String(data.get("cod_amount") ?? ""),
               serviceWindowFrom: String(data.get("service_window_from") ?? ""),
               serviceWindowTo: String(data.get("service_window_to") ?? ""),
@@ -338,7 +397,7 @@ function QuoteSummary({
                 aria-describedby="cod-amount-help"
               />
             </label>
-            <p id="cod-amount-help">Monto que el repartidor cobrará al entregar, en pesos con hasta 2 decimales (por ejemplo 150.50).</p>
+            <p id="cod-amount-help">Monto que el repartidor cobrará al entregar, en pesos con hasta 2 decimales (por ejemplo 150.50), máximo $20,000.00 por pedido.</p>
             {acceptanceVersions === null ? (
               <p className="opsWarning" role="alert">{acceptanceVersionsUnavailableMessage}</p>
             ) : (
@@ -350,6 +409,10 @@ function QuoteSummary({
             )}
             <label className="opsCheckbox">
               <input type="checkbox" name="accepted" required /> El cliente vio el desglose y aceptó términos y aviso de privacidad
+            </label>
+            <label className="opsCheckbox">
+              <input type="checkbox" name="restricted_goods_acknowledged" required /> Confirmo que el envío no contiene
+              artículos prohibidos (queda registrado en la orden)
             </label>
           </fieldset>
           <button className="opsPrimary" type="submit" disabled={busy || blockers.length > 0 || acceptanceVersions === null}>

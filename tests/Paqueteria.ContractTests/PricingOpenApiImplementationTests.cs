@@ -1,6 +1,10 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Paqueteria.Application.Idempotency;
+using Paqueteria.ContractTests.Support;
+using Pricing.Application.Quotes;
 using Pricing.Endpoints;
 
 namespace Paqueteria.ContractTests;
@@ -23,13 +27,16 @@ public sealed class PricingOpenApiImplementationTests
     public void Request_and_response_DTOs_match_AI05_without_internal_or_PII_fields()
     {
         AssertJsonProperties<CreateQuoteRequest>(
-            "client_account_id", "consolidated_route", "destination", "origin", "packages", "service_type");
+            "client_account_id", "consolidated_route", "destination", "low_price_authorization", "origin", "packages",
+            "service_type");
+        AssertJsonProperties<LowPriceAuthorizationInput>("reason");
+        AssertJsonProperties<LowPriceAuthorizationResponse>("actor_id", "reason", "valid_until");
         AssertJsonProperties<AddressInput>("address_text", "contact_name", "lat", "lng", "phone", "references");
         AssertJsonProperties<PackageInput>(
             "declared_value_cents", "description", "height_mm", "length_mm", "weight_grams", "width_mm");
         AssertJsonProperties<QuoteResponse>(
             "breakdown", "city_id", "consolidated_route", "destination_location_id", "expires_at", "id",
-            "minimum_total_cents_snapshot", "net", "origin_location_id", "package_snapshot", "pricing_policy_version",
+            "low_price_authorization", "minimum_total_cents_snapshot", "net", "origin_location_id", "package_snapshot", "pricing_policy_version",
             "pricing_tier", "request_snapshot_redacted", "rule_ids", "service_area_id", "service_type", "status", "tax", "total");
 
         var response = typeof(QuoteResponse).GetProperties().Select(property => property.Name).ToArray();
@@ -45,6 +52,38 @@ public sealed class PricingOpenApiImplementationTests
     {
         Assert.Equal(16, IdempotencyKeyPolicy.MinimumLength);
         Assert.Equal(128, IdempotencyKeyPolicy.MaximumLength);
+    }
+
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the AI-05 AddressInput.phone pattern and length bound describe
+    /// exactly what <see cref="QuotePhonePolicy"/> accepts.
+    /// </summary>
+    [Theory]
+    [InlineData("6671234567", true)]
+    [InlineData("667 123 4567", true)]
+    [InlineData("667-123-4567", true)]
+    [InlineData(" 667 - 123 - 4567 ", true)]
+    [InlineData("+52 667 123 4567", false)]
+    [InlineData("526671234567", false)]
+    [InlineData("667123456", false)]
+    [InlineData("66712345678", false)]
+    [InlineData("(667) 123 4567", false)]
+    [InlineData("667.123.4567", false)]
+    [InlineData("667\t123\t4567", false)]
+    [InlineData("６６７１２３４５６７", false)]
+    [InlineData("", false)]
+    [InlineData("-------------------------6671234567", false)]
+    public void Phone_contract_pattern_matches_the_quote_phone_policy(string phone, bool valid)
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schema = root.Mapping("components").Mapping("schemas").Mapping("AddressInput")
+            .Mapping("properties").Mapping("phone");
+        var pattern = new Regex(schema.Scalar("pattern"), RegexOptions.CultureInvariant);
+        var maximumLength = int.Parse(schema.Scalar("maxLength"), CultureInfo.InvariantCulture);
+
+        Assert.Equal(QuotePhonePolicy.MaximumInputLength, maximumLength);
+        Assert.Equal(valid, QuotePhonePolicy.IsValid(phone));
+        Assert.Equal(valid, phone.Length <= maximumLength && pattern.IsMatch(phone));
     }
 
     private static void AssertJsonProperties<T>(params string[] expected)

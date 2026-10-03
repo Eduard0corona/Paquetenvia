@@ -40,7 +40,7 @@ public sealed class Order
             string.IsNullOrWhiteSpace(pricingTier) || string.IsNullOrWhiteSpace(pricingPolicyVersion) ||
             string.IsNullOrWhiteSpace(packageSnapshot) || currency != "MXN" ||
             subtotalCents < 0 || discountCents < 0 || taxCents < 0 || totalCents < 0 ||
-            minimumTotalCentsSnapshot < 0 || codExpectedCents < 0 ||
+            minimumTotalCentsSnapshot < 0 || !OrderCodExpectationPolicy.IsValid(codExpectedCents) ||
             totalCents != checked(subtotalCents - discountCents + taxCents) ||
             serviceWindowFrom.HasValue != serviceWindowTo.HasValue ||
             (serviceWindowFrom is { } from && serviceWindowTo is { } to && from >= to))
@@ -124,7 +124,8 @@ public sealed class Order
 
     /// <summary>
     /// Creates a DRAFT order from its quote snapshot. <paramref name="codExpectedCents"/> is the dispatcher-declared
-    /// COD expectation in MXN cents (D6-COD-EXPECTED); zero means the order carries no COD.
+    /// COD expectation in MXN cents (D6-COD-EXPECTED); zero means the order carries no COD and it never exceeds
+    /// <see cref="OrderCodExpectationPolicy.MaximumCents"/> (COD-CAP-20000-2026-10-02).
     /// <paramref name="serviceWindowFrom"/> and <paramref name="serviceWindowTo"/> are the optional delivery window
     /// (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02): both or neither, with from strictly before to.
     /// </summary>

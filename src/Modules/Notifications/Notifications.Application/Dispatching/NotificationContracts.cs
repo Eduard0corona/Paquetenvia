@@ -61,6 +61,12 @@ public static class NotificationErrorCodes
     public const string ProviderTransient = "SYNTHETIC_TRANSIENT";
     public const string ProviderPermanent = "SYNTHETIC_PERMANENT";
     public const string ProviderAmbiguous = "SYNTHETIC_AMBIGUOUS_TIMEOUT";
+
+    /// <summary>
+    /// NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02: the distinct terminal reason of a WhatsApp send whose
+    /// outcome is unknown (Meta may have accepted it). The Notification ends FAILED and is never retried.
+    /// </summary>
+    public const string AmbiguousTimeout = "AMBIGUOUS_TIMEOUT";
     public const string LeaseLost = "LEASE_LOST";
 }
 
@@ -290,6 +296,11 @@ public static class NotificationRetryPolicy
 /// vocabulary of <c>notifications.apply_notification_outcome</c>, which settles the send request under
 /// its <c>lease_token</c>: SUCCESS → SENT/PROCESSED, PERMANENT → FAILED/DEAD, TRANSIENT and AMBIGUOUS →
 /// PENDING/RETRY with backoff until <c>MaximumAttempts</c>, then FAILED through the finalization lease.
+/// NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02 ("Marcar fallido y avisar"): an ambiguous WhatsApp send is
+/// AMBIGUOUS_FAILED → FAILED/DEAD with <see cref="NotificationErrorCodes.AmbiguousTimeout"/> and is never
+/// retried, so the customer never receives it twice; the FAILED status reaches the dispatchers through
+/// the existing <c>notifications.status-changed</c> → <c>NotificationStatusChanged.v1</c> operations event
+/// written in the same settle transaction. Email keeps the AMBIGUOUS retry (open owner question).
 /// </summary>
 public static class NotificationDeliveryOutcome
 {
@@ -297,15 +308,24 @@ public static class NotificationDeliveryOutcome
     public const string Transient = "TRANSIENT";
     public const string Permanent = "PERMANENT";
     public const string Ambiguous = "AMBIGUOUS";
+    public const string AmbiguousFailed = "AMBIGUOUS_FAILED";
 
-    public static string From(MessagingOutcome outcome) => outcome switch
+    public static string From(MessagingOutcome outcome, MessagingChannel channel) => (outcome, channel) switch
     {
-        MessagingOutcome.Accepted => Success,
-        MessagingOutcome.TransientFailure => Transient,
-        MessagingOutcome.PermanentFailure => Permanent,
-        MessagingOutcome.AmbiguousTimeout => Ambiguous,
+        (MessagingOutcome.Accepted, _) => Success,
+        (MessagingOutcome.TransientFailure, _) => Transient,
+        (MessagingOutcome.PermanentFailure, _) => Permanent,
+        (MessagingOutcome.AmbiguousTimeout, MessagingChannel.WhatsApp) => AmbiguousFailed,
+        (MessagingOutcome.AmbiguousTimeout, MessagingChannel.Email) => Ambiguous,
         _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped messaging outcome."),
     };
+
+    /// <summary>
+    /// The code persisted with <paramref name="outcome"/>: a terminal ambiguous outcome always records
+    /// <see cref="NotificationErrorCodes.AmbiguousTimeout"/>, never the provider code.
+    /// </summary>
+    public static string CodeFor(string outcome, string providerCode) =>
+        outcome == AmbiguousFailed ? NotificationErrorCodes.AmbiguousTimeout : providerCode;
 
     public static bool IsRetried(string outcome) => outcome is Transient or Ambiguous;
 }
