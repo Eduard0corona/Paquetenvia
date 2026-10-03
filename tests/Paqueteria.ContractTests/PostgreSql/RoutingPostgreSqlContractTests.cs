@@ -258,7 +258,6 @@ public sealed class RoutingPostgreSqlContractTests(PostgreSqlContractFixture fix
 
     private static RoutingDriverEligibilityOptions Eligibility() => new()
     {
-        PolicyVersion = "dsp-001-contract-v1",
         RequiredDocumentTypesByVehicleType = new(StringComparer.Ordinal) { ["MOTORCYCLE"] = ["IDENTITY"] },
         VehicleCapacity = new(StringComparer.Ordinal)
         {

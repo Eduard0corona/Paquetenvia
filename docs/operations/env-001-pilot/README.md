@@ -221,7 +221,8 @@ App settings wired by `apps.bicep`:
     `ProofStorage__ThreatScanner=DefenderForStorage`, `ProofStorage__AzureBlob__ServiceUri`,
     `DataProtection__Provider=PostgreSql` plus the `DataProtection__KeyEncryption__*` settings.
   - `Locations__GeocodingProvider=Manual`. The `GoogleMaps` adapter exists and its key is mapped, but
-    GATE-003 stays open until the owner records the Google spending cap; switching the value to
+    GATE-003 stays open until the owner records the Google spending cap, daily quotas and billing alerts
+    and writes the Geocoding-only key (section 6.6); switching the value to
     `GoogleMaps` in `apps.bicep` is then the only change (see `docs/development/gate-003-google-maps-geocoding.md`).
 - **Worker:** `ConnectionStrings__Paqueteria` and `ConnectionStrings__PaqueteriaWorker`, the same
   ADP-001 proof-storage and Data Protection settings, `Dispatch__AssignmentLifecycle`,
@@ -239,10 +240,18 @@ App settings wired by `apps.bicep`:
 `apps.settings.json` holds the business and policy values the owner must choose. It is appended to the
 API and Worker settings. It cannot override any platform-managed prefix, and it cannot carry a
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
-value is still `OWNER_DECISION_REQUIRED`:
+value is still `OWNER_DECISION_REQUIRED`; today no value in the file awaits the owner (it only carries
+`Finance__OperationalTimeZone=America/Mazatlan`).
 
-- `Dispatch__AssignmentPolicyVersion`
-- `Drivers__Eligibility__PolicyVersion`
+There is no assignment or driver eligibility policy version setting (POLICY-VERSIONS-PER-ORG-2026-10-02,
+owner 2026-10-02: "Por empresa, piloto-2026-10-v1"). Each organization carries its own versions in
+`organizations.organizations.assignment_policy_version` and `driver_eligibility_policy_version`; every
+organization, existing or created later, starts at `piloto-2026-10-v1`. The version applied is that of the
+organization of the driver being assigned or evaluated (the order owner when it assigns its own driver, the
+operator when the operator does). The API refuses to start if `Dispatch__AssignmentPolicyVersion` or
+`Drivers__Eligibility__PolicyVersion` is still set, and the guard rejects both names in
+`apps.settings.json` (as `REMOVED_SETTINGS`), so they no longer block the deploy. Raising an organization's
+version is a reviewed migrator step; there is no loader or API path for it yet.
 
 There is no pricing policy version setting (PRC-POLICY-VERSION-PER-ORG, owner 2026-09-28): each
 organization versions its own pricing policy in `pricing.tariff_rules.policy_version`, loaded with its
@@ -337,9 +346,10 @@ Two further caveats:
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
-3. The owner replaces every `OWNER_DECISION_REQUIRED` in `deploy/azure/pilot/apps.settings.json` and
-   the alert e-mail in `deploy/azure/pilot/observability.parameters.json` (PR → `development` →
-   `main`). Both files block the workflow while a placeholder remains.
+3. The owner replaces every `OWNER_DECISION_REQUIRED` in `deploy/azure/pilot/apps.settings.json` (none
+   remains since POLICY-VERSIONS-PER-ORG-2026-10-02) and the alert e-mail in
+   `deploy/azure/pilot/observability.parameters.json` (PR → `development` → `main`). Both files block the
+   workflow while a placeholder remains.
 4. Promote to `main` and wait for the Foundation CI push run on `main` (13/13 green). Note its run id
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
@@ -459,8 +469,22 @@ because the public lookup only compares hashes. Rotation is a template change re
 
 The workflow stops before deploying while any owner secret is missing. The API reads
 `google-maps-api-key` at startup even while `Locations__GeocodingProvider=Manual`, so the key must exist
-before the next deploy. Restrict it in Google Cloud Console to the Geocoding API and set the quota and
-budget there; those values are owner decisions still open under GATE-003.
+before the next deploy.
+
+**Google Maps key (GATE-003-MAPS-PILOT-RULES-2026-10-02, owner literal "Sí, las 4").** Before writing the
+key, the owner restricts it in Google Cloud Console (*APIs & Services → Credentials → API restrictions*) to
+the **Geocoding API only**. The pilot has no routes or ETAs, so Directions, Routes and Distance Matrix stay
+disabled; the adapter only calls `maps/api/geocode/json`, always with `components=country:MX`, and only a
+single non-partial `ROOFTOP` result in Mexico replaces the customer's pin ("Solo ROOFTOP"). The software
+cannot check the key restriction, so it is an owner step. Still owner-pending, and GATE-003 stays open
+(the pilot keeps `Locations__GeocodingProvider=Manual`) until they are recorded:
+
+- [ ] spending cap (budget) on the Google Cloud project;
+- [ ] daily quotas for the Geocoding API;
+- [ ] billing alerts;
+- [ ] the restricted key written to Key Vault as `google-maps-api-key` (commands above).
+
+See `docs/development/gate-003-google-maps-geocoding.md`.
 
 The workflow identity has *Key Vault Secrets Officer* on the vault. The owner needs a data-plane role
 too, for example a temporary *Key Vault Secrets Officer* on the vault.

@@ -18,7 +18,8 @@ public sealed record DriverEligibilitySnapshot(
     string? UserStatus,
     bool HasActiveDriverMembership,
     bool? ServiceAreaEligible,
-    IReadOnlyDictionary<string, DriverDocumentSnapshot> LatestDocuments);
+    IReadOnlyDictionary<string, DriverDocumentSnapshot> LatestDocuments,
+    string PolicyVersion);
 
 public sealed record VehicleCapacityLimits(
     int MaximumPackageCount,
@@ -29,8 +30,12 @@ public sealed record VehicleCapacityLimits(
     int MaximumHeightMillimeters,
     bool RequireDimensions);
 
+/// <summary>
+/// The shared eligibility rules (documents and vehicle capacity). Their version is not part of the rules:
+/// POLICY-VERSIONS-PER-ORG-2026-10-02 makes it per organization, so it arrives with the driver snapshot
+/// (<see cref="DriverEligibilitySnapshot.PolicyVersion"/>, the version of the driver's organization).
+/// </summary>
 public sealed record DriverEligibilityPolicyConfiguration(
-    string PolicyVersion,
     IReadOnlyDictionary<string, IReadOnlyList<string>> RequiredDocumentTypesByVehicleType,
     IReadOnlySet<string> NonExpiringDocumentTypes,
     IReadOnlyDictionary<string, VehicleCapacityLimits> VehicleCapacity);
@@ -91,7 +96,15 @@ public static class DriverEligibilityPolicy
 
         if (snapshot is null)
         {
-            return Result(null, null, policy.PolicyVersion, [DriverEligibilityRejectionCodes.DriverUnavailable]);
+            return Result(null, null, null, [DriverEligibilityRejectionCodes.DriverUnavailable]);
+        }
+
+        // POLICY-VERSIONS-PER-ORG-2026-10-02: the version is the one of the driver's organization. AI-06 makes
+        // it NOT NULL with a format CHECK, so a missing or malformed value is a broken read: fail loudly.
+        if (!OrganizationPolicyVersionFormat.IsValid(snapshot.PolicyVersion))
+        {
+            throw new InvalidOperationException(
+                "The driver organization's eligibility policy version is missing or malformed.");
         }
 
         var codes = new List<string>();
@@ -115,7 +128,7 @@ public static class DriverEligibilityPolicy
         EvaluateDocuments(evaluatedAt, snapshot, policy, codes);
         EvaluateCapacity(capacity, snapshot.VehicleType, policy, codes);
 
-        return Result(snapshot.DriverId, snapshot.VehicleType, policy.PolicyVersion, codes);
+        return Result(snapshot.DriverId, snapshot.VehicleType, snapshot.PolicyVersion, codes);
     }
 
     private static void EvaluateDocuments(
@@ -212,7 +225,7 @@ public static class DriverEligibilityPolicy
     private static DriverEligibilityResult Result(
         Guid? driverId,
         string? vehicleType,
-        string policyVersion,
+        string? policyVersion,
         IEnumerable<string> codes)
     {
         var rejections = codes

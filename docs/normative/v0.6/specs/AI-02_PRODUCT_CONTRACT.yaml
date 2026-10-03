@@ -38,6 +38,11 @@ business_decisions:
     business_200_499: 52
     business_500_plus_route_from: 45
   low_price_guard: Los precios 52 y 45 requieren consolidated_route=true o financial_override con actor, motivo y vigencia.
+  low_price_manual_authorization: 'LOW-PRICE-MANUAL-AUTH-2026-10-02 (project owner, 2026-10-02, "Sí, con autorización";
+    "En la cotización"): un envío de 52 MXN o menos con IVA incluido que no va en ruta consolidada puede pasar con
+    autorización manual de un DISPATCHER o de un PLATFORM_ADMIN con MFA satisfecho, auditada con su motivo. La
+    autorización se registra en la cotización como financial_override {actor_id, reason, valid_until}; su vigencia es la
+    de la cotización (valid_until = expires_at) y la orden la copia sin cambios.'
   base_scenario:
     requests_month: 1000
     success_rate: 0.93

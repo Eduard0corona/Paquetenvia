@@ -57,6 +57,15 @@ CREATE UNIQUE INDEX organizations_one_open_self_service_uq
   ON organizations.organizations(self_service_creator_user_id)
   WHERE self_service_creator_user_id IS NOT NULL AND status <> 'CLOSED';
 
+-- POLICY-VERSIONS-PER-ORG-2026-10-02: each organization versions its own assignment policy and its own
+-- driver eligibility policy; every organization starts at the owner's version piloto-2026-10-v1. The
+-- version applied is that of the organization of the driver being assigned or evaluated.
+ALTER TABLE organizations.organizations
+  ADD COLUMN assignment_policy_version text NOT NULL DEFAULT 'piloto-2026-10-v1'
+    CHECK (assignment_policy_version ~ '^[A-Za-z0-9._-]{1,64}$'),
+  ADD COLUMN driver_eligibility_policy_version text NOT NULL DEFAULT 'piloto-2026-10-v1'
+    CHECK (driver_eligibility_policy_version ~ '^[A-Za-z0-9._-]{1,64}$');
+
 CREATE TABLE organizations.organization_memberships (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES identity.users(id),
@@ -331,6 +340,12 @@ CREATE TABLE orders.orders (
   archived_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
+  -- ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: optional delivery window the dispatcher gives on createOrder (UTC
+  -- instants); both NULL means the order has no window of its own and the zone's schedule applies.
+  service_window_from timestamptz,
+  service_window_to timestamptz,
+  CONSTRAINT orders_service_window_check CHECK ((service_window_from IS NULL) = (service_window_to IS NULL)
+    AND (service_window_from IS NULL OR service_window_from < service_window_to)),
   CHECK (total_cents = subtotal_cents - discount_cents + tax_cents),
   CHECK (pricing_tier NOT IN ('BUSINESS_200_499','BUSINESS_500_PLUS') OR consolidated_route OR COALESCE(financial_override ?& ARRAY['actor_id','reason','valid_until'],false)),
   CHECK (total_cents >= minimum_total_cents_snapshot OR COALESCE(financial_override ?& ARRAY['actor_id','reason','valid_until'],false)),

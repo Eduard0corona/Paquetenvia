@@ -9,6 +9,7 @@ import {
 import {
   evaluateConfirmation,
   confirmationBlockerLabels,
+  lowPriceAuthorizationReasonMaximum,
   maximumPackages,
   maximumPhoneInputLength,
   payerTypes,
@@ -17,8 +18,9 @@ import {
   type Quote,
   vatIncludedLabel,
 } from "../contracts/create-order";
-import { mayHandleExactCoordinates } from "../contracts/capabilities";
+import { lowPriceAuthorizationRequiresMfa, mayHandleExactCoordinates } from "../contracts/capabilities";
 import { formatMxnCentsWithCurrency } from "../contracts/money";
+import { maximumServiceWindowHours, serviceWindowTimeZone } from "../contracts/service-window";
 import { formatMazatlanTime, serviceTypeLabel } from "../contracts/operations-formatters";
 import { operationsOrderHref } from "../routing/operations-routing";
 import type { CreateOrderController, CreateOrderState } from "../state/create-order-controller";
@@ -82,6 +84,12 @@ export function CreateOrderShell({
             )}
           </dl>
           <p>Servicio: {serviceTypeLabel(state.order.service_type)} · versión {state.order.version}</p>
+          <p>
+            Ventana de entrega:{" "}
+            {state.order.service_window === null
+              ? "horario de la zona"
+              : `${formatMazatlanTime(state.order.service_window.from)} a ${formatMazatlanTime(state.order.service_window.to)} (hora de Mazatlán)`}
+          </p>
           <div className="opsFormActions">
             <Link className="opsPrimary" href={operationsOrderHref(state.order.id)}>Abrir orden</Link>
             <button type="button" className="opsSecondary" onClick={() => controller.reset()}>Capturar otra orden</button>
@@ -96,6 +104,8 @@ export function CreateOrderShell({
             controller={controller}
             disabled={state.busy}
             coordinates={mayHandleExactCoordinates(state.role)}
+            lowPriceAuthorization={state.canAuthorizeLowPrice}
+            lowPriceAuthorizationNeedsMfa={lowPriceAuthorizationRequiresMfa(state.role)}
           />
           {state.quote !== null && (
             <QuoteSummary
@@ -135,13 +145,19 @@ function QuoteForm({
   controller,
   disabled,
   coordinates,
+  lowPriceAuthorization,
+  lowPriceAuthorizationNeedsMfa,
 }: {
   readonly controller: CreateOrderController;
   readonly disabled: boolean;
   /** Exact coordinates are only ever handled by DISPATCHER and PLATFORM_ADMIN (D5). */
   readonly coordinates: boolean;
+  /** LOW-PRICE-MANUAL-AUTH-2026-10-02: only DISPATCHER and PLATFORM_ADMIN see the option. */
+  readonly lowPriceAuthorization: boolean;
+  readonly lowPriceAuthorizationNeedsMfa: boolean;
 }) {
   const [packages, setPackages] = useState(1);
+  const [authorizeLowPrice, setAuthorizeLowPrice] = useState(false);
   return (
     <form
       className="opsForm"
@@ -173,6 +189,8 @@ function QuoteForm({
           serviceType: text("service_type"),
           consolidatedRoute: data.get("consolidated_route") === "on",
           packages: packageDrafts,
+          authorizeLowPrice: lowPriceAuthorization && data.get("authorize_low_price") === "on",
+          lowPriceReason: text("low_price_reason"),
         });
       }}
     >
@@ -211,6 +229,35 @@ function QuoteForm({
         <label className="opsCheckbox"><input type="checkbox" name="consolidated_route" /> Ruta consolidada</label>
         <label>Cuenta cliente (UUID, opcional)<input name="client_account_id" /></label>
       </fieldset>
+      {lowPriceAuthorization && (
+        <fieldset>
+          <legend>Autorizar envío de bajo monto</legend>
+          <label className="opsCheckbox">
+            <input
+              type="checkbox"
+              name="authorize_low_price"
+              checked={authorizeLowPrice}
+              onChange={(event) => setAuthorizeLowPrice(event.currentTarget.checked)}
+            />{" "}
+            Autorizar envío de bajo monto
+          </label>
+          {authorizeLowPrice && (
+            <label>Motivo de la autorización
+              <input
+                name="low_price_reason"
+                maxLength={lowPriceAuthorizationReasonMaximum}
+                required
+                aria-describedby="low-price-reason-help"
+              />
+            </label>
+          )}
+          <p id="low-price-reason-help">
+            Solo para envíos de 52 MXN o menos (IVA incluido) sin ruta consolidada. El motivo queda auditado
+            con tu usuario; no escribas nombres, teléfonos, correos ni direcciones.
+            {lowPriceAuthorizationNeedsMfa && " Requiere verificar tu identidad (MFA)."}
+          </p>
+        </fieldset>
+      )}
       <button className="opsPrimary" type="submit" disabled={disabled}>
         {disabled ? "Cotizando..." : "5. Cotizar"}
       </button>
@@ -238,8 +285,8 @@ function AddressFieldset({
           type="tel"
           inputMode="tel"
           maxLength={maximumPhoneInputLength}
-          pattern="[ \-]*(?:[0-9][ \-]*){10}"
-          title="10 dígitos de México, sin +52; puedes separarlos con espacios o guiones."
+          pattern="[ \-]*(?:\+52[ \-]*)?(?:[0-9][ \-]*){10}"
+          title="10 dígitos de México; puedes anteponer +52 y separarlos con espacios o guiones."
           placeholder="667 123 4567"
           required
         />
@@ -292,6 +339,12 @@ function QuoteSummary({
         {serviceTypeLabel(quote.service_type)} · {quote.package_count} paquete(s) ·
         {quote.consolidated_route ? " ruta consolidada" : " sin ruta consolidada"} · vence {formatMazatlanTime(quote.expires_at)} (hora de Mazatlán)
       </p>
+      {quote.low_price_authorization !== null && (
+        <p className="opsWarning" role="status">
+          Envío de bajo monto autorizado; vigente hasta {formatMazatlanTime(quote.low_price_authorization.valid_until)} (hora de Mazatlán).
+          {quote.low_price_authorization.reason !== null && <> Motivo: {quote.low_price_authorization.reason}</>}
+        </p>
+      )}
       {blockers.length > 0 && (
         <ul className="opsWarning" role="status">
           {blockers.map((blocker) => <li key={blocker}>{confirmationBlockerLabels[blocker]}</li>)}
@@ -309,9 +362,24 @@ function QuoteSummary({
               accepted: data.get("accepted") === "on",
               restrictedGoodsAcknowledged: data.get("restricted_goods_acknowledged") === "on",
               codAmount: String(data.get("cod_amount") ?? ""),
+              serviceWindowFrom: String(data.get("service_window_from") ?? ""),
+              serviceWindowTo: String(data.get("service_window_to") ?? ""),
             });
           }}
         >
+          <fieldset aria-describedby="service-window-help">
+            <legend>Ventana de entrega (opcional)</legend>
+            <label>Desde (hora de Mazatlán)
+              <input name="service_window_from" type="datetime-local" step={60} />
+            </label>
+            <label>Hasta (hora de Mazatlán)
+              <input name="service_window_to" type="datetime-local" step={60} />
+            </label>
+            <p id="service-window-help">
+              Déjala vacía para usar el horario de la zona. Máximo {maximumServiceWindowHours} horas; las horas se
+              interpretan en {serviceWindowTimeZone}, no en la zona de este equipo.
+            </p>
+          </fieldset>
           <fieldset>
             <legend>6. Aceptación</legend>
             <label>Quién paga

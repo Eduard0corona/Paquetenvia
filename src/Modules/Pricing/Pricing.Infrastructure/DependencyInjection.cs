@@ -7,6 +7,7 @@ using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Infrastructure;
+using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Tenancy;
 using Pricing.Application.Quotes;
 using Pricing.Infrastructure.Persistence;
@@ -65,6 +66,8 @@ public static class DependencyInjection
         services.AddScoped<TenantTransactionContext<PricingDbContext>>();
         services.TryAddSingleton<IClock, SystemClock>();
         services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
+        // LOW-PRICE-MANUAL-AUTH-2026-10-02: a manual low price authorization is audited in the createQuote transaction.
+        services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.AddSingleton<DisabledQuoteService>();
         services.AddScoped<PostgreSqlQuoteService>();
         services.AddScoped<IQuoteService>(serviceProvider =>

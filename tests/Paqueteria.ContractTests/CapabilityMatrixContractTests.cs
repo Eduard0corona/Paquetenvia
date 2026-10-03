@@ -325,6 +325,53 @@ public sealed class CapabilityMatrixContractTests
         Assert.Equal([TenantCapabilityGate.MfaRequiredCode], codes);
     }
 
+    /// <summary>
+    /// LOW-PRICE-MANUAL-AUTH-2026-10-02: AI-05 publishes the createQuote field capability in its own section and the
+    /// server enforces exactly it - DISPATCHER without MFA, PLATFORM_ADMIN only with MFA - while createQuote itself
+    /// keeps its D5 roles; createQuote declares the uniform 409 and both the request and the Quote carry the field.
+    /// </summary>
+    [Fact]
+    public void Low_price_authorization_field_capability_matches_AI05_and_the_server()
+    {
+        Assert.StartsWith("LOW-PRICE-MANUAL-AUTH-2026-10-02", Matrix.Scalar("low_price_authorization_decision"), StringComparison.Ordinal);
+        Assert.StartsWith("IMPLEMENTED", Matrix.Scalar("low_price_authorization_status"), StringComparison.Ordinal);
+        var section = Matrix.Mapping("low_price_authorization");
+        var (key, value) = Assert.Single(section.Children);
+        Assert.Equal("createQuote.low_price_authorization", ((YamlScalarNode)key).Value);
+        var published = ((YamlSequenceNode)value).Children.Select(node => ((YamlScalarNode)node).Value!).ToArray();
+
+        var capability = TenantFieldCapabilities.CreateQuoteLowPriceAuthorization;
+        Assert.Equal("createQuote", capability.OperationId);
+        Assert.Equal(published, capability.Grants.Select(grant => ContractValue(grant.Role)));
+        Assert.Equal(
+            [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true)],
+            capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Same(TenantCapabilities.CreateQuote, TenantCapabilities.All["createQuote"]);
+
+        var createQuote = Contract.Mapping("paths").Mapping("/quotes").Mapping("post");
+        Assert.Contains("LOW-PRICE-MANUAL-AUTH-2026-10-02", createQuote.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal("#/components/responses/Conflict", createQuote.Mapping("responses").Mapping("409").Scalar("$ref"));
+        Assert.Equal("#/components/responses/Forbidden", createQuote.Mapping("responses").Mapping("403").Scalar("$ref"));
+
+        var schemas = Contract.Mapping("components").Mapping("schemas");
+        Assert.Equal(
+            "#/components/schemas/LowPriceAuthorizationInput",
+            schemas.Mapping("CreateQuoteRequest").Mapping("properties").Mapping("low_price_authorization").Scalar("$ref"));
+        var reason = schemas.Mapping("LowPriceAuthorizationInput").Mapping("properties").Mapping("reason");
+        Assert.Equal("1", reason.Scalar("minLength"));
+        Assert.Equal(
+            Pricing.Application.Quotes.QuoteLowPriceAuthorizationPolicy.MaximumReasonLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            reason.Scalar("maxLength"));
+        var quoteField = schemas.Mapping("Quote").Mapping("properties").Mapping("low_price_authorization");
+        Assert.Equal(
+            ["valid_until"],
+            quoteField.Sequence("required").Children.Select(node => ((YamlScalarNode)node).Value));
+        Assert.Equal(
+            ["valid_until", "actor_id", "reason"],
+            quoteField.Mapping("properties").Children.Keys.Select(node => ((YamlScalarNode)node).Value));
+        Assert.Contains("getOrderFinancials", quoteField.Scalar("description"), StringComparison.Ordinal);
+    }
+
     private static bool IsMatrixOperationWithoutMfa(string operationId) =>
         OperationIds(Matrix.Mapping("operations")).Contains(operationId) &&
         !operationId.Contains("Settlement", StringComparison.Ordinal);

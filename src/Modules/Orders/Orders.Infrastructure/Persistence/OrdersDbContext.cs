@@ -52,6 +52,8 @@ public sealed class OrdersDbContext(
         entity.Property(value => value.PackageSnapshot).HasColumnName("package_snapshot").HasColumnType("jsonb").ValueGeneratedNever();
         entity.Property(value => value.FinancialOverride).HasColumnName("financial_override").HasColumnType("jsonb");
         entity.Property(value => value.CodExpectedCents).HasColumnName("cod_expected_cents").HasColumnType("bigint").ValueGeneratedNever();
+        entity.Property(value => value.ServiceWindowFrom).HasColumnName("service_window_from").HasColumnType("timestamp with time zone").ValueGeneratedNever();
+        entity.Property(value => value.ServiceWindowTo).HasColumnName("service_window_to").HasColumnType("timestamp with time zone").ValueGeneratedNever();
         entity.Property(value => value.Version).HasColumnName("version").ValueGeneratedNever();
         entity.Property(value => value.ClaimWindowEndsAt).HasColumnName("claim_window_ends_at").HasColumnType("timestamp with time zone");
         entity.Property(value => value.FinalizedAt).HasColumnName("finalized_at").HasColumnType("timestamp with time zone");

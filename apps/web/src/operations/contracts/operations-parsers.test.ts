@@ -180,6 +180,7 @@ describe("operations labels and timeline", () => {
       total: { currency: "MXN", amount_cents: 8700 },
       claim_window_ends_at: null,
       finalized_at: null,
+      service_window: null,
       timeline: [
         { event_type: "SECOND", occurred_at: "2026-07-27T02:00:00Z" },
         { event_type: "FIRST", occurred_at: "2026-07-27T01:00:00Z" },
@@ -190,5 +191,15 @@ describe("operations labels and timeline", () => {
         (event) => event.event_type,
       ),
     ).toEqual(["SECOND", "FIRST"]);
+    // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the order's own window, null meaning the zone schedule.
+    const window = { from: "2026-07-27T16:00:00+00:00", to: "2026-07-27T18:00:00+00:00" };
+    expect(parseOperationsOrderDetail({ ...detail, service_window: window }).service_window).toEqual(window);
+    expect(parseOperationsOrderDetail(detail).service_window).toBeNull();
+    const missing: Record<string, unknown> = { ...detail };
+    delete missing.service_window;
+    expect(parseOperationsOrderDetail(missing).service_window).toBeNull();
+    expect(() =>
+      parseOperationsOrderDetail({ ...detail, service_window: { from: window.to, to: window.to } }),
+    ).toThrow(OperationsContractError);
   });
 });

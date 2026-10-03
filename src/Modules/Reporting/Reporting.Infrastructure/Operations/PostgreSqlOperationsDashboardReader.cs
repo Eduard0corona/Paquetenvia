@@ -53,7 +53,9 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             destination_zone.zone_type,
             order_row.total_cents,
             order_row.minimum_total_cents_snapshot,
-            order_row.financial_override
+            order_row.financial_override,
+            order_row.service_window_from,
+            order_row.service_window_to
           FROM orders.orders AS order_row
           LEFT JOIN organizations.organizations AS owner_organization
             ON owner_organization.id = order_row.owner_org_id
@@ -142,7 +144,9 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             WHEN page.financial_override ?& ARRAY['actor_id', 'reason', 'valid_until']
               THEN 'AUTHORIZED_OVERRIDE'
             ELSE NULL
-          END AS cost_warning
+          END AS cost_warning,
+          page.service_window_from,
+          page.service_window_to
         FROM page
         LEFT JOIN active_assignment AS assignment
           ON assignment.order_id = page.id AND assignment.row_number = 1
@@ -401,6 +405,26 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             throw new OperationsDashboardContractException("Cost warning is invalid.");
         }
 
+        // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the order's delivery window; both bounds or neither (enforced by
+        // orders_service_window_check), so a half-set or non-UTC window is an inconsistent projection.
+        OperationsTimeWindow? deliveryWindow = null;
+        if (!reader.IsDBNull(26) || !reader.IsDBNull(27))
+        {
+            if (reader.IsDBNull(26) || reader.IsDBNull(27))
+            {
+                throw new OperationsDashboardContractException("Delivery window is invalid.");
+            }
+
+            var windowFrom = reader.GetFieldValue<DateTimeOffset>(26);
+            var windowTo = reader.GetFieldValue<DateTimeOffset>(27);
+            if (windowFrom.Offset != TimeSpan.Zero || windowTo.Offset != TimeSpan.Zero || windowFrom >= windowTo)
+            {
+                throw new OperationsDashboardContractException("Delivery window is invalid.");
+            }
+
+            deliveryWindow = new OperationsTimeWindow(windowFrom, windowTo);
+        }
+
         return new OperationsDashboardOrder(
             orderId,
             reader.GetInt32(1),
@@ -418,7 +442,8 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             assignment,
             location,
             costWarning,
-            OperationsDashboardProjectionPolicy.IsUnassignedAlert(status, assignment is not null));
+            OperationsDashboardProjectionPolicy.IsUnassignedAlert(status, assignment is not null),
+            deliveryWindow);
     }
 
     private static void ValidateRequest(OperationsDashboardRequest request)

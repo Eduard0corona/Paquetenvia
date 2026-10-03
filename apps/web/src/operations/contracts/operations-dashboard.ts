@@ -131,6 +131,8 @@ export interface OperationsOrderDetail {
   readonly total: OperationsMoney;
   readonly claim_window_ends_at: string | null;
   readonly finalized_at: string | null;
+  /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: null means the zone's schedule applies. */
+  readonly service_window: OperationsTimeWindow | null;
   readonly timeline: readonly OperationsOrderTimelineItem[];
 }
 

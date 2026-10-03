@@ -157,6 +157,16 @@ public sealed class OperationsDashboardPostgreSqlTests(
             item.GetProperty("cost_warning").GetString());
         Assert.Equal(JsonValueKind.Null, item.GetProperty("assignment").ValueKind);
         Assert.Equal(JsonValueKind.Null, item.GetProperty("latest_driver_location").ValueKind);
+        // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the order's own window is its delivery window.
+        var deliveryWindow = item.GetProperty("delivery_window");
+        Assert.Equal(["from", "to"], deliveryWindow.EnumerateObject().Select(property => property.Name).ToArray());
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-07-27T17:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            deliveryWindow.GetProperty("from").GetDateTimeOffset());
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-07-27T20:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            deliveryWindow.GetProperty("to").GetDateTimeOffset());
+        Assert.Equal(JsonValueKind.Null, item.GetProperty("pickup_window").ValueKind);
 
         foreach (var query in new[]
         {
@@ -353,7 +363,7 @@ public sealed class OperationsDashboardPostgreSqlTests(
               subtotal_cents,discount_cents,tax_cents,total_cents,
               minimum_total_cents_snapshot,currency,pricing_policy_version,
               package_snapshot,financial_override,cod_expected_cents,version,
-              created_at,updated_at)
+              created_at,updated_at,service_window_from,service_window_to)
             VALUES
               (
                 '71000000-0000-0000-0000-000000000001','ORD_obs_ready',
@@ -368,7 +378,8 @@ public sealed class OperationsDashboardPostgreSqlTests(
                 'URGENT','OCCASIONAL',false,'SENDER','READY_FOR_PICKUP',
                 9000,0,0,9000,10000,'MXN','obs-v1','[]',
                 '{"actor_id":"synthetic","reason":"synthetic","valid_until":"2026-08-01T00:00:00Z"}',
-                0,2,'2026-07-20T01:00:00Z','2026-07-27T01:00:00Z'
+                0,2,'2026-07-20T01:00:00Z','2026-07-27T01:00:00Z',
+                '2026-07-27T17:00:00Z','2026-07-27T20:00:00Z'
               ),
               (
                 '71000000-0000-0000-0000-000000000002','ORD_obs_assigned',
@@ -383,7 +394,8 @@ public sealed class OperationsDashboardPostgreSqlTests(
                 'SAME_DAY','OCCASIONAL',false,'SENDER','DELIVERING',
                 10000,0,0,10000,10000,'MXN','obs-v1','[]',
                 '{"actor_id":"synthetic","reason":"synthetic","valid_until":"2026-08-01T00:00:00Z"}',
-                0,3,'2026-07-20T02:00:00Z','2026-07-27T02:00:00Z'
+                0,3,'2026-07-20T02:00:00Z','2026-07-27T02:00:00Z',
+                NULL,NULL
               )
             ON CONFLICT DO NOTHING;
             INSERT INTO dispatch.assignments(

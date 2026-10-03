@@ -27,13 +27,16 @@ public sealed class PricingOpenApiImplementationTests
     public void Request_and_response_DTOs_match_AI05_without_internal_or_PII_fields()
     {
         AssertJsonProperties<CreateQuoteRequest>(
-            "client_account_id", "consolidated_route", "destination", "origin", "packages", "service_type");
+            "client_account_id", "consolidated_route", "destination", "low_price_authorization", "origin", "packages",
+            "service_type");
+        AssertJsonProperties<LowPriceAuthorizationInput>("reason");
+        AssertJsonProperties<LowPriceAuthorizationResponse>("actor_id", "reason", "valid_until");
         AssertJsonProperties<AddressInput>("address_text", "contact_name", "lat", "lng", "phone", "references");
         AssertJsonProperties<PackageInput>(
             "declared_value_cents", "description", "height_mm", "length_mm", "weight_grams", "width_mm");
         AssertJsonProperties<QuoteResponse>(
             "breakdown", "city_id", "consolidated_route", "destination_location_id", "expires_at", "id",
-            "minimum_total_cents_snapshot", "net", "origin_location_id", "package_snapshot", "pricing_policy_version",
+            "low_price_authorization", "minimum_total_cents_snapshot", "net", "origin_location_id", "package_snapshot", "pricing_policy_version",
             "pricing_tier", "request_snapshot_redacted", "rule_ids", "service_area_id", "service_type", "status", "tax", "total");
 
         var response = typeof(QuoteResponse).GetProperties().Select(property => property.Name).ToArray();
@@ -52,15 +55,25 @@ public sealed class PricingOpenApiImplementationTests
     }
 
     /// <summary>
-    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the AI-05 AddressInput.phone pattern and length bound describe
-    /// exactly what <see cref="QuotePhonePolicy"/> accepts.
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the AI-05
+    /// AddressInput.phone pattern and length bound describe exactly what <see cref="QuotePhonePolicy"/> accepts.
     /// </summary>
     [Theory]
     [InlineData("6671234567", true)]
     [InlineData("667 123 4567", true)]
     [InlineData("667-123-4567", true)]
     [InlineData(" 667 - 123 - 4567 ", true)]
-    [InlineData("+52 667 123 4567", false)]
+    [InlineData("+52 667 123 4567", true)]
+    [InlineData("+52-6671234567", true)]
+    [InlineData("+526671234567", true)]
+    [InlineData(" +52 - 667 123 4567", true)]
+    [InlineData("+1 667 123 4567", false)]
+    [InlineData("+ 52 667 123 4567", false)]
+    [InlineData("+52 1 667 123 4567", false)]
+    [InlineData("+52+52 667 123 4567", false)]
+    [InlineData("667 123 4567 +52", false)]
+    [InlineData("+52", false)]
+    [InlineData("+52--------------------6671234567", false)]
     [InlineData("526671234567", false)]
     [InlineData("667123456", false)]
     [InlineData("66712345678", false)]

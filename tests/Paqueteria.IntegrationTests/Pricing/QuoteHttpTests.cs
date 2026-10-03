@@ -85,15 +85,20 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
     }
 
     /// <summary>
-    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: a contact phone is ten Mexican digits once ASCII spaces and hyphens
-    /// are removed; a country prefix or any other character is the declared 422.
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: a contact phone is ten
+    /// Mexican digits once ASCII spaces, hyphens and an optional leading +52 are removed; another country prefix,
+    /// 52 without the plus sign or any other character is the declared 422.
     /// </summary>
     [Theory]
     [InlineData("6671111111", HttpStatusCode.Created)]
     [InlineData("667 111 1111", HttpStatusCode.Created)]
     [InlineData("667-111-1111", HttpStatusCode.Created)]
-    [InlineData("+526671111111", HttpStatusCode.UnprocessableEntity)]
-    [InlineData("+52 667 111 1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("+526671111111", HttpStatusCode.Created)]
+    [InlineData("+52 667 111 1111", HttpStatusCode.Created)]
+    [InlineData("+52-6671111111", HttpStatusCode.Created)]
+    [InlineData("+1 667 111 1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("+52 1 667 111 1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("+ 52 667 111 1111", HttpStatusCode.UnprocessableEntity)]
     [InlineData("526671111111", HttpStatusCode.UnprocessableEntity)]
     [InlineData("667111111", HttpStatusCode.UnprocessableEntity)]
     [InlineData("(667) 111 1111", HttpStatusCode.UnprocessableEntity)]
