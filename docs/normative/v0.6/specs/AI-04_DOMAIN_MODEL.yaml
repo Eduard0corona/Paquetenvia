@@ -447,6 +447,13 @@ outbox_invariants:
   with AMBIGUOUS_TIMEOUT plus a notifications.status-changed event (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03)
 - purge is owned by paqueteria_maintenance and can delete only old PROCESSED/DEAD rows
 - runtime producers provide all inserted values and emit no INSERT RETURNING
+- when the operator organization of an order (operator_org_id distinct from owner_org_id) assigns it (DSP-002), the
+  outbox rows and the audit rows of that action carry the owner organization (owner_org_id, tenant_context and
+  audit org_id are the owner, so the owner sees it in real time) and are written only through the SECURITY DEFINER
+  functions security.append_operator_order_outbox and security.append_operator_order_audit of
+  paqueteria_operator_outbox_executor, in the same transaction as the assignment; they refuse any caller whose
+  only tenant is not that order's operator, any other topic, action, audience or payload, and a repeated row; when
+  the owner acts it keeps inserting directly under RLS (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03)
 public_tracking_contract:
   public_statuses:
   - CREATED

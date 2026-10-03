@@ -1,5 +1,23 @@
 # Changelog
 
+## Outbox y auditoría a nombre del dueño cuando asigna el operador (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03) — 2026-10-03
+
+- Respuestas literales del project owner: "Función segura a nombre del dueño" y "Sí, el dueño lo ve"; registradas en
+  `decision-log.md`.
+- Corrige un fallo confirmado: cuando la organización operadora de un pedido ajeno asignaba a su repartidor (DSP-002),
+  RLS rechazaba las filas de outbox y auditoría etiquetadas con el dueño (42501) y la asignación se revertía.
+- AI-18: nuevo rol `paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS` con `SELECT`/`INSERT` por columna exactos
+  (sin UPDATE/DELETE, sin CREATE, sin membresía runtime) y aserciones 29-31. AI-06: solo una nota junto a
+  `audit_logs_tenant`/`outbox_tenant` (políticas sin cambio). AI-03 §25.2 y AI-04 `outbox_invariants` registran la regla.
+- Lane Dispatch `20261003000100_AddOperatorOwnerOutboxExecutor`: `security.append_operator_order_outbox` y
+  `security.append_operator_order_audit` (SECURITY DEFINER, `search_path=pg_catalog, pg_temp`, EXECUTE solo para
+  `paqueteria_app`); escriben una fila cada una solo si el contexto es exactamente el operador de la orden, el actor es
+  despachador o admin activo del operador y la fila corresponde a la asignación recién hecha (tema/acción, audiencia,
+  payload y versión en lista permitida, sin repetidos); si no, 42501. Rollback: solo elimina las dos funciones.
+- DSP-002 usa esas funciones únicamente cuando actúa el operador; el dueño conserva los inserts directos. Realtime
+  autoriza como audiencia de conductor al repartidor del operador de esa asignación exacta; no se amplía otra audiencia.
+- ORD-002 sin cambios (solo el dueño transiciona); extenderlo a operadores queda como decisión aparte.
+
 ## AI-02 y AI-15 alineados con la excepción WhatsApp de leases vencidos (DOC-AI02-AI15-STALE-LEASE-SYNC-2026-10-03) — 2026-10-03
 
 - Respuesta literal del project owner: "Sí, actualizarlo"; registrada en `decision-log.md`

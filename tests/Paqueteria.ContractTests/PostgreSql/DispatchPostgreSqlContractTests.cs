@@ -1134,7 +1134,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         await using var security = fixture.AdminDataSource.CreateCommand(
             """
             SELECT
-              (SELECT h."MigrationId" FROM platform.__ef_migrations_history_dispatch h),
+              (SELECT string_agg(h."MigrationId", ',' ORDER BY h."MigrationId")
+               FROM platform.__ef_migrations_history_dispatch h),
               (SELECT pg_get_userbyid(c.relowner)
                FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
                WHERE n.nspname='platform' AND c.relname='__ef_migrations_history_dispatch'),
@@ -1150,7 +1151,10 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             """);
         await using var reader = await security.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.Equal("20260723_AdoptCanonicalDispatchAssignmentsBaseline", reader.GetString(0));
+        // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the adoption is followed by the operator outbox executor lane.
+        Assert.Equal(
+            "20260723_AdoptCanonicalDispatchAssignmentsBaseline," + AddOperatorOwnerOutboxExecutor.MigrationId,
+            reader.GetString(0));
         Assert.Equal("paqueteria_migrator", reader.GetString(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));

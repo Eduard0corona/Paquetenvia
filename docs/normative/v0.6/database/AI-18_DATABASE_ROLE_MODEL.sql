@@ -14,6 +14,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_registration_executor NOLOGIN BYPASSRLS; EXCE
 DO $$ BEGIN CREATE ROLE paqueteria_session_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_master_data_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -384,6 +385,46 @@ GRANT SELECT (deployment_class,gate_007_closed) ON platform.master_data_deployme
 GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_master_data_executor;
 GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
 
+-- Operator actions on another owner's order are a separate security capability
+-- (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03, project owner: "Función segura a nombre del dueño";
+-- "Sí, el dueño lo ve"; AI-03 §24.3). When the operator organization of an order (orders.operator_org_id,
+-- distinct from owner_org_id) assigns its own driver (DSP-002), its transaction carries only the operator in
+-- app.current_org_ids, so outbox_tenant and audit_logs_tenant (AI-06) refuse the owner-tagged rows the owner's
+-- operations audience needs. paqueteria_operator_outbox_executor owns the only path that writes them: two
+-- SECURITY DEFINER functions installed by the Dispatch migration lane (20261003000100_AddOperatorOwnerOutboxExecutor)
+-- after this baseline, each with search_path=pg_catalog, pg_temp, EXECUTE revoked from PUBLIC and granted only
+-- to paqueteria_app:
+--   security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamptz,timestamptz)
+--     inserts one platform.outbox_events row (orders.status-changed, orders.timeline-event-added or
+--     dispatch.assignment-changed, aggregate Order, priority 50, PENDING, tenant_context exactly the owner);
+--   security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamptz)
+--     inserts one platform.audit_logs row (ASSIGNMENT_CREATED/Assignment or ORDER_STATUS_CHANGED/Order) for
+--     the owner organization and the calling actor.
+-- Each runs inside the caller's transaction, takes every inserted value from the caller (no default, no
+-- RETURNING) and writes only after proving in the same call that app.current_org_ids is exactly one
+-- organization, that it is the order's operator_org_id and differs from owner_org_id, that the given owner is
+-- the order owner, that app.current_user_id is an ACTIVE user with an ACTIVE DISPATCHER or PLATFORM_ADMIN
+-- membership of the operator, that the order is ASSIGNED and its ORDER_STATUS_CHANGED event at the current
+-- version was written by that actor for that operator and names an ACCEPTED OWN assignment of the order whose
+-- operator is the caller, that topic or action, audience, payload keys and identifiers match that evidence, and
+-- that the same row was not already written for that order version or assignment; anything else raises 42501
+-- and writes nothing. When the owner itself acts, the runtime keeps inserting directly under RLS. The executor
+-- has no outbox lifecycle (UPDATE/DELETE), bootstrap, lifecycle, cleanup, registration, session, master data or
+-- purge right, no USAGE on schema security and no broad business-schema grant; its outbox and audit SELECT is
+-- limited to the columns that prove a row is not repeated. The functions' rollback drops only them; the role and
+-- these grants then stay inert.
+REVOKE paqueteria_operator_outbox_executor FROM paqueteria_app, paqueteria_worker;
+GRANT USAGE ON SCHEMA identity,organizations,orders,dispatch,platform TO paqueteria_operator_outbox_executor;
+GRANT SELECT (id,status) ON identity.users TO paqueteria_operator_outbox_executor;
+GRANT SELECT (user_id,organization_id,role,status) ON organizations.organization_memberships TO paqueteria_operator_outbox_executor;
+GRANT SELECT (id,public_id,owner_org_id,operator_org_id,status,version) ON orders.orders TO paqueteria_operator_outbox_executor;
+GRANT SELECT (id,order_id,owner_org_id,operator_org_id,aggregate_version,event_type,public_event_code,payload,actor_id,occurred_at) ON orders.order_events TO paqueteria_operator_outbox_executor;
+GRANT SELECT (id,order_id,owner_org_id,operator_org_id,driver_id,assignment_type,status,cost_cents) ON dispatch.assignments TO paqueteria_operator_outbox_executor;
+GRANT SELECT (owner_org_id,topic,aggregate_type,aggregate_id,aggregate_version) ON platform.outbox_events TO paqueteria_operator_outbox_executor;
+GRANT INSERT (id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at) ON platform.outbox_events TO paqueteria_operator_outbox_executor;
+GRANT SELECT (org_id,action,entity_type,entity_id,payload_redacted) ON platform.audit_logs TO paqueteria_operator_outbox_executor;
+GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_operator_outbox_executor;
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
@@ -413,3 +454,6 @@ GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
 -- 26. paqueteria_master_data_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime role and only to deployment principals (members of paqueteria_migrator) and, once the Pricing MDM-001 lane is recorded, owns only security.load_master_data(uuid,uuid,json,bytea,boolean) (the first published jsonb overload is dropped by that lane's Up and Down). Both master data roles and their grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
 -- 27. paqueteria_master_data_executor holds only USAGE on schemas identity, organizations, locations, pricing, drivers and platform and exactly the column grants above (including SELECT(deployment_class,gate_007_closed) on platform.master_data_deployment_gate), plus SELECT and INSERT on pricing.tariff_rules.policy_version once the PRC-POLICY-VERSION-PER-ORG loader step is recorded and SELECT and INSERT on platform.master_data_operator_refs(operator_login, operator_ref) once the MDM-001-LOADER-HARDENING step is recorded: no table-wide grant, no DELETE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration or session privilege.
 -- 28. paqueteria_master_data_loader is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no runtime role and to no member that can use it while also being a member of paqueteria_migrator, owns nothing and holds only USAGE on schema security plus EXECUTE on security.load_master_data(uuid,uuid,json,bytea,boolean); that function's ACL is exactly its owner and the loader, it is SECURITY DEFINER with search_path=pg_catalog, pg_temp, and platform.master_data_deployment_gate forces RLS with only the master_data_deployment_gate_migrator policy and grants nothing to PUBLIC or the runtime roles; once the MDM-001-LOADER-HARDENING step is recorded, the function refuses any session whose login is a member of paqueteria_migrator, and platform.master_data_operator_refs forces RLS with only the master_data_operator_refs_migrator policy, is owned by paqueteria_migrator and grants nothing to PUBLIC, the runtime roles or the loader.
+-- 29. paqueteria_operator_outbox_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime or bootstrap role and, once the Dispatch DSP-OPERATOR-OWNER-OUTBOX lane is recorded, owns only security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamptz,timestamptz) and security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamptz). The role and its grants persist after that lane is rolled back: AI-18 declares them, and without the functions they are inert.
+-- 30. paqueteria_operator_outbox_executor holds only USAGE on schemas identity, organizations, orders, dispatch and platform and exactly the column grants above, none grantable: no table-wide grant, no UPDATE or DELETE, no CREATE, no other table, no outbox lifecycle, bootstrap, lifecycle, cleanup, registration, session, master data or purge privilege.
+-- 31. both operator outbox functions are SECURITY DEFINER with search_path=pg_catalog, pg_temp, contain no dynamic SQL and no RETURNING, and only paqueteria_app may EXECUTE them; PUBLIC, paqueteria_worker and paqueteria_bootstrap may not.

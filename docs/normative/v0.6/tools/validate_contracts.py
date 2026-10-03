@@ -130,6 +130,27 @@ MASTER_DATA_UPDATE_GRANTS = [
     "GRANT UPDATE (status) ON drivers.driver_service_areas TO paqueteria_master_data_executor;",
 ]
 
+# DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator outbox executor reads only the evidence that ties an
+# owner-tagged row to the operator's DSP-002 assignment and inserts only outbox and audit rows; its functions are
+# installed and granted by the Dispatch lane, never by AI-18.
+OPERATOR_OUTBOX_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA identity,organizations,orders,dispatch,platform TO paqueteria_operator_outbox_executor;",
+    "GRANT SELECT (id,status) ON identity.users TO paqueteria_operator_outbox_executor;",
+    "GRANT SELECT (user_id,organization_id,role,status) ON organizations.organization_memberships TO paqueteria_operator_outbox_executor;",
+    "GRANT SELECT (id,public_id,owner_org_id,operator_org_id,status,version) ON orders.orders TO paqueteria_operator_outbox_executor;",
+    "GRANT SELECT (id,order_id,owner_org_id,operator_org_id,aggregate_version,event_type,public_event_code,payload,actor_id,occurred_at) ON orders.order_events TO paqueteria_operator_outbox_executor;",
+    "GRANT SELECT (id,order_id,owner_org_id,operator_org_id,driver_id,assignment_type,status,cost_cents) ON dispatch.assignments TO paqueteria_operator_outbox_executor;",
+    "GRANT SELECT (owner_org_id,topic,aggregate_type,aggregate_id,aggregate_version) ON platform.outbox_events TO paqueteria_operator_outbox_executor;",
+    "GRANT INSERT (id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at) ON platform.outbox_events TO paqueteria_operator_outbox_executor;",
+    "GRANT SELECT (org_id,action,entity_type,entity_id,payload_redacted) ON platform.audit_logs TO paqueteria_operator_outbox_executor;",
+    "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_operator_outbox_executor;",
+]
+
+OPERATOR_OUTBOX_FUNCTIONS = [
+    "security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamptz,timestamptz)",
+    "security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamptz)",
+]
+
 BFF_TABLES = ["identity.bff_sessions", "identity.bff_logout_jtis"]
 
 BFF_SESSION_FUNCTIONS = [
@@ -143,7 +164,8 @@ BFF_SESSION_FUNCTIONS = [
 
 
 def executor_grant_errors(role_sql: str) -> list[str]:
-    """ADR-034, OPS-003-CLEANUP-ROLE, REG-001, BFF-SESSION-TABLE-SHAPE and MDM-001 exact grant sets for the dedicated executors."""
+    """ADR-034, OPS-003-CLEANUP-ROLE, REG-001, BFF-SESSION-TABLE-SHAPE, MDM-001 and DSP-OPERATOR-OWNER-OUTBOX exact grant
+    sets for the dedicated executors."""
     return (
         role_grant_errors(
             role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
@@ -174,6 +196,12 @@ def executor_grant_errors(role_sql: str) -> list[str]:
             "paqueteria_master_data_loader",
             MASTER_DATA_LOADER_GRANTS,
             "Master data loader (MDM-001-OPERATOR-LOADER)",
+        )
+        + role_grant_errors(
+            role_sql,
+            "paqueteria_operator_outbox_executor",
+            OPERATOR_OUTBOX_EXECUTOR_GRANTS,
+            "Operator outbox executor (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03)",
         )
     )
 
@@ -222,6 +250,36 @@ def bff_session_errors(schema_sql: str, role_sql: str) -> list[str]:
                 errors.append(f"{table} granted beyond paqueteria_session_executor: {normalized}")
         if ("_bff_session" in normalized or "_bff_logout_jti" in normalized) and "ON FUNCTION" in normalized:
             errors.append(f"BFF session functions are installed by their lane, not granted by AI-18: {normalized}")
+    return errors
+
+
+def operator_outbox_errors(schema_sql: str, role_sql: str) -> list[str]:
+    """DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: owner-tagged outbox and audit rows of an operator action are
+    written only through the operator outbox executor's functions; the role is never granted to anyone and its
+    functions are granted by the Dispatch lane, not by AI-18."""
+    errors = []
+    executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
+    for fragment in [
+        "CREATE ROLE paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_operator_outbox_executor FROM paqueteria_app, paqueteria_worker;",
+        "DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03",
+        "search_path=pg_catalog, pg_temp",
+    ] + OPERATOR_OUTBOX_FUNCTIONS:
+        if fragment not in role_sql:
+            errors.append(f"Missing operator outbox executor contract in AI-18: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_operator_outbox_executor\s+TO", executable_roles):
+        errors.append("Operator outbox executor membership granted contrary to DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03")
+    if re.search(r"GRANT[^;]*append_operator_order_[^;]*;", executable_roles):
+        errors.append("The operator outbox functions are granted by the Dispatch lane, not by AI-18")
+    if re.search(r"GRANT[^;]*\b(UPDATE|DELETE|TRUNCATE)\b[^;]*TO\s+paqueteria_operator_outbox_executor", executable_roles):
+        errors.append("The operator outbox executor may only read evidence and insert outbox and audit rows")
+    for fragment in [
+        "CREATE POLICY outbox_tenant ON platform.outbox_events USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));",
+        "CREATE POLICY audit_logs_tenant ON platform.audit_logs USING (security.app_allowed_org(org_id)) WITH CHECK (security.app_allowed_org(org_id));",
+        "DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03",
+    ]:
+        if fragment not in schema_sql:
+            errors.append(f"Missing operator outbox contract in AI-06: {fragment}")
     return errors
 
 
@@ -695,6 +753,8 @@ def main() -> int:
     if re.search(r"CREATE\s+POLICY[^;]*ON\s+platform\.master_data_deployment_gate\b", SQL_LINE_COMMENT.sub("", sql)):
         errors.append("The deployment gate policy belongs to AI-18 (it names paqueteria_migrator), not AI-06")
     checks.append("Master data loader: executor-owned function, operator-only EXECUTE, exact column grants, GATE-007 marker")
+    errors.extend(operator_outbox_errors(sql, role_sql))
+    checks.append("Operator outbox executor: dedicated NOLOGIN role, exact column grants, lane-granted API-only functions")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.

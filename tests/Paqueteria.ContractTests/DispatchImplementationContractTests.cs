@@ -249,6 +249,32 @@ public sealed class DispatchImplementationContractTests
         Assert.DoesNotContain("dispatch.assignment-created", source, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Operator_owner_rows_go_only_through_the_definer_functions_and_only_when_the_operator_acts()
+    {
+        // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator path calls the two SECURITY DEFINER functions
+        // with every value supplied, never inserts directly and never reads a value back.
+        var writer = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Dispatch", "Dispatch.Infrastructure",
+            "Assignments", "OperatorOwnerEventWriter.cs"));
+        Assert.Contains("SELECT security.append_operator_order_outbox(", writer, StringComparison.Ordinal);
+        Assert.Contains("SELECT security.append_operator_order_audit(", writer, StringComparison.Ordinal);
+        Assert.DoesNotContain("INSERT INTO", writer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("RETURNING", writer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ExecuteScalar", writer, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteReader", writer, StringComparison.Ordinal);
+
+        var coordinator = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Dispatch", "Dispatch.Infrastructure",
+            "Assignments", "PostgreSqlAssignmentToOrderCoordinator.cs"));
+        Assert.Contains("var actingAsOperator = operatorOrganizationId is not null;", coordinator, StringComparison.Ordinal);
+        Assert.Equal(3, Count(coordinator, "OperatorOwnerEventWriter.AppendOutboxAsync("));
+        Assert.Equal(2, Count(coordinator, "OperatorOwnerEventWriter.AppendAuditAsync("));
+        Assert.Equal(5, Count(coordinator, "if (actingAsOperator)"));
+    }
+
     private static void AssertJsonProperties<T>(params string[] expected)
     {
         var actual = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
