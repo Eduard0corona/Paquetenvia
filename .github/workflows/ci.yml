@@ -1734,9 +1734,10 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/issues/${related_issue_number}" \
             > "$RUNNER_TEMP/rel000-related-security-tracking-raw.json"
           known_advisory_inputs=()
-          for known_issue_number in $(
+          known_issue_numbers="$(
             python -c 'import json; data=json.load(open("tests/fixtures/rel-000/security-tracking.json", encoding="utf-8")); print(" ".join(str(int(value)) for value in data.get("known_advisory_issues", {}).values()))'
-          ); do
+          )"
+          for known_issue_number in $known_issue_numbers; do
             gh api "repos/${GITHUB_REPOSITORY}/issues/${known_issue_number}" \
               > "$RUNNER_TEMP/rel000-known-advisory-tracking-raw-${known_issue_number}.json"
             known_advisory_inputs+=(--known-advisory-input "$RUNNER_TEMP/rel000-known-advisory-tracking-raw-${known_issue_number}.json")
