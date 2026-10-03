@@ -210,7 +210,23 @@ describe("API-FIN-COD-VISIBILITY-2026-09-29 COD pending filter", () => {
     expect(openApi.slice(start, start + 800)).toContain("both listOrders and getOrderFinancials");
     expect(openApi).toContain("- name: cod_pending_reconciliation");
     for (const role of ["DISPATCHER", "PLATFORM_ADMIN"]) expect(canListPendingCod(role), role).toBe(true);
-    for (const role of ["FINANCE", "VIEWER", "DRIVER", "ALLY_ADMIN", null]) expect(canListPendingCod(role), String(role)).toBe(false);
+    for (const role of ["VIEWER", "DRIVER", "ALLY_ADMIN", null]) expect(canListPendingCod(role), String(role)).toBe(false);
     expect(requiresMfa("PLATFORM_ADMIN", "getOrderFinancials")).toBe(true);
+  });
+});
+
+describe("FIN-PENDING-COD-LIST-FINANCE-2026-10-02 FINANCE pending list", () => {
+  it("offers FINANCE the pending list, with MFA, and no other listOrders call", () => {
+    const start = openApi.indexOf("\n  cod_pending_reconciliation_filter:");
+    const decision = openApi.slice(start, openApi.indexOf("\n  finance_operations_status:", start));
+    expect(decision).toContain("FIN-PENDING-COD-LIST-FINANCE-2026-10-02");
+    expect(decision).toContain("only with cod_pending_reconciliation=true");
+    expect(decision).toContain("every other listOrders call by FINANCE stays 403");
+    expect(canListPendingCod("FINANCE")).toBe(true);
+    expect(canPerform("FINANCE", "listOrders")).toBe(false);
+    expect(capabilityMatrix.listOrders).not.toContain("FINANCE");
+    expect(requiresMfa("FINANCE", "getOrderFinancials")).toBe(true);
+    for (const operation of ["createOrder", "previewOrderCsv", "commitOrderCsv", "recordCodCollection"] as const)
+      expect(canPerform("FINANCE", operation), operation).toBe(false);
   });
 });

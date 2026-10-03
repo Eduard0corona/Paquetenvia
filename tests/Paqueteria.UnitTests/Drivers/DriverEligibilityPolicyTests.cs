@@ -31,6 +31,31 @@ public sealed class DriverEligibilityPolicyTests
     }
 
     [Fact]
+    public void Policy_version_is_the_one_of_the_driver_organization_and_absent_for_an_invisible_driver()
+    {
+        // POLICY-VERSIONS-PER-ORG-2026-10-02: the version travels with the driver snapshot, read from the
+        // driver's organization; the shared rules carry none.
+        var own = Evaluate(snapshot: Snapshot() with { PolicyVersion = "org-b.2026-11-v2" });
+        var rejected = Evaluate(snapshot: Snapshot() with { PolicyVersion = "org-c-v3", ProfileStatus = "SUSPENDED" });
+        var invisible = DriverEligibilityPolicy.Evaluate(Command(), null, Policy());
+
+        Assert.Equal("org-b.2026-11-v2", own.PolicyVersion);
+        Assert.Equal("org-c-v3", rejected.PolicyVersion);
+        Assert.Null(invisible.PolicyVersion);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not safe")]
+    [InlineData("piloto-2026-10-v1\n")]
+    [InlineData("12345678901234567890123456789012345678901234567890123456789012345")]
+    public void Malformed_organization_policy_version_fails_loudly(string version)
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => Evaluate(snapshot: Snapshot() with { PolicyVersion = version }));
+    }
+
+    [Fact]
     public void Rejections_follow_the_normative_category_order()
     {
         var snapshot = Snapshot() with
@@ -292,7 +317,8 @@ public sealed class DriverEligibilityPolicyTests
         new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal)
         {
             ["IDENTITY"] = Document(),
-        });
+        },
+        "dsp-synthetic-v1");
 
     private static DriverDocumentSnapshot Document(
         string status = "VALID",
@@ -304,7 +330,6 @@ public sealed class DriverEligibilityPolicyTests
             hasExpiry ? expiresAt ?? Now.AddDays(1) : null);
 
     private static DriverEligibilityPolicyConfiguration Policy(string[]? nonExpiring = null) => new(
-        "dsp-synthetic-v1",
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
             ["MOTORCYCLE"] = ["IDENTITY"],

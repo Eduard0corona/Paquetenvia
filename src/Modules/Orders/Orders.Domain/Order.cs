@@ -38,7 +38,7 @@ public sealed class Order
             string.IsNullOrWhiteSpace(pricingTier) || string.IsNullOrWhiteSpace(pricingPolicyVersion) ||
             string.IsNullOrWhiteSpace(packageSnapshot) || currency != "MXN" ||
             subtotalCents < 0 || discountCents < 0 || taxCents < 0 || totalCents < 0 ||
-            minimumTotalCentsSnapshot < 0 || codExpectedCents < 0 ||
+            minimumTotalCentsSnapshot < 0 || !OrderCodExpectationPolicy.IsValid(codExpectedCents) ||
             totalCents != checked(subtotalCents - discountCents + taxCents))
         {
             throw new ArgumentException("The order snapshot is invalid.");
@@ -111,7 +111,8 @@ public sealed class Order
 
     /// <summary>
     /// Creates a DRAFT order from its quote snapshot. <paramref name="codExpectedCents"/> is the dispatcher-declared
-    /// COD expectation in MXN cents (D6-COD-EXPECTED); zero means the order carries no COD.
+    /// COD expectation in MXN cents (D6-COD-EXPECTED); zero means the order carries no COD and it never exceeds
+    /// <see cref="OrderCodExpectationPolicy.MaximumCents"/> (COD-CAP-20000-2026-10-02).
     /// </summary>
     public static Order Create(
         Guid id,

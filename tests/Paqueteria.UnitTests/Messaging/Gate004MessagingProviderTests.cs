@@ -596,14 +596,43 @@ public sealed class Gate004MessagingProviderTests
     // ------------------------------------------------------------------ Outbox outcome mapping
 
     [Theory]
-    [InlineData(MessagingOutcome.Accepted, "SUCCESS", false)]
-    [InlineData(MessagingOutcome.TransientFailure, "TRANSIENT", true)]
-    [InlineData(MessagingOutcome.PermanentFailure, "PERMANENT", false)]
-    [InlineData(MessagingOutcome.AmbiguousTimeout, "AMBIGUOUS", true)]
-    public void Every_messaging_outcome_maps_onto_the_outbox_outcome_vocabulary(MessagingOutcome outcome, string expected, bool retried)
+    [InlineData(MessagingOutcome.Accepted, MessagingChannel.WhatsApp, "SUCCESS", false)]
+    [InlineData(MessagingOutcome.TransientFailure, MessagingChannel.WhatsApp, "TRANSIENT", true)]
+    [InlineData(MessagingOutcome.PermanentFailure, MessagingChannel.WhatsApp, "PERMANENT", false)]
+    [InlineData(MessagingOutcome.AmbiguousTimeout, MessagingChannel.WhatsApp, "AMBIGUOUS_FAILED", false)]
+    [InlineData(MessagingOutcome.Accepted, MessagingChannel.Email, "SUCCESS", false)]
+    [InlineData(MessagingOutcome.TransientFailure, MessagingChannel.Email, "TRANSIENT", true)]
+    [InlineData(MessagingOutcome.PermanentFailure, MessagingChannel.Email, "PERMANENT", false)]
+    [InlineData(MessagingOutcome.AmbiguousTimeout, MessagingChannel.Email, "AMBIGUOUS", true)]
+    public void Every_messaging_outcome_maps_onto_the_outbox_outcome_vocabulary(
+        MessagingOutcome outcome,
+        MessagingChannel channel,
+        string expected,
+        bool retried)
     {
-        Assert.Equal(expected, NotificationDeliveryOutcome.From(outcome));
+        Assert.Equal(expected, NotificationDeliveryOutcome.From(outcome, channel));
         Assert.Equal(retried, NotificationDeliveryOutcome.IsRetried(expected));
+    }
+
+    [Theory]
+    [InlineData(MessagingResultCodes.Timeout)]
+    [InlineData(MessagingResultCodes.ResponseInvalid)]
+    [InlineData(MessagingResultCodes.SyntheticAmbiguous)]
+    public void Ambiguous_whatsapp_sends_fail_terminally_with_the_distinct_reason_and_are_never_retried(string providerCode)
+    {
+        // NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02: "Marcar fallido y avisar". Meta may have accepted the
+        // message, so a retry could deliver it twice: FAILED with AMBIGUOUS_TIMEOUT, no RETRY.
+        var outcome = NotificationDeliveryOutcome.From(MessagingOutcome.AmbiguousTimeout, MessagingChannel.WhatsApp);
+
+        Assert.Equal(NotificationDeliveryOutcome.AmbiguousFailed, outcome);
+        Assert.False(NotificationDeliveryOutcome.IsRetried(outcome));
+        Assert.Equal("AMBIGUOUS_TIMEOUT", NotificationDeliveryOutcome.CodeFor(outcome, providerCode));
+        Assert.Equal(NotificationErrorCodes.AmbiguousTimeout, NotificationDeliveryOutcome.CodeFor(outcome, providerCode));
+        Assert.Equal(
+            providerCode,
+            NotificationDeliveryOutcome.CodeFor(
+                NotificationDeliveryOutcome.From(MessagingOutcome.AmbiguousTimeout, MessagingChannel.Email),
+                providerCode));
     }
 
     [Fact]

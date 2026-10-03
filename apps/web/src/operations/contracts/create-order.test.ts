@@ -3,14 +3,18 @@ import { acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
+  codAmountAboveCapMessage,
   codExpectedCents,
   confirmationBlockerLabels,
   CreateOrderContractError,
   evaluateConfirmation,
   lowPriceGuardTotalCents,
+  normalizeMexicanPhone,
   parseCreatedOrder,
   parseQuote,
+  restrictedGoodsRequiredMessage,
 } from "./create-order";
+import { maximumCodExpectedCents } from "./money";
 import { draft, orderResponse, quoteId, quoteResponse } from "./create-order.fixtures";
 
 const orderId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
@@ -52,6 +56,41 @@ describe("createQuote request", () => {
     expect(result.errors.join(" ")).not.toContain("corta");
   });
 
+  // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: 10 Mexican digits; only spaces and hyphens are removed.
+  it.each([
+    ["6671234567", "6671234567"],
+    ["667 123 4567", "6671234567"],
+    ["667-123-4567", "6671234567"],
+    [" 667 - 123 - 4567 ", "6671234567"],
+  ])("sends the phone %s normalized as %s", (typed, normalized) => {
+    expect(normalizeMexicanPhone(typed)).toBe(normalized);
+    const result = buildCreateQuoteBody(draft({ origin: { ...draft().origin, phone: typed } }));
+    expect(result.ok && result.body.origin.phone).toBe(normalized);
+  });
+
+  it.each([
+    "+526671234567",
+    "+52 667 123 4567",
+    "526671234567",
+    "667123456",
+    "66712345678",
+    "(667) 123 4567",
+    "667.123.4567",
+    "667\t123\t4567",
+    "６６７１２３４５６７",
+    "667123456a",
+    "-".repeat(23) + "6671234567",
+  ])("refuses the phone %j without echoing it", (typed) => {
+    expect(normalizeMexicanPhone(typed)).toBeNull();
+    const result = buildCreateQuoteBody(draft({ destination: { ...draft().destination, phone: typed } }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toEqual([
+      "El teléfono de destino debe tener 10 dígitos de México, sin +52; puedes separarlos con espacios o guiones.",
+    ]);
+    expect(result.errors.join(" ")).not.toContain(typed);
+  });
+
   it.each([["91", "0"], ["0", "-181"], ["1e1", "0"], ["", "0"]])(
     "refuses out-of-range coordinates %s,%s",
     (lat, lng) => {
@@ -61,7 +100,7 @@ describe("createQuote request", () => {
 });
 
 describe("createOrder request", () => {
-  const acceptance = { payerType: "SENDER", accepted: true };
+  const acceptance = { payerType: "SENDER", accepted: true, restrictedGoodsAcknowledged: true };
   const versions = { termsVersion: "terms-2026.09", privacyVersion: "privacy_v3" };
 
   it("builds the AI-05 CreateOrderRequest with the observed acceptance time", () => {
@@ -77,12 +116,22 @@ describe("createOrder request", () => {
           accepted_at: "2026-09-28T17:00:00.000Z",
           acceptance_channel: "ASSISTED",
         },
+        restricted_goods_acknowledged: true,
       },
     });
   });
 
-  it.each([{ payerType: "" }, { accepted: false }])("refuses an incomplete acceptance %o", (change) => {
-    expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, versions, new Date()).ok).toBe(false);
+  it.each([{ payerType: "" }, { accepted: false }, { restrictedGoodsAcknowledged: false }])(
+    "refuses an incomplete acceptance %o",
+    (change) => {
+      expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, versions, new Date()).ok).toBe(false);
+    },
+  );
+
+  it("names the missing prohibited-goods confirmation (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)", () => {
+    expect(
+      buildCreateOrderBody(quoteId, { ...acceptance, restrictedGoodsAcknowledged: false }, versions, new Date()),
+    ).toEqual({ ok: false, errors: [restrictedGoodsRequiredMessage] });
   });
 
   it.each([
@@ -90,7 +139,9 @@ describe("createOrder request", () => {
     ["150.5", 15_050],
     ["150", 15_000],
     ["0.01", 1],
-    [" 1234567.89 ", 123_456_789],
+    [" 19999.99 ", 1_999_999],
+    ["20000", 2_000_000],
+    ["20000.00", 2_000_000],
     ["0.1", 10],
     ["0.29", 29],
   ])("sends the typed COD %s as exact integer cents (D6-COD-EXPECTED)", (typed, cents) => {
@@ -98,6 +149,17 @@ describe("createOrder request", () => {
     expect(result.ok && result.body.cod_expected_cents).toBe(cents);
     expect(Number.isSafeInteger(cents)).toBe(true);
   });
+
+  it.each(["20000.01", "20001", "1234567.89", "9999999999999"])(
+    "refuses a COD above the 20,000 MXN cap (COD-CAP-20000-2026-10-02): %s",
+    (typed) => {
+      const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.errors).toContain(codAmountAboveCapMessage);
+      expect(codAmountAboveCapMessage).toBe("El cobro contra entrega no puede superar $20,000.00 MXN por pedido.");
+      expect(maximumCodExpectedCents).toBe(2_000_000);
+    },
+  );
 
   it.each(["", "   ", "0", "0.00", undefined])("sends no COD field for %o", (typed) => {
     const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());

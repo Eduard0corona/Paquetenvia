@@ -162,6 +162,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         Guid? ownerOrganizationId,
         string? cursor,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty ||
@@ -183,8 +184,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             new TenantDatabaseExecutionContext(actorId, [organizationId]),
             (dbContext, token) => ListWithinTransactionAsync(
                 dbContext,
+                actorId,
+                organizationId,
                 status,
                 codPendingReconciliation,
+                mfaSatisfied,
                 hasCursor,
                 cursorCreatedAt,
                 cursorId,
@@ -226,6 +230,10 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                     "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
                     CultureInfo.InvariantCulture));
             writer.WriteString("acceptance_channel", command.Acceptance.AcceptanceChannel);
+            // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher's confirmation is part of the request. Only
+            // true is ever accepted, so every fingerprint carries it; a key reserved before the decision belongs to a
+            // request that is now rejected anyway.
+            writer.WriteBoolean("restricted_goods_acknowledged", command.RestrictedGoodsAcknowledged);
             // D6-COD-EXPECTED: the declared COD is part of the request, so replaying a key with another amount is
             // IDEMPOTENCY_CONFLICT. Zero (no COD) is omitted, which keeps every pre-COD fingerprint byte-identical
             // and makes an absent field and an explicit zero the same request, as they are the same order.
@@ -358,6 +366,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             Guid.NewGuid(),
             order,
             command.ActorId,
+            command.RestrictedGoodsAcknowledged,
             now,
             cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.EventInserted, cancellationToken);
@@ -379,6 +388,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             pricing_tier = order.PricingTier,
             total_cents = order.TotalCents,
             cod_expected_cents = order.CodExpectedCents,
+            restricted_goods_acknowledged = command.RestrictedGoodsAcknowledged,
             request_id = command.RequestId,
         }, JsonOptions);
         await auditWriter.WriteAsync(
@@ -429,8 +439,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
 
     private async Task<OrderPageResult> ListWithinTransactionAsync(
         OrdersDbContext dbContext,
+        Guid actorId,
+        Guid organizationId,
         string? status,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         bool hasCursor,
         DateTimeOffset cursorCreatedAt,
         Guid cursorId,
@@ -438,6 +451,22 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     {
         var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
         var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
+        if (codPendingReconciliation)
+        {
+            // FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the COD filter reveals financial state, so, as the finance
+            // reads do, the getOrderFinancials authorization is re-checked inside this transaction before any
+            // order is read; the endpoint decision alone is never the only barrier.
+            await using var authorization = CreateCommand(
+                connection, transaction, OrderCodPendingListAuthorization.Sql);
+            authorization.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
+            authorization.Parameters.Add(P("org", NpgsqlDbType.Uuid, organizationId));
+            authorization.Parameters.Add(P("mfa", NpgsqlDbType.Boolean, mfaSatisfied));
+            if (await authorization.ExecuteScalarAsync(cancellationToken) is not true)
+            {
+                throw new OrderListForbiddenException();
+            }
+        }
+
         await using var command = CreateCommand(
             connection,
             transaction,
@@ -534,6 +563,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             !OrderInputPolicy.TryParsePayerType(command.PayerType, out _) ||
             !OrderInputPolicy.IsCodExpectedCents(command.CodExpectedCents) ||
+            !command.RestrictedGoodsAcknowledged ||
             command.Acceptance is null ||
             !OrderAcceptanceInputPolicy.IsValid(
                 command.Acceptance.TermsVersion,
@@ -863,14 +893,18 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         Guid eventId,
         Order order,
         Guid actorId,
+        bool restrictedGoodsAcknowledged,
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the append-only creation event is the order's record of the
+        // dispatcher's no-prohibited-goods confirmation; its actor_id and occurred_at say who confirmed and when.
         var payload = JsonSerializer.Serialize(new
         {
             order_id = order.Id,
             quote_id = order.QuoteId,
             status = "DRAFT",
+            restricted_goods_acknowledged = restrictedGoodsAcknowledged,
         }, JsonOptions);
         await using var command = CreateCommand(
             connection,

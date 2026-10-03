@@ -92,6 +92,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "terms-synthetic-v1",
@@ -143,6 +144,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = field == "terms_version" ? version : "terms-synthetic-v1",
@@ -203,6 +205,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = version,
@@ -216,6 +219,45 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
 
         await AssertUniformConflictAsync(response);
         Assert.Equal(0, factory.CreateCallCount);
+    }
+
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: only the JSON literal true confirms the shipment holds no prohibited
+    /// goods; every other value is the uniform 409 and never reaches the service.
+    /// </summary>
+    [Theory]
+    [InlineData("false")]
+    [InlineData("null")]
+    [InlineData("\"true\"")]
+    [InlineData("1")]
+    [InlineData("{}")]
+    public async Task POST_rejects_a_restricted_goods_confirmation_other_than_true(string literal)
+    {
+        factory.ResetCreateObservations();
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/orders");
+        request.Headers.Add("Idempotency-Key", Key());
+        request.Content = new StringContent(
+            $"{{\"quote_id\":\"{Guid.NewGuid():D}\",\"payer_type\":\"SENDER\"," +
+            "\"acceptance\":{\"terms_version\":\"terms-synthetic-v1\",\"privacy_version\":\"privacy-synthetic-v1\"," +
+            $"\"accepted_at\":\"{RecentUtc}\",\"acceptance_channel\":\"WEB\"}}," +
+            $"\"restricted_goods_acknowledged\":{literal}}}",
+            System.Text.Encoding.UTF8,
+            "application/json");
+
+        using var response = await client.SendAsync(request);
+
+        await AssertUniformConflictAsync(response);
+        Assert.Equal(0, factory.CreateCallCount);
+    }
+
+    [Fact]
+    public async Task POST_hands_the_restricted_goods_confirmation_to_the_service()
+    {
+        factory.ResetCreateObservations();
+        using var response = await CreateAsync(Guid.NewGuid(), Key());
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.True(factory.LastCreateCommand!.RestrictedGoodsAcknowledged);
     }
 
     [Fact]
@@ -257,6 +299,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
     [InlineData("terms_version")]
     [InlineData("privacy_version")]
     [InlineData("acceptance_channel")]
+    [InlineData("restricted_goods_acknowledged")]
     public async Task POST_rejects_other_missing_required_fields_without_invoking_service(string missingField)
     {
         factory.ResetCreateObservations();
@@ -441,6 +484,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         {
             quote_id = quoteId,
             payer_type = payerType,
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "terms-synthetic-v1",
@@ -455,28 +499,39 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         "quote_id" => JsonContent.Create(new
         {
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = ValidAcceptance(),
         }),
         "quote_id_empty" => JsonContent.Create(new
         {
             quote_id = Guid.Empty,
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = ValidAcceptance(),
         }),
         "payer_type" => JsonContent.Create(new
         {
             quote_id = Guid.NewGuid(),
+            restricted_goods_acknowledged = true,
+            acceptance = ValidAcceptance(),
+        }),
+        "restricted_goods_acknowledged" => JsonContent.Create(new
+        {
+            quote_id = Guid.NewGuid(),
+            payer_type = "SENDER",
             acceptance = ValidAcceptance(),
         }),
         "acceptance" => JsonContent.Create(new
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
         }),
         "terms_version" => JsonContent.Create(new
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 privacy_version = "privacy-synthetic-v1",
@@ -488,6 +543,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "terms-synthetic-v1",
@@ -499,6 +555,7 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "terms-synthetic-v1",

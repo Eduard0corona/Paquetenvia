@@ -109,6 +109,12 @@ describe("CSV-001 preview parser", () => {
       }),
     ],
     [
+      "a valid row above the 20,000 MXN COD cap",
+      previewResponse({
+        rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 2_000_001 }],
+      }),
+    ],
+    [
       "a COD given as text",
       previewResponse({
         rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: "150" }],
@@ -138,6 +144,15 @@ describe("CSV-001 preview parser", () => {
   it("keeps the integer COD of each valid row and none for an invalid row (D6-COD-EXPECTED)", () => {
     const preview = parseCsvImportPreview(invalidPreviewResponse());
     expect(preview.rows.map((row) => row.cod_expected_cents)).toEqual([15_050, null]);
+  });
+
+  it("accepts a valid row at exactly the 20,000 MXN COD cap", () => {
+    const preview = parseCsvImportPreview(
+      previewResponse({
+        rows: [{ row_number: 2, quote_id: quoteId, payer_type: "SENDER", valid: true, errors: [], cod_expected_cents: 2_000_000 }],
+      }),
+    );
+    expect(preview.rows[0].cod_expected_cents).toBe(2_000_000);
   });
 
   it("reports an invalid COD cell with its own code", () => {

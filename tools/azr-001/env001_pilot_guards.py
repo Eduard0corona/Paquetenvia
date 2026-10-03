@@ -175,9 +175,12 @@ PLATFORM_MANAGED_PREFIXES = (
 )
 # Settings that no longer exist. The API refuses to start while one is configured, so the pilot refuses
 # them before deploying. PRC-POLICY-VERSION-PER-ORG: each organization versions its own pricing policy on
-# its tariff rules; there is no global pricing policy version.
+# its tariff rules; there is no global pricing policy version. POLICY-VERSIONS-PER-ORG-2026-10-02: each
+# organization versions its own assignment and driver eligibility policies; there is no global version.
 REMOVED_SETTINGS = {
     "Pricing__PricingPolicyVersion": "PRC-POLICY-VERSION-PER-ORG (the version comes from each organization's tariff rules)",
+    "Dispatch__AssignmentPolicyVersion": "POLICY-VERSIONS-PER-ORG-2026-10-02 (the version comes from each organization)",
+    "Drivers__Eligibility__PolicyVersion": "POLICY-VERSIONS-PER-ORG-2026-10-02 (the version comes from the driver's organization)",
 }
 SETTING_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]*(__[A-Za-z0-9]+)+$")
 DIGEST_REGEX_LITERAL = r"^sha256:[0-9a-f]{64}$"

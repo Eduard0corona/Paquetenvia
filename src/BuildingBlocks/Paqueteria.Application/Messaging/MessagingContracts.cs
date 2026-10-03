@@ -16,7 +16,8 @@ public enum MessagingChannel
 /// <item><see cref="Accepted"/>: the provider accepted the message (SENT, outbox PROCESSED).</item>
 /// <item><see cref="TransientFailure"/>: nothing was delivered and a later attempt may succeed (RETRY with backoff).</item>
 /// <item><see cref="PermanentFailure"/>: retrying cannot succeed (FAILED, outbox DEAD).</item>
-/// <item><see cref="AmbiguousTimeout"/>: the request may have reached the provider (RETRY with backoff, may duplicate).</item>
+/// <item><see cref="AmbiguousTimeout"/>: the request may have reached the provider. WhatsApp: FAILED with
+/// <c>AMBIGUOUS_TIMEOUT</c>, never retried (NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02); email: RETRY with backoff.</item>
 /// </list>
 /// </summary>
 public enum MessagingOutcome

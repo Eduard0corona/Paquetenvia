@@ -70,7 +70,8 @@ function UploadForm({
         <p>
           Cobro contra entrega (opcional): agrega al final la columna <code>{csvCodColumn}</code> con el monto en
           centavos enteros, sin punto, comas ni signos (por ejemplo <code>15050</code> para $150.50). Deja la celda
-          vacía si la orden no lleva cobro.
+          vacía si la orden no lleva cobro. El tope es $20,000.00 MXN por pedido (<code>2000000</code> centavos); una
+          fila con más se marca inválida y el lote no se puede confirmar.
         </p>
         <label>Archivo CSV
           <input
@@ -139,11 +140,25 @@ function PreviewReport({
         </table>
       )}
       {committable && state.canCommit && (
-        <div className="opsFormActions">
-          <button className="opsPrimary" type="button" disabled={state.busy} onClick={() => void controller.commit()}>
-            {state.busy ? "Confirmando…" : `Confirmar lote de ${preview.valid_rows} orden(es)`}
-          </button>
-        </div>
+        <form
+          className="opsForm"
+          autoComplete="off"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            void controller.commit(data.get("restricted_goods_acknowledged") === "on");
+          }}
+        >
+          <label className="opsCheckbox">
+            <input type="checkbox" name="restricted_goods_acknowledged" required /> Confirmo que ningún envío del
+            archivo contiene artículos prohibidos
+          </label>
+          <div className="opsFormActions">
+            <button className="opsPrimary" type="submit" disabled={state.busy}>
+              {state.busy ? "Confirmando…" : `Confirmar lote de ${preview.valid_rows} orden(es)`}
+            </button>
+          </div>
+        </form>
       )}
     </>
   );

@@ -324,6 +324,142 @@ public sealed class NotificationsPostgreSqlContractTests(PostgreSqlContractFixtu
     }
 
     [Theory]
+    [InlineData("AMBIGUOUS_FAILED", "AMBIGUOUS_TIMEOUT")]
+    [InlineData("AMBIGUOUS", "SYNTHETIC_AMBIGUOUS_TIMEOUT")]
+    public async Task Ambiguous_whatsapp_send_fails_terminally_without_retry_and_alerts_operations(
+        string outcome,
+        string code)
+    {
+        // NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02 ("Marcar fallido y avisar"): FAILED with AMBIGUOUS_TIMEOUT,
+        // the send request DEAD (never claimed, requeued or recovered again) and one FAILED
+        // notifications.status-changed row for the operations audience, all in the settle transaction.
+        var owner = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            "INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type) VALUES (@owner,'NTF WhatsApp','NTF WhatsApp','BUSINESS')",
+            new NpgsqlParameter("owner", owner));
+        var (notificationId, sendId) = await InsertPendingSendAsync(owner, "WHATSAPP");
+        var claim = await ClaimByIdAsync("claim_notifications_outbox", sendId);
+        var apply =
+            $"SELECT security.apply_notification_outcome(@outbox,@lease,@notification,@version,'{outcome}','{code}',clock_timestamp(),clock_timestamp())";
+
+        Assert.False(await WorkerScalarAsync<bool>(
+            apply,
+            new NpgsqlParameter("outbox", sendId), new NpgsqlParameter("lease", Guid.NewGuid()),
+            new NpgsqlParameter("notification", notificationId), new NpgsqlParameter("version", 1)));
+        Assert.True(await WorkerScalarAsync<bool>(
+            apply,
+            new NpgsqlParameter("outbox", sendId), new NpgsqlParameter("lease", claim.Lease),
+            new NpgsqlParameter("notification", notificationId), new NpgsqlParameter("version", 1)));
+        Assert.False(await WorkerScalarAsync<bool>(
+            apply,
+            new NpgsqlParameter("outbox", sendId), new NpgsqlParameter("lease", claim.Lease),
+            new NpgsqlParameter("notification", notificationId), new NpgsqlParameter("version", 2)));
+
+        await using (var state = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT n.status,n.attempts,n.version,n.last_provider_attempt_code,
+              o.status,o.last_error,o.lease_token IS NULL,o.processed_at IS NOT NULL,
+              (SELECT string_agg(h.status || ':' || COALESCE(h.provider_attempt_code,'-'),',' ORDER BY h.version)
+                 FROM notifications.notification_status_events h WHERE h.notification_id=n.id),
+              (SELECT count(*)::integer FROM platform.outbox_events e
+                 WHERE e.topic='notifications.status-changed' AND e.aggregate_id=n.id),
+              (SELECT e.payload::text FROM platform.outbox_events e
+                 WHERE e.topic='notifications.status-changed' AND e.aggregate_id=n.id)
+            FROM notifications.notifications n
+            JOIN platform.outbox_events o ON o.id=@send
+            WHERE n.id=@notification
+            """))
+        {
+            state.Parameters.AddWithValue("send", sendId);
+            state.Parameters.AddWithValue("notification", notificationId);
+            await using var reader = await state.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("FAILED", reader.GetString(0));
+            Assert.Equal(1, reader.GetInt32(1));
+            Assert.Equal(2, reader.GetInt32(2));
+            Assert.Equal("AMBIGUOUS_TIMEOUT", reader.GetString(3));
+            Assert.Equal("DEAD", reader.GetString(4));
+            Assert.Equal("AMBIGUOUS_TIMEOUT", reader.GetString(5));
+            Assert.True(reader.GetBoolean(6));
+            Assert.True(reader.GetBoolean(7));
+            Assert.Equal("FAILED:AMBIGUOUS_TIMEOUT", reader.GetString(8));
+            Assert.Equal(1, reader.GetInt32(9));
+            using var payload = System.Text.Json.JsonDocument.Parse(reader.GetString(10));
+            Assert.Equal(
+                ["attempts", "channel", "notification_id", "occurred_at", "schema_version", "status"],
+                payload.RootElement.EnumerateObject().Select(static property => property.Name).Order(StringComparer.Ordinal));
+            Assert.Equal("WHATSAPP", payload.RootElement.GetProperty("channel").GetString());
+            Assert.Equal("FAILED", payload.RootElement.GetProperty("status").GetString());
+            Assert.Equal(1, payload.RootElement.GetProperty("attempts").GetInt32());
+        }
+
+        // DEAD is outside every claim (PENDING/RETRY) and stale-recovery (PROCESSING) predicate, and only
+        // maintenance purge may remove it: the send is never retried or requeued.
+        Assert.Equal("DEAD:1", await AdminScalarAsync<string>(
+            "SELECT status || ':' || attempts::text FROM platform.outbox_events WHERE id=@id",
+            new NpgsqlParameter("id", sendId)));
+    }
+
+    [Theory]
+    [InlineData("IN_APP", "AMBIGUOUS_FAILED", "AMBIGUOUS_TIMEOUT")]
+    [InlineData("EMAIL", "AMBIGUOUS_FAILED", "AMBIGUOUS_TIMEOUT")]
+    [InlineData("WHATSAPP", "AMBIGUOUS_FAILED", "SYNTHETIC_AMBIGUOUS_TIMEOUT")]
+    [InlineData("WHATSAPP", "PERMANENT", "AMBIGUOUS_TIMEOUT")]
+    public async Task Terminal_ambiguous_outcome_is_refused_outside_whatsapp_and_without_its_reason(
+        string channel,
+        string outcome,
+        string code)
+    {
+        var owner = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            "INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type) VALUES (@owner,'NTF Refused','NTF Refused','BUSINESS')",
+            new NpgsqlParameter("owner", owner));
+        var (notificationId, sendId) = await InsertPendingSendAsync(owner, channel);
+        var claim = await ClaimByIdAsync("claim_notifications_outbox", sendId);
+
+        var refused = await Assert.ThrowsAsync<PostgresException>(() => WorkerScalarAsync<bool>(
+            $"SELECT security.apply_notification_outcome(@outbox,@lease,@notification,1,'{outcome}','{code}',clock_timestamp(),clock_timestamp())",
+            new NpgsqlParameter("outbox", sendId), new NpgsqlParameter("lease", claim.Lease),
+            new NpgsqlParameter("notification", notificationId)));
+        Assert.Equal("22023", refused.SqlState);
+        Assert.Equal("PENDING:PROCESSING", await AdminScalarAsync<string>(
+            """
+            SELECT n.status || ':' || o.status FROM notifications.notifications n
+            JOIN platform.outbox_events o ON o.id=@send WHERE n.id=@notification
+            """,
+            new NpgsqlParameter("send", sendId), new NpgsqlParameter("notification", notificationId)));
+
+        // Settle the row so no PROCESSING lease is left for the stale-recovery tests of this collection.
+        Assert.True(await WorkerScalarAsync<bool>(
+            "SELECT security.apply_notification_outcome(@outbox,@lease,@notification,1,'PERMANENT','SYNTHETIC_PERMANENT',clock_timestamp(),NULL)",
+            new NpgsqlParameter("outbox", sendId), new NpgsqlParameter("lease", claim.Lease),
+            new NpgsqlParameter("notification", notificationId)));
+    }
+
+    [Theory]
+    [InlineData("IN_APP")]
+    [InlineData("EMAIL")]
+    public async Task Ambiguous_send_outside_whatsapp_keeps_the_retry(string channel)
+    {
+        var owner = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            "INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type) VALUES (@owner,'NTF Retry Kept','NTF Retry Kept','BUSINESS')",
+            new NpgsqlParameter("owner", owner));
+        var (notificationId, sendId) = await InsertPendingSendAsync(owner, channel);
+        var claim = await ClaimByIdAsync("claim_notifications_outbox", sendId);
+        Assert.True(await WorkerScalarAsync<bool>(
+            "SELECT security.apply_notification_outcome(@outbox,@lease,@notification,1,'AMBIGUOUS','SYNTHETIC_AMBIGUOUS_TIMEOUT',clock_timestamp(),timestamptz '2999-01-01 00:00:00Z')",
+            new NpgsqlParameter("outbox", sendId), new NpgsqlParameter("lease", claim.Lease),
+            new NpgsqlParameter("notification", notificationId)));
+        Assert.Equal("PENDING:RETRY:SYNTHETIC_AMBIGUOUS_TIMEOUT", await AdminScalarAsync<string>(
+            """
+            SELECT n.status || ':' || o.status || ':' || o.last_error FROM notifications.notifications n
+            JOIN platform.outbox_events o ON o.id=@send WHERE n.id=@notification
+            """,
+            new NpgsqlParameter("send", sendId), new NpgsqlParameter("notification", notificationId)));
+    }
+
+    [Theory]
     [InlineData(false, "TEMPLATE_NOT_FOUND")]
     [InlineData(true, "TEMPLATE_VERSION_UNKNOWN")]
     public async Task Template_lookup_is_exact_tenant_version_channel_and_immutable(
@@ -453,6 +589,43 @@ public sealed class NotificationsPostgreSqlContractTests(PostgreSqlContractFixtu
           timestamptz '2000-01-01 00:00:00Z',timestamptz '2000-01-01 00:00:00Z')
         """,
         new NpgsqlParameter("id", source), new NpgsqlParameter("owner", owner), new NpgsqlParameter("order", order));
+
+    /// <summary>
+    /// A PENDING Notification on <paramref name="channel"/> with its send request, written by the test
+    /// administrator: no production path creates WHATSAPP or EMAIL rows yet (GATE-004 lane pending).
+    /// </summary>
+    private async Task<(Guid Notification, Guid Send)> InsertPendingSendAsync(Guid owner, string channel)
+    {
+        var notification = Guid.NewGuid();
+        var send = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO notifications.notifications(
+              id,owner_org_id,order_id,recipient_user_id,channel,status,attempts,version,
+              template_key,template_version,variables_snapshot,source_event_id,created_at,updated_at)
+            VALUES(@notification,@owner,NULL,@recipient,@channel,'PENDING',0,1,
+              'order_created',1,'{}'::jsonb,@source,clock_timestamp(),clock_timestamp())
+            """,
+            new NpgsqlParameter("notification", notification),
+            new NpgsqlParameter("owner", owner),
+            new NpgsqlParameter("recipient", Guid.NewGuid()),
+            new NpgsqlParameter("channel", channel),
+            new NpgsqlParameter("source", Guid.NewGuid()));
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,
+              payload,priority,status,attempts,available_at,created_at)
+            VALUES(@send,@owner,jsonb_build_object('organization_ids',jsonb_build_array(@owner::text)),
+              'notifications.send-requested','Notification',@notification,1,
+              jsonb_build_object('schema_version','notification-send-requested-v1','notification_id',@notification),
+              100,'PENDING',0,timestamptz '1990-01-01 00:00:00Z',timestamptz '1990-01-01 00:00:00Z')
+            """,
+            new NpgsqlParameter("send", send),
+            new NpgsqlParameter("owner", owner),
+            new NpgsqlParameter("notification", notification));
+        return (notification, send);
+    }
 
     private async Task<T> AdminScalarAsync<T>(string sql, params NpgsqlParameter[] parameters)
     {

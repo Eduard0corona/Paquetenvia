@@ -25,6 +25,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal int TransitionCallCount => orderService.TransitionCallCount;
     internal int ListCallCount => orderService.ListCallCount;
     internal bool? LastListCodPendingReconciliation => orderService.LastListCodPendingReconciliation;
+    internal bool? LastListMfaSatisfied => orderService.LastListMfaSatisfied;
     internal CreateOrderCommand? LastCreateCommand => orderService.LastCreateCommand;
     internal TransitionOrderCommand? LastTransitionCommand => orderService.LastTransitionCommand;
 
@@ -32,6 +33,19 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal void SetDriverAssignment(Guid orderId, bool active) =>
         orderService.SetDriverAssignment(orderId, active);
     internal int TransitionEffectCount(Guid orderId) => orderService.TransitionEffectCount(orderId);
+
+    /// <summary>Marks an order as having a RECORDED, not yet reconciled COD collection for the pending list.</summary>
+    internal void MarkCodPending(Guid orderId) => orderService.MarkCodPending(orderId);
+
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: makes the COD pending list fail its in-transaction authorization
+    /// re-check, as the PostgreSQL service does when the membership changed after the endpoint decision.
+    /// </summary>
+    internal bool RefuseCodPendingListInTransaction
+    {
+        get => orderService.RefuseCodPendingListInTransaction;
+        set => orderService.RefuseCodPendingListInTransaction = value;
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -127,6 +141,9 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         private int transitionCallCount;
         private int listCallCount;
         private int lastListCodPending = -1;
+        private int lastListMfa = -1;
+        private volatile bool refuseCodPendingListInTransaction;
+        private readonly ConcurrentDictionary<Guid, byte> codPendingOrders = new();
         private CreateOrderCommand? lastCreateCommand;
         private TransitionOrderCommand? lastTransitionCommand;
 
@@ -140,6 +157,21 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             1 => true,
             _ => false,
         };
+        internal bool? LastListMfaSatisfied => Volatile.Read(ref lastListMfa) switch
+        {
+            -1 => null,
+            1 => true,
+            _ => false,
+        };
+
+        internal bool RefuseCodPendingListInTransaction
+        {
+            get => refuseCodPendingListInTransaction;
+            set => refuseCodPendingListInTransaction = value;
+        }
+
+        internal void MarkCodPending(Guid orderId) => codPendingOrders[orderId] = 0;
+
         internal CreateOrderCommand? LastCreateCommand => Volatile.Read(ref lastCreateCommand);
         internal TransitionOrderCommand? LastTransitionCommand => Volatile.Read(ref lastTransitionCommand);
 
@@ -316,15 +348,16 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             Guid? ownerOrganizationId,
             string? cursor,
             bool codPendingReconciliation,
+            bool mfaSatisfied,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref listCallCount);
             Volatile.Write(ref lastListCodPending, codPendingReconciliation ? 1 : 0);
-            if (codPendingReconciliation)
+            Volatile.Write(ref lastListMfa, mfaSatisfied ? 1 : 0);
+            if (codPendingReconciliation && refuseCodPendingListInTransaction)
             {
-                // The stub records no COD collection, so no order is pending reconciliation.
-                return Task.FromResult(new OrderPageResult([], null));
+                throw new OrderListForbiddenException();
             }
 
             if (ownerOrganizationId is { } owner && owner != organizationId)
@@ -340,6 +373,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             var items = orders.Values
                 .Where(order => order.OwnerOrganizationId == organizationId)
                 .Where(order => status is null || order.Status == status)
+                // Only orders marked with a RECORDED, unreconciled COD collection are pending reconciliation.
+                .Where(order => !codPendingReconciliation || codPendingOrders.ContainsKey(order.Id))
                 .OrderByDescending(order => order.Id)
                 .ToArray();
             return Task.FromResult(new OrderPageResult(items, null));

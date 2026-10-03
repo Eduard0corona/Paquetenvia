@@ -1,5 +1,5 @@
 import { isAcceptanceVersion, type AcceptanceVersions, acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
-import { parseMxnToCents } from "./money";
+import { formatMxnCentsWithCurrency, maximumCodExpectedCents, parseMxnToCents } from "./money";
 
 /**
  * /ops/orders/new (AI-07 create_order) against AI-05 createQuote and createOrder.
@@ -109,6 +109,11 @@ export interface AcceptanceDraft {
   readonly payerType: string;
   readonly accepted: boolean;
   /**
+   * ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher ticked that the shipment holds no prohibited goods.
+   * It is sent as `restricted_goods_acknowledged: true` and the server records it on the order.
+   */
+  readonly restrictedGoodsAcknowledged: boolean;
+  /**
    * D6-COD-EXPECTED: optional cash-on-delivery amount typed in MXN (e.g. `150.50`);
    * empty or absent means no COD. Converted to integer cents without floating point.
    */
@@ -153,6 +158,8 @@ export interface CreateOrderBody {
   };
   /** D6-COD-EXPECTED: integer MXN cents, sent only when the order carries COD. */
   cod_expected_cents?: number;
+  /** ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: required, and only `true` is valid. */
+  restricted_goods_acknowledged: true;
 }
 
 export type DraftResult<T> =
@@ -202,12 +209,16 @@ function address(
   const before = errors.length;
   const addressText = draft.addressText.trim();
   const contactName = draft.contactName.trim();
-  const phone = draft.phone.trim();
+  const phone = normalizeMexicanPhone(draft.phone);
   const references = draft.references.trim();
   if (addressText.length < 8)
     errors.push(`La dirección de ${label} requiere al menos 8 caracteres.`);
   if (contactName === "") errors.push(`Captura el contacto de ${label}.`);
-  if (phone === "") errors.push(`Captura el teléfono de ${label}.`);
+  if (draft.phone.trim() === "") errors.push(`Captura el teléfono de ${label}.`);
+  else if (phone === null)
+    errors.push(
+      `El teléfono de ${label} debe tener 10 dígitos de México, sin +52; puedes separarlos con espacios o guiones.`,
+    );
   if (references.length > 500)
     errors.push(`Las referencias de ${label} admiten 500 caracteres.`);
   const lat = coordinate(draft.lat, 90);
@@ -218,7 +229,7 @@ function address(
   const body: AddressBody = {
     address_text: addressText,
     contact_name: contactName,
-    phone,
+    phone: phone!,
     lat: lat!,
     lng: lng!,
   };
@@ -302,9 +313,11 @@ export function buildCreateOrderBody(
     errors.push(acceptanceVersionsUnavailableMessage);
   if (!draft.accepted)
     errors.push("Confirma que el cliente aceptó términos y aviso de privacidad.");
+  if (draft.restrictedGoodsAcknowledged !== true) errors.push(restrictedGoodsRequiredMessage);
   if (Number.isNaN(acceptedAt.getTime())) errors.push("La hora de aceptación no es válida.");
   const codCents = codExpectedCents(draft.codAmount);
   if (codCents === null) errors.push(invalidCodAmountMessage);
+  else if (codCents > maximumCodExpectedCents) errors.push(codAmountAboveCapMessage);
   if (errors.length > 0) return { ok: false, errors };
   const body: CreateOrderBody = {
     quote_id: quoteId,
@@ -315,14 +328,36 @@ export function buildCreateOrderBody(
       accepted_at: acceptedAt.toISOString(),
       acceptance_channel: operatorAcceptanceChannel,
     },
+    restricted_goods_acknowledged: true,
   };
   // Zero is "no COD": the field is left out, which the server treats identically.
   if (codCents! > 0) body.cod_expected_cents = codCents!;
   return { ok: true, body };
 }
 
+export const restrictedGoodsRequiredMessage =
+  "Confirma que el envío no contiene artículos prohibidos.";
+
+/** ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: AI-05 AddressInput.phone bound on the raw text. */
+export const maximumPhoneInputLength = 32;
+
+/**
+ * ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: a 10-digit Mexican phone. Only ASCII spaces and hyphens are removed;
+ * what remains must be exactly ten ASCII digits, so `+52`, `52` prefixes, parentheses, dots and any other
+ * character are rejected (`null`). Mirrors the server's QuotePhonePolicy.
+ */
+export function normalizeMexicanPhone(text: string): string | null {
+  if (text.length === 0 || text.length > maximumPhoneInputLength) return null;
+  const digits = text.replace(/[ -]/g, "");
+  return /^[0-9]{10}$/.test(digits) ? digits : null;
+}
+
 export const invalidCodAmountMessage =
   "El cobro contra entrega debe ser un monto en MXN con hasta 2 decimales, sin signos, comas ni símbolos.";
+
+/** COD-CAP-20000-2026-10-02: the server rejects more than 20,000.00 MXN per order. */
+export const codAmountAboveCapMessage =
+  `El cobro contra entrega no puede superar ${formatMxnCentsWithCurrency(maximumCodExpectedCents)} por pedido.`;
 
 /**
  * D6-COD-EXPECTED: the typed COD in MXN as integer cents (0 when left empty), or

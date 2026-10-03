@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "4e441d1165c17611abe317811278eb2932c27758685d768629855ab78de39da4"
+          test "$actual" = "f06c3ff24ca28621e1924a85d8d3368d5eef892cd8d4ce666e8e11815a2a98df"
 
       - name: Verify AI-18 remains unchanged
         shell: bash
@@ -1585,7 +1585,7 @@ jobs:
     env:
       CI: "true"
       REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
-      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-10-next-og-critical' && 'SEC-2026-10-NEXT-OG-CRITICAL' || github.head_ref == 'fix/security-2026-09-next-critical' && 'SEC-2026-09-NEXT-CRITICAL' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
+      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-10-braces-dos-tracked' && 'SEC-2026-10-BRACES-DOS-TRACKED' || github.head_ref == 'fix/security-2026-10-next-og-critical' && 'SEC-2026-10-NEXT-OG-CRITICAL' || github.head_ref == 'fix/security-2026-09-next-critical' && 'SEC-2026-09-NEXT-CRITICAL' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
       REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -1733,9 +1733,19 @@ jobs:
             > "$RUNNER_TEMP/rel000-security-tracking-raw.json"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${related_issue_number}" \
             > "$RUNNER_TEMP/rel000-related-security-tracking-raw.json"
+          known_advisory_inputs=()
+          known_issue_numbers="$(
+            python -c 'import json; data=json.load(open("tests/fixtures/rel-000/security-tracking.json", encoding="utf-8")); print(" ".join(str(int(value)) for value in data.get("known_advisory_issues", {}).values()))'
+          )"
+          for known_issue_number in $known_issue_numbers; do
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${known_issue_number}" \
+              > "$RUNNER_TEMP/rel000-known-advisory-tracking-raw-${known_issue_number}.json"
+            known_advisory_inputs+=(--known-advisory-input "$RUNNER_TEMP/rel000-known-advisory-tracking-raw-${known_issue_number}.json")
+          done
           python ./tools/rel-000/rel000.py sanitize-issue \
             --input "$RUNNER_TEMP/rel000-security-tracking-raw.json" \
             --related-input "$RUNNER_TEMP/rel000-related-security-tracking-raw.json" \
+            ${known_advisory_inputs[@]+"${known_advisory_inputs[@]}"} \
             --output "$RUNNER_TEMP/rel000-security-tracking.json"
 
       - name: Resolve explicit REL-000 mode and verify the branch lockfile
@@ -1888,4 +1898,7 @@ jobs:
             if (Test-Path -LiteralPath $path -PathType Leaf) {
               [System.IO.File]::Delete($path)
             }
+          }
+          foreach ($file in @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -File -Filter "rel000-known-advisory-tracking-raw-*.json")) {
+            [System.IO.File]::Delete($file.FullName)
           }
