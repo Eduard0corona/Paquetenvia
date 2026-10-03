@@ -68,6 +68,8 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         var occurredAt = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
         var requestHash = AssignmentCanonicalizer.ComputeSha256(command);
         var stopwatch = Stopwatch.StartNew();
+        string? assignmentPolicyVersion = null;
+        string? eligibilityPolicyVersion = null;
 
         try
         {
@@ -121,7 +123,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                             }
 
                             ReplayCounter.Add(1);
-                            LogResult(command, completed.Id, "replay", stopwatch.Elapsed);
+                            LogResult(command, completed.Id, "replay", null, null, stopwatch.Elapsed);
                             return completed;
                         }
 
@@ -199,6 +201,16 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         IneligibleCounter.Add(1);
                         throw EligibilityConflict(eligibility);
                     }
+
+                    // POLICY-VERSIONS-PER-ORG-2026-10-02: both versions are those of the organization that assigns
+                    // its own driver (the driver's organization, the active tenant): the order owner when it
+                    // assigns, the operator when the operator does.
+                    eligibilityPolicyVersion = eligibility.PolicyVersion;
+                    assignmentPolicyVersion = await ReadAssignmentPolicyVersionAsync(
+                        connection,
+                        transaction,
+                        command.OrganizationId,
+                        token);
 
                     var assignmentId = Guid.NewGuid();
                     var eventId = Guid.NewGuid();
@@ -322,6 +334,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                         transaction,
                         command,
                         assignment,
+                        assignmentPolicyVersion,
                         occurredAt,
                         token);
                     await failureInjector.OnStageAsync(
@@ -370,7 +383,13 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
                 cancellationToken);
 
             CreatedCounter.Add(1);
-            LogResult(command, result.Id, "created", stopwatch.Elapsed);
+            LogResult(
+                command,
+                result.Id,
+                "created",
+                assignmentPolicyVersion,
+                eligibilityPolicyVersion,
+                stopwatch.Elapsed);
             return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -810,6 +829,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         NpgsqlTransaction transaction,
         CreateOwnDriverAssignmentCommand command,
         Assignment assignment,
+        string assignmentPolicyVersion,
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
@@ -823,7 +843,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             assignment_type = assignment.AssignmentType.ToContractValue(),
             status = assignment.Status.ToContractValue(),
             cost_cents = assignment.CostCents,
-            policy_version = options.Value.AssignmentPolicyVersion,
+            policy_version = assignmentPolicyVersion,
             request_id = command.RequestId,
         }, JsonOptions);
         await auditWriter.WriteAsync(
@@ -915,6 +935,8 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         CreateOwnDriverAssignmentCommand command,
         Guid assignmentId,
         string result,
+        string? assignmentPolicyVersion,
+        string? eligibilityPolicyVersion,
         TimeSpan duration) =>
         logger.LogInformation(
             "Dispatch assignment result {Result}; tenant {TenantId}; actor {ActorId}; order {OrderId}; assignment {AssignmentId}; assignment policy {AssignmentPolicyVersion}; eligibility policy {EligibilityPolicyVersion}; duration_ms {DurationMs}",
@@ -923,9 +945,35 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             command.ActorId,
             command.OrderId,
             assignmentId,
-            options.Value.AssignmentPolicyVersion,
-            driverEligibilityOptions.Value.PolicyVersion,
+            assignmentPolicyVersion,
+            eligibilityPolicyVersion,
             duration.TotalMilliseconds);
+
+    /// <summary>
+    /// POLICY-VERSIONS-PER-ORG-2026-10-02: the assignment policy version of the organization that assigns.
+    /// AI-06 makes it NOT NULL with a format CHECK; anything else is a broken read and fails closed (the
+    /// transaction rolls back and nothing is assigned).
+    /// </summary>
+    private async Task<string> ReadAssignmentPolicyVersionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            "SELECT assignment_policy_version FROM organizations.organizations WHERE id=@organization");
+        command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
+        var version = await command.ExecuteScalarAsync(cancellationToken) as string;
+        if (!OrganizationPolicyVersionFormat.IsValid(version))
+        {
+            throw new AssignmentInfrastructureException(
+                "The assigning organization's assignment policy version is missing or malformed.");
+        }
+
+        return version!;
+    }
 
     private NpgsqlCommand CreateCommand(
         NpgsqlConnection connection,

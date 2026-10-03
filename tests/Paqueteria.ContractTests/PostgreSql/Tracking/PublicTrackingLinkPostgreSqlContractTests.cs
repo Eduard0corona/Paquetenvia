@@ -446,7 +446,8 @@ public sealed class PublicTrackingLinkPostgreSqlContractTests(PostgreSqlContract
                 scenario.QuoteId,
                 "SENDER",
                 new OrderAcceptanceInput("terms-synthetic-v1", "privacy-synthetic-v1", AcceptedAtClient, "WEB"),
-                requestId),
+                requestId,
+                RestrictedGoodsAcknowledged: true),
             CancellationToken.None);
     }
 

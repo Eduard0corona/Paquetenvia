@@ -133,6 +133,7 @@ public sealed class Obs002TelemetryTests
     [InlineData(NotificationDeliveryOutcome.Success, NotificationErrorCodes.ProviderAccepted, OutboxSettlement.Processed)]
     [InlineData(NotificationDeliveryOutcome.Transient, NotificationErrorCodes.ProviderTransient, OutboxSettlement.Retry)]
     [InlineData(NotificationDeliveryOutcome.Ambiguous, NotificationErrorCodes.ProviderAmbiguous, OutboxSettlement.Retry)]
+    [InlineData(NotificationDeliveryOutcome.AmbiguousFailed, NotificationErrorCodes.AmbiguousTimeout, OutboxSettlement.Dead)]
     [InlineData("SOURCE", NotificationErrorCodes.SourceExpanded, OutboxSettlement.Processed)]
     [InlineData("SOURCE", NotificationErrorCodes.NoEligibleRecipient, OutboxSettlement.Processed)]
     [InlineData("SOURCE", NotificationErrorCodes.TemplateNotFound, OutboxSettlement.Dead)]

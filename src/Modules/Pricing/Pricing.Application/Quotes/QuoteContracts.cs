@@ -137,3 +137,55 @@ public static class QuoteLowPriceAuthorizationPolicy
     /// <summary>The trimmed reason (1 to 200 characters, no control characters), or null when it is not valid.</summary>
     public static string? NormalizeReason(string? reason) => Pricing.Domain.LowPriceAuthorization.Normalize(reason);
 }
+
+/// <summary>
+/// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: a quote contact phone is a 10-digit Mexican number. The only
+/// separators tolerated are the ASCII space and the ASCII hyphen-minus, which are removed; what remains must be
+/// exactly ten ASCII digits <c>0-9</c>. A country prefix (<c>+52</c> or <c>52</c>), parentheses, dots, other
+/// whitespace, letters and non-ASCII digits are all rejected, so <c>+52 667 123 4567</c> is invalid while
+/// <c>667 123 4567</c> and <c>667-123-4567</c> normalize to <c>6671234567</c>. The normalized value is the one
+/// hashed, protected (ADP-001) and stored; neither the input nor the result is ever logged.
+/// </summary>
+public static class QuotePhonePolicy
+{
+    public const int DigitCount = 10;
+
+    /// <summary>Upper bound on the raw text, so a separator-padded value cannot grow without limit.</summary>
+    public const int MaximumInputLength = 32;
+
+    public static bool TryNormalize(string? value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrEmpty(value) || value.Length > MaximumInputLength)
+        {
+            return false;
+        }
+
+        Span<char> digits = stackalloc char[DigitCount];
+        var count = 0;
+        foreach (var character in value)
+        {
+            if (character is ' ' or '-')
+            {
+                continue;
+            }
+
+            if (!char.IsAsciiDigit(character) || count == DigitCount)
+            {
+                return false;
+            }
+
+            digits[count++] = character;
+        }
+
+        if (count != DigitCount)
+        {
+            return false;
+        }
+
+        normalized = new string(digits);
+        return true;
+    }
+
+    public static bool IsValid(string? value) => TryNormalize(value, out _);
+}

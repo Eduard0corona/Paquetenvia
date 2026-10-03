@@ -208,7 +208,7 @@ public sealed class QuoteLowPriceAuthorizationHttpTests : IClassFixture<QuoteHtt
         {
             address_text = originAddress,
             contact_name = "Synthetic Sender",
-            phone = "+526671111111",
+            phone = "6671111111",
             lat = 24.8,
             lng = -107.4,
         },
@@ -216,7 +216,7 @@ public sealed class QuoteLowPriceAuthorizationHttpTests : IClassFixture<QuoteHtt
         {
             address_text = "Synthetic destination 200",
             contact_name = "Synthetic Receiver",
-            phone = "+526672222222",
+            phone = "6672222222",
             lat = 24.81,
             lng = -107.41,
         },

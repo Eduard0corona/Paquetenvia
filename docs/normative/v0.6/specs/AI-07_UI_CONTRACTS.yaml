@@ -263,7 +263,11 @@ screen_contracts:
       409). The quote summary states that the shipment is authorized and until when, and the reason when the API
       returns it
     cod_expected: D6-COD-EXPECTED - optional COD amount typed in MXN with at most two decimals, converted to integer
-      cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD
+      cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD; more
+      than 20,000.00 MXN is refused with a message naming the cap before any request (COD-CAP-20000-2026-10-02)
+    phone_and_restricted_goods: ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - each contact phone is 10 Mexican digits
+      (spaces and hyphens removed, no +52) and is sent normalized; confirming requires ticking that the shipment holds
+      no prohibited goods, sent as restricted_goods_acknowledged true and recorded on the order by the server
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -371,11 +375,14 @@ screen_contracts:
     - committed
     validations:
     - commit is offered only when file_errors is empty, invalid_rows is 0 and valid_rows is at least 1
+    - commit also requires the dispatcher to tick that no shipment in the file contains prohibited goods; it is sent as
+      restricted_goods_acknowledged=true (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)
     - file_errors and per-row errors are shown by row_number, column and code in Spanish
     - a commit 422 replaces the preview with the returned per-row report and creates nothing
     - a commit response whose content_digest differs from the previewed one fails closed
     - per-row outcomes show CREATED with public_id or FAILED with error_code
     - each previewed row shows the server-reported cod_expected_cents (D6-COD-EXPECTED) as MXN, or no COD for 0
+    - the format help states the COD cap of 20,000.00 MXN (2000000 cents) per row (COD-CAP-20000-2026-10-02)
     idempotency:
     - Idempotency-Key names the batch and is reused for a retry of the same content_digest after a network or 5xx failure
     - a new file or a definitive server answer drops the key
@@ -439,14 +446,16 @@ screen_contracts:
       read: GET /orders/{orderId}/financials (getOrderFinancials)
       record: POST /orders/{orderId}/cod-records (recordCodCollection)
       reconcile: POST /cod-records/{codId}/reconcile (reconcileCod)
-      pending_list: GET /orders?cod_pending_reconciliation=true (listOrders, API-FIN-COD-VISIBILITY-2026-09-29)
+      pending_list: GET /orders?cod_pending_reconciliation=true (listOrders, API-FIN-COD-VISIBILITY-2026-09-29,
+        FIN-PENDING-COD-LIST-FINANCE-2026-10-02)
     roles:
       read: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
       record: [DISPATCHER, PLATFORM_ADMIN with MFA]
       reconcile: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
-      pending_list: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      pending_list: [DISPATCHER, PLATFORM_ADMIN with MFA, FINANCE with MFA]
       note: FINANCE never records a COD collection; DRIVER records from its own assignment, not from this screen;
-        FINANCE holds no listOrders capability, so it opens an order by id and reconciles from its financials
+        FINANCE sees the pending list (FIN-PENDING-COD-LIST-FINANCE-2026-10-02), the only listOrders call it may
+        make, and a 403 MFA_REQUIRED on it offers the same MFA step-up as the other finance reads
     states:
     - no_session
     - access_unavailable

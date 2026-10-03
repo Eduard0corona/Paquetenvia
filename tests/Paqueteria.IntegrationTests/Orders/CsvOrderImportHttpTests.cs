@@ -240,6 +240,38 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
         Assert.Equal(2, await CountOrdersForQuotesAsync(first, second));
     }
 
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: a commit without exactly one restricted_goods_acknowledged=true is the
+    /// uniform conflict; no batch is reserved and no order is created, so the same key then commits normally.
+    /// </summary>
+    [Theory]
+    [InlineData(new object[] { new string[0] })]
+    [InlineData(new object[] { new[] { "false" } })]
+    [InlineData(new object[] { new[] { "TRUE" } })]
+    [InlineData(new object[] { new[] { "1" } })]
+    [InlineData(new object[] { new[] { "" } })]
+    [InlineData(new object[] { new[] { "true", "true" } })]
+    public async Task Commit_without_the_restricted_goods_confirmation_is_the_uniform_conflict(string[] values)
+    {
+        factory.ResetCreateObservations();
+        var quoteId = Guid.NewGuid();
+        var csv = ValidCsv(quoteId);
+        var batchKey = BatchKey();
+
+        using var rejected = await SendAsync(
+            CommitRoute, csv, idempotencyKey: batchKey, contentDigest: Digest(csv), restrictedGoodsAcknowledged: values);
+
+        Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
+        using var problem = JsonDocument.Parse(await rejected.Content.ReadAsStringAsync());
+        Assert.Equal("CONFLICT", problem.RootElement.GetProperty("code").GetString());
+        Assert.Equal(0, factory.CreateCallCount);
+
+        using var accepted = await SendAsync(CommitRoute, csv, idempotencyKey: batchKey, contentDigest: Digest(csv));
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal(1, factory.CreateCallCount);
+        Assert.True(factory.LastCreateCommand!.RestrictedGoodsAcknowledged);
+    }
+
     [Fact]
     public async Task A_second_batch_key_over_the_same_quotes_reports_per_row_failures_instead_of_duplicating()
     {
@@ -410,7 +442,8 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
         Guid? organizationId = null,
         string? bearer = null,
         string? idempotencyKey = null,
-        string? contentDigest = null)
+        string? contentDigest = null,
+        IReadOnlyList<string>? restrictedGoodsAcknowledged = null)
     {
         var request = Authenticated(HttpMethod.Post, route, organizationId, bearer);
         if (idempotencyKey is not null)
@@ -418,7 +451,7 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
             request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
         }
 
-        request.Content = Upload(csv, contentDigest);
+        request.Content = Upload(csv, contentDigest, restrictedGoodsAcknowledged);
         return client.SendAsync(request);
     }
 
@@ -443,7 +476,15 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
         return request;
     }
 
-    private static MultipartFormDataContent Upload(string csv, string? contentDigest = null)
+    /// <summary>
+    /// A commit (a request with a digest) carries the dispatcher's restricted goods confirmation
+    /// (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) unless <paramref name="restrictedGoodsAcknowledged"/> names the
+    /// exact values to send; an empty list sends none.
+    /// </summary>
+    private static MultipartFormDataContent Upload(
+        string csv,
+        string? contentDigest = null,
+        IReadOnlyList<string>? restrictedGoodsAcknowledged = null)
     {
         var file = new ByteArrayContent(Encoding.UTF8.GetBytes(csv));
         file.Headers.ContentType = new MediaTypeHeaderValue("text/csv");
@@ -451,6 +492,11 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
         if (contentDigest is not null)
         {
             content.Add(new StringContent(contentDigest), "content_digest");
+        }
+
+        foreach (var value in restrictedGoodsAcknowledged ?? (contentDigest is null ? [] : ["true"]))
+        {
+            content.Add(new StringContent(value), CsvOrderImportContract.FieldRestrictedGoodsAcknowledged);
         }
 
         return content;

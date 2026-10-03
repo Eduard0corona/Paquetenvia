@@ -17,7 +17,7 @@ import { PendingSubmissions } from "./pending-submissions";
 
 const orgA = "11111111-1111-4111-8111-111111111111";
 const orgB = "22222222-2222-4222-8222-222222222222";
-const acceptance = { payerType: "SENDER", accepted: true };
+const acceptance = { payerType: "SENDER", accepted: true, restrictedGoodsAcknowledged: true };
 const configuredVersions: AcceptanceVersions = { termsVersion: "terms-1", privacyVersion: "privacy-1" };
 
 function session(organizationId: string): OperationsSession {
@@ -103,6 +103,7 @@ describe("quote to order", () => {
           accepted_at: "2026-09-28T17:00:00.000Z",
           acceptance_channel: "ASSISTED",
         },
+        restricted_goods_acknowledged: true,
       },
       "key-000000000002",
       expect.any(AbortSignal),

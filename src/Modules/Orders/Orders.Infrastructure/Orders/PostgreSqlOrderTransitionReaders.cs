@@ -290,8 +290,10 @@ public sealed class PostgreSqlOrderAssignmentGuardReader(
                      WHERE dsa.driver_id=p.id AND dsa.service_area_id=@service_area
                        AND dsa.org_id=p.org_id AND dsa.status='ACTIVE'
                        AND sa.owner_org_id=p.org_id AND sa.city_id=@city AND sa.status='ACTIVE'
-                   ) END
+                   ) END,
+                   o.driver_eligibility_policy_version
             FROM drivers.driver_profiles p
+            JOIN organizations.organizations o ON o.id=p.org_id
             LEFT JOIN identity.users u ON u.id=p.user_id
             WHERE p.id=@driver AND p.org_id=@org;
 
@@ -320,7 +322,8 @@ public sealed class PostgreSqlOrderAssignmentGuardReader(
                 reader.IsDBNull(7) ? null : reader.GetString(7),
                 reader.GetBoolean(8),
                 reader.IsDBNull(9) ? null : reader.GetBoolean(9),
-                new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal));
+                new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal),
+                reader.GetString(10));
         }
 
         if (!await reader.NextResultAsync(cancellationToken))
@@ -587,6 +590,29 @@ internal static class OrderCodPendingReconciliationPredicate
     internal const string Sql =
         "EXISTS (SELECT 1 FROM finance.cod_transactions c " +
         "WHERE c.order_id=orders.orders.id AND c.status='RECORDED' AND c.reconciled_at IS NULL)";
+}
+
+/// <summary>
+/// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the in-transaction re-check of the listOrders COD pending filter. It
+/// mirrors getOrderFinancials (x-capability-matrix finance_operations): an ACTIVE user holding, in the selected
+/// organization, an ACTIVE DISPATCHER membership, or an ACTIVE PLATFORM_ADMIN or FINANCE membership with a satisfied
+/// MFA challenge. It reads only identity and membership state and writes nothing.
+/// </summary>
+internal static class OrderCodPendingListAuthorization
+{
+    internal const string Sql =
+        """
+        SELECT EXISTS (
+          SELECT 1
+          FROM identity.users u
+          JOIN organizations.organization_memberships m ON m.user_id=u.id
+          WHERE u.id=@actor
+            AND u.status='ACTIVE'
+            AND m.organization_id=@org
+            AND m.status='ACTIVE'
+            AND (m.role='DISPATCHER' OR (@mfa AND m.role IN ('PLATFORM_ADMIN','FINANCE')))
+        )
+        """;
 }
 
 internal static class TransitionReaderCommand

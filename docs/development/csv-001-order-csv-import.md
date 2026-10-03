@@ -69,7 +69,7 @@ Las reglas de columna delegan en las políticas autoritativas de ORD-001 (`Order
 | `privacy_version` | no vacío, 64 caracteres como máximo | `PRIVACY_VERSION_INVALID` |
 | `accepted_at` | una de las cuatro formas ISO-8601 contratadas, distinta de `default` | `ACCEPTED_AT_INVALID` |
 | `acceptance_channel` | `WEB`, `PWA`, `ASSISTED` o `API` | `ACCEPTANCE_CHANNEL_INVALID` |
-| `cod_expected_cents` (opcional) | vacío (sin COD) o solo dígitos ASCII que quepan en int64, en centavos MXN | `COD_EXPECTED_CENTS_INVALID` |
+| `cod_expected_cents` (opcional) | vacío (sin COD) o solo dígitos ASCII, en centavos MXN, de `0` a `2000000` (tope de 20,000.00 MXN, COD-CAP-20000-2026-10-02) | `COD_EXPECTED_CENTS_INVALID` |
 | fila completa | exactamente tantos campos como el encabezado (seis o siete) | `COLUMN_COUNT_INVALID` |
 
 `accepted_at` se compara contra la lista cerrada de formatos que AI-05 contrata para `format: date-time`, no contra un parser permisivo:
@@ -81,7 +81,7 @@ yyyy-MM-ddTHH:mm:ss±HH:MM     yyyy-MM-ddTHH:mm:ss.fffffff±HH:MM
 
 La fracción admite de uno a siete dígitos. Un timestamp sin offset se rechaza: resolverlo contra la zona del servidor volvería ambiguo el instante de aceptación legal. Formas cercanas pero ajenas al contrato —`2026/07/22T12:00:00Z`, `2026-07-22 12:00:00Z`, `2026-07-22T12:00:00-0700`— se rechazan en lugar de reinterpretarse, porque ORD-001 tampoco las acepta en `POST /orders`.
 
-`cod_expected_cents` es dinero y nunca se interpreta como punto flotante: `150.50`, `1,500`, `1 500`, `+100`, `-1`, `$100` y `1e3` se rechazan en lugar de convertirse. La celda vacía, o un archivo de seis columnas, es una orden sin COD (`0`). La regla es la misma `OrderInputPolicy.TryParseCodExpectedCents` que aplica `POST /orders` al literal JSON de `cod_expected_cents`. El monto se copia a `orders.cod_expected_cents` por el mismo `IOrderService` y de ahí lo leen FIN-001 y SET-001; `Order` no lo expone (VIEWER lee órdenes y no tiene lectura financiera).
+`cod_expected_cents` es dinero y nunca se interpreta como punto flotante: `150.50`, `1,500`, `1 500`, `+100`, `-1`, `$100` y `1e3` se rechazan en lugar de convertirse. La celda vacía, o un archivo de seis columnas, es una orden sin COD (`0`). Un monto bien escrito por encima de `2000000` (20,000.00 MXN, inclusivo) también es `COD_EXPECTED_CENTS_INVALID` y bloquea la confirmación; se reutiliza el código porque CSV-001 usa un código por columna. La regla es la misma `OrderInputPolicy.TryParseCodExpectedCents` que aplica `POST /orders` al literal JSON de `cod_expected_cents`. El monto se copia a `orders.cod_expected_cents` por el mismo `IOrderService` y de ahí lo leen FIN-001 y SET-001; `Order` no lo expone (VIEWER lee órdenes y no tiene lectura financiera).
 
 `QUOTE_ID_DUPLICATED` se reporta en la segunda aparición y siguientes; la primera permanece válida, y como el commit exige el archivo completamente válido, el duplicado bloquea todo el lote.
 
@@ -126,6 +126,8 @@ Los rechazos de transporte —contenido que no es multipart, parte `file` ausent
 ## Commit
 
 `POST /api/v1/orders/csv/commit` — requiere sesión activa, tenant seleccionado, header `Idempotency-Key` (16 a 128 caracteres, política compartida), la parte `file` y el campo `content_digest`.
+
+Desde ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 también requiere exactamente un campo de formulario `restricted_goods_acknowledged=true`: la confirmación del despachador, dada una vez para todo el archivo, de que ningún envío contiene artículos prohibidos. No es una columna del CSV, así que los archivos de seis y siete columnas no cambian. Si falta, se repite o tiene otro valor, el commit responde el `409` uniforme `CONFLICT` antes de reservar el lote o crear órdenes; la misma key puede reenviarse después con la confirmación. Cada fila la entrega a ORD-001, que la registra en el evento `ORDER_CREATED` y en su auditoría. El CSV no tiene teléfonos, así que la regla de 10 dígitos no añade errores por fila.
 
 El paso de confirmación es explícito en dos sentidos: es una llamada distinta, y solo acepta el archivo cuyo digest coincide con el que devolvió el preview. Un archivo modificado después de revisarlo produce `409` y cero efectos.
 

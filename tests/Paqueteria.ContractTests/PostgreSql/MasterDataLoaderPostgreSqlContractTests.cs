@@ -478,14 +478,17 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             () => CallFunctionAsync(platform, CitiesDocument(platform, wrongZone).ToJsonString()));
         Assert.Equal("MDM001_CITY_TIMEZONE_NOT_ALLOWED", direct.MessageText);
 
-        // The platform creates it ACTIVE; a second platform load with another zone is a conflict.
+        // The platform creates it ACTIVE; a second platform load with another zone is refused (in the pilot only
+        // America/Mazatlan is accepted, MDM-001-TZ-MAZATLAN-ONLY-2026-10-02) and the stored city is untouched.
         await LoadAsync(CitiesDocument(platform, CityEntry(suffix)), platform);
         Assert.Equal("America/Mazatlan|ACTIVE", await ScalarAsync<string>(
             "SELECT concat_ws('|',timezone,status) FROM locations.cities WHERE name=@name", ("name", CityName(suffix))));
         var other = CityEntry(suffix);
         other["timezone"] = "America/Mexico_City";
         var conflict = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(CitiesDocument(platform, other), platform));
-        Assert.Contains("MDM001_CITY_CONFLICT at cities[1]", conflict.Message);
+        Assert.Contains(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, conflict.CapturedOutput(), StringComparison.Ordinal);
+        Assert.Equal("America/Mazatlan|ACTIVE", await ScalarAsync<string>(
+            "SELECT concat_ws('|',timezone,status) FROM locations.cities WHERE name=@name", ("name", CityName(suffix))));
         await LoadAsync(Document(tenant, suffix), tenant);
 
         // An INACTIVE city can no longer be referenced by any load.
@@ -921,9 +924,10 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
             ("function", AddMasterDataLoader.FunctionSignature));
         var expected = HardenMasterDataLoaderOperatorBoundary.FunctionSql;
-        // The installed function is the GATE-011 VAT_INCLUDED step's, which keeps every hardening edit (see
+        // The installed function is the MDM-001 America/Mazatlan step's, built on the GATE-011 VAT_INCLUDED step,
+        // which keeps every hardening edit (see
         // New_tariff_rules_must_be_VAT_INCLUDED_and_a_stored_rule_in_another_tax_mode_can_still_be_closed).
-        Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), installed);
+        Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), installed);
         Assert.All(HardenMasterDataLoaderOperatorBoundary.FunctionEdits, edit =>
             Assert.Contains(edit.Replacement, installed, StringComparison.Ordinal));
         Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
@@ -1253,7 +1257,9 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
             ("function", AddMasterDataLoader.FunctionSignature));
         var expected = RequireVatIncludedTariffsInMasterDataLoader.FunctionSql;
-        Assert.Equal(FunctionBody(expected), installed);
+        // The installed function is the MDM-001 America/Mazatlan step's, which keeps the VAT_INCLUDED edit.
+        Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), installed);
+        Assert.Contains(Assert.Single(RequireVatIncludedTariffsInMasterDataLoader.FunctionEdits).Replacement, installed, StringComparison.Ordinal);
         Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed, installed, StringComparison.Ordinal);
         Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.DecisionId, installed, StringComparison.Ordinal);
         Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
@@ -1288,7 +1294,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
             await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
             await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
-            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
             var rule = Guid.NewGuid();
             await ExecuteAsync(connectionString, $"""
@@ -1318,12 +1324,177 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 await transaction.RollbackAsync();
             }
 
-            // Up again reinstalls the VAT_INCLUDED function.
-            await MigratePricingAsync(connectionString, null);
+            // Up again reinstalls the VAT_INCLUDED function (and the America/Mazatlan step on top of it).
+            await MigratePricingAsync(connectionString, RequireVatIncludedTariffsInMasterDataLoader.MigrationId);
             Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
             Assert.Equal("5200|VAT_INCLUDED", await ScalarAsync<string>(connectionString,
                 $"SELECT amount_cents || '|' || tax_mode FROM pricing.tariff_rules WHERE id='{rule}'"));
+            Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+        }
+        finally
+        {
+            await fixture.DropIsolatedDatabaseAsync(connectionString);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Pilot_city_entries_accept_only_America_Mazatlan_and_stored_cities_stay_untouched()
+    {
+        // MDM-001-TZ-MAZATLAN-ONLY-2026-10-02: a city entry carries America/Mazatlan only. Another zone of the
+        // Mexican allowlist is refused by the job and by a direct call, in dry run too, and nothing is written.
+        var platform = await NewOrganizationAsync("PLATFORM");
+        var suffix = Suffix();
+        foreach (var zone in new[] { "America/Mexico_City", "America/Chihuahua", "America/Tijuana", "America/Cancun" })
+        {
+            var entry = CityEntry(suffix);
+            entry["timezone"] = zone;
+            var document = CitiesDocument(platform, entry);
+            foreach (var dryRun in new[] { true, false })
+            {
+                var refused = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(document, platform, dryRun));
+                Assert.Equal(MasterDataLoader.ValidationExitCode, refused.ExitCode);
+                Assert.Contains($"cities[1].timezone: {RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot}",
+                    refused.CapturedOutput(), StringComparison.Ordinal);
+
+                var direct = await Assert.ThrowsAsync<PostgresException>(
+                    () => CallFunctionAsync(platform, document.ToJsonString(), dryRun));
+                Assert.Equal(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, direct.MessageText);
+                Assert.Equal("22023", direct.SqlState);
+                Assert.Equal("cities[1]", direct.Hint);
+            }
+        }
+
+        // A zone outside the Mexican allowlist keeps its published code on a direct call.
+        var foreign = CityEntry(suffix);
+        foreign["timezone"] = "Europe/Madrid";
+        var notAllowed = await Assert.ThrowsAsync<PostgresException>(
+            () => CallFunctionAsync(platform, CitiesDocument(platform, foreign).ToJsonString(), dryRun: true));
+        Assert.Equal("MDM001_CITY_TIMEZONE_NOT_ALLOWED", notAllowed.MessageText);
+        Assert.Equal(0, await ScalarAsync<long>("SELECT count(*) FROM locations.cities WHERE name=@name", ("name", CityName(suffix))));
+        Assert.Equal(0, await ScalarAsync<long>(
+            "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org", ("org", platform)));
+
+        // America/Mazatlan loads, in dry run first (nothing written) and then for real.
+        var dry = await LoadAsync(CitiesDocument(platform, CityEntry(suffix)), platform, dryRun: true);
+        Assert.Contains("MDM001_DRY_RUN", dry.Output);
+        Assert.Equal(0, await ScalarAsync<long>("SELECT count(*) FROM locations.cities WHERE name=@name", ("name", CityName(suffix))));
+        await LoadAsync(CitiesDocument(platform, CityEntry(suffix)), platform);
+        Assert.Equal("America/Mazatlan|ACTIVE", await ScalarAsync<string>(
+            "SELECT concat_ws('|',timezone,status) FROM locations.cities WHERE name=@name", ("name", CityName(suffix))));
+
+        // A city stored before the decision in another zone is never rewritten: a tenant still references it by
+        // its natural key, and a platform entry for it is refused before the database (other zone) or reported as
+        // a conflict by the database (America/Mazatlan against the stored zone), without touching the row.
+        var legacySuffix = Suffix();
+        var legacyCity = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            "INSERT INTO locations.cities(id,country_code,state_code,name,timezone,status) VALUES (@id,'MX','SIN',@name,'America/Chihuahua','ACTIVE')",
+            ("id", legacyCity), ("name", CityName(legacySuffix)));
+        var tenant = await NewOrganizationAsync();
+        var referenced = await LoadAsync(Document(tenant, legacySuffix), tenant);
+        Assert.Contains("service_areas: created=1 updated=0 unchanged=0", referenced.Output);
+
+        var sameZone = CityEntry(legacySuffix);
+        sameZone["timezone"] = "America/Chihuahua";
+        var refusedLegacy = await Assert.ThrowsAsync<MasterDataLoadException>(
+            () => LoadAsync(CitiesDocument(platform, sameZone), platform));
+        Assert.Contains(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, refusedLegacy.CapturedOutput(), StringComparison.Ordinal);
+        var conflict = await Assert.ThrowsAsync<MasterDataLoadException>(
+            () => LoadAsync(CitiesDocument(platform, CityEntry(legacySuffix)), platform));
+        Assert.Contains("MDM001_CITY_CONFLICT at cities[1]", conflict.Message);
+        Assert.Equal("America/Chihuahua|ACTIVE", await ScalarAsync<string>(
+            "SELECT concat_ws('|',timezone,status) FROM locations.cities WHERE id=@id", ("id", legacyCity)));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task The_loader_function_differs_from_the_VAT_INCLUDED_one_only_by_the_reviewed_America_Mazatlan_edit()
+    {
+        var installed = await ScalarAsync<string>(
+            "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
+            ("function", AddMasterDataLoader.FunctionSignature));
+        var expected = RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql;
+        Assert.Equal(FunctionBody(expected), installed);
+        Assert.Contains(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, installed, StringComparison.Ordinal);
+        Assert.Contains(RequireMazatlanTimeZoneInMasterDataLoader.DecisionId, installed, StringComparison.Ordinal);
+        Assert.Contains($"IS DISTINCT FROM '{RequireMazatlanTimeZoneInMasterDataLoader.PilotTimeZone}'", installed, StringComparison.Ordinal);
+        Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed, installed, StringComparison.Ordinal);
+        Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
+        Assert.Contains(StoreTariffPolicyVersionInMasterDataLoader.ImmutableVersionError, installed, StringComparison.Ordinal);
+        // The published Mexican allowlist is still checked first.
+        Assert.Contains("MDM001_CITY_TIMEZONE_NOT_ALLOWED", installed, StringComparison.Ordinal);
+        Assert.Equal(AddMasterDataLoader.MexicoTimeZones.Count, AddMasterDataLoader.MexicoTimeZones.Count(zone => installed.Contains($"'{zone}'", StringComparison.Ordinal)));
+
+        // Undoing the single edit gives back the VAT_INCLUDED step's function byte for byte.
+        var edit = Assert.Single(RequireMazatlanTimeZoneInMasterDataLoader.FunctionEdits);
+        Assert.Equal(1, Occurrences(expected, edit.Replacement));
+        Assert.Equal(
+            RequireVatIncludedTariffsInMasterDataLoader.FunctionSql,
+            expected.Replace(edit.Replacement, edit.Published, StringComparison.Ordinal));
+        Assert.Equal(1, Occurrences(expected, "INSERT INTO platform.audit_logs"));
+        Assert.DoesNotContain("platform.audit_logs", edit.Replacement, StringComparison.Ordinal);
+        Assert.DoesNotContain("UPDATE ", edit.Replacement, StringComparison.Ordinal);
+        foreach (var sql in new[] { RequireMazatlanTimeZoneInMasterDataLoader.UpSql, RequireMazatlanTimeZoneInMasterDataLoader.DownSql })
+        {
+            var withoutAcl = sql.Replace(StoreTariffPolicyVersionInMasterDataLoader.FunctionAclSql, string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("GRANT ", withoutAcl, StringComparison.Ordinal);
+            Assert.DoesNotContain("REVOKE ", withoutAcl, StringComparison.Ordinal);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task America_Mazatlan_loader_step_rolls_back_and_reapplies_on_real_postgresql()
+    {
+        var connectionString = await fixture.CreateIsolatedDatabaseAsync("mdm001tz");
+        try
+        {
+            var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+            await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+            await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
+            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            var mazatlan = Guid.NewGuid();
+            var chihuahua = Guid.NewGuid();
+            await ExecuteAsync(connectionString, $"""
+                INSERT INTO locations.cities(id,country_code,state_code,name,timezone,status)
+                  VALUES ('{mazatlan}','MX','SIN','MDM-001 TZ Mazatlan City','America/Mazatlan','ACTIVE'),
+                         ('{chihuahua}','MX','CHH','MDM-001 TZ Chihuahua City','America/Chihuahua','ACTIVE');
+                """);
+            const string CitiesSql = "SELECT string_agg(timezone || '|' || status, ',' ORDER BY timezone) FROM locations.cities WHERE name LIKE 'MDM-001 TZ %'";
+
+            // Down to the VAT_INCLUDED step: its function, ACL and 122 grants; stored cities stay untouched.
+            await MigratePricingAsync(connectionString, RequireVatIncludedTariffsInMasterDataLoader.MigrationId);
+            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.DoesNotContain(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, await LoaderSourceAsync(connectionString), StringComparison.Ordinal);
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal("America/Chihuahua|ACTIVE,America/Mazatlan|ACTIVE", await ScalarAsync<string>(connectionString, CitiesSql));
+            Assert.Equal("PENDING", (await new ModuleMigrationCoordinator().PlanAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+
+            // Up again reinstalls the America/Mazatlan function.
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal("America/Chihuahua|ACTIVE,America/Mazatlan|ACTIVE", await ScalarAsync<string>(connectionString, CitiesSql));
             Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
                 .Single(state => state.Module == "Pricing").Status);
             await using (var connection = new NpgsqlConnection(connectionString))
@@ -1351,7 +1522,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
             await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
-            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
 
             // A reference and an audit row in the former hash format (append-only): neither is touched by the lane.
             var organization = Guid.NewGuid();
@@ -1385,13 +1556,13 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             }
 
             // Up again adopts the existing table and reinstalls the hardened function and the four grants (then
-            // the GATE-011 VAT_INCLUDED step on top of it).
+            // the GATE-011 VAT_INCLUDED and MDM-001 America/Mazatlan steps on top of it).
             await MigratePricingAsync(connectionString, HardenMasterDataLoaderOperatorBoundary.MigrationId);
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
             Assert.Equal(FunctionBody(HardenMasterDataLoaderOperatorBoundary.FunctionSql), await LoaderSourceAsync(connectionString));
             await MigratePricingAsync(connectionString, null);
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
-            Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
             Assert.Equal(reference, await ScalarAsync<Guid>(connectionString,
                 "SELECT operator_ref FROM platform.master_data_operator_refs WHERE operator_login='paqueteria_mdm_x2_login'"));
             Assert.Equal(legacy, await ScalarAsync<string>(connectionString,

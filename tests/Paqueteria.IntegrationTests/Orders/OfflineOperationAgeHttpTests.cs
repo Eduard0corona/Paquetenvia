@@ -99,6 +99,7 @@ public sealed class OfflineOperationAgeTransitionHttpTests : IClassFixture<Order
             {
                 quote_id = Guid.NewGuid(),
                 payer_type = "SENDER",
+                restricted_goods_acknowledged = true,
                 acceptance = new
                 {
                     terms_version = "terms-synthetic-v1",

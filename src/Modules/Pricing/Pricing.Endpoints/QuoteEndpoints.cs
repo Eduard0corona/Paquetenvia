@@ -193,7 +193,7 @@ public static class QuoteEndpoints
 
     private static bool IsValid(AddressInput request) =>
         !string.IsNullOrWhiteSpace(request.AddressText) && request.AddressText.Trim().Length >= 8 &&
-        !string.IsNullOrWhiteSpace(request.ContactName) && !string.IsNullOrWhiteSpace(request.Phone) &&
+        !string.IsNullOrWhiteSpace(request.ContactName) && QuotePhonePolicy.IsValid(request.Phone) &&
         (request.References is null || request.References.Length <= 500) &&
         request.Lat is >= -90 and <= 90 &&
         request.Lng is >= -180 and <= 180 &&

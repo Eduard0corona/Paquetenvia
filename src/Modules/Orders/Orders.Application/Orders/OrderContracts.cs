@@ -9,6 +9,12 @@ public sealed record OrderAcceptanceInput(
     DateTimeOffset AcceptedAt,
     string AcceptanceChannel);
 
+/// <param name="RestrictedGoodsAcknowledged">
+/// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher's confirmation that the shipment contains no
+/// prohibited goods. It must be true; false is rejected with the uniform conflict before any effect. It is a
+/// dispatcher attestation, not part of the customer's legal acceptance, so OrderAcceptanceCanonicalForm v1 is
+/// unchanged; it is recorded in the append-only ORDER_CREATED order event and its audit entry.
+/// </param>
 public sealed record CreateOrderCommand(
     Guid ActorId,
     Guid OrganizationId,
@@ -17,7 +23,8 @@ public sealed record CreateOrderCommand(
     string PayerType,
     OrderAcceptanceInput Acceptance,
     string? RequestId,
-    long CodExpectedCents = 0);
+    long CodExpectedCents = 0,
+    bool RestrictedGoodsAcknowledged = false);
 
 public sealed record MoneyResult(string Currency, long AmountCents);
 
@@ -59,7 +66,13 @@ public interface IOrderService
     /// <param name="codPendingReconciliation">
     /// API-FIN-COD-VISIBILITY-2026-09-29: true keeps only orders whose COD collection is RECORDED and not yet
     /// RECONCILED. It reveals financial state, so the endpoint admits it only for a caller that also holds
-    /// getOrderFinancials, decided before this service is reached.
+    /// getOrderFinancials, decided before this service is reached. FIN-PENDING-COD-LIST-FINANCE-2026-10-02: when it
+    /// is true the service re-checks that authorization inside its tenant transaction, before any order is read,
+    /// and throws <see cref="OrderListForbiddenException"/> when it no longer holds.
+    /// </param>
+    /// <param name="mfaSatisfied">
+    /// Whether the session satisfied an MFA challenge; it only matters for that in-transaction re-check, where
+    /// PLATFORM_ADMIN and FINANCE need it and DISPATCHER does not (FINANCE-COD-MFA-2026-09-27).
     /// </param>
     Task<OrderPageResult> ListAsync(
         Guid actorId,
@@ -68,6 +81,7 @@ public interface IOrderService
         Guid? ownerOrganizationId,
         string? cursor,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         CancellationToken cancellationToken);
 
     Task<OrderDetailResult> GetAsync(
@@ -88,6 +102,18 @@ public sealed class OrderConflictException(OrderConflictCode code)
     : Exception("The order request conflicts with current state.")
 {
     public OrderConflictCode Code { get; } = code;
+}
+
+/// <summary>
+/// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the order list filtered by COD pending reconciliation was refused inside
+/// the tenant transaction because the actor no longer holds an active role that reads order financials there. It is
+/// raised before any order is read and is reported as the uniform 403.
+/// </summary>
+public sealed class OrderListForbiddenException : Exception
+{
+    public OrderListForbiddenException() : base("The order list is not permitted.")
+    {
+    }
 }
 
 public sealed class OrderNotFoundException : Exception
@@ -117,28 +143,36 @@ public static class OrderInputPolicy
 
     /// <summary>
     /// D6-COD-EXPECTED: the dispatcher-declared COD expectation is MXN integer cents (int64), zero meaning no COD.
-    /// A negative amount is never a valid expectation.
+    /// A negative amount is never a valid expectation, and COD-CAP-20000-2026-10-02 caps it at 2,000,000 cents
+    /// (20,000.00 MXN) per order, inclusive.
     /// </summary>
-    public static bool IsCodExpectedCents(long value) => value >= 0;
+    public static bool IsCodExpectedCents(long value) => OrderCodExpectationPolicy.IsValid(value);
 
     /// <summary>
     /// Reads a COD expectation written as text, on a CSV-001 row or as the raw JSON number of
     /// <c>POST /orders</c>. Only a plain run of ASCII digits that fits int64 is accepted: signs, decimal points,
     /// exponents, thousands separators, currency symbols and whitespace are all rejected, so no fractional or
-    /// floating-point value can ever become an amount of cents.
+    /// floating-point value can ever become an amount of cents. A well-formed amount above the
+    /// COD-CAP-20000-2026-10-02 cap is rejected exactly like a malformed one.
     /// </summary>
     public static bool TryParseCodExpectedCents(string? text, out long cents)
     {
-        cents = 0;
-        return !string.IsNullOrEmpty(text) &&
+        if (!string.IsNullOrEmpty(text) &&
             text.Length <= MaximumCodExpectedCentsDigits &&
             text.All(char.IsAsciiDigit) &&
             long.TryParse(
                 text,
                 System.Globalization.NumberStyles.None,
                 System.Globalization.CultureInfo.InvariantCulture,
-                out cents) &&
-            IsCodExpectedCents(cents);
+                out var parsed) &&
+            IsCodExpectedCents(parsed))
+        {
+            cents = parsed;
+            return true;
+        }
+
+        cents = 0;
+        return false;
     }
 
     public static bool IsPayerType(string? value) =>

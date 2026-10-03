@@ -95,7 +95,7 @@ placeholder is still there (`env001_pilot_guards.py observability-check`).
 | `sqr-pv-pilot-outbox-lag` | per lane: no summary in the window, or `max(MaxClaimAgeMs)` > 300 s (`outboxLagThresholdSeconds`), or ≥ 10 loop failures | 15 min / 15 min | 2 |
 | `sqr-pv-pilot-outbox-dead` | any lane with `sum(Dead)` > 0 | 15 min / 15 min | 2 |
 | `sqr-pv-pilot-job-failure` | any 4004 or 4602 `failure`, or no successful 4004 retention lane result in the hour | 15 min / 1 h | 2 |
-| `sqr-pv-pilot-readiness` | per app (API, Worker, Web) ≥ 3 (`readinessEventThreshold`) `ProbeFailed`, crash/back-off, `ContainerTerminated` or `ReplicaUnhealthy` system events, or probe warnings | 5 min / 10 min | 1 |
+| `sqr-pv-pilot-readiness` | per app (API, Worker, Web) ≥ 3 (`readinessEventThreshold`) `ProbeFailed`, crash/back-off, `ContainerTerminated` or `ReplicaUnhealthy` system events, or probe warnings | 15 min / 15 min | 1 |
 | `sqr-pv-pilot-api-5xx` | ≥ 5 (`http5xxMinimumCount`) 5xx responses that are also ≥ 5 % (`http5xxPercentThreshold`) of all responses | 15 min / 15 min | 2 |
 
 The KQL of every rule and workbook tile was parsed and type-checked offline with
@@ -119,16 +119,22 @@ costs, per rule and month, 0.55 USD at a 15-minute frequency, 1.10 USD at 10 min
 
 | Item | USD/month |
 | --- | --- |
-| 4 rules at 15 min + 1 rule (readiness) at 5 min | 3.85 |
+| 5 rules at 15 min (readiness included, OBS-002-ALERTS-15MIN-COST-2026-10-02) | 2.75 |
 | Action group e-mails (first 1,000 per month free) | 0.00 |
 | Workbook | 0.00 |
 | New log lines: about 10,000 short lines per day (4 lanes × 1,440 heartbeats, about 3,400 job cycles, at most 1,440 HTTP summaries), roughly 10–15 MB/day or 0.3–0.45 GB/month | 0.00 inside the 5 GB free tier; at most about 1.10 if the workspace is already past it |
-| **Added total** | **≈ 3.85 (typical)** |
+| **Added total** | **≈ 2.75 (typical)** |
 
-The pilot estimate moves from about 98 to about **102 USD typical**. At the log cap it moves from
-about 108 to about **112 USD**, because the 0.3 GB/day cap bounds the extra logs. Guard P21 fails if
-the rules would cost more than 5 USD per month. If the owner wants to stay under 100 USD, the cheapest
-lever is readiness at 15 minutes (−1.10 USD).
+The pilot estimate moves from about 98 to about **101 USD typical**. At the log cap it moves from
+about 108 to about **111 USD**, because the 0.3 GB/day cap bounds the extra logs. Guard P21 fails if
+the rules would cost more than 5 USD per month.
+
+The owner accepted this extra cost on 2026-10-02 (`OBS-002-ALERTS-15MIN-COST-2026-10-02`, literal
+"Sí, revisar cada 15 min"). The readiness rule, first proposed every 5 minutes over 10 minutes, now
+runs every 15 minutes over a 15-minute window like the other four rules: Azure requires a window at
+least as long as the frequency, and guard P21 enforces the same. The detection delay of a readiness
+degradation grows from at most about 5 to at most about 15 minutes; the threshold stays at 3 events
+per app in the window. The alert e-mail is still pending from the owner.
 
 ## Tests
 

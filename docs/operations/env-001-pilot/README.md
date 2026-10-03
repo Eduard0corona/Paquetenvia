@@ -221,7 +221,8 @@ App settings wired by `apps.bicep`:
     `ProofStorage__ThreatScanner=DefenderForStorage`, `ProofStorage__AzureBlob__ServiceUri`,
     `DataProtection__Provider=PostgreSql` plus the `DataProtection__KeyEncryption__*` settings.
   - `Locations__GeocodingProvider=Manual`. The `GoogleMaps` adapter exists and its key is mapped, but
-    GATE-003 stays open until the owner records the Google spending cap; switching the value to
+    GATE-003 stays open until the owner records the Google spending cap, daily quotas and billing alerts
+    and writes the Geocoding-only key (section 6.6); switching the value to
     `GoogleMaps` in `apps.bicep` is then the only change (see `docs/development/gate-003-google-maps-geocoding.md`).
 - **Worker:** `ConnectionStrings__Paqueteria` and `ConnectionStrings__PaqueteriaWorker`, the same
   ADP-001 proof-storage and Data Protection settings, `Dispatch__AssignmentLifecycle`,
@@ -239,10 +240,18 @@ App settings wired by `apps.bicep`:
 `apps.settings.json` holds the business and policy values the owner must choose. It is appended to the
 API and Worker settings. It cannot override any platform-managed prefix, and it cannot carry a
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
-value is still `OWNER_DECISION_REQUIRED`:
+value is still `OWNER_DECISION_REQUIRED`; today no value in the file awaits the owner (it only carries
+`Finance__OperationalTimeZone=America/Mazatlan`).
 
-- `Dispatch__AssignmentPolicyVersion`
-- `Drivers__Eligibility__PolicyVersion`
+There is no assignment or driver eligibility policy version setting (POLICY-VERSIONS-PER-ORG-2026-10-02,
+owner 2026-10-02: "Por empresa, piloto-2026-10-v1"). Each organization carries its own versions in
+`organizations.organizations.assignment_policy_version` and `driver_eligibility_policy_version`; every
+organization, existing or created later, starts at `piloto-2026-10-v1`. The version applied is that of the
+organization of the driver being assigned or evaluated (the order owner when it assigns its own driver, the
+operator when the operator does). The API refuses to start if `Dispatch__AssignmentPolicyVersion` or
+`Drivers__Eligibility__PolicyVersion` is still set, and the guard rejects both names in
+`apps.settings.json` (as `REMOVED_SETTINGS`), so they no longer block the deploy. Raising an organization's
+version is a reviewed migrator step; there is no loader or API path for it yet.
 
 There is no pricing policy version setting (PRC-POLICY-VERSION-PER-ORG, owner 2026-09-28): each
 organization versions its own pricing policy in `pricing.tariff_rules.policy_version`, loaded with its
@@ -304,13 +313,14 @@ hours a month. Sized for 50–100 real deliveries.
 | Private DNS zone | 0.50 per zone | 0.50 |
 | VNet, route, managed certificate, budget | free | 0.00 |
 | **Subtotal before OBS-002** | | **≈ 98 typical, ≈ 108 if the log cap is hit every day** |
-| Log search alerts (OBS-002, §10) | 4 rules at 15 min (0.55 each) + 1 at 5 min (1.65), Retail Prices API 2026-09-28; e-mails and workbook free; the extra ~0.3–0.45 GB/month of logs fits the 5 GB free tier | 3.85 |
-| **Total** | | **≈ 102 typical, ≈ 112 if the log cap is hit every day** |
+| Log search alerts (OBS-002, §10) | 5 rules at 15 min (0.55 each), Retail Prices API 2026-09-28; e-mails and workbook free; the extra ~0.3–0.45 GB/month of logs fits the 5 GB free tier | 2.75 |
+| **Total** | | **≈ 101 typical, ≈ 111 if the log cap is hit every day** |
 
 **This design sits at the budget line and does not fit ~100 USD with margin.** The owner accepted this
 sizing (PILOT-BUDGET-ACCEPT-98-108, 2026-09-28) without applying any lever. OBS-002 adds about
-3.85 USD per month on top of that accepted range, which **still needs the owner's confirmation**.
-Readiness at 15 minutes instead of 5 minutes would save 1.10 USD of it. The largest item is the
+2.75 USD per month on top of that accepted range, with every alert evaluated every 15 minutes; the
+owner accepted it on 2026-10-02 (OBS-002-ALERTS-15MIN-COST-2026-10-02, literal "Sí, revisar cada 15
+min"). The largest item is the
 always-on API at 0.5 vCPU. For the record, the levers in order of impact:
 
 1. API at 0.25 vCPU / 0.5 GiB saves about 21 USD, at the risk of memory pressure in a 15-module .NET
@@ -336,9 +346,10 @@ Two further caveats:
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
-3. The owner replaces every `OWNER_DECISION_REQUIRED` in `deploy/azure/pilot/apps.settings.json` and
-   the alert e-mail in `deploy/azure/pilot/observability.parameters.json` (PR → `development` →
-   `main`). Both files block the workflow while a placeholder remains.
+3. The owner replaces every `OWNER_DECISION_REQUIRED` in `deploy/azure/pilot/apps.settings.json` (none
+   remains since POLICY-VERSIONS-PER-ORG-2026-10-02) and the alert e-mail in
+   `deploy/azure/pilot/observability.parameters.json` (PR → `development` → `main`). Both files block the
+   workflow while a placeholder remains.
 4. Promote to `main` and wait for the Foundation CI push run on `main` (13/13 green). Note its run id
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
@@ -458,8 +469,22 @@ because the public lookup only compares hashes. Rotation is a template change re
 
 The workflow stops before deploying while any owner secret is missing. The API reads
 `google-maps-api-key` at startup even while `Locations__GeocodingProvider=Manual`, so the key must exist
-before the next deploy. Restrict it in Google Cloud Console to the Geocoding API and set the quota and
-budget there; those values are owner decisions still open under GATE-003.
+before the next deploy.
+
+**Google Maps key (GATE-003-MAPS-PILOT-RULES-2026-10-02, owner literal "Sí, las 4").** Before writing the
+key, the owner restricts it in Google Cloud Console (*APIs & Services → Credentials → API restrictions*) to
+the **Geocoding API only**. The pilot has no routes or ETAs, so Directions, Routes and Distance Matrix stay
+disabled; the adapter only calls `maps/api/geocode/json`, always with `components=country:MX`, and only a
+single non-partial `ROOFTOP` result in Mexico replaces the customer's pin ("Solo ROOFTOP"). The software
+cannot check the key restriction, so it is an owner step. Still owner-pending, and GATE-003 stays open
+(the pilot keeps `Locations__GeocodingProvider=Manual`) until they are recorded:
+
+- [ ] spending cap (budget) on the Google Cloud project;
+- [ ] daily quotas for the Geocoding API;
+- [ ] billing alerts;
+- [ ] the restricted key written to Key Vault as `google-maps-api-key` (commands above).
+
+See `docs/development/gate-003-google-maps-geocoding.md`.
 
 The workflow identity has *Key Vault Secrets Officer* on the vault. The owner needs a data-plane role
 too, for example a temporary *Key Vault Secrets Officer* on the vault.
@@ -671,7 +696,7 @@ Details, event schema, thresholds and tests: `docs/development/obs-002-pilot-obs
   | `sqr-pv-pilot-outbox-lag` | a lane's oldest claimed message waited > 5 min, its loop keeps failing, or it wrote no summary in 15 min | 15 min |
   | `sqr-pv-pilot-outbox-dead` | any message was settled DEAD | 15 min |
   | `sqr-pv-pilot-job-failure` | retention or a scheduled job failed, or retention had no success for an hour | 15 min |
-  | `sqr-pv-pilot-readiness` | ≥ 3 probe failures, crash loops or restarts of one app in 10 min | 5 min |
+  | `sqr-pv-pilot-readiness` | ≥ 3 probe failures, crash loops or restarts of one app in 15 min | 15 min |
   | `sqr-pv-pilot-api-5xx` | ≥ 5 API 5xx that are also ≥ 5 % of the responses in 15 min | 15 min |
 
   The rules are stateful: one e-mail when an alert fires and one when it resolves. They go to the
