@@ -33,6 +33,12 @@ export function formatMxnCentsWithCurrency(cents: number): string {
   return `${formatMxnCents(cents)} MXN`;
 }
 
+/**
+ * COD-CAP-20000-2026-10-02 ("Tope COD 20,000 pesos"): the COD a dispatcher declares on
+ * one order is at most 20,000.00 MXN, inclusive (AI-05 `cod_expected_cents` maximum).
+ */
+export const maximumCodExpectedCents = 2_000_000;
+
 export interface ParseMxnOptions {
   readonly allowNegative?: boolean;
   readonly allowZero?: boolean;

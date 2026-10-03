@@ -3052,11 +3052,13 @@ components:
           type: integer
           format: int64
           minimum: 0
+          maximum: 2000000
           description: >-
             D6-COD-EXPECTED - optional cash-on-delivery amount the dispatcher declares, in MXN integer cents; absent
-            or 0 means the order carries no COD. The JSON literal must be a plain non-negative integer that fits
-            int64 (no fraction, exponent, sign or string); anything else is rejected with 409 before any order is
-            created. It is copied to orders.cod_expected_cents and is part of the Idempotency-Key request hash, so
+            or 0 means the order carries no COD. The JSON literal must be a plain non-negative integer of at most
+            2000000 (20,000.00 MXN per order, inclusive; COD-CAP-20000-2026-10-02) with no fraction, exponent, sign
+            or string; anything else, including 2000001, is rejected with the uniform 409 INVALID_REQUEST before any
+            order is created. It is copied to orders.cod_expected_cents and is part of the Idempotency-Key request hash, so
             replaying a key with another amount is a conflict. It is read back only through the finance operations
             (CodPosition.expected_cents, cod_expected_cents_total) and settlements, never through Order, which
             VIEWER can read.
@@ -3773,7 +3775,9 @@ components:
             UTF-8 CSV-001 document, at most 1 MiB and 500 data rows. The header is
             quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel, optionally followed by
             cod_expected_cents (D6-COD-EXPECTED); an empty COD cell means no COD and a filled one must be a plain
-            non-negative integer of MXN cents.
+            non-negative integer of MXN cents of at most 2000000 (20,000.00 MXN per order, inclusive;
+            COD-CAP-20000-2026-10-02). A cell above the cap is the row error COD_EXPECTED_CENTS_INVALID and blocks
+            the commit like any other invalid row.
     CsvImportCommitRequest:
       type: object
       required:
@@ -3839,6 +3843,7 @@ components:
           type: integer
           format: int64
           minimum: 0
+          maximum: 2000000
           description: >-
             D6-COD-EXPECTED - the COD the row declares in MXN cents, 0 when it declares none. Present exactly when
             valid is true, so the dispatcher can check each amount before confirming the batch.
@@ -5861,6 +5866,9 @@ x-pilot-contract-deltas:
       value in the ORD-001 request hash; Order does not expose it because VIEWER reads Order and has no finance read
     delta: CreateOrderRequest and the CSV row accept an optional non-negative integer COD expectation in MXN cents (int64),
       declared by the dispatcher; it is copied to orders.cod_expected_cents and flows to FIN-001 and SET-001
+    cap: COD-CAP-20000-2026-10-02 (literal "Tope COD 20,000 pesos") - at most 2000000 cents (20,000.00 MXN) per order,
+      inclusive; a larger amount is the uniform 409 INVALID_REQUEST on CreateOrderRequest and the row error
+      COD_EXPECTED_CENTS_INVALID on the CSV, enforced by OrderInputPolicy and the Order domain guard (no AI-06 CHECK)
     quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the
       order and in the CSV
   - id: D7-SETTLEMENT-CLOSED-PERIOD
