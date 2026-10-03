@@ -256,9 +256,11 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                    COALESCE(docs.statuses,ARRAY[]::text[]),
                    COALESCE(docs.object_keys,ARRAY[]::text[]),
                    COALESCE(docs.hashes,ARRAY[]::bytea[]),
-                   COALESCE(docs.expirations,ARRAY[]::timestamptz[])
+                   COALESCE(docs.expirations,ARRAY[]::timestamptz[]),
+                   o.driver_eligibility_policy_version
             FROM drivers.driver_profiles p
             JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
+            JOIN organizations.organizations o ON o.id=p.org_id
             LEFT JOIN LATERAL (
               SELECT array_agg(d.document_type ORDER BY d.document_type) AS types,
                      array_agg(d.status ORDER BY d.document_type) AS statuses,
@@ -330,7 +332,8 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                 reader.GetString(7),
                 true,
                 reader.IsDBNull(8) ? null : reader.GetBoolean(8),
-                documents));
+                documents,
+                reader.GetString(14)));
         }
 
         return snapshots;
@@ -362,8 +365,10 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                      WHERE dsa.driver_id=p.id AND dsa.service_area_id=@service_area_id
                        AND dsa.org_id=p.org_id AND dsa.status='ACTIVE'
                        AND sa.owner_org_id=p.org_id AND sa.city_id=@city_id AND sa.status='ACTIVE'
-                   ) END
+                   ) END,
+                   o.driver_eligibility_policy_version
             FROM drivers.driver_profiles p
+            JOIN organizations.organizations o ON o.id=p.org_id
             LEFT JOIN identity.users u ON u.id=p.user_id
             WHERE p.id=@driver_id AND p.org_id=@organization_id;
 
@@ -396,7 +401,8 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                 reader.GetString(6),
                 reader.IsDBNull(7) ? null : reader.GetString(7),
                 reader.GetBoolean(8),
-                reader.IsDBNull(9) ? null : reader.GetBoolean(9));
+                reader.IsDBNull(9) ? null : reader.GetBoolean(9),
+                reader.GetString(10));
         }
 
         if (!await reader.NextResultAsync(cancellationToken))
@@ -433,7 +439,8 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
             profile.UserStatus,
             profile.MembershipActive,
             profile.ServiceAreaEligible,
-            documents);
+            documents,
+            profile.PolicyVersion);
     }
 
     private static NpgsqlParameter P(string name, NpgsqlDbType type, object? value) => new(name, type)
@@ -451,7 +458,8 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
         string ProfileStatus,
         string? UserStatus,
         bool MembershipActive,
-        bool? ServiceAreaEligible);
+        bool? ServiceAreaEligible,
+        string PolicyVersion);
 }
 
 public sealed class PostgreSqlAssignmentReplayEvidenceReader : IAssignmentReplayEvidenceReader

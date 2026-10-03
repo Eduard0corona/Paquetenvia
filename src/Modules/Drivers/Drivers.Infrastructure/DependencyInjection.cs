@@ -26,6 +26,9 @@ public static class DependencyInjection
         services.AddOptions<DriversOptions>()
             .Bind(configuration.GetSection(DriversOptions.SectionName))
             .Validate(options => Enum.IsDefined(options.Provider), "Drivers:Provider is unsupported.")
+            .Validate(_ => configuration.GetSection(DriversOptions.SectionName)["Eligibility:PolicyVersion"] is null,
+                "Drivers:Eligibility:PolicyVersion was removed (POLICY-VERSIONS-PER-ORG-2026-10-02): each " +
+                "organization versions its own driver eligibility policy.")
             .Validate(options => options.CommandTimeoutSeconds is >= 1 and <= 60,
                 "Drivers:CommandTimeoutSeconds must be between 1 and 60.")
             .Validate(options => options.Provider != DriversProviderKind.PostgreSql ||
@@ -95,8 +98,7 @@ public static class DependencyInjection
 
     private static bool IsComplete(DriverEligibilityOptions options)
     {
-        if (string.IsNullOrWhiteSpace(options.PolicyVersion) ||
-            options.NonExpiringDocumentTypes.Any(type => !DocumentTypes.Contains(type)))
+        if (options.NonExpiringDocumentTypes.Any(type => !DocumentTypes.Contains(type)))
         {
             return false;
         }

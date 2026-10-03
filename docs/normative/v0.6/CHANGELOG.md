@@ -13,6 +13,77 @@
 - AI-07: `create_order.phone_and_restricted_goods` menciona el `+52` opcional.
 - Sin migración; AI-04, AI-06 y AI-18 sin cambios.
 
+## Límites de la ventana de servicio confirmados (ORD-SERVICE-WINDOW-LIMITS-CONFIRMED-2026-10-03) — 2026-10-03
+
+- Respuestas literales del project owner: "Sí, 12 h y 30 días" (duración máxima de la ventana y anticipación máxima);
+  "No por ahora" (columnas de ventana en el CSV de pedidos); "No en el piloto" (validar la ventana contra el horario
+  de la zona). Registrado en `decision-log.md`.
+- Sin cambios de comportamiento: la API ya aplicaba 12 horas de duración máxima y 30 días de anticipación; el CSV-001
+  sigue sin columnas de ventana y la ventana no se compara contra ningún horario de zona en el piloto (las zonas no
+  guardan horario). La entrada ORD-SERVICE-WINDOW-OPTIONAL de `x-pilot-contract-deltas` lo documenta.
+
+## Ventana de servicio opcional en la orden (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner a "Ventana de servicio (horario de entrega): la pantalla la pide pero la API no
+  la guarda. ¿La agrego a la API?": "Sí, opcional". Registrado en `decision-log.md`.
+- AI-05: `CreateOrderRequest.service_window` opcional (`from`, `to` en RFC 3339 con zona explícita, segundos enteros,
+  normalizados a UTC; `from < to`, máximo 12 horas, `from >= ahora - 5 min`, `to > ahora`, `from <= ahora + 30 días`;
+  cualquier otra forma es 409). `Order.service_window` (null si no hay ventana: aplica el horario de la zona). Entra
+  en el hash de idempotencia solo si está presente. Nueva entrada ORD-SERVICE-WINDOW-OPTIONAL en
+  `x-pilot-contract-deltas`.
+- AI-06: `orders.orders` agrega `service_window_from` y `service_window_to` (timestamptz, nulos) con
+  `orders_service_window_check`. Lane Orders `20261002000100_AddOrderServiceWindow` adopta la forma de AI-06 y su
+  rollback falla cerrado. AI-18 sin cambios.
+- AI-04: regla de `Order.service_window`. AI-07: `create_order.service_window` (hora de Mazatlán).
+- El CSV de pedidos no cambia: su plantilla no tiene columna de ventana (confirmado por el owner el 2026-10-03,
+  "No por ahora").
+
+## Autorización manual de envíos de bajo monto en la cotización (LOW-PRICE-MANUAL-AUTH-2026-10-02) — 2026-10-02
+
+- Respuestas literales del project owner: "Sí, con autorización"; "En la cotización". Registrado en `decision-log.md`
+  (`LOW-PRICE-MANUAL-AUTH-2026-10-02`); implementa PRC-002 (flujo de financial override) acotado a esa regla.
+- AI-05: `CreateQuoteRequest.low_price_authorization` opcional (`reason` recortado, 1 a 200 caracteres, sin datos
+  personales). Solo DISPATCHER o PLATFORM_ADMIN con MFA (`x-capability-matrix.low_price_authorization`); otro rol recibe
+  403 (`MFA_REQUIRED` si solo falta el segundo factor) antes de leer estado persistido. Si el precio la necesita (sin ruta
+  consolidada y tarifa 52/45 o total de 52 MXN o menos con IVA) la cotización guarda `financial_override` = {actor_id,
+  reason, valid_until = expires_at} y la orden lo copia; si no la necesita, 409 uniforme. createQuote declara 409.
+  `Quote.low_price_authorization` muestra `valid_until` a todo lector y `actor_id`/`reason` solo a quien tiene
+  getOrderFinancials.
+- Auditoría append-only `QUOTE_LOW_PRICE_AUTHORIZED` (actor, motivo, cotización, total en centavos) en la misma
+  transacción de createQuote; la autorización forma parte de la huella de idempotencia.
+- AI-07: `create_order.low_price_guard` deja pasar una cotización autorizada y `create_order.low_price_authorization`
+  describe el campo "Autorizar envío de bajo monto". AI-02 y AI-08 (PRC-002) registran la regla.
+- Sin migración: `financial_override` y los CHECK de tarifa/ruta y piso ya existen en AI-06. AI-06 y AI-18 sin cambios.
+
+## Reglas del piloto para Google Maps (GATE-003-MAPS-PILOT-RULES-2026-10-02) — 2026-10-02
+
+- Respuestas literales del project owner: "Sí, las 4" (key restringida a la Geocoding API, sin rutas ni ETAs en el
+  piloto, reemplazar el pin solo con coincidencia exacta, búsquedas restringidas a México) y, sobre qué es "exacta",
+  "Solo ROOFTOP".
+- Adaptador Google Maps: el pin del cliente se reemplaza solo con un único resultado, sin `partial_match` y
+  `location_type` `ROOFTOP` cuyo `address_components` tenga el país `MX`; todo lo demás conserva el pin manual.
+  `components=country:MX` se envía siempre desde una constante y `Locations:GoogleMaps:ComponentsCountry` solo
+  admite `MX` (otro valor, o vacío, falla la validación al arrancar).
+- Prueba de arquitectura: ningún endpoint de Directions, Routes o Distance Matrix ni puerto de ruteo/ETA en `src`.
+- GATE-003 sigue abierto: tope de gasto, cuotas diarias, alertas de facturación y la key restringida en Key Vault
+  (`google-maps-api-key`) quedan pendientes del owner; el piloto mantiene `Locations__GeocodingProvider=Manual`.
+- Sin cambios en AI-05, AI-06, AI-18 ni migraciones.
+
+## Versiones de política de asignación y de elegibilidad por organización (POLICY-VERSIONS-PER-ORG-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Por empresa, piloto-2026-10-v1"; registrada en `decision-log.md`.
+- AI-06: `organizations.organizations.assignment_policy_version` y `driver_eligibility_policy_version`, `text NOT NULL
+  DEFAULT 'piloto-2026-10-v1'` con el formato `^[A-Za-z0-9._-]{1,64}$`. Toda organización, existente o futura,
+  empieza en `piloto-2026-10-v1`.
+- AI-04 `Organization`: ambas versiones son de la organización; se aplica la de la organización del repartidor
+  asignado o evaluado (la dueña de la orden si asigna a su repartidor, la operadora si lo hace la operadora). No
+  existe versión global.
+- Se eliminan `Dispatch:AssignmentPolicyVersion` y `Drivers:Eligibility:PolicyVersion`: la API no arranca si siguen
+  configuradas y ya no bloquean el despliegue del piloto (el guard las rechaza en `apps.settings.json`). Las reglas
+  de elegibilidad (documentos y capacidad por vehículo) siguen siendo configuración compartida.
+- Lane Organizations `20261002000100_VersionDispatchPoliciesPerOrganization`: agrega o adopta ambas columnas sin
+  reescribir filas; el rollback se niega si alguna organización tiene otra versión. AI-18 sin cambios.
+
 ## Confirmación de artículos prohibidos y teléfonos de México (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) — 2026-10-02
 
 - Respuesta literal del project owner: "Sí, ambas"; registrada en `decision-log.md`.

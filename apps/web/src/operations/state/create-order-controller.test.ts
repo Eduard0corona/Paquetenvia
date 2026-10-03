@@ -5,7 +5,11 @@ import {
   type AcceptanceVersions,
 } from "../contracts/acceptance-versions";
 import { TenantApiError } from "../api/tenant-request";
-import { parseCreatedOrder, parseQuote } from "../contracts/create-order";
+import {
+  lowPriceAuthorizationNotNeededMessage,
+  parseCreatedOrder,
+  parseQuote,
+} from "../contracts/create-order";
 import { draft, orderResponse, quoteResponse } from "../contracts/create-order.fixtures";
 import type { OperationsSession } from "../session/operations-session";
 import { CreateOrderController } from "./create-order-controller";
@@ -268,5 +272,109 @@ describe("tenant switch", () => {
     env.switchTo(orgB);
     await env.controller.start();
     expect(env.controller.getSnapshot()).toMatchObject({ phase: "ready", quote: null });
+  });
+});
+
+describe("service window (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)", () => {
+  it("sends the typed window, uses a new key when only the window changes and shows the server window", async () => {
+    const window = { from: "2026-09-28T19:00:00+00:00", to: "2026-09-28T21:00:00+00:00" };
+    const createOrder = vi
+      .fn()
+      .mockRejectedValueOnce(new TenantApiError("network"))
+      .mockResolvedValueOnce(parseCreatedOrder(orderResponse({ service_window: window })));
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { createOrder });
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder({
+      ...acceptance,
+      serviceWindowFrom: "2026-09-28T12:00",
+      serviceWindowTo: "2026-09-28T13:00",
+    });
+    await controller.confirmOrder({
+      ...acceptance,
+      serviceWindowFrom: "2026-09-28T12:00",
+      serviceWindowTo: "2026-09-28T14:00",
+    });
+    expect(createOrder.mock.calls[0][0].service_window).toEqual({
+      from: "2026-09-28T19:00:00Z",
+      to: "2026-09-28T20:00:00Z",
+    });
+    expect(createOrder.mock.calls[1][0].service_window).toEqual({
+      from: "2026-09-28T19:00:00Z",
+      to: "2026-09-28T21:00:00Z",
+    });
+    expect(createOrder.mock.calls[0][1]).not.toBe(createOrder.mock.calls[1][1]);
+    expect(controller.getSnapshot().order?.service_window).toEqual(window);
+  });
+
+  it("does not call createOrder with a window that already ended", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder({
+      ...acceptance,
+      serviceWindowFrom: "2026-09-28T07:00",
+      serviceWindowTo: "2026-09-28T09:00",
+    });
+    expect(orders.createOrder).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().errors.join(" ")).toContain("ventana de entrega");
+  });
+});
+
+describe("low price authorization (LOW-PRICE-MANUAL-AUTH-2026-10-02)", () => {
+  const authorizedAt52 = () =>
+    parseQuote(quoteResponse({
+      net: { currency: "MXN", amount_cents: 4_483 },
+      tax: { currency: "MXN", amount_cents: 717 },
+      total: { currency: "MXN", amount_cents: 5_200 },
+      pricing_tier: "BUSINESS_200_499",
+      low_price_authorization: { valid_until: "2026-09-28T18:00:00+00:00", reason: "Cliente ancla" },
+    }));
+
+  it.each(["DISPATCHER", "PLATFORM_ADMIN"])("offers the option to %s", async (role) => {
+    const { controller } = setup({ [orgA]: role });
+    await controller.start();
+    expect(controller.getSnapshot().canAuthorizeLowPrice).toBe(true);
+  });
+
+  it.each(["VIEWER", "FINANCE", "DRIVER"])("never offers it to %s", async (role) => {
+    const { controller } = setup({ [orgA]: role });
+    await controller.start();
+    expect(controller.getSnapshot().canAuthorizeLowPrice).toBe(false);
+  });
+
+  it("sends the reason on createQuote and confirms the authorized quote", async () => {
+    const createQuote = vi.fn(async () => authorizedAt52());
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" }, { createQuote });
+    await controller.start();
+    await controller.requestQuote(draft({ authorizeLowPrice: true, lowPriceReason: " Cliente ancla " }));
+    expect((createQuote.mock.calls[0] as unknown[])[0]).toMatchObject({
+      low_price_authorization: { reason: "Cliente ancla" },
+    });
+    await controller.confirmOrder(acceptance);
+    expect(orders.createOrder).toHaveBeenCalledTimes(1);
+    const body = (vi.mocked(orders.createOrder).mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("low_price_authorization");
+    expect(controller.getSnapshot().order?.public_id).toBe("PQ-000123");
+  });
+
+  it("explains the uniform 409 of an authorization the price does not need", async () => {
+    const { controller } = setup(
+      { [orgA]: "DISPATCHER" },
+      { createQuote: vi.fn().mockRejectedValue(new TenantApiError("conflict")) },
+    );
+    await controller.start();
+    await controller.requestQuote(draft({ authorizeLowPrice: true, lowPriceReason: "Cliente ancla" }));
+    expect(controller.getSnapshot().message).toBe(lowPriceAuthorizationNotNeededMessage);
+  });
+
+  it("offers the MFA step-up when a PLATFORM_ADMIN without MFA authorizes", async () => {
+    const { controller } = setup(
+      { [orgA]: "PLATFORM_ADMIN" },
+      { createQuote: vi.fn().mockRejectedValue(new TenantApiError("forbidden", "MFA_REQUIRED", true)) },
+    );
+    await controller.start();
+    await controller.requestQuote(draft({ authorizeLowPrice: true, lowPriceReason: "Cliente ancla" }));
+    expect(controller.getSnapshot().stepUpHref).toBe("/login?mfa=required&return_url=%2Fops%2Forders%2Fnew");
   });
 });

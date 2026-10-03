@@ -782,7 +782,6 @@ public sealed class OrderAttemptCustodyPostgreSqlContractTests(PostgreSqlContrac
 
     internal static OrderTransitionDriverEligibilityOptions EligibilityOptions() => new()
     {
-        PolicyVersion = "ord-002-contract-v1",
         RequiredDocumentTypesByVehicleType = new(StringComparer.Ordinal)
         {
             ["MOTORCYCLE"] = ["IDENTITY"],

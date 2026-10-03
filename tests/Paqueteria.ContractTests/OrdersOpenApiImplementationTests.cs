@@ -34,7 +34,8 @@ public sealed class OrdersOpenApiImplementationTests
     public void Request_and_response_DTOs_match_AI05_without_internal_or_PII_fields()
     {
         AssertJsonProperties<CreateOrderRequest>(
-            "acceptance", "cod_expected_cents", "payer_type", "quote_id", "restricted_goods_acknowledged");
+            "acceptance", "cod_expected_cents", "payer_type", "quote_id", "restricted_goods_acknowledged",
+            "service_window");
         AssertJsonProperties<OrderAcceptanceRequest>(
             "acceptance_channel", "accepted_at", "privacy_version", "terms_version");
         AssertJsonProperties<TransitionOrderRequest>(
@@ -42,7 +43,7 @@ public sealed class OrdersOpenApiImplementationTests
         AssertJsonProperties<OrderResponse>(
             "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id",
             "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
-            "quote_id", "service_area_id", "service_type", "status", "total", "version");
+            "quote_id", "service_area_id", "service_type", "service_window", "status", "total", "version");
         AssertJsonProperties<OrderTimelineResponse>("event_type", "occurred_at");
         AssertJsonProperties<OrderPageResponse>("items", "next_cursor");
 
@@ -313,7 +314,7 @@ public sealed class OrdersOpenApiImplementationTests
         AssertJsonProperties<OrderResponse>(
             "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id",
             "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
-            "quote_id", "service_area_id", "service_type", "status", "total", "version");
+            "quote_id", "service_area_id", "service_type", "service_window", "status", "total", "version");
         Assert.DoesNotContain(
             typeof(OrderDetailResponse).GetProperties(),
             property => property.Name.Contains("Cod", StringComparison.Ordinal));
@@ -336,6 +337,52 @@ public sealed class OrdersOpenApiImplementationTests
             .Single(entry => entry.Scalar("id") == "D6-COD-EXPECTED");
         Assert.Equal("DECIDED", delta.Scalar("status"));
         Assert.Contains("feature/ord-csv-cod-expected", delta.Scalar("implementation"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_service_window_matches_AI05_on_the_request_and_the_Order()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var request = schemas.Mapping("CreateOrderRequest").Mapping("properties").Mapping("service_window");
+        var order = schemas.Mapping("Order").Mapping("properties").Mapping("service_window");
+        foreach (var window in new[] { request, order })
+        {
+            Assert.Equal(
+                ["null", "object"],
+                window.Sequence("type").Children.Select(node => Assert.IsType<YamlScalarNode>(node).Value!).Order(StringComparer.Ordinal));
+            Assert.Equal(["from", "to"], RequiredPropertyNames(window));
+            Assert.Equal(["from", "to"], PropertyNames(window));
+            foreach (var bound in new[] { "from", "to" })
+            {
+                Assert.Equal("date-time", window.Mapping("properties").Mapping(bound).Scalar("format"));
+            }
+        }
+
+        Assert.Equal("false", request.Scalar("additionalProperties"));
+        Assert.Equal("false", order.Scalar("additionalProperties"));
+        Assert.Equal(
+            OrderServiceWindowPolicy.MaximumInstantLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.Mapping("properties").Mapping("from").Scalar("maxLength"));
+        var description = request.Scalar("description");
+        Assert.Contains("at most 12 hours", description, StringComparison.Ordinal);
+        Assert.Contains("now - 5 minutes", description, StringComparison.Ordinal);
+        Assert.Contains("now + 30 days", description, StringComparison.Ordinal);
+        Assert.Contains(OrderServiceWindowPolicy.PilotTimeZone, description, StringComparison.Ordinal);
+        Assert.Equal(TimeSpan.FromHours(12), OrderServiceWindowPolicy.MaximumSpan);
+        Assert.Equal(TimeSpan.FromDays(30), OrderServiceWindowPolicy.MaximumLeadTime);
+        Assert.Equal(OrderAcceptanceInputPolicy.MaximumFutureSkew, OrderServiceWindowPolicy.ClockTolerance);
+        Assert.Equal(["from", "to"], JsonPropertyNames<ServiceWindowResponse>());
+
+        var delta = root.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Single(entry => entry.Scalar("id") == "ORD-SERVICE-WINDOW-OPTIONAL");
+        Assert.Equal("DECIDED", delta.Scalar("status"));
+        Assert.Equal("ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02", delta.Scalar("decision"));
+        Assert.Contains("feature/ord-service-window", delta.Scalar("implementation"), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            CsvOrderImportContract.HeaderWithCod,
+            column => column.Contains("window", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -378,9 +425,10 @@ public sealed class OrdersOpenApiImplementationTests
         var createOrder = root.Mapping("components").Mapping("schemas").Mapping("CreateOrderRequest");
         var acceptance = createOrder.Mapping("properties").Mapping("acceptance");
 
-        // D6-COD-EXPECTED: cod_expected_cents is the one optional CreateOrderRequest field.
+        // D6-COD-EXPECTED and ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: cod_expected_cents and service_window are
+        // the optional CreateOrderRequest fields.
         Assert.Equal(
-            JsonPropertyNames<CreateOrderRequest>().Where(name => name != "cod_expected_cents"),
+            JsonPropertyNames<CreateOrderRequest>().Where(name => name is not ("cod_expected_cents" or "service_window")),
             RequiredPropertyNames(createOrder));
         Assert.Equal(
             JsonPropertyNames<CreateOrderRequest>(),

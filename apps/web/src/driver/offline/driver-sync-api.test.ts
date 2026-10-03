@@ -58,6 +58,25 @@ describe("driver sync API", () => {
     );
   });
 
+  it("accepts the order service window absent, null or valid and rejects a malformed one", async () => {
+    // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: an API released before the window omits it.
+    const preWindow = transitionResponse();
+    delete preWindow.service_window;
+    const window = { from: "2026-07-26T19:00:00+00:00", to: "2026-07-26T21:00:00+00:00" };
+    for (const [body, ok] of [
+      [preWindow, true],
+      [transitionResponse(), true],
+      [{ ...transitionResponse(), service_window: window }, true],
+      [{ ...transitionResponse(), service_window: { from: window.to, to: window.from } }, false],
+      [{ ...transitionResponse(), service_window: { from: window.from } }, false],
+    ] as const) {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(jsonResponse(body, 200));
+      const api = createDriverSyncApi({ baseUrl: "https://api.synthetic.test", session, fetch });
+      if (ok) await expect(api.transitionOrder(operation)).resolves.toMatchObject({ version: 10 });
+      else await expect(api.transitionOrder(operation)).rejects.toThrow();
+    }
+  });
+
   it("keeps a signed URL memory-only and sends only required PUT headers", async () => {
     const grant = {
       id: "44444444-4444-4444-8444-444444444444",
@@ -336,5 +355,6 @@ function transitionResponse(): Record<string, unknown> {
     total: { currency: "MXN", amount_cents: 11_600 },
     claim_window_ends_at: null,
     finalized_at: "2026-07-26T12:00:00.000Z",
+    service_window: null,
   };
 }

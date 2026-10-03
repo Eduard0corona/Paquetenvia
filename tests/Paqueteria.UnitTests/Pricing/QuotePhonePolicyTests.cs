@@ -81,7 +81,7 @@ public sealed class QuotePhonePolicyTests
     [InlineData("667111111", "6672222222")]
     public async Task The_quote_service_rejects_an_invalid_phone_before_any_dependency(string origin, string destination)
     {
-        var service = new PostgreSqlQuoteService(null!, null!, null!, null!, null!, null!);
+        var service = new PostgreSqlQuoteService(null!, null!, null!, null!, null!, null!, null!);
 
         var exception = await Assert.ThrowsAsync<QuoteValidationException>(() =>
             service.CreateAsync(Command(origin, destination), CancellationToken.None));

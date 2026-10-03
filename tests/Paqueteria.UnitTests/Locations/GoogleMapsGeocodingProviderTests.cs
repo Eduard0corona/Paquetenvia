@@ -46,12 +46,15 @@ public sealed class GoogleMapsGeocodingProviderTests
     }
 
     [Theory]
-    [InlineData("RANGE_INTERPOLATED", false, true)]
+    [InlineData("ROOFTOP", false, true)]
+    [InlineData("RANGE_INTERPOLATED", false, false)]
     [InlineData("GEOMETRIC_CENTER", false, false)]
     [InlineData("APPROXIMATE", false, false)]
+    [InlineData("rooftop", false, false)]
     [InlineData("ROOFTOP", true, false)]
-    public async Task Only_non_partial_rooftop_or_interpolated_matches_move_the_pin(string locationType, bool partial, bool resolved)
+    public async Task Only_a_non_partial_rooftop_match_moves_the_pin(string locationType, bool partial, bool resolved)
     {
+        // GATE-003-MAPS-PILOT-RULES-2026-10-02: owner literal "Solo ROOFTOP".
         using var provider = Create(new FakeGoogleHandler(_ => Json(Ok(locationType, 23.1, -106.3, partial))));
 
         var result = await provider.GeocodeAsync(Request, default);
@@ -60,6 +63,87 @@ public sealed class GoogleMapsGeocodingProviderTests
         Assert.Equal(resolved ? 23.1 : PinLatitude, result.Latitude);
         Assert.Equal(resolved ? -106.3 : PinLongitude, result.Longitude);
         Assert.Equal(resolved ? "GOOGLE_MAPS" : "MANUAL", result.ProviderMode);
+    }
+
+    [Fact]
+    public async Task A_rooftop_match_without_partial_match_field_is_exact()
+    {
+        const string body =
+            """{"status":"OK","results":[{"geometry":{"location":{"lat":23.1,"lng":-106.3},"location_type":"ROOFTOP"},"address_components":[{"long_name":"México","short_name":"MX","types":["country","political"]}]}]}""";
+        using var provider = Create(new FakeGoogleHandler(_ => Json(body)));
+
+        var result = await provider.GeocodeAsync(Request, default);
+
+        Assert.Equal(new GeocodingResult("Centro Mazatlán", 23.1, -106.3, "GOOGLE_MAPS", false), result);
+    }
+
+    [Theory]
+    [InlineData("""[{"long_name":"United States","short_name":"US","types":["country","political"]}]""")]
+    [InlineData("""[{"long_name":"Mazatlán","short_name":"MX","types":["locality","political"]}]""")]
+    [InlineData("""[{"long_name":"México","short_name":"mx","types":["country","political"]}]""")]
+    [InlineData("""[{"long_name":"México","types":["country","political"]}]""")]
+    [InlineData("""[{"long_name":"México","short_name":"MX"}]""")]
+    [InlineData("""[]""")]
+    [InlineData("""{"short_name":"MX"}""")]
+    [InlineData(null)]
+    public async Task A_rooftop_match_outside_Mexico_or_without_a_Mexican_country_component_keeps_the_pin(string? components)
+    {
+        var handler = new FakeGoogleHandler(_ => Json(Ok("ROOFTOP", 23.1, -106.3, components: components)));
+        var logger = new CapturingLogger();
+        using var provider = Create(handler, options => options.CircuitBreakerFailureThreshold = 1, logger: logger);
+
+        AssertManualPin(await provider.GeocodeAsync(Request, default));
+        Assert.Single(handler.Requests);
+        Assert.Equal(GoogleMapsCircuitBreaker.State.Closed, provider.CircuitBreaker.CurrentState);
+        Assert.Contains(logger.Entries, entry => entry.Contains("(outside_country)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Every_request_targets_only_the_geocoding_path_and_is_restricted_to_Mexico()
+    {
+        var handler = new FakeGoogleHandler(_ => Json("""{"status":"ZERO_RESULTS","results":[]}"""));
+        using var provider = Create(handler, options =>
+        {
+            options.BaseUri = "https://maps.example.test/";
+            options.Region = string.Empty;
+        });
+
+        foreach (var address in new[] { Address, "  Av. del Mar 1, Mazatlán  ", "Directions/json?x=1", "../../distancematrix/json" })
+        {
+            AssertManualPin(await provider.GeocodeAsync(Request with { AddressText = address }, default));
+            var uri = provider.BuildRequestUri(address);
+            Assert.Equal("/" + GoogleMapsGeocodingProvider.GeocodePath, uri.AbsolutePath);
+            Assert.Equal("country:MX", ParseQuery(uri)["components"]);
+        }
+
+        Assert.Equal(4, handler.Requests.Count);
+        Assert.All(handler.Requests, sent =>
+        {
+            Assert.Equal(HttpMethod.Get, sent.Method);
+            Assert.Equal("/maps/api/geocode/json", sent.Uri.AbsolutePath);
+            Assert.Equal("country:MX", ParseQuery(sent.Uri)["components"]);
+        });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("US")]
+    [InlineData("mx")]
+    [InlineData("MX|country:US")]
+    public void The_country_restriction_cannot_be_changed_or_emptied(string country)
+    {
+        Assert.True(GoogleMapsGeocodingOptions.IsValid(new GoogleMapsGeocodingOptions { ApiKey = ApiKey }));
+        Assert.False(GoogleMapsGeocodingOptions.IsValid(new GoogleMapsGeocodingOptions { ApiKey = ApiKey, ComponentsCountry = country }));
+        Assert.Throws<InvalidOperationException>(() => Create(new FakeGoogleHandler(_ => Json("{}")), options => options.ComponentsCountry = country));
+
+        using var module = BuildModule(new()
+        {
+            ["Locations:GeocodingProvider"] = "GoogleMaps",
+            ["Locations:GoogleMaps:ApiKey"] = ApiKey,
+            ["Locations:GoogleMaps:ComponentsCountry"] = country,
+        });
+        Assert.Throws<OptionsValidationException>(() => module.GetRequiredService<IOptions<LocationsOptions>>().Value);
     }
 
     [Theory]
@@ -381,10 +465,20 @@ public sealed class GoogleMapsGeocodingProviderTests
         return services.BuildServiceProvider();
     }
 
-    private static string Ok(string locationType, double latitude, double longitude, bool partial = false)
+    private const string MexicoComponents =
+        """[{"long_name":"Mazatlán","short_name":"Mazatlán","types":["locality","political"]},""" +
+        """{"long_name":"México","short_name":"MX","types":["country","political"]}]""";
+
+    private static string Ok(
+        string locationType,
+        double latitude,
+        double longitude,
+        bool partial = false,
+        string? components = MexicoComponents)
     {
         var culture = System.Globalization.CultureInfo.InvariantCulture;
         return "{\"status\":\"OK\",\"results\":[{\"formatted_address\":\"Calle Privada 123, Colonia Sensible\"," +
+            (components is null ? string.Empty : "\"address_components\":" + components + ",") +
             "\"partial_match\":" + (partial ? "true" : "false") + "," +
             "\"geometry\":{\"location\":{\"lat\":" + latitude.ToString("R", culture) + ",\"lng\":" + longitude.ToString("R", culture) + "}," +
             "\"location_type\":\"" + locationType + "\"}}]}";

@@ -66,7 +66,7 @@ conserva el DTO exacto de OBS-001:
 - owner/operator con nombre canónico visible bajo RLS;
 - cliente visible o `null`;
 - zona operativa de destino o `null`;
-- ventanas en `null`, representadas como `Por confirmar`;
+- `pickup_window` en `null`; `delivery_window` es la ventana de servicio de la orden (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) o `null`, representada como `Horario de la zona`;
 - assignment más reciente entre `ACCEPTED`/`ACTIVE`; más de uno falla cerrado;
 - `driver_reference` no PII `DRV-xxxxxxxx`; el ID contractual no se renderiza;
 - posición persistida más reciente del conductor activo;
@@ -159,7 +159,7 @@ lista semánticas, `time datetime`, aria-live/aria-busy, foco visible, targets d
 - El endpoint aditivo `GET /api/v1/operations/dashboard` todavía no está
   declarado en AI-05; `HttpSurfaceOpenApiCoverageTests` lo nombra como única
   excepción. Declararlo requiere una decisión normativa propia.
-- Ventanas no están persistidas; cliente puede quedar `null`.
+- La ventana de recolección no está persistida; cliente puede quedar `null`.
 - La referencia de conductor no es nombre personal.
 - Posiciones no es un mapa; GATE-003 continúa abierto.
 - Las posiciones exactas sólo son visibles a operaciones autorizadas.

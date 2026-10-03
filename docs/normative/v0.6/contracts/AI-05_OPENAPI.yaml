@@ -32,6 +32,25 @@ paths:
       tags:
       - Quotes
       operationId: createQuote
+      description: >-
+        LOW-PRICE-MANUAL-AUTH-2026-10-02. The optional low_price_authorization
+        lets a DISPATCHER, or a PLATFORM_ADMIN with a satisfied MFA challenge
+        (x-capability-matrix low_price_authorization), authorize a shipment of
+        52 MXN or less, IVA included, that is not on a consolidated route, and
+        a BUSINESS_200_499 or BUSINESS_500_PLUS quote without a consolidated
+        route. The field capability is decided before any persisted state is
+        read; any other caller that sends it receives 403 (MFA_REQUIRED when
+        only the second factor is missing). The quote then stores the AI-06
+        financial_override {actor_id: caller, reason, valid_until: the quote's
+        expires_at}, the order created from it copies the override unchanged,
+        and an append-only audit entry (QUOTE_LOW_PRICE_AUTHORIZED: actor,
+        reason, quote id, total cents) is written in the same transaction. An
+        authorization the selected price does not need (consolidated_route
+        true, or a total above 5200 cents in another tier) is the uniform 409:
+        no quote, override or authorization audit entry is written (like any
+        other refusal after location resolution, the Idempotency-Key stays
+        bound to the request). The authorization (actor and reason) is part of
+        the Idempotency-Key fingerprint.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/IdempotencyKey'
@@ -48,6 +67,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Quote'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationError'
         '401':
@@ -2902,7 +2923,30 @@ components:
           description: AI05-INPUT-LIMITS; more than 20 packages is a validation error (422).
           items:
             $ref: '#/components/schemas/PackageInput'
+        low_price_authorization:
+          $ref: '#/components/schemas/LowPriceAuthorizationInput'
       description: Owner organization is derived from X-Organization-Id after membership validation.
+    LowPriceAuthorizationInput:
+      type: object
+      required:
+      - reason
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >-
+            LOW-PRICE-MANUAL-AUTH-2026-10-02. Why the low price shipment is
+            authorized; trimmed before validation, 1 to 200 characters, no
+            control characters. Operational text only - it must not contain
+            personal data (names, phone numbers, emails, addresses) or secrets;
+            a reason the audit redactor would alter is a validation error (422).
+      description: >-
+        LOW-PRICE-MANUAL-AUTH-2026-10-02 (project owner, 2026-10-02: "Sí, con
+        autorización"; "En la cotización"). Manual authorization of a shipment
+        of 52 MXN or less, IVA included, that is not on a consolidated route.
+        Only DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA
+        challenge may send it.
     PackageInput:
       type: object
       required:
@@ -3019,6 +3063,36 @@ components:
           type: object
           additionalProperties: true
           description: Must not contain plaintext address, contact name, telephone or access notes.
+        low_price_authorization:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - valid_until
+          properties:
+            valid_until:
+              type: string
+              format: date-time
+              description: The quote's expires_at; the authorization is valid exactly as long as the quote.
+            actor_id:
+              type: string
+              format: uuid
+              description: The user who authorized. Present only for a caller holding getOrderFinancials.
+            reason:
+              type: string
+              minLength: 1
+              maxLength: 200
+              description: The authorization reason. Present only for a caller holding getOrderFinancials.
+          description: >-
+            LOW-PRICE-MANUAL-AUTH-2026-10-02. The quote's financial_override,
+            exposed conservatively; null when the quote carries no manual low
+            price authorization. Every caller that reads the quote learns that
+            an authorization exists and its validity; who authorized and why
+            are financial control data, returned only to a caller that holds
+            getOrderFinancials in the selected organization (DISPATCHER members
+            and PLATFORM_ADMIN members with a satisfied MFA challenge). A VIEWER
+            and a PLATFORM_ADMIN without MFA receive valid_until only.
     CreateOrderRequest:
       type: object
       required:
@@ -3095,6 +3169,34 @@ components:
             the customer's acceptance, so OrderAcceptanceCanonicalForm v1 is unchanged; it is recorded in the
             append-only ORDER_CREATED order event (its actor and occurred_at say who confirmed and when) and in the
             ORDER_CREATED audit entry, and it is part of the Idempotency-Key request hash.
+        service_window:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - from
+          - to
+          properties:
+            from:
+              type: string
+              format: date-time
+              maxLength: 33
+            to:
+              type: string
+              format: date-time
+              maxLength: 33
+          description: >-
+            ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 - optional delivery window the dispatcher commits to; absent or
+            null means the order has no window of its own and the zone's schedule applies. from and to are RFC 3339
+            date-times with an explicit offset (Z or +hh:mm/-hh:mm; a local time without offset is rejected) and
+            whole-second precision, normalized to UTC; the pilot zone is America/Mazatlan and clients convert the
+            wall-clock time typed by the dispatcher with that zone. The window must satisfy from < to, to - from at
+            most 12 hours, and against server time with the 5-minute clock tolerance from >= now - 5 minutes, to >
+            now and from <= now + 30 days; no same-calendar-day rule applies. Anything else, including any other
+            member, is rejected with 409 before any order is created. It is stored on the order, returned as
+            Order.service_window and is part of the Idempotency-Key request hash, so replaying a key with another
+            window is a conflict.
     Order:
       type: object
       required:
@@ -3168,6 +3270,24 @@ components:
           - string
           - 'null'
           format: date-time
+        service_window:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - from
+          - to
+          properties:
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+          description: >-
+            ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 - the delivery window given on createOrder, as UTC instants; null
+            means the order has no window of its own and the zone's schedule applies.
     OrderDetail:
       allOf:
       - $ref: '#/components/schemas/Order'
@@ -5898,6 +6018,14 @@ x-capability-matrix:
     listIncidents: [DISPATCHER, PLATFORM_ADMIN]
     getIncident: [DISPATCHER, PLATFORM_ADMIN]
     listOrderProofs: [DISPATCHER, PLATFORM_ADMIN]
+  low_price_authorization_decision: LOW-PRICE-MANUAL-AUTH-2026-10-02 (project owner, 2026-10-02, "Sí, con autorización")
+    - the createQuote field low_price_authorization admits DISPATCHER members without MFA and PLATFORM_ADMIN members
+    with a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor is missing); every other role receives
+    403, decided before any persisted state is read. It is a field capability of createQuote, not a separate operation
+  low_price_authorization_status: IMPLEMENTED (feature/low-price-manual-authorization, TenantFieldCapabilities and its
+    tests)
+  low_price_authorization:
+    createQuote.low_price_authorization: [DISPATCHER, PLATFORM_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -5945,6 +6073,19 @@ x-pilot-contract-deltas:
       the ORD-001 request hash and is recorded in the append-only ORDER_CREATED order event and audit entry, never in
       order_acceptances or OrderAcceptanceCanonicalForm v1; AddressInput.phone (createQuote) is a 10-digit Mexican number
       after removing ASCII spaces and hyphens, otherwise 422, and only the normalized digits are hashed and stored
+  - id: ORD-SERVICE-WINDOW-OPTIONAL
+    status: DECIDED
+    decision: ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02
+    literal: 'Ventana de servicio (horario de entrega): la pantalla la pide pero la API no la guarda. ¿La agrego a la
+      API? - Sí, opcional'
+    implementation: shipped by feature/ord-service-window together with its code and tests - CreateOrderRequest.service_window,
+      Order.service_window, the window in the ORD-001 request hash and the Orders lane 20261002000100_AddOrderServiceWindow
+    delta: CreateOrderRequest accepts an optional service_window {from, to}; it is stored on orders.service_window_from and
+      orders.service_window_to and returned on Order and OrderDetail; absent means the zone's schedule applies. The CSV-001
+      template has no window column and is unchanged
+    confirmed: ORD-SERVICE-WINDOW-LIMITS-CONFIRMED-2026-10-03 (project owner, 2026-10-03) - "Sí, 12 h y 30 días" for the
+      12-hour maximum span and the 30-day maximum lead time; "No por ahora" to window columns in the CSV-001 template;
+      "No en el piloto" to validating the window against a zone schedule (operating zones store none)
   - id: D7-SETTLEMENT-CLOSED-PERIOD
     status: DECIDED
     decision: D7-SETTLEMENT-RULES

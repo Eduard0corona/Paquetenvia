@@ -1,5 +1,6 @@
 import { isAcceptanceVersion, type AcceptanceVersions, acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import { formatMxnCentsWithCurrency, maximumCodExpectedCents, parseMxnToCents } from "./money";
+import { buildServiceWindow, type ServiceWindowBody } from "./service-window";
 
 /**
  * /ops/orders/new (AI-07 create_order) against AI-05 createQuote and createOrder.
@@ -32,10 +33,14 @@ export const maximumPackages = 20;
  * AI-07 create_order.low_price_guard: block confirmation at <= 52 MXN total, IVA included
  * (GATE-011-VAT-INCLUDED-2026-09-29: "52 con IVA incluido"), unless the route flag
  * (consolidated_route, AI-02 low_price_guard) or an authorized override. The guard reads the
- * VAT-included total the customer pays, never the pre-tax net. AI-05 exposes no override on
- * createOrder, so only the route flag unblocks it here.
+ * VAT-included total the customer pays, never the pre-tax net. The override is the quote's
+ * `low_price_authorization` (LOW-PRICE-MANUAL-AUTH-2026-10-02), sent on createQuote, never on
+ * createOrder; the server decides whether the quote carries it.
  */
 export const lowPriceGuardTotalCents = 5_200;
+
+/** LOW-PRICE-MANUAL-AUTH-2026-10-02: AI-05 LowPriceAuthorizationInput.reason maxLength. */
+export const lowPriceAuthorizationReasonMaximum = 200;
 
 /** GATE-011-VAT-INCLUDED-2026-09-29: every price is presented with IVA included. */
 export const vatIncludedLabel = "IVA incluido";
@@ -48,6 +53,16 @@ export interface Money {
 export interface QuoteBreakdownLine {
   readonly line_type: string | null;
   readonly amount_cents: number | null;
+}
+
+/**
+ * LOW-PRICE-MANUAL-AUTH-2026-10-02: the manual authorization a quote carries. `actor_id`
+ * and `reason` are `null` when the API withholds them from the active role.
+ */
+export interface QuoteLowPriceAuthorization {
+  readonly valid_until: string;
+  readonly actor_id: string | null;
+  readonly reason: string | null;
 }
 
 export interface Quote {
@@ -65,6 +80,7 @@ export interface Quote {
   readonly minimum_total_cents_snapshot: number;
   readonly pricing_policy_version: string;
   readonly status: QuoteStatus;
+  readonly low_price_authorization: QuoteLowPriceAuthorization | null;
 }
 
 export interface CreatedOrder {
@@ -75,6 +91,8 @@ export interface CreatedOrder {
   readonly price_net: Money;
   readonly total: Money;
   readonly service_type: ServiceType;
+  /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: null means the zone's schedule applies. */
+  readonly service_window: ServiceWindowBody | null;
 }
 
 export interface AddressDraft {
@@ -102,6 +120,12 @@ export interface QuoteDraft {
   readonly serviceType: string;
   readonly consolidatedRoute: boolean;
   readonly packages: readonly PackageDraft[];
+  /**
+   * LOW-PRICE-MANUAL-AUTH-2026-10-02: "Autorizar envío de bajo monto". Only DISPATCHER and
+   * PLATFORM_ADMIN see the option; the reason is operational text without personal data.
+   */
+  readonly authorizeLowPrice?: boolean;
+  readonly lowPriceReason?: string;
 }
 
 /** What the operator captures; versions and channel are never operator input. */
@@ -118,6 +142,12 @@ export interface AcceptanceDraft {
    * empty or absent means no COD. Converted to integer cents without floating point.
    */
   readonly codAmount?: string;
+  /**
+   * ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: optional delivery window as `datetime-local`
+   * values read as America/Mazatlan wall-clock time; both empty means no window.
+   */
+  readonly serviceWindowFrom?: string;
+  readonly serviceWindowTo?: string;
 }
 
 interface AddressBody {
@@ -145,6 +175,7 @@ export interface CreateQuoteBody {
   service_type: ServiceType;
   consolidated_route: boolean;
   packages: PackageBody[];
+  low_price_authorization?: { reason: string };
 }
 
 export interface CreateOrderBody {
@@ -160,6 +191,8 @@ export interface CreateOrderBody {
   cod_expected_cents?: number;
   /** ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: required, and only `true` is valid. */
   restricted_goods_acknowledged: true;
+  /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: UTC instants, sent only when a window was typed. */
+  service_window?: ServiceWindowBody;
 }
 
 export type DraftResult<T> =
@@ -189,6 +222,13 @@ export function buildCreateQuoteBody(draft: QuoteDraft): DraftResult<CreateQuote
   const packages = draft.packages.map((item, index) =>
     packageBody(item, index + 1, errors),
   );
+  const lowPriceReason = draft.authorizeLowPrice === true ? (draft.lowPriceReason ?? "").trim() : null;
+  if (lowPriceReason !== null && lowPriceReason === "")
+    errors.push("Captura el motivo de la autorización de bajo monto.");
+  if (lowPriceReason !== null && lowPriceReason.length > lowPriceAuthorizationReasonMaximum)
+    errors.push(`El motivo de la autorización admite ${lowPriceAuthorizationReasonMaximum} caracteres.`);
+  if (lowPriceReason !== null && /[\u0000-\u001f\u007f-\u009f]/.test(lowPriceReason))
+    errors.push("El motivo de la autorización debe ser una sola línea.");
   if (errors.length > 0) return { ok: false, errors };
   const body: CreateQuoteBody = {
     origin: origin!,
@@ -198,6 +238,7 @@ export function buildCreateQuoteBody(draft: QuoteDraft): DraftResult<CreateQuote
     packages: packages as PackageBody[],
   };
   if (clientAccountId !== "") body.client_account_id = clientAccountId;
+  if (lowPriceReason !== null) body.low_price_authorization = { reason: lowPriceReason };
   return { ok: true, body };
 }
 
@@ -318,6 +359,8 @@ export function buildCreateOrderBody(
   const codCents = codExpectedCents(draft.codAmount);
   if (codCents === null) errors.push(invalidCodAmountMessage);
   else if (codCents > maximumCodExpectedCents) errors.push(codAmountAboveCapMessage);
+  const serviceWindow = buildServiceWindow(draft.serviceWindowFrom, draft.serviceWindowTo, acceptedAt);
+  if (!serviceWindow.ok) errors.push(serviceWindow.error);
   if (errors.length > 0) return { ok: false, errors };
   const body: CreateOrderBody = {
     quote_id: quoteId,
@@ -332,6 +375,8 @@ export function buildCreateOrderBody(
   };
   // Zero is "no COD": the field is left out, which the server treats identically.
   if (codCents! > 0) body.cod_expected_cents = codCents!;
+  // Both empty is "no window": the field is left out and the zone's schedule applies.
+  if (serviceWindow.ok && serviceWindow.window !== null) body.service_window = serviceWindow.window;
   return { ok: true, body };
 }
 
@@ -374,7 +419,11 @@ export function codExpectedCents(text: string | undefined): number | null {
 
 export type ConfirmationBlocker = "inactive" | "expired" | "low_price";
 
-/** AI-07 create_order: quote not expired and the low price guard. */
+/**
+ * AI-07 create_order: quote not expired and the low price guard. A quote that carries the
+ * manual authorization (LOW-PRICE-MANUAL-AUTH-2026-10-02) passes the guard; its validity is
+ * the quote's own expiry, which the expiry blocker already enforces.
+ */
 export function evaluateConfirmation(
   quote: Quote,
   now: Date,
@@ -382,7 +431,11 @@ export function evaluateConfirmation(
   const blockers: ConfirmationBlocker[] = [];
   if (quote.status !== "ACTIVE") blockers.push("inactive");
   if (Date.parse(quote.expires_at) <= now.getTime()) blockers.push("expired");
-  if (quote.total.amount_cents <= lowPriceGuardTotalCents && !quote.consolidated_route)
+  if (
+    quote.total.amount_cents <= lowPriceGuardTotalCents &&
+    !quote.consolidated_route &&
+    quote.low_price_authorization === null
+  )
     blockers.push("low_price");
   return blockers;
 }
@@ -391,8 +444,12 @@ export const confirmationBlockerLabels: Readonly<Record<ConfirmationBlocker, str
   inactive: "La cotización ya no está activa; cotiza de nuevo.",
   expired: "La cotización expiró; cotiza de nuevo.",
   low_price:
-    "Total de 52 MXN o menos (IVA incluido): solo se confirma con ruta consolidada.",
+    "Total de 52 MXN o menos (IVA incluido): solo se confirma con ruta consolidada o con autorización de envío de bajo monto.",
 };
+
+/** LOW-PRICE-MANUAL-AUTH-2026-10-02: Spanish copy for the uniform 409 of createQuote. */
+export const lowPriceAuthorizationNotNeededMessage =
+  "La autorización de bajo monto no aplica a esta cotización (ruta consolidada o total mayor a 52 MXN con IVA incluido). Cotiza sin autorizar.";
 
 // ---------------------------------------------------------------------------
 // Response parsers
@@ -425,7 +482,7 @@ export function parseQuote(value: unknown): Quote {
       "status",
       "city_id",
     ],
-    ["breakdown", "service_area_id", "request_snapshot_redacted"],
+    ["breakdown", "service_area_id", "request_snapshot_redacted", "low_price_authorization"],
   );
   uuid(object.origin_location_id);
   uuid(object.destination_location_id);
@@ -461,6 +518,20 @@ export function parseQuote(value: unknown): Quote {
     minimum_total_cents_snapshot: nonNegativeInteger(object.minimum_total_cents_snapshot),
     pricing_policy_version: boundedString(object.pricing_policy_version, 1, 128),
     status: oneOf(object.status, quoteStatuses),
+    low_price_authorization: lowPriceAuthorization(object.low_price_authorization),
+  };
+}
+
+function lowPriceAuthorization(value: unknown): QuoteLowPriceAuthorization | null {
+  if (value === undefined || value === null) return null;
+  const object = knownObject(value, ["valid_until"], ["actor_id", "reason"]);
+  return {
+    valid_until: utc(object.valid_until),
+    actor_id: object.actor_id === undefined ? null : uuid(object.actor_id),
+    reason:
+      object.reason === undefined
+        ? null
+        : boundedString(object.reason, 1, lowPriceAuthorizationReasonMaximum),
   };
 }
 
@@ -487,6 +558,7 @@ export function parseCreatedOrder(value: unknown): CreatedOrder {
       "service_area_id",
       "claim_window_ends_at",
       "finalized_at",
+      "service_window",
     ],
   );
   uuid(object.owner_org_id);
@@ -504,7 +576,20 @@ export function parseCreatedOrder(value: unknown): CreatedOrder {
     price_net: money(object.price_net),
     total: money(object.total),
     service_type: oneOf(object.service_type, serviceTypes),
+    service_window:
+      object.service_window === undefined || object.service_window === null
+        ? null
+        : parseServiceWindow(object.service_window),
   };
+}
+
+/** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: exactly `from` and `to`, offset-qualified, from before to. */
+export function parseServiceWindow(value: unknown): ServiceWindowBody {
+  const object = knownObject(value, ["from", "to"], []);
+  const from = utc(object.from);
+  const to = utc(object.to);
+  if (Date.parse(from) >= Date.parse(to)) fail();
+  return { from, to };
 }
 
 function breakdownLine(value: unknown): QuoteBreakdownLine {

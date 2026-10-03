@@ -368,6 +368,108 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.DoesNotContain("cod", reader.GetString(5), StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 on real PostgreSQL through the runtime role and RLS: the window lands
+    /// in orders.service_window_from/to and the ORDER_CREATED audit, never in the order event or the outbox payload;
+    /// create, replay, get and list return it; another window under the same key is IDEMPOTENCY_CONFLICT; a window
+    /// already over or malformed is refused before any row is written; and the table check refuses half a window
+    /// or from not before to whatever writes it.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Service_window_is_persisted_audited_returned_and_bound_to_the_key()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(createOrder: false);
+        var generator = new SequencePublicIdGenerator("ORD_WWWWWWWWWWWWWWWWWWWWWA", "ORD_WWWWWWWWWWWWWWWWWWWWWB");
+        await using var scope = CreateScope(generator);
+        var from = new DateTimeOffset(
+            DateTimeOffset.UtcNow.AddHours(2).UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond,
+            TimeSpan.Zero);
+        var window = new OrderServiceWindow(from, from.AddHours(3));
+
+        foreach (var refused in new[]
+                 {
+                     new OrderServiceWindow(from.AddHours(-5), from.AddHours(-3)),
+                     new OrderServiceWindow(from, from),
+                     new OrderServiceWindow(from, from.AddHours(13)),
+                     new OrderServiceWindow(from.AddTicks(10), from.AddHours(1)),
+                 })
+        {
+            var invalid = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+                CreateCommand(scenario, "orders-pg-window-invalid") with { ServiceWindow = refused },
+                CancellationToken.None));
+            Assert.Equal(OrderConflictCode.InvalidRequest, invalid.Code);
+        }
+
+        Assert.Equal(0, generator.CallCount);
+
+        var command = CreateCommand(scenario, "orders-pg-window-0001") with { ServiceWindow = window };
+        var created = await scope.Service.CreateAsync(command, CancellationToken.None);
+        var replay = await scope.Service.CreateAsync(command, CancellationToken.None);
+        Assert.Equal(window, created.ServiceWindow);
+        Assert.Equal(created, replay);
+
+        var otherWindow = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            command with { ServiceWindow = window with { To = from.AddHours(4) } }, CancellationToken.None));
+        Assert.Equal(OrderConflictCode.IdempotencyConflict, otherWindow.Code);
+        var noWindow = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            command with { ServiceWindow = null }, CancellationToken.None));
+        Assert.Equal(OrderConflictCode.IdempotencyConflict, noWindow.Code);
+
+        var detail = await scope.Service.GetAsync(scenario.UserId, scenario.OrganizationId, created.Id, CancellationToken.None);
+        Assert.Equal(window, detail.Order.ServiceWindow);
+        var page = await scope.Service.ListAsync(
+            scenario.UserId, scenario.OrganizationId, null, null, null, false, false, CancellationToken.None);
+        Assert.Equal(window, Assert.Single(page.Items, item => item.Id == created.Id).ServiceWindow);
+
+        await using (var verify = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT o.service_window_from, o.service_window_to,
+              (SELECT (payload_redacted->>'service_window_from')::timestamptz FROM platform.audit_logs a
+                WHERE a.entity_id=o.id AND a.action='ORDER_CREATED'),
+              (SELECT (payload_redacted->>'service_window_to')::timestamptz FROM platform.audit_logs a
+                WHERE a.entity_id=o.id AND a.action='ORDER_CREATED'),
+              (SELECT payload::text FROM orders.order_events e WHERE e.order_id=o.id),
+              (SELECT payload::text FROM platform.outbox_events x WHERE x.aggregate_id=o.id),
+              (SELECT count(*) FROM orders.orders WHERE owner_org_id=@org)
+            FROM orders.orders o
+            WHERE o.id=@order;
+            """))
+        {
+            verify.Parameters.AddWithValue("org", scenario.OrganizationId);
+            verify.Parameters.AddWithValue("order", created.Id);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(window.From, reader.GetFieldValue<DateTimeOffset>(0));
+            Assert.Equal(window.To, reader.GetFieldValue<DateTimeOffset>(1));
+            Assert.Equal(window.From, reader.GetFieldValue<DateTimeOffset>(2));
+            Assert.Equal(window.To, reader.GetFieldValue<DateTimeOffset>(3));
+            Assert.DoesNotContain("window", reader.GetString(4), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("window", reader.GetString(5), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(1L, reader.GetInt64(6));
+        }
+
+        foreach (var assignment in new[]
+                 {
+                     "service_window_to=NULL",
+                     "service_window_from=NULL",
+                     "service_window_to=service_window_from",
+                     "service_window_to=service_window_from - interval '1 second'",
+                 })
+        {
+            await using var connection = await fixture.AdminDataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await using var update = new NpgsqlCommand(
+                $"UPDATE orders.orders SET {assignment} WHERE id=@order;", connection, transaction);
+            update.Parameters.AddWithValue("order", created.Id);
+            var violation = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.CheckViolation, violation.SqlState);
+            Assert.Equal("orders_service_window_check", violation.ConstraintName);
+            await transaction.RollbackAsync();
+        }
+    }
+
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
     public async Task Concurrency_hash_conflict_collision_retry_and_migration_contract_hold()
@@ -456,6 +558,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
                 Orders.Infrastructure.Persistence.Migrations.AddRealtimeResynchronizationCursor.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddOrderLifecycleFinalizationExecutor.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId,
+                Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId,
             ],
             await context.Database.GetAppliedMigrationsAsync());
 
