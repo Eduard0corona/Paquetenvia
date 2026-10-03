@@ -146,6 +146,19 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             Assert.DoesNotContain("package", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("cipher", json, StringComparison.OrdinalIgnoreCase);
         }
+
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the append-only ORDER_CREATED event and its audit entry record the
+        // dispatcher's confirmation; the outbox payload does not carry it.
+        using (var orderEvent = System.Text.Json.JsonDocument.Parse(reader.GetString(33)))
+        {
+            Assert.True(orderEvent.RootElement.GetProperty("restricted_goods_acknowledged").GetBoolean());
+        }
+
+        Assert.DoesNotContain("restricted_goods", reader.GetString(34), StringComparison.Ordinal);
+        using (var audit = System.Text.Json.JsonDocument.Parse(reader.GetString(35)))
+        {
+            Assert.True(audit.RootElement.GetProperty("restricted_goods_acknowledged").GetBoolean());
+        }
     }
 
     [PostgreSqlContractFact]
@@ -235,6 +248,57 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         {
             Assert.Equal(0L, reader.GetInt64(ordinal));
         }
+    }
+
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 on real PostgreSQL: without the dispatcher's confirmation the create
+    /// is the uniform conflict before any row, idempotency key or quote consumption; with it the same quote then
+    /// creates normally.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Unconfirmed_restricted_goods_are_rejected_before_any_PostgreSQL_side_effect()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(createOrder: false);
+        var generator = new SequencePublicIdGenerator("ORD_YYYYYYYYYYYYYYYYYYYYYY");
+        await using var scope = CreateScope(generator);
+        var command = CreateCommand(scenario, "orders-pg-restricted-goods") with { RestrictedGoodsAcknowledged = false };
+
+        var exception = await Assert.ThrowsAsync<OrderConflictException>(() =>
+            scope.Service.CreateAsync(command, CancellationToken.None));
+
+        Assert.Equal(OrderConflictCode.InvalidRequest, exception.Code);
+        Assert.Equal(0, generator.CallCount);
+        await using (var verify = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT q.status,q.consumed_at IS NULL,
+              (SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.orders WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.order_acceptances WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.order_events WHERE owner_org_id=@org),
+              (SELECT count(*) FROM platform.outbox_events WHERE owner_org_id=@org),
+              (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ORDER_CREATED')
+            FROM pricing.quotes q
+            WHERE q.id=@quote;
+            """))
+        {
+            verify.Parameters.AddWithValue("org", scenario.OrganizationId);
+            verify.Parameters.AddWithValue("quote", scenario.QuoteId);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("ACTIVE", reader.GetString(0));
+            Assert.True(reader.GetBoolean(1));
+            for (var ordinal = 2; ordinal <= 7; ordinal++)
+            {
+                Assert.Equal(0L, reader.GetInt64(ordinal));
+            }
+        }
+
+        var created = await scope.Service.CreateAsync(
+            command with { RestrictedGoodsAcknowledged = true },
+            CancellationToken.None);
+        Assert.Equal("DRAFT", created.Status);
     }
 
     /// <summary>
@@ -461,7 +525,8 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             "privacy-synthetic-v1",
             AcceptedAtClient,
             "WEB"),
-        "synthetic-request-id");
+        "synthetic-request-id",
+        RestrictedGoodsAcknowledged: true);
 
     private static async Task<bool> TryCreateAsync(IOrderService service, CreateOrderCommand command)
     {

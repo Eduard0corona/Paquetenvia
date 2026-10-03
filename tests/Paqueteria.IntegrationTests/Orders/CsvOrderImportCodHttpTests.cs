@@ -154,6 +154,8 @@ public sealed class CsvOrderImportCodHttpTests : IClassFixture<OrderHttpWebAppli
         if (contentDigest is not null)
         {
             content.Add(new StringContent(contentDigest), "content_digest");
+            // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: every commit carries the dispatcher's confirmation.
+            content.Add(new StringContent("true"), "restricted_goods_acknowledged");
         }
 
         request.Content = content;

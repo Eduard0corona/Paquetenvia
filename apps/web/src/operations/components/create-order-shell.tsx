@@ -10,6 +10,7 @@ import {
   evaluateConfirmation,
   confirmationBlockerLabels,
   maximumPackages,
+  maximumPhoneInputLength,
   payerTypes,
   type AddressDraft,
   type PackageDraft,
@@ -231,7 +232,18 @@ function AddressFieldset({
       <legend>{legend}</legend>
       <label>Dirección<input name={`${prefix}_address`} minLength={8} required /></label>
       <label>Contacto<input name={`${prefix}_contact`} required /></label>
-      <label>Teléfono<input name={`${prefix}_phone`} type="tel" required /></label>
+      <label>Teléfono (10 dígitos)
+        <input
+          name={`${prefix}_phone`}
+          type="tel"
+          inputMode="tel"
+          maxLength={maximumPhoneInputLength}
+          pattern="[ \-]*(?:[0-9][ \-]*){10}"
+          title="10 dígitos de México, sin +52; puedes separarlos con espacios o guiones."
+          placeholder="667 123 4567"
+          required
+        />
+      </label>
       {coordinates && (
         <>
           <label>Latitud<input name={`${prefix}_lat`} inputMode="decimal" required /></label>
@@ -295,6 +307,7 @@ function QuoteSummary({
             void controller.confirmOrder({
               payerType: String(data.get("payer_type") ?? ""),
               accepted: data.get("accepted") === "on",
+              restrictedGoodsAcknowledged: data.get("restricted_goods_acknowledged") === "on",
               codAmount: String(data.get("cod_amount") ?? ""),
             });
           }}
@@ -328,6 +341,10 @@ function QuoteSummary({
             )}
             <label className="opsCheckbox">
               <input type="checkbox" name="accepted" required /> El cliente vio el desglose y aceptó términos y aviso de privacidad
+            </label>
+            <label className="opsCheckbox">
+              <input type="checkbox" name="restricted_goods_acknowledged" required /> Confirmo que el envío no contiene
+              artículos prohibidos (queda registrado en la orden)
             </label>
           </fieldset>
           <button className="opsPrimary" type="submit" disabled={busy || blockers.length > 0 || acceptanceVersions === null}>

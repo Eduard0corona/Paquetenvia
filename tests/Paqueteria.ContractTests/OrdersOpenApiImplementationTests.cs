@@ -33,7 +33,8 @@ public sealed class OrdersOpenApiImplementationTests
     [Fact]
     public void Request_and_response_DTOs_match_AI05_without_internal_or_PII_fields()
     {
-        AssertJsonProperties<CreateOrderRequest>("acceptance", "cod_expected_cents", "payer_type", "quote_id");
+        AssertJsonProperties<CreateOrderRequest>(
+            "acceptance", "cod_expected_cents", "payer_type", "quote_id", "restricted_goods_acknowledged");
         AssertJsonProperties<OrderAcceptanceRequest>(
             "acceptance_channel", "accepted_at", "privacy_version", "terms_version");
         AssertJsonProperties<TransitionOrderRequest>(
@@ -205,9 +206,15 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Equal(
             ["file"],
             RequiredPropertyNames(schemas.Mapping("CsvImportPreviewRequest")));
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: commit also carries the dispatcher's confirmation.
         Assert.Equal(
-            ["content_digest", "file"],
+            ["content_digest", "file", CsvOrderImportContract.FieldRestrictedGoodsAcknowledged],
             RequiredPropertyNames(schemas.Mapping("CsvImportCommitRequest")));
+        Assert.Equal(
+            [CsvOrderImportContract.RestrictedGoodsAcknowledgedValue],
+            schemas.Mapping("CsvImportCommitRequest").Mapping("properties")
+                .Mapping(CsvOrderImportContract.FieldRestrictedGoodsAcknowledged).Sequence("enum").Children
+                .Select(node => ((YamlScalarNode)node).Value));
         Assert.Equal(
             "#/components/schemas/CsvImportPreviewRequest",
             MultipartSchemaRef(preview));
@@ -329,6 +336,31 @@ public sealed class OrdersOpenApiImplementationTests
             .Single(entry => entry.Scalar("id") == "D6-COD-EXPECTED");
         Assert.Equal("DECIDED", delta.Scalar("status"));
         Assert.Contains("feature/ord-csv-cod-expected", delta.Scalar("implementation"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restricted_goods_acknowledgement_is_a_required_true_on_createOrder_and_CSV_commit()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var createOrder = schemas.Mapping("CreateOrderRequest");
+        var acknowledged = createOrder.Mapping("properties").Mapping("restricted_goods_acknowledged");
+
+        Assert.Contains("restricted_goods_acknowledged", RequiredPropertyNames(createOrder));
+        Assert.Equal("boolean", acknowledged.Scalar("type"));
+        Assert.Equal("true", acknowledged.Scalar("const"));
+        Assert.Contains("OrderAcceptanceCanonicalForm v1 is unchanged", acknowledged.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal("restricted_goods_acknowledged", CsvOrderImportContract.FieldRestrictedGoodsAcknowledged);
+
+        // The confirmation is a commit form field, never a CSV column: both headers keep their meaning.
+        Assert.DoesNotContain(CsvOrderImportContract.FieldRestrictedGoodsAcknowledged, CsvOrderImportContract.HeaderWithCod);
+
+        var delta = root.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Single(entry => entry.Scalar("id") == "ORD-PROHIBITED-GOODS-PHONE-MX");
+        Assert.Equal("DECIDED", delta.Scalar("status"));
+        Assert.Equal("ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02", delta.Scalar("decision"));
+        Assert.Equal("Sí, ambas", delta.Scalar("literal"));
     }
 
     [Fact]

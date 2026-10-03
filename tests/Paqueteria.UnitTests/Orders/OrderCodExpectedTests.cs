@@ -121,8 +121,9 @@ public sealed class OrderCodExpectedTests
     }
 
     /// <summary>
-    /// An order without COD keeps the exact pre-D6 fingerprint, so an idempotency key reserved before this change
-    /// still replays instead of turning into a conflict, and an absent field equals an explicit zero.
+    /// An order without COD adds nothing to the fingerprint, so an absent field equals an explicit zero. Since
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 every accepted request also carries the dispatcher's restricted goods
+    /// confirmation, which the pinned pre-image includes; a request without it is rejected before it is hashed.
     /// </summary>
     [Fact]
     public void A_request_without_COD_keeps_the_pre_COD_fingerprint_byte_for_byte()
@@ -134,7 +135,8 @@ public sealed class OrderCodExpectedTests
             "\"terms_version\":\"synthetic-v1\"," +
             "\"privacy_version\":\"synthetic-v1\"," +
             "\"accepted_at\":\"2026-07-20T12:34:56.1234560Z\"," +
-            "\"acceptance_channel\":\"WEB\"}";
+            "\"acceptance_channel\":\"WEB\"," +
+            "\"restricted_goods_acknowledged\":true}";
 
         Assert.Equal(
             SHA256.HashData(Encoding.UTF8.GetBytes(preCodPreImage)),
@@ -297,11 +299,14 @@ public sealed class OrderCodExpectedTests
                 "csv-cod-batch-key-0001",
                 prevalidation.ContentDigest,
                 prevalidation.ValidRows,
-                "request-1"),
+                "request-1",
+                RestrictedGoodsAcknowledged: true),
             CancellationToken.None);
 
         Assert.Equal(2, result.CreatedRows);
         Assert.Equal([15_050L, 0L], orders.Commands.Select(command => command.CodExpectedCents));
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the commit confirmation reaches every row's create command.
+        Assert.All(orders.Commands, command => Assert.True(command.RestrictedGoodsAcknowledged));
         Assert.Equal([QuoteId, SecondQuoteId], orders.Commands.Select(command => command.QuoteId));
     }
 
@@ -320,7 +325,8 @@ public sealed class OrderCodExpectedTests
         "SENDER",
         new OrderAcceptanceInput("synthetic-v1", "synthetic-v1", AcceptedAt, "WEB"),
         "request",
-        codExpectedCents);
+        codExpectedCents,
+        RestrictedGoodsAcknowledged: true);
 
     private static CsvOrderImportPrevalidation Prevalidate(string content) =>
         CsvOrderImportPrevalidator.Prevalidate(Encoding.UTF8.GetBytes(content));

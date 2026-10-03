@@ -104,7 +104,8 @@ public static class OrderEndpoints
                         request.Acceptance.AcceptedAt,
                         request.Acceptance.AcceptanceChannel),
                     httpContext.TraceIdentifier,
-                    codExpectedCents),
+                    codExpectedCents,
+                    RestrictedGoodsAcknowledged: true),
                 cancellationToken);
             return Results.Created($"/api/v1/orders/{result.Id:D}", ToResponse(result));
         }
@@ -323,7 +324,16 @@ public static class OrderEndpoints
             request.Acceptance.TermsVersion,
             request.Acceptance.PrivacyVersion,
             request.Acceptance.AcceptedAt,
-            request.Acceptance.AcceptanceChannel);
+            request.Acceptance.AcceptanceChannel) &&
+        IsRestrictedGoodsAcknowledged(request.RestrictedGoodsAcknowledged);
+
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher must confirm the shipment contains no prohibited
+    /// goods with the JSON literal <c>true</c>. Absent, null, <c>false</c>, a quoted <c>"true"</c> or any other
+    /// value is the uniform 409 before any effect.
+    /// </summary>
+    private static bool IsRestrictedGoodsAcknowledged(JsonElement? value) =>
+        value is { ValueKind: JsonValueKind.True };
 
     /// <summary>
     /// D6-COD-EXPECTED: an absent (or JSON null) <c>cod_expected_cents</c> is zero. A present value must be a JSON
@@ -425,12 +435,15 @@ public static class OrderEndpoints
 /// AI-05 CreateOrderRequest. <c>cod_expected_cents</c> (D6-COD-EXPECTED) is the optional COD the dispatcher
 /// declares, in MXN integer cents; absent means zero. It is written to <c>orders.cod_expected_cents</c> and is read
 /// back only through the finance operations (FIN-001/SET-001), never through the Order response a VIEWER can read.
+/// <c>restricted_goods_acknowledged</c> (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) is required and must be the JSON
+/// literal <c>true</c>.
 /// </summary>
 public sealed record CreateOrderRequest(
     [property: JsonPropertyName("quote_id")] Guid QuoteId,
     [property: JsonPropertyName("payer_type")] string PayerType,
     [property: JsonPropertyName("acceptance")] OrderAcceptanceRequest Acceptance,
-    [property: JsonPropertyName("cod_expected_cents")] JsonElement? CodExpectedCents = null);
+    [property: JsonPropertyName("cod_expected_cents")] JsonElement? CodExpectedCents = null,
+    [property: JsonPropertyName("restricted_goods_acknowledged")] JsonElement? RestrictedGoodsAcknowledged = null);
 
 public sealed record OrderAcceptanceRequest(
     [property: JsonPropertyName("terms_version")] string TermsVersion,

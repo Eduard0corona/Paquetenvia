@@ -1,5 +1,6 @@
 import {
   checkCsvFile,
+  csvRestrictedGoodsField,
   csvUploadFilename,
   parseCsvImportCommit,
   parseCsvImportPreview,
@@ -25,7 +26,12 @@ function upload(file: Blob, contentDigest?: string): FormData {
   const form = new FormData();
   // A neutral filename: the local file name never leaves the browser.
   form.append("file", new Blob([file], { type: "text/csv" }), csvUploadFilename);
-  if (contentDigest !== undefined) form.append("content_digest", contentDigest);
+  if (contentDigest !== undefined) {
+    form.append("content_digest", contentDigest);
+    // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: a commit always carries the dispatcher's confirmation; the
+    // controller only commits after the dispatcher ticked it, and the server rejects a commit without it.
+    form.append(csvRestrictedGoodsField, "true");
+  }
   return form;
 }
 

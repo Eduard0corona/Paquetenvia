@@ -1,5 +1,17 @@
 # Changelog
 
+## Confirmación de artículos prohibidos y teléfonos de México (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Sí, ambas"; registrada en `decision-log.md`.
+- AI-05: `CreateOrderRequest.restricted_goods_acknowledged` obligatorio (solo `true`) y el campo multipart
+  `restricted_goods_acknowledged=true` obligatorio en `CsvImportCommitRequest`; cualquier otro valor es 409 uniforme.
+  La confirmación entra al hash de idempotencia de ORD-001 y queda en el evento append-only `ORDER_CREATED` y en su
+  auditoría. `order_acceptances` y `OrderAcceptanceCanonicalForm v1` no cambian. `AddressInput.phone` (`createQuote`)
+  es un número de México de 10 dígitos tras quitar espacios y guiones (sin `+52`); otro valor es 422. Nueva entrada
+  `ORD-PROHIBITED-GOODS-PHONE-MX` en `x-pilot-contract-deltas`.
+- AI-07: `create_order.phone_and_restricted_goods` y la casilla de confirmación del commit de `csv_order_import`.
+- Sin migración; AI-04, AI-06 y AI-18 sin cambios.
+
 ## WhatsApp ambiguo: fallido sin reintento y aviso al despachador (NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02) — 2026-10-02
 
 - Respuesta literal del project owner (GATE-004): "Marcar fallido y avisar"; registrada en `decision-log.md`

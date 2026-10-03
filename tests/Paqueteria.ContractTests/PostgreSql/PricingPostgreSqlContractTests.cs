@@ -1183,7 +1183,8 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                 quoteId,
                 "SENDER",
                 new OrderAcceptanceInput("terms-synthetic-v1", "privacy-synthetic-v1", acceptedAt, "WEB"),
-                "prc-policy-version-order"),
+                "prc-policy-version-order",
+                RestrictedGoodsAcknowledged: true),
             CancellationToken.None);
     }
 
@@ -1409,8 +1410,8 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         data.OrganizationId,
         key,
         null,
-        new QuoteAddressInput("Synthetic origin avenue 100", "Synthetic Sender", "+526671111111", 24.80, -107.40, "Synthetic gate"),
-        new QuoteAddressInput("Synthetic destination avenue 200", "Synthetic Receiver", "+526672222222", 24.81, -107.41, null),
+        new QuoteAddressInput("Synthetic origin avenue 100", "Synthetic Sender", "6671111111", 24.80, -107.40, "Synthetic gate"),
+        new QuoteAddressInput("Synthetic destination avenue 200", "Synthetic Receiver", "6672222222", 24.81, -107.41, null),
         "SAME_DAY",
         false,
         [new QuotePackageInput("Synthetic parcel", 1000, 5000, 100, 100, 100)],

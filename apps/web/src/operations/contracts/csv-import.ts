@@ -26,6 +26,13 @@ export const csvUploadFilename = "orders.csv";
 /** CSV-001 header; the COD column (D6-COD-EXPECTED) is optional and, when present, last. */
 export const csvHeader = "quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel";
 export const csvCodColumn = "cod_expected_cents";
+/**
+ * ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: AI-05 CsvImportCommitRequest form field (not a CSV column) with the
+ * dispatcher's confirmation that no shipment in the file contains prohibited goods.
+ */
+export const csvRestrictedGoodsField = "restricted_goods_acknowledged";
+export const csvRestrictedGoodsRequiredMessage =
+  "Confirma que ningún envío del archivo contiene artículos prohibidos antes de confirmar el lote.";
 
 export const csvFileErrors = [
   "ENCODING_INVALID",

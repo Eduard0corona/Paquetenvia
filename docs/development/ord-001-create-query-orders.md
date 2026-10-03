@@ -28,7 +28,7 @@ Cualquier excepción revierte todo: quote `ACTIVE`, `consumed_at` nulo y cero or
 
 ## Idempotencia y single-use
 
-El scope es `ORD-001:CREATE_ORDER`; la key usa la política compartida de 16 a 128 caracteres. El SHA-256 canónico contiene tenant, quote ID, payer type, versiones sintéticas, `accepted_at` normalizado, canal y, solo cuando no es 0, `cod_expected_cents` (D6-COD-EXPECTED; omitir el 0 deja idénticos los hashes previos al COD y hace equivalentes el campo ausente y el 0 explícito). Excluye actor derivado, request ID, headers, PII y tiempos de servidor.
+El scope es `ORD-001:CREATE_ORDER`; la key usa la política compartida de 16 a 128 caracteres. El SHA-256 canónico contiene tenant, quote ID, payer type, versiones sintéticas, `accepted_at` normalizado, canal, `restricted_goods_acknowledged` (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) y, solo cuando no es 0, `cod_expected_cents` (D6-COD-EXPECTED; omitir el 0 deja idénticos los hashes previos al COD y hace equivalentes el campo ausente y el 0 explícito). Excluye actor derivado, request ID, headers, PII y tiempos de servidor.
 
 Misma organización, key y hash reproduce la respuesta 201 sin insertar ni consumir otra vez. Hash diferente devuelve 409. Dos keys para una quote compiten bajo `FOR UPDATE`; una sola crea y `orders.quote_id` unique es el backstop. Quote no disponible, expirada, usada, revocada, cross-tenant o inexistente devuelve el mismo 409.
 
@@ -63,7 +63,11 @@ Base64:  KgkXbicN3MUuD+4Vfz1b2GnzYEf3+Ubap8rtSBauCzc=
 
 Se inserta solo `ORDER_CREATED`, versión 1, con payload mínimo. El outbox usa topic `orders.created`, aggregate `Order`, status `PENDING`, attempts 0 y valores explícitos. No se implementa claim, dispatch, settle ni Worker PostgreSQL.
 
-AUD-001 registra `ORDER_CREATED` con actor, organización, order/quote IDs, payer type, pricing tier, total, `cod_expected_cents` y request ID. El COD no viaja en el evento ni en el outbox. Evento, outbox, auditoría y replay excluyen acceptance completa, packages, direcciones, contactos, teléfonos, ciphertext y PII.
+AUD-001 registra `ORDER_CREATED` con actor, organización, order/quote IDs, payer type, pricing tier, total, `cod_expected_cents`, `restricted_goods_acknowledged` y request ID. El COD no viaja en el evento ni en el outbox. Evento, outbox, auditoría y replay excluyen acceptance completa, packages, direcciones, contactos, teléfonos, ciphertext y PII.
+
+## Confirmación de artículos prohibidos (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)
+
+`CreateOrderRequest.restricted_goods_acknowledged` es obligatorio y solo acepta el literal JSON `true`; ausente, `null`, `false`, `"true"` o cualquier otro valor es el `409` uniforme antes de invocar el servicio, y el coordinador vuelve a rechazar `false` antes de generar el public ID o abrir la transacción. El CSV la recibe como campo del commit (ver CSV-001). Es la atestación del despachador sobre el contenido del envío, no la aceptación del cliente: `orders.order_acceptances`, `OrderAcceptanceCanonicalForm v1` y su vector no cambian. Se registra en el evento append-only `ORDER_CREATED` (`payload.restricted_goods_acknowledged`, con `actor_id` y `occurred_at` como quién y cuándo) y en la auditoría `ORDER_CREATED`; no viaja en el outbox. Forma parte del hash idempotente (`"restricted_goods_acknowledged":true` después de `acceptance_channel`), así que una key reservada antes de esta decisión corresponde a una solicitud que ahora se rechaza. El guard `restricted_goods_check` de DRAFT → CONFIRMED y su metadata no cambian. No hay migración: no se agrega columna a `orders.orders`.
 
 ## Endpoints y paginación
 

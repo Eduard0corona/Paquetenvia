@@ -665,15 +665,15 @@ function Invoke-FreshOrder {
     $quoteHeaders = $headers.Clone(); $quoteHeaders["Idempotency-Key"] = "local-fresh-quote-$nonce"
     $quoteBody = @{
         client_account_id = $null
-        origin = @{ address_text="Synthetic Origin"; contact_name="Synthetic Sender"; phone="+520000000001"; lat=24.78; lng=-107.42; references="LOCAL SYNTHETIC" }
-        destination = @{ address_text="Synthetic Destination"; contact_name="Synthetic Receiver"; phone="+520000000002"; lat=24.79; lng=-107.41; references="LOCAL SYNTHETIC" }
+        origin = @{ address_text="Synthetic Origin"; contact_name="Synthetic Sender"; phone="0000000001"; lat=24.78; lng=-107.42; references="LOCAL SYNTHETIC" }
+        destination = @{ address_text="Synthetic Destination"; contact_name="Synthetic Receiver"; phone="0000000002"; lat=24.79; lng=-107.41; references="LOCAL SYNTHETIC" }
         service_type="SAME_DAY"; consolidated_route=$false
         packages=@(@{ description="Synthetic parcel"; weight_grams=1000; declared_value_cents=0; length_mm=100; width_mm=100; height_mm=100 })
     } | ConvertTo-Json -Depth 8
     $quote = Invoke-RestMethod -Method Post -Uri "$apiUrl/api/v1/quotes" -Headers $quoteHeaders -ContentType "application/json" -Body $quoteBody
     $orderHeaders = $headers.Clone(); $orderHeaders["Idempotency-Key"] = "local-fresh-order-$nonce"
     $orderBody = @{
-        quote_id=$quote.id; payer_type="SENDER"
+        quote_id=$quote.id; payer_type="SENDER"; restricted_goods_acknowledged=$true
         acceptance=@{ terms_version="local-synthetic-v1"; privacy_version="local-synthetic-v1"; accepted_at=[DateTimeOffset]::UtcNow.ToString("O"); acceptance_channel="API" }
     } | ConvertTo-Json -Depth 6
     $order = Invoke-RestMethod -Method Post -Uri "$apiUrl/api/v1/orders" -Headers $orderHeaders -ContentType "application/json" -Body $orderBody
@@ -889,13 +889,13 @@ function Invoke-ApiPost(
 function New-SeedOrder([string] $Alias) {
     $quote = Invoke-ApiPost "/api/v1/quotes" "local-dispatcher-mfa" "local-seed-$Alias-quote-v1" @{
         client_account_id = $null
-        origin = @{ address_text="Synthetic $Alias Origin"; contact_name="Synthetic Sender"; phone="+520000000001"; lat=24.78; lng=-107.42; references="LOCAL SYNTHETIC" }
-        destination = @{ address_text="Synthetic $Alias Destination"; contact_name="Synthetic Receiver"; phone="+520000000002"; lat=24.79; lng=-107.41; references="LOCAL SYNTHETIC" }
+        origin = @{ address_text="Synthetic $Alias Origin"; contact_name="Synthetic Sender"; phone="0000000001"; lat=24.78; lng=-107.42; references="LOCAL SYNTHETIC" }
+        destination = @{ address_text="Synthetic $Alias Destination"; contact_name="Synthetic Receiver"; phone="0000000002"; lat=24.79; lng=-107.41; references="LOCAL SYNTHETIC" }
         service_type="SAME_DAY"; consolidated_route=$false
         packages=@(@{ description="Synthetic $Alias parcel"; weight_grams=1000; declared_value_cents=0; length_mm=100; width_mm=100; height_mm=100 })
     }
     return Invoke-ApiPost "/api/v1/orders" "local-dispatcher-mfa" "local-seed-$Alias-order-v1" @{
-        quote_id=$quote.id; payer_type="SENDER"
+        quote_id=$quote.id; payer_type="SENDER"; restricted_goods_acknowledged=$true
         # AI05-INPUT-LIMITS: the server accepts accepted_at only within [now - 72 h, now + 5 min].
         acceptance=@{ terms_version="local-synthetic-v1"; privacy_version="local-synthetic-v1"; accepted_at=[DateTimeOffset]::UtcNow.ToString("O"); acceptance_channel="API" }
     }

@@ -170,7 +170,7 @@ public sealed class QuoteCapabilityMatrixHttpTests(QuoteHttpWebApplicationFactor
             {
                 address_text = "Synthetic origin 100",
                 contact_name = "Synthetic Sender",
-                phone = "+526671111111",
+                phone = "6671111111",
                 lat = 24.8,
                 lng = -107.4,
             },
@@ -178,7 +178,7 @@ public sealed class QuoteCapabilityMatrixHttpTests(QuoteHttpWebApplicationFactor
             {
                 address_text = "Synthetic destination 200",
                 contact_name = "Synthetic Receiver",
-                phone = "+526672222222",
+                phone = "667 222 2222",
                 lat = 24.81,
                 lng = -107.41,
             },
@@ -510,6 +510,7 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
         {
             quote_id = quoteId,
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "terms-synthetic-v1",
@@ -535,6 +536,9 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
             content.Add(
                 new StringContent(CsvOrderImportPrevalidator.ComputeContentDigest(Encoding.UTF8.GetBytes(csv))),
                 "content_digest");
+            content.Add(
+                new StringContent(CsvOrderImportContract.RestrictedGoodsAcknowledgedValue),
+                CsvOrderImportContract.FieldRestrictedGoodsAcknowledged);
         }
 
         return CapabilityMatrix.Request(HttpMethod.Post, route, profile, content);

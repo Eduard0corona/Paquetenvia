@@ -97,7 +97,8 @@ public sealed class OrderCodExpectedHttpTests : IClassFixture<OrderHttpWebApplic
         var json =
             $"{{\"quote_id\":\"{quoteId:D}\",\"payer_type\":\"RECIPIENT\"," +
             "\"acceptance\":{\"terms_version\":\"terms-synthetic-v1\",\"privacy_version\":\"privacy-synthetic-v1\"," +
-            $"\"accepted_at\":\"{RecentUtc}\",\"acceptance_channel\":\"ASSISTED\"}}{cod}}}";
+            $"\"accepted_at\":\"{RecentUtc}\",\"acceptance_channel\":\"ASSISTED\"}}," +
+            $"\"restricted_goods_acknowledged\":true{cod}}}";
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/orders")
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
