@@ -3165,6 +3165,7 @@ components:
           type:
           - object
           - 'null'
+          additionalProperties: false
           required:
           - from
           - to

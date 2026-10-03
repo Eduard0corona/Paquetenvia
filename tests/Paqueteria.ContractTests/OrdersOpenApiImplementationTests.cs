@@ -348,6 +348,7 @@ public sealed class OrdersOpenApiImplementationTests
         }
 
         Assert.Equal("false", request.Scalar("additionalProperties"));
+        Assert.Equal("false", order.Scalar("additionalProperties"));
         Assert.Equal(
             OrderServiceWindowPolicy.MaximumInstantLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
             request.Mapping("properties").Mapping("from").Scalar("maxLength"));
