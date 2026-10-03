@@ -1,5 +1,15 @@
 # Changelog
 
+## Alertas OBS-002 del piloto cada 15 minutos (OBS-002-ALERTS-15MIN-COST-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Sí, revisar cada 15 min"; registrada en `decision-log.md`
+  (`OBS-002-ALERTS-15MIN-COST-2026-10-02`).
+- `deploy/azure/pilot/observability.bicep`: la alerta de disponibilidad `sqr-pv-pilot-readiness` pasa de cada 5 minutos
+  con ventana de 10 a cada 15 minutos con ventana de 15 (Azure exige ventana ≥ frecuencia). Las cinco reglas cuestan
+  ≈ 2.75 USD/mes; el piloto queda en ≈ 101 USD típico y ≈ 111 USD con el tope diario de logs.
+- El correo de destino `alertEmailAddress` sigue siendo parámetro obligatorio del owner, sin valor por defecto, pendiente.
+- Sin cambios de contrato, esquema, roles ni migraciones.
+
 ## Finanzas ve la lista de cobros pendientes de conciliar (FIN-PENDING-COD-LIST-FINANCE-2026-10-02) — 2026-10-02
 
 - Respuesta literal del project owner: "Tope COD 20,000 pesos, finanzas sí ve la lista". Esta entrada cubre solo
