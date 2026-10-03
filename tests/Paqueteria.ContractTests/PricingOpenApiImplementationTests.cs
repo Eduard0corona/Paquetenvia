@@ -55,15 +55,25 @@ public sealed class PricingOpenApiImplementationTests
     }
 
     /// <summary>
-    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the AI-05 AddressInput.phone pattern and length bound describe
-    /// exactly what <see cref="QuotePhonePolicy"/> accepts.
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the AI-05
+    /// AddressInput.phone pattern and length bound describe exactly what <see cref="QuotePhonePolicy"/> accepts.
     /// </summary>
     [Theory]
     [InlineData("6671234567", true)]
     [InlineData("667 123 4567", true)]
     [InlineData("667-123-4567", true)]
     [InlineData(" 667 - 123 - 4567 ", true)]
-    [InlineData("+52 667 123 4567", false)]
+    [InlineData("+52 667 123 4567", true)]
+    [InlineData("+52-6671234567", true)]
+    [InlineData("+526671234567", true)]
+    [InlineData(" +52 - 667 123 4567", true)]
+    [InlineData("+1 667 123 4567", false)]
+    [InlineData("+ 52 667 123 4567", false)]
+    [InlineData("+52 1 667 123 4567", false)]
+    [InlineData("+52+52 667 123 4567", false)]
+    [InlineData("667 123 4567 +52", false)]
+    [InlineData("+52", false)]
+    [InlineData("+52--------------------6671234567", false)]
     [InlineData("526671234567", false)]
     [InlineData("667123456", false)]
     [InlineData("66712345678", false)]

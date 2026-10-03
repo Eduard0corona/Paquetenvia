@@ -57,12 +57,18 @@ describe("createQuote request", () => {
     expect(result.errors.join(" ")).not.toContain("corta");
   });
 
-  // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: 10 Mexican digits; only spaces and hyphens are removed.
+  // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: 10 Mexican digits; spaces,
+  // hyphens and one optional leading +52 are removed.
   it.each([
     ["6671234567", "6671234567"],
     ["667 123 4567", "6671234567"],
     ["667-123-4567", "6671234567"],
     [" 667 - 123 - 4567 ", "6671234567"],
+    ["+526671234567", "6671234567"],
+    ["+52 667 123 4567", "6671234567"],
+    ["+52-6671234567", "6671234567"],
+    [" +52 - 667-123-4567 ", "6671234567"],
+    ["+52 5212345678", "5212345678"],
   ])("sends the phone %s normalized as %s", (typed, normalized) => {
     expect(normalizeMexicanPhone(typed)).toBe(normalized);
     const result = buildCreateQuoteBody(draft({ origin: { ...draft().origin, phone: typed } }));
@@ -70,9 +76,22 @@ describe("createQuote request", () => {
   });
 
   it.each([
-    "+526671234567",
-    "+52 667 123 4567",
     "526671234567",
+    "52 667 123 4567",
+    "+1 667 123 4567",
+    "+16671234567",
+    "+5 2667123456",
+    "+ 52 667 123 4567",
+    "+53 667 123 4567",
+    "+52 1 667 123 4567",
+    "+52+52 667 123 4567",
+    "++52 667 123 4567",
+    "+52-",
+    "667 123 4567 +52",
+    "0052 667 123 4567",
+    "+52 (667) 123 4567",
+    "＋52 667 123 4567",
+    "+52" + "-".repeat(20) + "6671234567",
     "667123456",
     "66712345678",
     "(667) 123 4567",
@@ -87,9 +106,17 @@ describe("createQuote request", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors).toEqual([
-      "El teléfono de destino debe tener 10 dígitos de México, sin +52; puedes separarlos con espacios o guiones.",
+      "El teléfono de destino debe tener 10 dígitos de México; puedes anteponer +52 y separarlos con espacios o guiones.",
     ]);
     expect(result.errors.join(" ")).not.toContain(typed);
+  });
+
+  // ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the prefix alone has no national digits (the message names +52 itself,
+  // so this case is checked apart from the no-echo assertion above).
+  it.each(["+52", "+52 ", " +52"])("refuses the bare prefix %j", (typed) => {
+    expect(normalizeMexicanPhone(typed)).toBeNull();
+    const result = buildCreateQuoteBody(draft({ origin: { ...draft().origin, phone: typed } }));
+    expect(result.ok).toBe(false);
   });
 
   it.each([["91", "0"], ["0", "-181"], ["1e1", "0"], ["", "0"]])(

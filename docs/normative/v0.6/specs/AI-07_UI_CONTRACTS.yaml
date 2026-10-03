@@ -266,7 +266,8 @@ screen_contracts:
       cents with integer arithmetic (never floating point) and sent as cod_expected_cents; empty means no COD; more
       than 20,000.00 MXN is refused with a message naming the cap before any request (COD-CAP-20000-2026-10-02)
     phone_and_restricted_goods: ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - each contact phone is 10 Mexican digits
-      (spaces and hyphens removed, no +52) and is sent normalized; confirming requires ticking that the shipment holds
+      (spaces and hyphens removed; an optional leading +52 is removed too per ORD-PHONE-PLUS52-LOCATIONS-2026-10-03,
+      any other prefix is refused) and is sent normalized; confirming requires ticking that the shipment holds
       no prohibited goods, sent as restricted_goods_acknowledged true and recorded on the order by the server
     service_window: ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 - optional delivery window (from and to) typed as wall-clock
       time in America/Mazatlan, converted with that zone (never the browser's) to instants sent as service_window;

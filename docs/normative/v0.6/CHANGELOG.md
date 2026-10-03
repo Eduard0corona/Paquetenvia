@@ -1,5 +1,18 @@
 # Changelog
 
+## Prefijo +52 en teléfonos y 10 dígitos en ubicaciones (ORD-PHONE-PLUS52-LOCATIONS-2026-10-03) — 2026-10-03
+
+- Respuestas literales del project owner: "Aceptar +52 y quitarlo" y "Exigir 10 dígitos en ubicaciones"; registradas
+  en `decision-log.md`.
+- AI-05: `AddressInput.phone` (`createQuote`) acepta un prefijo `+52` inicial opcional, que se quita junto con espacios
+  y guiones; deben quedar exactamente 10 dígitos ASCII (otro prefijo, `52` sin `+` u otro carácter sigue siendo 422).
+  `CreateLocationRequest.phone` (`createLocation`, GEO-001) aplica la misma regla: sigue siendo opcional (`null`) y
+  otro valor es el 400 uniforme; se valida solo al escribir, las ubicaciones ya guardadas siguen legibles. Solo los 10
+  dígitos normalizados se hashean, protegen y guardan. Nueva entrada `ORD-PHONE-PLUS52-LOCATIONS` en
+  `x-pilot-contract-deltas`.
+- AI-07: `create_order.phone_and_restricted_goods` menciona el `+52` opcional.
+- Sin migración; AI-04, AI-06 y AI-18 sin cambios.
+
 ## Límites de la ventana de servicio confirmados (ORD-SERVICE-WINDOW-LIMITS-CONFIRMED-2026-10-03) — 2026-10-03
 
 - Respuestas literales del project owner: "Sí, 12 h y 30 días" (duración máxima de la ventana y anticipación máxima);

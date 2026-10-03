@@ -87,6 +87,15 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             var replay = await scope.Service.CreateAsync(command, default);
 
             Assert.Equal(created.Id, replay.Id);
+            // ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the +52 prefix and separators are removed before the input hash,
+            // so the same phones typed with the country prefix replay the same quote instead of conflicting.
+            var prefixed = command with
+            {
+                Origin = command.Origin with { Phone = "+52 667 111 1111" },
+                Destination = command.Destination with { Phone = "+52-6672222222" },
+            };
+            var prefixedReplay = await scope.Service.CreateAsync(prefixed, default);
+            Assert.Equal(created.Id, prefixedReplay.Id);
             // GATE-011-VAT-INCLUDED-2026-09-29: the rule amount is the total with IVA included; the pre-tax
             // net is round_half_up(34567 / 1.16) = 29799 cents and the tax is the remainder.
             Assert.Equal(29_799, created.Net.AmountCents);

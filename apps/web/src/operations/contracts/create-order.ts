@@ -258,7 +258,7 @@ function address(
   if (draft.phone.trim() === "") errors.push(`Captura el teléfono de ${label}.`);
   else if (phone === null)
     errors.push(
-      `El teléfono de ${label} debe tener 10 dígitos de México, sin +52; puedes separarlos con espacios o guiones.`,
+      `El teléfono de ${label} debe tener 10 dígitos de México; puedes anteponer +52 y separarlos con espacios o guiones.`,
     );
   if (references.length > 500)
     errors.push(`Las referencias de ${label} admiten 500 caracteres.`);
@@ -387,13 +387,15 @@ export const restrictedGoodsRequiredMessage =
 export const maximumPhoneInputLength = 32;
 
 /**
- * ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: a 10-digit Mexican phone. Only ASCII spaces and hyphens are removed;
- * what remains must be exactly ten ASCII digits, so `+52`, `52` prefixes, parentheses, dots and any other
- * character are rejected (`null`). Mirrors the server's QuotePhonePolicy.
+ * ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: a 10-digit Mexican phone.
+ * ASCII spaces and hyphens are removed, and so is one optional leading `+52` (separators allowed before and after
+ * it); what remains must be exactly ten ASCII digits, so another country prefix, `52` without `+`, parentheses,
+ * dots and any other character are rejected (`null`). Mirrors the server's MexicanPhonePolicy.
  */
 export function normalizeMexicanPhone(text: string): string | null {
   if (text.length === 0 || text.length > maximumPhoneInputLength) return null;
-  const digits = text.replace(/[ -]/g, "");
+  const national = text.replace(/^[ -]*\+52/, "");
+  const digits = national.replace(/[ -]/g, "");
   return /^[0-9]{10}$/.test(digits) ? digits : null;
 }
 
