@@ -22,13 +22,18 @@ internal static partial class MasterDataDocumentValidator
     internal const int MaximumVertices = 200_000;
     internal const int MaximumTotalEntries = 20_000;
 
-    /// <summary>MDM-001 M2: the IANA zones a new Mexican city may use; the loader function holds the same list.</summary>
+    /// <summary>MDM-001 M2: the IANA zones a Mexican city may use; the loader function holds the same list.</summary>
     internal static readonly string[] MexicoTimeZones =
     [
         "America/Bahia_Banderas", "America/Cancun", "America/Chihuahua", "America/Ciudad_Juarez",
         "America/Hermosillo", "America/Matamoros", "America/Mazatlan", "America/Merida",
         "America/Mexico_City", "America/Monterrey", "America/Ojinaga", "America/Tijuana",
     ];
+
+    /// <summary>MDM-001-TZ-MAZATLAN-ONLY-2026-10-02: the only zone a city entry may carry in the pilot; the loader
+    /// function repeats it (MDM001_CITY_TIMEZONE_NOT_IN_PILOT).</summary>
+    internal const string PilotTimeZone = "America/Mazatlan";
+
     private const int MaximumErrors = 50;
 
     internal static readonly string[] Sections =
@@ -207,6 +212,10 @@ internal static partial class MasterDataDocumentValidator
             if (!IsString(item, "timezone", out var timezone) || !MexicoTimeZones.Contains(timezone, StringComparer.Ordinal))
             {
                 Error($"{reference}.timezone", "MDM001_CITY_TIMEZONE_NOT_ALLOWED");
+            }
+            else if (!string.Equals(timezone, PilotTimeZone, StringComparison.Ordinal))
+            {
+                Error($"{reference}.timezone", "MDM001_CITY_TIMEZONE_NOT_IN_PILOT");
             }
 
             if (key is not null && !_cities.Add(key))
