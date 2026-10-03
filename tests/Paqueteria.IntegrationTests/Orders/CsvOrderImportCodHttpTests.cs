@@ -65,6 +65,39 @@ public sealed class CsvOrderImportCodHttpTests : IClassFixture<OrderHttpWebAppli
         Assert.Equal(0, factory.CreateCallCount);
     }
 
+    /// <summary>COD-CAP-20000-2026-10-02: 2,000,000 cents is accepted; one cent more is a row error that blocks commit.</summary>
+    [Fact]
+    public async Task Preview_accepts_a_COD_at_the_20000_MXN_cap_and_rejects_one_cent_more()
+    {
+        factory.ResetCreateObservations();
+        var csv =
+            $"{HeaderWithCod}\n" +
+            $"{Guid.NewGuid():D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAt},ASSISTED,2000000\n" +
+            $"{Guid.NewGuid():D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAt},ASSISTED,2000001\n";
+
+        using var response = await SendAsync(PreviewRoute, csv);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(1, body.RootElement.GetProperty("valid_rows").GetInt32());
+        Assert.Equal(1, body.RootElement.GetProperty("invalid_rows").GetInt32());
+        var rows = body.RootElement.GetProperty("rows").EnumerateArray().ToArray();
+        Assert.Equal(2_000_000, rows[0].GetProperty("cod_expected_cents").GetInt64());
+        Assert.False(rows[1].GetProperty("valid").GetBoolean());
+        Assert.False(rows[1].TryGetProperty("cod_expected_cents", out _));
+        var error = Assert.Single(rows[1].GetProperty("errors").EnumerateArray().ToArray());
+        Assert.Equal("cod_expected_cents", error.GetProperty("column").GetString());
+        Assert.Equal("COD_EXPECTED_CENTS_INVALID", error.GetProperty("code").GetString());
+
+        using var commit = await SendAsync(
+            CommitRoute,
+            csv,
+            idempotencyKey: $"csv-cod-{Guid.NewGuid():N}",
+            contentDigest: body.RootElement.GetProperty("content_digest").GetString());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, commit.StatusCode);
+        Assert.Equal(0, factory.CreateCallCount);
+    }
+
     [Fact]
     public async Task Commit_creates_the_order_with_the_rows_COD_and_another_amount_under_the_key_conflicts()
     {

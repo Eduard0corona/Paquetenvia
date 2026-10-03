@@ -27,7 +27,9 @@ public sealed class OrderCodExpectedTests
     [InlineData("1", 1L)]
     [InlineData("15050", 15_050L)]
     [InlineData("0015050", 15_050L)]
-    [InlineData("9223372036854775807", long.MaxValue)]
+    [InlineData("1999999", 1_999_999L)]
+    [InlineData("2000000", 2_000_000L)]
+    [InlineData("0002000000", 2_000_000L)]
     public void Plain_non_negative_integers_parse_to_exact_cents(string text, long expected)
     {
         Assert.True(OrderInputPolicy.TryParseCodExpectedCents(text, out var cents));
@@ -68,9 +70,28 @@ public sealed class OrderCodExpectedTests
     public void Negative_expectations_are_never_valid()
     {
         Assert.True(OrderInputPolicy.IsCodExpectedCents(0));
-        Assert.True(OrderInputPolicy.IsCodExpectedCents(long.MaxValue));
+        Assert.True(OrderInputPolicy.IsCodExpectedCents(OrderCodExpectationPolicy.MaximumCents));
         Assert.False(OrderInputPolicy.IsCodExpectedCents(-1));
         Assert.False(OrderInputPolicy.IsCodExpectedCents(long.MinValue));
+    }
+
+    /// <summary>
+    /// COD-CAP-20000-2026-10-02 (owner literal: "Tope COD 20,000 pesos"): 20,000.00 MXN is 2,000,000 cents and the
+    /// cap is inclusive, so 2,000,000 is accepted and 2,000,001 is rejected, as a number and as text.
+    /// </summary>
+    [Theory]
+    [InlineData("2000001", 2_000_001L)]
+    [InlineData("0002000001", 2_000_001L)]
+    [InlineData("2000100", 2_000_100L)]
+    [InlineData("100000000", 100_000_000L)]
+    [InlineData("9223372036854775807", long.MaxValue)]
+    public void Expectations_above_the_20000_MXN_cap_are_rejected(string text, long value)
+    {
+        Assert.Equal(2_000_000L, OrderCodExpectationPolicy.MaximumCents);
+        Assert.False(OrderInputPolicy.IsCodExpectedCents(value));
+        Assert.False(OrderInputPolicy.TryParseCodExpectedCents(text, out var cents));
+        Assert.Equal(0, cents);
+        Assert.Throws<ArgumentException>(() => CreateOrder(value));
     }
 
     [Fact]
@@ -78,7 +99,8 @@ public sealed class OrderCodExpectedTests
     {
         Assert.Equal(0, CreateOrder(0).CodExpectedCents);
         Assert.Equal(15_050, CreateOrder(15_050).CodExpectedCents);
-        Assert.Equal(long.MaxValue, CreateOrder(long.MaxValue).CodExpectedCents);
+        Assert.Equal(2_000_000, CreateOrder(2_000_000).CodExpectedCents);
+        Assert.Throws<ArgumentException>(() => CreateOrder(2_000_001));
         Assert.Throws<ArgumentException>(() => CreateOrder(-1));
     }
 
@@ -169,6 +191,8 @@ public sealed class OrderCodExpectedTests
     [InlineData("$100")]
     [InlineData("1e3")]
     [InlineData("9223372036854775808")]
+    [InlineData("2000001")]
+    [InlineData("9223372036854775807")]
     [InlineData("cien")]
     public void An_invalid_COD_cell_is_a_row_error_and_blocks_the_batch(string cell)
     {
@@ -185,6 +209,25 @@ public sealed class OrderCodExpectedTests
         Assert.Equal("cod_expected_cents", error.Column);
         Assert.Equal("COD_EXPECTED_CENTS_INVALID", error.Code);
         Assert.Empty(result.ValidRows);
+        Assert.False(result.IsCommittable);
+    }
+
+    [Fact]
+    public void A_COD_cell_at_the_20000_MXN_cap_is_accepted_and_one_cent_more_blocks_the_batch()
+    {
+        var result = Prevalidate($"""
+            {HeaderWithCod}
+            {QuoteId:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAtText},WEB,2000000
+            {SecondQuoteId:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{AcceptedAtText},WEB,2000001
+            """);
+
+        Assert.Equal(2_000_000, result.Rows[0].CodExpectedCents);
+        Assert.True(result.Rows[0].Valid);
+        Assert.False(result.Rows[1].Valid);
+        Assert.Null(result.Rows[1].CodExpectedCents);
+        Assert.Equal(
+            ("cod_expected_cents", "COD_EXPECTED_CENTS_INVALID"),
+            Assert.Single(result.Rows[1].Errors) is var error ? (error.Column, error.Code) : default);
         Assert.False(result.IsCommittable);
     }
 
@@ -302,6 +345,7 @@ public sealed class OrderCodExpectedTests
             Guid? ownerOrganizationId,
             string? cursor,
             bool codPendingReconciliation,
+            bool mfaSatisfied,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<OrderDetailResult> GetAsync(

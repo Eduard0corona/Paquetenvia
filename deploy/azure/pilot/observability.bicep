@@ -39,8 +39,8 @@ var tags = {
 }
 
 // Log search alerts are billed per rule by evaluation frequency (Azure Retail Prices API, mexicocentral,
-// 2026-09-28): PT15M 0.55, PT10M 1.10, PT5M 1.65 USD per month. Five rules, 1 x PT5M + 4 x PT15M = 3.85
-// USD per month. The workbook is free and the first 1,000 alert e-mails per month are free.
+// 2026-09-28): PT15M 0.55, PT10M 1.10, PT5M 1.65 USD per month. Five rules, all at PT15M = 2.75 USD per
+// month (OBS-002-ALERTS-15MIN-COST-2026-10-02: readiness also every 15 minutes, window 15 minutes). The workbook is free and the first 1,000 alert e-mails per month are free.
 
 // Event ids in the queries: 4601 OutboxLaneSummary, 4602 ScheduledJobCycle, 4603 HttpStatusSummary
 // (Paqueteria.Infrastructure.Observability.TelemetryEvents) and 4004 OutboxRetentionLaneCompleted (OPS-004).
@@ -158,10 +158,10 @@ var rules = [
   {
     name: 'sqr-pv-pilot-readiness'
     displayName: 'PILOT readiness degradation'
-    description: 'OBS-002: repeated probe failures, crash loops or restarts of the API, Worker or Web.'
+    description: 'OBS-002: repeated probe failures, crash loops or restarts of the API, Worker or Web in the last 15 minutes.'
     severity: 1
-    frequency: 'PT5M'
-    window: 'PT10M'
+    frequency: 'PT15M'
+    window: 'PT15M'
     query: readinessQuery
   }
   {
