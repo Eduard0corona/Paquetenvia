@@ -12,8 +12,9 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared, unchanged) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
+| Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (22 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (23 guards) and `test_env001_pilot_guards.py` |
 | Restore drill | `deploy/azure/pilot/restore-drill.sh` |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -228,9 +229,10 @@ App settings wired by `apps.bicep`:
   ADP-001 proof-storage and Data Protection settings, `Dispatch__AssignmentLifecycle`,
   `Notifications`, `Orders__ClaimWindowFinalization__Enabled=true`, and `Urls=http://+:8080` for the
   probes.
-- **Web:** `NODE_ENV=production` and `PAQUETERIA_CSP_CONNECT_SOURCES=<blob endpoint>`, so drivers can
-  PUT proofs directly. The image is built with `NEXT_PUBLIC_AUTH_MODE=bff` and **without**
-  `NEXT_PUBLIC_API_BASE_URL`.
+- **Web:** `NODE_ENV=production`, `PAQUETERIA_CSP_CONNECT_SOURCES=<blob endpoint>` (so drivers can
+  PUT proofs directly), and `PAQUETERIA_TERMS_VERSION` / `PAQUETERIA_PRIVACY_VERSION` from
+  `web.parameters.json` (see "Accepted terms and privacy versions" below). The image is built with
+  `NEXT_PUBLIC_AUTH_MODE=bff` and **without** `NEXT_PUBLIC_API_BASE_URL`.
 
 > The shared `deploy/azure/Dockerfile.web` cannot produce a BFF build. It always defines
 > `NEXT_PUBLIC_API_BASE_URL`, as `""` when the argument is omitted, and `next.config.ts` then fails
@@ -261,20 +263,31 @@ start if `Pricing__PricingPolicyVersion` is still set.
 Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
 
-**Accepted terms and privacy versions (UI-001, owner decision pending, not wired yet).** The
-operator-assisted order screen (`/ops/orders/new`) reads two server-only runtime settings on the
-web container: `PAQUETERIA_TERMS_VERSION` and `PAQUETERIA_PRIVACY_VERSION`. Each must match the
-AI-05 `terms_version`/`privacy_version` format `^[A-Za-z0-9._-]+$` (1 to 64 characters). If
-either is missing, malformed or `OWNER_DECISION_REQUIRED`, order confirmation is disabled.
-There is no default. They are not in `apps.settings.json`, because that file only reaches the
-API and Worker, only takes `.NET` `Section__Key` names, and treats the `PAQUETERIA_` prefix as
-platform-managed. Before the first pilot deployment that must create orders, the owner chooses
-both values. The pilot deploy then needs:
+**Accepted terms and privacy versions (UI-001, owner decision pending).** The operator-assisted order
+screen (`/ops/orders/new`) reads two server-only runtime settings on the web container:
+`PAQUETERIA_TERMS_VERSION` and `PAQUETERIA_PRIVACY_VERSION`. Each must match the AI-05
+`terms_version`/`privacy_version` format `^[A-Za-z0-9._-]{1,64}$` (letters, digits, `.`, `_`, `-`; 1 to 64
+characters, for example `2026-10-01`). If either is missing, malformed or `OWNER_DECISION_REQUIRED`, the web
+disables order confirmation. There is no default.
 
-- the two values as literal env entries on `ca-pv-pilot-web` in `apps.bicep`, or a new web-only
-  settings file/parameter;
-- a pilot guard (`tools/azr-001/env001_pilot_guards.py`) that refuses to deploy while either one
-  is missing or still `OWNER_DECISION_REQUIRED`.
+The values are owner decisions. They come with the approved privacy notice (GATE-007) and the terms in force,
+and the owner has not supplied them yet. They live in `deploy/azure/pilot/web.parameters.json`, an ARM
+parameters file like `observability.parameters.json`:
+
+- `webTermsVersion` → `PAQUETERIA_TERMS_VERSION` and `webPrivacyVersion` → `PAQUETERIA_PRIVACY_VERSION`, both
+  set on `ca-pv-pilot-web` only. In `apps.bicep` both are string parameters with no default,
+  `@minLength(1)` and `@maxLength(64)`.
+- Both start as `OWNER_DECISION_REQUIRED`. `env001_pilot_guards.py web-check` fails with
+  `STOP_FOR_OWNER_DECISION: webTermsVersion (PAQUETERIA_TERMS_VERSION) ...` (and the same for the privacy
+  version) while a value is the placeholder, empty, longer than 64 characters or outside the format, or
+  while the file has any other parameter. The provenance job and Stage 4 run it, so **the pilot deploy
+  stops before touching Azure** until the owner fills both values.
+- Guard P22 checks the parameters (no default, 1 to 64), that only the web receives the two variables, and
+  that the workflow checks and deploys the file.
+
+They are not in `apps.settings.json`, because that file only reaches the API and Worker, only takes
+`.NET` `Section__Key` names, and treats the `PAQUETERIA_` prefix as platform-managed. Changing a version
+later is a reviewed PR to `web.parameters.json` and a redeploy; new orders then record the new version.
 
 **Cleanups (PILOT-CLEANUPS-ENABLED, owner 2026-09-28).** The Worker runs:
 
@@ -346,16 +359,23 @@ Two further caveats:
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
-3. The owner replaces every `OWNER_DECISION_REQUIRED` in `deploy/azure/pilot/apps.settings.json` (none
-   remains since POLICY-VERSIONS-PER-ORG-2026-10-02) and the alert e-mail in
-   `deploy/azure/pilot/observability.parameters.json` (PR → `development` → `main`). Both files block the
-   workflow while a placeholder remains.
+3. The owner replaces every `OWNER_DECISION_REQUIRED` (PR → `development` → `main`):
+   - `deploy/azure/pilot/apps.settings.json` (none remains since POLICY-VERSIONS-PER-ORG-2026-10-02);
+   - the alert e-mail in `deploy/azure/pilot/observability.parameters.json`;
+   - `webTermsVersion` and `webPrivacyVersion` in `deploy/azure/pilot/web.parameters.json`, the accepted
+     terms and privacy notice versions that come with the approved notice (§4).
+
+   Each file blocks the workflow while a placeholder remains.
 4. Promote to `main` and wait for the Foundation CI push run on `main` (13/13 green). Note its run id
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
    `foundation_run_id=<run id>`, `custom_domain_phase=none`.
-6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*.
-   Write the AuthCenter secret straight into the vault (§6.6) and run again.
+6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
+   workflow requires three owner secrets and reports the first one missing. Write all three straight into
+   the vault (§6.6) and run again:
+   - `authcenter-paquetenvia-client-secret`;
+   - `google-maps-api-key`;
+   - `public-tracking-link-key`.
 7. The run summary shows the DNS records. At the DNS host of `paquetenvia.com`, create:
    - `A` `@` → the environment static IP;
    - `TXT` `asuid` → the custom-domain verification id.
@@ -366,13 +386,15 @@ Two further caveats:
    issued by HTTP validation. Check with
    `az containerapp env certificate list -g <rg> -n <env> --managed-certificates-only -o table`
    (status `Succeeded`), then `curl -I https://paquetenvia.com/`.
-9. Check by hand, in a browser on `https://paquetenvia.com`:
-   - Log in through AuthCenter.
-   - In DevTools → Network → WS, `/hubs/...` shows `101 Switching Protocols`.
-   - Upload a proof photo, then check that the blob has the Defender scan-result index tag.
-   - `http://paquetenvia.com` redirects to HTTPS or is refused. HTTP-to-HTTPS on a route custom domain
-     is not verified yet.
-10. Register the production AuthCenter client URIs (auth-001 §10.1, all on `https://paquetenvia.com`).
+9. Register the production AuthCenter client URIs (auth-001 §10.1, all on `https://paquetenvia.com`).
+   The login test in the next step needs them.
+10. Check by hand, in a browser on `https://paquetenvia.com`:
+    - Log in through AuthCenter.
+    - In DevTools → Network → WS, `/hubs/...` shows `101 Switching Protocols`.
+    - Upload a proof photo, then check that the blob has the Defender scan-result index tag.
+    - `/ops/orders/new` allows confirming an order (the terms and privacy versions are set).
+    - `http://paquetenvia.com` redirects to HTTPS or is refused. HTTP-to-HTTPS on a route custom domain
+      is not verified yet.
 11. Run the restore drill (§6.4) and keep its `EVIDENCE` line. The ENV-001 criterion "restore drill
     evidence is current before pilot start" requires it.
 
@@ -608,7 +630,7 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 22 guards (P00–P21) run on the compiled ARM output and the workflow:
+The 23 guards (P00–P22) run on the compiled ARM output and the workflow:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -641,6 +663,9 @@ The 22 guards (P00–P21) run on the compiled ARM output and the workflow:
   - one action group, e-mail only, bound to a parameter without a default;
   - queries read only the Container Apps log tables and the allowlisted event properties;
   - the workflow checks the parameters file.
+- **Accepted terms and privacy versions (P22, UI-001):** the web receives `PAQUETERIA_TERMS_VERSION` and
+  `PAQUETERIA_PRIVACY_VERSION` from `apps.bicep` parameters without a default (1 to 64 characters), no
+  other workload receives them, `web.parameters.json` is well formed, and the workflow checks and deploys it.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -653,7 +678,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 22/22 pilot guards (P00–P21) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 23/23 pilot guards (P00–P22) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
@@ -669,8 +694,9 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 - `SSL Mode=VerifyFull` from the .NET images.
 - That PostgreSQL 18 is offered with private access in `mexicocentral`. AZR-001 used PG 18 there
   with public access.
-- The ADP-001 adapters themselves, which are not merged yet. Until they are, the API refuses to start
-  with `AzureKeyVault`, `AzureBlob` or `DefenderForStorage`, by design.
+- The ADP-001 adapters against real Azure. They are merged (`AzureKeyVaultPiiKeyWrapClient`,
+  `AzureBlobProofObjectStorage`, `DefenderForStorageThreatScanner`) and tested offline, but they have
+  never called Key Vault, Blob Storage or Defender for Storage.
 - OBS-002:
   - ARM acceptance of the alert rules, action group and workbook;
   - that the JSON console line reaches `Log_s` unchanged;
