@@ -1810,7 +1810,7 @@ jobs:
     env:
       CI: "true"
       REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
-      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-10-braces-dos-tracked' && 'SEC-2026-10-BRACES-DOS-TRACKED' || github.head_ref == 'fix/security-2026-10-next-og-critical' && 'SEC-2026-10-NEXT-OG-CRITICAL' || github.head_ref == 'fix/security-2026-09-next-critical' && 'SEC-2026-09-NEXT-CRITICAL' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
+      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-10-braces-dos-tracked' && 'SEC-2026-10-BRACES-DOS-TRACKED' || github.head_ref == 'fix/security-2026-09-next-critical' && 'SEC-2026-09-NEXT-CRITICAL' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
       REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}

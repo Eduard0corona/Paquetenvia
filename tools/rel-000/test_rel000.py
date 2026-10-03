@@ -5407,13 +5407,13 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             {
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.NEXT_CRITICAL_REMEDIATION_ID,
-                rel000.NEXT_OG_CRITICAL_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
         historical = {item["id"]: item for item in policy["historical_remediations"]}
         self.assertEqual("MERGED", historical[rel000.SHARP_REMEDIATION_ID]["status"])
+        self.assertEqual("MERGED", historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["status"])
 
     def test_web_transitive_mode_requires_exact_branch_and_id(self):
         policy = self.policy()
@@ -5682,19 +5682,21 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         )
         self.assertEqual(38, fixture["issue_number"])
         self.assertEqual(48, fixture["remediation_issues"][rel000.NEXT_CRITICAL_REMEDIATION_ID])
-        self.assertEqual(
-            175, fixture["remediation_issues"][rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]
+        self.assertNotIn(
+            rel000.NEXT_OG_CRITICAL_REMEDIATION_ID, fixture["remediation_issues"]
         )
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
         self.assertIn("fix/security-2026-09-next-critical", workflow)
         self.assertIn("SEC-2026-09-NEXT-CRITICAL", workflow)
-        self.assertIn(
-            "github.head_ref == 'fix/security-2026-10-next-og-critical' "
-            "&& 'SEC-2026-10-NEXT-OG-CRITICAL'",
-            workflow,
-        )
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
+        for name in ("ci.yml", "pr-validation.yml"):
+            retired = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertNotIn(
+                    "github.head_ref == 'fix/security-2026-10-next-og-critical'", retired
+                )
+                self.assertNotIn("SEC-2026-10-NEXT-OG-CRITICAL", retired)
 
 
 class NextCriticalRemediationPolicyTests(unittest.TestCase):
@@ -5972,8 +5974,38 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-next-og-critical-tests-")
         self.root = Path(self.temp.name)
-        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
-        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+        self.repository_policy_path = (
+            REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
+        )
+        current_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # PR #176 merged, so the authorization is historical; the regression suite replays it
+        # as the active authorization it was while the remediation branch was open.
+        next_og = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.NEXT_OG_CRITICAL_REMEDIATION_ID
+            )
+        )
+        next_og.pop("status", None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.NEXT_OG_CRITICAL_REMEDIATION_ID
+        ]
+        active = self.policy_value["active_remediations"]
+        braces_index = next(
+            (
+                index
+                for index, item in enumerate(active)
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            ),
+            len(active),
+        )
+        active.insert(braces_index, next_og)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -6128,6 +6160,31 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
                 "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
                 "vulnerable_lock_versions": [],
             },
+        )
+
+    def test_merged_authorization_is_historical_and_not_active(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        historical = {item["id"]: item for item in policy["historical_remediations"]}
+        self.assertEqual("MERGED", historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["status"])
+        self.assertEqual(
+            "1ade580ac762cd0d1acdb4cc4d593c2cf5757c10",
+            historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["validated_target_sha"],
+        )
+        self.assertNotIn(
+            rel000.NEXT_OG_CRITICAL_REMEDIATION_ID,
+            {item["id"] for item in policy["active_remediations"]},
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy,
+                "fix/security-2026-10-next-og-critical",
+                rel000.NEXT_OG_CRITICAL_REMEDIATION_ID,
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-10-next-og-critical"),
         )
 
     def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
