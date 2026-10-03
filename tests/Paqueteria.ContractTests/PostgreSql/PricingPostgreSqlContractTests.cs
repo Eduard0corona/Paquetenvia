@@ -1219,7 +1219,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                 "UPDATE pricing.quotes SET financial_override=financial_override - 'reason' WHERE id=@id", P("id", created.Id)));
             Assert.Equal(PostgresErrorCodes.CheckViolation, incomplete.SqlState);
 
-            await AssertLowPriceAuditAsync(data, created.Id, reason, 5_200);
+            await AssertLowPriceAuditAsync(data, created.Id, reason, 5_200, "BUSINESS_200_499");
 
             var order = await CreateOrderAsync(data, created.Id, "prc-low-price-authorized-order");
             Assert.Equal(created.Id, order.QuoteId);
@@ -1239,7 +1239,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             Assert.Equal(PostgresErrorCodes.CheckViolation, orderCheck.SqlState);
 
             // The order creation adds no second authorization audit row.
-            await AssertLowPriceAuditAsync(data, created.Id, reason, 5_200);
+            await AssertLowPriceAuditAsync(data, created.Id, reason, 5_200, "BUSINESS_200_499");
         }
         finally
         {
@@ -1317,7 +1317,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             Assert.Null(plain.LowPriceAuthorization);
             Assert.True(await ScalarAdminAsync<bool>(
                 "SELECT financial_override IS NULL FROM pricing.quotes WHERE id=@id", P("id", plain.Id)));
-            await AssertLowPriceAuditAsync(data, authorized.Id, "Promoción autorizada", 5_200);
+            await AssertLowPriceAuditAsync(data, authorized.Id, "Promoción autorizada", 5_200, "OCCASIONAL");
         }
         finally
         {
@@ -1366,12 +1366,21 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
             P("account", accountId));
     }
 
-    private async Task AssertLowPriceAuditAsync(SyntheticPricingData data, Guid quoteId, string reason, long totalCents)
+    private async Task AssertLowPriceAuditAsync(
+        SyntheticPricingData data,
+        Guid quoteId,
+        string reason,
+        long totalCents,
+        string pricingTier)
     {
         await using var audit = fixture.AdminDataSource.CreateCommand(
             """
             SELECT actor_id, entity_type, payload_redacted->>'reason', (payload_redacted->>'total_cents')::bigint,
-                   payload_redacted->>'quote_id', payload_redacted->>'actor_id', request_id
+                   payload_redacted->>'quote_id', payload_redacted->>'actor_id', request_id,
+                   (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(payload_redacted) k),
+                   payload_redacted::text, payload_redacted->>'currency', payload_redacted->>'pricing_tier',
+                   (payload_redacted->>'consolidated_route')::boolean,
+                   (payload_redacted->>'valid_until')::timestamptz = (SELECT expires_at FROM pricing.quotes WHERE id=@quote)
             FROM platform.audit_logs
             WHERE org_id=@org AND action='QUOTE_LOW_PRICE_AUTHORIZED' AND entity_id=@quote
             """);
@@ -1386,6 +1395,15 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         Assert.Equal(quoteId.ToString("D"), reader.GetString(4));
         Assert.Equal(data.ActorId.ToString("D"), reader.GetString(5));
         Assert.Equal("prc001-contract-request", reader.GetString(6));
+        // The stored evidence is exactly the intended payload, and the redactor altered none of it.
+        Assert.Equal(
+            ["actor_id", "consolidated_route", "currency", "pricing_tier", "quote_id", "reason", "total_cents", "valid_until"],
+            reader.GetFieldValue<string[]>(7));
+        Assert.DoesNotContain(Paqueteria.Application.Auditing.AuditPayloadRedactor.Replacement, reader.GetString(8), StringComparison.Ordinal);
+        Assert.Equal("MXN", reader.GetString(9));
+        Assert.Equal(pricingTier, reader.GetString(10));
+        Assert.False(reader.GetBoolean(11));
+        Assert.True(reader.GetBoolean(12));
         Assert.False(await reader.ReadAsync());
     }
 

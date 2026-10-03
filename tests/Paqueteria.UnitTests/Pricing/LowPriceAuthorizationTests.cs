@@ -244,6 +244,44 @@ public sealed class LowPriceAuthorizationTests
     }
 
     [Fact]
+    public void The_audit_payload_survives_the_redactor_unchanged_with_exactly_the_intended_fields()
+    {
+        var evaluation = Evaluate(PricingTier.Business200To499, 5_200, authorized: true);
+        var authorization = new LowPriceAuthorization(ActorId, "Cliente ancla, ruta en consolidación", ExpiresAt);
+        var quote = CreateQuote(
+            evaluation,
+            PricingTier.Business200To499,
+            false,
+            authorization,
+            PostgreSqlQuoteService.SerializeFinancialOverride(authorization));
+
+        var payload = PostgreSqlQuoteService.CreateLowPriceAuditPayload(quote, authorization);
+        var redacted = new global::Paqueteria.Application.Auditing.AuditPayloadRedactor().Redact(payload).Json;
+
+        Assert.DoesNotContain(global::Paqueteria.Application.Auditing.AuditPayloadRedactor.Replacement, redacted, StringComparison.Ordinal);
+        using var document = System.Text.Json.JsonDocument.Parse(redacted);
+        var root = document.RootElement;
+        Assert.Equal(
+            ["actor_id", "consolidated_route", "currency", "pricing_tier", "quote_id", "reason", "total_cents", "valid_until"],
+            root.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(quote.Id, root.GetProperty("quote_id").GetGuid());
+        Assert.Equal(ActorId, root.GetProperty("actor_id").GetGuid());
+        Assert.Equal("Cliente ancla, ruta en consolidación", root.GetProperty("reason").GetString());
+        Assert.Equal(5_200, root.GetProperty("total_cents").GetInt64());
+        Assert.Equal("MXN", root.GetProperty("currency").GetString());
+        Assert.Equal("BUSINESS_200_499", root.GetProperty("pricing_tier").GetString());
+        Assert.False(root.GetProperty("consolidated_route").GetBoolean());
+        Assert.Equal(ExpiresAt, root.GetProperty("valid_until").GetDateTimeOffset());
+
+        // Why the decision id is not in the payload: its dated suffix reads as a phone number and is redacted.
+        using var dated = System.Text.Json.JsonDocument.Parse("""{"decision":"LOW-PRICE-MANUAL-AUTH-2026-10-02"}""");
+        Assert.Contains(
+            global::Paqueteria.Application.Auditing.AuditPayloadRedactor.Replacement,
+            new global::Paqueteria.Application.Auditing.AuditPayloadRedactor().Redact(dated.RootElement).Json,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_PostgreSQL_quote_service_resolves_with_the_append_only_audit_writer()
     {
         var configuration = new ConfigurationBuilder()

@@ -581,19 +581,15 @@ public sealed class PostgreSqlQuoteService(
     internal static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value) =>
         new(value.UtcTicks - (value.UtcTicks % 10), TimeSpan.Zero);
 
-    private async Task WriteLowPriceAuthorizationAuditAsync(
-        PricingDbContext dbContext,
-        CreateQuoteCommand command,
-        Quote quote,
-        LowPriceAuthorization authorization,
-        DateTimeOffset occurredAt,
-        CancellationToken cancellationToken)
-    {
-        // Append-only evidence in the createQuote transaction: who authorized, why, which quote and its total.
-        var payload = JsonSerializer.SerializeToElement(
+    /// <summary>
+    /// Append-only evidence of a manual low price authorization: who authorized, why, which quote and its total. The
+    /// audit action names the decision; every value here passes the audit redactor unchanged (a dated decision id
+    /// would not: its digit run reads as a phone number), so the stored evidence never holds "[REDACTED]".
+    /// </summary>
+    internal static JsonElement CreateLowPriceAuditPayload(Quote quote, LowPriceAuthorization authorization) =>
+        JsonSerializer.SerializeToElement(
             new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                ["decision"] = "LOW-PRICE-MANUAL-AUTH-2026-10-02",
                 ["quote_id"] = quote.Id,
                 ["actor_id"] = authorization.ActorId,
                 ["reason"] = authorization.Reason,
@@ -603,6 +599,16 @@ public sealed class PostgreSqlQuoteService(
                 ["consolidated_route"] = quote.ConsolidatedRoute,
                 ["valid_until"] = authorization.ValidUntil,
             });
+
+    private async Task WriteLowPriceAuthorizationAuditAsync(
+        PricingDbContext dbContext,
+        CreateQuoteCommand command,
+        Quote quote,
+        LowPriceAuthorization authorization,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        var payload = CreateLowPriceAuditPayload(quote, authorization);
         var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
         var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
         await auditWriter.WriteAsync(
