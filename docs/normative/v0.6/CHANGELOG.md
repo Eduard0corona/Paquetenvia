@@ -1,5 +1,18 @@
 # Changelog
 
+## WhatsApp ambiguo: fallido sin reintento y aviso al despachador (NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner (GATE-004): "Marcar fallido y avisar"; registrada en `decision-log.md`
+  (`NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02`).
+- Un envío WhatsApp con resultado ambiguo (timeout o respuesta sin `wamid`: Meta pudo aceptarlo) es terminal: la
+  Notification queda FAILED con el motivo `AMBIGUOUS_TIMEOUT`, el `notifications.send-requested` queda DEAD y nunca se
+  reintenta ni se reencola, así el cliente nunca lo recibe dos veces.
+- Aviso: el `notifications.status-changed` que el mismo settle ya escribe (`NotificationStatusChanged.v1`, audiencia
+  operations, sin destinatario ni PII). Sin evento, flujo cross-module, estado ni tabla nuevos.
+- Lane Notifications `20261002000100_FailAmbiguousWhatsAppNotifications`: reemplaza solo el cuerpo de
+  `security.apply_notification_outcome` (misma firma, dueño, permisos y verificación de `lease_token`); rollback
+  restaura el cuerpo de NTF-001. IN_APP y email conservan el reintento AMBIGUOUS. AI-06, AI-12 y AI-18 sin cambios.
+
 ## Zona horaria del piloto solo America/Mazatlan en el cargador MDM-001 (MDM-001-TZ-MAZATLAN-ONLY-2026-10-02) — 2026-10-02
 
 - Respuesta literal del project owner: "Solo America/Mazatlan"; registrada en `decision-log.md`
