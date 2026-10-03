@@ -686,7 +686,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 '{VersionPricingPolicyPerOrganization.MigrationId}',
                 '{StoreTariffPolicyVersionInMasterDataLoader.MigrationId}',
                 '{HardenMasterDataLoaderOperatorBoundary.MigrationId}',
-                '{RequireVatIncludedTariffsInMasterDataLoader.MigrationId}');
+                '{RequireVatIncludedTariffsInMasterDataLoader.MigrationId}',
+                '{RequireMazatlanTimeZoneInMasterDataLoader.MigrationId}');
             """);
         Assert.Equal("PENDING", await PricingLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";

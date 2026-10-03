@@ -9,6 +9,7 @@ import {
   oneOf,
   uuid,
 } from "./strict-json";
+import { maximumCodExpectedCents } from "./money";
 
 /**
  * /ops/orders/import (AI-07 csv_order_import) over AI-05 previewOrderCsv and
@@ -25,6 +26,13 @@ export const csvUploadFilename = "orders.csv";
 /** CSV-001 header; the COD column (D6-COD-EXPECTED) is optional and, when present, last. */
 export const csvHeader = "quote_id,payer_type,terms_version,privacy_version,accepted_at,acceptance_channel";
 export const csvCodColumn = "cod_expected_cents";
+/**
+ * ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: AI-05 CsvImportCommitRequest form field (not a CSV column) with the
+ * dispatcher's confirmation that no shipment in the file contains prohibited goods.
+ */
+export const csvRestrictedGoodsField = "restricted_goods_acknowledged";
+export const csvRestrictedGoodsRequiredMessage =
+  "Confirma que ningún envío del archivo contiene artículos prohibidos antes de confirmar el lote.";
 
 export const csvFileErrors = [
   "ENCODING_INVALID",
@@ -112,7 +120,8 @@ export const csvRowErrorLabels: Readonly<Record<CsvRowErrorCode, string>> = {
   PRIVACY_VERSION_INVALID: "Versión de aviso de privacidad inválida",
   ACCEPTED_AT_INVALID: "Fecha de aceptación inválida",
   ACCEPTANCE_CHANNEL_INVALID: "Canal de aceptación inválido",
-  COD_EXPECTED_CENTS_INVALID: "Cobro contra entrega inválido: usa centavos enteros, sin punto, comas ni signos",
+  COD_EXPECTED_CENTS_INVALID:
+    "Cobro contra entrega inválido: usa centavos enteros, sin punto, comas ni signos, de 0 a 2000000 ($20,000.00 MXN)",
 };
 
 export const csvRowOutcomeLabels: Readonly<Record<CsvRowOutcomeError, string>> = {
@@ -184,6 +193,8 @@ function parseRowPreview(value: unknown): CsvRowPreview {
     errors: array(object.errors, 16).map(parseRowError),
     cod_expected_cents: valid ? integer(object.cod_expected_cents, 0) : null,
   };
+  // AI-05 maximum (COD-CAP-20000-2026-10-02): a valid row never declares more than 20,000.00 MXN.
+  if (row.cod_expected_cents !== null && row.cod_expected_cents > maximumCodExpectedCents) fail();
   // A valid row names its quote and payer and carries no error.
   if (row.valid && (row.errors.length > 0 || row.quote_id === null || row.payer_type === null)) fail();
   return row;

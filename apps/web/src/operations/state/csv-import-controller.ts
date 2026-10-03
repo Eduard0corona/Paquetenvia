@@ -5,6 +5,7 @@ import {
   checkCsvFile,
   csvConflictMessages,
   csvFileProblemLabels,
+  csvRestrictedGoodsRequiredMessage,
   isCommittable,
   type CsvImportCommit,
   type CsvImportPreview,
@@ -163,13 +164,21 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
     }
   }
 
-  public async commit(): Promise<void> {
+  /**
+   * @param restrictedGoodsAcknowledged ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher ticked that no
+   * shipment in the file contains prohibited goods; without it nothing is sent.
+   */
+  public async commit(restrictedGoodsAcknowledged: boolean): Promise<void> {
     const api = this.api;
     const file = this.file;
     const state = this.getSnapshot();
     const preview = state.preview;
     if (api === null || file === null || preview === null || !state.canCommit || state.busy) return;
     if (!isCommittable(preview)) return;
+    if (!restrictedGoodsAcknowledged) {
+      this.update({ errors: [csvRestrictedGoodsRequiredMessage], message: null, stepUpHref: null });
+      return;
+    }
     const generation = this.generation;
     // The batch key follows the previewed digest: a retry of the same batch reuses it.
     const submission = this.pending.prepare(commitScope, preview.content_digest, () => preview.content_digest);

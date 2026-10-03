@@ -74,6 +74,10 @@ Los tres snapshots JSON son deterministas:
 
 No contienen direccion, referencias, contacto, telefono, ciphertext, headers, secretos ni claves. La cotizacion referencia las ubicaciones protegidas; no duplica su ciphertext. El SHA-256 `input_hash` se calcula sobre una serializacion canonica del request y no almacena el request original en la tabla idempotente.
 
+### Telefono de contacto (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)
+
+`origin.phone` y `destination.phone` son numeros de Mexico de 10 digitos (`QuotePhonePolicy`, en `Pricing.Application`). Solo se quitan el espacio ASCII y el guion ASCII; lo que queda deben ser exactamente diez digitos ASCII `0-9`, con un maximo de 32 caracteres de entrada. Se rechazan con `422` (antes de cualquier efecto) el prefijo `+52` o `52`, parentesis, puntos, tabuladores, espacios no ASCII, digitos no ASCII y letras: `667 123 4567` y `667-123-4567` son `6671234567`; `+52 667 123 4567` no es valido. El endpoint valida y el servicio vuelve a validar y normaliza antes de calcular `input_hash`, de modo que dos formas del mismo numero son la misma solicitud, y solo los diez digitos se protegen (ADP-001) y se guardan. El valor nunca se registra en logs ni aparece en respuestas o errores. `createLocation` (GEO-001) conserva su telefono opcional sin esta regla. La pantalla `/ops/orders/new` aplica la misma regla en el formulario y envia el numero normalizado.
+
 ## Idempotencia y expiracion
 
 POST usa `platform.idempotency_keys` con scope `PRC-001:CREATE_QUOTE`. Desde la correccion `PRC-001-DEF-001`, la clave queda vinculada al SHA-256 canonico antes de cualquier llamada a Locations:

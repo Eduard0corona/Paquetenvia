@@ -133,6 +133,44 @@ NEXT_OG_ESLINT_DEPRECATION = (
     "    deprecated: This version is no longer supported. "
     "Please see https://eslint.org/version-support for other options."
 )
+BRACES_KNOWN_ADVISORY_ID = "SEC-2026-10-BRACES-DOS-TRACKED"
+BRACES_KNOWN_ADVISORY_ISSUE = 180
+BRACES_KNOWN_ADVISORY_ISSUE_TITLE = (
+    "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships"
+)
+# Exact accepted known advisory: no patched braces release exists on npm, so the
+# advisory is tolerated only on this package, severity, version and dev-only lock path.
+BRACES_KNOWN_ADVISORY = {
+    "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "severity": "high",
+    "installed_versions": ["3.0.3"],
+    "affected_range": "<=3.0.3",
+    "patched_range": ">=3.0.4",
+    "direct_or_transitive": "transitive",
+    "dependency_path_count": 1,
+    "dependency_scope": "dev",
+    "lock_path": [
+        "eslint-config-next@16.3.6",
+        "@next/eslint-plugin-next@16.3.6",
+        "fast-glob@3.3.1",
+        "micromatch@4.0.8",
+        "braces@3.0.3",
+    ],
+    "lockfile": "apps/web/pnpm-lock.yaml",
+    "tracked_issue": BRACES_KNOWN_ADVISORY_ISSUE,
+    "tracked_issue_title": BRACES_KNOWN_ADVISORY_ISSUE_TITLE,
+}
+# Audit fields an accepted known advisory must reproduce exactly in every audit.
+KNOWN_ADVISORY_AUDIT_FIELDS = (
+    "package",
+    "severity",
+    "installed_versions",
+    "affected_range",
+    "patched_range",
+    "direct_or_transitive",
+    "dependency_path_count",
+)
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -777,6 +815,60 @@ def validate_remediation_policy(policy: Any) -> dict[str, Any]:
                     "REMEDIATION_POLICY_INVALID",
                     "The Next.js next/og remediation authorization is incomplete or inconsistent.",
                 )
+        if authorization.get("id") == BRACES_KNOWN_ADVISORY_ID:
+            accepted = authorization.get("accepted_known_advisory")
+            totals = {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
+            if (
+                authorization.get("tracked_issue") != BRACES_KNOWN_ADVISORY_ISSUE
+                or authorization.get("tracked_issue_title") != BRACES_KNOWN_ADVISORY_ISSUE_TITLE
+                or "related_tracked_issue" in authorization
+                or authorization.get("issue_advisories")
+                != {str(BRACES_KNOWN_ADVISORY_ISSUE): [BRACES_KNOWN_ADVISORY["advisory_id"]]}
+                or authorization.get("expected_base_advisories")
+                != [BRACES_KNOWN_ADVISORY["advisory_id"]]
+                or authorization.get("expected_base_packages")
+                != {BRACES_KNOWN_ADVISORY["advisory_id"]: BRACES_KNOWN_ADVISORY["package"]}
+                or authorization.get("expected_base_totals") != totals
+                or authorization.get("expected_branch_totals") != totals
+                or authorization.get("allowed_direct_packages") != []
+                or authorization.get("allowed_dependency_files") != ["apps/web/pnpm-lock.yaml"]
+                or authorization.get("required_dependency_files") != []
+                or authorization.get("allowed_non_dependency_files")
+                != [
+                    ".github/workflows/ci.yml",
+                    ".github/workflows/pr-validation.yml",
+                    "tests/fixtures/rel-000/security-tracking.json",
+                    "tools/rel-000/rel000.py",
+                    "tools/rel-000/security-remediation-policy.json",
+                    "tools/rel-000/test_rel000.py",
+                ]
+                or not isinstance(accepted, dict)
+                or set(accepted)
+                != {*BRACES_KNOWN_ADVISORY, "expected_lockfile_sha256", "exit_condition"}
+                or any(accepted.get(key) != value for key, value in BRACES_KNOWN_ADVISORY.items())
+                or re.fullmatch(r"[0-9a-f]{64}", str(accepted.get("expected_lockfile_sha256", "")))
+                is None
+                or not isinstance(accepted.get("exit_condition"), str)
+                or "braces>=3.0.4" not in accepted["exit_condition"]
+                or f"Issue #{BRACES_KNOWN_ADVISORY_ISSUE}" not in accepted["exit_condition"]
+                or authorization.get("target_sharp_version") != "0.35.4"
+                or authorization.get("require_sharp_runtime_smoke") is not True
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The braces accepted known advisory authorization is incomplete or inconsistent.",
+                )
+    # An accepted known advisory exists only under its own exact authorization.
+    for authorization in [*historical, *active]:
+        if "accepted_known_advisory" in authorization and authorization.get("id") != (
+            BRACES_KNOWN_ADVISORY_ID
+        ):
+            fail(
+                "REMEDIATION_POLICY_INVALID",
+                "Only the exact braces authorization may declare an accepted known advisory.",
+            )
     validate_dependency_admission_registry(policy, identifiers, branches)
     return policy
 
@@ -6098,6 +6190,259 @@ def validate_next_og_critical_remediation_diff(
     }
 
 
+def _lock_importer_dependencies(lock_text: str) -> dict[str, dict[str, set[str]]]:
+    """Direct dependency names of the root importer, by dependency section."""
+
+    sections: dict[str, dict[str, set[str]]] = {}
+    in_importers = False
+    importer: str | None = None
+    section: str | None = None
+    for line in lock_text.splitlines():
+        if not line:
+            continue
+        if not line.startswith(" "):
+            in_importers = line == "importers:"
+            importer = None
+            section = None
+            continue
+        if not in_importers:
+            continue
+        match = re.fullmatch(r"  (['\"]?)(\S.*?)\1:", line)
+        if match:
+            importer = match.group(2)
+            section = None
+            continue
+        match = re.fullmatch(r"    (\w+):", line)
+        if match:
+            section = match.group(1)
+            continue
+        match = re.fullmatch(r"      (['\"]?)(\S+?)\1:", line)
+        if match and importer is not None and section is not None:
+            sections.setdefault(importer, {}).setdefault(section, set()).add(match.group(2))
+    return sections
+
+
+def _lock_snapshot_dependents(lock_text: str) -> dict[str, set[str]]:
+    """Map each resolved `name@version` to the snapshots that depend on it."""
+
+    dependents: dict[str, set[str]] = {}
+    in_snapshots = False
+    parent: str | None = None
+    in_dependencies = False
+    for line in lock_text.splitlines():
+        if not line:
+            continue
+        if not line.startswith(" "):
+            in_snapshots = line == "snapshots:"
+            parent = None
+            continue
+        if not in_snapshots:
+            continue
+        block_key = _lock_package_block_key(line)
+        if block_key is not None:
+            parent = block_key.split("(", 1)[0]
+            in_dependencies = False
+            continue
+        match = re.fullmatch(r"    (\w+):", line)
+        if match:
+            in_dependencies = match.group(1) in {"dependencies", "optionalDependencies"}
+            continue
+        match = re.fullmatch(r"      (['\"]?)(\S+?)\1: (\S+)", line)
+        if match and in_dependencies and parent is not None:
+            child = f"{match.group(2)}@{match.group(3).split('(', 1)[0]}"
+            dependents.setdefault(child, set()).add(parent)
+    return dependents
+
+
+def validate_known_advisory_lock_path(lock_text: str, accepted: dict[str, Any]) -> None:
+    """Prove the accepted package is reachable only through its exact dev-only path."""
+
+    lock_path = accepted["lock_path"]
+    root_name = _lock_package_name(lock_path[0])
+    target_name = _lock_package_name(lock_path[-1])
+    importer = _lock_importer_dependencies(lock_text)
+    if set(importer) != {"."}:
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory requires the single web importer.",
+        )
+    root_sections = importer["."]
+    if (
+        root_name not in root_sections.get("devDependencies", set())
+        or any(
+            _lock_package_name(node) in root_sections.get(section, set())
+            for node in lock_path
+            for section in ("dependencies", "optionalDependencies", "peerDependencies")
+        )
+        or any(
+            _lock_package_name(node) in root_sections.get("devDependencies", set())
+            for node in lock_path[1:]
+        )
+    ):
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory is no longer reachable only as a development dependency.",
+            package=root_name,
+        )
+    target_version = lock_path[-1][len(target_name) + 1 :]
+    if _lock_key_versions(lock_text, target_name) != {target_version}:
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory package resolves to a different version set.",
+            package=target_name,
+        )
+    dependents = _lock_snapshot_dependents(lock_text)
+    expected_parents = [set(), *({parent} for parent in lock_path[:-1])]
+    for node, parents in zip(lock_path, expected_parents, strict=True):
+        if dependents.get(node, set()) != parents:
+            fail(
+                "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                "The accepted known advisory dependency path changed.",
+                package=node,
+                expected=sorted(parents),
+                actual=sorted(dependents.get(node, set())),
+            )
+
+
+def validate_known_advisory_lock_graph(
+    lock_bytes: bytes, accepted: dict[str, Any], label: str
+) -> str:
+    validate_known_advisory_lock_path(lock_bytes.decode("utf-8"), accepted)
+    lock_hash = hashlib.sha256(lock_bytes).hexdigest()
+    if lock_hash != accepted["expected_lockfile_sha256"]:
+        fail(
+            "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+            f"The {label} lockfile differs from the graph the known advisory was accepted on.",
+            expected=accepted["expected_lockfile_sha256"],
+            actual=lock_hash,
+        )
+    return lock_hash
+
+
+def _audit_advisory_ids(audit: Any) -> set[str]:
+    advisories = audit.get("advisories") if isinstance(audit, dict) else None
+    return {
+        str(item.get("advisory_id", "")).lower()
+        for item in advisories or []
+        if isinstance(item, dict)
+    }
+
+
+def resolve_accepted_known_advisories(
+    repository_root: Path,
+    base_main_sha: str,
+    policy: dict[str, Any],
+    tracking_issue: dict[str, Any],
+    base_audit: dict[str, Any],
+    branch_audit: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Bind each accepted known advisory present in an audit to its open Issue and lock graph."""
+
+    present = _audit_advisory_ids(base_audit) | _audit_advisory_ids(branch_audit)
+    known_issues = tracking_issue.get("known_advisory_issues") or []
+    if not isinstance(known_issues, list) or not all(
+        isinstance(item, dict) for item in known_issues
+    ):
+        fail("KNOWN_ADVISORY_TRACKING_INVALID", "The known advisory Issues are invalid.")
+    resolved: list[dict[str, Any]] = []
+    for authorization in policy["active_remediations"]:
+        accepted = authorization.get("accepted_known_advisory")
+        if accepted is None or accepted["advisory_id"].lower() not in present:
+            continue
+        matches = [
+            item
+            for item in known_issues
+            if int(item.get("number", 0)) == accepted["tracked_issue"]
+        ]
+        if len(matches) != 1:
+            fail(
+                "KNOWN_ADVISORY_TRACKING_INVALID",
+                "The accepted known advisory Issue was not consulted exactly once.",
+                issue=accepted["tracked_issue"],
+            )
+        issue = matches[0]
+        if (
+            issue.get("title") != accepted["tracked_issue_title"]
+            or {str(value).lower() for value in issue.get("tracked_advisory_ids") or []}
+            != {accepted["advisory_id"].lower()}
+        ):
+            fail(
+                "KNOWN_ADVISORY_TRACKING_INVALID",
+                "The accepted known advisory Issue does not match its exact tracking contract.",
+                issue=accepted["tracked_issue"],
+            )
+        if str(issue.get("state", "")).upper() != "OPEN":
+            fail(
+                "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+                "The accepted known advisory Issue must stay open while the advisory is present.",
+                issue=accepted["tracked_issue"],
+            )
+        lockfile = accepted["lockfile"]
+        base_lock = subprocess.run(
+            ["git", "-C", str(repository_root), "show", f"{base_main_sha}:{lockfile}"],
+            check=False,
+            capture_output=True,
+        )
+        if base_lock.returncode:
+            fail("KNOWN_ADVISORY_LOCK_GRAPH_CHANGED", "The base lockfile is missing.")
+        validate_known_advisory_lock_graph(base_lock.stdout, accepted, "base")
+        lock_hash = validate_known_advisory_lock_graph(
+            (repository_root / lockfile).read_bytes(), accepted, "branch"
+        )
+        resolved.append(
+            {
+                "remediation_id": authorization["id"],
+                "accepted": copy.deepcopy(accepted),
+                "issue": {
+                    "number": accepted["tracked_issue"],
+                    "state": "OPEN",
+                    "title": issue.get("title"),
+                    "url": issue.get("url"),
+                },
+                "lockfile_sha256": lock_hash,
+            }
+        )
+    return resolved
+
+
+def validate_braces_known_advisory_diff(
+    repository_root: Path,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    """The tracking authorization changes no dependency file and only its exact files."""
+
+    if changed_dependency_files:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The braces known advisory authorization must not change dependency files.",
+            actual=changed_dependency_files,
+        )
+    unexpected = sorted(set(all_changed) - set(authorization["allowed_non_dependency_files"]))
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The braces known advisory authorization changed a file outside its exact scope.",
+            files=unexpected,
+        )
+    accepted = authorization["accepted_known_advisory"]
+    lock_hash = validate_known_advisory_lock_graph(
+        (repository_root / accepted["lockfile"]).read_bytes(), accepted, "branch"
+    )
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": False,
+        "dependency_lockfile_changed": False,
+        "dependency_workspace_changed": False,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": [],
+        "lockfile_consistency_verified": True,
+        "lockfile_sha256": lock_hash,
+        "vulnerable_lock_versions": [],
+    }
+
+
 def validate_dependency_admission_source(
     all_changed: list[str],
     admissions: list[dict[str, Any]],
@@ -6312,6 +6657,13 @@ def validate_dependency_diff(
         return validate_next_og_critical_remediation_diff(
             repository_root,
             base_main_sha,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if authorization is not None and authorization.get("id") == BRACES_KNOWN_ADVISORY_ID:
+        return validate_braces_known_advisory_diff(
+            repository_root,
             all_changed,
             changed,
             authorization,
@@ -6575,6 +6927,7 @@ def validate_issue_and_audit(
     dependency_diff: dict[str, Any],
     mode: str = NORMAL_RELEASE_EVIDENCE,
     authorization: dict[str, Any] | None = None,
+    accepted_known_advisories: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if int(issue.get("number", 0)) != 5:
         fail("ISSUE5_OMITTED_OR_CLOSED", "Issue #5 must be consulted.")
@@ -6692,6 +7045,29 @@ def validate_issue_and_audit(
 
     base = validate_audit_snapshot(base_audit, "base")
     branch = validate_audit_snapshot(branch_audit, "branch")
+    # An accepted known advisory is tolerated only with its exact audit identity in
+    # every audit that reports it; any other package, severity or path fails closed.
+    accepted_by_id: dict[str, dict[str, Any]] = {}
+    for known in accepted_known_advisories or []:
+        accepted = known["accepted"]
+        accepted_by_id[accepted["advisory_id"].lower()] = known
+        for label, snapshot in (("base", base), ("branch", branch)):
+            for item in snapshot["advisories"]:
+                if item["advisory_id"].lower() != accepted["advisory_id"].lower():
+                    continue
+                mismatched = sorted(
+                    field
+                    for field in KNOWN_ADVISORY_AUDIT_FIELDS
+                    if item.get(field) != accepted[field]
+                )
+                if mismatched:
+                    fail(
+                        "KNOWN_ADVISORY_SCOPE_INVALID",
+                        f"The {label} audit reports the accepted known advisory outside its exact scope.",
+                        advisory=accepted["advisory_id"],
+                        fields=mismatched,
+                    )
+    accepted_ids = set(accepted_by_id)
     base_totals = base["totals"]
     branch_totals = branch["totals"]
     if branch_totals["critical"] > 0:
@@ -6781,7 +7157,7 @@ def validate_issue_and_audit(
     else:
         fail("REL000_MODE_INVALID", "The audit validator received an invalid mode.")
 
-    untracked_base = base_ids - expected_ids
+    untracked_base = base_ids - expected_ids - accepted_ids
     if untracked_base:
         fail(
             "UNTRACKED_DEPENDENCY_ADVISORY",
@@ -6882,7 +7258,9 @@ def validate_issue_and_audit(
         if issue5_state == "OPEN"
         else "REMEDIATED"
     )
-    if additional_present:
+    if additional_present and additional_present <= accepted_ids:
+        additional_status = "ACCEPTED_KNOWN_ADVISORY"
+    elif additional_present:
         additional_status = (
             "PARTIALLY_REMEDIATED"
             if additional_present != expected_additional_ids
@@ -6902,7 +7280,8 @@ def validate_issue_and_audit(
         else "NOT_APPLICABLE"
     )
     removed_ids = base_ids - branch_ids
-    if branch_ids:
+    # Accepted known advisories stay reported but do not block; anything else does.
+    if branch_ids - accepted_ids:
         dependency_security_status = "BLOCKED"
         release_candidate_status = "BLOCKED_BY_SECURITY_ADVISORIES_AND_OWNER_DECISION"
     elif issue5_state == "OPEN" or additional_state == "OPEN" or (
@@ -6918,7 +7297,9 @@ def validate_issue_and_audit(
 
     tracking_by_id = {
         advisory_id: (
-            "Issue #5"
+            f"Issue #{accepted_by_id[advisory_id]['issue']['number']}"
+            if advisory_id in accepted_by_id
+            else "Issue #5"
             if advisory_id == ISSUE5_ADVISORY.lower()
             else f"Issue #{expected_related_number}"
             if advisory_id in expected_related_ids
@@ -6975,6 +7356,33 @@ def validate_issue_and_audit(
                 if related_tracking_required
                 else []
             ),
+            *(
+                {
+                    "id": f"Issue #{known['issue']['number']}",
+                    "state": known["issue"]["state"],
+                    "title": known["issue"]["title"],
+                    "url": known["issue"]["url"],
+                    "tracked_advisories": 1,
+                    "remediation_status": "ACCEPTED_KNOWN_ADVISORY",
+                }
+                for known in accepted_by_id.values()
+                if not (
+                    policy_tracks_additional
+                    and known["issue"]["number"] == int(additional_issue.get("number", 0))
+                )
+            ),
+        ],
+        "accepted_known_advisories": [
+            {
+                "advisory_id": known["accepted"]["advisory_id"],
+                "package": known["accepted"]["package"],
+                "severity": known["accepted"]["severity"],
+                "dependency_scope": known["accepted"]["dependency_scope"],
+                "tracking_issue": f"Issue #{known['issue']['number']}",
+                "remediation_id": known["remediation_id"],
+                "lockfile_sha256": known["lockfile_sha256"],
+            }
+            for known in accepted_by_id.values()
         ],
         "dependency_advisories": redacted_advisories,
         "remediated_advisories": [
@@ -7271,6 +7679,7 @@ def release_report(
         "audit_tracking_gap_detected": False,
         "audit_tracking_gap_count": 0,
         "dependency_advisories": security["dependency_advisories"],
+        "accepted_known_advisories": security.get("accepted_known_advisories", []),
         "remediated_advisories": security["remediated_advisories"],
         "removed_advisory_ids": security["removed_advisory_ids"],
         "remaining_advisory_ids": security["remaining_advisory_ids"],
@@ -7653,6 +8062,14 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     decisions = validate_decisions(normative["gates"])
     base_audit = load_json(args.base_audit)
     branch_audit = load_json(args.branch_audit)
+    accepted_known_advisories = resolve_accepted_known_advisories(
+        repository_root,
+        trace["base_main_sha"],
+        policy,
+        additional_issue,
+        base_audit,
+        branch_audit,
+    )
     dependency_diff = validate_dependency_diff(
         repository_root,
         trace["base_main_sha"],
@@ -7669,6 +8086,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         dependency_diff,
         args.mode,
         authorization,
+        accepted_known_advisories,
     )
     security["sharp_runtime_smoke"] = validate_sharp_runtime_smoke(
         load_json(args.sharp_runtime_smoke) if args.sharp_runtime_smoke else None,
@@ -7998,6 +8416,7 @@ def sanitize_issue(
     input_path: Path,
     output_path: Path,
     related_input_path: Path | None = None,
+    known_advisory_input_paths: list[Path] | None = None,
 ) -> None:
     raw = load_json(input_path)
     html_url = raw.get("html_url") or raw.get("url")
@@ -8040,6 +8459,14 @@ def sanitize_issue(
         sanitize_issue(related_input_path, related_output)
         sanitized["related_issue"] = load_json(related_output)
         related_output.unlink()
+    if known_advisory_input_paths is not None:
+        known_issues = []
+        for index, known_input_path in enumerate(known_advisory_input_paths):
+            known_output = output_path.with_name(f"{output_path.stem}-known-{index}.json")
+            sanitize_issue(known_input_path, known_output)
+            known_issues.append(load_json(known_output))
+            known_output.unlink()
+        sanitized["known_advisory_issues"] = known_issues
     write_json(output_path, sanitized)
 
 
@@ -8067,6 +8494,7 @@ def build_parser() -> argparse.ArgumentParser:
     issue.add_argument("--input", type=Path, required=True)
     issue.add_argument("--output", type=Path, required=True)
     issue.add_argument("--related-input", type=Path)
+    issue.add_argument("--known-advisory-input", type=Path, action="append", default=[])
 
     resolve_mode = subparsers.add_parser("resolve-mode")
     resolve_mode.add_argument("--policy", type=Path, required=True)
@@ -8209,7 +8637,12 @@ def main() -> int:
             )
             return 0
         if args.command == "sanitize-issue":
-            sanitize_issue(args.input, args.output, args.related_input)
+            sanitize_issue(
+                args.input,
+                args.output,
+                args.related_input,
+                args.known_advisory_input or None,
+            )
             return 0
         if args.command == "resolve-mode":
             print(

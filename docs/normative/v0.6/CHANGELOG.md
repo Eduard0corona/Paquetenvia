@@ -15,6 +15,76 @@
 - Lane Organizations `20261002000100_VersionDispatchPoliciesPerOrganization`: agrega o adopta ambas columnas sin
   reescribir filas; el rollback se niega si alguna organización tiene otra versión. AI-18 sin cambios.
 
+## Confirmación de artículos prohibidos y teléfonos de México (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Sí, ambas"; registrada en `decision-log.md`.
+- AI-05: `CreateOrderRequest.restricted_goods_acknowledged` obligatorio (solo `true`) y el campo multipart
+  `restricted_goods_acknowledged=true` obligatorio en `CsvImportCommitRequest`; cualquier otro valor es 409 uniforme.
+  La confirmación entra al hash de idempotencia de ORD-001 y queda en el evento append-only `ORDER_CREATED` y en su
+  auditoría. `order_acceptances` y `OrderAcceptanceCanonicalForm v1` no cambian. `AddressInput.phone` (`createQuote`)
+  es un número de México de 10 dígitos tras quitar espacios y guiones (sin `+52`); otro valor es 422. Nueva entrada
+  `ORD-PROHIBITED-GOODS-PHONE-MX` en `x-pilot-contract-deltas`.
+- AI-07: `create_order.phone_and_restricted_goods` y la casilla de confirmación del commit de `csv_order_import`.
+- Sin migración; AI-04, AI-06 y AI-18 sin cambios.
+
+## WhatsApp ambiguo: fallido sin reintento y aviso al despachador (NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner (GATE-004): "Marcar fallido y avisar"; registrada en `decision-log.md`
+  (`NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02`).
+- Un envío WhatsApp con resultado ambiguo (timeout o respuesta sin `wamid`: Meta pudo aceptarlo) es terminal: la
+  Notification queda FAILED con el motivo `AMBIGUOUS_TIMEOUT`, el `notifications.send-requested` queda DEAD y nunca se
+  reintenta ni se reencola, así el cliente nunca lo recibe dos veces.
+- Aviso: el `notifications.status-changed` que el mismo settle ya escribe (`NotificationStatusChanged.v1`, audiencia
+  operations, sin destinatario ni PII). Sin evento, flujo cross-module, estado ni tabla nuevos.
+- Lane Notifications `20261002000100_FailAmbiguousWhatsAppNotifications`: reemplaza solo el cuerpo de
+  `security.apply_notification_outcome` (misma firma, dueño, permisos y verificación de `lease_token`); rollback
+  restaura el cuerpo de NTF-001. IN_APP y email conservan el reintento AMBIGUOUS. AI-06, AI-12 y AI-18 sin cambios.
+
+## Zona horaria del piloto solo America/Mazatlan en el cargador MDM-001 (MDM-001-TZ-MAZATLAN-ONLY-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Solo America/Mazatlan"; registrada en `decision-log.md`
+  (`MDM-001-TZ-MAZATLAN-ONLY-2026-10-02`).
+- Lane Pricing `20261002000100_RequireMazatlanTimeZoneInMasterDataLoader`: `security.load_master_data` rechaza una entrada de
+  ciudad con zona distinta de `America/Mazatlan` (`MDM001_CITY_TIMEZONE_NOT_IN_PILOT`, también en dry run); el validador del
+  job repite la regla. Una zona fuera de la lista mexicana sigue siendo `MDM001_CITY_TIMEZONE_NOT_ALLOWED`.
+- Ninguna fila guardada se reescribe. Sin permisos, tablas ni roles nuevos; rollback restaura la función anterior. AI-06 y AI-18
+  sin cambios.
+
+## Alertas OBS-002 del piloto cada 15 minutos (OBS-002-ALERTS-15MIN-COST-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Sí, revisar cada 15 min"; registrada en `decision-log.md`
+  (`OBS-002-ALERTS-15MIN-COST-2026-10-02`).
+- `deploy/azure/pilot/observability.bicep`: la alerta de disponibilidad `sqr-pv-pilot-readiness` pasa de cada 5 minutos
+  con ventana de 10 a cada 15 minutos con ventana de 15 (Azure exige ventana ≥ frecuencia). Las cinco reglas cuestan
+  ≈ 2.75 USD/mes; el piloto queda en ≈ 101 USD típico y ≈ 111 USD con el tope diario de logs.
+- El correo de destino `alertEmailAddress` sigue siendo parámetro obligatorio del owner, sin valor por defecto, pendiente.
+- Sin cambios de contrato, esquema, roles ni migraciones.
+
+## Finanzas ve la lista de cobros pendientes de conciliar (FIN-PENDING-COD-LIST-FINANCE-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner: "Tope COD 20,000 pesos, finanzas sí ve la lista". Esta entrada cubre solo
+  "finanzas sí ve la lista"; registrado en `decision-log.md` (`FIN-PENDING-COD-LIST-FINANCE-2026-10-02`).
+- AI-05: FINANCE con MFA puede llamar `listOrders` únicamente con `cod_pending_reconciliation=true` (sin MFA,
+  `403 MFA_REQUIRED`); cualquier otra llamada de FINANCE a `listOrders` sigue en 403. Se documentan la descripción
+  de `listOrders`, su `x-authorization-precedence` y `x-capability-matrix.cod_pending_reconciliation_filter`; la
+  fila `operations.listOrders` no cambia. La lista vuelve a verificar los roles de `getOrderFinancials` dentro de
+  la transacción tenant antes de leer órdenes. FINANCE recibe la misma representación `Order` que los demás
+  lectores, sin datos personales ni `cod_expected_cents`, y sigue sin crear ni modificar órdenes.
+- AI-07 `cod_control.pending_list`: agrega FINANCE con MFA.
+- Sin migraciones, esquemas, roles de base de datos ni flujos nuevos.
+
+## Tope de COD declarado por orden: 20,000 MXN (COD-CAP-20000-2026-10-02) — 2026-10-02
+
+- Literal del project owner: "Tope COD 20,000 pesos, finanzas sí ve la lista". Esta entrada cubre solo el tope;
+  registrado en `decision-log.md` (`COD-CAP-20000-2026-10-02`).
+- AI-05: `CreateOrderRequest.cod_expected_cents` y `CsvImportRowPreview.cod_expected_cents` agregan
+  `maximum: 2000000` (20,000.00 MXN, inclusivo). Un monto mayor en `POST /orders` es el mismo 409 uniforme que
+  cualquier literal COD inválido; en el CSV es el error de fila `COD_EXPECTED_CENTS_INVALID` (sin código nuevo) y
+  bloquea la confirmación. La entrada D6-COD-EXPECTED de `x-pilot-contract-deltas` documenta el tope.
+- AI-07: `create_order.cod_expected` y `csv_order_import` muestran el tope.
+- Sin migración ni CHECK nuevo: AI-06 conserva `CHECK (cod_expected_cents >= 0)`; el tope vive en
+  `OrderInputPolicy` y en el guard de dominio de `Order.Create`. AI-06 y AI-18 sin cambios.
+
 ## COD declarado por el despachador en la orden y en el CSV (D6-COD-EXPECTED) — 2026-09-29
 
 - Implementa `D6-COD-PILOT` ("el despachador declara el monto COD al crear la orden (y en el CSV)"), reaprobado para

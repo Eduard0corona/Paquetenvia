@@ -592,6 +592,29 @@ internal static class OrderCodPendingReconciliationPredicate
         "WHERE c.order_id=orders.orders.id AND c.status='RECORDED' AND c.reconciled_at IS NULL)";
 }
 
+/// <summary>
+/// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the in-transaction re-check of the listOrders COD pending filter. It
+/// mirrors getOrderFinancials (x-capability-matrix finance_operations): an ACTIVE user holding, in the selected
+/// organization, an ACTIVE DISPATCHER membership, or an ACTIVE PLATFORM_ADMIN or FINANCE membership with a satisfied
+/// MFA challenge. It reads only identity and membership state and writes nothing.
+/// </summary>
+internal static class OrderCodPendingListAuthorization
+{
+    internal const string Sql =
+        """
+        SELECT EXISTS (
+          SELECT 1
+          FROM identity.users u
+          JOIN organizations.organization_memberships m ON m.user_id=u.id
+          WHERE u.id=@actor
+            AND u.status='ACTIVE'
+            AND m.organization_id=@org
+            AND m.status='ACTIVE'
+            AND (m.role='DISPATCHER' OR (@mfa AND m.role IN ('PLATFORM_ADMIN','FINANCE')))
+        )
+        """;
+}
+
 internal static class TransitionReaderCommand
 {
     internal static NpgsqlCommand Create(

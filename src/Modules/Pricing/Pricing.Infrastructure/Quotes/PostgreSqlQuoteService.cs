@@ -39,6 +39,10 @@ public sealed class PostgreSqlQuoteService(
     {
         ArgumentNullException.ThrowIfNull(command);
         Validate(command);
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: from here on only the normalized 10-digit phone exists, so the
+        // idempotency hash, the protected location PII and the redacted snapshot all see the same value however the
+        // separators were typed.
+        command = WithNormalizedPhones(command);
         var serviceType = ParseServiceType(command.ServiceType);
         var inputHash = ComputeInputHash(command);
 
@@ -680,10 +684,22 @@ public sealed class PostgreSqlQuoteService(
         }
     }
 
+    /// <summary>Runs after <see cref="Validate"/>, so both phones are known to normalize.</summary>
+    private static CreateQuoteCommand WithNormalizedPhones(CreateQuoteCommand command)
+    {
+        _ = QuotePhonePolicy.TryNormalize(command.Origin.Phone, out var origin);
+        _ = QuotePhonePolicy.TryNormalize(command.Destination.Phone, out var destination);
+        return command with
+        {
+            Origin = command.Origin with { Phone = origin },
+            Destination = command.Destination with { Phone = destination },
+        };
+    }
+
     private static void ValidateAddress(QuoteAddressInput address)
     {
         if (string.IsNullOrWhiteSpace(address.AddressText) || address.AddressText.Trim().Length < 8 ||
-            string.IsNullOrWhiteSpace(address.ContactName) || string.IsNullOrWhiteSpace(address.Phone) ||
+            string.IsNullOrWhiteSpace(address.ContactName) || !QuotePhonePolicy.IsValid(address.Phone) ||
             address.References?.Length > 500)
         {
             throw new QuoteValidationException(QuoteValidationCode.InvalidRequest);

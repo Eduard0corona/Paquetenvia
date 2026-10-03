@@ -224,7 +224,8 @@ public sealed class OrderDomainTests
 
     private static CreateOrderCommand Command(Guid actorId, string requestId) => new(
         actorId, OrganizationId, "orders-unit-key-0001", QuoteId, "SENDER",
-        new OrderAcceptanceInput("synthetic-v1", "synthetic-v1", AcceptedAt, "WEB"), requestId);
+        new OrderAcceptanceInput("synthetic-v1", "synthetic-v1", AcceptedAt, "WEB"), requestId,
+        RestrictedGoodsAcknowledged: true);
 
     private static OrderResult Result() => new(
         OrderId, "ORD_AAAAAAAAAAAAAAAAAAAAAA", OrganizationId, null, "DRAFT",

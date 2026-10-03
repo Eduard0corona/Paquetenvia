@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CsvImportApi } from "../api/csv-import-api";
 import { TenantApiError } from "../api/tenant-request";
-import { parseCsvImportCommit, parseCsvImportPreview } from "../contracts/csv-import";
+import {
+  csvRestrictedGoodsRequiredMessage,
+  parseCsvImportCommit,
+  parseCsvImportPreview,
+} from "../contracts/csv-import";
 import {
   bearerSession,
   commitResponse,
@@ -72,11 +76,20 @@ describe("CSV import flow", () => {
   it("previews, then commits the exact previewed digest", async () => {
     const { controller, api } = await previewed({ [orgA]: "DISPATCHER" });
     expect(controller.getSnapshot().preview?.valid_rows).toBe(1);
-    await controller.commit();
+    await controller.commit(true);
     const [sent, digest] = vi.mocked(api.commit).mock.calls[0];
     expect(await (sent as Blob).text()).toBe("quote_id,payer_type,terms_version\n");
     expect(digest).toBe(syntheticDigest());
     expect(controller.getSnapshot().commit?.created_rows).toBe(1);
+  });
+
+  it("does not commit until the dispatcher confirms no prohibited goods (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)", async () => {
+    const { controller, api } = await previewed({ [orgA]: "DISPATCHER" });
+    await controller.commit(false);
+    expect(api.commit).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().errors).toEqual([csvRestrictedGoodsRequiredMessage]);
+    await controller.commit(true);
+    expect(api.commit).toHaveBeenCalledTimes(1);
   });
 
   it("does not commit a preview with invalid rows", async () => {
@@ -84,7 +97,7 @@ describe("CSV import flow", () => {
       { [orgA]: "DISPATCHER" },
       { preview: vi.fn(async () => parseCsvImportPreview(invalidPreviewResponse())) },
     );
-    await controller.commit();
+    await controller.commit(true);
     expect(api.commit).not.toHaveBeenCalled();
     expect(controller.getSnapshot().message).toContain("Ninguna orden se creó");
   });
@@ -94,7 +107,7 @@ describe("CSV import flow", () => {
       { [orgA]: "DISPATCHER" },
       { commit: vi.fn(async () => ({ kind: "rejected" as const, preview: parseCsvImportPreview(invalidPreviewResponse()) })) },
     );
-    await controller.commit();
+    await controller.commit(true);
     expect(controller.getSnapshot().preview?.invalid_rows).toBe(1);
     expect(controller.getSnapshot().commit).toBeNull();
   });
@@ -105,8 +118,8 @@ describe("CSV import flow", () => {
       .mockRejectedValueOnce(new TenantApiError("network"))
       .mockResolvedValueOnce({ kind: "committed", commit: parseCsvImportCommit(commitResponse()) });
     const { controller } = await previewed({ [orgA]: "DISPATCHER" }, { commit });
-    await controller.commit();
-    await controller.commit();
+    await controller.commit(true);
+    await controller.commit(true);
     expect(commit.mock.calls[0][2]).toBe(commit.mock.calls[1][2]);
     expect(controller.getSnapshot().commit).not.toBeNull();
   });
@@ -117,8 +130,8 @@ describe("CSV import flow", () => {
       .mockRejectedValueOnce(new TenantApiError("conflict", "CONFLICT"))
       .mockResolvedValueOnce({ kind: "committed", commit: parseCsvImportCommit(commitResponse()) });
     const { controller } = await previewed({ [orgA]: "DISPATCHER" }, { commit });
-    await controller.commit();
-    await controller.commit();
+    await controller.commit(true);
+    await controller.commit(true);
     expect(commit.mock.calls[0][2]).not.toBe(commit.mock.calls[1][2]);
   });
 
@@ -127,7 +140,7 @@ describe("CSV import flow", () => {
       { [orgA]: "DISPATCHER" },
       { commit: vi.fn(async () => { throw new TenantApiError("conflict", "IDEMPOTENCY_CONFLICT"); }) },
     );
-    await controller.commit();
+    await controller.commit(true);
     expect(controller.getSnapshot().message).toContain("otro contenido");
   });
 
@@ -145,7 +158,7 @@ describe("CSV import flow", () => {
       { [orgA]: "DISPATCHER" },
       { commit: vi.fn(async () => { throw new TenantApiError("network"); }) },
     );
-    await controller.commit();
+    await controller.commit(true);
     expect(pending.size).toBe(1);
     await controller.selectFile(file());
     expect(pending.size).toBe(0);
@@ -159,7 +172,7 @@ describe("CSV import tenant switch", () => {
       { [orgA]: "DISPATCHER", [orgB]: "DISPATCHER" },
       { commit: vi.fn(async () => { throw new TenantApiError("network"); }) },
     );
-    await context.controller.commit();
+    await context.controller.commit(true);
     context.switchTo(orgB);
     await context.controller.start();
     expect(context.pending.size).toBe(0);
