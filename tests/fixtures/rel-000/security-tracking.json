@@ -4,6 +4,10 @@
   "url": "https://github.com/Eduard0corona/Paquetenvia/issues/38",
   "remediation_issues": {
     "SEC-2026-09-NEXT-CRITICAL": 48,
-    "SEC-2026-10-NEXT-OG-CRITICAL": 175
+    "SEC-2026-10-NEXT-OG-CRITICAL": 175,
+    "SEC-2026-10-BRACES-DOS-TRACKED": 180
+  },
+  "known_advisory_issues": {
+    "SEC-2026-10-BRACES-DOS-TRACKED": 180
   }
 }
