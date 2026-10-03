@@ -4,8 +4,8 @@ using Pricing.Infrastructure.Quotes;
 namespace Paqueteria.UnitTests.Pricing;
 
 /// <summary>
-/// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: a quote contact phone is a 10-digit Mexican number; only ASCII spaces
-/// and hyphens are removed before counting.
+/// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: a quote contact phone is a
+/// 10-digit Mexican number; ASCII spaces, ASCII hyphens and one optional leading +52 are removed before counting.
 /// </summary>
 public sealed class QuotePhonePolicyTests
 {
@@ -18,6 +18,13 @@ public sealed class QuotePhonePolicyTests
     [InlineData(" 66 71 23 45 67 ", "6671234567")]
     [InlineData("667 - 123 - 4567", "6671234567")]
     [InlineData("0000000000", "0000000000")]
+    [InlineData("+526671234567", "6671234567")]
+    [InlineData("+52 667 123 4567", "6671234567")]
+    [InlineData("+52-6671234567", "6671234567")]
+    [InlineData("+52 6671234567", "6671234567")]
+    [InlineData(" +52 - 667-123-4567 ", "6671234567")]
+    [InlineData("-+52667 123 4567", "6671234567")]
+    [InlineData("+52 5212345678", "5212345678")]
     public void Ten_digits_with_spaces_or_hyphens_normalize_to_the_digits(string input, string expected)
     {
         Assert.True(QuotePhonePolicy.TryNormalize(input, out var normalized));
@@ -30,9 +37,26 @@ public sealed class QuotePhonePolicyTests
     [InlineData("   ")]
     [InlineData("667123456")]
     [InlineData("66712345678")]
-    [InlineData("+526671234567")]
-    [InlineData("+52 667 123 4567")]
     [InlineData("526671234567")]
+    [InlineData("+1 667 123 4567")]
+    [InlineData("+16671234567")]
+    [InlineData("+5 2667123456")]
+    [InlineData("+ 52 667 123 4567")]
+    [InlineData("+53 667 123 4567")]
+    [InlineData("+521 667 123 4567")]
+    [InlineData("+52 1 667 123 4567")]
+    [InlineData("+52+52 667 123 4567")]
+    [InlineData("++52 667 123 4567")]
+    [InlineData("+52 667 123 456")]
+    [InlineData("+52")]
+    [InlineData("+52 ")]
+    [InlineData("+")]
+    [InlineData("667 123 4567 +52")]
+    [InlineData("667+52 1234567")]
+    [InlineData("0052 667 123 4567")]
+    [InlineData("+52 (667) 123 4567")]
+    [InlineData("＋52 667 123 4567")]
+    [InlineData("+52--------------------6671234567")]
     [InlineData("52 667 123 4567")]
     [InlineData("(667) 123 4567")]
     [InlineData("667.123.4567")]
@@ -51,8 +75,9 @@ public sealed class QuotePhonePolicyTests
     }
 
     [Theory]
-    [InlineData("+526671111111", "6672222222")]
+    [InlineData("+16671111111", "6672222222")]
     [InlineData("6671111111", "52 667 222 2222")]
+    [InlineData("6671111111", "+52 1 667 222 2222")]
     [InlineData("667111111", "6672222222")]
     public async Task The_quote_service_rejects_an_invalid_phone_before_any_dependency(string origin, string destination)
     {
@@ -70,9 +95,14 @@ public sealed class QuotePhonePolicyTests
         Assert.True(QuotePhonePolicy.TryNormalize("667 111 1111", out var spaced));
         Assert.True(QuotePhonePolicy.TryNormalize("667-111-1111", out var hyphenated));
 
+        Assert.True(QuotePhonePolicy.TryNormalize("+52 667 111 1111", out var prefixed));
+
         Assert.Equal(
             PostgreSqlQuoteService.ComputeInputHash(Command(spaced, "6672222222")),
             PostgreSqlQuoteService.ComputeInputHash(Command(hyphenated, "6672222222")));
+        Assert.Equal(
+            PostgreSqlQuoteService.ComputeInputHash(Command(spaced, "6672222222")),
+            PostgreSqlQuoteService.ComputeInputHash(Command(prefixed, "6672222222")));
         Assert.NotEqual(
             PostgreSqlQuoteService.ComputeInputHash(Command("6671111111", "6672222222")),
             PostgreSqlQuoteService.ComputeInputHash(Command("6671111112", "6672222222")));

@@ -11,6 +11,7 @@ using NetTopologySuite.Geometries;
 using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Contacts;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
@@ -299,6 +300,14 @@ public sealed class PostgreSqlLocationService(
     {
         ArgumentNullException.ThrowIfNull(command);
         Validate(command);
+        // ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: from here on only the normalized 10 digits exist, so the protected
+        // phone is the same however the separators or the +52 prefix were typed. Validation runs on write only;
+        // stored locations whose phone predates the rule stay readable and are never rewritten.
+        if (command.Phone is not null)
+        {
+            _ = MexicanPhonePolicy.TryNormalize(command.Phone, out var normalizedPhone);
+            command = command with { Phone = normalizedPhone };
+        }
 
         GeocodingResult geocoded;
         try
@@ -612,6 +621,7 @@ public sealed class PostgreSqlLocationService(
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             string.IsNullOrWhiteSpace(command.AddressText) || command.AddressText.Trim().Length < 8 ||
             string.IsNullOrWhiteSpace(command.AddressSummary) || command.AddressSummary.Length > 180 ||
+            (command.Phone is not null && !MexicanPhonePolicy.IsValid(command.Phone)) ||
             command.Lat is < -90 or > 90 || command.Lng is < -180 or > 180 ||
             double.IsNaN(command.Lat) || double.IsNaN(command.Lng) ||
             double.IsInfinity(command.Lat) || double.IsInfinity(command.Lng))
@@ -638,7 +648,7 @@ public sealed class PostgreSqlLocationService(
             !Enum.IsDefined(command.Role) ||
             string.IsNullOrWhiteSpace(command.AddressText) || command.AddressText.Trim().Length < 8 ||
             string.IsNullOrWhiteSpace(command.ContactName) ||
-            string.IsNullOrWhiteSpace(command.Phone) ||
+            !MexicanPhonePolicy.IsValid(command.Phone) ||
             command.References?.Length > 500 ||
             command.Lat is < -90 or > 90 || command.Lng is < -180 or > 180 ||
             double.IsNaN(command.Lat) || double.IsNaN(command.Lng) ||

@@ -2853,12 +2853,13 @@ components:
         phone:
           type: string
           maxLength: 32
-          pattern: ^[ -]*(?:[0-9][ -]*){10}$
+          pattern: ^[ -]*(?:\+52[ -]*)?(?:[0-9][ -]*){10}$
           description: >-
-            ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - a 10-digit Mexican number. ASCII spaces and hyphens are
-            removed and exactly ten ASCII digits must remain; a +52 or 52 prefix, parentheses, dots or any other
-            character is rejected with 422 before any effect. The normalized ten digits are what the quote hashes,
-            protects and stores; the value is never logged.
+            ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03 - a 10-digit Mexican
+            number. ASCII spaces and hyphens are removed, an optional leading +52 country prefix is removed, and
+            exactly ten ASCII digits must remain; another country prefix, 52 without the plus sign, parentheses,
+            dots or any other character is rejected with 422 before any effect. The normalized ten digits (never the
+            prefix) are what the quote hashes, protects and stores; the value is never logged.
         lat:
           type: number
           minimum: -90
@@ -4594,6 +4595,14 @@ components:
           type:
           - string
           - 'null'
+          maxLength: 32
+          pattern: ^[ -]*(?:\+52[ -]*)?(?:[0-9][ -]*){10}$
+          description: >-
+            ORD-PHONE-PLUS52-LOCATIONS-2026-10-03 - optional; when present it follows the AddressInput.phone rule
+            (ASCII spaces and hyphens removed, an optional leading +52 removed, exactly ten ASCII digits left) and
+            any other value is the uniform 400 before any effect, without echoing it. Only the normalized ten digits
+            are protected and stored and the value is never logged. The rule is checked on write only; locations
+            stored before it stay readable and are not rewritten.
         lat:
           type: number
           minimum: -90
@@ -5916,6 +5925,16 @@ x-pilot-contract-deltas:
       COD_EXPECTED_CENTS_INVALID on the CSV, enforced by OrderInputPolicy and the Order domain guard (no AI-06 CHECK)
     quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the
       order and in the CSV
+  - id: ORD-PHONE-PLUS52-LOCATIONS
+    status: DECIDED
+    decision: ORD-PHONE-PLUS52-LOCATIONS-2026-10-03
+    literal: Aceptar +52 y quitarlo; Exigir 10 dígitos en ubicaciones
+    implementation: shipped by feature/phone-plus52-and-locations together with its code and tests
+    delta: AddressInput.phone (createQuote) and CreateLocationRequest.phone (createLocation) accept an optional leading
+      +52 country prefix, which is removed with the ASCII spaces and hyphens before exactly ten ASCII digits are
+      required; createQuote answers 422 and createLocation the uniform 400 otherwise; the createLocation phone stays
+      optional (null) and is validated on write only, so stored locations stay readable; only the normalized ten digits
+      are hashed, protected and stored
   - id: ORD-PROHIBITED-GOODS-PHONE-MX
     status: DECIDED
     decision: ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02

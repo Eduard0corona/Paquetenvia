@@ -1,7 +1,10 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Locations.Application.Locations;
 using Locations.Endpoints;
+using Paqueteria.Application.Contacts;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.ContractTests.Support;
 
@@ -26,6 +29,41 @@ public sealed class LocationsOpenApiImplementationTests
         Assert.Contains("Guid service_area_id", source, StringComparison.Ordinal);
         Assert.Contains("request.Headers[\"Idempotency-Key\"]", source, StringComparison.Ordinal);
         Assert.Equal(5, Count(source, ".RequireTenantContext()"));
+    }
+
+    /// <summary>
+    /// ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the AI-05 CreateLocationRequest.phone pattern and length bound describe
+    /// exactly what <see cref="MexicanPhonePolicy"/> accepts, and they are the same as AddressInput.phone.
+    /// </summary>
+    [Theory]
+    [InlineData("6671234567", true)]
+    [InlineData("667 123 4567", true)]
+    [InlineData("667-123-4567", true)]
+    [InlineData("+52 667 123 4567", true)]
+    [InlineData("+52-6671234567", true)]
+    [InlineData("+526671234567", true)]
+    [InlineData("526671234567", false)]
+    [InlineData("+1 667 123 4567", false)]
+    [InlineData("+52 1 667 123 4567", false)]
+    [InlineData("667123456", false)]
+    [InlineData("(667) 123 4567", false)]
+    [InlineData("667.123.4567", false)]
+    [InlineData("", false)]
+    [InlineData("+52--------------------6671234567", false)]
+    public void Location_phone_contract_pattern_matches_the_mexican_phone_policy(string phone, bool valid)
+    {
+        var schemas = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"))
+            .Mapping("components").Mapping("schemas");
+        var schema = schemas.Mapping("CreateLocationRequest").Mapping("properties").Mapping("phone");
+        var quoteSchema = schemas.Mapping("AddressInput").Mapping("properties").Mapping("phone");
+        var pattern = new Regex(schema.Scalar("pattern"), RegexOptions.CultureInvariant);
+        var maximumLength = int.Parse(schema.Scalar("maxLength"), CultureInfo.InvariantCulture);
+
+        Assert.Equal(quoteSchema.Scalar("pattern"), schema.Scalar("pattern"));
+        Assert.Equal(quoteSchema.Scalar("maxLength"), schema.Scalar("maxLength"));
+        Assert.Equal(MexicanPhonePolicy.MaximumInputLength, maximumLength);
+        Assert.Equal(valid, MexicanPhonePolicy.IsValid(phone));
+        Assert.Equal(valid, phone.Length <= maximumLength && pattern.IsMatch(phone));
     }
 
     [Fact]

@@ -309,14 +309,17 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
             const string addressN = "Calle Sintetica Rotacion N 101";
             const string addressNext = "Calle Sintetica Rotacion N1 202";
             const string contact = "Contacto Sintetico ADP";
-            const string phone = "+526140000101";
+            // ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the +52 prefix and separators are removed before protection,
+            // so the stored phone is the ten national digits.
+            const string typedPhone = "+52 614 000 0101";
+            const string phone = "6140000101";
 
             Guid first;
             var versionN = vault.CurrentVersion;
             await using (var scope = CreateRuntimeScope(piiProtector: protector))
             {
                 var result = await scope.Service.CreateAsync(
-                    CreateCommand(scenario, $"adp001-n-{Guid.NewGuid():N}") with { AddressText = addressN, ContactName = contact, Phone = phone },
+                    CreateCommand(scenario, $"adp001-n-{Guid.NewGuid():N}") with { AddressText = addressN, ContactName = contact, Phone = typedPhone },
                     default);
                 first = result.Location!.Id;
             }
@@ -370,7 +373,7 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
             Assert.Equal(0L, await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(
                 fixture.AdminDataSource,
                 scenario.OrganizationId,
-                [addressN, addressNext, contact, phone]));
+                [addressN, addressNext, contact, phone, typedPhone]));
         }
         finally
         {

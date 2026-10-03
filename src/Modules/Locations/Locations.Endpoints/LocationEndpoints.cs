@@ -4,6 +4,7 @@ using Locations.Application.Locations;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application.Contacts;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
@@ -254,6 +255,9 @@ public static class LocationEndpoints
         request.CityId != Guid.Empty &&
         !string.IsNullOrWhiteSpace(request.AddressText) && request.AddressText.Trim().Length >= 8 &&
         !string.IsNullOrWhiteSpace(request.AddressSummary) && request.AddressSummary.Length <= 180 &&
+        // ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the phone stays optional (null), but when present it must be a
+        // 10-digit Mexican number; the value is never echoed in the uniform 400 nor logged.
+        (request.Phone is null || MexicanPhonePolicy.IsValid(request.Phone)) &&
         request.Lat is >= -90 and <= 90 && request.Lng is >= -180 and <= 180 &&
         !double.IsNaN(request.Lat) && !double.IsNaN(request.Lng) &&
         !double.IsInfinity(request.Lat) && !double.IsInfinity(request.Lng);

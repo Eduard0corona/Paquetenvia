@@ -83,6 +83,57 @@ public sealed class LocationHttpSuccessTests : IClassFixture<LocationHttpWebAppl
             property => property.Name.Contains("KeyVersion", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the optional location phone is ten Mexican digits once ASCII spaces,
+    /// hyphens and an optional leading +52 are removed; anything else is the uniform GEO-001 400, which never echoes
+    /// the value.
+    /// </summary>
+    [Theory]
+    [InlineData("6141234567", HttpStatusCode.Created)]
+    [InlineData("614 123 4567", HttpStatusCode.Created)]
+    [InlineData("614-123-4567", HttpStatusCode.Created)]
+    [InlineData("+526141234567", HttpStatusCode.Created)]
+    [InlineData("+52 614 123 4567", HttpStatusCode.Created)]
+    [InlineData("+52-6141234567", HttpStatusCode.Created)]
+    [InlineData("", HttpStatusCode.BadRequest)]
+    [InlineData("   ", HttpStatusCode.BadRequest)]
+    [InlineData("614123456", HttpStatusCode.BadRequest)]
+    [InlineData("61412345678", HttpStatusCode.BadRequest)]
+    [InlineData("526141234567", HttpStatusCode.BadRequest)]
+    [InlineData("+1 614 123 4567", HttpStatusCode.BadRequest)]
+    [InlineData("+52 1 614 123 4567", HttpStatusCode.BadRequest)]
+    [InlineData("(614) 123 4567", HttpStatusCode.BadRequest)]
+    [InlineData("614.123.4567", HttpStatusCode.BadRequest)]
+    [InlineData("phone-number", HttpStatusCode.BadRequest)]
+    [InlineData("+52--------------------6141234567", HttpStatusCode.BadRequest)]
+    public async Task POST_location_accepts_only_ten_digit_Mexican_phones(string phone, HttpStatusCode expected)
+    {
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/locations");
+        request.Headers.Add("Idempotency-Key", $"geo001-http-phone-{Guid.NewGuid():N}");
+        request.Content = JsonContent.Create(new
+        {
+            city_id = LocationHttpWebApplicationFactory.CityId,
+            service_area_id = LocationHttpWebApplicationFactory.ServiceAreaId,
+            address_text = "Synthetic private address",
+            address_summary = "Synthetic summary",
+            contact_name = "Synthetic contact",
+            phone,
+            lat = 28.61,
+            lng = -106.09,
+        });
+
+        using var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(expected, response.StatusCode);
+        if (phone.Trim().Length > 0)
+        {
+            Assert.DoesNotContain(phone, body, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("phone", body, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static TheoryData<string?> InvalidIdempotencyKeys => new()
     {
         null,

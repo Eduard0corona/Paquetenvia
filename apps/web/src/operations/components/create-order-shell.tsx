@@ -238,8 +238,8 @@ function AddressFieldset({
           type="tel"
           inputMode="tel"
           maxLength={maximumPhoneInputLength}
-          pattern="[ \-]*(?:[0-9][ \-]*){10}"
-          title="10 dígitos de México, sin +52; puedes separarlos con espacios o guiones."
+          pattern="[ \-]*(?:\+52[ \-]*)?(?:[0-9][ \-]*){10}"
+          title="10 dígitos de México; puedes anteponer +52 y separarlos con espacios o guiones."
           placeholder="667 123 4567"
           required
         />
