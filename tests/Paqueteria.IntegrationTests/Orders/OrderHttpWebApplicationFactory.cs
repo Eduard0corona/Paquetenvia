@@ -208,7 +208,9 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 command.Acceptance.TermsVersion, command.Acceptance.PrivacyVersion,
                 command.Acceptance.AcceptedAt.ToUniversalTime().ToString("O"),
                 command.Acceptance.AcceptanceChannel,
-                command.CodExpectedCents);
+                command.CodExpectedCents,
+                command.ServiceWindow?.From.ToString("O"),
+                command.ServiceWindow?.To.ToString("O"));
             lock (gate)
             {
                 if (responses.TryGetValue((command.OrganizationId, command.IdempotencyKey), out var stored))
@@ -228,7 +230,10 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                     throw new OrderConflictException(OrderConflictCode.QuoteUnavailable);
                 }
 
-                var result = Result(Guid.NewGuid(), command.QuoteId, command.OrganizationId);
+                var result = Result(Guid.NewGuid(), command.QuoteId, command.OrganizationId) with
+                {
+                    ServiceWindow = command.ServiceWindow,
+                };
                 quoteOrders[command.QuoteId] = result.Id;
                 orders[result.Id] = result;
                 timelines[result.Id] =

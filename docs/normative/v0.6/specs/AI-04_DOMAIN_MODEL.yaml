@@ -158,6 +158,8 @@ entities:
     - commercial ownership never changes silently
     - CLOSED becomes final when claim window expires
     - pricing_policy_version is copied unchanged from the quote
+    - service_window (from, to) is optional and given by the dispatcher on createOrder; both bounds or neither, from
+      strictly before to, stored as UTC instants; absent means the zone's schedule applies (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)
   DriverPosition:
     required:
     - id

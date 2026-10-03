@@ -1,5 +1,30 @@
 # Changelog
 
+## Límites de la ventana de servicio confirmados (ORD-SERVICE-WINDOW-LIMITS-CONFIRMED-2026-10-03) — 2026-10-03
+
+- Respuestas literales del project owner: "Sí, 12 h y 30 días" (duración máxima de la ventana y anticipación máxima);
+  "No por ahora" (columnas de ventana en el CSV de pedidos); "No en el piloto" (validar la ventana contra el horario
+  de la zona). Registrado en `decision-log.md`.
+- Sin cambios de comportamiento: la API ya aplicaba 12 horas de duración máxima y 30 días de anticipación; el CSV-001
+  sigue sin columnas de ventana y la ventana no se compara contra ningún horario de zona en el piloto (las zonas no
+  guardan horario). La entrada ORD-SERVICE-WINDOW-OPTIONAL de `x-pilot-contract-deltas` lo documenta.
+
+## Ventana de servicio opcional en la orden (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) — 2026-10-02
+
+- Respuesta literal del project owner a "Ventana de servicio (horario de entrega): la pantalla la pide pero la API no
+  la guarda. ¿La agrego a la API?": "Sí, opcional". Registrado en `decision-log.md`.
+- AI-05: `CreateOrderRequest.service_window` opcional (`from`, `to` en RFC 3339 con zona explícita, segundos enteros,
+  normalizados a UTC; `from < to`, máximo 12 horas, `from >= ahora - 5 min`, `to > ahora`, `from <= ahora + 30 días`;
+  cualquier otra forma es 409). `Order.service_window` (null si no hay ventana: aplica el horario de la zona). Entra
+  en el hash de idempotencia solo si está presente. Nueva entrada ORD-SERVICE-WINDOW-OPTIONAL en
+  `x-pilot-contract-deltas`.
+- AI-06: `orders.orders` agrega `service_window_from` y `service_window_to` (timestamptz, nulos) con
+  `orders_service_window_check`. Lane Orders `20261002000100_AddOrderServiceWindow` adopta la forma de AI-06 y su
+  rollback falla cerrado. AI-18 sin cambios.
+- AI-04: regla de `Order.service_window`. AI-07: `create_order.service_window` (hora de Mazatlán).
+- El CSV de pedidos no cambia: su plantilla no tiene columna de ventana (confirmado por el owner el 2026-10-03,
+  "No por ahora").
+
 ## Autorización manual de envíos de bajo monto en la cotización (LOW-PRICE-MANUAL-AUTH-2026-10-02) — 2026-10-02
 
 - Respuestas literales del project owner: "Sí, con autorización"; "En la cotización". Registrado en `decision-log.md`

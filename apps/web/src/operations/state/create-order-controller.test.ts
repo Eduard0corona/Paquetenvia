@@ -275,6 +275,52 @@ describe("tenant switch", () => {
   });
 });
 
+describe("service window (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)", () => {
+  it("sends the typed window, uses a new key when only the window changes and shows the server window", async () => {
+    const window = { from: "2026-09-28T19:00:00+00:00", to: "2026-09-28T21:00:00+00:00" };
+    const createOrder = vi
+      .fn()
+      .mockRejectedValueOnce(new TenantApiError("network"))
+      .mockResolvedValueOnce(parseCreatedOrder(orderResponse({ service_window: window })));
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { createOrder });
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder({
+      ...acceptance,
+      serviceWindowFrom: "2026-09-28T12:00",
+      serviceWindowTo: "2026-09-28T13:00",
+    });
+    await controller.confirmOrder({
+      ...acceptance,
+      serviceWindowFrom: "2026-09-28T12:00",
+      serviceWindowTo: "2026-09-28T14:00",
+    });
+    expect(createOrder.mock.calls[0][0].service_window).toEqual({
+      from: "2026-09-28T19:00:00Z",
+      to: "2026-09-28T20:00:00Z",
+    });
+    expect(createOrder.mock.calls[1][0].service_window).toEqual({
+      from: "2026-09-28T19:00:00Z",
+      to: "2026-09-28T21:00:00Z",
+    });
+    expect(createOrder.mock.calls[0][1]).not.toBe(createOrder.mock.calls[1][1]);
+    expect(controller.getSnapshot().order?.service_window).toEqual(window);
+  });
+
+  it("does not call createOrder with a window that already ended", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await controller.requestQuote(draft());
+    await controller.confirmOrder({
+      ...acceptance,
+      serviceWindowFrom: "2026-09-28T07:00",
+      serviceWindowTo: "2026-09-28T09:00",
+    });
+    expect(orders.createOrder).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().errors.join(" ")).toContain("ventana de entrega");
+  });
+});
+
 describe("low price authorization (LOW-PRICE-MANUAL-AUTH-2026-10-02)", () => {
   const authorizedAt52 = () =>
     parseQuote(quoteResponse({

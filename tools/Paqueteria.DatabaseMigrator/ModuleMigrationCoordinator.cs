@@ -51,8 +51,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
         ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
-        ("Orders", "__ef_migrations_history_orders", AddTrackingLinkGenerations.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260929000100_AddTrackingLinkGenerations.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddOrderServiceWindow.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261002000100_AddOrderServiceWindow.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
@@ -116,11 +116,12 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // TRK-002-AUTO-LINK: the lane only adds the two link-generation columns and their two partial
-                // unique indexes (or adopts the AI-06 ones); generations keep revoked links from coming back, so
-                // its rollback fails closed. LIF-001 is verified below with its own fail-closed rollback.
+                // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the lane's latest step only adds the two nullable
+                // service window columns and their check (or adopts the AI-06 ones); dropping them would erase
+                // committed delivery windows, so its rollback fails closed. TRK-002-AUTO-LINK and LIF-001 are
+                // verified below with their own fail-closed rollbacks.
                 "Orders" =>
-                    source.Contains("TRK002_GENERATION_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
+                    source.Contains("ORD_SERVICE_WINDOW_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
                     !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
                     !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
@@ -175,6 +176,12 @@ internal sealed class ModuleMigrationCoordinator
                 "VERIFIED"));
         }
 
+        VerifyFailClosedSource(
+            root,
+            "Orders",
+            AddTrackingLinkGenerations.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260929000100_AddTrackingLinkGenerations.cs",
+            "TRK002_GENERATION_DOWNGRADE_NOT_SUPPORTED");
         VerifyFailClosedSource(
             root,
             "Orders",
@@ -481,6 +488,7 @@ internal sealed class ModuleMigrationCoordinator
                     AddRealtimeResynchronizationCursor.MigrationId,
                     AddOrderLifecycleFinalizationExecutor.MigrationId,
                     AddTrackingLinkGenerations.MigrationId,
+                    AddOrderServiceWindow.MigrationId,
                 ],
             "Notifications" =>
                 [

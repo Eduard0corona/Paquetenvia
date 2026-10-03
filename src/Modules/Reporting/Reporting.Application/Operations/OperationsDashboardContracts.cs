@@ -82,6 +82,9 @@ public sealed record OperationsDriverLocation(
     double AccuracyMeters,
     DateTimeOffset CapturedAt);
 
+/// <summary>A time window as UTC instants (OBS-001 pickup_window/delivery_window).</summary>
+public sealed record OperationsTimeWindow(DateTimeOffset From, DateTimeOffset To);
+
 public sealed record OperationsDashboardOrder(
     Guid OrderId,
     int AggregateVersion,
@@ -97,7 +100,8 @@ public sealed record OperationsDashboardOrder(
     OperationsAssignmentSummary? Assignment,
     OperationsDriverLocation? LatestDriverLocation,
     string? CostWarning,
-    bool UnassignedAlert);
+    bool UnassignedAlert,
+    OperationsTimeWindow? DeliveryWindow = null);
 
 public sealed record OperationsDashboardPage(
     DateTimeOffset GeneratedAt,

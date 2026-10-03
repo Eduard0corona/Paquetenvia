@@ -74,7 +74,9 @@ public static class OrderEndpoints
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
             !IsValid(request) ||
             !OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(request.Acceptance.AcceptedAt, clock.UtcNow) ||
-            !TryReadCodExpectedCents(request.CodExpectedCents, out var codExpectedCents))
+            !TryReadCodExpectedCents(request.CodExpectedCents, out var codExpectedCents) ||
+            !TryReadServiceWindow(request.ServiceWindow, out var serviceWindow) ||
+            (serviceWindow is not null && !OrderServiceWindowPolicy.IsWithinServerTime(serviceWindow, clock.UtcNow)))
         {
             return Conflict();
         }
@@ -105,7 +107,8 @@ public static class OrderEndpoints
                         request.Acceptance.AcceptanceChannel),
                     httpContext.TraceIdentifier,
                     codExpectedCents,
-                    RestrictedGoodsAcknowledged: true),
+                    RestrictedGoodsAcknowledged: true,
+                    ServiceWindow: serviceWindow),
                 cancellationToken);
             return Results.Created($"/api/v1/orders/{result.Id:D}", ToResponse(result));
         }
@@ -354,6 +357,64 @@ public static class OrderEndpoints
             OrderInputPolicy.TryParseCodExpectedCents(element.GetRawText(), out cents);
     }
 
+    /// <summary>
+    /// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: an absent (or JSON null) <c>service_window</c> means no window. A
+    /// present one must be an object with exactly the string members <c>from</c> and <c>to</c>, each an RFC 3339
+    /// date-time with an explicit offset and whole seconds, read as text so no lenient binder can assume a local
+    /// zone; the result is normalized to UTC and must satisfy the shape rules of
+    /// <see cref="OrderServiceWindowPolicy"/>. Anything else is the uniform 409.
+    /// </summary>
+    private static bool TryReadServiceWindow(JsonElement? value, out OrderServiceWindow? window)
+    {
+        window = null;
+        if (value is not { } element || element.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        string? fromText = null;
+        string? toText = null;
+        foreach (var member in element.EnumerateObject())
+        {
+            if (member.Value.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            switch (member.Name)
+            {
+                case "from" when fromText is null:
+                    fromText = member.Value.GetString();
+                    break;
+                case "to" when toText is null:
+                    toText = member.Value.GetString();
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        if (!OrderServiceWindowPolicy.TryParseInstant(fromText, out var from) ||
+            !OrderServiceWindowPolicy.TryParseInstant(toText, out var to))
+        {
+            return false;
+        }
+
+        var candidate = new OrderServiceWindow(from, to);
+        if (!OrderServiceWindowPolicy.IsWellFormed(candidate))
+        {
+            return false;
+        }
+
+        window = candidate;
+        return true;
+    }
+
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
     {
         value = string.Empty;
@@ -384,7 +445,11 @@ public static class OrderEndpoints
         result.PricingTier,
         new MoneyResponse(result.Total.Currency, result.Total.AmountCents),
         result.ClaimWindowEndsAt,
-        result.FinalizedAt);
+        result.FinalizedAt,
+        ToResponse(result.ServiceWindow));
+
+    private static ServiceWindowResponse? ToResponse(OrderServiceWindow? window) =>
+        window is null ? null : new ServiceWindowResponse(window.From, window.To);
 
     private static OrderDetailResponse ToDetailResponse(OrderDetailResult result)
     {
@@ -407,6 +472,7 @@ public static class OrderEndpoints
             order.Total,
             order.ClaimWindowEndsAt,
             order.FinalizedAt,
+            order.ServiceWindow,
             result.Timeline.Select(item => new OrderTimelineResponse(
                 item.EventType,
                 item.OccurredAt)).ToArray());
@@ -437,13 +503,16 @@ public static class OrderEndpoints
 /// back only through the finance operations (FIN-001/SET-001), never through the Order response a VIEWER can read.
 /// <c>restricted_goods_acknowledged</c> (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) is required and must be the JSON
 /// literal <c>true</c>.
+/// <c>service_window</c> (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) is the optional delivery window <c>{from, to}</c>;
+/// absent means the zone's schedule applies. It is stored on the order and returned as <c>Order.service_window</c>.
 /// </summary>
 public sealed record CreateOrderRequest(
     [property: JsonPropertyName("quote_id")] Guid QuoteId,
     [property: JsonPropertyName("payer_type")] string PayerType,
     [property: JsonPropertyName("acceptance")] OrderAcceptanceRequest Acceptance,
     [property: JsonPropertyName("cod_expected_cents")] JsonElement? CodExpectedCents = null,
-    [property: JsonPropertyName("restricted_goods_acknowledged")] JsonElement? RestrictedGoodsAcknowledged = null);
+    [property: JsonPropertyName("restricted_goods_acknowledged")] JsonElement? RestrictedGoodsAcknowledged = null,
+    [property: JsonPropertyName("service_window")] JsonElement? ServiceWindow = null);
 
 public sealed record OrderAcceptanceRequest(
     [property: JsonPropertyName("terms_version")] string TermsVersion,
@@ -479,7 +548,13 @@ public sealed record OrderResponse(
     [property: JsonPropertyName("pricing_tier")] string PricingTier,
     [property: JsonPropertyName("total")] MoneyResponse Total,
     [property: JsonPropertyName("claim_window_ends_at")] DateTimeOffset? ClaimWindowEndsAt,
-    [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt);
+    [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt,
+    [property: JsonPropertyName("service_window")] ServiceWindowResponse? ServiceWindow);
+
+/// <summary>ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the order's delivery window as UTC instants.</summary>
+public sealed record ServiceWindowResponse(
+    [property: JsonPropertyName("from")] DateTimeOffset From,
+    [property: JsonPropertyName("to")] DateTimeOffset To);
 
 public sealed record OrderTimelineResponse(
     [property: JsonPropertyName("event_type")] string EventType,
@@ -503,6 +578,7 @@ public sealed record OrderDetailResponse(
     [property: JsonPropertyName("total")] MoneyResponse Total,
     [property: JsonPropertyName("claim_window_ends_at")] DateTimeOffset? ClaimWindowEndsAt,
     [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt,
+    [property: JsonPropertyName("service_window")] ServiceWindowResponse? ServiceWindow,
     [property: JsonPropertyName("timeline")] IReadOnlyList<OrderTimelineResponse> Timeline);
 
 public sealed record OrderPageResponse(

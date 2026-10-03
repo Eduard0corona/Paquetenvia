@@ -129,3 +129,17 @@ Rollback:
 4. conservar órdenes, quotes usadas, evidencia, eventos, outbox, auditoría e idempotencia según retención.
 
 No se debe editar AI-06/AI-18 ni convertir rollback en eliminación de datos.
+
+## Ventana de servicio opcional (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)
+
+`CreateOrderRequest.service_window` (`{from, to}`) es opcional; ausente o `null` significa que aplica el horario de
+la zona. Cada límite es RFC 3339 con zona explícita (`Z` o `±hh:mm`; una hora local sin zona es 409) y segundos
+enteros, y se normaliza a UTC. Reglas: `from < to`, `to - from <= 12 h`, `from >= ahora - 5 min` (tolerancia de
+reloj del repositorio), `to > ahora`, `from <= ahora + 30 días`; cualquier otro miembro es 409. AI-04 no define una
+regla de mismo día calendario, por lo que no se aplica; el owner confirmó el tope de 12 h y el horizonte de 30 días
+y que en el piloto la ventana no se valida contra un horario de zona (ORD-SERVICE-WINDOW-LIMITS-CONFIRMED-2026-10-03). La ventana se guarda en `orders.service_window_from/to`, se devuelve como
+`Order.service_window` en createOrder, listOrders, getOrder y transitionOrder, entra en la auditoría
+`ORDER_CREATED` y en el hash de idempotencia solo cuando existe (hashes previos intactos; otra ventana con la misma
+key es `IDEMPOTENCY_CONFLICT`). No viaja en el evento, el outbox ni el tracking público. El tablero de despacho
+la muestra como `delivery_window`. La pantalla `/ops/orders/new` la captura como hora de Mazatlán y la convierte
+con `America/Mazatlan`, no con la zona del navegador. El CSV-001 no tiene columna de ventana ("No por ahora", 2026-10-03).

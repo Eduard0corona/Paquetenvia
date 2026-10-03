@@ -268,6 +268,10 @@ screen_contracts:
     phone_and_restricted_goods: ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 - each contact phone is 10 Mexican digits
       (spaces and hyphens removed, no +52) and is sent normalized; confirming requires ticking that the shipment holds
       no prohibited goods, sent as restricted_goods_acknowledged true and recorded on the order by the server
+    service_window: ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 - optional delivery window (from and to) typed as wall-clock
+      time in America/Mazatlan, converted with that zone (never the browser's) to instants sent as service_window;
+      both empty means the zone's schedule applies; one bound alone, from not before to, a span over 12 hours or a
+      window already over is refused before sending; the order view shows the window in Mazatlan time
   driver_stop:
     offline_cache:
     - assigned stop minimum data
