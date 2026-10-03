@@ -456,6 +456,74 @@ public sealed partial class DispatchPostgreSqlContractTests
         }
     }
 
+    [PostgreSqlContractFact]
+    public async Task Operator_owner_outbox_assignment_events_refuse_the_driver_when_the_order_operator_diverges()
+    {
+        // ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03: dispatch.assignment-changed (ACCEPTED/ACTIVE and closed reads)
+        // authorizes the operator's driver only while the assignment's operator is the order's stored operator.
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        var operatorId = Guid.NewGuid();
+        var thirdId = Guid.NewGuid();
+        await MakeOperatorAsync(scenario, operatorId);
+        await scenario.ExecuteAdminAsync(
+            """
+            INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
+            VALUES (@third,'DSP third','DSP third','BUSINESS');
+            """,
+            P("third", thirdId));
+        try
+        {
+            var created = await CreateAssignmentService(fixture.AppDataSource)
+                .CreateOwnDriverAssignmentAsync(Command(scenario) with { OrganizationId = operatorId }, default);
+            await using var connections = new RealtimeWorkerConnectionFactory(fixture.WorkerConnectionString);
+            var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
+
+            var active = await evidence.ReadAssignmentAsync(scenario.OrganizationId, created.Id, default);
+            Assert.NotNull(active);
+            Assert.True(active.DriverAudienceAuthorized);
+
+            await SetOrderOperatorAsync(scenario, thirdId);
+            var divergedActive = await evidence.ReadAssignmentAsync(scenario.OrganizationId, created.Id, default);
+            Assert.NotNull(divergedActive);
+            Assert.False(divergedActive.DriverAudienceAuthorized);
+            Assert.False(await evidence.IsDriverAudienceAuthorizedAsync(
+                scenario.OrganizationId, scenario.OrderId, created.Id, scenario.DriverId, default));
+            await SetOrderOperatorAsync(scenario, operatorId);
+
+            foreach (var closedStatus in new[] { "COMPLETED", "CANCELLED" })
+            {
+                await scenario.ExecuteAdminAsync(
+                    "UPDATE dispatch.assignments SET status=@status WHERE id=@assignment;",
+                    P("status", closedStatus),
+                    P("assignment", created.Id));
+                var closed = await evidence.ReadClosedAssignmentAsync(scenario.OrganizationId, created.Id, 2, default);
+                Assert.NotNull(closed);
+                Assert.True(closed.DriverAudienceAuthorized);
+
+                await SetOrderOperatorAsync(scenario, thirdId);
+                var divergedClosed = await evidence.ReadClosedAssignmentAsync(
+                    scenario.OrganizationId, created.Id, 2, default);
+                Assert.NotNull(divergedClosed);
+                Assert.False(divergedClosed.DriverAudienceAuthorized);
+                await SetOrderOperatorAsync(scenario, operatorId);
+            }
+        }
+        finally
+        {
+            await SetOrderOperatorAsync(scenario, operatorId);
+            await RemoveOperatorAsync(scenario, operatorId);
+            await scenario.ExecuteAdminAsync(
+                "DELETE FROM organizations.organizations WHERE id=@third;",
+                P("third", thirdId));
+        }
+    }
+
+    private static Task SetOrderOperatorAsync(DispatchScenario scenario, Guid operatorId) =>
+        scenario.ExecuteAdminAsync(
+            "UPDATE orders.orders SET operator_org_id=@operator WHERE id=@order;",
+            P("operator", operatorId),
+            P("order", scenario.OrderId));
+
     private static async Task MakeOperatorAsync(DispatchScenario scenario, Guid operatorId) =>
         await scenario.ExecuteAdminAsync(
             """

@@ -515,6 +515,12 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
                     SELECT EXISTS (
                       SELECT 1
                       FROM dispatch.assignments a
+                      -- ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03: the assignment's operator must still be the
+                      -- order's stored operator, for every driver-audience path (status, assignment, closed).
+                      JOIN orders.orders o
+                        ON o.id=a.order_id
+                       AND o.owner_org_id=a.owner_org_id
+                       AND o.operator_org_id=a.operator_org_id
                       JOIN drivers.driver_profiles p
                         ON p.id=a.driver_id
                        AND p.org_id=a.operator_org_id
