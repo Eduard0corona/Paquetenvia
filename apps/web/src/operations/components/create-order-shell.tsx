@@ -316,7 +316,7 @@ function QuoteSummary({
                 aria-describedby="cod-amount-help"
               />
             </label>
-            <p id="cod-amount-help">Monto que el repartidor cobrará al entregar, en pesos con hasta 2 decimales (por ejemplo 150.50).</p>
+            <p id="cod-amount-help">Monto que el repartidor cobrará al entregar, en pesos con hasta 2 decimales (por ejemplo 150.50), máximo $20,000.00 por pedido.</p>
             {acceptanceVersions === null ? (
               <p className="opsWarning" role="alert">{acceptanceVersionsUnavailableMessage}</p>
             ) : (
