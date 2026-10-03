@@ -228,7 +228,7 @@ contract_hardening:
     location_lane: same lifecycle in an independent low-priority lane.
     lease: each claim assigns a new lease_token and lease expiry; settle requires id + matching lease_token + PROCESSING state.
     runtime_grants: Worker invokes lifecycle functions; it cannot directly SELECT, UPDATE or DELETE outbox rows.
-    recovery: stale PROCESSING rows are requeued in bounded batches; poison messages transition to DEAD.
+    recovery: stale PROCESSING rows are requeued in bounded batches, except a stale WHATSAPP notifications.send-requested, which is never requeued; it becomes DEAD and its Notification FAILED with AMBIGUOUS_TIMEOUT plus a notifications.status-changed event that alerts the dispatcher (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03); poison messages transition to DEAD.
     retention: only old PROCESSED/DEAD rows are purgeable; active states are never deleted.
   public_tracking:
     statuses:
