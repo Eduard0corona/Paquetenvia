@@ -22,6 +22,10 @@ public static class E002NotificationStateReader
         "20260827000100_RouteExternalOfferRealtime",
         "20260829000100_RouteManualRouteRealtime",
         DispatchLaneMigrationId,
+        // NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02: replaces only the apply_notification_outcome body.
+        "20261002000100_FailAmbiguousWhatsAppNotifications",
+        // NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03: replaces only the recover_stale_notifications_outbox body.
+        "20261003000100_FailStaleWhatsAppNotificationLeases",
     ];
 
     public static async Task<E002NotificationState> ReadAsync(

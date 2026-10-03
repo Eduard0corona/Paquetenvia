@@ -610,6 +610,7 @@ public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassF
         {
             quote_id = Guid.NewGuid(),
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "terms-2026-09",

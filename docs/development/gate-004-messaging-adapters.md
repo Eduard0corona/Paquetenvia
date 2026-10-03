@@ -18,15 +18,40 @@ message on its own: no producer, recipient source or pilot configuration uses it
 | `MessagingRecipient` | E.164 phone or email; `ToString()` is `[redacted]`, and `MessagingRequest.ToString()` omits recipient and parameters |
 | `MessagingResult(Outcome, Code, ProviderReference, RetryAfter)` | `Code` is one of the closed `MessagingResultCodes` set (safe for logs and persistence) |
 
-Outcome mapping onto the NTF-001 outbox vocabulary (`NotificationDeliveryOutcome.From`, used by the
-same `apply_notification_outcome` settle under `lease_token`):
+Outcome mapping onto the NTF-001 outbox vocabulary (`NotificationDeliveryOutcome.From(outcome, channel)`,
+used by the same `apply_notification_outcome` settle under `lease_token`):
 
-| `MessagingOutcome` | Outbox outcome | Notification / outbox |
-| --- | --- | --- |
-| `Accepted` | `SUCCESS` | SENT / PROCESSED |
-| `TransientFailure` | `TRANSIENT` | PENDING / RETRY with backoff |
-| `AmbiguousTimeout` | `AMBIGUOUS` | PENDING / RETRY with backoff |
-| `PermanentFailure` | `PERMANENT` | FAILED / DEAD |
+| `MessagingOutcome` | Channel | Outbox outcome | Notification / outbox |
+| --- | --- | --- | --- |
+| `Accepted` | any | `SUCCESS` | SENT / PROCESSED |
+| `TransientFailure` | any | `TRANSIENT` | PENDING / RETRY with backoff |
+| `AmbiguousTimeout` | WhatsApp | `AMBIGUOUS_FAILED` | FAILED / DEAD, code `AMBIGUOUS_TIMEOUT`, never retried |
+| `AmbiguousTimeout` | Email | `AMBIGUOUS` | PENDING / RETRY with backoff |
+| `PermanentFailure` | any | `PERMANENT` | FAILED / DEAD |
+
+**Ambiguous WhatsApp sends (NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02, owner: "Marcar fallido y avisar").** A WhatsApp
+template send has no idempotency key, so a retry after a timeout could deliver the message twice. The outcome is
+terminal: `NotificationDeliveryOutcome.CodeFor` records `AMBIGUOUS_TIMEOUT` (never the provider code), the
+Notification ends FAILED and the send request DEAD, which no claim, requeue or stale-recovery function picks up
+again. The Notifications lane `20261002000100_FailAmbiguousWhatsAppNotifications` enforces it in
+`security.apply_notification_outcome` as well: `AMBIGUOUS_FAILED` must carry `AMBIGUOUS_TIMEOUT` and is refused
+(`22023`) for any channel but WHATSAPP, and an `AMBIGUOUS` report for a WHATSAPP Notification is settled as
+`AMBIGUOUS_FAILED`. The dispatcher alert is the `notifications.status-changed` row the settle already writes in the
+same transaction (REALTIME lane → `NotificationStatusChanged.v1` on OperationsHub, operations audience, payload
+`notification_id`, `channel`, `status`, `attempts`, `occurred_at`; no recipient or template parameter). Email keeps
+the AMBIGUOUS retry: the owner answer names WhatsApp only, and ACS reuses one `Operation-Id` per Notification.
+
+**Stale WhatsApp leases (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03, owner: "Sí, marcar fallido y avisar").** If
+the process sending a WhatsApp message dies mid-send, its `notifications.send-requested` row stays PROCESSING
+until the lease expires and the message may already have reached Meta. The Notifications lane
+`20261003000100_FailStaleWhatsAppNotificationLeases` makes `security.recover_stale_notifications_outbox` settle it
+like an ambiguous send instead of requeueing it (or re-leasing it for max-attempts finalization): the request ends
+DEAD with `AMBIGUOUS_TIMEOUT` under its own expired `lease_token`, the PENDING Notification ends FAILED with
+`AMBIGUOUS_TIMEOUT`, and the same `notifications.status-changed` row reaches the dispatchers, all in the recovery
+transaction. A WhatsApp row locked by a concurrent settle is skipped and excluded from the requeue. IN_APP and
+email keep the NTF-001 recovery (requeue, then max-attempts finalization). The rows settled this way are not
+returned to the worker, so the OBS-002 settled counter does not count them; the FAILED history row and the
+status-changed event are their record.
 
 `NotificationRetryPolicy.CalculateDelay(attempts, base, max, retryAfter)` raises the exponential delay
 to a provider `Retry-After` hint and caps it at `RetryMaximumSeconds`. Max attempts still end in the
@@ -160,11 +185,21 @@ that does not exist stops the Worker at start and fails the `existing` secret re
   invalidation, credential failure, disabled channels, deterministic synthetic outcomes, start-up
   validation without values, Key Vault mapping into the options, outbox outcome mapping and retry cap.
   All HTTP goes through a fake `HttpMessageHandler`; nothing calls Meta or Azure.
+- `tests/Paqueteria.ContractTests/PostgreSql/NotificationsPostgreSqlContractTests.cs` (PostgreSQL): an ambiguous
+  WhatsApp settle ends FAILED/DEAD with `AMBIGUOUS_TIMEOUT`, writes one FAILED status-changed row without PII and
+  refuses a stale lease; the terminal outcome is refused for IN_APP and EMAIL or without its code; IN_APP and EMAIL
+  keep the retry. `NotificationsMigrationGuardPostgreSqlTests` runs the lane up, down and up again.
 - `tests/Paqueteria.ArchitectureTests/MessagingArchitectureTests.cs`: outbound `HttpClient` only in the
   messaging adapters, request loggers removed, allowlisted log dimensions, ACS without keys, Worker
   wiring after the Key Vault source.
 
 ## Rollback
 
-Revert the commit. No migration, no normative contract and no deployment template changed; every
+NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03: migrate the Notifications lane down to
+`20261002000100_FailAmbiguousWhatsAppNotifications` (restores the NTF-001 recovery body), then revert the commit;
+WhatsApp Notifications already FAILED by stale recovery stay terminal.
+
+NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02: migrate the Notifications lane down to
+`20260927000200_AddDispatchOutboxLane` (restores the NTF-001 settle body), then revert the commit; Notifications
+already FAILED with `AMBIGUOUS_TIMEOUT` stay terminal. For the adapters alone: revert the commit. No migration, no normative contract and no deployment template changed; every
 channel is `Disabled` unless configured, so the running pilot is unaffected either way.

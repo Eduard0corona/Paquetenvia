@@ -31,7 +31,7 @@ public sealed class OrderCodExpectedHttpTests : IClassFixture<OrderHttpWebApplic
     [InlineData("null", 0L)]
     [InlineData("0", 0L)]
     [InlineData("15050", 15_050L)]
-    [InlineData("9223372036854775807", long.MaxValue)]
+    [InlineData("2000000", 2_000_000L)]
     public async Task POST_carries_the_declared_COD_to_the_create_path(string? literal, long expected)
     {
         factory.ResetCreateObservations();
@@ -53,6 +53,8 @@ public sealed class OrderCodExpectedHttpTests : IClassFixture<OrderHttpWebApplic
     [InlineData("1e3")]
     [InlineData("1E+3")]
     [InlineData("9223372036854775808")]
+    [InlineData("2000001")]
+    [InlineData("9223372036854775807")]
     [InlineData("\"150\"")]
     [InlineData("\"150.50\"")]
     [InlineData("true")]
@@ -95,7 +97,8 @@ public sealed class OrderCodExpectedHttpTests : IClassFixture<OrderHttpWebApplic
         var json =
             $"{{\"quote_id\":\"{quoteId:D}\",\"payer_type\":\"RECIPIENT\"," +
             "\"acceptance\":{\"terms_version\":\"terms-synthetic-v1\",\"privacy_version\":\"privacy-synthetic-v1\"," +
-            $"\"accepted_at\":\"{RecentUtc}\",\"acceptance_channel\":\"ASSISTED\"}}{cod}}}";
+            $"\"accepted_at\":\"{RecentUtc}\",\"acceptance_channel\":\"ASSISTED\"}}," +
+            $"\"restricted_goods_acknowledged\":true{cod}}}";
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/orders")
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),

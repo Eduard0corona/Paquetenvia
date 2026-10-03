@@ -12,6 +12,12 @@ public sealed partial class GoogleMapsGeocodingOptions
 {
     public const string DefaultBaseUri = "https://maps.googleapis.com/";
 
+    /// <summary>
+    /// GATE-003-MAPS-PILOT-RULES-2026-10-02: searches are restricted to Mexico. The provider always
+    /// sends <c>components=country:MX</c> from this constant, never from configuration.
+    /// </summary>
+    public const string PilotCountry = "MX";
+
     public string ApiKey { get; set; } = string.Empty;
 
     /// <summary>Scheme and host of the Geocoding API; tests point it at a fake handler.</summary>
@@ -20,8 +26,12 @@ public sealed partial class GoogleMapsGeocodingOptions
     /// <summary>ccTLD region bias (<c>region=</c>); empty sends none.</summary>
     public string Region { get; set; } = "mx";
 
-    /// <summary>ISO 3166-1 alpha-2 country restriction (<c>components=country:</c>); empty sends none.</summary>
-    public string ComponentsCountry { get; set; } = "MX";
+    /// <summary>
+    /// Locked to <see cref="PilotCountry"/> (GATE-003-MAPS-PILOT-RULES-2026-10-02). It is kept only so
+    /// that a configured override fails closed: any other value, empty included, fails validation at
+    /// start instead of being silently ignored. The request never reads it.
+    /// </summary>
+    public string ComponentsCountry { get; set; } = PilotCountry;
 
     /// <summary>Timeout of one HTTP attempt, response body included.</summary>
     public int AttemptTimeoutMilliseconds { get; set; } = 3000;
@@ -52,7 +62,7 @@ public sealed partial class GoogleMapsGeocodingOptions
         ApiKeyPattern().IsMatch(options.ApiKey) &&
         IsValidBaseUri(options.BaseUri) &&
         (options.Region.Length == 0 || RegionPattern().IsMatch(options.Region)) &&
-        (options.ComponentsCountry.Length == 0 || CountryPattern().IsMatch(options.ComponentsCountry)) &&
+        string.Equals(options.ComponentsCountry, PilotCountry, StringComparison.Ordinal) &&
         options.AttemptTimeoutMilliseconds is >= 200 and <= 10_000 &&
         options.MaxRetries is >= 0 and <= 3 &&
         options.RetryBaseDelayMilliseconds is >= 0 and <= 5_000 &&
@@ -75,7 +85,4 @@ public sealed partial class GoogleMapsGeocodingOptions
 
     [GeneratedRegex("^[a-z]{2}$", RegexOptions.CultureInvariant)]
     private static partial Regex RegionPattern();
-
-    [GeneratedRegex("^[A-Z]{2}$", RegexOptions.CultureInvariant)]
-    private static partial Regex CountryPattern();
 }

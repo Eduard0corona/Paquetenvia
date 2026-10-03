@@ -92,6 +92,15 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         {
             throw new OrderConflictException(OrderConflictCode.InvalidRequest);
         }
+
+        // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: an optional delivery window must not have ended, must not start
+        // before the clock tolerance and must not be too far ahead; JSON and CSV commits both pass here.
+        if (command.ServiceWindow is { } serviceWindow &&
+            !OrderServiceWindowPolicy.IsWithinServerTime(serviceWindow, clock.UtcNow))
+        {
+            throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+        }
+
         _ = OrderInputPolicy.TryParsePayerType(command.PayerType, out var payerType);
         var requestHash = ComputeRequestHash(command);
         var maximumAttempts = checked(options.Value.PublicIdCollisionRetryCount + 1);
@@ -162,6 +171,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         Guid? ownerOrganizationId,
         string? cursor,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty ||
@@ -183,8 +193,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             new TenantDatabaseExecutionContext(actorId, [organizationId]),
             (dbContext, token) => ListWithinTransactionAsync(
                 dbContext,
+                actorId,
+                organizationId,
                 status,
                 codPendingReconciliation,
+                mfaSatisfied,
                 hasCursor,
                 cursorCreatedAt,
                 cursorId,
@@ -226,12 +239,25 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                     "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
                     CultureInfo.InvariantCulture));
             writer.WriteString("acceptance_channel", command.Acceptance.AcceptanceChannel);
+            // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher's confirmation is part of the request. Only
+            // true is ever accepted, so every fingerprint carries it; a key reserved before the decision belongs to a
+            // request that is now rejected anyway.
+            writer.WriteBoolean("restricted_goods_acknowledged", command.RestrictedGoodsAcknowledged);
             // D6-COD-EXPECTED: the declared COD is part of the request, so replaying a key with another amount is
             // IDEMPOTENCY_CONFLICT. Zero (no COD) is omitted, which keeps every pre-COD fingerprint byte-identical
             // and makes an absent field and an explicit zero the same request, as they are the same order.
             if (command.CodExpectedCents != 0)
             {
                 writer.WriteNumber("cod_expected_cents", command.CodExpectedCents);
+            }
+
+            // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the window is part of the request, so replaying a key with
+            // another window is IDEMPOTENCY_CONFLICT. An absent window is omitted, which keeps every fingerprint
+            // computed before the window existed byte-identical.
+            if (command.ServiceWindow is { } window)
+            {
+                writer.WriteString("service_window_from", OrderServiceWindowPolicy.Format(window.From));
+                writer.WriteString("service_window_to", OrderServiceWindowPolicy.Format(window.To));
             }
 
             writer.WriteEndObject();
@@ -326,7 +352,9 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             quote.PackageSnapshot,
             quote.FinancialOverride,
             now,
-            command.CodExpectedCents);
+            command.CodExpectedCents,
+            command.ServiceWindow?.From,
+            command.ServiceWindow?.To);
 
         await InsertOrderAsync(connection, transaction, order, cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.OrderInserted, cancellationToken);
@@ -358,6 +386,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             Guid.NewGuid(),
             order,
             command.ActorId,
+            command.RestrictedGoodsAcknowledged,
             now,
             cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.EventInserted, cancellationToken);
@@ -379,6 +408,9 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             pricing_tier = order.PricingTier,
             total_cents = order.TotalCents,
             cod_expected_cents = order.CodExpectedCents,
+            restricted_goods_acknowledged = command.RestrictedGoodsAcknowledged,
+            service_window_from = order.ServiceWindowFrom,
+            service_window_to = order.ServiceWindowTo,
             request_id = command.RequestId,
         }, JsonOptions);
         await auditWriter.WriteAsync(
@@ -429,8 +461,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
 
     private async Task<OrderPageResult> ListWithinTransactionAsync(
         OrdersDbContext dbContext,
+        Guid actorId,
+        Guid organizationId,
         string? status,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         bool hasCursor,
         DateTimeOffset cursorCreatedAt,
         Guid cursorId,
@@ -438,13 +473,30 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     {
         var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
         var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
+        if (codPendingReconciliation)
+        {
+            // FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the COD filter reveals financial state, so, as the finance
+            // reads do, the getOrderFinancials authorization is re-checked inside this transaction before any
+            // order is read; the endpoint decision alone is never the only barrier.
+            await using var authorization = CreateCommand(
+                connection, transaction, OrderCodPendingListAuthorization.Sql);
+            authorization.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
+            authorization.Parameters.Add(P("org", NpgsqlDbType.Uuid, organizationId));
+            authorization.Parameters.Add(P("mfa", NpgsqlDbType.Boolean, mfaSatisfied));
+            if (await authorization.ExecuteScalarAsync(cancellationToken) is not true)
+            {
+                throw new OrderListForbiddenException();
+            }
+        }
+
         await using var command = CreateCommand(
             connection,
             transaction,
             $"""
             SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
                    origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
-                   pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at
+                   pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at,
+                   service_window_from,service_window_to
             FROM orders.orders
             WHERE (@status IS NULL OR status=@status)
               AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
@@ -491,7 +543,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             """
             SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
                    origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
-                   pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at
+                   pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at,
+                   service_window_from,service_window_to
             FROM orders.orders WHERE id=@id
             """);
         command.Parameters.Add(P("id", NpgsqlDbType.Uuid, orderId));
@@ -534,6 +587,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             !IdempotencyKeyPolicy.IsValid(command.IdempotencyKey) ||
             !OrderInputPolicy.TryParsePayerType(command.PayerType, out _) ||
             !OrderInputPolicy.IsCodExpectedCents(command.CodExpectedCents) ||
+            !command.RestrictedGoodsAcknowledged ||
+            (command.ServiceWindow is not null && !OrderServiceWindowPolicy.IsWellFormed(command.ServiceWindow)) ||
             command.Acceptance is null ||
             !OrderAcceptanceInputPolicy.IsValid(
                 command.Acceptance.TermsVersion,
@@ -777,11 +832,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
               origin_location_id,destination_location_id,service_type,pricing_tier,consolidated_route,payer_type,status,
               subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot,currency,
               pricing_policy_version,package_snapshot,financial_override,cod_expected_cents,version,
-              claim_window_ends_at,finalized_at,archived_at,created_at,updated_at)
+              claim_window_ends_at,finalized_at,archived_at,created_at,updated_at,service_window_from,service_window_to)
             VALUES (
               @id,@public_id,@quote_id,@owner,NULL,@client,@city,@area,@origin,@destination,@service,@tier,@consolidated,
               @payer,'DRAFT',@subtotal,@discount,@tax,@total,@minimum,@currency,@policy,@packages,@override,@cod,1,
-              NULL,NULL,NULL,@created,@updated)
+              NULL,NULL,NULL,@created,@updated,@window_from,@window_to)
             """);
         AddOrderParameters(command, order);
         try
@@ -863,14 +918,18 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         Guid eventId,
         Order order,
         Guid actorId,
+        bool restrictedGoodsAcknowledged,
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the append-only creation event is the order's record of the
+        // dispatcher's no-prohibited-goods confirmation; its actor_id and occurred_at say who confirmed and when.
         var payload = JsonSerializer.Serialize(new
         {
             order_id = order.Id,
             quote_id = order.QuoteId,
             status = "DRAFT",
+            restricted_goods_acknowledged = restrictedGoodsAcknowledged,
         }, JsonOptions);
         await using var command = CreateCommand(
             connection,
@@ -1003,6 +1062,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         command.Parameters.Add(P("packages", NpgsqlDbType.Jsonb, order.PackageSnapshot));
         command.Parameters.Add(P("override", NpgsqlDbType.Jsonb, order.FinancialOverride));
         command.Parameters.Add(P("cod", NpgsqlDbType.Bigint, order.CodExpectedCents));
+        command.Parameters.Add(P("window_from", NpgsqlDbType.TimestampTz, order.ServiceWindowFrom));
+        command.Parameters.Add(P("window_to", NpgsqlDbType.TimestampTz, order.ServiceWindowTo));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, order.CreatedAt));
         command.Parameters.Add(P("updated", NpgsqlDbType.TimestampTz, order.UpdatedAt));
     }
@@ -1045,7 +1106,10 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         order.PricingTier,
         new MoneyResult(order.Currency, order.TotalCents),
         order.ClaimWindowEndsAt,
-        order.FinalizedAt);
+        order.FinalizedAt,
+        order.ServiceWindowFrom is { } from && order.ServiceWindowTo is { } to
+            ? new OrderServiceWindow(from, to)
+            : null);
 
     private static OrderReadRow ReadOrder(NpgsqlDataReader reader)
     {
@@ -1068,8 +1132,34 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 reader.GetString(15),
                 new MoneyResult(currency, reader.GetInt64(16)),
                 reader.IsDBNull(17) ? null : reader.GetFieldValue<DateTimeOffset>(17),
-                reader.IsDBNull(18) ? null : reader.GetFieldValue<DateTimeOffset>(18)),
+                reader.IsDBNull(18) ? null : reader.GetFieldValue<DateTimeOffset>(18),
+                ReadServiceWindow(reader, 20, 21)),
             reader.GetFieldValue<DateTimeOffset>(19));
+    }
+
+    /// <summary>
+    /// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: both bounds or neither (enforced by orders_service_window_check);
+    /// a half-set window read back is an inconsistency and fails closed.
+    /// </summary>
+    internal static OrderServiceWindow? ReadServiceWindow(
+        NpgsqlDataReader reader,
+        int fromOrdinal,
+        int toOrdinal,
+        Func<Exception>? inconsistent = null)
+    {
+        var hasFrom = !reader.IsDBNull(fromOrdinal);
+        var hasTo = !reader.IsDBNull(toOrdinal);
+        if (hasFrom != hasTo)
+        {
+            throw inconsistent?.Invoke() ??
+                new OrderServiceUnavailableException("The order service window is inconsistent.");
+        }
+
+        return hasFrom
+            ? new OrderServiceWindow(
+                reader.GetFieldValue<DateTimeOffset>(fromOrdinal),
+                reader.GetFieldValue<DateTimeOffset>(toOrdinal))
+            : null;
     }
 
     private sealed record IdempotencyRow(

@@ -1,3 +1,4 @@
+using Paqueteria.Application.Contacts;
 namespace Pricing.Application.Quotes;
 
 public sealed record QuoteAddressInput(
@@ -26,7 +27,21 @@ public sealed record CreateQuoteCommand(
     string ServiceType,
     bool ConsolidatedRoute,
     IReadOnlyList<QuotePackageInput> Packages,
-    string? RequestId);
+    string? RequestId,
+    QuoteLowPriceAuthorizationInput? LowPriceAuthorization = null);
+
+/// <summary>
+/// LOW-PRICE-MANUAL-AUTH-2026-10-02: the optional manual authorization of a low price shipment. The endpoint only
+/// forwards it after the caller proved the authorization capability (DISPATCHER, or PLATFORM_ADMIN with MFA); the
+/// reason is trimmed, 1 to 200 characters, and must not contain personal data.
+/// </summary>
+public sealed record QuoteLowPriceAuthorizationInput(string Reason);
+
+/// <summary>
+/// The authorization a quote carries (its AI-06 <c>financial_override</c>): who authorized it, why, and until when
+/// (the quote's own expiry). The endpoint decides which of these fields a caller may read.
+/// </summary>
+public sealed record QuoteLowPriceAuthorizationResult(Guid ActorId, string Reason, DateTimeOffset ValidUntil);
 
 public sealed record MoneyResult(string Currency, long AmountCents);
 
@@ -56,7 +71,8 @@ public sealed record QuoteResult(
     long MinimumTotalCentsSnapshot,
     string PricingPolicyVersion,
     string Status,
-    IReadOnlyDictionary<string, object?> RequestSnapshotRedacted);
+    IReadOnlyDictionary<string, object?> RequestSnapshotRedacted,
+    QuoteLowPriceAuthorizationResult? LowPriceAuthorization = null);
 
 public interface IQuoteService
 {
@@ -79,6 +95,9 @@ public enum QuoteValidationCode
     TaxModeBlocked,
     ConsolidatedRouteRequired,
     IdempotencyConflict,
+
+    /// <summary>LOW-PRICE-MANUAL-AUTH-2026-10-02: the reason carries what looks like personal data or a secret.</summary>
+    LowPriceAuthorizationReasonRejected,
 }
 
 public sealed class QuoteValidationException(QuoteValidationCode code)
@@ -89,6 +108,19 @@ public sealed class QuoteValidationException(QuoteValidationCode code)
 
 public sealed class QuoteNotFoundException : Exception;
 
+/// <summary>
+/// LOW-PRICE-MANUAL-AUTH-2026-10-02: a low price authorization was sent for a quote that does not need one (a
+/// consolidated route, or a total above 52 MXN in a tier that does not require the route). It is the uniform 409;
+/// an authorization is never stored silently.
+/// </summary>
+public sealed class QuoteConflictException : Exception
+{
+    public QuoteConflictException()
+        : base("The quote request conflicts with the low price guard.")
+    {
+    }
+}
+
 public sealed class QuoteServiceUnavailableException(string message, Exception? innerException = null)
     : Exception(message, innerException);
 
@@ -96,4 +128,33 @@ public sealed class QuoteServiceUnavailableException(string message, Exception? 
 public static class QuoteInputLimits
 {
     public const int MaximumPackages = Pricing.Domain.PricingPackagePolicy.MaximumPackages;
+}
+
+/// <summary>LOW-PRICE-MANUAL-AUTH-2026-10-02 reason rules as the endpoint sees them; the domain stays authoritative.</summary>
+public static class QuoteLowPriceAuthorizationPolicy
+{
+    public const int MaximumReasonLength = Pricing.Domain.LowPriceAuthorization.MaximumReasonLength;
+
+    /// <summary>The trimmed reason (1 to 200 characters, no control characters), or null when it is not valid.</summary>
+    public static string? NormalizeReason(string? reason) => Pricing.Domain.LowPriceAuthorization.Normalize(reason);
+}
+
+/// <summary>
+/// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: a quote contact phone is a
+/// 10-digit Mexican number as defined by <see cref="MexicanPhonePolicy"/> (ASCII spaces and hyphens removed, an
+/// optional leading <c>+52</c> removed, exactly ten ASCII digits left). The same policy applies to the saved-location
+/// phone of <c>createLocation</c> (GEO-001). The normalized value is the one hashed, protected (ADP-001) and stored;
+/// neither the input nor the result is ever logged.
+/// </summary>
+public static class QuotePhonePolicy
+{
+    public const int DigitCount = MexicanPhonePolicy.DigitCount;
+
+    /// <summary>Upper bound on the raw text, so a separator-padded value cannot grow without limit.</summary>
+    public const int MaximumInputLength = MexicanPhonePolicy.MaximumInputLength;
+
+    public static bool TryNormalize(string? value, out string normalized) =>
+        MexicanPhonePolicy.TryNormalize(value, out normalized);
+
+    public static bool IsValid(string? value) => MexicanPhonePolicy.IsValid(value);
 }

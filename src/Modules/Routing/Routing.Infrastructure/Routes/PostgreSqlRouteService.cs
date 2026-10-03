@@ -646,8 +646,10 @@ public sealed partial class PostgreSqlRouteService(
                      JOIN locations.service_areas sa ON sa.id=dsa.service_area_id
                      WHERE dsa.driver_id=p.id AND dsa.service_area_id=@service_area
                        AND dsa.org_id=p.org_id AND dsa.status='ACTIVE'
-                       AND sa.owner_org_id=p.org_id AND sa.city_id=@city AND sa.status='ACTIVE') END
+                       AND sa.owner_org_id=p.org_id AND sa.city_id=@city AND sa.status='ACTIVE') END,
+                   o.driver_eligibility_policy_version
             FROM drivers.driver_profiles p
+            JOIN organizations.organizations o ON o.id=p.org_id
             LEFT JOIN identity.users u ON u.id=p.user_id
             WHERE p.id=@driver AND p.org_id=@organization
             """;
@@ -665,7 +667,7 @@ public sealed partial class PostgreSqlRouteService(
                     reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3),
                     reader.GetString(4), reader.GetString(5), reader.GetString(6),
                     reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetBoolean(8),
-                    reader.IsDBNull(9) ? null : reader.GetBoolean(9));
+                    reader.IsDBNull(9) ? null : reader.GetBoolean(9), reader.GetString(10));
             }
         }
         if (profile is null) return null;
@@ -706,7 +708,8 @@ public sealed partial class PostgreSqlRouteService(
             profile.UserStatus,
             profile.MembershipActive,
             profile.ServiceAreaEligible,
-            documents);
+            documents,
+            profile.PolicyVersion);
     }
 
     private static void EnsureMutable(RouteRow route, int expectedVersion)
@@ -745,7 +748,8 @@ public sealed partial class PostgreSqlRouteService(
         string ProfileStatus,
         string? UserStatus,
         bool MembershipActive,
-        bool? ServiceAreaEligible);
+        bool? ServiceAreaEligible,
+        string PolicyVersion);
 
     private sealed record RouteRow(
         Guid Id,

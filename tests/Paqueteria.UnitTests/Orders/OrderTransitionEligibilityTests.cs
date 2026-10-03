@@ -37,7 +37,6 @@ public sealed class OrderTransitionEligibilityTests
         }
 
         var policy = new DriverEligibilityPolicyConfiguration(
-            "ord-002-unit-v1",
             new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
             {
                 ["MOTORCYCLE"] = ["IDENTITY"],
@@ -58,7 +57,8 @@ public sealed class OrderTransitionEligibilityTests
             new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal)
             {
                 ["IDENTITY"] = new("IDENTITY", "VALID", "synthetic/identity", new byte[32], Now.AddDays(30)),
-            });
+            },
+            "ord-002-unit-v1");
 
         return OrderTransitionEligibility.Evaluate(
             "OWN",

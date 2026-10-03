@@ -3,14 +3,19 @@ import { acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import {
   buildCreateOrderBody,
   buildCreateQuoteBody,
+  codAmountAboveCapMessage,
   codExpectedCents,
   confirmationBlockerLabels,
   CreateOrderContractError,
   evaluateConfirmation,
+  lowPriceAuthorizationReasonMaximum,
   lowPriceGuardTotalCents,
+  normalizeMexicanPhone,
   parseCreatedOrder,
   parseQuote,
+  restrictedGoodsRequiredMessage,
 } from "./create-order";
+import { maximumCodExpectedCents } from "./money";
 import { draft, orderResponse, quoteId, quoteResponse } from "./create-order.fixtures";
 
 const orderId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
@@ -52,6 +57,68 @@ describe("createQuote request", () => {
     expect(result.errors.join(" ")).not.toContain("corta");
   });
 
+  // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: 10 Mexican digits; spaces,
+  // hyphens and one optional leading +52 are removed.
+  it.each([
+    ["6671234567", "6671234567"],
+    ["667 123 4567", "6671234567"],
+    ["667-123-4567", "6671234567"],
+    [" 667 - 123 - 4567 ", "6671234567"],
+    ["+526671234567", "6671234567"],
+    ["+52 667 123 4567", "6671234567"],
+    ["+52-6671234567", "6671234567"],
+    [" +52 - 667-123-4567 ", "6671234567"],
+    ["+52 5212345678", "5212345678"],
+  ])("sends the phone %s normalized as %s", (typed, normalized) => {
+    expect(normalizeMexicanPhone(typed)).toBe(normalized);
+    const result = buildCreateQuoteBody(draft({ origin: { ...draft().origin, phone: typed } }));
+    expect(result.ok && result.body.origin.phone).toBe(normalized);
+  });
+
+  it.each([
+    "526671234567",
+    "52 667 123 4567",
+    "+1 667 123 4567",
+    "+16671234567",
+    "+5 2667123456",
+    "+ 52 667 123 4567",
+    "+53 667 123 4567",
+    "+52 1 667 123 4567",
+    "+52+52 667 123 4567",
+    "++52 667 123 4567",
+    "+52-",
+    "667 123 4567 +52",
+    "0052 667 123 4567",
+    "+52 (667) 123 4567",
+    "＋52 667 123 4567",
+    "+52" + "-".repeat(20) + "6671234567",
+    "667123456",
+    "66712345678",
+    "(667) 123 4567",
+    "667.123.4567",
+    "667\t123\t4567",
+    "６６７１２３４５６７",
+    "667123456a",
+    "-".repeat(23) + "6671234567",
+  ])("refuses the phone %j without echoing it", (typed) => {
+    expect(normalizeMexicanPhone(typed)).toBeNull();
+    const result = buildCreateQuoteBody(draft({ destination: { ...draft().destination, phone: typed } }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toEqual([
+      "El teléfono de destino debe tener 10 dígitos de México; puedes anteponer +52 y separarlos con espacios o guiones.",
+    ]);
+    expect(result.errors.join(" ")).not.toContain(typed);
+  });
+
+  // ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: the prefix alone has no national digits (the message names +52 itself,
+  // so this case is checked apart from the no-echo assertion above).
+  it.each(["+52", "+52 ", " +52"])("refuses the bare prefix %j", (typed) => {
+    expect(normalizeMexicanPhone(typed)).toBeNull();
+    const result = buildCreateQuoteBody(draft({ origin: { ...draft().origin, phone: typed } }));
+    expect(result.ok).toBe(false);
+  });
+
   it.each([["91", "0"], ["0", "-181"], ["1e1", "0"], ["", "0"]])(
     "refuses out-of-range coordinates %s,%s",
     (lat, lng) => {
@@ -61,7 +128,7 @@ describe("createQuote request", () => {
 });
 
 describe("createOrder request", () => {
-  const acceptance = { payerType: "SENDER", accepted: true };
+  const acceptance = { payerType: "SENDER", accepted: true, restrictedGoodsAcknowledged: true };
   const versions = { termsVersion: "terms-2026.09", privacyVersion: "privacy_v3" };
 
   it("builds the AI-05 CreateOrderRequest with the observed acceptance time", () => {
@@ -77,12 +144,22 @@ describe("createOrder request", () => {
           accepted_at: "2026-09-28T17:00:00.000Z",
           acceptance_channel: "ASSISTED",
         },
+        restricted_goods_acknowledged: true,
       },
     });
   });
 
-  it.each([{ payerType: "" }, { accepted: false }])("refuses an incomplete acceptance %o", (change) => {
-    expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, versions, new Date()).ok).toBe(false);
+  it.each([{ payerType: "" }, { accepted: false }, { restrictedGoodsAcknowledged: false }])(
+    "refuses an incomplete acceptance %o",
+    (change) => {
+      expect(buildCreateOrderBody(quoteId, { ...acceptance, ...change }, versions, new Date()).ok).toBe(false);
+    },
+  );
+
+  it("names the missing prohibited-goods confirmation (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)", () => {
+    expect(
+      buildCreateOrderBody(quoteId, { ...acceptance, restrictedGoodsAcknowledged: false }, versions, new Date()),
+    ).toEqual({ ok: false, errors: [restrictedGoodsRequiredMessage] });
   });
 
   it.each([
@@ -90,7 +167,9 @@ describe("createOrder request", () => {
     ["150.5", 15_050],
     ["150", 15_000],
     ["0.01", 1],
-    [" 1234567.89 ", 123_456_789],
+    [" 19999.99 ", 1_999_999],
+    ["20000", 2_000_000],
+    ["20000.00", 2_000_000],
     ["0.1", 10],
     ["0.29", 29],
   ])("sends the typed COD %s as exact integer cents (D6-COD-EXPECTED)", (typed, cents) => {
@@ -98,6 +177,17 @@ describe("createOrder request", () => {
     expect(result.ok && result.body.cod_expected_cents).toBe(cents);
     expect(Number.isSafeInteger(cents)).toBe(true);
   });
+
+  it.each(["20000.01", "20001", "1234567.89", "9999999999999"])(
+    "refuses a COD above the 20,000 MXN cap (COD-CAP-20000-2026-10-02): %s",
+    (typed) => {
+      const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.errors).toContain(codAmountAboveCapMessage);
+      expect(codAmountAboveCapMessage).toBe("El cobro contra entrega no puede superar $20,000.00 MXN por pedido.");
+      expect(maximumCodExpectedCents).toBe(2_000_000);
+    },
+  );
 
   it.each(["", "   ", "0", "0.00", undefined])("sends no COD field for %o", (typed) => {
     const result = buildCreateOrderBody(quoteId, { ...acceptance, codAmount: typed }, versions, new Date());
@@ -211,5 +301,151 @@ describe("quote and order parsers", () => {
     });
     expect(() => parseCreatedOrder(orderResponse({ version: 0 }))).toThrow(CreateOrderContractError);
     expect(() => parseCreatedOrder(orderResponse({ driver_phone: "x" }))).toThrow(CreateOrderContractError);
+  });
+});
+
+describe("service window on createOrder (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)", () => {
+  const acceptance = { payerType: "SENDER", accepted: true, restrictedGoodsAcknowledged: true };
+  const versions = { termsVersion: "terms-2026.09", privacyVersion: "privacy_v3" };
+  const acceptedAt = new Date("2026-10-02T17:00:00Z");
+
+  it("sends the window typed in Mazatlan time as UTC instants", () => {
+    const result = buildCreateOrderBody(
+      quoteId,
+      { ...acceptance, serviceWindowFrom: "2026-10-02T12:00", serviceWindowTo: "2026-10-02T14:00" },
+      versions,
+      acceptedAt,
+    );
+    expect(result.ok && result.body.service_window).toEqual({
+      from: "2026-10-02T19:00:00Z",
+      to: "2026-10-02T21:00:00Z",
+    });
+  });
+
+  it("leaves the field out when no window is typed", () => {
+    const result = buildCreateOrderBody(
+      quoteId,
+      { ...acceptance, serviceWindowFrom: "", serviceWindowTo: "" },
+      versions,
+      acceptedAt,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.ok && "service_window" in result.body).toBe(false);
+  });
+
+  it("refuses half a window", () => {
+    const result = buildCreateOrderBody(
+      quoteId,
+      { ...acceptance, serviceWindowFrom: "2026-10-02T12:00" },
+      versions,
+      acceptedAt,
+    );
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.errors.join(" ")).toContain("ventana de entrega");
+  });
+
+  it("parses the order window and fails closed on a malformed one", () => {
+    const window = { from: "2026-10-02T19:00:00+00:00", to: "2026-10-02T21:00:00+00:00" };
+    expect(parseCreatedOrder(orderResponse({ service_window: window })).service_window).toEqual(window);
+    expect(parseCreatedOrder(orderResponse()).service_window).toBeNull();
+    const withoutWindow = orderResponse();
+    delete withoutWindow.service_window;
+    expect(parseCreatedOrder(withoutWindow).service_window).toBeNull();
+    for (const bad of [
+      { from: window.from },
+      { ...window, extra: "x" },
+      { from: window.to, to: window.from },
+      { from: "2026-10-02T19:00:00", to: window.to },
+      "2026-10-02",
+    ]) {
+      expect(() => parseCreatedOrder(orderResponse({ service_window: bad }))).toThrow(CreateOrderContractError);
+    }
+  });
+});
+
+describe("low price authorization (LOW-PRICE-MANUAL-AUTH-2026-10-02)", () => {
+  const now = new Date("2026-09-28T17:00:00Z");
+  const at52 = quoteResponse({
+    net: { currency: "MXN", amount_cents: 4_483 },
+    tax: { currency: "MXN", amount_cents: 717 },
+    total: { currency: "MXN", amount_cents: 5_200 },
+    pricing_tier: "BUSINESS_200_499",
+  });
+  const actorId = "99999999-9999-4999-8999-999999999999";
+
+  it("sends the trimmed reason only when the option is checked", () => {
+    const authorized = buildCreateQuoteBody(
+      draft({ authorizeLowPrice: true, lowPriceReason: "  Cliente ancla, ruta en consolidación  " }),
+    );
+    expect(authorized.ok).toBe(true);
+    if (!authorized.ok) return;
+    expect(authorized.body.low_price_authorization).toEqual({ reason: "Cliente ancla, ruta en consolidación" });
+
+    const unchecked = buildCreateQuoteBody(draft({ authorizeLowPrice: false, lowPriceReason: "Motivo" }));
+    expect(unchecked.ok).toBe(true);
+    if (!unchecked.ok) return;
+    expect(unchecked.body).not.toHaveProperty("low_price_authorization");
+    const plain = buildCreateQuoteBody(draft());
+    expect(plain.ok && plain.body).not.toHaveProperty("low_price_authorization");
+  });
+
+  it.each([
+    ["an empty reason", "   "],
+    ["a reason above 200 characters", "a".repeat(201)],
+    ["a multi-line reason", "línea uno\nlínea dos"],
+  ])("refuses %s before calling the API", (_label, reason) => {
+    const result = buildCreateQuoteBody(draft({ authorizeLowPrice: true, lowPriceReason: reason }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.join(" ")).toContain("autorización");
+    expect(result.errors.join(" ")).not.toContain(reason.trim() === "" ? "\u0000" : reason);
+  });
+
+  it("accepts exactly 200 characters after trimming", () => {
+    expect(lowPriceAuthorizationReasonMaximum).toBe(200);
+    expect(buildCreateQuoteBody(draft({ authorizeLowPrice: true, lowPriceReason: ` ${"a".repeat(200)} ` })).ok).toBe(true);
+  });
+
+  it("lets an authorized quote of 52 MXN or less pass the guard and keeps blocking one without it", () => {
+    expect(evaluateConfirmation(parseQuote(at52), now)).toEqual(["low_price"]);
+    const authorized = parseQuote({
+      ...at52,
+      low_price_authorization: {
+        valid_until: "2026-09-28T18:00:00+00:00",
+        actor_id: actorId,
+        reason: "Cliente ancla",
+      },
+    });
+    expect(authorized.low_price_authorization).toEqual({
+      valid_until: "2026-09-28T18:00:00+00:00",
+      actor_id: actorId,
+      reason: "Cliente ancla",
+    });
+    expect(evaluateConfirmation(authorized, now)).toEqual([]);
+    // The authorization never outlives the quote: an expired authorized quote is still blocked.
+    expect(evaluateConfirmation(parseQuote({ ...at52, expires_at: "2026-09-28T17:00:00Z", low_price_authorization: { valid_until: "2026-09-28T17:00:00Z" } }), now)).toEqual(["expired"]);
+  });
+
+  it("reads the withheld actor and reason as null and a missing or null field as no authorization", () => {
+    const withheld = parseQuote({ ...at52, low_price_authorization: { valid_until: "2026-09-28T18:00:00Z" } });
+    expect(withheld.low_price_authorization).toEqual({
+      valid_until: "2026-09-28T18:00:00Z",
+      actor_id: null,
+      reason: null,
+    });
+    expect(evaluateConfirmation(withheld, now)).toEqual([]);
+    expect(parseQuote({ ...at52, low_price_authorization: null }).low_price_authorization).toBeNull();
+    expect(parseQuote(quoteResponse()).low_price_authorization).toBeNull();
+  });
+
+  it.each([
+    ["an unknown property", { valid_until: "2026-09-28T18:00:00Z", financial_override: {} }],
+    ["a missing validity", { reason: "Cliente ancla" }],
+    ["a local validity", { valid_until: "2026-09-28T18:00:00" }],
+    ["a malformed actor", { valid_until: "2026-09-28T18:00:00Z", actor_id: "not-a-uuid" }],
+    ["an oversized reason", { valid_until: "2026-09-28T18:00:00Z", reason: "a".repeat(201) }],
+    ["a non-object", "AUTHORIZED"],
+  ])("fails closed on %s", (_label, value) => {
+    expect(() => parseQuote({ ...at52, low_price_authorization: value })).toThrow(CreateOrderContractError);
   });
 });

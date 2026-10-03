@@ -111,7 +111,6 @@ La configuración base es segura y no habilita producto:
     "Provider": "Disabled",
     "CommandTimeoutSeconds": 30,
     "Eligibility": {
-      "PolicyVersion": "synthetic-v1",
       "RequiredDocumentTypesByVehicleType": {},
       "NonExpiringDocumentTypes": [],
       "VehicleCapacity": {}
@@ -126,6 +125,12 @@ La configuración base es segura y no habilita producto:
 políticas incompletas, límites no positivos o un máximo individual superior al
 total. Los valores de pruebas son sintéticos y no constituyen parámetros
 operativos aprobados.
+
+La versión de la política no es configuración (POLICY-VERSIONS-PER-ORG-2026-10-02): es la
+`driver_eligibility_policy_version` de la organización del repartidor, que cada lectura del snapshot trae
+junto al perfil (`organizations.organizations`, empezando en `piloto-2026-10-v1`). `Drivers:Eligibility:PolicyVersion`
+ya no existe y la API no arranca si sigue configurada. Una versión ausente o mal formada falla de forma
+ruidosa y no se asigna nada.
 
 Ejemplo exclusivamente sintético de una entrada:
 

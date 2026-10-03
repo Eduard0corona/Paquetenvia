@@ -102,7 +102,9 @@ public static class CsvOrderImportEndpoints
         }
 
         var upload = await TryReadUploadAsync(httpContext, cancellationToken);
-        if (upload?.ContentDigest is null)
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: without the dispatcher's no-prohibited-goods confirmation the
+        // batch is the uniform conflict, before any reservation or order.
+        if (upload?.ContentDigest is null || !upload.RestrictedGoodsAcknowledged)
         {
             return Conflict();
         }
@@ -129,7 +131,8 @@ public static class CsvOrderImportEndpoints
                     idempotencyKey,
                     prevalidation.ContentDigest,
                     prevalidation.ValidRows,
-                    httpContext.TraceIdentifier),
+                    httpContext.TraceIdentifier,
+                    RestrictedGoodsAcknowledged: true),
                 cancellationToken);
             return Results.Ok(ToCommitResponse(result));
         }
@@ -201,7 +204,20 @@ public static class CsvOrderImportEndpoints
             return null;
         }
 
-        return new CsvUpload(buffer.ToArray(), digests.Count == 1 ? digests[0] : null);
+        var acknowledgements = form[CsvOrderImportContract.FieldRestrictedGoodsAcknowledged];
+        if (acknowledgements.Count > 1)
+        {
+            return null;
+        }
+
+        return new CsvUpload(
+            buffer.ToArray(),
+            digests.Count == 1 ? digests[0] : null,
+            acknowledgements.Count == 1 &&
+            string.Equals(
+                acknowledgements[0],
+                CsvOrderImportContract.RestrictedGoodsAcknowledgedValue,
+                StringComparison.Ordinal));
     }
 
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
@@ -267,7 +283,7 @@ public static class CsvOrderImportEndpoints
     private static IResult Unavailable() =>
         Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
 
-    private sealed record CsvUpload(byte[] Content, string? ContentDigest);
+    private sealed record CsvUpload(byte[] Content, string? ContentDigest, bool RestrictedGoodsAcknowledged);
 }
 
 public sealed record CsvImportRowErrorResponse(

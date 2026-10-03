@@ -131,6 +131,156 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
         await AssertDispatchLaneAsync(connection, installed: true);
     }
 
+    [PostgreSqlContractFact]
+    public async Task Ambiguous_whatsapp_settle_migration_replaces_only_the_outcome_body_across_up_down_up()
+    {
+        // NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02: 20261002000100_FailAmbiguousWhatsAppNotifications swaps the
+        // apply_notification_outcome body and nothing else; Down restores the NTF-001 body.
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        await using var container = new PostgreSqlBuilder(Image)
+            .WithDatabase("paqueteria_ntf_whatsapp_ambiguous")
+            .WithUsername("postgres")
+            .WithPassword(password)
+            .WithCleanUp(true)
+            .Build();
+        await container.StartAsync();
+        var connectionString = container.GetConnectionString();
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await using var context = CreateNotificationsContext(connection);
+        var migrator = context.GetService<IMigrator>();
+
+        await migrator.MigrateAsync();
+        await AssertAmbiguousWhatsAppSettleAsync(connection, installed: true);
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync(AddDispatchOutboxLane.MigrationId);
+        await AssertAmbiguousWhatsAppSettleAsync(connection, installed: false);
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync();
+        await AssertAmbiguousWhatsAppSettleAsync(connection, installed: true);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Stale_whatsapp_lease_migration_replaces_only_the_recovery_body_across_up_down_up()
+    {
+        // NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03: 20261003000100_FailStaleWhatsAppNotificationLeases swaps the
+        // recover_stale_notifications_outbox body and nothing else; Down restores the previous body byte for byte.
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        await using var container = new PostgreSqlBuilder(Image)
+            .WithDatabase("paqueteria_ntf_whatsapp_stale_lease")
+            .WithUsername("postgres")
+            .WithPassword(password)
+            .WithCleanUp(true)
+            .Build();
+        await container.StartAsync();
+        var connectionString = container.GetConnectionString();
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await using var context = CreateNotificationsContext(connection);
+        var migrator = context.GetService<IMigrator>();
+
+        await migrator.MigrateAsync(FailAmbiguousWhatsAppNotifications.MigrationId);
+        var previous = await AssertStaleWhatsAppRecoveryAsync(connection, installed: false);
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync();
+        var installedBody = await AssertStaleWhatsAppRecoveryAsync(connection, installed: true);
+        Assert.NotEqual(previous, installedBody);
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync(FailAmbiguousWhatsAppNotifications.MigrationId);
+        Assert.Equal(previous, await AssertStaleWhatsAppRecoveryAsync(connection, installed: false));
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync();
+        Assert.Equal(installedBody, await AssertStaleWhatsAppRecoveryAsync(connection, installed: true));
+    }
+
+    private static async Task<string> AssertStaleWhatsAppRecoveryAsync(NpgsqlConnection connection, bool installed)
+    {
+        await ExecuteAsync(connection, "RESET ROLE");
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT pg_get_userbyid(p.proowner),
+                   p.prosecdef,
+                   position('AMBIGUOUS_TIMEOUT' IN p.prosrc) > 0,
+                   position('lease_token=v_request.lease_token' IN p.prosrc) > 0,
+                   has_function_privilege('paqueteria_worker',p.oid,'EXECUTE'),
+                   has_function_privilege('paqueteria_app',p.oid,'EXECUTE'),
+                   has_function_privilege('public',p.oid,'EXECUTE'),
+                   has_schema_privilege('paqueteria_outbox_executor','security','CREATE'),
+                   EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications
+                           WHERE "MigrationId"=@migration_id),
+                   p.proconfig::text,
+                   pg_get_function_result(p.oid),
+                   p.prosrc
+            FROM pg_catalog.pg_proc p
+            WHERE p.oid='security.recover_stale_notifications_outbox(text,integer,integer,interval)'::regprocedure
+            """,
+            connection);
+        command.Parameters.AddWithValue("migration_id", FailStaleWhatsAppNotificationLeases.MigrationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("paqueteria_outbox_executor", reader.GetString(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(installed, reader.GetBoolean(2));
+        Assert.Equal(installed, reader.GetBoolean(3));
+        Assert.True(reader.GetBoolean(4));
+        Assert.False(reader.GetBoolean(5));
+        Assert.False(reader.GetBoolean(6));
+        Assert.False(reader.GetBoolean(7));
+        Assert.Equal(installed, reader.GetBoolean(8));
+        Assert.Equal("{\"search_path=pg_catalog, platform, security, pg_temp\"}", reader.GetString(9));
+        Assert.Equal("SETOF platform.outbox_events", reader.GetString(10));
+        var body = reader.GetString(11);
+        Assert.False(await reader.ReadAsync());
+        return body;
+    }
+
+    private static async Task AssertAmbiguousWhatsAppSettleAsync(NpgsqlConnection connection, bool installed)
+    {
+        await ExecuteAsync(connection, "RESET ROLE");
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT pg_get_userbyid(p.proowner),
+                   p.prosecdef,
+                   position('AMBIGUOUS_FAILED' IN p.prosrc) > 0,
+                   position('lease_token=p_lease_token' IN p.prosrc) > 0,
+                   has_function_privilege('paqueteria_worker',p.oid,'EXECUTE'),
+                   has_function_privilege('paqueteria_app',p.oid,'EXECUTE'),
+                   has_schema_privilege('paqueteria_outbox_executor','security','CREATE'),
+                   EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications
+                           WHERE "MigrationId"=@migration_id),
+                   p.proconfig::text
+            FROM pg_catalog.pg_proc p
+            WHERE p.oid='security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamptz,timestamptz)'::regprocedure
+            """,
+            connection);
+        command.Parameters.AddWithValue("migration_id", FailAmbiguousWhatsAppNotifications.MigrationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("paqueteria_outbox_executor", reader.GetString(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(installed, reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
+        Assert.True(reader.GetBoolean(4));
+        Assert.False(reader.GetBoolean(5));
+        Assert.False(reader.GetBoolean(6));
+        Assert.Equal(installed, reader.GetBoolean(7));
+        Assert.Equal("{\"search_path=pg_catalog, platform, notifications, security, pg_temp\"}", reader.GetString(8));
+        Assert.False(await reader.ReadAsync());
+    }
+
     private static async Task AssertDispatchLaneAsync(NpgsqlConnection connection, bool installed)
     {
         // Inspected by the deployment principal: the migrator holds no EXECUTE on the resolver.

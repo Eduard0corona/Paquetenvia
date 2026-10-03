@@ -184,6 +184,7 @@ export function pendingOrderResponse(id: string, publicId: string): Record<strin
     total: { currency: "MXN", amount_cents: 10_000 },
     claim_window_ends_at: null,
     finalized_at: null,
+    service_window: null,
   };
 }
 

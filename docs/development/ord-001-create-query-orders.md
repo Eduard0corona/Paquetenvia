@@ -28,7 +28,7 @@ Cualquier excepción revierte todo: quote `ACTIVE`, `consumed_at` nulo y cero or
 
 ## Idempotencia y single-use
 
-El scope es `ORD-001:CREATE_ORDER`; la key usa la política compartida de 16 a 128 caracteres. El SHA-256 canónico contiene tenant, quote ID, payer type, versiones sintéticas, `accepted_at` normalizado, canal y, solo cuando no es 0, `cod_expected_cents` (D6-COD-EXPECTED; omitir el 0 deja idénticos los hashes previos al COD y hace equivalentes el campo ausente y el 0 explícito). Excluye actor derivado, request ID, headers, PII y tiempos de servidor.
+El scope es `ORD-001:CREATE_ORDER`; la key usa la política compartida de 16 a 128 caracteres. El SHA-256 canónico contiene tenant, quote ID, payer type, versiones sintéticas, `accepted_at` normalizado, canal, `restricted_goods_acknowledged` (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) y, solo cuando no es 0, `cod_expected_cents` (D6-COD-EXPECTED; omitir el 0 deja idénticos los hashes previos al COD y hace equivalentes el campo ausente y el 0 explícito). Excluye actor derivado, request ID, headers, PII y tiempos de servidor.
 
 Misma organización, key y hash reproduce la respuesta 201 sin insertar ni consumir otra vez. Hash diferente devuelve 409. Dos keys para una quote compiten bajo `FOR UPDATE`; una sola crea y `orders.quote_id` unique es el backstop. Quote no disponible, expirada, usada, revocada, cross-tenant o inexistente devuelve el mismo 409.
 
@@ -36,7 +36,7 @@ Misma organización, key y hash reproduce la respuesta 201 sin insertar ni consu
 
 Se copian sin recalcular ni inferir desde `breakdown`: quote ID, owner, client account, city, service area, origin, destination, service type, pricing tier, consolidated route, subtotal, discount, tax, total, minimum snapshot, currency, policy version, package snapshot y financial override.
 
-`cod_expected_cents` no viene de la quote (QUOTE-NO-COD): lo declara el despachador en `CreateOrderRequest` o en la columna opcional del CSV-001 (D6-COD-EXPECTED) y se escribe en `orders.cod_expected_cents`. El literal JSON debe ser un entero simple no negativo que quepa en int64 (`1.5`, `1e3`, `150.0`, `-1` o `"150"` son 409 uniforme). `Order` no lo devuelve porque VIEWER lee órdenes; se consulta en `getOrderFinancials`/`getRouteFinancials` y en liquidaciones.
+`cod_expected_cents` no viene de la quote (QUOTE-NO-COD): lo declara el despachador en `CreateOrderRequest` o en la columna opcional del CSV-001 (D6-COD-EXPECTED) y se escribe en `orders.cod_expected_cents`. El literal JSON debe ser un entero simple no negativo de como máximo `2000000` centavos (20,000.00 MXN por orden, inclusivo; COD-CAP-20000-2026-10-02): `1.5`, `1e3`, `150.0`, `-1`, `2000001` o `"150"` son 409 uniforme antes de cualquier trabajo. `OrderInputPolicy` aplica el tope en API, CSV y validación del create, y `Order.Create` lo repite como guard de dominio (`OrderCodExpectationPolicy.MaximumCents`). No hay CHECK en AI-06 para el tope: AI-06 mantiene `CHECK >= 0` y las órdenes previas por encima del tope siguen legibles. `Order` no lo devuelve porque VIEWER lee órdenes; se consulta en `getOrderFinancials`/`getRouteFinancials` y en liquidaciones.
 
 `orders.package_items` se deriva solo de `quote.package_snapshot`. Cada item recibe UUID de aplicación, owner de order y operator nulo; copia descripción redactada, gramos, valor `bigint` y dimensiones JSONB, incluidas nulas. Un snapshot inválido falla cerrado y no consume la quote.
 
@@ -63,7 +63,11 @@ Base64:  KgkXbicN3MUuD+4Vfz1b2GnzYEf3+Ubap8rtSBauCzc=
 
 Se inserta solo `ORDER_CREATED`, versión 1, con payload mínimo. El outbox usa topic `orders.created`, aggregate `Order`, status `PENDING`, attempts 0 y valores explícitos. No se implementa claim, dispatch, settle ni Worker PostgreSQL.
 
-AUD-001 registra `ORDER_CREATED` con actor, organización, order/quote IDs, payer type, pricing tier, total, `cod_expected_cents` y request ID. El COD no viaja en el evento ni en el outbox. Evento, outbox, auditoría y replay excluyen acceptance completa, packages, direcciones, contactos, teléfonos, ciphertext y PII.
+AUD-001 registra `ORDER_CREATED` con actor, organización, order/quote IDs, payer type, pricing tier, total, `cod_expected_cents`, `restricted_goods_acknowledged` y request ID. El COD no viaja en el evento ni en el outbox. Evento, outbox, auditoría y replay excluyen acceptance completa, packages, direcciones, contactos, teléfonos, ciphertext y PII.
+
+## Confirmación de artículos prohibidos (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02)
+
+`CreateOrderRequest.restricted_goods_acknowledged` es obligatorio y solo acepta el literal JSON `true`; ausente, `null`, `false`, `"true"` o cualquier otro valor es el `409` uniforme antes de invocar el servicio, y el coordinador vuelve a rechazar `false` antes de generar el public ID o abrir la transacción. El CSV la recibe como campo del commit (ver CSV-001). Es la atestación del despachador sobre el contenido del envío, no la aceptación del cliente: `orders.order_acceptances`, `OrderAcceptanceCanonicalForm v1` y su vector no cambian. Se registra en el evento append-only `ORDER_CREATED` (`payload.restricted_goods_acknowledged`, con `actor_id` y `occurred_at` como quién y cuándo) y en la auditoría `ORDER_CREATED`; no viaja en el outbox. Forma parte del hash idempotente (`"restricted_goods_acknowledged":true` después de `acceptance_channel`), así que una key reservada antes de esta decisión corresponde a una solicitud que ahora se rechaza. El guard `restricted_goods_check` de DRAFT → CONFIRMED y su metadata no cambian. No hay migración: no se agrega columna a `orders.orders`.
 
 ## Endpoints y paginación
 
@@ -125,3 +129,17 @@ Rollback:
 4. conservar órdenes, quotes usadas, evidencia, eventos, outbox, auditoría e idempotencia según retención.
 
 No se debe editar AI-06/AI-18 ni convertir rollback en eliminación de datos.
+
+## Ventana de servicio opcional (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)
+
+`CreateOrderRequest.service_window` (`{from, to}`) es opcional; ausente o `null` significa que aplica el horario de
+la zona. Cada límite es RFC 3339 con zona explícita (`Z` o `±hh:mm`; una hora local sin zona es 409) y segundos
+enteros, y se normaliza a UTC. Reglas: `from < to`, `to - from <= 12 h`, `from >= ahora - 5 min` (tolerancia de
+reloj del repositorio), `to > ahora`, `from <= ahora + 30 días`; cualquier otro miembro es 409. AI-04 no define una
+regla de mismo día calendario, por lo que no se aplica; el owner confirmó el tope de 12 h y el horizonte de 30 días
+y que en el piloto la ventana no se valida contra un horario de zona (ORD-SERVICE-WINDOW-LIMITS-CONFIRMED-2026-10-03). La ventana se guarda en `orders.service_window_from/to`, se devuelve como
+`Order.service_window` en createOrder, listOrders, getOrder y transitionOrder, entra en la auditoría
+`ORDER_CREATED` y en el hash de idempotencia solo cuando existe (hashes previos intactos; otra ventana con la misma
+key es `IDEMPOTENCY_CONFLICT`). No viaja en el evento, el outbox ni el tracking público. El tablero de despacho
+la muestra como `delivery_window`. La pantalla `/ops/orders/new` la captura como hora de Mazatlán y la convierte
+con `America/Mazatlan`, no con la zona del navegador. El CSV-001 no tiene columna de ventana ("No por ahora", 2026-10-03).

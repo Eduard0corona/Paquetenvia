@@ -64,7 +64,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.True(Orders.Domain.OrderPublicIdPolicy.IsValid(created.PublicId));
 
         var page = await scope.Service.ListAsync(
-            scenario.UserId, scenario.OrganizationId, "DRAFT", scenario.OrganizationId, null, false, CancellationToken.None);
+            scenario.UserId, scenario.OrganizationId, "DRAFT", scenario.OrganizationId, null, false, false, CancellationToken.None);
         Assert.Single(page.Items);
         var detail = await scope.Service.GetAsync(
             scenario.UserId, scenario.OrganizationId, created.Id, CancellationToken.None);
@@ -145,6 +145,19 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             Assert.DoesNotContain("phone", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("package", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("cipher", json, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the append-only ORDER_CREATED event and its audit entry record the
+        // dispatcher's confirmation; the outbox payload does not carry it.
+        using (var orderEvent = System.Text.Json.JsonDocument.Parse(reader.GetString(33)))
+        {
+            Assert.True(orderEvent.RootElement.GetProperty("restricted_goods_acknowledged").GetBoolean());
+        }
+
+        Assert.DoesNotContain("restricted_goods", reader.GetString(34), StringComparison.Ordinal);
+        using (var audit = System.Text.Json.JsonDocument.Parse(reader.GetString(35)))
+        {
+            Assert.True(audit.RootElement.GetProperty("restricted_goods_acknowledged").GetBoolean());
         }
     }
 
@@ -238,10 +251,62 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
     }
 
     /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 on real PostgreSQL: without the dispatcher's confirmation the create
+    /// is the uniform conflict before any row, idempotency key or quote consumption; with it the same quote then
+    /// creates normally.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Unconfirmed_restricted_goods_are_rejected_before_any_PostgreSQL_side_effect()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(createOrder: false);
+        var generator = new SequencePublicIdGenerator("ORD_YYYYYYYYYYYYYYYYYYYYYY");
+        await using var scope = CreateScope(generator);
+        var command = CreateCommand(scenario, "orders-pg-restricted-goods") with { RestrictedGoodsAcknowledged = false };
+
+        var exception = await Assert.ThrowsAsync<OrderConflictException>(() =>
+            scope.Service.CreateAsync(command, CancellationToken.None));
+
+        Assert.Equal(OrderConflictCode.InvalidRequest, exception.Code);
+        Assert.Equal(0, generator.CallCount);
+        await using (var verify = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT q.status,q.consumed_at IS NULL,
+              (SELECT count(*) FROM platform.idempotency_keys WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.orders WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.order_acceptances WHERE owner_org_id=@org),
+              (SELECT count(*) FROM orders.order_events WHERE owner_org_id=@org),
+              (SELECT count(*) FROM platform.outbox_events WHERE owner_org_id=@org),
+              (SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='ORDER_CREATED')
+            FROM pricing.quotes q
+            WHERE q.id=@quote;
+            """))
+        {
+            verify.Parameters.AddWithValue("org", scenario.OrganizationId);
+            verify.Parameters.AddWithValue("quote", scenario.QuoteId);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("ACTIVE", reader.GetString(0));
+            Assert.True(reader.GetBoolean(1));
+            for (var ordinal = 2; ordinal <= 7; ordinal++)
+            {
+                Assert.Equal(0L, reader.GetInt64(ordinal));
+            }
+        }
+
+        var created = await scope.Service.CreateAsync(
+            command with { RestrictedGoodsAcknowledged = true },
+            CancellationToken.None);
+        Assert.Equal("DRAFT", created.Status);
+    }
+
+    /// <summary>
     /// D6-COD-EXPECTED on real PostgreSQL through the runtime role and RLS: the dispatcher-declared amount lands in
     /// orders.cod_expected_cents and the ORDER_CREATED audit, never in the order event or the outbox payload; the
     /// same key and amount replays, another amount under that key is IDEMPOTENCY_CONFLICT without side effects, and
-    /// a negative amount is refused before any row is written.
+    /// a negative amount or one above the 2,000,000-cent cap (COD-CAP-20000-2026-10-02) is refused before any row
+    /// is written.
     /// </summary>
     [PostgreSqlContractFact]
     [Trait("Category", "PostgreSqlContract")]
@@ -258,14 +323,22 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.Equal(OrderConflictCode.InvalidRequest, negative.Code);
         Assert.Equal(0, generator.CallCount);
 
-        const long declared = 9_000_000_000_050L;
+        // COD-CAP-20000-2026-10-02: one cent above 20,000.00 MXN is refused before any row is written.
+        var overCap = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            CreateCommand(scenario, "orders-pg-cod-over-cap") with { CodExpectedCents = 2_000_001 },
+            CancellationToken.None));
+        Assert.Equal(OrderConflictCode.InvalidRequest, overCap.Code);
+        Assert.Equal(0, generator.CallCount);
+
+        // The cap itself is inclusive.
+        const long declared = 2_000_000L;
         var command = CreateCommand(scenario, "orders-pg-cod-0001") with { CodExpectedCents = declared };
         var created = await scope.Service.CreateAsync(command, CancellationToken.None);
         var replay = await scope.Service.CreateAsync(command, CancellationToken.None);
         Assert.Equal(created, replay);
 
         var otherAmount = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
-            command with { CodExpectedCents = declared + 1 }, CancellationToken.None));
+            command with { CodExpectedCents = declared - 1 }, CancellationToken.None));
         Assert.Equal(OrderConflictCode.IdempotencyConflict, otherAmount.Code);
         var noAmount = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
             command with { CodExpectedCents = 0 }, CancellationToken.None));
@@ -293,6 +366,108 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.Equal(1L, reader.GetInt64(3));
         Assert.DoesNotContain("cod", reader.GetString(4), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("cod", reader.GetString(5), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 on real PostgreSQL through the runtime role and RLS: the window lands
+    /// in orders.service_window_from/to and the ORDER_CREATED audit, never in the order event or the outbox payload;
+    /// create, replay, get and list return it; another window under the same key is IDEMPOTENCY_CONFLICT; a window
+    /// already over or malformed is refused before any row is written; and the table check refuses half a window
+    /// or from not before to whatever writes it.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Service_window_is_persisted_audited_returned_and_bound_to_the_key()
+    {
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync(createOrder: false);
+        var generator = new SequencePublicIdGenerator("ORD_WWWWWWWWWWWWWWWWWWWWWA", "ORD_WWWWWWWWWWWWWWWWWWWWWB");
+        await using var scope = CreateScope(generator);
+        var from = new DateTimeOffset(
+            DateTimeOffset.UtcNow.AddHours(2).UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond,
+            TimeSpan.Zero);
+        var window = new OrderServiceWindow(from, from.AddHours(3));
+
+        foreach (var refused in new[]
+                 {
+                     new OrderServiceWindow(from.AddHours(-5), from.AddHours(-3)),
+                     new OrderServiceWindow(from, from),
+                     new OrderServiceWindow(from, from.AddHours(13)),
+                     new OrderServiceWindow(from.AddTicks(10), from.AddHours(1)),
+                 })
+        {
+            var invalid = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+                CreateCommand(scenario, "orders-pg-window-invalid") with { ServiceWindow = refused },
+                CancellationToken.None));
+            Assert.Equal(OrderConflictCode.InvalidRequest, invalid.Code);
+        }
+
+        Assert.Equal(0, generator.CallCount);
+
+        var command = CreateCommand(scenario, "orders-pg-window-0001") with { ServiceWindow = window };
+        var created = await scope.Service.CreateAsync(command, CancellationToken.None);
+        var replay = await scope.Service.CreateAsync(command, CancellationToken.None);
+        Assert.Equal(window, created.ServiceWindow);
+        Assert.Equal(created, replay);
+
+        var otherWindow = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            command with { ServiceWindow = window with { To = from.AddHours(4) } }, CancellationToken.None));
+        Assert.Equal(OrderConflictCode.IdempotencyConflict, otherWindow.Code);
+        var noWindow = await Assert.ThrowsAsync<OrderConflictException>(() => scope.Service.CreateAsync(
+            command with { ServiceWindow = null }, CancellationToken.None));
+        Assert.Equal(OrderConflictCode.IdempotencyConflict, noWindow.Code);
+
+        var detail = await scope.Service.GetAsync(scenario.UserId, scenario.OrganizationId, created.Id, CancellationToken.None);
+        Assert.Equal(window, detail.Order.ServiceWindow);
+        var page = await scope.Service.ListAsync(
+            scenario.UserId, scenario.OrganizationId, null, null, null, false, false, CancellationToken.None);
+        Assert.Equal(window, Assert.Single(page.Items, item => item.Id == created.Id).ServiceWindow);
+
+        await using (var verify = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT o.service_window_from, o.service_window_to,
+              (SELECT (payload_redacted->>'service_window_from')::timestamptz FROM platform.audit_logs a
+                WHERE a.entity_id=o.id AND a.action='ORDER_CREATED'),
+              (SELECT (payload_redacted->>'service_window_to')::timestamptz FROM platform.audit_logs a
+                WHERE a.entity_id=o.id AND a.action='ORDER_CREATED'),
+              (SELECT payload::text FROM orders.order_events e WHERE e.order_id=o.id),
+              (SELECT payload::text FROM platform.outbox_events x WHERE x.aggregate_id=o.id),
+              (SELECT count(*) FROM orders.orders WHERE owner_org_id=@org)
+            FROM orders.orders o
+            WHERE o.id=@order;
+            """))
+        {
+            verify.Parameters.AddWithValue("org", scenario.OrganizationId);
+            verify.Parameters.AddWithValue("order", created.Id);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(window.From, reader.GetFieldValue<DateTimeOffset>(0));
+            Assert.Equal(window.To, reader.GetFieldValue<DateTimeOffset>(1));
+            Assert.Equal(window.From, reader.GetFieldValue<DateTimeOffset>(2));
+            Assert.Equal(window.To, reader.GetFieldValue<DateTimeOffset>(3));
+            Assert.DoesNotContain("window", reader.GetString(4), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("window", reader.GetString(5), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(1L, reader.GetInt64(6));
+        }
+
+        foreach (var assignment in new[]
+                 {
+                     "service_window_to=NULL",
+                     "service_window_from=NULL",
+                     "service_window_to=service_window_from",
+                     "service_window_to=service_window_from - interval '1 second'",
+                 })
+        {
+            await using var connection = await fixture.AdminDataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await using var update = new NpgsqlCommand(
+                $"UPDATE orders.orders SET {assignment} WHERE id=@order;", connection, transaction);
+            update.Parameters.AddWithValue("order", created.Id);
+            var violation = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.CheckViolation, violation.SqlState);
+            Assert.Equal("orders_service_window_check", violation.ConstraintName);
+            await transaction.RollbackAsync();
+        }
     }
 
     [PostgreSqlContractFact]
@@ -383,6 +558,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
                 Orders.Infrastructure.Persistence.Migrations.AddRealtimeResynchronizationCursor.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddOrderLifecycleFinalizationExecutor.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId,
+                Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId,
             ],
             await context.Database.GetAppliedMigrationsAsync());
 
@@ -452,7 +628,8 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             "privacy-synthetic-v1",
             AcceptedAtClient,
             "WEB"),
-        "synthetic-request-id");
+        "synthetic-request-id",
+        RestrictedGoodsAcknowledged: true);
 
     private static async Task<bool> TryCreateAsync(IOrderService service, CreateOrderCommand command)
     {

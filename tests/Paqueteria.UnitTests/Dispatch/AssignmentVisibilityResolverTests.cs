@@ -106,7 +106,8 @@ public sealed class AssignmentVisibilityResolverTests
                     "ACTIVE",
                     true,
                     null,
-                    new Dictionary<string, DriverDocumentSnapshot>())
+                    new Dictionary<string, DriverDocumentSnapshot>(),
+                    "piloto-2026-10-v1")
                 : null;
             return Task.FromResult(driver);
         }

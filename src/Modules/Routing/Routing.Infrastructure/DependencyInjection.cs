@@ -83,8 +83,7 @@ public static class DependencyInjection
 
     private static bool IsComplete(RoutingDriverEligibilityOptions options)
     {
-        if (string.IsNullOrWhiteSpace(options.PolicyVersion) ||
-            options.NonExpiringDocumentTypes.Any(type => !DocumentTypes.Contains(type))) return false;
+        if (options.NonExpiringDocumentTypes.Any(type => !DocumentTypes.Contains(type))) return false;
         foreach (var vehicleType in VehicleTypes)
         {
             if (!options.RequiredDocumentTypesByVehicleType.TryGetValue(vehicleType, out var documents) ||

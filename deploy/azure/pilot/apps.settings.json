@@ -1,13 +1,5 @@
 [
   {
-    "name": "Dispatch__AssignmentPolicyVersion",
-    "value": "OWNER_DECISION_REQUIRED"
-  },
-  {
-    "name": "Drivers__Eligibility__PolicyVersion",
-    "value": "OWNER_DECISION_REQUIRED"
-  },
-  {
     "name": "Finance__OperationalTimeZone",
     "value": "America/Mazatlan"
   }

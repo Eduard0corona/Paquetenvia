@@ -27,7 +27,10 @@ export interface CodState {
   readonly role: string | null;
   readonly canRecord: boolean;
   readonly canReconcile: boolean;
-  /** listOrders with cod_pending_reconciliation (DISPATCHER, PLATFORM_ADMIN with MFA). */
+  /**
+   * listOrders with cod_pending_reconciliation (DISPATCHER; PLATFORM_ADMIN and FINANCE
+   * with MFA, FIN-PENDING-COD-LIST-FINANCE-2026-10-02).
+   */
   readonly canListPending: boolean;
   /** Orders whose collection is RECORDED and not RECONCILED; null until the API answered. */
   readonly pending: readonly PendingCodOrder[] | null;

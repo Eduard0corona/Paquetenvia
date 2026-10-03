@@ -261,7 +261,9 @@ public static class OperationsDashboardEndpoints
         item.UpdatedAt,
         item.ServiceType,
         null,
-        null,
+        item.DeliveryWindow is null
+            ? null
+            : new OperationsTimeWindowResponse(item.DeliveryWindow.From, item.DeliveryWindow.To),
         item.DeliveryZone is null
             ? null
             : new OperationsZoneResponse(

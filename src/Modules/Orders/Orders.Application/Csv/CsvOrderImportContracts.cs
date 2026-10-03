@@ -23,6 +23,15 @@ public static class CsvOrderImportContract
     public const string ColumnCodExpectedCents = "cod_expected_cents";
     public const string ColumnFile = "file";
 
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the commit form field carrying the dispatcher's confirmation that no
+    /// shipment in the file contains prohibited goods. It is not a CSV column; its only accepted value is
+    /// <see cref="RestrictedGoodsAcknowledgedValue"/>.
+    /// </summary>
+    public const string FieldRestrictedGoodsAcknowledged = "restricted_goods_acknowledged";
+
+    public const string RestrictedGoodsAcknowledgedValue = "true";
+
     public const int MaximumFileBytes = 1_048_576;
     public const int MaximumDataRows = 500;
     public const int MaximumVersionLength = Orders.OrderAcceptanceInputPolicy.MaximumVersionLength;
@@ -136,13 +145,18 @@ public sealed record CsvOrderImportPrevalidation(
         FileErrors.Count == 0 && Rows.Count > 0 && ValidRows.Count == Rows.Count;
 }
 
+/// <param name="RestrictedGoodsAcknowledged">
+/// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher's confirmation, given once on commit for every shipment
+/// in the file, that none contains prohibited goods. Each row hands it to ORD-001, which rejects a row without it.
+/// </param>
 public sealed record CsvOrderImportCommitCommand(
     Guid ActorId,
     Guid OrganizationId,
     string IdempotencyKey,
     string ContentDigest,
     IReadOnlyList<CsvOrderImportOrderRow> Rows,
-    string? RequestId)
+    string? RequestId,
+    bool RestrictedGoodsAcknowledged = false)
 {
     public IReadOnlyList<CsvOrderImportOrderRow> Rows { get; } = Rows.ToImmutableArray();
 }

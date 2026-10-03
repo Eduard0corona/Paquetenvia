@@ -170,7 +170,7 @@ public sealed class QuoteCapabilityMatrixHttpTests(QuoteHttpWebApplicationFactor
             {
                 address_text = "Synthetic origin 100",
                 contact_name = "Synthetic Sender",
-                phone = "+526671111111",
+                phone = "6671111111",
                 lat = 24.8,
                 lng = -107.4,
             },
@@ -178,7 +178,7 @@ public sealed class QuoteCapabilityMatrixHttpTests(QuoteHttpWebApplicationFactor
             {
                 address_text = "Synthetic destination 200",
                 contact_name = "Synthetic Receiver",
-                phone = "+526672222222",
+                phone = "667 222 2222",
                 lat = 24.81,
                 lng = -107.41,
             },
@@ -277,14 +277,12 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
 
     /// <summary>
     /// Any presence of the parameter, whatever its value, is refused before any order is read for a role outside
-    /// getOrderFinancials; a PLATFORM_ADMIN whose only missing requirement is MFA is told so. FINANCE never gains
-    /// listOrders through the filter, with or without MFA.
+    /// getOrderFinancials; a PLATFORM_ADMIN whose only missing requirement is MFA is told so. FINANCE is covered by
+    /// the FIN-PENDING-COD-LIST-FINANCE-2026-10-02 tests below: it reaches only the exact pending list, with MFA.
     /// </summary>
     [Theory]
     [InlineData(MockIdentityProfiles.ActiveViewer, false)]
     [InlineData(MockIdentityProfiles.ActivePlatformAdminNoMfa, true)]
-    [InlineData(MockIdentityProfiles.ActiveFinance, false)]
-    [InlineData(MockIdentityProfiles.ActiveFinanceMfa, false)]
     [InlineData(MockIdentityProfiles.ActiveDriver, false)]
     public async Task ListOrders_cod_pending_filter_is_403_before_any_order_is_read_for(string profile, bool mfaRequired)
     {
@@ -310,6 +308,163 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
         Assert.Equal(0, body.RootElement.GetProperty("items").GetArrayLength());
         Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("next_cursor").ValueKind);
         Assert.Equal(before, factory.ListCallCount);
+    }
+
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02 ("finanzas sí ve la lista"): a FINANCE member with a satisfied MFA
+    /// challenge reaches listOrders with exactly cod_pending_reconciliation=true, receives only the pending orders in
+    /// the existing AI-05 Order shape, and may narrow it further by status, owner or cursor.
+    /// </summary>
+    [Fact]
+    public async Task ListOrders_cod_pending_list_is_open_to_FINANCE_with_MFA_in_the_Order_shape()
+    {
+        var pendingId = await CreateOrderIdAsync();
+        var otherId = await CreateOrderIdAsync();
+        factory.MarkCodPending(pendingId);
+
+        var before = factory.ListCallCount;
+        using var response = await client.SendAsync(CapabilityMatrix.Request(
+            HttpMethod.Get, "/api/v1/orders?cod_pending_reconciliation=true", MockIdentityProfiles.ActiveFinanceMfa));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(before + 1, factory.ListCallCount);
+        Assert.True(factory.LastListCodPendingReconciliation);
+        Assert.True(factory.LastListMfaSatisfied);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var items = document.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        var item = Assert.Single(items);
+        Assert.Equal(pendingId, item.GetProperty("id").GetGuid());
+        Assert.NotEqual(otherId, item.GetProperty("id").GetGuid());
+        // Exactly the AI-05 Order that every other listOrders reader receives: no COD amount, no address,
+        // coordinates, contact or other personal data.
+        Assert.Equal(
+            [
+                "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id", "operator_org_id",
+                "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id", "quote_id",
+                "service_area_id", "service_type", "service_window", "status", "total", "version",
+            ],
+            item.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain("cod_expected", body, StringComparison.OrdinalIgnoreCase);
+
+        foreach (var narrowing in new[]
+                 {
+                     "&status=DRAFT",
+                     $"&owner_org_id={MockIdentityProfiles.ViewerOrganizationId:D}",
+                 })
+        {
+            using var narrowed = await client.SendAsync(CapabilityMatrix.Request(
+                HttpMethod.Get,
+                $"/api/v1/orders?cod_pending_reconciliation=true{narrowing}",
+                MockIdentityProfiles.ActiveFinanceMfa));
+            Assert.Equal(HttpStatusCode.OK, narrowed.StatusCode);
+            Assert.True(factory.LastListCodPendingReconciliation);
+        }
+    }
+
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: FINANCE keeps no other listOrders access. Without the parameter, with
+    /// false or with any value other than exactly true it is the uniform 403, with or without MFA; with exactly true
+    /// and no MFA it is 403 MFA_REQUIRED, as on the other finance reads. Every refusal comes before any order is read.
+    /// </summary>
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveFinanceMfa)]
+    [InlineData(MockIdentityProfiles.ActiveFinance)]
+    public async Task ListOrders_other_than_the_cod_pending_list_stays_403_for_FINANCE(string profile)
+    {
+        foreach (var query in new[]
+                 {
+                     string.Empty, "?cod_pending_reconciliation=false", "?cod_pending_reconciliation=",
+                     "?cod_pending_reconciliation=TRUE", "?cod_pending_reconciliation=1",
+                     "?cod_pending_reconciliation=not-a-boolean", "?status=DELIVERED",
+                     "?cod_pending_reconciliation=true&cod_pending_reconciliation=false",
+                 })
+        {
+            var before = factory.ListCallCount;
+            using var response = await client.SendAsync(
+                CapabilityMatrix.Request(HttpMethod.Get, $"/api/v1/orders{query}", profile));
+            await CapabilityMatrix.AssertForbiddenAsync(response);
+            Assert.Equal(before, factory.ListCallCount);
+        }
+    }
+
+    [Fact]
+    public async Task ListOrders_cod_pending_list_without_MFA_is_403_MFA_REQUIRED_for_FINANCE()
+    {
+        var before = factory.ListCallCount;
+        using var response = await client.SendAsync(CapabilityMatrix.Request(
+            HttpMethod.Get, "/api/v1/orders?cod_pending_reconciliation=true", MockIdentityProfiles.ActiveFinance));
+        await CapabilityMatrix.AssertForbiddenAsync(response, mfaRequired: true);
+        Assert.Equal(before, factory.ListCallCount);
+    }
+
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02 and FINANCE-COD-RECONCILIATION: seeing the pending list never lets
+    /// FINANCE create, import, transition or open an order, even with MFA.
+    /// </summary>
+    [Fact]
+    public async Task FINANCE_with_MFA_still_never_creates_reads_or_modifies_orders()
+    {
+        var orderId = await CreateOrderIdAsync();
+        var created = factory.CreateCallCount;
+        using (var create = await client.SendAsync(
+                   CreateOrderAs(MockIdentityProfiles.ActiveFinanceMfa, Guid.NewGuid())))
+        {
+            await CapabilityMatrix.AssertForbiddenAsync(create);
+        }
+
+        var csv = Csv(Guid.NewGuid());
+        using (var preview = await client.SendAsync(CsvAs(
+                   "/api/v1/orders/csv/preview", MockIdentityProfiles.ActiveFinanceMfa, csv, withDigest: false)))
+        {
+            await CapabilityMatrix.AssertForbiddenAsync(preview);
+        }
+
+        using (var commit = await client.SendAsync(CsvAs(
+                   "/api/v1/orders/csv/commit", MockIdentityProfiles.ActiveFinanceMfa, csv, withDigest: true)))
+        {
+            await CapabilityMatrix.AssertForbiddenAsync(commit);
+        }
+
+        using (var transition = await client.SendAsync(CapabilityMatrix.Request(
+                   HttpMethod.Post,
+                   $"/api/v1/orders/{orderId:D}/transitions",
+                   MockIdentityProfiles.ActiveFinanceMfa,
+                   JsonContent.Create(new { target_status = "CANCELLED", reason = "synthetic", expected_version = 1 }))))
+        {
+            await CapabilityMatrix.AssertForbiddenAsync(transition);
+        }
+
+        using (var detail = await client.SendAsync(CapabilityMatrix.Request(
+                   HttpMethod.Get, $"/api/v1/orders/{orderId:D}", MockIdentityProfiles.ActiveFinanceMfa)))
+        {
+            await CapabilityMatrix.AssertForbiddenAsync(detail);
+        }
+
+        Assert.Equal(created, factory.CreateCallCount);
+        Assert.Equal(0, factory.TransitionEffectCount(orderId));
+    }
+
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: when the in-transaction re-check refuses the COD pending list (the
+    /// membership changed after the endpoint decision), the answer is the uniform 403 and no order is returned.
+    /// </summary>
+    [Theory]
+    [InlineData(MockIdentityProfiles.ActiveFinanceMfa)]
+    [InlineData(MockIdentityProfiles.ActiveDispatcher)]
+    public async Task ListOrders_cod_pending_list_refused_inside_the_transaction_is_403(string profile)
+    {
+        factory.RefuseCodPendingListInTransaction = true;
+        try
+        {
+            using var response = await client.SendAsync(CapabilityMatrix.Request(
+                HttpMethod.Get, "/api/v1/orders?cod_pending_reconciliation=true", profile));
+            await CapabilityMatrix.AssertForbiddenAsync(response);
+            Assert.DoesNotContain("items", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            factory.RefuseCodPendingListInTransaction = false;
+        }
     }
 
     [Theory]
@@ -344,14 +499,18 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
         return body.RootElement.GetProperty("id").GetGuid();
     }
 
-    private static HttpRequestMessage CreateOrder(string role, Guid quoteId) => CapabilityMatrix.Request(
+    private static HttpRequestMessage CreateOrder(string role, Guid quoteId) =>
+        CreateOrderAs(CapabilityMatrix.Profile(role), quoteId);
+
+    private static HttpRequestMessage CreateOrderAs(string profile, Guid quoteId) => CapabilityMatrix.Request(
         HttpMethod.Post,
         "/api/v1/orders",
-        CapabilityMatrix.Profile(role),
+        profile,
         JsonContent.Create(new
         {
             quote_id = quoteId,
             payer_type = "SENDER",
+            restricted_goods_acknowledged = true,
             acceptance = new
             {
                 terms_version = "terms-synthetic-v1",
@@ -364,7 +523,10 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
     private static string Csv(Guid quoteId) =>
         $"{CsvHeader}\n{quoteId:D},SENDER,terms-synthetic-v1,privacy-synthetic-v1,{CsvAcceptedAt},WEB\n";
 
-    private static HttpRequestMessage Csv(string route, string role, string csv, bool withDigest)
+    private static HttpRequestMessage Csv(string route, string role, string csv, bool withDigest) =>
+        CsvAs(route, CapabilityMatrix.Profile(role), csv, withDigest);
+
+    private static HttpRequestMessage CsvAs(string route, string profile, string csv, bool withDigest)
     {
         var file = new ByteArrayContent(Encoding.UTF8.GetBytes(csv));
         file.Headers.ContentType = new MediaTypeHeaderValue("text/csv");
@@ -374,9 +536,12 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
             content.Add(
                 new StringContent(CsvOrderImportPrevalidator.ComputeContentDigest(Encoding.UTF8.GetBytes(csv))),
                 "content_digest");
+            content.Add(
+                new StringContent(CsvOrderImportContract.RestrictedGoodsAcknowledgedValue),
+                CsvOrderImportContract.FieldRestrictedGoodsAcknowledged);
         }
 
-        return CapabilityMatrix.Request(HttpMethod.Post, route, CapabilityMatrix.Profile(role), content);
+        return CapabilityMatrix.Request(HttpMethod.Post, route, profile, content);
     }
 }
 

@@ -444,7 +444,7 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         {
             Assert.Empty((await ListPendingAsync(orders.Service, scenario)).Items);
             var all = await orders.Service.ListAsync(
-                scenario.ActorId, scenario.OrganizationId, null, null, null, false, default);
+                scenario.ActorId, scenario.OrganizationId, null, null, null, false, false, default);
             Assert.Equal(3, all.Items.Count);
         }
 
@@ -465,7 +465,7 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
             Assert.Null(pending.NextCursor);
             // The status filter still applies together with the COD filter.
             Assert.Empty((await orders.Service.ListAsync(
-                scenario.ActorId, scenario.OrganizationId, "CLOSED", null, null, true, default)).Items);
+                scenario.ActorId, scenario.OrganizationId, "CLOSED", null, null, true, false, default)).Items);
         }
 
         await scenario.SetOrderStatusAsync(scenario.CodOrderId, "DELIVERED");
@@ -484,8 +484,57 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         }
     }
 
-    private static Task<OrderPageResult> ListPendingAsync(IOrderService service, FinanceScenario scenario) =>
-        service.ListAsync(scenario.ActorId, scenario.OrganizationId, null, null, null, true, default);
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02 on real PostgreSQL: the COD pending list re-checks, inside its tenant
+    /// transaction and before any order is read, that the actor still reads order financials there. FINANCE lists
+    /// the pending collections only with a satisfied MFA challenge; a VIEWER, a PLATFORM_ADMIN without MFA, a
+    /// DRIVER and a suspended FINANCE membership are refused even though the endpoint is bypassed.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Cod_pending_list_rechecks_the_financials_role_inside_the_transaction()
+    {
+        await using var scenario = await FinanceScenario.CreateAsync(fixture);
+        var cod = CreateCodService(fixture.AppDataSource);
+        await cod.RecordAsync(scenario.Record(scenario.CodOrderId, 5_000, "finance-pending-list"), default);
+
+        await scenario.SetActorRoleAsync("FINANCE");
+        await using (var orders = CreateOrdersListScope())
+        {
+            await Assert.ThrowsAsync<OrderListForbiddenException>(() => ListPendingAsync(orders.Service, scenario));
+            var pending = await ListPendingAsync(orders.Service, scenario, mfaSatisfied: true);
+            Assert.Equal([scenario.CodOrderId], pending.Items.Select(order => order.Id));
+        }
+
+        foreach (var (role, mfa) in new[] { ("VIEWER", true), ("PLATFORM_ADMIN", false), ("DRIVER", true) })
+        {
+            await scenario.SetActorRoleAsync(role);
+            await using var orders = CreateOrdersListScope();
+            await Assert.ThrowsAsync<OrderListForbiddenException>(() =>
+                ListPendingAsync(orders.Service, scenario, mfaSatisfied: mfa));
+        }
+
+        await scenario.SetActorRoleAsync("PLATFORM_ADMIN");
+        await using (var orders = CreateOrdersListScope())
+        {
+            Assert.Single((await ListPendingAsync(orders.Service, scenario, mfaSatisfied: true)).Items);
+        }
+
+        await scenario.SetActorRoleAsync("FINANCE");
+        await scenario.SetActorMembershipStatusAsync("SUSPENDED");
+        await using (var orders = CreateOrdersListScope())
+        {
+            await Assert.ThrowsAsync<OrderListForbiddenException>(() =>
+                ListPendingAsync(orders.Service, scenario, mfaSatisfied: true));
+        }
+
+        await scenario.SetActorMembershipStatusAsync("ACTIVE");
+    }
+
+    private static Task<OrderPageResult> ListPendingAsync(
+        IOrderService service,
+        FinanceScenario scenario,
+        bool mfaSatisfied = false) =>
+        service.ListAsync(scenario.ActorId, scenario.OrganizationId, null, null, null, true, mfaSatisfied, default);
 
     private OrdersListScope CreateOrdersListScope()
     {
@@ -798,6 +847,16 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
             WHERE user_id=@actor AND organization_id=@org;
             """,
             P("role", role),
+            P("actor", ActorId),
+            P("org", OrganizationId));
+
+        public Task SetActorMembershipStatusAsync(string status) => ExecuteAsync(
+            """
+            UPDATE organizations.organization_memberships
+            SET status=@status
+            WHERE user_id=@actor AND organization_id=@org;
+            """,
+            P("status", status),
             P("actor", ActorId),
             P("org", OrganizationId));
 

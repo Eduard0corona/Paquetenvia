@@ -84,6 +84,38 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
         Assert.Equal((HttpStatusCode)422, response.StatusCode);
     }
 
+    /// <summary>
+    /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02 and ORD-PHONE-PLUS52-LOCATIONS-2026-10-03: a contact phone is ten
+    /// Mexican digits once ASCII spaces, hyphens and an optional leading +52 are removed; another country prefix,
+    /// 52 without the plus sign or any other character is the declared 422.
+    /// </summary>
+    [Theory]
+    [InlineData("6671111111", HttpStatusCode.Created)]
+    [InlineData("667 111 1111", HttpStatusCode.Created)]
+    [InlineData("667-111-1111", HttpStatusCode.Created)]
+    [InlineData("+526671111111", HttpStatusCode.Created)]
+    [InlineData("+52 667 111 1111", HttpStatusCode.Created)]
+    [InlineData("+52-6671111111", HttpStatusCode.Created)]
+    [InlineData("+1 667 111 1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("+52 1 667 111 1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("+ 52 667 111 1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("526671111111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("667111111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("(667) 111 1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("667.111.1111", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("phone-number", HttpStatusCode.UnprocessableEntity)]
+    public async Task POST_accepts_only_ten_digit_Mexican_phones(string phone, HttpStatusCode expected)
+    {
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/quotes");
+        request.Headers.Add("Idempotency-Key", $"quote-http-phone-{Guid.NewGuid():N}");
+        request.Content = ValidBody(originPhone: phone);
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(expected, response.StatusCode);
+        Assert.DoesNotContain(phone, await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
     /// <summary>AI05-INPUT-LIMITS: 1 to 20 packages per quote; 21 is the declared 422 validation error.</summary>
     [Theory]
     [InlineData(20, HttpStatusCode.Created)]
@@ -232,14 +264,15 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
         string originAddress = "Synthetic origin 100",
         double originLat = 24.8,
         string packageDescription = "Synthetic parcel",
-        int packageCount = 1) => JsonContent.Create(new
+        int packageCount = 1,
+        string originPhone = "6671111111") => JsonContent.Create(new
         {
             client_account_id = (Guid?)null,
             origin = new
             {
                 address_text = originAddress,
                 contact_name = "Synthetic Sender",
-                phone = "+526671111111",
+                phone = originPhone,
                 lat = includeCoordinates ? originLat : (double?)null,
                 lng = includeCoordinates ? -107.4 : (double?)null,
                 references = "Synthetic gate",
@@ -248,7 +281,7 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
             {
                 address_text = "Synthetic destination 200",
                 contact_name = "Synthetic Receiver",
-                phone = "+526672222222",
+                phone = "667 222 2222",
                 lat = includeCoordinates ? 24.81 : (double?)null,
                 lng = includeCoordinates ? -107.41 : (double?)null,
             },

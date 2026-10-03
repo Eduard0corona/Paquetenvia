@@ -686,7 +686,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 '{VersionPricingPolicyPerOrganization.MigrationId}',
                 '{StoreTariffPolicyVersionInMasterDataLoader.MigrationId}',
                 '{HardenMasterDataLoaderOperatorBoundary.MigrationId}',
-                '{RequireVatIncludedTariffsInMasterDataLoader.MigrationId}');
+                '{RequireVatIncludedTariffsInMasterDataLoader.MigrationId}',
+                '{RequireMazatlanTimeZoneInMasterDataLoader.MigrationId}');
             """);
         Assert.Equal("PENDING", await PricingLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
@@ -762,7 +763,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
 
         // Every other lane is applied by the privileged fixture principal; this contract is the REG-001 and REG-002
         // steps. Rewinding both leaves a populated installation whose registration executor was pre-provisioned
-        // per E-002 and whose pending_memberships table the REG-002 lane adopts.
+        // per E-002 and whose pending_memberships table the REG-002 lane adopts. The later POLICY-VERSIONS-PER-ORG
+        // step is rewound with them (its history row only; the columns stay for it to adopt again).
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION security.register_identity_subject(text,uuid);
@@ -775,7 +777,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             DROP FUNCTION security.revoke_pending_membership(uuid,uuid,uuid,text,text);
             DROP FUNCTION security.apply_pending_memberships(text,bytea[],integer[]);
             DELETE FROM platform."__ef_migrations_history_organizations"
-              WHERE "MigrationId" IN ('{E002RegistrationStateReader.Reg001MigrationId}','{E002RegistrationStateReader.Reg002MigrationId}');
+              WHERE "MigrationId" IN ('{E002RegistrationStateReader.Reg001MigrationId}','{E002RegistrationStateReader.Reg002MigrationId}',
+                '{Organizations.Infrastructure.Persistence.Migrations.VersionDispatchPoliciesPerOrganization.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrganizationsLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
@@ -908,7 +911,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
               ON orders.orders FROM paqueteria_lifecycle_executor;
             DELETE FROM platform."__ef_migrations_history_orders"
               WHERE "MigrationId" IN ('{E002LifecycleStateReader.Lif001MigrationId}',
-                '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}');
+                '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}',
+                '{Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
