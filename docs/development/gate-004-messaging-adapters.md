@@ -41,6 +41,18 @@ same transaction (REALTIME lane → `NotificationStatusChanged.v1` on Operations
 `notification_id`, `channel`, `status`, `attempts`, `occurred_at`; no recipient or template parameter). Email keeps
 the AMBIGUOUS retry: the owner answer names WhatsApp only, and ACS reuses one `Operation-Id` per Notification.
 
+**Stale WhatsApp leases (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03, owner: "Sí, marcar fallido y avisar").** If
+the process sending a WhatsApp message dies mid-send, its `notifications.send-requested` row stays PROCESSING
+until the lease expires and the message may already have reached Meta. The Notifications lane
+`20261003000100_FailStaleWhatsAppNotificationLeases` makes `security.recover_stale_notifications_outbox` settle it
+like an ambiguous send instead of requeueing it (or re-leasing it for max-attempts finalization): the request ends
+DEAD with `AMBIGUOUS_TIMEOUT` under its own expired `lease_token`, the PENDING Notification ends FAILED with
+`AMBIGUOUS_TIMEOUT`, and the same `notifications.status-changed` row reaches the dispatchers, all in the recovery
+transaction. A WhatsApp row locked by a concurrent settle is skipped and excluded from the requeue. IN_APP and
+email keep the NTF-001 recovery (requeue, then max-attempts finalization). The rows settled this way are not
+returned to the worker, so the OBS-002 settled counter does not count them; the FAILED history row and the
+status-changed event are their record.
+
 `NotificationRetryPolicy.CalculateDelay(attempts, base, max, retryAfter)` raises the exponential delay
 to a provider `Retry-After` hint and caps it at `RetryMaximumSeconds`. Max attempts still end in the
 existing stale-recovery finalization lease. Adapters never retry internally: a WhatsApp send has no
@@ -182,6 +194,10 @@ that does not exist stops the Worker at start and fails the `existing` secret re
   wiring after the Key Vault source.
 
 ## Rollback
+
+NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03: migrate the Notifications lane down to
+`20261002000100_FailAmbiguousWhatsAppNotifications` (restores the NTF-001 recovery body), then revert the commit;
+WhatsApp Notifications already FAILED by stale recovery stay terminal.
 
 NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02: migrate the Notifications lane down to
 `20260927000200_AddDispatchOutboxLane` (restores the NTF-001 settle body), then revert the commit; Notifications
