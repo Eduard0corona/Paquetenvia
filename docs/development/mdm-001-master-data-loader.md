@@ -135,8 +135,11 @@ sección `cities` (`MDM001_CITIES_REQUIRE_PLATFORM_ORGANIZATION`). Una ciudad nu
 `ACTIVE` (la entrada no lleva `status`), sólo en México (`country_code: MX`) y con una zona IANA de la
 lista permitida: `America/Bahia_Banderas`, `America/Cancun`, `America/Chihuahua`, `America/Ciudad_Juarez`,
 `America/Hermosillo`, `America/Matamoros`, `America/Mazatlan`, `America/Merida`, `America/Mexico_City`,
-`America/Monterrey`, `America/Ojinaga`, `America/Tijuana`. Una ciudad existente nunca se reescribe: otra
-zona horaria o una ciudad `INACTIVE` es `MDM001_CITY_CONFLICT`. Las cargas de los tenants sólo pueden
+`America/Monterrey`, `America/Ojinaga`, `America/Tijuana` (fuera de ella: `MDM001_CITY_TIMEZONE_NOT_ALLOWED`).
+En el piloto, además, sólo se acepta `America/Mazatlan` (decisión del owner
+`MDM-001-TZ-MAZATLAN-ONLY-2026-10-02`, literal "Solo America/Mazatlan"): otra zona de la lista falla con
+`MDM001_CITY_TIMEZONE_NOT_IN_PILOT`, en el job antes de la base y en la función, también en dry run.
+Una ciudad existente nunca se reescribe: otra zona horaria o una ciudad `INACTIVE` es `MDM001_CITY_CONFLICT`. Las cargas de los tenants sólo pueden
 **referenciar** ciudades existentes y `ACTIVE` (`MDM001_CITY_NOT_FOUND` si no).
 
 **`policy_version`** es obligatorio en cada regla de tarifa (decisión del owner
@@ -246,6 +249,15 @@ inmutables. No agrega permisos, tablas ni roles (el ejecutor conserva 122 permis
 vocabulario y el CHECK de `tax_mode`. Su `Down` restaura la función del paso de endurecimiento; las reglas
 cargadas se quedan. El validador del job sigue aceptando los tres valores de AI-06 porque solo la base sabe si
 la regla ya existe.
+
+La lane `20261002000100_RequireMazatlanTimeZoneInMasterDataLoader` (`MDM-001-TZ-MAZATLAN-ONLY-2026-10-02`:
+"Solo America/Mazatlan") reemplaza la función con el cuerpo del paso `VAT_INCLUDED` más una edición revisada de
+coincidencia única: después de la lista mexicana, una entrada de ciudad con zona distinta de `America/Mazatlan`
+falla con `MDM001_CITY_TIMEZONE_NOT_IN_PILOT` (SQLSTATE `22023`, `HINT` = referencia; también en dry run, sin
+escribir nada). Ninguna fila guardada se reescribe: una ciudad cargada antes en otra zona conserva su zona y las
+cargas de tenants la siguen referenciando por su llave natural (las referencias no llevan zona). El validador del
+job repite la regla con el mismo código. No agrega permisos, tablas ni roles (el ejecutor conserva 122 permisos).
+Su `Down` restaura la función del paso `VAT_INCLUDED`; las ciudades cargadas se quedan.
 
 Mantienen el contrato: `DatabaseBaselineAssertions` (límite exacto del ejecutor, del beneficiario, de la
 marca y de la tabla de seudónimos), el mapa E-002 (`_PLUS_MDM001`, por historial del carril Pricing), la ACL de `security`, el puente

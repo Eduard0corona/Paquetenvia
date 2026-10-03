@@ -53,6 +53,7 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
                      StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
                      HardenMasterDataLoaderOperatorBoundary.MigrationId,
                      RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
+                     RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
                  })
         {
             Assert.True(await reader.ReadAsync());

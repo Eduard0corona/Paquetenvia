@@ -28,7 +28,7 @@ public sealed class PricingPolicyVersionMigrationPostgreSqlContractTests(Postgre
     public async Task The_shared_fixture_carries_the_policy_version_migrations_before_the_latest_pricing_migration()
     {
         var verified = Assert.Single(ModuleMigrationCoordinator.VerifySources(), state => state.Module == Module);
-        Assert.Equal(RequireVatIncludedTariffsInMasterDataLoader.MigrationId, verified.MigrationId);
+        Assert.Equal(RequireMazatlanTimeZoneInMasterDataLoader.MigrationId, verified.MigrationId);
 
         var applied = Assert.Single(
             await new ModuleMigrationCoordinator().AssertAsync(fixture.DeploymentConnectionString, CancellationToken.None),
@@ -57,6 +57,7 @@ public sealed class PricingPolicyVersionMigrationPostgreSqlContractTests(Postgre
                     StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
                     HardenMasterDataLoaderOperatorBoundary.MigrationId,
                     RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
+                    RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
                 ],
                 await HistoryAsync(connectionString));
             Assert.Equal(("NO", 0L), await ShapeAsync(connectionString));
@@ -138,6 +139,7 @@ public sealed class PricingPolicyVersionMigrationPostgreSqlContractTests(Postgre
                     StoreTariffPolicyVersionInMasterDataLoader.MigrationId,
                     HardenMasterDataLoaderOperatorBoundary.MigrationId,
                     RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
+                    RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
                 ],
                 await HistoryAsync(connectionString));
 

@@ -295,7 +295,8 @@ internal sealed class NotificationsOutboxProcessor(
     /// </summary>
     internal static OutboxSettlement? Settlement(string outcome, string code) => outcome switch
     {
-        "DEAD" or "MAX_ATTEMPTS" or NotificationDeliveryOutcome.Permanent => OutboxSettlement.Dead,
+        "DEAD" or "MAX_ATTEMPTS" or NotificationDeliveryOutcome.Permanent or NotificationDeliveryOutcome.AmbiguousFailed =>
+            OutboxSettlement.Dead,
         NotificationDeliveryOutcome.Success => OutboxSettlement.Processed,
         NotificationDeliveryOutcome.Transient or NotificationDeliveryOutcome.Ambiguous => OutboxSettlement.Retry,
         "SOURCE" => code is NotificationErrorCodes.SourceExpanded or NotificationErrorCodes.NoEligibleRecipient

@@ -284,7 +284,8 @@ public sealed class OrdersOpenApiImplementationTests
     }
 
     /// <summary>
-    /// D6-COD-EXPECTED: the COD expectation is an optional int64 of cents with minimum 0 on createOrder and on the
+    /// D6-COD-EXPECTED: the COD expectation is an optional int64 of cents with minimum 0 and maximum 2000000
+    /// (COD-CAP-20000-2026-10-02) on createOrder and on the
     /// CSV-001 preview, the CSV column is named after the createOrder field and appended last, the row error is the
     /// implementation's, the delta is marked shipped, and Order never exposes the amount to its VIEWER readers.
     /// </summary>
@@ -302,6 +303,10 @@ public sealed class OrdersOpenApiImplementationTests
             Assert.Equal("integer", cod.Scalar("type"));
             Assert.Equal("int64", cod.Scalar("format"));
             Assert.Equal("0", cod.Scalar("minimum"));
+            // COD-CAP-20000-2026-10-02: the AI-05 maximum is the implementation's inclusive cap.
+            Assert.Equal(
+                OrderCodExpectationPolicy.MaximumCents.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                cod.Scalar("maximum"));
         }
 
         Assert.DoesNotContain("cod_expected_cents", PropertyNames(schemas.Mapping("Order")));

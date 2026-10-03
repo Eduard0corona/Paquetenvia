@@ -162,6 +162,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         Guid? ownerOrganizationId,
         string? cursor,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty ||
@@ -183,8 +184,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             new TenantDatabaseExecutionContext(actorId, [organizationId]),
             (dbContext, token) => ListWithinTransactionAsync(
                 dbContext,
+                actorId,
+                organizationId,
                 status,
                 codPendingReconciliation,
+                mfaSatisfied,
                 hasCursor,
                 cursorCreatedAt,
                 cursorId,
@@ -435,8 +439,11 @@ public sealed class QuoteSnapshotToOrderCoordinator(
 
     private async Task<OrderPageResult> ListWithinTransactionAsync(
         OrdersDbContext dbContext,
+        Guid actorId,
+        Guid organizationId,
         string? status,
         bool codPendingReconciliation,
+        bool mfaSatisfied,
         bool hasCursor,
         DateTimeOffset cursorCreatedAt,
         Guid cursorId,
@@ -444,6 +451,22 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     {
         var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
         var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
+        if (codPendingReconciliation)
+        {
+            // FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the COD filter reveals financial state, so, as the finance
+            // reads do, the getOrderFinancials authorization is re-checked inside this transaction before any
+            // order is read; the endpoint decision alone is never the only barrier.
+            await using var authorization = CreateCommand(
+                connection, transaction, OrderCodPendingListAuthorization.Sql);
+            authorization.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
+            authorization.Parameters.Add(P("org", NpgsqlDbType.Uuid, organizationId));
+            authorization.Parameters.Add(P("mfa", NpgsqlDbType.Boolean, mfaSatisfied));
+            if (await authorization.ExecuteScalarAsync(cancellationToken) is not true)
+            {
+                throw new OrderListForbiddenException();
+            }
+        }
+
         await using var command = CreateCommand(
             connection,
             transaction,

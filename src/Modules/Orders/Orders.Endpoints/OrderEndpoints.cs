@@ -140,7 +140,22 @@ public static class OrderEndpoints
 
         if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListOrders) is { } denied)
         {
-            return denied;
+            // FIN-PENDING-COD-LIST-FINANCE-2026-10-02: a caller without listOrders is admitted only to the COD
+            // pending list itself, exactly cod_pending_reconciliation=true, and only as FINANCE with MFA
+            // (MFA_REQUIRED without it). Every other shape keeps the refusal listOrders already gives. Both
+            // decisions read the request and the session only, before any order is read.
+            if (!OrderListCodFilter.IsPendingOnly(cod_pending_reconciliation))
+            {
+                return denied;
+            }
+
+            if (TenantCapabilityGate.Deny(
+                    session,
+                    tenantContext,
+                    TenantCapabilityRefinements.ListOrdersCodPendingReconciliationOnly) is { } pendingDenied)
+            {
+                return pendingDenied;
+            }
         }
 
         // API-FIN-COD-VISIBILITY-2026-09-29: the COD filter reveals financial state, so its mere presence also
@@ -165,6 +180,7 @@ public static class OrderEndpoints
                 owner_org_id,
                 cursor,
                 codPendingReconciliation,
+                session.MfaSatisfied,
                 cancellationToken);
             return Results.Ok(new OrderPageResponse(
                 page.Items.Select(ToResponse).ToArray(),
@@ -173,6 +189,10 @@ public static class OrderEndpoints
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OrderListForbiddenException)
+        {
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.GetOrderFinancials);
         }
         catch (OrderServiceUnavailableException)
         {
@@ -317,9 +337,10 @@ public static class OrderEndpoints
 
     /// <summary>
     /// D6-COD-EXPECTED: an absent (or JSON null) <c>cod_expected_cents</c> is zero. A present value must be a JSON
-    /// number whose literal is a plain non-negative integer that fits int64; <c>1.5</c>, <c>1e3</c>, <c>150.0</c>,
-    /// <c>-1</c> and a quoted <c>"150"</c> are the uniform 409, the same as every other invalid contract value,
-    /// because the literal is checked rather than whatever a lenient number binder would coerce it to.
+    /// number whose literal is a plain non-negative integer of at most 2,000,000 cents (COD-CAP-20000-2026-10-02);
+    /// <c>1.5</c>, <c>1e3</c>, <c>150.0</c>, <c>-1</c>, <c>2000001</c> and a quoted <c>"150"</c> are the uniform
+    /// 409, the same as every other invalid contract value, because the literal is checked rather than whatever a
+    /// lenient number binder would coerce it to.
     /// </summary>
     private static bool TryReadCodExpectedCents(JsonElement? value, out long cents)
     {
@@ -495,6 +516,12 @@ public sealed record OrderPageResponse(
 /// </summary>
 public static class OrderListCodFilter
 {
+    /// <summary>
+    /// FIN-PENDING-COD-LIST-FINANCE-2026-10-02: the single request shape a caller without listOrders may use, the
+    /// parameter present with exactly the value <c>true</c>. Absent, <c>false</c> or any other value is not it.
+    /// </summary>
+    public static bool IsPendingOnly(string? value) => string.Equals(value, "true", StringComparison.Ordinal);
+
     public static bool TryParse(string? value, out bool codPendingReconciliation)
     {
         codPendingReconciliation = false;

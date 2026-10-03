@@ -1,5 +1,5 @@
 import { isAcceptanceVersion, type AcceptanceVersions, acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
-import { parseMxnToCents } from "./money";
+import { formatMxnCentsWithCurrency, maximumCodExpectedCents, parseMxnToCents } from "./money";
 
 /**
  * /ops/orders/new (AI-07 create_order) against AI-05 createQuote and createOrder.
@@ -317,6 +317,7 @@ export function buildCreateOrderBody(
   if (Number.isNaN(acceptedAt.getTime())) errors.push("La hora de aceptación no es válida.");
   const codCents = codExpectedCents(draft.codAmount);
   if (codCents === null) errors.push(invalidCodAmountMessage);
+  else if (codCents > maximumCodExpectedCents) errors.push(codAmountAboveCapMessage);
   if (errors.length > 0) return { ok: false, errors };
   const body: CreateOrderBody = {
     quote_id: quoteId,
@@ -353,6 +354,10 @@ export function normalizeMexicanPhone(text: string): string | null {
 
 export const invalidCodAmountMessage =
   "El cobro contra entrega debe ser un monto en MXN con hasta 2 decimales, sin signos, comas ni símbolos.";
+
+/** COD-CAP-20000-2026-10-02: the server rejects more than 20,000.00 MXN per order. */
+export const codAmountAboveCapMessage =
+  `El cobro contra entrega no puede superar ${formatMxnCentsWithCurrency(maximumCodExpectedCents)} por pedido.`;
 
 /**
  * D6-COD-EXPECTED: the typed COD in MXN as integer cents (0 when left empty), or

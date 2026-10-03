@@ -70,7 +70,8 @@ function UploadForm({
         <p>
           Cobro contra entrega (opcional): agrega al final la columna <code>{csvCodColumn}</code> con el monto en
           centavos enteros, sin punto, comas ni signos (por ejemplo <code>15050</code> para $150.50). Deja la celda
-          vacía si la orden no lleva cobro.
+          vacía si la orden no lleva cobro. El tope es $20,000.00 MXN por pedido (<code>2000000</code> centavos); una
+          fila con más se marca inválida y el lote no se puede confirmar.
         </p>
         <label>Archivo CSV
           <input
