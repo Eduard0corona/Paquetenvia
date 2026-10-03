@@ -236,6 +236,120 @@
       },
       "target_sharp_version": "0.35.3",
       "require_sharp_runtime_smoke": true
+    },
+    {
+      "id": "SEC-2026-10-NEXT-OG-CRITICAL",
+      "mode": "SECURITY_REMEDIATION",
+      "status": "MERGED",
+      "authorized_base_sha": "ab45f24266584da314623c973527232fc3e89dee",
+      "authorized_source_branch": "fix/security-2026-10-next-og-critical",
+      "validated_target_sha": "1ade580ac762cd0d1acdb4cc4d593c2cf5757c10",
+      "tracked_issue": 175,
+      "tracked_issue_title": "SEC-2026-10: remediate Next.js next/og critical and brace-expansion advisories",
+      "issue_advisories": {
+        "175": [
+          "GHSA-vcvr-r3jv-pc5j",
+          "GHSA-qhr7-859c-m2p7",
+          "GHSA-6j4f-fj2g-mc7p",
+          "GHSA-q2hr-2g5m-vwhr"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-vcvr-r3jv-pc5j",
+        "GHSA-qhr7-859c-m2p7",
+        "GHSA-6j4f-fj2g-mc7p",
+        "GHSA-q2hr-2g5m-vwhr"
+      ],
+      "expected_base_packages": {
+        "GHSA-vcvr-r3jv-pc5j": "next",
+        "GHSA-qhr7-859c-m2p7": "brace-expansion",
+        "GHSA-6j4f-fj2g-mc7p": "brace-expansion",
+        "GHSA-q2hr-2g5m-vwhr": "brace-expansion"
+      },
+      "expected_base_totals": {
+        "total": 4,
+        "critical": 1,
+        "high": 2,
+        "moderate": 1,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 0,
+        "critical": 0,
+        "high": 0,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [
+        "next",
+        "eslint-config-next"
+      ],
+      "allowed_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "required_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "expected_direct_version_changes": {
+        "next": {"from": "16.3.3", "to": "16.3.6"},
+        "eslint-config-next": {"from": "16.3.3", "to": "16.3.6"}
+      },
+      "next_affected_range": ">=16.2.0 <16.3.6",
+      "next_first_patched_version": "16.3.6",
+      "expected_override_changes": {
+        "brace-expansion@<1.1.18": {"selector": "brace-expansion@<1.1.21", "from": "1.1.18", "to": "1.1.21"},
+        "brace-expansion@>=4.0.0 <5.0.9": {"selector": "brace-expansion@>=4.0.0 <5.0.12", "from": "5.0.9", "to": "5.0.12"},
+        "next@16.3.3>sharp": {"selector": "next@16.3.6>sharp", "from": "0.35.4", "to": "0.35.4"}
+      },
+      "allowed_overrides": {
+        "postcss": "8.5.23",
+        "brace-expansion@<1.1.21": "1.1.21",
+        "brace-expansion@>=4.0.0 <5.0.12": "5.0.12",
+        "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+        "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+        "browserslist@<=4.28.6": "4.28.7",
+        "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+        "next@16.3.6>sharp": "0.35.4"
+      },
+      "expected_lock_version_replacements": {
+        "next": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "eslint-config-next": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/env": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/eslint-plugin-next": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-darwin-arm64": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-darwin-x64": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-linux-arm64-gnu": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-linux-arm64-musl": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-linux-x64-gnu": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-linux-x64-musl": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-win32-arm64-msvc": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "@next/swc-win32-x64-msvc": {"from": ["16.3.3"], "to": ["16.3.6"]},
+        "brace-expansion": {"from": ["1.1.18", "5.0.9"], "to": ["1.1.21", "5.0.12"]}
+      },
+      "allowed_lock_metadata_additions": [
+        {
+          "package": "eslint@9.39.5",
+          "line": "    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options."
+        }
+      ],
+      "expected_lock_package_count": 475,
+      "expected_lockfile_sha256": "a85a581a4b6b0a4169c8632091aa5bdc2981891c4fa40661344cbc8b43e4522d",
+      "target_sharp_version": "0.35.4",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
     }
   ],
   "active_remediations": [
@@ -456,119 +570,6 @@
       },
       "expected_lock_package_count": 475,
       "expected_lockfile_sha256": "e9706ab2b331261306248a17bcf05e0b314219d82f5a8f60803de6e42df2c544",
-      "target_sharp_version": "0.35.4",
-      "require_sharp_runtime_smoke": true,
-      "prohibited_prereleases": true,
-      "manual_lockfile_edits_allowed": false
-    },
-    {
-      "id": "SEC-2026-10-NEXT-OG-CRITICAL",
-      "mode": "SECURITY_REMEDIATION",
-      "authorized_base_sha": "ab45f24266584da314623c973527232fc3e89dee",
-      "authorized_source_branch": "fix/security-2026-10-next-og-critical",
-      "validated_target_sha": "1ade580ac762cd0d1acdb4cc4d593c2cf5757c10",
-      "tracked_issue": 175,
-      "tracked_issue_title": "SEC-2026-10: remediate Next.js next/og critical and brace-expansion advisories",
-      "issue_advisories": {
-        "175": [
-          "GHSA-vcvr-r3jv-pc5j",
-          "GHSA-qhr7-859c-m2p7",
-          "GHSA-6j4f-fj2g-mc7p",
-          "GHSA-q2hr-2g5m-vwhr"
-        ]
-      },
-      "expected_base_advisories": [
-        "GHSA-vcvr-r3jv-pc5j",
-        "GHSA-qhr7-859c-m2p7",
-        "GHSA-6j4f-fj2g-mc7p",
-        "GHSA-q2hr-2g5m-vwhr"
-      ],
-      "expected_base_packages": {
-        "GHSA-vcvr-r3jv-pc5j": "next",
-        "GHSA-qhr7-859c-m2p7": "brace-expansion",
-        "GHSA-6j4f-fj2g-mc7p": "brace-expansion",
-        "GHSA-q2hr-2g5m-vwhr": "brace-expansion"
-      },
-      "expected_base_totals": {
-        "total": 4,
-        "critical": 1,
-        "high": 2,
-        "moderate": 1,
-        "low": 0
-      },
-      "expected_branch_totals": {
-        "total": 0,
-        "critical": 0,
-        "high": 0,
-        "moderate": 0,
-        "low": 0
-      },
-      "allowed_direct_packages": [
-        "next",
-        "eslint-config-next"
-      ],
-      "allowed_dependency_files": [
-        "apps/web/package.json",
-        "apps/web/pnpm-lock.yaml",
-        "apps/web/pnpm-workspace.yaml"
-      ],
-      "required_dependency_files": [
-        "apps/web/package.json",
-        "apps/web/pnpm-lock.yaml",
-        "apps/web/pnpm-workspace.yaml"
-      ],
-      "allowed_non_dependency_files": [
-        ".github/workflows/ci.yml",
-        ".github/workflows/pr-validation.yml",
-        "tests/fixtures/rel-000/security-tracking.json",
-        "tools/rel-000/rel000.py",
-        "tools/rel-000/security-remediation-policy.json",
-        "tools/rel-000/test_rel000.py"
-      ],
-      "expected_direct_version_changes": {
-        "next": {"from": "16.3.3", "to": "16.3.6"},
-        "eslint-config-next": {"from": "16.3.3", "to": "16.3.6"}
-      },
-      "next_affected_range": ">=16.2.0 <16.3.6",
-      "next_first_patched_version": "16.3.6",
-      "expected_override_changes": {
-        "brace-expansion@<1.1.18": {"selector": "brace-expansion@<1.1.21", "from": "1.1.18", "to": "1.1.21"},
-        "brace-expansion@>=4.0.0 <5.0.9": {"selector": "brace-expansion@>=4.0.0 <5.0.12", "from": "5.0.9", "to": "5.0.12"},
-        "next@16.3.3>sharp": {"selector": "next@16.3.6>sharp", "from": "0.35.4", "to": "0.35.4"}
-      },
-      "allowed_overrides": {
-        "postcss": "8.5.23",
-        "brace-expansion@<1.1.21": "1.1.21",
-        "brace-expansion@>=4.0.0 <5.0.12": "5.0.12",
-        "nanoid@>=3.0.0 <3.3.18": "3.3.18",
-        "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
-        "browserslist@<=4.28.6": "4.28.7",
-        "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
-        "next@16.3.6>sharp": "0.35.4"
-      },
-      "expected_lock_version_replacements": {
-        "next": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "eslint-config-next": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/env": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/eslint-plugin-next": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-darwin-arm64": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-darwin-x64": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-linux-arm64-gnu": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-linux-arm64-musl": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-linux-x64-gnu": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-linux-x64-musl": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-win32-arm64-msvc": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "@next/swc-win32-x64-msvc": {"from": ["16.3.3"], "to": ["16.3.6"]},
-        "brace-expansion": {"from": ["1.1.18", "5.0.9"], "to": ["1.1.21", "5.0.12"]}
-      },
-      "allowed_lock_metadata_additions": [
-        {
-          "package": "eslint@9.39.5",
-          "line": "    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options."
-        }
-      ],
-      "expected_lock_package_count": 475,
-      "expected_lockfile_sha256": "a85a581a4b6b0a4169c8632091aa5bdc2981891c4fa40661344cbc8b43e4522d",
       "target_sharp_version": "0.35.4",
       "require_sharp_runtime_smoke": true,
       "prohibited_prereleases": true,
