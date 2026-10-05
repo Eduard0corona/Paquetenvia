@@ -1,4 +1,4 @@
-import { formatMxnCentsWithCurrency } from "../../operations/contracts/money";
+import { formatMxnCentsWithCurrency, parseMxnToCents } from "../../operations/contracts/money";
 import type { CodTransaction, PendingCodOrder } from "./cod";
 import type { Settlement } from "./settlement";
 
@@ -34,6 +34,36 @@ export function settlementPaymentConfirmation(settlement: Settlement): Confirmat
       `Confirma que ya se pagaron ${formatMxnCentsWithCurrency(settlement.total_cents)} ` +
       `en la liquidación ${settlementTarget(settlement)}.`,
     confirmLabel: "Marcar pagada",
+  };
+}
+
+/**
+ * Adding an adjustment changes the settlement total. Returns `null` when the typed amount is
+ * not a valid non-zero amount, so the controller reports the validation error instead.
+ */
+export function settlementAdjustmentConfirmation(
+  settlement: Settlement,
+  amountText: string,
+): ConfirmationText | null {
+  const cents = parseMxnToCents(amountText, { allowNegative: true, allowZero: false });
+  if (cents === null) return null;
+  const verb = cents < 0 ? "descontará" : "sumará";
+  const absolute = cents < 0 ? -cents : cents;
+  return {
+    title: "¿Agregar ajuste?",
+    description:
+      `Se ${verb} ${formatMxnCentsWithCurrency(absolute)} a la liquidación ${settlementTarget(settlement)}.`,
+    confirmLabel: "Agregar ajuste",
+  };
+}
+
+export function settlementVoidConfirmation(settlement: Settlement): ConfirmationText {
+  return {
+    title: "¿Anular liquidación?",
+    description:
+      `Se anulará la liquidación ${settlementTarget(settlement)} por ` +
+      `${formatMxnCentsWithCurrency(settlement.total_cents)}. Esta acción no se puede deshacer.`,
+    confirmLabel: "Anular",
   };
 }
 

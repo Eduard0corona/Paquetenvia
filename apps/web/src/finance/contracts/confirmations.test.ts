@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   codReconciliationConfirmation,
   pendingCodReconciliationConfirmation,
+  settlementAdjustmentConfirmation,
   settlementApprovalConfirmation,
   settlementPaymentConfirmation,
+  settlementVoidConfirmation,
 } from "./confirmations";
 import type { Settlement } from "./settlement";
 
@@ -30,6 +32,23 @@ describe("finance confirmations", () => {
     const payment = settlementPaymentConfirmation({ ...settlement, status: "APPROVED", total_cents: 5 });
     expect(payment.confirmLabel).toBe("Marcar pagada");
     expect(payment.description).toContain("$0.05 MXN");
+  });
+
+  it("states the exact adjustment and refuses to describe an invalid amount", () => {
+    const discount = settlementAdjustmentConfirmation(settlement, "-40.5");
+    expect(discount?.confirmLabel).toBe("Agregar ajuste");
+    expect(discount?.description).toContain("descontará $40.50 MXN");
+    const bonus = settlementAdjustmentConfirmation(settlement, "0.29");
+    expect(bonus?.description).toContain("sumará $0.29 MXN");
+    expect(settlementAdjustmentConfirmation(settlement, "0")).toBeNull();
+    expect(settlementAdjustmentConfirmation(settlement, "1e3")).toBeNull();
+  });
+
+  it("warns that voiding a settlement cannot be undone", () => {
+    const voided = settlementVoidConfirmation(settlement);
+    expect(voided.confirmLabel).toBe("Anular");
+    expect(voided.description).toContain("$1,234,567.89 MXN");
+    expect(voided.description).toContain("no se puede deshacer");
   });
 
   it("names the order before reconciling a COD collection", () => {

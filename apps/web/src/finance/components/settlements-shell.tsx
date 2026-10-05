@@ -4,7 +4,12 @@ import Link from "next/link";
 import { useConfirmDialog, type ConfirmRequest } from "../../components/confirm-dialog";
 import { formatMxnCentsWithCurrency } from "../../operations/contracts/money";
 import { formatMazatlanTime } from "../../operations/contracts/operations-formatters";
-import { settlementApprovalConfirmation, settlementPaymentConfirmation } from "../contracts/confirmations";
+import {
+  settlementAdjustmentConfirmation,
+  settlementApprovalConfirmation,
+  settlementPaymentConfirmation,
+  settlementVoidConfirmation,
+} from "../contracts/confirmations";
 import {
   settlementLineTypeLabels,
   settlementStatuses,
@@ -233,7 +238,14 @@ function Detail({
         <form className="opsForm" autoComplete="off" onSubmit={(event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
-          void controller.addAdjustment(String(data.get("amount") ?? ""), String(data.get("reason") ?? ""));
+          const amount = String(data.get("amount") ?? "");
+          const reason = String(data.get("reason") ?? "");
+          const text = settlementAdjustmentConfirmation(settlement, amount);
+          if (text === null) {
+            void controller.addAdjustment(amount, reason);
+            return;
+          }
+          confirm({ ...text, onConfirm: () => void controller.addAdjustment(amount, reason) });
         }}>
           <h3>Agregar ajuste</h3>
           <label>Monto en MXN (negativo para descontar)
@@ -247,7 +259,11 @@ function Detail({
       {actions.includes("void") && (
         <form className="opsForm" autoComplete="off" onSubmit={(event) => {
           event.preventDefault();
-          void controller.voidSettlement(String(new FormData(event.currentTarget).get("reason") ?? ""));
+          const reason = String(new FormData(event.currentTarget).get("reason") ?? "");
+          confirm({
+            ...settlementVoidConfirmation(settlement),
+            onConfirm: () => void controller.voidSettlement(reason),
+          });
         }}>
           <h3>Anular liquidación</h3>
           <p>Las líneas y el total se conservan; anular solo libera sus fuentes para otra liquidación.</p>
