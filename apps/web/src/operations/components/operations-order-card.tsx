@@ -7,10 +7,11 @@ import { externalOfferConfirmation } from "../contracts/external-offer-confirmat
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
-  formatMazatlanTime,
   orderStatusLabels,
   serviceTypeLabel,
 } from "../contracts/operations-formatters";
+import { DateTime } from "../../components/ui/date-time";
+import { DescriptionList } from "../../components/ui/description-list";
 import { parseMxnToCents } from "../contracts/money";
 import { formatServiceWindow } from "../contracts/service-window";
 import { operationsOrderHref } from "../routing/operations-routing";
@@ -41,40 +42,27 @@ export function OperationsOrderCard({
         <h3>{order.public_id}</h3>
         <span className="opsStatus">{orderStatusLabels[order.status]}</span>
       </div>
-      <dl>
-        <Row label="Dueño" value={order.owner.display_name} />
-        <Row
-          label="Opera"
-          value={order.operator?.display_name ?? "Sin operador"}
-        />
-        <Row label="Cliente" value={order.client?.display_name ?? "No disponible"} />
-        <Row
-          label="Zona"
-          value={order.delivery_zone?.name ?? "Sin zona asignada"}
-        />
-        <Row label="Servicio" value={serviceTypeLabel(order.service_type)} />
-        <Row label="Recolección" value="Por confirmar" />
-        <Row label="Entrega" value={formatServiceWindow(order.delivery_window)} />
-        <Row
-          label="Asignación"
-          value={assignmentTypeLabel(order.assignment?.assignment_type)}
-        />
-        <Row
-          label="Repartidor"
-          value={order.assignment?.driver_reference ?? "Sin repartidor"}
-        />
-        <Row
-          label="Actualizada"
-          value={formatMazatlanTime(order.updated_at)}
-        />
-      </dl>
+      <DescriptionList
+        items={[
+          { label: "Dueño", value: order.owner.display_name },
+          { label: "Opera", value: order.operator?.display_name ?? "Sin operador" },
+          { label: "Cliente", value: order.client?.display_name ?? "No disponible" },
+          { label: "Zona", value: order.delivery_zone?.name ?? "Sin zona asignada" },
+          { label: "Servicio", value: serviceTypeLabel(order.service_type) },
+          { label: "Recolección", value: "Por confirmar" },
+          { label: "Entrega", value: formatServiceWindow(order.delivery_window) },
+          { label: "Asignación", value: assignmentTypeLabel(order.assignment?.assignment_type) },
+          { label: "Repartidor", value: order.assignment?.driver_reference ?? "Sin repartidor" },
+          { label: "Actualizada", value: <DateTime value={order.updated_at} /> },
+        ]}
+      />
       {order.unassigned_alert && (
-        <p className="opsAlert" role="status">
+        <p className="notice noticeCrit" role="status">
           Requiere asignación
         </p>
       )}
       {order.cost_warning !== null && (
-        <p className="opsWarning" title="Revisión operativa de precio requerida.">
+        <p className="notice noticeWarn" title="Revisión operativa de precio requerida.">
           Revisar precio
         </p>
       )}
@@ -127,30 +115,21 @@ export function OperationsOrderCard({
             <option value="BICYCLE">Bicicleta</option>
             <option value="WALKER">A pie</option>
           </select></label>
-          <button className="opsPrimary" type="submit" disabled={publishing}>
+          <button className="btn btnPrimary" type="submit" disabled={publishing}>
             {publishing ? "Publicando..." : "Publicar oferta"}
           </button>
           <span role="status" aria-live="polite">{message}</span>
         </form>
       ) : null}
-      <Link className="opsPrimary" href={operationsOrderHref(order.order_id)}>
+      <Link className="btn btnPrimary" href={operationsOrderHref(order.order_id)}>
         Abrir orden
       </Link>
       {order.assignment?.assignment_type === "OWN" &&
       ["ACCEPTED", "ACTIVE"].includes(order.assignment.status) ? (
-        <Link className="opsPrimary" href={`/ops/routes?orderId=${encodeURIComponent(order.order_id)}`}>
+        <Link className="btn btnPrimary" href={`/ops/routes?orderId=${encodeURIComponent(order.order_id)}`}>
           Agregar a ruta
         </Link>
       ) : null}
     </article>
-  );
-}
-
-function Row({ label, value }: { readonly label: string; readonly value: string }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
   );
 }

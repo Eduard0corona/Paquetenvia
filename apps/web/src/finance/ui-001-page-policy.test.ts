@@ -20,7 +20,7 @@ const newScreenSources = [
   "src/operations/api/incidents-api.ts",
   "src/operations/components/csv-import-shell.tsx",
   "src/operations/components/incidents-shell.tsx",
-  "src/operations/components/tenant-feedback.tsx",
+  "src/components/ui/feedback.tsx",
   "src/operations/contracts/csv-import.ts",
   "src/operations/contracts/incident.ts",
   "src/operations/contracts/strict-json.ts",

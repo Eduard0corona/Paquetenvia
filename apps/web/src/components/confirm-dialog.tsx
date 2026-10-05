@@ -77,10 +77,10 @@ export function ConfirmDialog({
           <h2 id={titleId}>{request.title}</h2>
           <p id={descriptionId}>{request.description}</p>
           <div className="confirmDialogActions">
-            <button ref={cancelRef} type="button" className="opsSecondary" onClick={() => finish(false)}>
+            <button ref={cancelRef} type="button" className="btn btnSecondary" onClick={() => finish(false)}>
               {request.cancelLabel ?? "Cancelar"}
             </button>
-            <button type="button" className="opsPrimary" onClick={() => finish(true)}>
+            <button type="button" className="btn btnPrimary" onClick={() => finish(true)}>
               {request.confirmLabel}
             </button>
           </div>

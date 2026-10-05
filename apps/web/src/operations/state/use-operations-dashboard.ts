@@ -1,5 +1,6 @@
 "use client";
 
+import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import type {
@@ -51,7 +52,6 @@ export interface OperationsDashboardState {
   setFilters(filters: OperationsDashboardFilters): void;
   refresh(): void;
   loadMore(): void;
-  requestOrganizationChange(organizationId: string): Promise<void>;
   publishExternalOffer(
     orderId: string,
     commissionCents: number,
@@ -59,13 +59,12 @@ export interface OperationsDashboardState {
     vehicleType: "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER",
     idempotencyKey: string,
   ): Promise<void>;
-  readonly canChangeOrganization: boolean;
 }
 
 export function useOperationsDashboard(
   telemetry: OperationsDashboardTelemetry = noOpOperationsTelemetry,
 ): OperationsDashboardState {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? windowOrigin();
+  const apiBaseUrl = clientApiBaseUrl();
   const [items, setItems] = useState<readonly OperationsDashboardOrder[]>([]);
   const [contexts, setContexts] = useState<
     readonly OperationsOrganizationContext[]
@@ -80,7 +79,6 @@ export function useOperationsDashboard(
     useState<ConnectionState>("Sin sesión");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeOrganizationId, setActiveOrganizationId] = useState("");
-  const [canChangeOrganization, setCanChangeOrganization] = useState(false);
   const sessionRef = useRef<OperationsSession | null>(null);
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const connectionRef = useRef<ManagedRealtimeConnection | null>(null);
@@ -241,9 +239,6 @@ export function useOperationsDashboard(
       return;
     }
     setActiveOrganizationId(session.organizationId);
-    setCanChangeOrganization(
-      session.requestOrganizationChange !== undefined,
-    );
     const api = createOperationsApi(apiBaseUrl, session);
     apiRef.current = api;
     setConnection("Conectando");
@@ -377,12 +372,6 @@ export function useOperationsDashboard(
     [performLoad, telemetry],
   );
 
-  const requestOrganizationChange = useCallback(async (organizationId: string) => {
-    const session = sessionRef.current;
-    if (session?.requestOrganizationChange === undefined) return;
-    await session.requestOrganizationChange(organizationId);
-  }, []);
-
   const publishExternalOffer = useCallback(
     async (
       orderId: string,
@@ -427,9 +416,7 @@ export function useOperationsDashboard(
       void performLoad("replace", "manual");
     },
     loadMore: () => void performLoad("append", "pagination"),
-    requestOrganizationChange,
     publishExternalOffer,
-    canChangeOrganization,
   };
 }
 
@@ -456,8 +443,4 @@ function filterCategory(
 ): string {
   const keys = Object.keys(next) as (keyof OperationsDashboardFilters)[];
   return keys.find((key) => previous[key] !== next[key]) ?? "clear";
-}
-
-function windowOrigin(): string {
-  return typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
 }

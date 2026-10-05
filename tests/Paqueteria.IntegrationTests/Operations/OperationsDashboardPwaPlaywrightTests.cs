@@ -313,7 +313,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                     "() => Intl.DateTimeFormat().resolvedOptions().timeZone"));
             Assert.Equal(
                 "Horarios mostrados en hora de Mazatlán.",
-                (await page.Locator(".opsTimezone").TextContentAsync())?.Trim());
+                (await page.Locator(".pageNote").TextContentAsync())?.Trim());
             var timelineTime = page.Locator(".opsTimeline time").First;
             var timelineIso = await timelineTime.GetAttributeAsync("datetime");
             Assert.NotNull(timelineIso);
@@ -373,7 +373,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 () => {
                   window.__operationsConnectionTransitions = [];
                   const status = document.querySelector(
-                    ".opsHeaderStatus span:first-child");
+                    ".opsConnection");
                   new MutationObserver(() => {
                     window.__operationsConnectionTransitions.push(
                       status?.textContent?.trim() ?? "");

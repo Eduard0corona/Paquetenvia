@@ -1,4 +1,5 @@
 import { formatMxnCentsWithCurrency, parseMxnToCents } from "../../operations/contracts/money";
+import { shortId } from "../../lib/short-id";
 import type { CodTransaction, PendingCodOrder } from "./cod";
 import type { Settlement } from "./settlement";
 
@@ -7,10 +8,6 @@ export interface ConfirmationText {
   readonly title: string;
   readonly description: string;
   readonly confirmLabel: string;
-}
-
-function shortId(value: string): string {
-  return value.slice(0, 8);
 }
 
 function settlementTarget(settlement: Settlement): string {

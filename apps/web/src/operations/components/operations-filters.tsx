@@ -150,7 +150,7 @@ export function OperationsFilters({
       </label>
       <button
         type="button"
-        className="opsSecondary"
+        className="btn btnSecondary"
         onClick={() => {
           onChange({});
         }}

@@ -54,6 +54,7 @@ import {
 } from "../state/external-offers-controller";
 import { disabledDriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
 import { formatMxnCents } from "../../operations/contracts/money";
+import { DriverAccount } from "./driver-account";
 import styles from "./driver-stops.module.css";
 
 const unavailableState: DriverStopsViewState = Object.freeze({
@@ -452,7 +453,10 @@ function DriverShell({
   return (
     <main className={styles.shell} aria-busy={busy}>
       <header className={styles.header}>
-        <p className={styles.eyebrow}>Paquetenvia Repartidor</p>
+        <div className={styles.headerTop}>
+          <p className={styles.eyebrow}>Paquetenvia Repartidor</p>
+          <DriverAccount />
+        </div>
         <h1>Mis paradas</h1>
         <p className={styles.intro}>
           Consulta y registra las acciones de tus recolecciones y entregas.

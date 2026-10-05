@@ -1,3 +1,5 @@
+import { shortId } from "../../lib/short-id";
+
 export type RouteStatus = "DRAFT" | "PLANNED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
 export interface ManualRoute {
@@ -61,7 +63,7 @@ export function removeRouteStopConfirmation(stop: ManualRouteStop): {
     title: "¿Retirar parada?",
     description:
       `Se retirará de la ruta la parada ${stop.sequence} (${routeStopTypeLabels[stop.stop_type].toLowerCase()} ` +
-      `de la orden ${stop.order_id.slice(0, 8)}). La orden quedará fuera de esta ruta.`,
+      `de la orden ${shortId(stop.order_id)}). La orden quedará fuera de esta ruta.`,
     confirmLabel: "Retirar",
   };
 }

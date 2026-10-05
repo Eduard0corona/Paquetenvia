@@ -67,15 +67,11 @@ describe("operations page privacy policy", () => {
     }
   });
 
-  it("links the dashboard to order creation and finance screens to each other", () => {
-    const dashboard = readFileSync("src/operations/components/operations-dashboard-shell.tsx", "utf8");
-    expect(dashboard).toContain('href="/ops/orders/new"');
-    expect(dashboard).toContain('href="/finance/cod"');
-    const cod = readFileSync("src/finance/components/cod-shell.tsx", "utf8");
-    expect(cod).toContain('href="/finance/settlements"');
-    expect(cod).toContain('href="/ops/dashboard"');
-    const settlements = readFileSync("src/finance/components/settlements-shell.tsx", "utf8");
-    expect(settlements).toContain('href="/finance/cod"');
-    expect(settlements).toContain('href="/ops/dashboard"');
+  it("reaches order creation and the finance screens from the shared app shell navigation", () => {
+    const nav = readFileSync("src/components/app-shell/nav-items.ts", "utf8");
+    for (const href of ["/ops/orders/new", "/ops/dashboard", "/finance/cod", "/finance/settlements"])
+      expect(nav).toContain(`href: "${href}"`);
+    for (const layout of ["src/app/ops/layout.tsx", "src/app/finance/layout.tsx"])
+      expect(readFileSync(layout, "utf8")).toContain("<AppShell>");
   });
 });
