@@ -178,6 +178,60 @@ public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplica
     }
 
     [Fact]
+    public async Task POST_transition_names_the_rule_code_to_a_caller_holding_the_capability()
+    {
+        var orderId = await CreateOrderAsync(MockIdentityProfiles.ActivePlatformAdminMfa);
+        using var invalidState = await TransitionAsync(orderId, Key(), "DELIVERED", 1);
+        await AssertCodedConflictAsync(invalidState, "TRANSITION_NOT_ALLOWED");
+
+        using var wrongVersion = await TransitionAsync(orderId, Key(), "CANCELLED", 2);
+        await AssertCodedConflictAsync(wrongVersion, "VERSION_CONFLICT");
+
+        using var missingGuard = await TransitionAsync(orderId, Key(), "CONFIRMED", 1, metadata: new { });
+        await AssertCodedConflictAsync(missingGuard, "RESTRICTED_GOODS_ACK_REQUIRED");
+
+        using var cancelled = await TransitionAsync(orderId, Key(), "CANCELLED", 1);
+        Assert.Equal(HttpStatusCode.OK, cancelled.StatusCode);
+        using var terminal = await TransitionAsync(orderId, Key(), "CONFIRMED", 2,
+            metadata: new { restricted_goods_acknowledged = true });
+        await AssertCodedConflictAsync(terminal, "ORDER_TERMINAL");
+    }
+
+    [Fact]
+    public async Task POST_transition_keeps_the_identical_uncoded_409_for_missing_foreign_and_incapable_callers()
+    {
+        // The reference is a request-shape rejection: decided before any persisted state is read.
+        using var shape = await TransitionAsync(Guid.NewGuid(), Key(), "NOT_A_STATUS", 1);
+        var reference = await NormalizedProblemAsync(shape);
+        Assert.False(reference.ContainsKey("code"));
+
+        using var missing = await TransitionAsync(Guid.NewGuid(), Key(), "CANCELLED", 1);
+        using var foreign = await TransitionAsync(
+            OrderHttpWebApplicationFactory.ForeignOrderId,
+            Key(),
+            "CANCELLED",
+            1);
+        using var foreignStale = await TransitionAsync(
+            OrderHttpWebApplicationFactory.ForeignOrderId,
+            Key(),
+            "DELIVERED",
+            99);
+        var ownOrder = await CreateOrderAsync(MockIdentityProfiles.ActiveDispatcher);
+        using var viewerStale = await TransitionAsync(
+            ownOrder,
+            Key(),
+            "CANCELLED",
+            2,
+            profile: MockIdentityProfiles.ActiveViewer);
+
+        foreach (var response in new[] { missing, foreign, foreignStale, viewerStale })
+        {
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Equal(reference, await NormalizedProblemAsync(response));
+        }
+    }
+
+    [Fact]
     public async Task POST_transition_returns_incremented_order_and_replays_identical_safe_200()
     {
         var orderId = await CreateOrderAsync(MockIdentityProfiles.ActivePlatformAdminMfa);
@@ -406,6 +460,34 @@ public sealed class OrderTransitionHttpTests : IClassFixture<OrderHttpWebApplica
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(409, body.RootElement.GetProperty("status").GetInt32());
         Assert.Equal("Conflict.", body.RootElement.GetProperty("title").GetString());
+    }
+
+    private static async Task AssertCodedConflictAsync(HttpResponseMessage response, string code)
+    {
+        await AssertConflictAsync(response);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(code, body.RootElement.GetProperty("code").GetString());
+        // The rule code is the only addition: no detail, identifier or guard evidence.
+        Assert.Equal(
+            ["code", "status", "title", "traceId", "type"],
+            body.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>The problem members and values, without the per-request traceId.</summary>
+    private static async Task<SortedDictionary<string, string>> NormalizedProblemAsync(HttpResponseMessage response)
+    {
+        Assert.StartsWith("application/problem+json", response.Content.Headers.ContentType?.ToString());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var members = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in body.RootElement.EnumerateObject())
+        {
+            if (property.Name != "traceId")
+            {
+                members[property.Name] = property.Value.GetRawText();
+            }
+        }
+
+        return members;
     }
 
     private static string Key() => $"transition-http-{Guid.NewGuid():N}";

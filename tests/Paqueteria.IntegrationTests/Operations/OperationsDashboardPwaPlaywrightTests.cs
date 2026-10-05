@@ -119,6 +119,30 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             Assert.True(
                 await recorder.WaitForNextOperationsAcceptedAsync(
                     TimeSpan.FromSeconds(10)));
+            Assert.Equal(
+                ["Por preparar", "En recolección", "En ruta", "Requiere atención", "Terminadas"],
+                (await page.Locator(".opsBoardColumn > h2 .statusChipText")
+                    .AllTextContentsAsync())
+                    .Select(text => text.Trim())
+                    .ToArray());
+            // UI-PHASE2-QUEUE-COUNTS-2026-10-05: the indicators and the group totals come from the real
+            // getOperationsQueueCounts on the same API, never from the loaded page.
+            var groupTotals = page.Locator(".opsBoardColumn > h2 .opsBoardTotal");
+            await groupTotals.Nth(4).WaitForAsync();
+            Assert.All(
+                await groupTotals.AllTextContentsAsync(),
+                text => Assert.Matches("^[0-9]+ en total$", text.Trim()));
+            Assert.Equal(
+                ["Sin asignar", "Requiere atención", "Revisar precio", "Entregadas sin cerrar", "En ruta"],
+                (await page.Locator(".opsSummary article > span").AllTextContentsAsync())
+                    .Select(text => text.Trim())
+                    .ToArray());
+            Assert.All(
+                await page.Locator(".opsSummary article > strong").AllTextContentsAsync(),
+                text => Assert.Matches("^[0-9]+$", text.Trim()));
+            Assert.Contains(
+                requests,
+                request => request.Url.EndsWith("/api/v1/operations/queue-counts", StringComparison.Ordinal));
             Assert.Contains(
                 "no-cache",
                 (await response.AllHeadersAsync())["cache-control"],
@@ -190,7 +214,8 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 "PROCESSED",
                 await WaitForOutboxAsync(database, statusEvent.OutboxId));
             await WaitForDashboardRequestAsync(requests, dashboardRequests);
-            await page.Locator(".opsOrderCard .opsStatus")
+            await page.Locator(
+                    ".opsBoardColumn:has(#status-group-EN_ROUTE) .opsOrderCard .statusBadgeLabel")
                 .GetByText("En reparto", new() { Exact = true })
                 .WaitForAsync();
 
@@ -277,7 +302,8 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 reconnectRequests[1] >= reconnectObservedAt,
                 $"Mandatory REST started at {reconnectRequests[1]:O}, " +
                 $"before reconnect was observed at {reconnectObservedAt:O}.");
-            await page.Locator(".opsOrderCard .opsStatus")
+            await page.Locator(
+                    ".opsBoardColumn:has(#status-group-FINISHED) .opsOrderCard .statusBadgeLabel")
                 .GetByText("Cerrada", new() { Exact = true })
                 .WaitForAsync(new LocatorWaitForOptions { Timeout = 30_000 });
             await page.GetByText("Conectada", new() { Exact = true }).WaitForAsync(
@@ -302,7 +328,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 .WaitForAsync();
             await page.GetByRole(
                     AriaRole.Heading,
-                    new() { Name = "Timeline", Exact = true })
+                    new() { Name = "Historial", Exact = true })
                 .WaitForAsync();
             Assert.Equal(
                 documentsBeforeDetail,
@@ -313,21 +339,49 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                     "() => Intl.DateTimeFormat().resolvedOptions().timeZone"));
             Assert.Equal(
                 "Horarios mostrados en hora de Mazatlán.",
-                (await page.Locator(".opsTimezone").TextContentAsync())?.Trim());
+                (await page.Locator(".pageNote").TextContentAsync())?.Trim());
             var timelineTime = page.Locator(".opsTimeline time").First;
             var timelineIso = await timelineTime.GetAttributeAsync("datetime");
             Assert.NotNull(timelineIso);
             Assert.Equal(
                 await FormatInMazatlanAsync(page, timelineIso),
                 (await timelineTime.TextContentAsync())?.Trim());
-            Assert.True(await page.GetByRole(
-                    AriaRole.Button,
-                    new() { Name = "Asignar repartidor propio", Exact = true })
-                .IsDisabledAsync());
-            Assert.True(await page.GetByRole(
-                    AriaRole.Button,
-                    new() { Name = "Abrir incidencia", Exact = true })
-                .IsDisabledAsync());
+            Assert.Equal(
+                0,
+                await page.Locator("main button[disabled]").CountAsync());
+            Assert.Equal(
+                "/ops/incidents",
+                await page.GetByRole(
+                        AriaRole.Link,
+                        new() { Name = "Abrir incidencia", Exact = true })
+                    .GetAttributeAsync("href"));
+            Assert.Equal(
+                "/ops/dashboard",
+                await page.GetByRole(
+                        AriaRole.Link,
+                        new() { Name = "Publicar oferta externa desde el tablero", Exact = true })
+                    .GetAttributeAsync("href"));
+
+            // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Buscar guía" searches the exact tracking number through
+            // listOrders on the real API; an unknown number shows the uniform message and a match opens the order.
+            var search = page.GetByRole(AriaRole.Search, new() { Name = "Buscar guía", Exact = true });
+            var searchBox = search.GetByRole(AriaRole.Searchbox);
+            await searchBox.FillAsync("ORD_" + new string('Z', 22));
+            await search.GetByRole(AriaRole.Button, new() { Name = "Buscar", Exact = true }).ClickAsync();
+            await search.GetByText("No encontramos esa guía", new() { Exact = true }).WaitForAsync();
+            await searchBox.FillAsync(PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId);
+            await search.GetByRole(AriaRole.Button, new() { Name = "Buscar", Exact = true }).ClickAsync();
+            await page.WaitForFunctionAsync(
+                "() => document.querySelector('form[role=search] input')?.value === ''");
+            await page.GetByRole(
+                    AriaRole.Heading,
+                    new()
+                    {
+                        Name = PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId,
+                        Exact = true,
+                    })
+                .WaitForAsync();
+            Assert.Equal(0, await search.GetByText("No encontramos esa guía", new() { Exact = true }).CountAsync());
 
             var persistence = await page.EvaluateAsync<PersistenceEvidence>(
                 """
@@ -366,7 +420,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 () => {
                   window.__operationsConnectionTransitions = [];
                   const status = document.querySelector(
-                    ".opsHeaderStatus span:first-child");
+                    ".opsConnection");
                   new MutationObserver(() => {
                     window.__operationsConnectionTransitions.push(
                       status?.textContent?.trim() ?? "");

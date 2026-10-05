@@ -57,7 +57,7 @@ export const settlementConflictMessages: Readonly<Record<string, string>> = {
   CONFLICT:
     "La solicitud chocó con otra operación o con una clave de idempotencia usada con otros datos; actualiza y vuelve a intentar.",
   SETTLEMENT_STATE_CONFLICT:
-    "El estado actual de la liquidación no permite esta acción; se recargó la versión del servidor.",
+    "El estado actual de la liquidación no permite esta acción; se recargó la versión más reciente.",
   CASH_PENDING: "No se puede aprobar: hay efectivo contra entrega sin conciliar por el monto esperado.",
   INCIDENT_PENDING: "No se puede aprobar: hay una incidencia abierta o en investigación en una orden incluida.",
   CLAIM_PENDING: "No se puede aprobar: una orden incluida tiene una reclamación abierta.",
@@ -162,7 +162,7 @@ export interface CreateSettlementBody {
 /** CreateSettlementRequest: period_to not before period_from, at most 366 days. */
 export function validateCreateSettlement(body: CreateSettlementBody): readonly string[] {
   const errors: string[] = [];
-  if (!isCanonicalUuid(body.driver_id)) errors.push("El repartidor debe ser un UUID.");
+  if (!isCanonicalUuid(body.driver_id)) errors.push("El ID del repartidor no es válido.");
   const validDates = isCalendarDate(body.period_from) && isCalendarDate(body.period_to);
   if (!validDates) errors.push("Captura fechas de periodo válidas (AAAA-MM-DD).");
   if (validDates) {

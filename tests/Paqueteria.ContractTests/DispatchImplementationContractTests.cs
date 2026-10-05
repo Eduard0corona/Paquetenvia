@@ -22,7 +22,9 @@ public sealed class DispatchImplementationContractTests
         var source = File.ReadAllText(path);
 
         Assert.Equal(3, Count(source, "endpoints.MapPost("));
-        Assert.Equal(2, Count(source, "endpoints.MapGet("));
+        Assert.Equal(3, Count(source, "endpoints.MapGet("));
+        Assert.Contains("MapGet(\"/api/v1/orders/{orderId}/assignable-drivers\"", source, StringComparison.Ordinal);
+        Assert.Contains(".WithName(\"listAssignableDrivers\")", source, StringComparison.Ordinal);
         Assert.Contains("MapPost(\"/api/v1/orders/{orderId}/assignments\"", source, StringComparison.Ordinal);
         Assert.Contains("MapGet(\"/api/v1/driver/me/stops\"", source, StringComparison.Ordinal);
         Assert.Contains("MapPost(\"/api/v1/external-offers\"", source, StringComparison.Ordinal);
@@ -60,6 +62,17 @@ public sealed class DispatchImplementationContractTests
             "accepted_at", "accepted_by_driver_id", "commission", "expires_at", "id",
             "order_id", "status", "version");
         AssertJsonProperties<ExternalOfferPageResponse>("items", "next_cursor");
+        AssertJsonProperties<AssignableDriverResponse>(
+            "active_assignment_count", "driver_id", "driver_reference", "eligible", "ineligibility_reasons",
+            "vehicle_type");
+        AssertJsonProperties<AssignableDriverPageResponse>("items", "next_cursor");
+        Assert.DoesNotContain(
+            typeof(AssignableDriverResponse).GetProperties().Select(property => property.Name),
+            name => name.Contains("Name", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Phone", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Email", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Document", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Location", StringComparison.OrdinalIgnoreCase));
 
         var stopNames = typeof(DriverStopResponse).GetProperties()
             .Select(property => property.Name)
@@ -174,6 +187,69 @@ public sealed class DispatchImplementationContractTests
                 .Children.Cast<YamlScalarNode>().Select(value => value.Value));
     }
 
+    /// <summary>
+    /// UI-PHASE2-DRIVER-PICKER-2026-10-05: listAssignableDrivers is published with the same precedence, visibility and
+    /// conflict response as assignDriver, and its schemas carry exactly the vocabulary the server enforces.
+    /// </summary>
+    [Fact]
+    public void AI05_assignable_driver_list_matches_the_implemented_vocabulary()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var operation = root.Mapping("paths").Mapping("/orders/{orderId}/assignable-drivers").Mapping("get");
+        Assert.Equal("listAssignableDrivers", operation.Scalar("operationId"));
+        Assert.Contains("UI-PHASE2-DRIVER-PICKER-2026-10-05", operation.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal(
+            "shape-validation-then-capability-before-persisted-state",
+            operation.Scalar("x-authorization-precedence"));
+        Assert.Equal(
+            ["order_packages", "driver_profile_documents"],
+            operation.Sequence("x-capability-protected-state").Children.Cast<YamlScalarNode>().Select(value => value.Value));
+        var responses = operation.Mapping("responses");
+        Assert.Equal(
+            ["200", "401", "403", "404", "409", "503"],
+            responses.Children.Keys.Cast<YamlScalarNode>().Select(value => value.Value));
+        Assert.Equal("#/components/responses/UniformNotFound", responses.Mapping("404").Scalar("$ref"));
+        Assert.Equal("#/components/responses/DispatchAssignmentConflict", responses.Mapping("409").Scalar("$ref"));
+        var cursor = Assert.Single(
+            operation.Sequence("parameters").Children.Cast<YamlMappingNode>(),
+            parameter => parameter.Children.ContainsKey(new YamlScalarNode("name")));
+        Assert.Equal("cursor", cursor.Scalar("name"));
+        Assert.Equal("query", cursor.Scalar("in"));
+        Assert.Equal(["cursor"], DispatchEndpointsQueryParameters());
+
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var driver = schemas.Mapping("AssignableDriver");
+        Assert.Equal("false", driver.Scalar("additionalProperties"));
+        Assert.Equal(
+            [
+                "active_assignment_count", "driver_id", "driver_reference", "eligible", "ineligibility_reasons",
+                "vehicle_type",
+            ],
+            RequiredPropertyNames(driver));
+        var properties = driver.Mapping("properties");
+        Assert.Equal("^DRV-[0-9a-f]{8}$", properties.Mapping("driver_reference").Scalar("pattern"));
+        Assert.Equal(
+            Dispatch.Application.Assignments.AssignableDriverPolicy.VehicleTypes.ToArray(),
+            properties.Mapping("vehicle_type").Sequence("enum").Children.Cast<YamlScalarNode>()
+                .Select(value => value.Value!).ToArray());
+        Assert.Equal(
+            Dispatch.Application.Assignments.AssignableDriverPolicy.ReasonCodes.ToArray(),
+            properties.Mapping("ineligibility_reasons").Mapping("items").Sequence("enum")
+                .Children.Cast<YamlScalarNode>().Select(value => value.Value!).ToArray());
+        Assert.Equal(["items", "next_cursor"], RequiredPropertyNames(schemas.Mapping("AssignableDriverPage")));
+
+        // Every policy code except the two driver-type codes (only OWN profiles are listed) is published.
+        var policyCodes = typeof(Drivers.Application.Eligibility.DriverEligibilityRejectionCodes)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Select(field => (string)field.GetValue(null)!)
+            .Where(code => code is not ("DRIVER_TYPE_NOT_OWN" or "DRIVER_TYPE_NOT_EXTERNAL"))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            policyCodes,
+            Dispatch.Application.Assignments.AssignableDriverPolicy.ReasonCodes.Order(StringComparer.Ordinal).ToArray());
+    }
+
     [Fact]
     public void Ef_model_maps_only_dispatch_assignments_with_the_exact_columns_and_partial_index()
     {
@@ -273,6 +349,28 @@ public sealed class DispatchImplementationContractTests
         Assert.Equal(3, Count(coordinator, "OperatorOwnerEventWriter.AppendOutboxAsync("));
         Assert.Equal(2, Count(coordinator, "OperatorOwnerEventWriter.AppendAuditAsync("));
         Assert.Equal(5, Count(coordinator, "if (actingAsOperator)"));
+    }
+
+    private static string[] DispatchEndpointsQueryParameters()
+    {
+        var accepted = new List<string>();
+        foreach (var name in new[] { "cursor", "limit", "page_size", "status", "driver_id", "order_id" })
+        {
+            var query = new Microsoft.AspNetCore.Http.QueryCollection(
+                new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+                {
+                    [name] = name == "cursor"
+                        ? Dispatch.Application.Assignments.AssignableDriverCursorCodec.Encode(
+                            new Dispatch.Application.Assignments.AssignableDriverCursor(Guid.NewGuid()))
+                        : "1",
+                });
+            if (DispatchEndpoints.TryReadAssignableDriversQuery(query, out _))
+            {
+                accepted.Add(name);
+            }
+        }
+
+        return accepted.ToArray();
     }
 
     private static void AssertJsonProperties<T>(params string[] expected)

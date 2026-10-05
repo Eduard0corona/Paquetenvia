@@ -6,16 +6,13 @@ import {
   buildLoginHref,
   buildStepUpHref,
   isLocalReturnUrl,
-  logoutBffSession,
-  navigateAfterLogout,
-  type BffLogoutResult,
   type BffSessionState,
 } from "../bff-session";
 import {
   bootstrapBffSession,
-  clearInstalledSessions,
   type BffSessionInstallation,
 } from "../bff-session-installation";
+import { endBffSession } from "../logout";
 import { loginErrorMessage } from "../login-errors";
 import { shouldOfferStepUp } from "../step-up";
 import { StepUpPrompt } from "./step-up-prompt";
@@ -27,11 +24,6 @@ type ViewState =
       readonly session: BffSessionState;
       readonly installation: BffSessionInstallation;
     };
-
-const destinations = {
-  operations: "/ops/dashboard",
-  driver: "/driver/stops",
-} as const;
 
 export function LoginExperience() {
   const search = useSearchParams();
@@ -66,18 +58,9 @@ export function LoginExperience() {
 
   async function logout(csrfToken: string) {
     setBusy(true);
-    let result: BffLogoutResult = { ok: false };
-    try {
-      result = await logoutBffSession(csrfToken);
-    } finally {
-      clearInstalledSessions(window);
-    }
-    if (result.ok) {
-      // AUTH-001-RP-INITIATED-LOGOUT: AuthCenter ends its single sign-on session and returns
-      // to /login; without an end-session URL the local logout is all there is.
-      navigateAfterLogout(result, window.location);
-      return;
-    }
+    // AUTH-001-RP-INITIATED-LOGOUT: AuthCenter ends its single sign-on session and returns
+    // to /login; without an end-session URL the local logout is all there is.
+    if (await endBffSession(csrfToken, window, window.location)) return;
     setBusy(false);
     await reload();
   }
@@ -166,7 +149,7 @@ function SessionView({
       ) : (
         <>
           <p>Organización activa: {installation.displayName}.</p>
-          <a className="button" href={returnUrl ?? destinations[installation.kind]}>
+          <a className="button" href={returnUrl ?? installation.landingPath}>
             Continuar
           </a>
         </>
@@ -174,7 +157,7 @@ function SessionView({
       <p>
         <button
           type="button"
-          className="textLink"
+          className="btnLink"
           disabled={busy}
           onClick={() => void onLogout(session.csrfToken)}
         >

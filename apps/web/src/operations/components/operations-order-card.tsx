@@ -2,20 +2,27 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
+import type { ConfirmRequest } from "../../components/confirm-dialog";
+import { externalOfferConfirmation } from "../contracts/external-offer-confirmation";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
-  formatMazatlanTime,
-  orderStatusLabels,
+  assignmentTypeLabel,
   serviceTypeLabel,
 } from "../contracts/operations-formatters";
+import { DateTime } from "../../components/ui/date-time";
+import { DescriptionList } from "../../components/ui/description-list";
+import { StatusBadge } from "../../components/ui/status-badge";
+import { parseMxnToCents } from "../contracts/money";
 import { formatServiceWindow } from "../contracts/service-window";
 import { operationsOrderHref } from "../routing/operations-routing";
 
 export function OperationsOrderCard({
   order,
+  confirm,
   onPublishExternalOffer,
 }: {
   readonly order: OperationsDashboardOrder;
+  readonly confirm: (request: ConfirmRequest) => void;
   readonly onPublishExternalOffer: (
     orderId: string,
     commissionCents: number,
@@ -33,42 +40,29 @@ export function OperationsOrderCard({
     <article className="opsOrderCard">
       <div className="opsCardHeading">
         <h3>{order.public_id}</h3>
-        <span className="opsStatus">{orderStatusLabels[order.status]}</span>
+        <StatusBadge status={order.status} showGroup={false} />
       </div>
-      <dl>
-        <Row label="Owner" value={order.owner.display_name} />
-        <Row
-          label="Operator"
-          value={order.operator?.display_name ?? "Sin operador"}
-        />
-        <Row label="Cliente" value={order.client?.display_name ?? "No disponible"} />
-        <Row
-          label="Zona"
-          value={order.delivery_zone?.name ?? "Sin zona asignada"}
-        />
-        <Row label="Servicio" value={serviceTypeLabel(order.service_type)} />
-        <Row label="Recolección" value="Por confirmar" />
-        <Row label="Entrega" value={formatServiceWindow(order.delivery_window)} />
-        <Row
-          label="Asignación"
-          value={assignmentLabel(order.assignment?.assignment_type)}
-        />
-        <Row
-          label="Repartidor"
-          value={order.assignment?.driver_reference ?? "Sin repartidor"}
-        />
-        <Row
-          label="Actualizada"
-          value={formatMazatlanTime(order.updated_at)}
-        />
-      </dl>
+      <DescriptionList
+        items={[
+          { label: "Dueño", value: order.owner.display_name },
+          { label: "Opera", value: order.operator?.display_name ?? "Sin operador" },
+          { label: "Cliente", value: order.client?.display_name ?? "No disponible" },
+          { label: "Zona", value: order.delivery_zone?.name ?? "Sin zona asignada" },
+          { label: "Servicio", value: serviceTypeLabel(order.service_type) },
+          { label: "Recolección", value: "Por confirmar" },
+          { label: "Entrega", value: formatServiceWindow(order.delivery_window) },
+          { label: "Asignación", value: assignmentTypeLabel(order.assignment?.assignment_type) },
+          { label: "Repartidor", value: order.assignment?.driver_reference ?? "Sin repartidor" },
+          { label: "Actualizada", value: <DateTime value={order.updated_at} /> },
+        ]}
+      />
       {order.unassigned_alert && (
-        <p className="opsAlert" role="status">
+        <p className="notice noticeCrit" role="status">
           Requiere asignación
         </p>
       )}
       {order.cost_warning !== null && (
-        <p className="opsWarning" title="Revisión operativa de precio requerida.">
+        <p className="notice noticeWarn" title="Revisión operativa de precio requerida.">
           Revisar precio
         </p>
       )}
@@ -79,76 +73,63 @@ export function OperationsOrderCard({
             event.preventDefault();
             if (publishing) return;
             const data = new FormData(event.currentTarget);
-            const commission = Number(data.get("commission"));
+            const commissionCents = parseMxnToCents(String(data.get("commission") ?? ""));
             const expires = String(data.get("expires"));
             const vehicle = String(data.get("vehicle")) as
               | "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER";
-            if (!Number.isFinite(commission) || commission < 0 || !expires) {
-              setMessage("Completa una comision y expiracion validas.");
+            const expiresAt = new Date(expires);
+            if (commissionCents === null || !expires || Number.isNaN(expiresAt.getTime())) {
+              setMessage("Completa una comisión y una expiración válidas.");
               return;
             }
-            const key = keyRef.current ?? crypto.randomUUID();
-            keyRef.current = key;
-            setPublishing(true);
-            setMessage(null);
-            void onPublishExternalOffer(
-              order.order_id,
-              Math.round(commission * 100),
-              new Date(expires).toISOString(),
-              vehicle,
-              key,
-            ).then(() => {
-              keyRef.current = null;
-              setMessage("Oferta externa publicada.");
-            }).catch(() => {
-              setMessage("No fue posible publicar la oferta.");
-            }).finally(() => setPublishing(false));
+            confirm({
+              ...externalOfferConfirmation(order.public_id, commissionCents, expiresAt, vehicle),
+              onConfirm: () => {
+                const key = keyRef.current ?? crypto.randomUUID();
+                keyRef.current = key;
+                setPublishing(true);
+                setMessage(null);
+                void onPublishExternalOffer(
+                  order.order_id,
+                  commissionCents,
+                  expiresAt.toISOString(),
+                  vehicle,
+                  key,
+                ).then(() => {
+                  keyRef.current = null;
+                  setMessage("Oferta externa publicada.");
+                }).catch(() => {
+                  setMessage("No fue posible publicar la oferta.");
+                }).finally(() => setPublishing(false));
+              },
+            });
           }}
         >
           <strong>Publicar oferta externa</strong>
-          <label>Comision (MXN)<input name="commission" type="number" min="0" step="0.01" required /></label>
-          <label>Expiracion<input name="expires" type="datetime-local" required /></label>
-          <label>Vehiculo<select name="vehicle" defaultValue="MOTORCYCLE">
+          <label>Comisión (MXN)<input name="commission" type="text" inputMode="decimal" pattern="\d{1,13}(\.\d{1,2})?" placeholder="45.00" required /></label>
+          <label>Expiración<input name="expires" type="datetime-local" required /></label>
+          <label>Vehículo<select name="vehicle" defaultValue="MOTORCYCLE">
             <option value="MOTORCYCLE">Motocicleta</option>
-            <option value="CAR">Automovil</option>
+            <option value="CAR">Automóvil</option>
             <option value="VAN">Van</option>
             <option value="BICYCLE">Bicicleta</option>
             <option value="WALKER">A pie</option>
           </select></label>
-          <button className="opsPrimary" type="submit" disabled={publishing}>
+          <button className="btn btnPrimary" type="submit" disabled={publishing}>
             {publishing ? "Publicando..." : "Publicar oferta"}
           </button>
           <span role="status" aria-live="polite">{message}</span>
         </form>
       ) : null}
-      <Link className="opsPrimary" href={operationsOrderHref(order.order_id)}>
+      <Link className="btn btnPrimary" href={operationsOrderHref(order.order_id)}>
         Abrir orden
       </Link>
       {order.assignment?.assignment_type === "OWN" &&
       ["ACCEPTED", "ACTIVE"].includes(order.assignment.status) ? (
-        <Link className="opsPrimary" href={`/ops/routes?orderId=${encodeURIComponent(order.order_id)}`}>
+        <Link className="btn btnPrimary" href={`/ops/routes?orderId=${encodeURIComponent(order.order_id)}`}>
           Agregar a ruta
         </Link>
       ) : null}
     </article>
-  );
-}
-
-function Row({ label, value }: { readonly label: string; readonly value: string }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
-  );
-}
-
-function assignmentLabel(value?: string): string {
-  return (
-    {
-      OWN: "Flota propia",
-      EXTERNAL: "Externa",
-      ALLY_CAPACITY: "Capacidad aliada",
-    }[value ?? ""] ?? "Sin asignación"
   );
 }

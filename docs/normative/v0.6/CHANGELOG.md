@@ -1,5 +1,76 @@
 # Changelog
 
+## Conteos reales de la bandeja de operaciones (UI-PHASE2-QUEUE-COUNTS-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`. Fase 2: "Conteos para la bandeja" (conteo real del servidor; hoy los indicadores cuentan solo lo
+  cargado).
+- AI-05: `getOperationsQueueCounts` (`GET /operations/queue-counts`, esquemas `OperationsQueueCounts`,
+  `OperationsQueues` y `OperationsCount`, módulo Reporting). Solo conteos enteros sobre las órdenes que la organización
+  activa puede leer como dueña u operadora (RLS): `total`, `by_status` con los 17 estados AI-04 (incluye ceros) y
+  `queues` (`unassigned`, `needs_attention`, `price_review`, `delivered_not_closed`, `en_route`), cada una con una regla
+  que el tablero ya aplica. Sin parámetros ni filtros (cualquier query es 400). Mismos roles que el tablero:
+  DISPATCHER y PLATFORM_ADMIN con MFA (`x-capability-matrix.operations_queue_operations`); VIEWER recibe 403.
+- AI-07 `/ops/dashboard` `queue_counts`: indicadores "Sin asignar", "Requiere atención", "Revisar precio",
+  "Entregadas sin cerrar" y "En ruta", y "N en total" por grupo de estado, recargados junto con la lista.
+- Sin migraciones, tablas, índices, roles, grants ni flujos nuevos; AI-04, AI-06 y AI-18 sin cambios.
+
+## Código de la regla incumplida al cambiar el estado (ORD-002-GUARD-CODES-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`; ADR `docs/adr/ADR-ORD-002-TRANSITION-REJECTION-CODES.md`.
+- AI-05 `TransitionConflictProblem.code` (409 de `transitionOrder`): enum cerrado con los códigos de versión y matriz
+  AI-04 (VERSION_CONFLICT, TRANSITION_NOT_ALLOWED, ORDER_TERMINAL, ORDER_FINALIZED, CLAIM_WINDOW_CLOSED) y un código por
+  cada guarda AI-04 existente (`x-ord-002-guard-codes`), además de OFFLINE_OPERATION_EXPIRED. Sin guardas ni estados
+  nuevos.
+- Solo se devuelve para una orden de la organización seleccionada (dueña) y a quien tiene la capacidad de
+  `transitionOrder` sobre ella (DISPATCHER, PLATFORM_ADMIN con MFA, DRIVER con la asignación ACCEPTED/ACTIVE de esa
+  orden). Orden inexistente, ajena u operada, forma inválida, idempotencia, concurrencia y quien no tiene la capacidad
+  siguen recibiendo el mismo 409 uniforme sin código. Sin datos personales, identificadores ni montos.
+- AI-07 "Siguiente paso": mensaje es-MX por código desde un solo helper; código ausente o desconocido usa el mensaje
+  genérico.
+- Sin migraciones, tablas, roles, grants ni flujos nuevos; AI-06 y AI-18 sin cambios.
+- AI-04 `guards` documenta `CLAIM_RESOLVED: [claim_resolution_reason_present]`, guarda que el código ya aplicaba;
+  el mapa de códigos y AI-04 se verifican ahora en ambas direcciones.
+
+## Búsqueda por guía y acciones válidas de la orden (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`.
+- AI-05 `listOrders`: parámetro opcional `public_id`, coincidencia exacta del número de guía (`ORD_` y 22 caracteres
+  Base64URL); un valor con otro formato no coincide con nada; orden ajena, inexistente o mal formada devuelven la
+  misma página vacía (RLS). Solo se busca por guía, nunca por datos personales. Sin capacidad nueva.
+- AI-05 `OrderDetail.allowed_transitions` (esquema `OrderAllowedTransition`): transiciones ORD-002 que quien consulta
+  podría pedir ahora, calculadas por el servidor con la matriz AI-04, la regla de solo dueño, la versión y las reglas de
+  rol de `transitionOrder`; `required_metadata` indica `restricted_goods_acknowledged` o `incident_id`. No evalúa ni
+  expone guardas; es orientativa y `transitionOrder` vuelve a validar todo.
+- AI-07: "Buscar guía" en la barra superior y "Siguiente paso" en `/ops/orders/:id` (solo acciones válidas, motivo
+  obligatorio, confirmación, Idempotency-Key, recarga REST).
+- Sin migraciones, tablas, índices, roles, grants ni flujos nuevos; AI-04, AI-06 y AI-18 sin cambios.
+
+## Asignar repartidor desde el detalle de la orden (UI-PHASE2-DRIVER-PICKER-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`.
+- AI-05: `listAssignableDrivers` (`GET /orders/{orderId}/assignable-drivers`, esquemas `AssignableDriver` y
+  `AssignableDriverPage`). Lista por cursor los repartidores OWN de la organización activa (no INACTIVE) con
+  `driver_id`, la referencia `DRV-xxxxxxxx` que ya muestra el tablero (no hay nombre de repartidor en AI-06; no se lee
+  ni devuelve nombre, correo, teléfono, documentos ni ubicación), vehículo, si `assignDriver` lo aceptaría ahora para
+  esa orden con la misma política DSP-001 y los códigos estables cuando no, y sus asignaciones ACCEPTED/ACTIVE.
+  Mismos roles que `assignDriver` (`x-capability-matrix.assignable_driver_operations`); 404 uniforme; 409 CONFLICT si la
+  orden no admite asignación; solo lectura.
+- AI-07 `/ops/orders/:id`: panel "Asignar repartidor" (lista, costo en MXN a centavos enteros, confirmación, misma
+  Idempotency-Key en reintentos, recarga REST); "Publicar oferta externa desde el tablero" sigue como alternativa.
+- Sin migraciones, tablas, índices, roles, grants ni flujos nuevos; AI-06 y AI-18 sin cambios.
+
+## Cinco grupos de estado en la interfaz (UI-STATUS-GROUPS-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md` con el mapeo aprobado.
+- Solo presentación en `apps/web` (UI-001): el tablero agrupa las órdenes en Por preparar, En recolección, En ruta,
+  Requiere atención y Terminadas, sin ocultar el estado exacto de AI-04. Máquina de estados, terminalidad, ventana de
+  reclamo, API, tracking público y PWA del repartidor sin cambios.
+
 ## El repartidor del operador recibe los cambios de estado del dueño (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03) — 2026-10-03
 
 - Respuesta literal del project owner: "Solo avisar a su repartidor"; registrada en `decision-log.md`.

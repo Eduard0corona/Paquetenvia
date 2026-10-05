@@ -13,16 +13,70 @@
   padding: 1rem 0 1.25rem;
 }
 
+.headerTop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem 0.75rem;
+  font-size: var(--text-sm);
+}
+
+.accountName {
+  max-width: 12rem;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountLogout {
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.85rem;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.accountLogout:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.accountLogout:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.accountHint {
+  flex-basis: 100%;
+  color: var(--muted);
+  text-align: right;
+}
+
 .header h1 {
   margin: 0.2rem 0 0.45rem;
-  font-size: clamp(2rem, 10vw, 3.2rem);
+  font-size: clamp(var(--text-xl), 7vw, var(--text-2xl));
   line-height: 1;
 }
 
 .eyebrow,
 .cardLabel {
   margin: 0;
-  color: var(--accent-dark);
+  color: var(--accent-strong);
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.09em;
@@ -42,7 +96,7 @@
   align-items: center;
   gap: 0.55rem;
   margin-bottom: 1rem;
-  color: #334e68;
+  color: var(--muted);
   font-size: 0.9rem;
   font-weight: 700;
 }
@@ -52,15 +106,15 @@
   height: 0.7rem;
   border: 2px solid currentColor;
   border-radius: 999px;
-  background: #16a34a;
+  background: var(--ok);
 }
 
 .connection.offline {
-  color: #92400e;
+  color: var(--warn);
 }
 
 .connection.offline .connectionMark {
-  background: #f59e0b;
+  background: var(--warn);
 }
 
 .stopList {
@@ -75,10 +129,10 @@
 .detail,
 .statusPanel {
   overflow-wrap: anywhere;
-  border: 1px solid #bcccdc;
-  border-radius: 1rem;
-  background: #fff;
-  box-shadow: 0 0.75rem 2rem rgb(16 42 67 / 8%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
 }
 
 .stopCard {
@@ -105,11 +159,11 @@
   display: inline-flex;
   min-height: 2rem;
   align-items: center;
-  border: 1px solid #7dd3c7;
+  border: 1px solid var(--accent);
   border-radius: 999px;
   padding: 0.3rem 0.65rem;
-  background: #e6fffa;
-  color: #115e59;
+  background: var(--accent-soft);
+  color: var(--ink);
   font-size: 0.78rem;
   font-weight: 800;
   text-align: center;
@@ -119,11 +173,11 @@
   display: inline-flex;
   min-height: 2rem;
   align-items: center;
-  border: 2px dashed #7c3aed;
+  border: 2px dashed var(--info);
   border-radius: 999px;
   padding: 0.3rem 0.65rem;
-  background: #f5f3ff;
-  color: #5b21b6;
+  background: var(--info-soft);
+  color: var(--info);
   font-size: 0.78rem;
   font-weight: 800;
 }
@@ -134,10 +188,10 @@
   display: grid;
   gap: 0.75rem;
   margin: 0 0 1rem;
-  border: 1px solid #a5b4fc;
-  border-radius: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 1rem;
-  background: #eef2ff;
+  background: var(--info-soft);
   color: var(--ink);
 }
 
@@ -150,7 +204,7 @@
 
 .actions {
   margin-top: 1rem;
-  background: #f8fafc;
+  background: var(--surface-2);
 }
 
 .actions legend {
@@ -161,10 +215,10 @@
 .actions input[type="file"] {
   width: 100%;
   min-height: 44px;
-  border: 1px solid #829ab1;
-  border-radius: 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
   padding: 0.55rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .queueSummary button,
@@ -173,10 +227,10 @@
   min-width: 44px;
   min-height: 44px;
   border: 0;
-  border-radius: 0.7rem;
+  border-radius: var(--radius-sm);
   padding: 0.65rem 1rem;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
   font: inherit;
   font-weight: 800;
@@ -193,7 +247,7 @@
 .actions button:focus-visible,
 .actions input:focus-visible,
 .conflictActions button:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -202,8 +256,8 @@
 }
 
 .conflict {
-  border-color: #f59e0b;
-  background: #fffbeb;
+  border-color: var(--warn);
+  background: var(--warn-soft);
 }
 
 .conflict dl {
@@ -212,7 +266,7 @@
 }
 
 .conflict dt {
-  color: #78350f;
+  color: var(--warn);
   font-size: 0.78rem;
   font-weight: 800;
 }
@@ -234,15 +288,15 @@
   margin: 0;
   transform: translate(-50%, -50%);
   border: 2px solid var(--accent);
-  border-radius: 1rem;
+  border-radius: var(--radius);
   padding: 1.25rem;
-  background: #fff;
-  box-shadow: 0 1.25rem 4rem rgb(15 23 42 / 28%);
+  background: var(--surface);
+  box-shadow: var(--shadow);
   color: var(--ink);
 }
 
 .confirmationDialog::backdrop {
-  background: rgb(15 23 42 / 52%);
+  background: var(--overlay);
 }
 
 .confirmationDialog h4,
@@ -260,10 +314,10 @@
   min-width: 44px;
   min-height: 44px;
   border: 0;
-  border-radius: 0.7rem;
+  border-radius: var(--radius-sm);
   padding: 0.65rem 1rem;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
   font: inherit;
   font-weight: 800;
@@ -271,12 +325,12 @@
 
 .dialogActions button:last-child {
   border: 2px solid var(--accent);
-  background: #fff;
-  color: var(--accent-dark);
+  background: var(--surface);
+  color: var(--accent-strong);
 }
 
 .dialogActions button:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -294,7 +348,7 @@
 
 .stopFacts dt,
 .detailFacts dt {
-  color: #627d98;
+  color: var(--muted);
   font-size: 0.78rem;
   font-weight: 700;
 }
@@ -316,7 +370,7 @@
   min-height: 44px;
   align-items: center;
   justify-content: center;
-  border-radius: 0.75rem;
+  border-radius: var(--radius-sm);
   font-weight: 800;
   text-decoration: none;
 }
@@ -324,13 +378,13 @@
 .primaryLink {
   width: 100%;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .secondaryLink {
   border: 2px solid var(--accent);
   padding: 0.65rem 1rem;
-  color: var(--accent-dark);
+  color: var(--accent-strong);
 }
 
 .retryButton {
@@ -338,21 +392,21 @@
   border: 0;
   padding: 0.7rem 1rem;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
   font: inherit;
 }
 
 .primaryLink:hover,
 .retryButton:hover {
-  background: var(--accent-dark);
+  background: var(--accent-strong);
 }
 
 .primaryLink:focus-visible,
 .secondaryLink:focus-visible,
 .retryButton:focus-visible,
 .detail h2:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -360,11 +414,11 @@
   display: grid;
   gap: 0.3rem;
   margin-bottom: 1rem;
-  border: 1px solid #f59e0b;
-  border-radius: 0.8rem;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
   padding: 0.85rem;
-  background: #fffbeb;
-  color: #78350f;
+  background: var(--warn-soft);
+  color: var(--warn);
   font-size: 0.9rem;
 }
 
@@ -386,10 +440,10 @@
 
 .offerActions button {
   border: 1px solid var(--accent);
-  border-radius: 0.5rem;
+  border-radius: var(--radius-sm);
   padding: 0.7rem 1rem;
-  background: #fff;
-  color: var(--accent-dark);
+  background: var(--surface);
+  color: var(--accent-strong);
   cursor: pointer;
   font: inherit;
   font-weight: 700;
@@ -397,7 +451,7 @@
 
 .offerActions button:first-child {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .offerActions button:disabled {
@@ -428,8 +482,8 @@
 
 .skeleton {
   height: 10rem;
-  border-radius: 1rem;
-  background: linear-gradient(100deg, #d9e2ec 20%, #f0f4f8 50%, #d9e2ec 80%);
+  border-radius: var(--radius);
+  background: linear-gradient(100deg, var(--line) 20%, var(--surface-2) 50%, var(--line) 80%);
   background-size: 220% 100%;
   animation: shimmer 1.2s linear infinite;
 }

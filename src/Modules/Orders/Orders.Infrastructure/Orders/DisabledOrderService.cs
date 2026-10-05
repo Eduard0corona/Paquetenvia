@@ -18,6 +18,7 @@ public sealed class DisabledOrderService : IOrderService
         string? cursor,
         bool codPendingReconciliation,
         bool mfaSatisfied,
+        string? publicId,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -28,6 +29,7 @@ public sealed class DisabledOrderService : IOrderService
         Guid actorId,
         Guid organizationId,
         Guid orderId,
+        bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

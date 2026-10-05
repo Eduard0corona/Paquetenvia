@@ -171,6 +171,48 @@ describe("operations api", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("reads the queue counts without any query string (UI-PHASE2-QUEUE-COUNTS-2026-10-05)", async () => {
+    const byStatus = Object.fromEntries(
+      [
+        "DRAFT", "CONFIRMED", "READY_FOR_PICKUP", "ASSIGNED", "AT_PICKUP", "PICKED_UP", "IN_TRANSIT",
+        "DELIVERING", "FAILED_ATTEMPT", "RESCHEDULED", "RETURNING", "RETURNED", "DELIVERED", "CLOSED",
+        "CLAIM_OPEN", "CLAIM_RESOLVED", "CANCELLED",
+      ].map((status) => [status, status === "DELIVERED" ? 2 : 0]),
+    );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          generated_at: "2026-10-05T18:00:00+00:00",
+          total: 2,
+          by_status: byStatus,
+          queues: { unassigned: 0, needs_attention: 0, price_review: 0, delivered_not_closed: 2, en_route: 0 },
+        }),
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const counts = await createOperationsApi("https://api.synthetic.test", session).queueCounts();
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe("https://api.synthetic.test/api/v1/operations/queue-counts");
+    expect(init.method).toBe("GET");
+    expect((init.headers as Record<string, string>)["X-Organization-Id"]).toBe(session.organizationId);
+    expect(counts.queues.delivered_not_closed).toBe(2);
+  });
+
+  it("rejects queue counts that break the contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ generated_at: "2026-10-05T18:00:00Z", total: 1 }), {
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    await expect(createOperationsApi("https://api.synthetic.test", session).queueCounts()).rejects.toThrow();
+  });
+
   it.each([
     [401, "unauthorized"],
     [403, "forbidden"],

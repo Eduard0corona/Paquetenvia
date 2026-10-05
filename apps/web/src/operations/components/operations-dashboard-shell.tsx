@@ -1,109 +1,94 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useConfirmDialog } from "../../components/confirm-dialog";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
 import { OperationsPositions } from "./operations-positions";
-import { orderStatuses } from "../contracts/operations-dashboard";
-import {
-  formatMazatlanTime,
-  orderStatusLabels,
-} from "../contracts/operations-formatters";
+import { orderStatusGroupIds, statusGroup } from "../contracts/status-groups";
+import { statusGroupTotals } from "../contracts/queue-counts";
+import { DateTime } from "../../components/ui/date-time";
+import { EmptyState } from "../../components/ui/empty-state";
+import { PageHeader } from "../../components/ui/page-header";
+import { StatusGroupChip } from "../../components/ui/status-badge";
 import { useOperationsDashboard } from "../state/use-operations-dashboard";
 
 export function OperationsDashboardShell() {
   const state = useOperationsDashboard();
   const [view, setView] = useState<"list" | "positions">("list");
+  const { confirm, dialog } = useConfirmDialog();
   const grouped = useMemo(
     () =>
-      orderStatuses.map((status) => ({
-        status,
-        items: state.items.filter((item) => item.status === status),
+      orderStatusGroupIds.map((group) => ({
+        group,
+        items: state.items.filter((item) => statusGroup(item.status) === group),
       })),
     [state.items],
   );
-  const summary = {
-    total: state.items.length,
-    unassigned: state.items.filter((item) => item.unassigned_alert).length,
-    delivering: state.items.filter((item) => item.status === "DELIVERING").length,
-    warnings: state.items.filter((item) => item.cost_warning !== null).length,
-  };
+  // UI-PHASE2-QUEUE-COUNTS-2026-10-05: indicators and group totals are the
+  // server counts of every order, never a count of the loaded page.
+  const counts = state.queueCounts;
+  const groupTotals = useMemo(
+    () => (counts === null ? null : statusGroupTotals(counts)),
+    [counts],
+  );
+  const pendingValue = state.queueCountsUnavailable ? "Sin dato" : "…";
 
   return (
-    <main className="opsShell" aria-busy={state.loading}>
-      <header className="opsHeader">
-        <div>
-          <p className="opsEyebrow">Despacho</p>
-          <h1>Operaciones</h1>
-          <p>{state.activeOrganizationName}</p>
-        </div>
-        <div className="opsHeaderStatus" aria-live="polite">
-          <span>{state.connection}</span>
-          <span>
-            Última actualización:{" "}
-            {state.lastUpdated === null
-              ? "Pendiente"
-              : formatMazatlanTime(state.lastUpdated)}
-          </span>
-          <button
-            type="button"
-            className="opsPrimary"
-            onClick={state.refresh}
-            disabled={state.loading || state.accessUnavailable}
-          >
-            Actualizar
-          </button>
-          <Link className="opsPrimary" href="/ops/routes">Rutas manuales</Link>
-          <Link className="opsPrimary" href="/ops/orders/import">Importar CSV</Link>
-          <Link className="opsPrimary" href="/ops/incidents">Incidencias</Link>
-          <Link className="opsPrimary" href="/finance/cod">Cobro contra entrega</Link>
-        </div>
-      </header>
+    <div className="page" aria-busy={state.loading}>
+      <PageHeader
+        eyebrow="Despacho"
+        title="Operaciones"
+        live
+        actions={
+          <>
+            <span className="opsConnection">{state.connection}</span>
+            <span>
+              Última actualización:{" "}
+              {state.lastUpdated === null ? "Pendiente" : <DateTime value={state.lastUpdated} />}
+            </span>
+            <button
+              type="button"
+              className="btn btnSecondary"
+              onClick={state.refresh}
+              disabled={state.loading || state.accessUnavailable}
+            >
+              Actualizar
+            </button>
+          </>
+        }
+      />
 
-      <p className="opsTimezone">Horarios mostrados en hora de Mazatlán.</p>
-
-      {state.contexts.length > 1 && state.canChangeOrganization ? (
-        <label className="opsOrganizationSelector">
-          Organización activa
-          <select
-            value={
-              state.contexts.find(
-                (context) =>
-                  context.display_name === state.activeOrganizationName,
-              )?.organization_id ?? ""
-            }
-            onChange={(event) =>
-              void state.requestOrganizationChange(event.target.value)
-            }
-          >
-            {state.contexts.map((context) => (
-              <option key={context.organization_id} value={context.organization_id}>
-                {context.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
+      <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
 
       {state.accessUnavailable && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Acceso no disponible</h2>
           <p>No es posible mostrar información de operaciones.</p>
         </section>
       )}
       {state.error !== null && (
-        <p className="opsAlert" role="alert">
+        <p className="notice noticeCrit" role="alert">
           {state.error}
         </p>
       )}
 
+
       <section className="opsSummary" aria-label="Resumen operativo">
-        <Summary label="Órdenes cargadas" value={summary.total} />
-        <Summary label="Órdenes sin asignar" value={summary.unassigned} />
-        <Summary label="Órdenes en reparto" value={summary.delivering} />
-        <Summary label="Revisar precio" value={summary.warnings} />
+        <Summary label="Sin asignar" value={counts?.queues.unassigned ?? pendingValue} />
+        <Summary label="Requiere atención" value={counts?.queues.needs_attention ?? pendingValue} />
+        <Summary label="Revisar precio" value={counts?.queues.price_review ?? pendingValue} />
+        <Summary
+          label="Entregadas sin cerrar"
+          value={counts?.queues.delivered_not_closed ?? pendingValue}
+        />
+        <Summary label="En ruta" value={counts?.queues.en_route ?? pendingValue} />
       </section>
+      <p className="opsSummaryNote">
+        {state.queueCountsUnavailable
+          ? "Los totales no están disponibles por ahora; la lista sigue actualizándose."
+          : "Totales de todas las órdenes de la organización, sin aplicar filtros."}
+      </p>
 
       <OperationsFilters
         filters={state.filters}
@@ -116,6 +101,7 @@ export function OperationsDashboardShell() {
         <legend>Vista</legend>
         <button
           type="button"
+          className="btn btnSecondary"
           aria-pressed={view === "list"}
           onClick={() => setView("list")}
         >
@@ -123,6 +109,7 @@ export function OperationsDashboardShell() {
         </button>
         <button
           type="button"
+          className="btn btnSecondary"
           aria-pressed={view === "positions"}
           onClick={() => setView("positions")}
         >
@@ -134,24 +121,41 @@ export function OperationsDashboardShell() {
         <OperationsPositions items={state.items} />
       ) : (
         <section className="opsBoard" aria-label="Órdenes agrupadas por estado">
-          {grouped.map(({ status, items }) => (
+          {grouped.map(({ group, items }) => (
             <section
               className="opsBoardColumn"
-              aria-labelledby={`status-${status}`}
-              key={status}
+              aria-labelledby={`status-group-${group}`}
+              key={group}
             >
-              <h2 id={`status-${status}`}>
-                {orderStatusLabels[status]} <span>{items.length}</span>
+              <h2 id={`status-group-${group}`}>
+                <StatusGroupChip group={group} />
+                <span className="opsBoardTotals">
+                  <span className="opsBoardCount">
+                    {items.length}
+                    <span className="srOnly">
+                      {" "}
+                      {items.length === 1 ? "orden cargada" : "órdenes cargadas"}
+                    </span>
+                  </span>
+                  {groupTotals !== null && (
+                    <span className="opsBoardTotal">{groupTotals[group]} en total</span>
+                  )}
+                </span>
               </h2>
-              <div className="opsCards">
-                {items.map((item) => (
-                  <OperationsOrderCard
-                    key={item.order_id}
-                    order={item}
-                    onPublishExternalOffer={state.publishExternalOffer}
-                  />
-                ))}
-              </div>
+              {items.length === 0 ? (
+                <EmptyState>Sin órdenes en este grupo.</EmptyState>
+              ) : (
+                <div className="opsCards">
+                  {items.map((item) => (
+                    <OperationsOrderCard
+                      key={item.order_id}
+                      order={item}
+                      confirm={confirm}
+                      onPublishExternalOffer={state.publishExternalOffer}
+                    />
+                  ))}
+                </div>
+              )}
             </section>
           ))}
         </section>
@@ -160,17 +164,18 @@ export function OperationsDashboardShell() {
       {view === "list" && state.nextCursor !== null && (
         <button
           type="button"
-          className="opsLoadMore"
+          className="btn btnSecondary"
           onClick={state.loadMore}
           disabled={state.loadingMore}
         >
           {state.loadingMore ? "Cargando…" : "Cargar más"}
         </button>
       )}
-      <p className="opsLive" aria-live="polite">
+      <p className="live" aria-live="polite">
         {state.loading ? "Actualizando operaciones." : ""}
       </p>
-    </main>
+      {dialog}
+    </div>
   );
 }
 
@@ -179,7 +184,7 @@ function Summary({
   value,
 }: {
   readonly label: string;
-  readonly value: number;
+  readonly value: number | string;
 }) {
   return (
     <article>

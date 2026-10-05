@@ -9,6 +9,10 @@ import {
   parseOperationsOrderDetail,
   parseOrganizationContexts,
 } from "../contracts/operations-parsers";
+import {
+  parseOperationsQueueCounts,
+  type OperationsQueueCounts,
+} from "../contracts/queue-counts";
 import type { OperationsSession } from "../session/operations-session";
 import {
   MissingCredentialError,
@@ -27,6 +31,8 @@ export interface OperationsDashboardApi {
   organizationContexts(
     signal?: AbortSignal,
   ): Promise<readonly OperationsOrganizationContext[]>;
+  /** UI-PHASE2-QUEUE-COUNTS-2026-10-05: real server counts; no filter, no query string. */
+  queueCounts(signal?: AbortSignal): Promise<OperationsQueueCounts>;
   publishExternalOffer(
     input: PublishExternalOfferInput,
     idempotencyKey: string,
@@ -202,6 +208,14 @@ export function createOperationsApi(
         parseOrganizationContexts,
         signal,
       )) as readonly OperationsOrganizationContext[];
+    },
+    async queueCounts(signal) {
+      return (await get(
+        "/api/v1/operations/queue-counts",
+        new URLSearchParams(),
+        parseOperationsQueueCounts,
+        signal,
+      )) as OperationsQueueCounts;
     },
     publishExternalOffer: postExternalOffer,
   };

@@ -1,5 +1,6 @@
 "use client";
 
+import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useState } from "react";
 import {
   publicStatusLabels,
@@ -18,9 +19,7 @@ export function PublicTrackingShell() {
     const route = parsePublicTrackingPathname(window.location.pathname);
     return route.kind === "tracking" ? route.token : null;
   });
-  const apiBaseUrl =
-    process.env.NEXT_PUBLIC_API_BASE_URL ??
-    (typeof window === "undefined" ? "http://localhost" : window.location.origin);
+  const apiBaseUrl = clientApiBaseUrl();
   const state = usePublicTracking(
     token ?? null,
     apiBaseUrl,

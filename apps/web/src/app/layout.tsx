@@ -7,12 +7,17 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Paquetenvia",
-  description: "Foundation workspace for the Paquetenvia modular monolith.",
+  description: "Gestión de envíos, entregas y cobros para operaciones de paquetería.",
   manifest: "/manifest.webmanifest",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#102a43",
+  // Mirrors --surface in globals.css for the light and dark color schemes.
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#161e20" },
+  ],
+  colorScheme: "light dark",
 };
 
 export default async function RootLayout({

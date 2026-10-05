@@ -57,9 +57,19 @@ public sealed record OrderResult(
 
 public sealed record OrderTimelineItem(string EventType, DateTimeOffset OccurredAt);
 
-public sealed record OrderDetailResult(OrderResult Order, IReadOnlyList<OrderTimelineItem> Timeline)
+/// <param name="AllowedTransitions">
+/// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the advisory transitions the caller could request now
+/// (<see cref="OrderAllowedTransitionsPolicy"/>); empty when none.
+/// </param>
+public sealed record OrderDetailResult(
+    OrderResult Order,
+    IReadOnlyList<OrderTimelineItem> Timeline,
+    IReadOnlyList<OrderAllowedTransition>? AllowedTransitions = null)
 {
     public IReadOnlyList<OrderTimelineItem> Timeline { get; } = Timeline.ToImmutableArray();
+
+    public IReadOnlyList<OrderAllowedTransition> AllowedTransitions { get; } =
+        (AllowedTransitions ?? []).ToImmutableArray();
 }
 
 public sealed record OrderPageResult(IReadOnlyList<OrderResult> Items, string? NextCursor)
@@ -82,6 +92,11 @@ public interface IOrderService
     /// Whether the session satisfied an MFA challenge; it only matters for that in-transaction re-check, where
     /// PLATFORM_ADMIN and FINANCE need it and DISPATCHER does not (FINANCE-COD-MFA-2026-09-27).
     /// </param>
+    /// <param name="publicId">
+    /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: exact tracking number (<c>public_id</c>) filter. A value that is not
+    /// a well-formed <see cref="OrderPublicIdPolicy"/> identifier matches nothing and is never sent to the database;
+    /// RLS keeps the match inside the orders the selected organization may read.
+    /// </param>
     Task<OrderPageResult> ListAsync(
         Guid actorId,
         Guid organizationId,
@@ -90,12 +105,18 @@ public interface IOrderService
         string? cursor,
         bool codPendingReconciliation,
         bool mfaSatisfied,
+        string? publicId,
         CancellationToken cancellationToken);
 
+    /// <param name="mfaSatisfied">
+    /// Whether the session satisfied an MFA challenge; it only feeds the advisory
+    /// <see cref="OrderDetailResult.AllowedTransitions"/> (PLATFORM_ADMIN transitions need it).
+    /// </param>
     Task<OrderDetailResult> GetAsync(
         Guid actorId,
         Guid organizationId,
         Guid orderId,
+        bool mfaSatisfied,
         CancellationToken cancellationToken);
 }
 

@@ -14,7 +14,7 @@ export default function HealthPage() {
           {health.status}
         </p>
         <p>Esta vista no consulta servicios externos ni endpoints de negocio.</p>
-        <Link className="textLink" href="/">
+        <Link className="btnLink" href="/">
           Volver al inicio
         </Link>
       </section>

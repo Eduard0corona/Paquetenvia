@@ -1,5 +1,6 @@
 "use client";
 
+import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { realtimeCredentials } from "@/auth/request-credentials";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
@@ -64,7 +65,7 @@ export function useManualRoutes(): ManualRoutesState {
 
   const mutate = useCallback(async (action: (api: RoutesApi) => Promise<ManualRouteDetail | ManualRoute>) => {
     const api = apiRef.current;
-    if (api === null) { setMessage("Inicia una sesion de Operaciones."); return; }
+    if (api === null) { setMessage("Inicia una sesión de Operaciones."); return; }
     setMutating(true);
     setMessage(null);
     try {
@@ -76,7 +77,7 @@ export function useManualRoutes(): ManualRoutesState {
       } else {
         await loadDetail(result.id);
       }
-      setMessage("Cambio confirmado por el servidor.");
+      setMessage("Cambio guardado.");
     } catch (error) {
       if (error instanceof RoutesApiError && error.category === "conflict" && selectedRef.current)
         await loadDetail(selectedRef.current.id).catch(() => undefined);
@@ -97,7 +98,7 @@ export function useManualRoutes(): ManualRoutesState {
       setRoutes([]);
       setConnected(false);
       if (session === null || cancelled) { apiRef.current = null; return; }
-      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? window.location.origin;
+      const baseUrl = clientApiBaseUrl();
       const api = createRoutesApi(baseUrl, session);
       apiRef.current = api;
       try {
@@ -118,7 +119,7 @@ export function useManualRoutes(): ManualRoutesState {
           suppressLogging: true,
           onReconnecting: () => setConnected(false),
           onResynchronized: () => setConnected(true),
-          onResynchronizationError: () => setMessage("No fue posible reconstruir las rutas por REST."),
+          onResynchronizationError: () => setMessage("No fue posible actualizar las rutas. Usa Actualizar para reintentar."),
           resynchronizeFromRest: async () => {
             const current = await api.list();
             setRoutes(current.items);
@@ -160,8 +161,8 @@ export function useManualRoutes(): ManualRoutesState {
 
 function labelError(error: unknown): string {
   if (error instanceof RoutesApiError && error.category === "conflict")
-    return "La ruta cambio en el servidor. Se recupero la version autoritativa.";
+    return "La ruta cambió mientras la editabas. Se cargó la versión más reciente; revisa y vuelve a intentar.";
   if (error instanceof RoutesApiError && ["unauthorized", "forbidden"].includes(error.category))
-    return "No tienes acceso a la planeacion de rutas.";
-  return "No fue posible completar la operacion de rutas.";
+    return "No tienes acceso a la planeación de rutas.";
+  return "No fue posible completar la operación de rutas.";
 }

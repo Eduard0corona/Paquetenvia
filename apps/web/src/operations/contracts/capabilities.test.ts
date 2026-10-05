@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canAuthorizeLowPrice,
+  canSearchOrders,
   canListPendingCod,
   lowPriceAuthorizationMatrix,
   lowPriceAuthorizationRequiresMfa,
@@ -93,6 +94,40 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
       expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
       expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
     }
+  });
+
+  it("mirrors AI-05 assignable_driver_operations with the assignDriver roles (UI-PHASE2-DRIVER-PICKER-2026-10-05)", () => {
+    const published = publishedSection("assignable_driver_operations", "  operations_queue_operations_decision:");
+    expect(published).toEqual({ listAssignableDrivers: ["DISPATCHER", "PLATFORM_ADMIN"] });
+    expect(screenOperationsMatrix.listAssignableDrivers).toEqual(published.listAssignableDrivers);
+    expect(screenOperationsMatrix.assignDriver).toEqual(screenOperationsMatrix.listAssignableDrivers);
+    for (const operation of ["assignDriver", "listAssignableDrivers"] as const) {
+      expect(canPerform("DISPATCHER", operation), operation).toBe(true);
+      expect(canPerform("PLATFORM_ADMIN", operation), operation).toBe(true);
+      for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", null])
+        expect(canPerform(role, operation), `${role} ${operation}`).toBe(false);
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+      expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
+    }
+  });
+
+  it("mirrors AI-05 operations_queue_operations with the dashboard roles (UI-PHASE2-QUEUE-COUNTS-2026-10-05)", () => {
+    const published = publishedSection("operations_queue_operations", "  low_price_authorization_decision:");
+    expect(published).toEqual({ getOperationsQueueCounts: ["DISPATCHER", "PLATFORM_ADMIN"] });
+    expect(screenOperationsMatrix.getOperationsQueueCounts).toEqual(published.getOperationsQueueCounts);
+    expect(canPerform("DISPATCHER", "getOperationsQueueCounts")).toBe(true);
+    expect(canPerform("PLATFORM_ADMIN", "getOperationsQueueCounts")).toBe(true);
+    for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", null])
+      expect(canPerform(role, "getOperationsQueueCounts"), String(role)).toBe(false);
+    expect(requiresMfa("PLATFORM_ADMIN", "getOperationsQueueCounts")).toBe(true);
+    expect(requiresMfa("DISPATCHER", "getOperationsQueueCounts")).toBe(false);
+  });
+
+  it("offers the tracking-number search to the roles that open the order detail (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)", () => {
+    expect(canSearchOrders("DISPATCHER")).toBe(true);
+    expect(canSearchOrders("PLATFORM_ADMIN")).toBe(true);
+    for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", null])
+      expect(canSearchOrders(role), String(role)).toBe(false);
   });
 
   it("each mirrored operation exists in AI-05", () => {

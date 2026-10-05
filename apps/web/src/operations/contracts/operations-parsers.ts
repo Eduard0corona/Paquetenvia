@@ -15,6 +15,7 @@ import {
   type OperationsZoneSummary,
   type OrderStatus,
 } from "./operations-dashboard";
+import { parseAllowedTransitions } from "./order-transitions";
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -58,8 +59,13 @@ export function parseOperationsOrderDetail(
   // service_window, which reads as no window (the zone's schedule).
   const hasServiceWindow =
     typeof value === "object" && value !== null && !Array.isArray(value) && "service_window" in value;
+  // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: an API released before allowed_transitions omits
+  // it, which reads as no action offered.
+  const hasAllowedTransitions =
+    typeof value === "object" && value !== null && !Array.isArray(value) && "allowed_transitions" in value;
   const object = exactObject(value, [
     ...(hasServiceWindow ? ["service_window"] : []),
+    ...(hasAllowedTransitions ? ["allowed_transitions"] : []),
     "id",
     "public_id",
     "owner_org_id",
@@ -110,7 +116,16 @@ export function parseOperationsOrderDetail(
         ? null
         : serviceWindow(object.service_window),
     timeline: timeline.map(parseTimeline),
+    allowed_transitions: hasAllowedTransitions ? allowedTransitions(object.allowed_transitions) : [],
   };
+}
+
+function allowedTransitions(value: unknown): OperationsOrderDetail["allowed_transitions"] {
+  try {
+    return parseAllowedTransitions(value);
+  } catch {
+    fail();
+  }
 }
 
 export function parseOrganizationContexts(

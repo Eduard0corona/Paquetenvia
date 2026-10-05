@@ -53,6 +53,18 @@ export function timelineLabel(eventType: string): string {
   return timelineLabels[eventType] ?? "Actualización de la orden";
 }
 
+const assignmentTypeLabels: Readonly<Record<string, string>> = {
+  OWN: "Flota propia",
+  EXTERNAL: "Externa",
+  ALLY_CAPACITY: "Capacidad aliada",
+};
+
+/** Human label of an assignment type; the dashboard card and the order detail share it. */
+export function assignmentTypeLabel(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "Sin asignación";
+  return assignmentTypeLabels[value] ?? "Asignada";
+}
+
 export function serviceTypeLabel(value: string): string {
   return (
     {

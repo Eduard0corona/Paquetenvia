@@ -212,7 +212,7 @@ export function buildCreateQuoteBody(draft: QuoteDraft): DraftResult<CreateQuote
   const errors: string[] = [];
   const clientAccountId = draft.clientAccountId.trim();
   if (clientAccountId !== "" && !uuidPattern.test(clientAccountId))
-    errors.push("La cuenta cliente debe ser un UUID.");
+    errors.push("El ID de la cuenta cliente no es válido.");
   const origin = address(draft.origin, "origen", errors);
   const destination = address(draft.destination, "destino", errors);
   if (!(serviceTypes as readonly string[]).includes(draft.serviceType))

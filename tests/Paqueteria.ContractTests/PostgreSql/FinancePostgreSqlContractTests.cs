@@ -444,7 +444,7 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         {
             Assert.Empty((await ListPendingAsync(orders.Service, scenario)).Items);
             var all = await orders.Service.ListAsync(
-                scenario.ActorId, scenario.OrganizationId, null, null, null, false, false, default);
+                scenario.ActorId, scenario.OrganizationId, null, null, null, false, false, null, default);
             Assert.Equal(3, all.Items.Count);
         }
 
@@ -465,7 +465,7 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
             Assert.Null(pending.NextCursor);
             // The status filter still applies together with the COD filter.
             Assert.Empty((await orders.Service.ListAsync(
-                scenario.ActorId, scenario.OrganizationId, "CLOSED", null, null, true, false, default)).Items);
+                scenario.ActorId, scenario.OrganizationId, "CLOSED", null, null, true, false, null, default)).Items);
         }
 
         await scenario.SetOrderStatusAsync(scenario.CodOrderId, "DELIVERED");
@@ -534,7 +534,7 @@ public sealed class FinancePostgreSqlContractTests(PostgreSqlContractFixture fix
         IOrderService service,
         FinanceScenario scenario,
         bool mfaSatisfied = false) =>
-        service.ListAsync(scenario.ActorId, scenario.OrganizationId, null, null, null, true, mfaSatisfied, default);
+        service.ListAsync(scenario.ActorId, scenario.OrganizationId, null, null, null, true, mfaSatisfied, null, default);
 
     private OrdersListScope CreateOrdersListScope()
     {

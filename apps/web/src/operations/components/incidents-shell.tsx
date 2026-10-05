@@ -22,26 +22,24 @@ import { formatMazatlanTime } from "../contracts/operations-formatters";
 import { operationsOrderHref } from "../routing/operations-routing";
 import type { IncidentsController, IncidentsState } from "../state/incidents-controller";
 import { useIncidents } from "../state/use-incidents";
-import { ScreenGate, TenantFeedback } from "./tenant-feedback";
+import { DateTime } from "../../components/ui/date-time";
+import { EmptyState } from "../../components/ui/empty-state";
+import { Feedback, ScreenGate } from "../../components/ui/feedback";
+import { PageHeader } from "../../components/ui/page-header";
 
 export function IncidentsShell() {
   const { state, controller } = useIncidents();
   return (
-    <main className="opsShell" aria-busy={state.phase === "loading" || state.busy || state.listing}>
-      <header className="opsHeader">
-        <div>
-          <p className="opsEyebrow">Despacho</p>
-          <h1>Incidencias</h1>
-          <p>Registro de intentos fallidos y su resolución con la API como autoridad.</p>
-        </div>
-        <div className="opsHeaderStatus">
-          <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
-        </div>
-      </header>
+    <div className="page" aria-busy={state.phase === "loading" || state.busy || state.listing}>
+      <PageHeader
+        eyebrow="Despacho"
+        title="Incidencias"
+        description="Registra los intentos de entrega fallidos y da seguimiento a su resolución."
+      />
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no gestiona incidencias." />
-      <TenantFeedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
-      {state.mfaHint !== null && <p className="opsTimezone">{state.mfaHint}</p>}
+      <Feedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
+      {state.mfaHint !== null && <p className="notice noticeInfo">{state.mfaHint}</p>}
 
       {state.phase === "ready" && (
         <>
@@ -52,7 +50,7 @@ export function IncidentsShell() {
           <IncidentList state={state} controller={controller} />
         </>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -80,9 +78,11 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
     }}>
       <fieldset>
         <legend>Abrir incidencia de intento fallido</legend>
-        <label>Orden (UUID)
-          <input name="order_id" required value={orderId} onChange={(event) => setOrderId(event.target.value)} />
+        <label>ID de la orden
+          <input name="order_id" required value={orderId} aria-describedby="incident-order-help"
+            onChange={(event) => setOrderId(event.target.value)} />
         </label>
+        <p id="incident-order-help" className="fieldHint">Pega el ID completo de la orden; lo encuentras al abrirla desde Operaciones.</p>
         <label>Tipo<input name="type" required defaultValue="FAILED_ATTEMPT" pattern="[A-Z_]{1,64}" /></label>
         <label>Severidad
           <select name="severity" required defaultValue="">
@@ -108,6 +108,7 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
             <legend>Evidencias de la orden (elige de 1 a 10)</legend>
             <button
               type="button"
+              className="btn btnSecondary"
               disabled={state.listing || typedOrder.length === 0}
               onClick={() => void controller.loadProofs(typedOrder)}
             >
@@ -123,27 +124,27 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
                   <li key={proof.id}>
                     <label>
                       <input type="checkbox" name="evidence" value={proof.id} />
-                      {proofTypeLabels[proof.proof_type]} · capturada {formatMazatlanTime(proof.captured_at)}
+                      {proofTypeLabels[proof.proof_type]} · capturada <DateTime value={proof.captured_at} />
                     </label>
                   </li>
                 ))}
               </ul>
             )}
             {proofsForOrder && state.proofsCursor !== null && (
-              <button type="button" disabled={state.listing} onClick={() => void controller.loadMoreProofs()}>
+              <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.loadMoreProofs()}>
                 Cargar más evidencias
               </button>
             )}
           </fieldset>
         ) : (
-          <label>Evidencias (UUID de prueba, de 1 a 10, separados por coma o renglón)
+          <label>IDs de las evidencias (de 1 a 10, separados por coma o renglón)
             <textarea name="evidence" rows={3} required />
           </label>
         )}
         <label>Descripción (no incluyas datos personales innecesarios)
           <textarea name="description" rows={4} maxLength={2000} required />
         </label>
-        <button className="opsPrimary" type="submit" disabled={state.busy}>Abrir incidencia</button>
+        <button className="btn btnPrimary" type="submit" disabled={state.busy}>Abrir incidencia</button>
       </fieldset>
     </form>
   );
@@ -194,7 +195,7 @@ function ResolveForm({ state, controller }: { readonly state: IncidentsState; re
         <label>Motivo (máximo 500 caracteres; queda en auditoría)
           <textarea name="reason" rows={3} maxLength={500} required />
         </label>
-        <button className="opsPrimary" type="submit" disabled={state.busy || pending.length === 0}>
+        <button className="btn btnPrimary" type="submit" disabled={state.busy || pending.length === 0}>
           Registrar resolución
         </button>
       </fieldset>
@@ -208,8 +209,8 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
     <section>
       <h2>Incidencias de la organización</h2>
       {state.canList && (
-        <div className="opsFormLayout">
-          <label>Estado
+        <div className="opsFormActions">
+          <label className="opsInlineField">Estado
             <select
               value={state.statusFilter ?? ""}
               disabled={state.listing}
@@ -221,12 +222,12 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
               {incidentStatuses.map((value) => <option key={value} value={value}>{incidentStatusLabels[value]}</option>)}
             </select>
           </label>
-          <button type="button" disabled={state.listing} onClick={() => void controller.refresh()}>Actualizar</button>
+          <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.refresh()}>Actualizar</button>
         </div>
       )}
-      {incidents.length === 0 ? <p>Sin incidencias para mostrar.</p> : (
+      {incidents.length === 0 ? <EmptyState>Sin incidencias para mostrar.</EmptyState> : (
         <table className="opsTable">
-          <caption>Tal como las devolvió el servidor</caption>
+          <caption>Incidencias registradas</caption>
           <thead>
             <tr>
               <th scope="col">Incidencia</th><th scope="col">Orden</th><th scope="col">Estado</th>
@@ -244,15 +245,15 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
                 <td>{incidentReasonLabels[incident.reason_code]}</td>
                 <td>{incidentNextActionLabels[incident.next_action]}</td>
                 <td>{incident.custody_acquired ? "Con custodia" : "Sin custodia"}</td>
-                <td>{formatMazatlanTime(incident.occurred_at)}</td>
-                <td>{formatMazatlanTime(incident.sla_due_at)}</td>
+                <td><DateTime value={incident.occurred_at} /></td>
+                <td><DateTime value={incident.sla_due_at} /></td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
       {state.canList && state.nextCursor !== null && (
-        <button type="button" disabled={state.listing} onClick={() => void controller.loadMore()}>Cargar más</button>
+        <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.loadMore()}>Cargar más</button>
       )}
     </section>
   );

@@ -3,13 +3,18 @@
 import Link from "next/link";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
-  formatMazatlanTime,
-  orderStatusLabels,
+  assignmentTypeLabel,
   serviceTypeLabel,
   timelineLabel,
 } from "../contracts/operations-formatters";
 import { formatServiceWindow } from "../contracts/service-window";
+import { DateTime } from "../../components/ui/date-time";
+import { DescriptionList } from "../../components/ui/description-list";
+import { PageHeader } from "../../components/ui/page-header";
+import { StatusBadge } from "../../components/ui/status-badge";
 import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
+import { OperationsDriverAssignment } from "./operations-driver-assignment";
+import { OperationsNextStep } from "./operations-next-step";
 import { OperationsTrackingLink } from "./operations-tracking-link";
 
 export function OperationsOrderDetailShell({
@@ -20,131 +25,123 @@ export function OperationsOrderDetailShell({
   const state = useOperationsOrderDetail(orderId);
   if (state.notFound) {
     return (
-      <main className="opsShell opsDetail">
-        <h1>Orden no disponible</h1>
-        <p>No es posible mostrar esta orden.</p>
-        <Link className="opsPrimary" href="/ops/dashboard">
-          Volver al tablero
-        </Link>
-      </main>
+      <div className="page">
+        <PageHeader title="Orden no disponible" description="No es posible mostrar esta orden." />
+        <div className="opsFormActions">
+          <Link className="btn btnSecondary" href="/ops/dashboard">
+            Volver al tablero
+          </Link>
+        </div>
+      </div>
     );
   }
   if (state.accessUnavailable) {
     return (
-      <main className="opsShell opsDetail">
-        <h1>Acceso no disponible</h1>
-        <p>No es posible mostrar información de operaciones.</p>
-      </main>
+      <div className="page">
+        <PageHeader
+          title="Acceso no disponible"
+          description="No es posible mostrar información de operaciones."
+        />
+      </div>
     );
   }
   if (state.order === null || state.projection === null) {
     return (
-      <main className="opsShell opsDetail" aria-busy={state.loading}>
-        <h1>Detalle de orden</h1>
-        <p>{state.error ?? "Cargando información operativa…"}</p>
-      </main>
+      <div className="page" aria-busy={state.loading}>
+        <PageHeader
+          title="Detalle de orden"
+          description={state.error ?? "Cargando información operativa…"}
+        />
+      </div>
     );
   }
 
   const { order, projection } = state;
   return (
-    <main className="opsShell opsDetail" aria-busy={state.loading}>
-      <header className="opsHeader">
-        <div>
-          <p className="opsEyebrow">Orden</p>
-          <h1>{order.public_id}</h1>
-          <p className="opsStatus">{orderStatusLabels[order.status]}</p>
-        </div>
-        <div className="opsHeaderStatus" aria-live="polite">
-          <span>{state.connection}</span>
-          <span>
-            Última actualización:{" "}
-            {state.lastUpdated === null
-              ? "Pendiente"
-              : formatMazatlanTime(state.lastUpdated)}
-          </span>
-          <button type="button" className="opsPrimary" onClick={state.refresh}>
-            Actualizar
-          </button>
-          <Link className="opsSecondary" href="/ops/dashboard">
-            Volver al tablero
-          </Link>
-        </div>
-      </header>
-      <p className="opsTimezone">Horarios mostrados en hora de Mazatlán.</p>
+    <div className="page" aria-busy={state.loading}>
+      <PageHeader
+        eyebrow="Orden"
+        title={order.public_id}
+        description={<StatusBadge status={order.status} />}
+        live
+        actions={
+          <>
+            <span className="opsConnection">{state.connection}</span>
+            <span>
+              Última actualización:{" "}
+              {state.lastUpdated === null ? "Pendiente" : <DateTime value={state.lastUpdated} />}
+            </span>
+            <button type="button" className="btn btnSecondary" onClick={state.refresh}>
+              Actualizar
+            </button>
+          </>
+        }
+      />
+      <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
 
-      <section className="opsDetailGrid" aria-label="Resumen de la orden">
-        <Detail label="Owner" value={projection.owner.display_name} />
-        <Detail
-          label="Operator"
-          value={projection.operator?.display_name ?? "Sin operador"}
-        />
-        <Detail
-          label="Cliente"
-          value={projection.client?.display_name ?? "No disponible"}
-        />
-        <Detail label="Servicio" value={serviceTypeLabel(order.service_type)} />
-        <Detail
-          label="Zona"
-          value={projection.delivery_zone?.name ?? "Sin zona asignada"}
-        />
-        <Detail label="Recolección" value="Por confirmar" />
-        <Detail label="Entrega" value={formatServiceWindow(order.service_window)} />
-        <Detail
-          label="Asignación"
-          value={assignmentText(projection)}
-        />
-        <Detail
-          label="Última posición"
-          value={
-            projection.latest_driver_location === null
-              ? "No disponible"
-              : `${formatMazatlanTime(
-                  projection.latest_driver_location.captured_at,
-                )}; precisión aproximada ${Math.round(
-                  projection.latest_driver_location.accuracy_m,
-                )} m`
-          }
-        />
-        <Detail
-          label="Precio"
-          value={
-            projection.cost_warning === null
-              ? "Sin advertencias"
-              : "Revisar precio"
-          }
-        />
-      </section>
+      <DescriptionList
+        variant="grid"
+        label="Resumen de la orden"
+        items={[
+          { label: "Dueño", value: projection.owner.display_name },
+          { label: "Opera", value: projection.operator?.display_name ?? "Sin operador" },
+          { label: "Cliente", value: projection.client?.display_name ?? "No disponible" },
+          { label: "Servicio", value: serviceTypeLabel(order.service_type) },
+          { label: "Zona", value: projection.delivery_zone?.name ?? "Sin zona asignada" },
+          { label: "Recolección", value: "Por confirmar" },
+          { label: "Entrega", value: formatServiceWindow(order.service_window) },
+          { label: "Asignación", value: assignmentText(projection) },
+          {
+            label: "Última posición",
+            value:
+              projection.latest_driver_location === null ? (
+                "No disponible"
+              ) : (
+                <>
+                  <DateTime value={projection.latest_driver_location.captured_at} />; precisión
+                  aproximada {Math.round(projection.latest_driver_location.accuracy_m)} m
+                </>
+              ),
+          },
+          {
+            label: "Precio",
+            value: projection.cost_warning === null ? "Sin advertencias" : "Revisar precio",
+          },
+        ]}
+      />
 
       {projection.unassigned_alert && (
-        <p className="opsAlert" role="status">
+        <p className="notice noticeCrit" role="status">
           Requiere asignación
         </p>
       )}
 
+      <OperationsNextStep
+        orderId={order.id}
+        publicId={order.public_id}
+        version={order.version}
+        allowedTransitions={order.allowed_transitions}
+        onOrderChanged={state.refresh}
+      />
+
+      <OperationsDriverAssignment
+        orderId={order.id}
+        publicId={order.public_id}
+        assignable={admitsAssignment(order.status, projection)}
+        onOrderChanged={state.refresh}
+      />
+
       <section aria-labelledby="timeline-title">
-        <h2 id="timeline-title">Timeline</h2>
+        <h2 id="timeline-title">Historial</h2>
         <ol className="opsTimeline">
           {order.timeline.map((item, index) => (
             <li key={`${item.occurred_at}-${index}`}>
               <strong>{timelineLabel(item.event_type)}</strong>
-              <time dateTime={item.occurred_at}>
-                {formatMazatlanTime(item.occurred_at)}
-              </time>
+              <DateTime value={item.occurred_at} />
             </li>
           ))}
         </ol>
       </section>
-
-      <Unavailable
-        title="Proofs"
-        text="Resumen no disponible en el contrato de lectura actual."
-      />
-      <Unavailable
-        title="Incidencias"
-        text="Disponible después de INC-001."
-      />
-      <Unavailable title="Ruta" text="Disponible después de RTE-001." />
 
       <OperationsTrackingLink
         orderId={order.id}
@@ -152,49 +149,30 @@ export function OperationsOrderDetailShell({
       />
 
       <section aria-labelledby="actions-title">
-        <h2 id="actions-title">Acciones futuras</h2>
-        <div className="opsDisabledActions">
-          {[
-            ["Asignar repartidor propio", "Requiere discovery de conductores."],
-            ["Publicar oferta externa", "Disponible después de EXT-001."],
-            ["Agregar a ruta", "Disponible después de RTE-001."],
-            ["Abrir incidencia", "Disponible después de INC-001."],
-          ].map(([label, reason]) => (
-            <button key={label} type="button" disabled title={reason}>
-              {label}
-            </button>
-          ))}
+        <h2 id="actions-title">Otras acciones</h2>
+        <p>
+          Para publicar una oferta externa o agregar la orden a una ruta, búscala en el
+          tablero de Operaciones. Los intentos fallidos se registran en Incidencias.
+        </p>
+        <div className="opsFormActions">
+          <Link className="btn btnSecondary" href="/ops/dashboard">
+            Publicar oferta externa desde el tablero
+          </Link>
+          <Link className="btn btnSecondary" href="/ops/incidents">
+            Abrir incidencia
+          </Link>
         </div>
       </section>
-    </main>
-  );
-}
-
-function Detail({ label, value }: { readonly label: string; readonly value: string }) {
-  return (
-    <article>
-      <h2>{label}</h2>
-      <p>{value}</p>
-    </article>
-  );
-}
-
-function Unavailable({
-  title,
-  text,
-}: {
-  readonly title: string;
-  readonly text: string;
-}) {
-  return (
-    <section className="opsUnavailable">
-      <h2>{title}</h2>
-      <p>{text}</p>
-    </section>
+    </div>
   );
 }
 
 function assignmentText(order: OperationsDashboardOrder): string {
-  if (order.assignment === null) return "Sin asignación";
-  return `${order.assignment.assignment_type} · ${order.assignment.driver_reference}`;
+  if (order.assignment === null) return assignmentTypeLabel(null);
+  return `${assignmentTypeLabel(order.assignment.assignment_type)} · ${order.assignment.driver_reference}`;
+}
+
+/** assignDriver accepts only READY_FOR_PICKUP or RESCHEDULED orders without an active assignment. */
+function admitsAssignment(status: string, order: OperationsDashboardOrder): boolean {
+  return (status === "READY_FOR_PICKUP" || status === "RESCHEDULED") && order.assignment === null;
 }

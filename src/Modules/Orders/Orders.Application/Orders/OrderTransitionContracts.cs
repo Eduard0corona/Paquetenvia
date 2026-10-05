@@ -41,11 +41,19 @@ public enum OrderTransitionConflictCode
 
 public sealed class OrderTransitionConflictException(
     OrderTransitionConflictCode code,
-    string? guardCode = null)
+    string? guardCode = null,
+    string? rejectionCode = null)
     : Exception("The order transition conflicts with current state.")
 {
     public OrderTransitionConflictCode Code { get; } = code;
     public string? GuardCode { get; } = guardCode;
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: the AI-05 rule code (<see cref="OrderTransitionRejectionCodes"/>) the 409 may
+    /// carry. Null keeps the uniform 409 without a code: it is set only after the order was locked for the selected
+    /// owner organization and the caller holds the transitionOrder capability on it.
+    /// </summary>
+    public string? RejectionCode { get; } = rejectionCode;
 }
 
 public sealed class OrderTransitionForbiddenException : Exception
@@ -72,6 +80,32 @@ public static class OrderTransitionInputPolicy
     public const int MaximumReasonLength = 500;
     public const int MaximumMetadataDepth = 2;
     public const int DefaultMaximumMetadataUtf8Bytes = 4_096;
+
+    /// <summary>The only metadata member DRAFT -> CONFIRMED accepts; the restricted_goods_check guard needs it true.</summary>
+    public const string RestrictedGoodsAcknowledgedKey = "restricted_goods_acknowledged";
+
+    /// <summary>The only metadata member a FAILED_ATTEMPT target accepts, and the one it requires.</summary>
+    public const string IncidentIdKey = "incident_id";
+
+    private static readonly IReadOnlyList<string> NoRequiredMetadata = [];
+    private static readonly IReadOnlyList<string> RestrictedGoodsMetadata = [RestrictedGoodsAcknowledgedKey];
+    private static readonly IReadOnlyList<string> IncidentMetadata = [IncidentIdKey];
+
+    /// <summary>
+    /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the metadata members a transitionOrder request for this edge must
+    /// carry to be accepted, read from the same keys <see cref="TryNormalizeMetadata"/> parses: DRAFT -> CONFIRMED
+    /// needs <c>restricted_goods_acknowledged</c> (true) and every FAILED_ATTEMPT target needs <c>incident_id</c>.
+    /// Every other edge takes no metadata. The reason is always required and is not listed here.
+    /// </summary>
+    public static IReadOnlyList<string> RequiredMetadataKeys(OrderStatus source, OrderStatus target)
+    {
+        if (source == OrderStatus.Draft && target == OrderStatus.Confirmed)
+        {
+            return RestrictedGoodsMetadata;
+        }
+
+        return target == OrderStatus.FailedAttempt ? IncidentMetadata : NoRequiredMetadata;
+    }
 
     public static bool TryNormalizeMetadata(
         string? metadataJson,
@@ -116,7 +150,7 @@ public static class OrderTransitionInputPolicy
                 }
 
                 if (properties.Length != 1 ||
-                    !string.Equals(properties[0].Name, "restricted_goods_acknowledged", StringComparison.Ordinal) ||
+                    !string.Equals(properties[0].Name, RestrictedGoodsAcknowledgedKey, StringComparison.Ordinal) ||
                     properties[0].Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 {
                     return false;
@@ -133,7 +167,7 @@ public static class OrderTransitionInputPolicy
             if (target == OrderStatus.FailedAttempt)
             {
                 if (properties.Length != 1 ||
-                    !string.Equals(properties[0].Name, "incident_id", StringComparison.Ordinal) ||
+                    !string.Equals(properties[0].Name, IncidentIdKey, StringComparison.Ordinal) ||
                     properties[0].Value.ValueKind != JsonValueKind.String ||
                     !Guid.TryParseExact(properties[0].Value.GetString(), "D", out var incidentId) ||
                     incidentId == Guid.Empty)
@@ -215,6 +249,14 @@ public sealed record OrderTransitionAuthorizationContext(
 public interface IOrderTransitionAuthorizer
 {
     bool IsAuthorized(OrderTransitionAuthorizationContext context);
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: whether the actor holds the transitionOrder capability on this order at all,
+    /// whatever the edge: the role rules of <see cref="IsAuthorized"/> without the per-edge driver list (DISPATCHER;
+    /// PLATFORM_ADMIN with a satisfied MFA challenge; DRIVER only while holding the order's ACCEPTED or ACTIVE
+    /// assignment). Only such an actor receives the rule code of a rejected transition.
+    /// </summary>
+    bool HoldsTransitionCapability(string? activeRole, bool mfaSatisfied, bool hasMatchingDriverAssignment);
 }
 
 public sealed class OrderTransitionAuthorizer : IOrderTransitionAuthorizer
@@ -237,12 +279,18 @@ public sealed class OrderTransitionAuthorizer : IOrderTransitionAuthorizer
         (OrderStatus.Returning, OrderStatus.Returned),
     ];
 
-    public bool IsAuthorized(OrderTransitionAuthorizationContext context) => context.ActiveRole switch
+    public bool IsAuthorized(OrderTransitionAuthorizationContext context) =>
+        HoldsTransitionCapability(context.ActiveRole, context.MfaSatisfied, context.HasMatchingDriverAssignment) &&
+        (context.ActiveRole != "DRIVER" || DriverTransitions.Contains((context.Source, context.Target)));
+
+    public bool HoldsTransitionCapability(
+        string? activeRole,
+        bool mfaSatisfied,
+        bool hasMatchingDriverAssignment) => activeRole switch
     {
-        "PLATFORM_ADMIN" => context.MfaSatisfied,
+        "PLATFORM_ADMIN" => mfaSatisfied,
         "DISPATCHER" => true,
-        "DRIVER" => context.HasMatchingDriverAssignment &&
-            DriverTransitions.Contains((context.Source, context.Target)),
+        "DRIVER" => hasMatchingDriverAssignment,
         _ => false,
     };
 }

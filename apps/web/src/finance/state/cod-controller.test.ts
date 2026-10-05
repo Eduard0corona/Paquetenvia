@@ -96,7 +96,7 @@ describe("COD flows", () => {
     expect(financials).toHaveBeenCalledTimes(2);
     expect(controller.getSnapshot().financials?.cod.status).toBe("RECORDED");
     expect(controller.getSnapshot().transaction?.id).toBe(codId);
-    expect(controller.getSnapshot().message).toBe("Cobro registrado por el servidor.");
+    expect(controller.getSnapshot().message).toBe("Cobro registrado.");
   });
 
   it("refuses an amount that differs from the expectation without calling the API", async () => {
@@ -245,7 +245,7 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
     expect(financials.mock.calls[0][0]).toBe(orderId);
     expect(vi.mocked(api.reconcile).mock.calls[0][0]).toBe(codId);
     expect(pendingReconciliation).toHaveBeenCalledTimes(2);
-    expect(controller.getSnapshot()).toMatchObject({ pending: [], message: "Cobro conciliado por el servidor." });
+    expect(controller.getSnapshot()).toMatchObject({ pending: [], message: "Cobro conciliado." });
     expect(controller.getSnapshot().financials?.cod.status).toBe("RECONCILED");
   });
 

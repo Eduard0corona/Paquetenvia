@@ -1,3 +1,5 @@
+import { shortId } from "../../lib/short-id";
+
 export type RouteStatus = "DRAFT" | "PLANNED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
 export interface ManualRoute {
@@ -27,6 +29,43 @@ export interface ManualRouteDetail extends ManualRoute {
 export interface ManualRoutePage {
   readonly items: readonly ManualRoute[];
   readonly next_cursor: string | null;
+}
+
+export const routeStatusLabels: Readonly<Record<RouteStatus, string>> = {
+  DRAFT: "Borrador",
+  PLANNED: "Planeada",
+  ACTIVE: "En curso",
+  COMPLETED: "Completada",
+  CANCELLED: "Cancelada",
+};
+
+export const routeStopTypeLabels: Readonly<Record<ManualRouteStop["stop_type"], string>> = {
+  PICKUP: "Recolección",
+  DELIVERY: "Entrega",
+  RETURN: "Devolución",
+};
+
+export const routeStopStatusLabels: Readonly<Record<ManualRouteStop["status"], string>> = {
+  PENDING: "Pendiente",
+  ARRIVED: "En el punto",
+  COMPLETED: "Completada",
+  FAILED: "Fallida",
+  SKIPPED: "Omitida",
+};
+
+/** Text of the confirmation shown before a stop leaves a route. */
+export function removeRouteStopConfirmation(stop: ManualRouteStop): {
+  readonly title: string;
+  readonly description: string;
+  readonly confirmLabel: string;
+} {
+  return {
+    title: "¿Retirar parada?",
+    description:
+      `Se retirará de la ruta la parada ${stop.sequence} (${routeStopTypeLabels[stop.stop_type].toLowerCase()} ` +
+      `de la orden ${shortId(stop.order_id)}). La orden quedará fuera de esta ruta.`,
+    confirmLabel: "Retirar",
+  };
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

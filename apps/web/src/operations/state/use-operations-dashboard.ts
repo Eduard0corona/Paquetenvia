@@ -1,5 +1,6 @@
 "use client";
 
+import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import type {
@@ -23,6 +24,12 @@ import {
   noOpOperationsTelemetry,
   type OperationsDashboardTelemetry,
 } from "../telemetry/operations-telemetry";
+import type { OperationsQueueCounts } from "../contracts/queue-counts";
+import {
+  emptyQueueCountsView,
+  QueueCountsLoader,
+  type QueueCountsView,
+} from "./queue-counts-loader";
 import {
   AuthoritativeRefreshCoordinator,
   RefreshScopeChangedError,
@@ -48,10 +55,12 @@ export interface OperationsDashboardState {
   readonly connection: ConnectionState;
   readonly lastUpdated: Date | null;
   readonly filters: OperationsDashboardFilters;
+  /** UI-PHASE2-QUEUE-COUNTS-2026-10-05: real server counts, never the loaded page. */
+  readonly queueCounts: OperationsQueueCounts | null;
+  readonly queueCountsUnavailable: boolean;
   setFilters(filters: OperationsDashboardFilters): void;
   refresh(): void;
   loadMore(): void;
-  requestOrganizationChange(organizationId: string): Promise<void>;
   publishExternalOffer(
     orderId: string,
     commissionCents: number,
@@ -59,13 +68,12 @@ export interface OperationsDashboardState {
     vehicleType: "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER",
     idempotencyKey: string,
   ): Promise<void>;
-  readonly canChangeOrganization: boolean;
 }
 
 export function useOperationsDashboard(
   telemetry: OperationsDashboardTelemetry = noOpOperationsTelemetry,
 ): OperationsDashboardState {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? windowOrigin();
+  const apiBaseUrl = clientApiBaseUrl();
   const [items, setItems] = useState<readonly OperationsDashboardOrder[]>([]);
   const [contexts, setContexts] = useState<
     readonly OperationsOrganizationContext[]
@@ -80,7 +88,11 @@ export function useOperationsDashboard(
     useState<ConnectionState>("Sin sesión");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeOrganizationId, setActiveOrganizationId] = useState("");
-  const [canChangeOrganization, setCanChangeOrganization] = useState(false);
+  const [queueCountsView, setQueueCountsView] =
+    useState<QueueCountsView>(emptyQueueCountsView);
+  const [queueCountsLoader] = useState(
+    () => new QueueCountsLoader(setQueueCountsView),
+  );
   const sessionRef = useRef<OperationsSession | null>(null);
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const connectionRef = useRef<ManagedRealtimeConnection | null>(null);
@@ -113,6 +125,7 @@ export function useOperationsDashboard(
     const current = connectionRef.current;
     connectionRef.current = null;
     if (current !== null) await current.stop().catch(() => undefined);
+    queueCountsLoader.reset();
     setItems([]);
     itemsRef.current = [];
     setContexts([]);
@@ -122,7 +135,15 @@ export function useOperationsDashboard(
     setLastUpdated(null);
     setError(null);
     setAccessUnavailable(false);
-  }, [clearTimers]);
+  }, [clearTimers, queueCountsLoader]);
+
+  // The counts are fetched again with every replacing list load except a
+  // driver-position refresh, which never changes an order status or queue.
+  const refreshQueueCounts = useCallback(() => {
+    const api = apiRef.current;
+    if (api === null) return;
+    void queueCountsLoader.load((signal) => api.queueCounts(signal));
+  }, [queueCountsLoader]);
 
   const performLoad = useCallback(
     async (
@@ -185,6 +206,7 @@ export function useOperationsDashboard(
             setError(null);
             setAccessUnavailable(false);
             telemetry.lookupCompleted("rest");
+            if (mode === "replace" && trigger !== "location") refreshQueueCounts();
           },
         });
       } catch (caught: unknown) {
@@ -196,6 +218,7 @@ export function useOperationsDashboard(
           caught instanceof OperationsApiError ? caught.category : "contract";
         telemetry.lookupFailed(category);
         if (category === "unauthorized" || category === "forbidden") {
+          queueCountsLoader.reset();
           setItems([]);
           itemsRef.current = [];
           setNextCursor(null);
@@ -215,7 +238,7 @@ export function useOperationsDashboard(
         return null;
       }
     },
-    [telemetry],
+    [queueCountsLoader, refreshQueueCounts, telemetry],
   );
 
   const scheduleRefresh = useCallback(
@@ -241,9 +264,6 @@ export function useOperationsDashboard(
       return;
     }
     setActiveOrganizationId(session.organizationId);
-    setCanChangeOrganization(
-      session.requestOrganizationChange !== undefined,
-    );
     const api = createOperationsApi(apiBaseUrl, session);
     apiRef.current = api;
     setConnection("Conectando");
@@ -262,6 +282,7 @@ export function useOperationsDashboard(
       setContexts(availableContexts);
       setLastUpdated(new Date(dashboard.generated_at));
       telemetry.lookupCompleted("rest");
+      refreshQueueCounts();
       const realtime = createOperationsDashboardRealtime(apiBaseUrl, session, {
         refreshOperations: () => scheduleRefresh(250, "realtime"),
         refreshLocation: () => scheduleRefresh(500, "location"),
@@ -324,6 +345,7 @@ export function useOperationsDashboard(
     apiBaseUrl,
     clearForSessionChange,
     performLoad,
+    refreshQueueCounts,
     scheduleRefresh,
     telemetry,
   ]);
@@ -356,10 +378,11 @@ export function useOperationsDashboard(
     () => () => {
       refreshCoordinatorRef.current.cancel();
       abortRef.current?.abort();
+      queueCountsLoader.reset();
       clearTimers();
       void connectionRef.current?.stop();
     },
-    [clearTimers],
+    [clearTimers, queueCountsLoader],
   );
 
   const setFilters = useCallback(
@@ -376,12 +399,6 @@ export function useOperationsDashboard(
     },
     [performLoad, telemetry],
   );
-
-  const requestOrganizationChange = useCallback(async (organizationId: string) => {
-    const session = sessionRef.current;
-    if (session?.requestOrganizationChange === undefined) return;
-    await session.requestOrganizationChange(organizationId);
-  }, []);
 
   const publishExternalOffer = useCallback(
     async (
@@ -421,15 +438,15 @@ export function useOperationsDashboard(
     connection,
     lastUpdated,
     filters,
+    queueCounts: queueCountsView.counts,
+    queueCountsUnavailable: queueCountsView.unavailable,
     setFilters,
     refresh: () => {
       seenCursorsRef.current.clear();
       void performLoad("replace", "manual");
     },
     loadMore: () => void performLoad("append", "pagination"),
-    requestOrganizationChange,
     publishExternalOffer,
-    canChangeOrganization,
   };
 }
 
@@ -456,8 +473,4 @@ function filterCategory(
 ): string {
   const keys = Object.keys(next) as (keyof OperationsDashboardFilters)[];
   return keys.find((key) => previous[key] !== next[key]) ?? "clear";
-}
-
-function windowOrigin(): string {
-  return typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
 }

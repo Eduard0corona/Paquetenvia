@@ -2,13 +2,14 @@
 
 import { useMemo } from "react";
 import {
-  orderStatuses,
   type OperationsDashboardOrder,
   type OperationsDashboardFilters,
   type OperationsServiceType,
   type OrderStatus,
 } from "../contracts/operations-dashboard";
+import { dateTimeLocalToUtc, utcToDateTimeLocal } from "../contracts/filter-datetime";
 import { orderStatusLabels } from "../contracts/operations-formatters";
+import { orderStatusGroupIds, orderStatusGroups, statusesInGroup } from "../contracts/status-groups";
 
 interface Props {
   readonly filters: OperationsDashboardFilters;
@@ -42,10 +43,14 @@ export function OperationsFilters({
           }
         >
           <option value="">Todos</option>
-          {orderStatuses.map((status) => (
-            <option key={status} value={status}>
-              {orderStatusLabels[status]}
-            </option>
+          {orderStatusGroupIds.map((group) => (
+            <optgroup key={group} label={orderStatusGroups[group].label}>
+              {statusesInGroup(group).map((status) => (
+                <option key={status} value={status}>
+                  {orderStatusLabels[status]}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </label>
@@ -66,7 +71,7 @@ export function OperationsFilters({
         }
       />
       <ProjectionSelect
-        label="Owner"
+        label="Dueño"
         value={filters.ownerOrganizationId}
         options={options.owners}
         onChange={(value) =>
@@ -74,7 +79,7 @@ export function OperationsFilters({
         }
       />
       <ProjectionSelect
-        label="Operator"
+        label="Opera"
         value={filters.operatorOrganizationId}
         options={options.operators}
         onChange={(value) =>
@@ -109,10 +114,11 @@ export function OperationsFilters({
         Fecha de creación desde
         <input
           type="datetime-local"
+          value={utcToDateTimeLocal(filters.createdFrom)}
           onChange={(event) =>
             onChange({
               ...filters,
-              createdFrom: toUtc(event.target.value),
+              createdFrom: dateTimeLocalToUtc(event.target.value),
               cursor: undefined,
             })
           }
@@ -122,10 +128,11 @@ export function OperationsFilters({
         Fecha de creación hasta
         <input
           type="datetime-local"
+          value={utcToDateTimeLocal(filters.createdTo)}
           onChange={(event) =>
             onChange({
               ...filters,
-              createdTo: toUtc(event.target.value),
+              createdTo: dateTimeLocalToUtc(event.target.value),
               cursor: undefined,
             })
           }
@@ -147,7 +154,7 @@ export function OperationsFilters({
       </label>
       <button
         type="button"
-        className="opsSecondary"
+        className="btn btnSecondary"
         onClick={() => {
           onChange({});
         }}
@@ -236,10 +243,4 @@ function projectionOptions(items: readonly OperationsDashboardOrder[]) {
 function unique(options: readonly ProjectionOption[]): readonly ProjectionOption[] {
   return [...new Map(options.map((option) => [option.id, option])).values()]
     .sort((left, right) => left.label.localeCompare(right.label, "es-MX"));
-}
-
-function toUtc(value: string): string | undefined {
-  if (value === "") return undefined;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }

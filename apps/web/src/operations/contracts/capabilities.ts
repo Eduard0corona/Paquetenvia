@@ -52,6 +52,15 @@ export const screenOperationsMatrix = {
   getIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
   listOrderProofs: ["DISPATCHER", "PLATFORM_ADMIN"],
   recordCodCollection: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // UI-PHASE2-DRIVER-PICKER-2026-10-05: the order detail assigns an OWN driver picked from
+  // listAssignableDrivers (x-capability-matrix assignable_driver_operations), which admits
+  // exactly the assignDriver roles.
+  assignDriver: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listAssignableDrivers: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // UI-PHASE2-QUEUE-COUNTS-2026-10-05: the dashboard indicators read
+  // getOperationsQueueCounts (x-capability-matrix operations_queue_operations),
+  // which admits exactly the operations dashboard roles.
+  getOperationsQueueCounts: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 const allOperations: Readonly<Record<string, readonly string[]>> = {
@@ -94,6 +103,9 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "voidSettlement",
     "exportSettlementCsv",
     "issueTrackingLink",
+    "assignDriver",
+    "listAssignableDrivers",
+    "getOperationsQueueCounts",
   ],
 };
 
@@ -161,6 +173,18 @@ export function resolveActiveRole(
     contexts.find((context) => context.organization_id === organizationId)?.role ??
     null
   );
+}
+
+/**
+ * UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Buscar guía" opens the order detail, which reads the
+ * operations dashboard (OBS-001, ADR-OBS-001: DISPATCHER, and PLATFORM_ADMIN with MFA), so the
+ * search is offered to the listOrders roles that can also open that detail. VIEWER lists orders
+ * but cannot open the detail, so it is not offered the search.
+ */
+export const orderDetailRoles = ["DISPATCHER", "PLATFORM_ADMIN"] as const;
+
+export function canSearchOrders(role: string | null): boolean {
+  return canPerform(role, "listOrders") && (orderDetailRoles as readonly (string | null)[]).includes(role);
 }
 
 /** VIEWER never receives exact coordinates (D5-VIEWER-LOCATION-PRECISION-2026-09-27). */

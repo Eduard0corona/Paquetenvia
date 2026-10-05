@@ -5,18 +5,33 @@ import { driverSessionChangedEvent } from "../driver/session/driver-session";
 import type { OperationsSession } from "../operations/session/operations-session";
 import { operationsSessionChangedEvent } from "../operations/session/operations-session";
 import { fetchBffSession, type BffSessionState } from "./bff-session";
+import type { SessionAccount } from "./session-account";
 
 export type BffSessionInstallation =
   | {
       readonly kind: "operations" | "driver";
       readonly organizationId: string;
       readonly displayName: string;
+      /** Where "Continuar" sends the person after login; see {@link landingPathForRole}. */
+      readonly landingPath: string;
     }
   | { readonly kind: "none" };
+
+/**
+ * First screen for a membership role after login. FINANCE works from the COD and settlement
+ * screens, DRIVER from its stops; every other role starts on the operations dashboard. This
+ * only picks a page: each screen still asks the API what the role may do.
+ */
+export function landingPathForRole(role: string): string {
+  if (role === "DRIVER") return "/driver/stops";
+  if (role === "FINANCE") return "/finance/cod";
+  return "/ops/dashboard";
+}
 
 export interface SessionHost {
   __paquetenviaOperationsSession?: OperationsSession;
   __paquetenviaDriverSession?: DriverSession;
+  __paquetenviaAccount?: SessionAccount;
   dispatchEvent(event: Event): boolean;
 }
 
@@ -40,7 +55,19 @@ export function selectSessionInstallation(
     kind: selected.role === "DRIVER" ? "driver" : "operations",
     organizationId: selected.organization_id,
     displayName: selected.display_name,
+    landingPath: landingPathForRole(selected.role),
   };
+}
+
+export interface InstallOptions {
+  /** Shown by the app shell and the driver account area; kept in memory only. */
+  readonly account?: SessionAccount;
+  /**
+   * Switches the active organization (app shell selector). It re-runs the bootstrap with
+   * the chosen organization, so every screen clears its tenant state on the
+   * session-changed events exactly as on a new sign-in.
+   */
+  readonly onOrganizationChange?: (organizationId: string) => Promise<void>;
 }
 
 export function installBffSession(
@@ -48,11 +75,13 @@ export function installBffSession(
   installation: BffSessionInstallation,
   csrfToken: string,
   sessionNamespace: string,
+  options: InstallOptions = {},
 ): void {
   clearInstalledSessions(host);
   if (installation.kind === "none") {
     return;
   }
+  host.__paquetenviaAccount = options.account ?? { displayName: null };
   const credentials = {
     credentialMode: "cookie" as const,
     getCsrfToken: () => csrfToken,
@@ -70,6 +99,9 @@ export function installBffSession(
     organizationId: installation.organizationId,
     sessionNamespace,
     ...credentials,
+    ...(options.onOrganizationChange === undefined
+      ? {}
+      : { requestOrganizationChange: options.onOrganizationChange }),
   };
   host.dispatchEvent(new Event(operationsSessionChangedEvent));
 }
@@ -80,6 +112,7 @@ export function clearInstalledSessions(host: SessionHost): void {
     host.__paquetenviaDriverSession !== undefined;
   delete host.__paquetenviaOperationsSession;
   delete host.__paquetenviaDriverSession;
+  delete host.__paquetenviaAccount;
   if (hadSession) {
     host.dispatchEvent(new Event(operationsSessionChangedEvent));
     host.dispatchEvent(new Event(driverSessionChangedEvent));
@@ -126,6 +159,11 @@ export async function bootstrapBffSession(
     contexts === null
       ? ({ kind: "none" } as const)
       : selectSessionInstallation(contexts, preferredOrganizationId);
-  installBffSession(host, installation, session.csrfToken, session.sessionNamespace);
+  installBffSession(host, installation, session.csrfToken, session.sessionNamespace, {
+    account: { displayName: session.user.name },
+    onOrganizationChange: async (organizationId) => {
+      await bootstrapBffSession(host, fetcher, organizationId);
+    },
+  });
   return { session, installation };
 }

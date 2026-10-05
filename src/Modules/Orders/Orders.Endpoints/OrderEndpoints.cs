@@ -131,6 +131,7 @@ public static class OrderEndpoints
         Guid? owner_org_id,
         string? cod_pending_reconciliation,
         string? cursor,
+        string? public_id,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IOrderService service,
@@ -184,6 +185,7 @@ public static class OrderEndpoints
                 cursor,
                 codPendingReconciliation,
                 session.MfaSatisfied,
+                public_id,
                 cancellationToken);
             return Results.Ok(new OrderPageResponse(
                 page.Items.Select(ToResponse).ToArray(),
@@ -226,6 +228,7 @@ public static class OrderEndpoints
                 actorId,
                 tenantContext.OrganizationId,
                 orderId,
+                session.MfaSatisfied,
                 cancellationToken);
             return Results.Ok(ToDetailResponse(detail));
         }
@@ -308,15 +311,28 @@ public static class OrderEndpoints
         {
             return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.TransitionOrder);
         }
-        catch (OrderTransitionConflictException)
+        catch (OrderTransitionConflictException exception)
         {
-            return Conflict();
+            return TransitionConflict(exception.RejectionCode);
         }
         catch (OrderTransitionInfrastructureException)
         {
             return Conflict();
         }
     }
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: the AI-05 TransitionConflict. The service sets a rule code only for an order of
+    /// the selected organization whose caller holds the transitionOrder capability; any other conflict, and any value
+    /// outside the closed enum, is the uniform 409 without a code.
+    /// </summary>
+    private static IResult TransitionConflict(string? rejectionCode) =>
+        OrderTransitionRejectionCodes.IsDefined(rejectionCode)
+            ? Results.Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Conflict.",
+                extensions: new Dictionary<string, object?> { ["code"] = rejectionCode })
+            : Conflict();
 
     private static bool IsValid(CreateOrderRequest request) =>
         request is not null &&
@@ -475,7 +491,10 @@ public static class OrderEndpoints
             order.ServiceWindow,
             result.Timeline.Select(item => new OrderTimelineResponse(
                 item.EventType,
-                item.OccurredAt)).ToArray());
+                item.OccurredAt)).ToArray(),
+            result.AllowedTransitions.Select(item => new OrderAllowedTransitionResponse(
+                item.TargetStatus,
+                item.RequiredMetadata.ToArray())).ToArray());
     }
 
     private static IResult Conflict() =>
@@ -579,7 +598,16 @@ public sealed record OrderDetailResponse(
     [property: JsonPropertyName("claim_window_ends_at")] DateTimeOffset? ClaimWindowEndsAt,
     [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt,
     [property: JsonPropertyName("service_window")] ServiceWindowResponse? ServiceWindow,
-    [property: JsonPropertyName("timeline")] IReadOnlyList<OrderTimelineResponse> Timeline);
+    [property: JsonPropertyName("timeline")] IReadOnlyList<OrderTimelineResponse> Timeline,
+    [property: JsonPropertyName("allowed_transitions")] IReadOnlyList<OrderAllowedTransitionResponse> AllowedTransitions);
+
+/// <summary>
+/// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: one advisory ORD-002 transition the caller could request now with
+/// transitionOrder, and the metadata members that request must carry. Guard internals are never exposed.
+/// </summary>
+public sealed record OrderAllowedTransitionResponse(
+    [property: JsonPropertyName("target_status")] string TargetStatus,
+    [property: JsonPropertyName("required_metadata")] IReadOnlyList<string> RequiredMetadata);
 
 public sealed record OrderPageResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<OrderResponse> Items,
