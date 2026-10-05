@@ -46,7 +46,7 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
         var served = ReadServedOperations();
 
         // Guards against a vacuous pass if either side stops being read at all.
-        Assert.Equal(57, contracted.Paths.Count);
+        Assert.Equal(58, contracted.Paths.Count);
         Assert.True(served.Count >= 20, $"Only {served.Count} versioned operations were routed.");
         Assert.Contains("POST /orders/csv/preview", served);
         Assert.Contains("POST /orders/csv/commit", served);

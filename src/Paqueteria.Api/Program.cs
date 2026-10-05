@@ -167,6 +167,7 @@ app.MapProofEndpoints();
 app.MapProofReadEndpoints();
 app.MapIncidentEndpoints();
 app.MapOperationsDashboardEndpoints();
+app.MapOperationsQueueCountsEndpoints();
 app.MapRouteEndpoints();
 app.MapCodEndpoints();
 app.MapFinancialsEndpoints();

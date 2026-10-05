@@ -1232,7 +1232,7 @@ ul.notice {
 
 .opsSummary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
@@ -1256,6 +1256,12 @@ ul.notice {
 .opsSummary strong {
   font-size: var(--text-xl);
   font-variant-numeric: tabular-nums;
+}
+
+.opsSummaryNote {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
 .opsFilters {
@@ -1334,6 +1340,21 @@ ul.notice {
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   text-align: center;
+}
+
+/* UI-PHASE2-QUEUE-COUNTS-2026-10-05: the server total of the group next to the cards loaded. */
+.opsBoardColumn > h2 .opsBoardTotals {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.opsBoardColumn > h2 .opsBoardTotal {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .opsCards {

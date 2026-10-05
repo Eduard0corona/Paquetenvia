@@ -125,6 +125,24 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                     .AllTextContentsAsync())
                     .Select(text => text.Trim())
                     .ToArray());
+            // UI-PHASE2-QUEUE-COUNTS-2026-10-05: the indicators and the group totals come from the real
+            // getOperationsQueueCounts on the same API, never from the loaded page.
+            var groupTotals = page.Locator(".opsBoardColumn > h2 .opsBoardTotal");
+            await groupTotals.Nth(4).WaitForAsync();
+            Assert.All(
+                await groupTotals.AllTextContentsAsync(),
+                text => Assert.Matches("^[0-9]+ en total$", text.Trim()));
+            Assert.Equal(
+                ["Sin asignar", "Requiere atención", "Revisar precio", "Entregadas sin cerrar", "En ruta"],
+                (await page.Locator(".opsSummary article > span").AllTextContentsAsync())
+                    .Select(text => text.Trim())
+                    .ToArray());
+            Assert.All(
+                await page.Locator(".opsSummary article > strong").AllTextContentsAsync(),
+                text => Assert.Matches("^[0-9]+$", text.Trim()));
+            Assert.Contains(
+                requests,
+                request => request.Url.EndsWith("/api/v1/operations/queue-counts", StringComparison.Ordinal));
             Assert.Contains(
                 "no-cache",
                 (await response.AllHeadersAsync())["cache-control"],

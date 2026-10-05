@@ -26,6 +26,7 @@ tags:
 - name: Custody
 - name: Onboarding
 - name: Platform
+- name: Operations
 paths:
   /quotes:
     post:
@@ -439,6 +440,57 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/DispatchAssignmentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /operations/queue-counts:
+    get:
+      tags:
+      - Operations
+      operationId: getOperationsQueueCounts
+      description: >-
+        UI-PHASE2-QUEUE-COUNTS-2026-10-05 returns the real server-side counts of
+        the operations work queues, so the dashboard indicators count every
+        order instead of only the page it loaded. It counts every order the
+        selected organization may read as its owner or its operator under RLS
+        (owner_org_id and operator_org_id stay distinct; orders of any other
+        organization are never counted), in one tenant transaction with a
+        single aggregate; the read never writes and takes no row lock. The
+        response carries integer counts only - no order id, tracking number,
+        name, address, amount or other order data. by_status has all 17 AI-04
+        statuses, zeros included, and total is their sum. queues restates rules
+        the dashboard already applies and adds none - unassigned: READY_FOR_PICKUP
+        or RESCHEDULED without an ACCEPTED or ACTIVE assignment (the dashboard
+        unassigned_alert); needs_attention: FAILED_ATTEMPT, RESCHEDULED, RETURNING
+        and CLAIM_OPEN; price_review: the orders the dashboard flags with a
+        cost_warning (total below the minimum snapshot, or an authorized
+        financial override); delivered_not_closed: DELIVERED; en_route:
+        IN_TRANSIT and DELIVERING. A queue may overlap another (a RESCHEDULED
+        order without an assignment is both unassigned and needs_attention).
+        The operation takes no query parameter and applies no filter; any query
+        string is 400 before capability and before any order is read. Same roles
+        as the operations dashboard it feeds - DISPATCHER members and
+        PLATFORM_ADMIN members with a satisfied MFA challenge
+        (x-capability-matrix operations_queue_operations), re-checked inside the
+        tenant transaction; VIEWER, DRIVER, FINANCE and every other role receive
+        the uniform 403 before any order is read.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-capability-protected-state:
+      - order_status_counts
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      responses:
+        '200':
+          description: The work-queue counts of the selected organization
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationsQueueCounts'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /routes:
@@ -3641,6 +3693,125 @@ components:
           - string
           - 'null'
           description: Opaque cursor of the next page; null on the last page.
+    OperationsCount:
+      type: integer
+      format: int64
+      minimum: 0
+      description: UI-PHASE2-QUEUE-COUNTS-2026-10-05. A number of orders.
+    OperationsQueueCounts:
+      type: object
+      additionalProperties: false
+      description: >-
+        UI-PHASE2-QUEUE-COUNTS-2026-10-05. Integer counts over the orders the
+        selected organization may read as owner or operator; no identifier or
+        other order data.
+      required:
+      - generated_at
+      - total
+      - by_status
+      - queues
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+          description: UTC instant at which the counts were read.
+        total:
+          $ref: '#/components/schemas/OperationsCount'
+        by_status:
+          type: object
+          additionalProperties: false
+          description: Every AI-04 status with its count, zeros included; their sum is total.
+          required:
+          - DRAFT
+          - CONFIRMED
+          - READY_FOR_PICKUP
+          - ASSIGNED
+          - AT_PICKUP
+          - PICKED_UP
+          - IN_TRANSIT
+          - DELIVERING
+          - FAILED_ATTEMPT
+          - RESCHEDULED
+          - RETURNING
+          - RETURNED
+          - DELIVERED
+          - CLOSED
+          - CLAIM_OPEN
+          - CLAIM_RESOLVED
+          - CANCELLED
+          properties:
+            DRAFT:
+              $ref: '#/components/schemas/OperationsCount'
+            CONFIRMED:
+              $ref: '#/components/schemas/OperationsCount'
+            READY_FOR_PICKUP:
+              $ref: '#/components/schemas/OperationsCount'
+            ASSIGNED:
+              $ref: '#/components/schemas/OperationsCount'
+            AT_PICKUP:
+              $ref: '#/components/schemas/OperationsCount'
+            PICKED_UP:
+              $ref: '#/components/schemas/OperationsCount'
+            IN_TRANSIT:
+              $ref: '#/components/schemas/OperationsCount'
+            DELIVERING:
+              $ref: '#/components/schemas/OperationsCount'
+            FAILED_ATTEMPT:
+              $ref: '#/components/schemas/OperationsCount'
+            RESCHEDULED:
+              $ref: '#/components/schemas/OperationsCount'
+            RETURNING:
+              $ref: '#/components/schemas/OperationsCount'
+            RETURNED:
+              $ref: '#/components/schemas/OperationsCount'
+            DELIVERED:
+              $ref: '#/components/schemas/OperationsCount'
+            CLOSED:
+              $ref: '#/components/schemas/OperationsCount'
+            CLAIM_OPEN:
+              $ref: '#/components/schemas/OperationsCount'
+            CLAIM_RESOLVED:
+              $ref: '#/components/schemas/OperationsCount'
+            CANCELLED:
+              $ref: '#/components/schemas/OperationsCount'
+        queues:
+          $ref: '#/components/schemas/OperationsQueues'
+    OperationsQueues:
+      type: object
+      additionalProperties: false
+      description: >-
+        UI-PHASE2-QUEUE-COUNTS-2026-10-05. The work queues of the operations
+        dashboard; each restates a rule the dashboard already applies and a
+        queue may overlap another.
+      required:
+      - unassigned
+      - needs_attention
+      - price_review
+      - delivered_not_closed
+      - en_route
+      properties:
+        unassigned:
+          allOf:
+          - $ref: '#/components/schemas/OperationsCount'
+          description: READY_FOR_PICKUP or RESCHEDULED without an ACCEPTED or ACTIVE assignment.
+        needs_attention:
+          allOf:
+          - $ref: '#/components/schemas/OperationsCount'
+          description: FAILED_ATTEMPT, RESCHEDULED, RETURNING and CLAIM_OPEN.
+        price_review:
+          allOf:
+          - $ref: '#/components/schemas/OperationsCount'
+          description: >-
+            Orders the dashboard flags with a cost_warning - total below the
+            minimum snapshot or an authorized financial override.
+        delivered_not_closed:
+          allOf:
+          - $ref: '#/components/schemas/OperationsCount'
+          description: DELIVERED.
+        en_route:
+          allOf:
+          - $ref: '#/components/schemas/OperationsCount'
+          description: IN_TRANSIT and DELIVERING.
     CreateOfferRequest:
       type: object
       required:
@@ -6325,6 +6496,13 @@ x-capability-matrix:
     before any order or driver is read
   assignable_driver_operations:
     listAssignableDrivers: [DISPATCHER, PLATFORM_ADMIN]
+  operations_queue_operations_decision: UI-PHASE2-QUEUE-COUNTS-2026-10-05 (project owner, 2026-10-05, "Sí a los 5
+    grupos de estado, avanza con la fase 2") - the work-queue counts read getOperationsQueueCounts admits exactly the
+    roles of the operations dashboard it feeds - DISPATCHER members without MFA and PLATFORM_ADMIN members with a
+    satisfied MFA challenge (403 MFA_REQUIRED when only the second factor is missing); every other role, VIEWER
+    included, receives the uniform 403 before any order is read
+  operations_queue_operations:
+    getOperationsQueueCounts: [DISPATCHER, PLATFORM_ADMIN]
   low_price_authorization_decision: LOW-PRICE-MANUAL-AUTH-2026-10-02 (project owner, 2026-10-02, "Sí, con autorización")
     - the createQuote field low_price_authorization admits DISPATCHER members without MFA and PLATFORM_ADMIN members
     with a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor is missing); every other role receives
