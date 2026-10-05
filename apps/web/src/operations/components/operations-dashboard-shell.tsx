@@ -5,10 +5,11 @@ import { useConfirmDialog } from "../../components/confirm-dialog";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
 import { OperationsPositions } from "./operations-positions";
-import { orderStatuses } from "../contracts/operations-dashboard";
-import { orderStatusLabels } from "../contracts/operations-formatters";
+import { orderStatusGroupIds, statusGroup } from "../contracts/status-groups";
 import { DateTime } from "../../components/ui/date-time";
+import { EmptyState } from "../../components/ui/empty-state";
 import { PageHeader } from "../../components/ui/page-header";
+import { StatusGroupChip } from "../../components/ui/status-badge";
 import { useOperationsDashboard } from "../state/use-operations-dashboard";
 
 export function OperationsDashboardShell() {
@@ -17,9 +18,9 @@ export function OperationsDashboardShell() {
   const { confirm, dialog } = useConfirmDialog();
   const grouped = useMemo(
     () =>
-      orderStatuses.map((status) => ({
-        status,
-        items: state.items.filter((item) => item.status === status),
+      orderStatusGroupIds.map((group) => ({
+        group,
+        items: state.items.filter((item) => statusGroup(item.status) === group),
       })),
     [state.items],
   );
@@ -108,25 +109,33 @@ export function OperationsDashboardShell() {
         <OperationsPositions items={state.items} />
       ) : (
         <section className="opsBoard" aria-label="Órdenes agrupadas por estado">
-          {grouped.map(({ status, items }) => (
+          {grouped.map(({ group, items }) => (
             <section
               className="opsBoardColumn"
-              aria-labelledby={`status-${status}`}
-              key={status}
+              aria-labelledby={`status-group-${group}`}
+              key={group}
             >
-              <h2 id={`status-${status}`}>
-                {orderStatusLabels[status]} <span>{items.length}</span>
+              <h2 id={`status-group-${group}`}>
+                <StatusGroupChip group={group} />
+                <span className="opsBoardCount">
+                  {items.length}
+                  <span className="srOnly"> {items.length === 1 ? "orden" : "órdenes"}</span>
+                </span>
               </h2>
-              <div className="opsCards">
-                {items.map((item) => (
-                  <OperationsOrderCard
-                    key={item.order_id}
-                    order={item}
-                    confirm={confirm}
-                    onPublishExternalOffer={state.publishExternalOffer}
-                  />
-                ))}
-              </div>
+              {items.length === 0 ? (
+                <EmptyState>Sin órdenes en este grupo.</EmptyState>
+              ) : (
+                <div className="opsCards">
+                  {items.map((item) => (
+                    <OperationsOrderCard
+                      key={item.order_id}
+                      order={item}
+                      confirm={confirm}
+                      onPublishExternalOffer={state.publishExternalOffer}
+                    />
+                  ))}
+                </div>
+              )}
             </section>
           ))}
         </section>

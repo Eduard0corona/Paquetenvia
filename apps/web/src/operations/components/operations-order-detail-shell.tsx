@@ -4,7 +4,6 @@ import Link from "next/link";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
-  orderStatusLabels,
   serviceTypeLabel,
   timelineLabel,
 } from "../contracts/operations-formatters";
@@ -12,6 +11,7 @@ import { formatServiceWindow } from "../contracts/service-window";
 import { DateTime } from "../../components/ui/date-time";
 import { DescriptionList } from "../../components/ui/description-list";
 import { PageHeader } from "../../components/ui/page-header";
+import { StatusBadge } from "../../components/ui/status-badge";
 import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
 import { OperationsTrackingLink } from "./operations-tracking-link";
 
@@ -60,7 +60,7 @@ export function OperationsOrderDetailShell({
       <PageHeader
         eyebrow="Orden"
         title={order.public_id}
-        description={<p className="opsStatus">{orderStatusLabels[order.status]}</p>}
+        description={<StatusBadge status={order.status} />}
         live
         actions={
           <>

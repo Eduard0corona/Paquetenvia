@@ -8,7 +8,8 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Feedback, ScreenGate } from "../../components/ui/feedback";
 import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
-import { orderStatusLabels } from "../../operations/contracts/operations-formatters";
+import { StatusBadge } from "../../components/ui/status-badge";
+import { isOrderStatus } from "../../operations/contracts/status-groups";
 import { operationsOrderHref } from "../../operations/routing/operations-routing";
 import {
   canRecordCollection,
@@ -134,10 +135,12 @@ function PendingRow({
   readonly controller: CodController;
   readonly confirm: (request: ConfirmRequest) => void;
 }) {
-  const status = (orderStatusLabels as Readonly<Record<string, string>>)[order.status] ?? order.status;
   return (
     <li>
-      <span>{order.public_id} · {status}</span>{" "}
+      <span>
+        {order.public_id} ·{" "}
+        {isOrderStatus(order.status) ? <StatusBadge status={order.status} /> : order.status}
+      </span>{" "}
       <button className="btn btnSecondary" type="button" disabled={busy} onClick={() => void controller.load(order.id)}>
         Ver cobro
       </button>
@@ -166,7 +169,7 @@ function Financials({
     <>
       <h2>Orden {financials.order_id}</h2>
       <p>
-        Estado: {orderStatusLabels[financials.order_status]} ·{" "}
+        Estado: <StatusBadge status={financials.order_status} /> ·{" "}
         <Link href={operationsOrderHref(financials.order_id)}>Abrir orden</Link>
       </p>
       <DescriptionList

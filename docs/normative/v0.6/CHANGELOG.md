@@ -1,5 +1,13 @@
 # Changelog
 
+## Cinco grupos de estado en la interfaz (UI-STATUS-GROUPS-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md` con el mapeo aprobado.
+- Solo presentación en `apps/web` (UI-001): el tablero agrupa las órdenes en Por preparar, En recolección, En ruta,
+  Requiere atención y Terminadas, sin ocultar el estado exacto de AI-04. Máquina de estados, terminalidad, ventana de
+  reclamo, API, tracking público y PWA del repartidor sin cambios.
+
 ## El repartidor del operador recibe los cambios de estado del dueño (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03) — 2026-10-03
 
 - Respuesta literal del project owner: "Solo avisar a su repartidor"; registrada en `decision-log.md`.
