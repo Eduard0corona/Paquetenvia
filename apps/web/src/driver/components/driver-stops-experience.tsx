@@ -53,6 +53,7 @@ import {
   type ExternalOffersState,
 } from "../state/external-offers-controller";
 import { disabledDriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
+import { formatMxnCents } from "../../operations/contracts/money";
 import styles from "./driver-stops.module.css";
 
 const unavailableState: DriverStopsViewState = Object.freeze({
@@ -1019,10 +1020,7 @@ function formatTimestamp(value: string | null): string {
 }
 
 function formatCommission(amountCents: number): string {
-  return new Intl.NumberFormat("es-MX", {
-    style: "currency",
-    currency: "MXN",
-  }).format(amountCents / 100);
+  return formatMxnCents(amountCents);
 }
 
 function toOperationalStatus(

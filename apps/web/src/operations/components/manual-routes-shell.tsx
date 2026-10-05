@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRef } from "react";
 import type { ManualRouteStop } from "../contracts/manual-route";
 import { useManualRoutes } from "../state/use-manual-routes";
+import { formatMxnCents } from "../contracts/money";
 
 export function ManualRoutesShell() {
   const state = useManualRoutes();
@@ -75,7 +76,7 @@ function Field({ name, label, required = false, defaultValue }: { readonly name:
 }
 function nullable(value: string): string | null { return value.trim() || null; }
 function short(value: string): string { return value.slice(0, 8); }
-function money(cents: number): string { return new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(cents / 100); }
+function money(cents: number): string { return formatMxnCents(cents); }
 function queryOrder(): string { return typeof window === "undefined" ? "" : new URL(window.location.href).searchParams.get("orderId") ?? ""; }
 function swap(stops: readonly ManualRouteStop[], left: number, right: number): string[] { const ids = stops.map((stop) => stop.id); [ids[left], ids[right]] = [ids[right], ids[left]]; return ids; }
 function move(stops: readonly ManualRouteStop[], source: string, target: string): string[] { const ids = stops.map((stop) => stop.id); const from = ids.indexOf(source); const to = ids.indexOf(target); if (from < 0 || to < 0) return ids; ids.splice(to, 0, ids.splice(from, 1)[0]); return ids; }
