@@ -297,6 +297,29 @@ public sealed class CapabilityMatrixContractTests
         Assert.Contains("a.status IN ('ACCEPTED','ACTIVE')", authorization, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// UI-PHASE2-DRIVER-PICKER-2026-10-05: AI-05 publishes the driver picker read in its own section, citing the owner
+    /// literal, and the server grants exactly the assignDriver roles it serves: DISPATCHER without MFA and
+    /// PLATFORM_ADMIN with MFA.
+    /// </summary>
+    [Fact]
+    public void Assignable_driver_operations_mirror_assignDriver()
+    {
+        var decision = Matrix.Scalar("assignable_driver_operations_decision");
+        Assert.StartsWith("UI-PHASE2-DRIVER-PICKER-2026-10-05", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí a los 5 grupos de estado, avanza con la fase 2\"", decision, StringComparison.Ordinal);
+        Assert.Contains("exactly the roles of assignDriver", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["listAssignableDrivers"],
+            OperationIds(Matrix.Mapping("assignable_driver_operations")).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            TenantCapabilities.AssignDriver.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+            TenantCapabilities.ListAssignableDrivers.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Equal(
+            [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true)],
+            TenantCapabilities.ListAssignableDrivers.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -382,7 +405,7 @@ public sealed class CapabilityMatrixContractTests
         foreach (var section in new[]
                  {
                      "operations", "finance_operations", "platform_operations", "membership_operations",
-                     "tracking_link_operations", "incident_operations",
+                     "tracking_link_operations", "incident_operations", "assignable_driver_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

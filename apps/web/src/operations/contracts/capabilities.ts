@@ -52,6 +52,11 @@ export const screenOperationsMatrix = {
   getIncident: ["DISPATCHER", "PLATFORM_ADMIN"],
   listOrderProofs: ["DISPATCHER", "PLATFORM_ADMIN"],
   recordCodCollection: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // UI-PHASE2-DRIVER-PICKER-2026-10-05: the order detail assigns an OWN driver picked from
+  // listAssignableDrivers (x-capability-matrix assignable_driver_operations), which admits
+  // exactly the assignDriver roles.
+  assignDriver: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listAssignableDrivers: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 const allOperations: Readonly<Record<string, readonly string[]>> = {
@@ -94,6 +99,8 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "voidSettlement",
     "exportSettlementCsv",
     "issueTrackingLink",
+    "assignDriver",
+    "listAssignableDrivers",
   ],
 };
 

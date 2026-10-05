@@ -41,6 +41,8 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         Guid.Parse("d2000000-0000-0000-0000-000000000007");
 
     internal void SetStops(IReadOnlyList<DriverStopResult> stops) => service.Stops = stops;
+    internal int AssignableDriverReads => service.AssignableDriverReads;
+    internal ListAssignableDriversQuery? LastAssignableDriversQuery => service.LastAssignableDriversQuery;
     internal int Effects => service.Effects;
     internal int Invocations => service.Invocations;
 
@@ -75,14 +77,68 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
             services.RemoveAll<IAssignmentService>();
             services.RemoveAll<IDriverStopsQuery>();
             services.RemoveAll<IExternalOfferService>();
+            services.RemoveAll<IAssignableDriversQuery>();
+            services.AddSingleton<IAssignableDriversQuery>(service);
             services.AddSingleton<IAssignmentService>(service);
             services.AddSingleton<IDriverStopsQuery>(service);
             services.AddSingleton<IExternalOfferService>(service);
         });
     }
 
-    private sealed class StubDispatchService : IAssignmentService, IDriverStopsQuery, IExternalOfferService
+    private sealed class StubDispatchService :
+        IAssignmentService, IDriverStopsQuery, IExternalOfferService, IAssignableDriversQuery
     {
+        private int assignableDriverReads;
+
+        public int AssignableDriverReads => Volatile.Read(ref assignableDriverReads);
+        public ListAssignableDriversQuery? LastAssignableDriversQuery { get; private set; }
+
+        public Task<AssignableDriverPage> ListAsync(
+            ListAssignableDriversQuery query,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref assignableDriverReads);
+            LastAssignableDriversQuery = query;
+            if (query.ActorId != DispatcherId && query.ActorId != AdminMfaId)
+            {
+                throw new AssignmentForbiddenException();
+            }
+
+            if (query.OrderId == MissingOrderId || query.OrderId == CrossTenantOrderId)
+            {
+                throw new AssignmentNotFoundException();
+            }
+
+            if (query.OrderId == ConflictOrderId)
+            {
+                throw new AssignmentConflictException(AssignmentConflictCode.InvalidOrderState);
+            }
+
+            var eligibleDriver = Guid.Parse("d2000000-0000-0000-0000-0000000000e1");
+            var ineligibleDriver = Guid.Parse("d2000000-0000-0000-0000-0000000000e2");
+            return Task.FromResult(new AssignableDriverPage(
+                [
+                    new AssignableDriverResult(
+                        eligibleDriver,
+                        Paqueteria.Application.Privacy.DriverReference.From(eligibleDriver),
+                        "MOTORCYCLE",
+                        true,
+                        [],
+                        1),
+                    new AssignableDriverResult(
+                        ineligibleDriver,
+                        Paqueteria.Application.Privacy.DriverReference.From(ineligibleDriver),
+                        "CAR",
+                        false,
+                        ["DOCUMENT_EXPIRED"],
+                        0),
+                ],
+                query.Cursor is null
+                    ? AssignableDriverCursorCodec.Encode(new AssignableDriverCursor(ineligibleDriver))
+                    : null));
+        }
+
         private readonly ConcurrentDictionary<(Guid Tenant, string Key), Stored> stored = new();
         private int effects;
         private int invocations;

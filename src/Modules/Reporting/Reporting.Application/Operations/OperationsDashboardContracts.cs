@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using Paqueteria.Domain.Tenancy;
 
@@ -147,19 +146,9 @@ public static class OperationsDashboardProjectionPolicy
     public static bool IsUnassignedAlert(string status, bool hasActiveAssignment) =>
         status is "READY_FOR_PICKUP" or "RESCHEDULED" && !hasActiveAssignment;
 
-    public static string DriverReference(Guid driverId)
-    {
-        if (driverId == Guid.Empty)
-        {
-            throw new ArgumentException("A non-empty driver id is required.", nameof(driverId));
-        }
-
-        Span<byte> guidBytes = stackalloc byte[16];
-        driverId.TryWriteBytes(guidBytes, bigEndian: true, out _);
-        Span<byte> hash = stackalloc byte[32];
-        SHA256.HashData(guidBytes, hash);
-        return $"DRV-{Convert.ToHexString(hash[..4]).ToLowerInvariant()}";
-    }
+    /// <summary>The shared non-PII driver label; the assignable-driver list uses the same one.</summary>
+    public static string DriverReference(Guid driverId) =>
+        Paqueteria.Application.Privacy.DriverReference.From(driverId);
 
     public static bool IsValidLocation(
         double latitude,

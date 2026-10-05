@@ -36,6 +36,18 @@ public static class DispatchEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
+        endpoints.MapGet("/api/v1/orders/{orderId}/assignable-drivers", ListAssignableDriversAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("listAssignableDrivers")
+            .WithTags("Dispatch")
+            .Produces<AssignableDriverPageResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
         endpoints.MapGet("/api/v1/driver/me/stops", ListMyStopsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
@@ -321,6 +333,95 @@ public static class DispatchEndpoints
         }
     }
 
+    /// <summary>
+    /// UI-PHASE2-DRIVER-PICKER-2026-10-05. The only query parameter is <c>cursor</c>, at most once and issued by this
+    /// operation; anything else is 409 INVALID_REQUEST before capability or any row is read. The assignDriver
+    /// capability is then settled from the session and again inside the tenant transaction; a malformed, missing or
+    /// foreign order is the uniform 404 and an order that does not admit an assignment now is 409 CONFLICT.
+    /// </summary>
+    private static async Task<IResult> ListAssignableDriversAsync(
+        string orderId,
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        IAssignableDriversQuery query,
+        CancellationToken cancellationToken)
+    {
+        if (!TrySession(session, tenantContext, out var actorId))
+        {
+            return Forbidden();
+        }
+
+        if (!TryReadAssignableDriversQuery(httpContext.Request.Query, out var cursor))
+        {
+            return Conflict("INVALID_REQUEST");
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListAssignableDrivers) is { } denied)
+        {
+            return denied;
+        }
+
+        if (!Guid.TryParseExact(orderId, "D", out var parsedOrderId) || parsedOrderId == Guid.Empty)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            var page = await query.ListAsync(
+                new ListAssignableDriversQuery(
+                    actorId,
+                    tenantContext.OrganizationId,
+                    session.MfaSatisfied,
+                    parsedOrderId,
+                    cursor),
+                cancellationToken);
+            return Results.Ok(new AssignableDriverPageResponse(
+                page.Items.Select(item => new AssignableDriverResponse(
+                    item.DriverId,
+                    item.DriverReference,
+                    item.VehicleType,
+                    item.Eligible,
+                    item.IneligibilityReasons,
+                    item.ActiveAssignmentCount)).ToArray(),
+                page.NextCursor));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AssignmentForbiddenException)
+        {
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListAssignableDrivers);
+        }
+        catch (AssignmentNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (AssignmentConflictException)
+        {
+            return Conflict("CONFLICT");
+        }
+        catch (AssignmentInfrastructureException)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service Unavailable.");
+        }
+    }
+
+    public static bool TryReadAssignableDriversQuery(IQueryCollection query, out AssignableDriverCursor? cursor)
+    {
+        cursor = null;
+        if (query.Keys.Any(key => !string.Equals(key, "cursor", StringComparison.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        return !query.TryGetValue("cursor", out var value) ||
+            AssignableDriverCursorCodec.TryDecode(value[0], out cursor);
+    }
+
     private static async Task<IResult> ListMyStopsAsync(
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
@@ -462,6 +563,18 @@ public sealed record AssignmentResponse(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("cost")] MoneyResponse Cost,
     [property: JsonPropertyName("route_id")] Guid? RouteId);
+
+public sealed record AssignableDriverResponse(
+    [property: JsonPropertyName("driver_id")] Guid DriverId,
+    [property: JsonPropertyName("driver_reference")] string DriverReference,
+    [property: JsonPropertyName("vehicle_type")] string VehicleType,
+    [property: JsonPropertyName("eligible")] bool Eligible,
+    [property: JsonPropertyName("ineligibility_reasons")] IReadOnlyList<string> IneligibilityReasons,
+    [property: JsonPropertyName("active_assignment_count")] int ActiveAssignmentCount);
+
+public sealed record AssignableDriverPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<AssignableDriverResponse> Items,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
 public sealed record DriverStopResponse(
     [property: JsonPropertyName("order_id")] Guid OrderId,
