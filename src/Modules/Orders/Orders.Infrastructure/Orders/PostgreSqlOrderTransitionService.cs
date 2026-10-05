@@ -241,10 +241,27 @@ public sealed class PostgreSqlOrderTransitionService(
             command.OrderId,
             occurredAt,
             cancellationToken);
+        // ORD-002-GUARD-CODES-2026-10-05: the order is locked as an order of the selected (owner) organization, so
+        // the membership snapshot decides whether a rejection may carry its rule code. It is read once, here, and
+        // is the same snapshot the edge authorization below uses.
+        var authorization = await authorizationReader.ReadAsync(
+            connection,
+            transaction,
+            command.ActorId,
+            command.OrganizationId,
+            command.OrderId,
+            cancellationToken);
+        var disclosesRejectionCode = authorizer.HoldsTransitionCapability(
+            authorization.ActiveRole,
+            command.MfaSatisfied,
+            authorization.HasMatchingDriverAssignment);
+
         var version = OrderTransitionMatrix.EvaluateVersion(order.Version, command.ExpectedVersion);
         if (!version.Allowed)
         {
-            throw new OrderTransitionConflictException(OrderTransitionConflictCode.VersionConflict);
+            throw new OrderTransitionConflictException(
+                OrderTransitionConflictCode.VersionConflict,
+                rejectionCode: disclosesRejectionCode ? OrderTransitionRejectionCodes.ForRule(version.Code) : null);
         }
 
         var state = OrderTransitionMatrix.Evaluate(
@@ -258,16 +275,10 @@ public sealed class PostgreSqlOrderTransitionService(
             throw new OrderTransitionConflictException(
                 state.Code == OrderTransitionRuleCode.TerminalState
                     ? OrderTransitionConflictCode.TerminalState
-                    : OrderTransitionConflictCode.InvalidState);
+                    : OrderTransitionConflictCode.InvalidState,
+                rejectionCode: disclosesRejectionCode ? OrderTransitionRejectionCodes.ForRule(state.Code) : null);
         }
 
-        var authorization = await authorizationReader.ReadAsync(
-            connection,
-            transaction,
-            command.ActorId,
-            command.OrganizationId,
-            command.OrderId,
-            cancellationToken);
         if (!authorizer.IsAuthorized(new OrderTransitionAuthorizationContext(
                 authorization.ActiveRole,
                 source,
@@ -350,9 +361,11 @@ public sealed class PostgreSqlOrderTransitionService(
         var guard = guardRegistry.Evaluate(guardContext);
         if (!guard.Satisfied)
         {
+            // Reached only after IsAuthorized, which implies HoldsTransitionCapability.
             throw new OrderTransitionConflictException(
                 OrderTransitionConflictCode.GuardNotSatisfied,
-                guard.Code);
+                guard.Code,
+                OrderTransitionRejectionCodes.ForGuard(guard.Code));
         }
 
         var newVersion = checked(order.Version + 1);

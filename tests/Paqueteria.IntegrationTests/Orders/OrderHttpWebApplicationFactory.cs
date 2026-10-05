@@ -288,11 +288,16 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                     throw new OrderTransitionConflictException(OrderTransitionConflictCode.OrderUnavailable);
                 }
 
+                // ORD-002-GUARD-CODES-2026-10-05: like the PostgreSQL service, a rule code only for an order of the
+                // selected organization whose caller holds the transitionOrder capability on it.
+                var disclosesCode = HoldsCapability(command);
                 if (current.Version != command.ExpectedVersion ||
                     !OrderContractValues.TryParseOrderStatus(current.Status, out var source) ||
                     !OrderContractValues.TryParseOrderStatus(command.TargetStatus, out var target))
                 {
-                    throw new OrderTransitionConflictException(OrderTransitionConflictCode.VersionConflict);
+                    throw new OrderTransitionConflictException(
+                        OrderTransitionConflictCode.VersionConflict,
+                        rejectionCode: disclosesCode ? OrderTransitionRejectionCodes.VersionConflict : null);
                 }
 
                 if (!IsAuthorized(command, source, target))
@@ -311,7 +316,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                     throw new OrderTransitionConflictException(
                         matrix.Code == OrderTransitionRuleCode.TerminalState
                             ? OrderTransitionConflictCode.TerminalState
-                            : OrderTransitionConflictCode.InvalidState);
+                            : OrderTransitionConflictCode.InvalidState,
+                        rejectionCode: disclosesCode ? OrderTransitionRejectionCodes.ForRule(matrix.Code) : null);
                 }
 
                 if (target == OrderStatus.Confirmed &&
@@ -322,7 +328,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 {
                     throw new OrderTransitionConflictException(
                         OrderTransitionConflictCode.GuardNotSatisfied,
-                        "restricted_goods_check");
+                        "restricted_goods_check",
+                        OrderTransitionRejectionCodes.ForGuard("restricted_goods_check"));
                 }
 
                 var updated = current with
@@ -445,7 +452,33 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                         null),
                     context.Source,
                     context.Target);
+
+            public bool HoldsTransitionCapability(
+                string? activeRole,
+                bool mfaSatisfied,
+                bool hasMatchingDriverAssignment) =>
+                new OrderTransitionAuthorizer().HoldsTransitionCapability(
+                    activeRole,
+                    mfaSatisfied,
+                    hasMatchingDriverAssignment);
         }
+
+        /// <summary>The stub's role table without the per-edge driver list, as HoldsTransitionCapability.</summary>
+        private bool HoldsCapability(TransitionOrderCommand command) =>
+            command.ActorId switch
+            {
+                var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2") =>
+                    command.MfaSatisfied,
+                var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3") =>
+                    command.MfaSatisfied,
+                var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4") =>
+                    command.OrganizationId == Identity.Infrastructure.Mock.MockIdentityProfiles.OperationsOrganizationId,
+                var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10") =>
+                    true,
+                var id when id == Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11") =>
+                    activeDriverAssignments.ContainsKey(command.OrderId),
+                _ => false,
+            };
 
         private bool IsAuthorized(
             TransitionOrderCommand command,

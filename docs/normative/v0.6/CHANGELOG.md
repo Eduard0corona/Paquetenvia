@@ -1,5 +1,21 @@
 # Changelog
 
+## Código de la regla incumplida al cambiar el estado (ORD-002-GUARD-CODES-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`; ADR `docs/adr/ADR-ORD-002-TRANSITION-REJECTION-CODES.md`.
+- AI-05 `TransitionConflictProblem.code` (409 de `transitionOrder`): enum cerrado con los códigos de versión y matriz
+  AI-04 (VERSION_CONFLICT, TRANSITION_NOT_ALLOWED, ORDER_TERMINAL, ORDER_FINALIZED, CLAIM_WINDOW_CLOSED) y un código por
+  cada guarda AI-04 existente (`x-ord-002-guard-codes`), además de OFFLINE_OPERATION_EXPIRED. Sin guardas ni estados
+  nuevos.
+- Solo se devuelve para una orden de la organización seleccionada (dueña) y a quien tiene la capacidad de
+  `transitionOrder` sobre ella (DISPATCHER, PLATFORM_ADMIN con MFA, DRIVER con la asignación ACCEPTED/ACTIVE de esa
+  orden). Orden inexistente, ajena u operada, forma inválida, idempotencia, concurrencia y quien no tiene la capacidad
+  siguen recibiendo el mismo 409 uniforme sin código. Sin datos personales, identificadores ni montos.
+- AI-07 "Siguiente paso": mensaje es-MX por código desde un solo helper; código ausente o desconocido usa el mensaje
+  genérico.
+- Sin migraciones, tablas, roles, grants ni flujos nuevos; AI-04, AI-06 y AI-18 sin cambios.
+
 ## Búsqueda por guía y acciones válidas de la orden (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05) — 2026-10-05
 
 - Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en

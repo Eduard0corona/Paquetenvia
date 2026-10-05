@@ -311,15 +311,28 @@ public static class OrderEndpoints
         {
             return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.TransitionOrder);
         }
-        catch (OrderTransitionConflictException)
+        catch (OrderTransitionConflictException exception)
         {
-            return Conflict();
+            return TransitionConflict(exception.RejectionCode);
         }
         catch (OrderTransitionInfrastructureException)
         {
             return Conflict();
         }
     }
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: the AI-05 TransitionConflict. The service sets a rule code only for an order of
+    /// the selected organization whose caller holds the transitionOrder capability; any other conflict, and any value
+    /// outside the closed enum, is the uniform 409 without a code.
+    /// </summary>
+    private static IResult TransitionConflict(string? rejectionCode) =>
+        OrderTransitionRejectionCodes.IsDefined(rejectionCode)
+            ? Results.Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Conflict.",
+                extensions: new Dictionary<string, object?> { ["code"] = rejectionCode })
+            : Conflict();
 
     private static bool IsValid(CreateOrderRequest request) =>
         request is not null &&

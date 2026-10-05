@@ -134,9 +134,54 @@ export function transitionConfirmation(
   };
 }
 
-/** Every 409 of transitionOrder until phase 2D exposes guard codes. */
+/** A 409 of transitionOrder without a rule code, or with one this screen does not know. */
 export const transitionConflictMessage =
   "No se pudo cambiar el estado; la orden cambió o falta un requisito. Actualiza e intenta de nuevo.";
+
+/**
+ * ORD-002-GUARD-CODES-2026-10-05: the AI-05 TransitionConflictProblem.code values and what each
+ * one tells the person, in es-MX. The server sends a rule code only to whoever may change the
+ * order; the message names what is missing and never repeats server text or identifiers.
+ */
+export const transitionRejectionMessages = Object.freeze({
+  OFFLINE_OPERATION_EXPIRED: "El cambio es más antiguo que la ventana permitida; no puede registrarse.",
+  VERSION_CONFLICT: "La orden cambió mientras la revisabas. Revisa la información actualizada e intenta de nuevo.",
+  TRANSITION_NOT_ALLOWED: "Ese cambio ya no es posible desde el estado actual de la orden.",
+  ORDER_TERMINAL: "La orden ya terminó; no admite más cambios.",
+  ORDER_FINALIZED: "La orden ya se cerró de forma definitiva; no admite más cambios.",
+  CLAIM_WINDOW_CLOSED: "El plazo para abrir una reclamación ya terminó.",
+  QUOTE_NOT_VALID: "La cotización de la orden ya no es válida.",
+  PAYER_ACCEPTANCE_REQUIRED: "Falta la aceptación de quien paga.",
+  RESTRICTED_GOODS_ACK_REQUIRED: "Falta confirmar que el envío no contiene artículos prohibidos.",
+  VALID_ASSIGNMENT_REQUIRED: "Falta un repartidor asignado y habilitado para esta orden.",
+  DRIVER_CAPACITY_EXCEEDED: "El vehículo del repartidor no tiene capacidad para los paquetes.",
+  ASSIGNMENT_COST_REQUIRED: "Falta el costo de la asignación.",
+  PICKUP_PROOF_REQUIRED: "Falta la foto de recolección.",
+  DELIVERY_PROOF_REQUIRED: "Falta la foto o el código de entrega.",
+  COD_NOT_RECORDED: "Falta registrar el cobro contra entrega.",
+  UNRESOLVED_INCIDENT: "Hay una incidencia sin resolver.",
+  COD_NOT_RECONCILED: "El cobro contra entrega aún no está conciliado.",
+  FINANCIAL_RECONCILIATION_INCOMPLETE: "La conciliación financiera de la orden no está completa.",
+  CLAIM_WINDOW_NOT_SET: "La orden aún no tiene plazo de reclamación; no puede cerrarse.",
+  REASON_REQUIRED: "Escribe el motivo del cambio.",
+  CUSTODY_ALREADY_ACQUIRED: "El paquete ya fue recolectado; la orden no puede cancelarse.",
+  INCIDENT_REQUIRED: "Falta registrar la incidencia de este intento.",
+  CUSTODY_NOT_ACQUIRED: "El paquete aún no ha sido recolectado.",
+  NEXT_ACTION_MISMATCH: "La incidencia registrada indica otro siguiente paso.",
+} as const);
+
+export type TransitionRejectionCode = keyof typeof transitionRejectionMessages;
+
+export const transitionRejectionCodes = Object.freeze(
+  Object.keys(transitionRejectionMessages),
+) as readonly TransitionRejectionCode[];
+
+/** The message for a transitionOrder 409; the generic one for an absent, malformed or unknown code. */
+export function transitionRejectionMessage(code: string | null | undefined): string {
+  return typeof code === "string" && Object.hasOwn(transitionRejectionMessages, code)
+    ? transitionRejectionMessages[code as TransitionRejectionCode]
+    : transitionConflictMessage;
+}
 
 /** AI-04 public identifier: ORD_ and 22 Base64URL characters, case sensitive. */
 const publicIdPattern = /^ORD_[A-Za-z0-9_-]{22}$/;
