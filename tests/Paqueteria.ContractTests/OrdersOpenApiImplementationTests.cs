@@ -96,9 +96,16 @@ public sealed class OrdersOpenApiImplementationTests
         var schemas = root.Mapping("components").Mapping("schemas");
         var problem = schemas.Mapping("TransitionConflictProblem");
         Assert.Equal(["status", "title", "type"], RequiredPropertyNames(problem));
+        // ORD-002-GUARD-CODES-2026-10-05: the offline code first, then the closed rule-code enum.
         Assert.Equal(
-            [OfflineOperationAgePolicy.ExpiredCode],
+            new[] { OfflineOperationAgePolicy.ExpiredCode }
+                .Concat(OrderTransitionRejectionCodes.All)
+                .Order(StringComparer.Ordinal),
             EnumValues(problem.Mapping("properties").Mapping("code")));
+        Assert.Equal(
+            [OfflineOperationAgePolicy.ExpiredCode, .. OrderTransitionRejectionCodes.All],
+            problem.Mapping("properties").Mapping("code").Sequence("enum").Children
+                .Select(node => Assert.IsType<YamlScalarNode>(node).Value!));
         var clientOccurredAt = schemas.Mapping("TransitionRequest").Mapping("properties").Mapping("client_occurred_at");
         Assert.Equal("date-time", clientOccurredAt.Scalar("format"));
         Assert.DoesNotContain(
@@ -120,6 +127,52 @@ public sealed class OrdersOpenApiImplementationTests
         var source = ReadRepositoryFile("src", "Modules", "Orders", "Orders.Endpoints", "OrderEndpoints.cs");
         Assert.Contains("offlinePolicy.Evaluate(request.ClientOccurredAt, clock.UtcNow)", source, StringComparison.Ordinal);
         Assert.Contains("[\"code\"] = OfflineOperationAgePolicy.ExpiredCode", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: AI-05 publishes the AI-04 guard to rule-code map the service applies, every
+    /// AI-04 guard is in it, and the endpoint emits only codes of the closed enum.
+    /// </summary>
+    [Fact]
+    public void Transition_rule_codes_and_guard_map_match_AI04_and_AI05()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var code = root.Mapping("components").Mapping("schemas").Mapping("TransitionConflictProblem")
+            .Mapping("properties").Mapping("code");
+        var published = code.Mapping("x-ord-002-guard-codes").Children.ToDictionary(
+            pair => Assert.IsType<YamlScalarNode>(pair.Key).Value!,
+            pair => Assert.IsType<YamlScalarNode>(pair.Value).Value!,
+            StringComparer.Ordinal);
+        var registry = new OrderTransitionGuardRegistry();
+        Assert.Equal(
+            registry.Guards.Select(guard => guard.Code).Order(StringComparer.Ordinal),
+            published.Keys.Order(StringComparer.Ordinal));
+        Assert.All(published, pair =>
+            Assert.Equal(pair.Value, OrderTransitionRejectionCodes.ForGuard(pair.Key)));
+
+        var ai04Guards = YamlNodes.DescendantsAndSelf(
+                YamlNodes.LoadMapping(RepositoryPaths.Normative("specs", "AI-04_DOMAIN_MODEL.yaml")))
+            .OfType<YamlMappingNode>()
+            .Where(mapping => mapping.Children.ContainsKey(new YamlScalarNode("guards")) &&
+                mapping.Children.ContainsKey(new YamlScalarNode("transitions")))
+            .Select(mapping => mapping.Mapping("guards"))
+            .Single()
+            .Children.Values
+            .OfType<YamlSequenceNode>()
+            .SelectMany(sequence => sequence.Children.OfType<YamlScalarNode>().Select(node => node.Value!))
+            .ToHashSet(StringComparer.Ordinal);
+        // AI-04 names the retry guard as one composite; the registry splits it in two.
+        ai04Guards.Remove("if_from_failed_attempt_then_custody_acquired_true_and_valid_assignment");
+        ai04Guards.Add("retry_custody_acquired_true");
+        ai04Guards.Add("retry_valid_assignment");
+        // Both directions: every AI-04 guard is published and no published guard is missing from AI-04.
+        Assert.Equal(
+            ai04Guards.Order(StringComparer.Ordinal),
+            published.Keys.Order(StringComparer.Ordinal));
+
+        var source = ReadRepositoryFile("src", "Modules", "Orders", "Orders.Endpoints", "OrderEndpoints.cs");
+        Assert.Contains("OrderTransitionRejectionCodes.IsDefined(rejectionCode)", source, StringComparison.Ordinal);
+        Assert.Contains("return TransitionConflict(exception.RejectionCode);", source, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  transitionRejectionCodes,
+  transitionRejectionMessage,
   maximumReasonLength,
   nextStepActions,
   normalizePublicIdInput,
@@ -108,4 +112,47 @@ describe("order transitions contract (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)",
     ])
       expect(normalizePublicIdInput(value), value).toBeNull();
   });
+});
+
+describe("transition rejection messages (ORD-002-GUARD-CODES-2026-10-05)", () => {
+  const openApi = readFileSync(
+    resolve(process.cwd(), "../../docs/normative/v0.6/contracts/AI-05_OPENAPI.yaml"),
+    "utf8",
+  );
+
+  it("covers exactly the AI-05 TransitionConflictProblem.code enum, in order", () => {
+    const problem = openApi.slice(
+      openApi.indexOf("    TransitionConflictProblem:"),
+      openApi.indexOf("    ProofConflictProblem:"),
+    );
+    const enumBlock = problem.slice(
+      problem.indexOf("          enum:"),
+      problem.indexOf("          x-ord-002-guard-codes:"),
+    );
+    const published = [...enumBlock.matchAll(/^ {10}- ([A-Z_]+)$/gm)].map((match) => match[1]);
+    expect(published.length).toBe(24);
+    expect([...transitionRejectionCodes]).toEqual(published);
+  });
+
+  it("names what is missing for the codes the owner asked for", () => {
+    expect(transitionRejectionMessage("PICKUP_PROOF_REQUIRED")).toBe("Falta la foto de recolección.");
+    expect(transitionRejectionMessage("COD_NOT_RECONCILED")).toBe("El cobro contra entrega aún no está conciliado.");
+  });
+
+  it("gives every code its own Spanish sentence without identifiers or codes", () => {
+    const messages = transitionRejectionCodes.map((code) => transitionRejectionMessage(code));
+    expect(new Set(messages).size).toBe(messages.length);
+    for (const message of messages) {
+      expect(message).not.toBe(transitionConflictMessage);
+      expect(message).toMatch(/^[A-ZÁÉÍÓÚÑ¿][^_{}<>]*[.?]$/);
+      expect(message).not.toMatch(/[A-Z]{2,}_|[0-9a-f]{8}-/);
+    }
+  });
+
+  it.each([null, undefined, "", "CONFLICT", "pickup_proof_complete", "constructor", "toString", "__proto__", "UNKNOWN_RULE"])(
+    "falls back to the generic message for %j",
+    (code) => {
+      expect(transitionRejectionMessage(code)).toBe(transitionConflictMessage);
+    },
+  );
 });

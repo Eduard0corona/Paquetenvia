@@ -2839,10 +2839,23 @@ components:
             $ref: '#/components/schemas/SettlementConflictProblem'
     TransitionConflict:
       description: >-
-        ORD-002 state, idempotency or concurrency conflict, returned without a
-        code. An offline replay whose client_occurred_at is older than 72
-        hours is rejected with the code OFFLINE_OPERATION_EXPIRED
-        (OPS-003-SERVER-72H-REJECTION, x-offline-operation-age).
+        ORD-002 state, idempotency or concurrency conflict. An offline replay
+        whose client_occurred_at is older than 72 hours is rejected with the
+        code OFFLINE_OPERATION_EXPIRED (OPS-003-SERVER-72H-REJECTION,
+        x-offline-operation-age). ORD-002-GUARD-CODES-2026-10-05: a version,
+        AI-04 matrix or guard rejection carries the stable rule code of
+        TransitionConflictProblem only when the order belongs to the selected
+        organization (the owner; ORD-002 is owner-only) and the caller holds
+        the transitionOrder capability on it (DISPATCHER; PLATFORM_ADMIN with a
+        satisfied MFA challenge; DRIVER only while holding the order's ACCEPTED
+        or ACTIVE assignment). Every other conflict - request shape,
+        idempotency, concurrency, an unknown order, an order of another
+        organization, an order the selected organization only operates, or a
+        caller without that capability - is the same uniform 409 without a
+        code, so a code never reveals that an order exists outside the
+        caller's reach. A rejected request stores nothing: retrying it with the
+        same Idempotency-Key evaluates the rules again, and only a completed
+        200 is replayed.
       content:
         application/problem+json:
           schema:
@@ -3399,9 +3412,11 @@ components:
               satisfied MFA challenge; DRIVER only for its own driver steps of an
               assignment it holds; every other role none). Guards (quote and
               acceptance, assignment, proofs, custody, incidents, COD and
-              reconciliation) are not evaluated and never exposed, so a listed
-              transition may still be refused with 409. The list is advisory:
-              transitionOrder re-evaluates everything in its own transaction.
+              reconciliation) are not evaluated here, so a listed transition may
+              still be refused with 409; that 409 names the failed rule
+              (TransitionConflictProblem.code, ORD-002-GUARD-CODES-2026-10-05).
+              The list is advisory: transitionOrder re-evaluates everything in
+              its own transaction.
               Items follow the AI-04 status order.
             items:
               $ref: '#/components/schemas/OrderAllowedTransition'
@@ -4402,9 +4417,73 @@ components:
           type: string
         code:
           type: string
-          description: Present only when the offline operation is older than 72 hours.
+          description: >-
+            OFFLINE_OPERATION_EXPIRED when the offline operation is older than
+            72 hours. ORD-002-GUARD-CODES-2026-10-05: otherwise, only for a
+            caller holding the transitionOrder capability on an order of the
+            selected organization (see TransitionConflict), the rule that
+            refused the transition, the first one that failed in this order -
+            version (VERSION_CONFLICT: the order changed since it was read;
+            TRANSITION_NOT_ALLOWED also when the version is exhausted), the
+            AI-04 matrix (TRANSITION_NOT_ALLOWED: not an edge of the current
+            status; ORDER_TERMINAL: RETURNED, CLAIM_RESOLVED or CANCELLED;
+            ORDER_FINALIZED: a CLOSED order already finalized;
+            CLAIM_WINDOW_CLOSED: the claim window has ended), then the AI-04
+            guards of the edge as listed in x-ord-002-guard-codes. The code
+            names a rule, never the evidence behind it: no identifier, amount,
+            status of another entity, proof, incident or personal data is
+            returned. Absent means the uniform conflict. Clients map unknown
+            values to their generic conflict message.
           enum:
           - OFFLINE_OPERATION_EXPIRED
+          - VERSION_CONFLICT
+          - TRANSITION_NOT_ALLOWED
+          - ORDER_TERMINAL
+          - ORDER_FINALIZED
+          - CLAIM_WINDOW_CLOSED
+          - QUOTE_NOT_VALID
+          - PAYER_ACCEPTANCE_REQUIRED
+          - RESTRICTED_GOODS_ACK_REQUIRED
+          - VALID_ASSIGNMENT_REQUIRED
+          - DRIVER_CAPACITY_EXCEEDED
+          - ASSIGNMENT_COST_REQUIRED
+          - PICKUP_PROOF_REQUIRED
+          - DELIVERY_PROOF_REQUIRED
+          - COD_NOT_RECORDED
+          - UNRESOLVED_INCIDENT
+          - COD_NOT_RECONCILED
+          - FINANCIAL_RECONCILIATION_INCOMPLETE
+          - CLAIM_WINDOW_NOT_SET
+          - REASON_REQUIRED
+          - CUSTODY_ALREADY_ACQUIRED
+          - INCIDENT_REQUIRED
+          - CUSTODY_NOT_ACQUIRED
+          - NEXT_ACTION_MISMATCH
+          x-ord-002-guard-codes:
+            valid_active_quote: QUOTE_NOT_VALID
+            payer_acceptance: PAYER_ACCEPTANCE_REQUIRED
+            restricted_goods_check: RESTRICTED_GOODS_ACK_REQUIRED
+            eligible_driver: VALID_ASSIGNMENT_REQUIRED
+            capacity_available: DRIVER_CAPACITY_EXCEEDED
+            assignment_cost_present: ASSIGNMENT_COST_REQUIRED
+            pickup_proof_complete: PICKUP_PROOF_REQUIRED
+            delivery_proof_complete: DELIVERY_PROOF_REQUIRED
+            if_cod_expected_then_cod_status_recorded_or_reconciled: COD_NOT_RECORDED
+            no_unresolved_incident: UNRESOLVED_INCIDENT
+            if_cod_expected_then_cod_status_reconciled: COD_NOT_RECONCILED
+            financial_reconciliation_complete: FINANCIAL_RECONCILIATION_INCOMPLETE
+            claim_window_ends_at_set: CLAIM_WINDOW_NOT_SET
+            now_before_or_equal_claim_window_ends_at: CLAIM_WINDOW_CLOSED
+            claim_reason_present: REASON_REQUIRED
+            claim_resolution_reason_present: REASON_REQUIRED
+            cancellation_reason_present: REASON_REQUIRED
+            if_from_at_pickup_then_custody_not_acquired: CUSTODY_ALREADY_ACQUIRED
+            attempt_stage_recorded: INCIDENT_REQUIRED
+            custody_acquired_recorded: INCIDENT_REQUIRED
+            custody_acquired_true: CUSTODY_NOT_ACQUIRED
+            retry_custody_acquired_true: CUSTODY_NOT_ACQUIRED
+            retry_valid_assignment: VALID_ASSIGNMENT_REQUIRED
+            failed_attempt_next_action_respected: NEXT_ACTION_MISMATCH
     ProofConflictProblem:
       type: object
       required:

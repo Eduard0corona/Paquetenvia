@@ -847,6 +847,209 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 CancellationToken.None));
     }
 
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: each rejection carries the AI-05 rule code computed from the real rows the
+    /// version, matrix and guard reads see, without partial rows.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Rejection_codes_follow_the_version_matrix_and_real_guard_reads()
+    {
+        await using (var draft = new SyntheticOrderScenario(fixture))
+        {
+            await draft.InitializeAsync();
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(scope, Command(draft, OrderStatus.Cancelled, 2, Key()), "VERSION_CONFLICT");
+            await AssertRejectionCodeAsync(scope, Command(draft, OrderStatus.Delivered, 1, Key()), "TRANSITION_NOT_ALLOWED");
+            await PrepareConfirmationAsync(draft);
+            await AssertRejectionCodeAsync(
+                scope, Command(draft, OrderStatus.Confirmed, 1, Key(), "{}"), "RESTRICTED_GOODS_ACK_REQUIRED");
+            await AssertNoTransitionArtifactsAsync(draft, OrderStatus.Draft);
+        }
+
+        await using (var cancelled = new SyntheticOrderScenario(fixture))
+        {
+            await cancelled.InitializeAsync(OrderStatus.Cancelled.ToContractValue());
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(
+                scope,
+                Command(cancelled, OrderStatus.Confirmed, 1, Key(), """{"restricted_goods_acknowledged":true}"""),
+                "ORDER_TERMINAL");
+        }
+
+        await using (var ready = new SyntheticOrderScenario(fixture))
+        {
+            await ready.InitializeAsync(OrderStatus.ReadyForPickup.ToContractValue());
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(
+                scope, Command(ready, OrderStatus.Assigned, 1, Key()), "VALID_ASSIGNMENT_REQUIRED");
+        }
+
+        // A rejection stores nothing: the same Idempotency-Key succeeds once the missing proof exists.
+        await using (var pickup = new SyntheticOrderScenario(fixture))
+        {
+            await pickup.InitializeAsync(OrderStatus.AtPickup.ToContractValue());
+            var version = await OrderStatusHistory.SeedCanonicalAsync(pickup, "AT_PICKUP");
+            await using var scope = CreateScope();
+            var key = Key();
+            await AssertRejectionCodeAsync(
+                scope, Command(pickup, OrderStatus.PickedUp, version, key), "PICKUP_PROOF_REQUIRED");
+            await InsertProofAsync(pickup, "PICKUP_PHOTO");
+            var pickedUp = await scope.Service.TransitionAsync(
+                Command(pickup, OrderStatus.PickedUp, version, key),
+                CancellationToken.None);
+            Assert.Equal("PICKED_UP", pickedUp.Status);
+        }
+
+        await using (var returning = new SyntheticOrderScenario(fixture))
+        {
+            await returning.InitializeAsync(OrderStatus.PickedUp.ToContractValue());
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(
+                scope, Command(returning, OrderStatus.Returning, 1, Key()), "CUSTODY_NOT_ACQUIRED");
+        }
+
+        await using (var inTransit = new SyntheticOrderScenario(fixture))
+        {
+            await inTransit.InitializeAsync(OrderStatus.InTransit.ToContractValue());
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(
+                scope,
+                Command(inTransit, OrderStatus.FailedAttempt, 1, Key(), $$"""{"incident_id":"{{Guid.NewGuid():D}}"}"""),
+                "INCIDENT_REQUIRED");
+        }
+
+        await using (var delivering = new SyntheticOrderScenario(fixture))
+        {
+            await delivering.InitializeAsync(OrderStatus.Delivering.ToContractValue());
+            await delivering.ExecuteAdminAsync(
+                "UPDATE orders.orders SET cod_expected_cents=5000 WHERE id=@order;",
+                SyntheticOrderScenario.P("order", delivering.OrderId));
+            var version = await OrderStatusHistory.SeedCanonicalAsync(delivering, "DELIVERING");
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(
+                scope, Command(delivering, OrderStatus.Delivered, version, Key()), "DELIVERY_PROOF_REQUIRED");
+            await InsertProofAsync(delivering, "DELIVERY_PHOTO");
+            await AssertRejectionCodeAsync(
+                scope, Command(delivering, OrderStatus.Delivered, version, Key()), "COD_NOT_RECORDED");
+            Assert.Equal(version, await CurrentVersionAsync(delivering));
+        }
+
+        await using (var delivered = new SyntheticOrderScenario(fixture))
+        {
+            await delivered.InitializeAsync(OrderStatus.Delivered.ToContractValue());
+            await delivered.ExecuteAdminAsync(
+                """
+                UPDATE orders.orders
+                SET cod_expected_cents=5000,claim_window_ends_at=clock_timestamp()-interval '1 hour'
+                WHERE id=@order;
+                """,
+                SyntheticOrderScenario.P("order", delivered.OrderId));
+            await InsertCodAsync(delivered, "RECORDED", 5_000);
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(
+                scope, Command(delivered, OrderStatus.Closed, 1, Key()), "COD_NOT_RECONCILED");
+            await AssertRejectionCodeAsync(
+                scope, Command(delivered, OrderStatus.ClaimOpen, 1, Key()), "CLAIM_WINDOW_CLOSED");
+            await AssertNoTransitionArtifactsAsync(delivered, OrderStatus.Delivered);
+        }
+
+        await using (var closed = new SyntheticOrderScenario(fixture))
+        {
+            await closed.InitializeAsync(OrderStatus.Closed.ToContractValue());
+            await closed.ExecuteAdminAsync(
+                "UPDATE orders.orders SET claim_window_ends_at=clock_timestamp()-interval '1 hour' WHERE id=@order;",
+                SyntheticOrderScenario.P("order", closed.OrderId));
+            await using var scope = CreateScope();
+            await AssertRejectionCodeAsync(
+                scope, Command(closed, OrderStatus.ClaimOpen, 1, Key()), "CLAIM_WINDOW_CLOSED");
+        }
+    }
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: an order the selected organization does not own, and a caller without the
+    /// transitionOrder capability, keep the uniform conflict without a code; a DRIVER gets codes only for the order
+    /// it holds.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Rejection_codes_stay_hidden_from_foreign_orders_and_callers_without_the_capability()
+    {
+        await using var owner = new SyntheticOrderScenario(fixture);
+        await using var foreign = new SyntheticOrderScenario(fixture);
+        await owner.InitializeAsync(OrderStatus.AtPickup.ToContractValue());
+        await foreign.InitializeAsync(OrderStatus.AtPickup.ToContractValue());
+        await using var scope = CreateScope();
+
+        // Another organization's order, with a stale version, a non-edge and a failing guard alike.
+        foreach (var (target, version) in new[]
+                 {
+                     (OrderStatus.Cancelled, 7),
+                     (OrderStatus.Delivered, 1),
+                     (OrderStatus.PickedUp, 1),
+                 })
+        {
+            var crossTenant = Command(owner, target, version, Key()) with { OrderId = foreign.OrderId };
+            var hidden = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+                scope.Service.TransitionAsync(crossTenant, CancellationToken.None));
+            Assert.Equal(OrderTransitionConflictCode.OrderUnavailable, hidden.Code);
+            Assert.Null(hidden.RejectionCode);
+            Assert.Null(hidden.GuardCode);
+        }
+
+        await AssertNoTransitionArtifactsAsync(foreign, OrderStatus.AtPickup);
+
+        // PLATFORM_ADMIN without MFA, VIEWER and a DRIVER without the assignment: same order, no code.
+        await SetRoleAsync(owner, "PLATFORM_ADMIN");
+        await AssertUncodedAsync(Command(owner, OrderStatus.Cancelled, 7, Key()) with { MfaSatisfied = false });
+        await SetRoleAsync(owner, "VIEWER");
+        await AssertUncodedAsync(Command(owner, OrderStatus.Cancelled, 7, Key()));
+        await AssertUncodedAsync(Command(owner, OrderStatus.Delivered, 1, Key()));
+        await SetRoleAsync(owner, "DRIVER");
+        await AssertUncodedAsync(Command(owner, OrderStatus.Cancelled, 7, Key()));
+        await AssertUncodedAsync(Command(owner, OrderStatus.Delivered, 1, Key()));
+
+        // The same DRIVER holding the order's ACTIVE assignment: codes for its own order.
+        await InsertAssignmentAsync(owner, owner.UserId);
+        await AssertRejectionCodeAsync(scope, Command(owner, OrderStatus.PickedUp, 7, Key()), "VERSION_CONFLICT");
+        await AssertRejectionCodeAsync(scope, Command(owner, OrderStatus.Delivered, 1, Key()), "TRANSITION_NOT_ALLOWED");
+        await AssertRejectionCodeAsync(scope, Command(owner, OrderStatus.PickedUp, 1, Key()), "PICKUP_PROOF_REQUIRED");
+        // A valid edge outside the driver list stays the 403 it was.
+        await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
+            scope.Service.TransitionAsync(Command(owner, OrderStatus.Cancelled, 1, Key()), CancellationToken.None));
+        await AssertNoTransitionArtifactsAsync(owner, OrderStatus.AtPickup);
+
+        async Task AssertUncodedAsync(TransitionOrderCommand command)
+        {
+            var conflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+                scope.Service.TransitionAsync(command, CancellationToken.None));
+            Assert.Null(conflict.RejectionCode);
+        }
+
+        static Task SetRoleAsync(SyntheticOrderScenario scenario, string role) =>
+            scenario.ExecuteAdminAsync(
+                """
+                UPDATE organizations.organization_memberships
+                SET role=@role
+                WHERE user_id=@user AND organization_id=@org;
+                """,
+                SyntheticOrderScenario.P("role", role),
+                SyntheticOrderScenario.P("user", scenario.UserId),
+                SyntheticOrderScenario.P("org", scenario.OrganizationId));
+    }
+
+    private static async Task<OrderTransitionConflictException> AssertRejectionCodeAsync(
+        TransitionScope scope,
+        TransitionOrderCommand command,
+        string expectedCode)
+    {
+        var conflict = await Assert.ThrowsAsync<OrderTransitionConflictException>(() =>
+            scope.Service.TransitionAsync(command, CancellationToken.None));
+        Assert.Equal(expectedCode, conflict.RejectionCode);
+        Assert.True(OrderTransitionRejectionCodes.IsDefined(conflict.RejectionCode));
+        return conflict;
+    }
+
     private TransitionScope CreateScope(
         DateTimeOffset? now = null,
         IOrderTransitionFailureInjector? failureInjector = null)
@@ -1257,6 +1460,14 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         return reader.IsDBNull(0) ? null : reader.GetFieldValue<DateTimeOffset>(0);
+    }
+
+    private async Task<int> CurrentVersionAsync(SyntheticOrderScenario scenario)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            "SELECT version FROM orders.orders WHERE id=@order");
+        command.Parameters.AddWithValue("order", scenario.OrderId);
+        return (int)(await command.ExecuteScalarAsync())!;
     }
 
     private static async Task<bool> TryTransitionAsync(

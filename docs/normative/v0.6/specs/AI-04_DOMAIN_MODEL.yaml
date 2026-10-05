@@ -365,6 +365,8 @@ order_state_machine:
     CLAIM_OPEN:
     - now_before_or_equal_claim_window_ends_at
     - claim_reason_present
+    CLAIM_RESOLVED:
+    - claim_resolution_reason_present
     CANCELLED:
     - cancellation_reason_present
     - if_from_at_pickup_then_custody_not_acquired

@@ -1,6 +1,10 @@
 import type { OrderActionsApi } from "../api/order-actions-api";
 import { TenantApiError } from "../api/tenant-request";
-import { transitionConflictMessage, type NextStepAction } from "../contracts/order-transitions";
+import {
+  transitionConflictMessage,
+  transitionRejectionMessage,
+  type NextStepAction,
+} from "../contracts/order-transitions";
 import { describeFailure } from "./tenant-error-messages";
 
 /**
@@ -88,12 +92,15 @@ export class OrderTransitionController {
         {},
         transitionConflictMessage,
       );
+      // ORD-002-GUARD-CODES-2026-10-05: a 409 names the unmet rule when the server sent its code.
       const message =
         error instanceof TenantApiError && error.category === "not_found"
           ? "La orden ya no está disponible. Se actualizó la información."
           : error instanceof TenantApiError && error.category === "invalid"
             ? "Revisa el motivo e intenta de nuevo."
-            : view.message;
+            : error instanceof TenantApiError && error.category === "conflict"
+              ? transitionRejectionMessage(error.code)
+              : view.message;
       this.set({ busy: false, message, success: false, stepUpHref: view.stepUpHref });
       if (!retryable && !(error instanceof TenantApiError && error.category === "forbidden")) this.onOrderChanged();
     }

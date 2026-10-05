@@ -41,6 +41,38 @@ describe("order transition controller (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)"
     expect(onOrderChanged).toHaveBeenCalledTimes(1);
   });
 
+  it("says what is missing when the 409 carries a rule code (ORD-002-GUARD-CODES-2026-10-05)", async () => {
+    const { controller, states, onOrderChanged } = setup(async () => {
+      throw new TenantApiError("conflict", "PICKUP_PROOF_REQUIRED");
+    });
+    await controller.submit(cancel, "Motivo", 4, false);
+    expect(states.at(-1)).toMatchObject({ busy: false, success: false, message: "Falta la foto de recolección." });
+    expect(onOrderChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, "SOME_FUTURE_RULE"])("keeps the generic 409 text for code %j", async (code) => {
+    const { controller, states } = setup(async () => {
+      throw new TenantApiError("conflict", code);
+    });
+    await controller.submit(cancel, "Motivo", 4, false);
+    expect(states.at(-1)?.message).toBe(transitionConflictMessage);
+  });
+
+  it("starts a new Idempotency-Key after a coded 409", async () => {
+    const transition = vi
+      .fn<OrderActionsApi["transitionOrder"]>()
+      .mockRejectedValueOnce(new TenantApiError("conflict", "COD_NOT_RECONCILED"))
+      .mockResolvedValue({ id: orderId, status: "CANCELLED", version: 5 });
+    const { controller, states } = setup(transition);
+    await controller.submit(cancel, "Motivo", 4, false);
+    expect(states.at(-1)?.message).toBe("El cobro contra entrega aún no está conciliado.");
+    await controller.submit(cancel, "Motivo", 4, false);
+    expect(transition.mock.calls.map((call) => call[5])).toEqual([
+      "order-transition-uuid-1",
+      "order-transition-uuid-2",
+    ]);
+  });
+
   it("reuses the Idempotency-Key only to retry the same payload after a network failure", async () => {
     const transition = vi
       .fn<OrderActionsApi["transitionOrder"]>()

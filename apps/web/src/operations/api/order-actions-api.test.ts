@@ -106,4 +106,19 @@ describe("order actions api (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)", () => {
       category: "invalid",
     });
   });
+
+  it("keeps the 409 rule code only when it is a well-formed problem code (ORD-002-GUARD-CODES-2026-10-05)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(problem(409, "PICKUP_PROOF_REQUIRED")));
+    await expect(api().transitionOrder(orderId, cancel, "Motivo", 1, false, key)).rejects.toMatchObject({
+      category: "conflict",
+      code: "PICKUP_PROOF_REQUIRED",
+    });
+    for (const code of ["pickup proof", "<b>X</b>", "A".repeat(65)]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(problem(409, code)));
+      await expect(api().transitionOrder(orderId, cancel, "Motivo", 1, false, key)).rejects.toMatchObject({
+        category: "conflict",
+        code: null,
+      });
+    }
+  });
 });

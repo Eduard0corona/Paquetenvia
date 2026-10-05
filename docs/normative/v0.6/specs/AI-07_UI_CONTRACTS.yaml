@@ -119,6 +119,17 @@ routes:
         or server failure; expected_version is the version just read
       recovery: after the answer the order is fetched again; a 409 shows "No se pudo cambiar el estado; la orden cambió
         o falta un requisito. Actualiza e intenta de nuevo."
+      # ORD-002-GUARD-CODES-2026-10-05 (project owner, 2026-10-05): a 409 carrying a TransitionConflictProblem rule code
+      # says what is missing instead, in es-MX, from one helper; an absent or unknown code keeps the message above.
+      rejection_messages:
+        decision: ORD-002-GUARD-CODES-2026-10-05
+        source: transitionOrder 409 TransitionConflictProblem.code
+        display:
+        - one es-MX sentence per AI-05 rule code (for example PICKUP_PROOF_REQUIRED "Falta la foto de recolección.",
+          COD_NOT_RECONCILED "El cobro contra entrega aún no está conciliado."); never server text, identifiers or
+          personal data
+        - an absent, malformed or unknown code shows the generic 409 message
+        - the order is still fetched again after the answer; the code never changes the offered actions by itself
   /ops/routes:
     roles:
     - platform_admin

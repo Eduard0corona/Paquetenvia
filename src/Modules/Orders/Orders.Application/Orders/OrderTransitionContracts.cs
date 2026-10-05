@@ -41,11 +41,19 @@ public enum OrderTransitionConflictCode
 
 public sealed class OrderTransitionConflictException(
     OrderTransitionConflictCode code,
-    string? guardCode = null)
+    string? guardCode = null,
+    string? rejectionCode = null)
     : Exception("The order transition conflicts with current state.")
 {
     public OrderTransitionConflictCode Code { get; } = code;
     public string? GuardCode { get; } = guardCode;
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: the AI-05 rule code (<see cref="OrderTransitionRejectionCodes"/>) the 409 may
+    /// carry. Null keeps the uniform 409 without a code: it is set only after the order was locked for the selected
+    /// owner organization and the caller holds the transitionOrder capability on it.
+    /// </summary>
+    public string? RejectionCode { get; } = rejectionCode;
 }
 
 public sealed class OrderTransitionForbiddenException : Exception
@@ -241,6 +249,14 @@ public sealed record OrderTransitionAuthorizationContext(
 public interface IOrderTransitionAuthorizer
 {
     bool IsAuthorized(OrderTransitionAuthorizationContext context);
+
+    /// <summary>
+    /// ORD-002-GUARD-CODES-2026-10-05: whether the actor holds the transitionOrder capability on this order at all,
+    /// whatever the edge: the role rules of <see cref="IsAuthorized"/> without the per-edge driver list (DISPATCHER;
+    /// PLATFORM_ADMIN with a satisfied MFA challenge; DRIVER only while holding the order's ACCEPTED or ACTIVE
+    /// assignment). Only such an actor receives the rule code of a rejected transition.
+    /// </summary>
+    bool HoldsTransitionCapability(string? activeRole, bool mfaSatisfied, bool hasMatchingDriverAssignment);
 }
 
 public sealed class OrderTransitionAuthorizer : IOrderTransitionAuthorizer
@@ -263,12 +279,18 @@ public sealed class OrderTransitionAuthorizer : IOrderTransitionAuthorizer
         (OrderStatus.Returning, OrderStatus.Returned),
     ];
 
-    public bool IsAuthorized(OrderTransitionAuthorizationContext context) => context.ActiveRole switch
+    public bool IsAuthorized(OrderTransitionAuthorizationContext context) =>
+        HoldsTransitionCapability(context.ActiveRole, context.MfaSatisfied, context.HasMatchingDriverAssignment) &&
+        (context.ActiveRole != "DRIVER" || DriverTransitions.Contains((context.Source, context.Target)));
+
+    public bool HoldsTransitionCapability(
+        string? activeRole,
+        bool mfaSatisfied,
+        bool hasMatchingDriverAssignment) => activeRole switch
     {
-        "PLATFORM_ADMIN" => context.MfaSatisfied,
+        "PLATFORM_ADMIN" => mfaSatisfied,
         "DISPATCHER" => true,
-        "DRIVER" => context.HasMatchingDriverAssignment &&
-            DriverTransitions.Contains((context.Source, context.Target)),
+        "DRIVER" => hasMatchingDriverAssignment,
         _ => false,
     };
 }
