@@ -352,12 +352,14 @@ public sealed class OrderCodExpectedTests
             string? cursor,
             bool codPendingReconciliation,
             bool mfaSatisfied,
+            string? publicId,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<OrderDetailResult> GetAsync(
             Guid actorId,
             Guid organizationId,
             Guid orderId,
+            bool mfaSatisfied,
             CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 

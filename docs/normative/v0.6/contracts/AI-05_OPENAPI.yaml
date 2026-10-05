@@ -148,6 +148,24 @@ paths:
           MFA challenge; any other value is 403 for FINANCE.
         schema:
           type: boolean
+      - name: public_id
+        in: query
+        description: >-
+          UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05. Exact tracking number
+          (Order.public_id, ORD_ followed by 22 Base64URL characters, case
+          sensitive); the list keeps only the order with that identifier, so
+          the page holds at most one item. It is decided after the capability
+          check, adds no capability of its own and narrows any other filter.
+          The value is checked against the public identifier format before any
+          order is read; a value outside that format matches nothing and
+          returns an empty page, like an unknown status. Tenant isolation is
+          the same RLS that scopes every listOrders read: an order of another
+          organization, a missing order and a malformed value all return the
+          same empty page. Only the tracking number is searchable; recipient,
+          sender or any other personal data is never a search criterion.
+        schema:
+          type: string
+          pattern: ^ORD_[A-Za-z0-9_-]{22}$
       - name: cursor
         in: query
         schema:
@@ -3357,11 +3375,63 @@ components:
       allOf:
       - $ref: '#/components/schemas/Order'
       - type: object
+        required:
+        - allowed_transitions
         properties:
           timeline:
             type: array
             items:
               $ref: '#/components/schemas/OrderEvent'
+          allowed_transitions:
+            type: array
+            description: >-
+              UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05. The ORD-002 transitions
+              the caller could request now with transitionOrder, computed by the
+              server so the UI does not duplicate the state machine; empty when
+              none. It reuses the checks transitionOrder applies before its
+              guards: only the owner organization transitions an order
+              (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03), so an operator
+              organization always receives an empty list; the current version
+              must still admit a transition; the AI-04 edges of the current
+              status, terminal states and the claim window and finalization of
+              CLOSED at the server clock; and the transitionOrder role rules for
+              the selected organization (DISPATCHER; PLATFORM_ADMIN with a
+              satisfied MFA challenge; DRIVER only for its own driver steps of an
+              assignment it holds; every other role none). Guards (quote and
+              acceptance, assignment, proofs, custody, incidents, COD and
+              reconciliation) are not evaluated and never exposed, so a listed
+              transition may still be refused with 409. The list is advisory:
+              transitionOrder re-evaluates everything in its own transaction.
+              Items follow the AI-04 status order.
+            items:
+              $ref: '#/components/schemas/OrderAllowedTransition'
+    OrderAllowedTransition:
+      type: object
+      additionalProperties: false
+      description: >-
+        UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05. One transition the caller
+        could request now. reason is always required by TransitionRequest and
+        is not repeated here.
+      required:
+      - target_status
+      - required_metadata
+      properties:
+        target_status:
+          $ref: '#/components/schemas/OrderStatus'
+        required_metadata:
+          type: array
+          uniqueItems: true
+          description: >-
+            TransitionRequest.metadata members this transition requires:
+            restricted_goods_acknowledged (the JSON literal true) for DRAFT to
+            CONFIRMED and incident_id (the pending incident of the current
+            attempt) for FAILED_ATTEMPT; empty for every other transition, which
+            takes no metadata.
+          items:
+            type: string
+            enum:
+            - restricted_goods_acknowledged
+            - incident_id
     TransitionRequest:
       type: object
       required:

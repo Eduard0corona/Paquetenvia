@@ -201,5 +201,15 @@ describe("operations labels and timeline", () => {
     expect(() =>
       parseOperationsOrderDetail({ ...detail, service_window: { from: window.to, to: window.to } }),
     ).toThrow(OperationsContractError);
+    // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: absent reads as no action; present is strict.
+    expect(parseOperationsOrderDetail(detail).allowed_transitions).toEqual([]);
+    const allowed = [{ target_status: "CANCELLED", required_metadata: [] }];
+    expect(parseOperationsOrderDetail({ ...detail, allowed_transitions: allowed }).allowed_transitions).toEqual(allowed);
+    expect(() =>
+      parseOperationsOrderDetail({
+        ...detail,
+        allowed_transitions: [{ target_status: "CANCELLED", required_metadata: [], guard: "x" }],
+      }),
+    ).toThrow(OperationsContractError);
   });
 });

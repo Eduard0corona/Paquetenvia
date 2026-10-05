@@ -25,6 +25,7 @@ describe("confirmation before risky money and destructive actions", () => {
     ["src/operations/components/manual-routes-shell.tsx", ["removeRouteStopConfirmation("], ["state.removeStop(stop.id)"]],
     ["src/operations/components/operations-order-card.tsx", ["externalOfferConfirmation("], ["void onPublishExternalOffer("]],
     ["src/operations/components/operations-driver-assignment.tsx", ["driverAssignmentConfirmation("], ["assign(driver, costCents)"]],
+    ["src/operations/components/operations-next-step.tsx", ["transitionConfirmation("], ["submit(action, trimmed, version, acknowledged)"]],
   ] as const)("%s runs each risky action only from the confirmation", (path, builders, actions) => {
     const source = read(path);
     for (const builder of builders) expect(source, builder).toContain(builder);

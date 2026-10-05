@@ -450,6 +450,77 @@ public sealed class OrdersOpenApiImplementationTests
             "WEB"));
     }
 
+    /// <summary>
+    /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: listOrders searches by the exact tracking number only, with the
+    /// AI-04 public identifier format, and getOrder returns the advisory allowed_transitions exactly as AI-05 declares.
+    /// </summary>
+    [Fact]
+    public void The_public_id_search_and_allowed_transitions_match_AI05()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var list = root.Mapping("paths").Mapping("/orders").Mapping("get");
+        var parameters = list.Sequence("parameters").Children.OfType<YamlMappingNode>()
+            .Where(parameter => parameter.Children.ContainsKey(new YamlScalarNode("name")))
+            .ToArray();
+        Assert.Equal(
+            ["cod_pending_reconciliation", "cursor", "owner_org_id", "public_id", "status"],
+            parameters.Select(parameter => parameter.Scalar("name")).Order(StringComparer.Ordinal));
+        var publicId = parameters.Single(parameter => parameter.Scalar("name") == "public_id");
+        Assert.Equal("query", publicId.Scalar("in"));
+        var pattern = publicId.Mapping("schema").Scalar("pattern");
+        Assert.Equal("^ORD_[A-Za-z0-9_-]{22}$", pattern);
+        foreach (var candidate in new[]
+        {
+            "ORD_AAAAAAAAAAAAAAAAAAAAAA", "ORD_abcdefghij-_0123456789", "ORD_AAAAAAAAAAAAAAAAAAAAA",
+            "ORD_AAAAAAAAAAAAAAAAAAAAAAA", "ord_AAAAAAAAAAAAAAAAAAAAAA", "ORD_AAAAAAAAAAAAAAAAAAAA+/",
+            "ORD_AAAAAAAAAAAAAAAAAAAA%_", " ORD_AAAAAAAAAAAAAAAAAAAAAA", "", "ORD_",
+        })
+        {
+            Assert.Equal(Regex.IsMatch(candidate, pattern), OrderPublicIdPolicy.IsValid(candidate));
+        }
+
+        var description = publicId.Scalar("description");
+        Assert.Contains("UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05", description, StringComparison.Ordinal);
+        Assert.Contains("same empty page", description, StringComparison.Ordinal);
+        Assert.Contains("never a search criterion", description, StringComparison.Ordinal);
+
+        var source = ReadRepositoryFile("src", "Modules", "Orders", "Orders.Endpoints", "OrderEndpoints.cs");
+        Assert.Contains("string? public_id,", source, StringComparison.Ordinal);
+        var coordinator = ReadRepositoryFile(
+            "src", "Modules", "Orders", "Orders.Infrastructure", "Orders", "QuoteSnapshotToOrderCoordinator.cs");
+        Assert.Contains("(publicId is not null && !OrderPublicIdPolicy.IsValid(publicId))", coordinator, StringComparison.Ordinal);
+        Assert.Contains("AND (@public_id IS NULL OR public_id=@public_id)", coordinator, StringComparison.Ordinal);
+        Assert.DoesNotContain("LIKE", coordinator, StringComparison.OrdinalIgnoreCase);
+
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var detail = schemas.Mapping("OrderDetail").Sequence("allOf").Children.OfType<YamlMappingNode>()
+            .Single(node => node.Children.ContainsKey(new YamlScalarNode("properties")));
+        Assert.Equal(["allowed_transitions", "timeline"], PropertyNames(detail));
+        Assert.Equal(["allowed_transitions"], RequiredPropertyNames(detail));
+        Assert.Equal(
+            "#/components/schemas/OrderAllowedTransition",
+            detail.Mapping("properties").Mapping("allowed_transitions").Mapping("items").Scalar("$ref"));
+        AssertJsonProperties<OrderDetailResponse>(
+            [.. JsonPropertyNames<OrderResponse>(), "allowed_transitions", "timeline"]);
+
+        var allowed = schemas.Mapping("OrderAllowedTransition");
+        Assert.Equal("false", allowed.Scalar("additionalProperties"));
+        Assert.Equal(["required_metadata", "target_status"], RequiredPropertyNames(allowed));
+        Assert.Equal(JsonPropertyNames<OrderAllowedTransitionResponse>(), PropertyNames(allowed));
+        Assert.Equal(
+            "#/components/schemas/OrderStatus",
+            allowed.Mapping("properties").Mapping("target_status").Scalar("$ref"));
+        Assert.Equal(
+            new[] { OrderTransitionInputPolicy.IncidentIdKey, OrderTransitionInputPolicy.RestrictedGoodsAcknowledgedKey }
+                .Order(StringComparer.Ordinal),
+            EnumValues(allowed.Mapping("properties").Mapping("required_metadata").Mapping("items")));
+
+        // The response is built only from the shared policy; no transition rule lives in the endpoint.
+        Assert.Contains("result.AllowedTransitions.Select(item => new OrderAllowedTransitionResponse(", source, StringComparison.Ordinal);
+        Assert.Contains("OrderAllowedTransitionsPolicy.Compute(", coordinator, StringComparison.Ordinal);
+        Assert.DoesNotContain("OrderTransitionMatrix", source, StringComparison.Ordinal);
+    }
+
     private static void AssertJsonProperties<T>(params string[] expected)
     {
         var actual = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)

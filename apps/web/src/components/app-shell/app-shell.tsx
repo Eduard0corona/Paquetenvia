@@ -7,7 +7,9 @@ import { bootstrapBffSession, landingPathForRole } from "../../auth/bff-session-
 import { isBffAuthenticationEnabled } from "../../auth/auth-mode";
 import { signOutInstalledSession } from "../../auth/logout";
 import { accountLabel } from "../../auth/session-account";
+import { canSearchOrders } from "../../operations/contracts/capabilities";
 import { activeNavKey, navItemsForRole, type NavItem, type NavKey } from "./nav-items";
+import { OrderSearchBox } from "./order-search-box";
 import { useShellContext, type ShellContext } from "./use-shell-context";
 
 const sidebarId = "app-sidebar";
@@ -78,6 +80,9 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
           </button>
           <Link className="appBrand appTopbarBrand" href={homeHref}>Paquetenvia</Link>
           <OrganizationContext shell={shell} pathname={pathname} />
+          {shell.status === "ready" && canSearchOrders(shell.role) && (
+            <OrderSearchBox session={shell.session} />
+          )}
           {shell.status === "ready" && <AccountMenu shell={shell} />}
         </header>
         <main id="main" className="appContent" tabIndex={-1}>

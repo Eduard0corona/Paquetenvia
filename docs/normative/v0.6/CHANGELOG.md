@@ -1,5 +1,20 @@
 # Changelog
 
+## Búsqueda por guía y acciones válidas de la orden (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`.
+- AI-05 `listOrders`: parámetro opcional `public_id`, coincidencia exacta del número de guía (`ORD_` y 22 caracteres
+  Base64URL); un valor con otro formato no coincide con nada; orden ajena, inexistente o mal formada devuelven la
+  misma página vacía (RLS). Solo se busca por guía, nunca por datos personales. Sin capacidad nueva.
+- AI-05 `OrderDetail.allowed_transitions` (esquema `OrderAllowedTransition`): transiciones ORD-002 que quien consulta
+  podría pedir ahora, calculadas por el servidor con la matriz AI-04, la regla de solo dueño, la versión y las reglas de
+  rol de `transitionOrder`; `required_metadata` indica `restricted_goods_acknowledged` o `incident_id`. No evalúa ni
+  expone guardas; es orientativa y `transitionOrder` vuelve a validar todo.
+- AI-07: "Buscar guía" en la barra superior y "Siguiente paso" en `/ops/orders/:id` (solo acciones válidas, motivo
+  obligatorio, confirmación, Idempotency-Key, recarga REST).
+- Sin migraciones, tablas, índices, roles, grants ni flujos nuevos; AI-04, AI-06 y AI-18 sin cambios.
+
 ## Asignar repartidor desde el detalle de la orden (UI-PHASE2-DRIVER-PICKER-2026-10-05) — 2026-10-05
 
 - Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en

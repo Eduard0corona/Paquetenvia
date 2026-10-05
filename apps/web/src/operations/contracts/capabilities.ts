@@ -170,6 +170,18 @@ export function resolveActiveRole(
   );
 }
 
+/**
+ * UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Buscar guía" opens the order detail, which reads the
+ * operations dashboard (OBS-001, ADR-OBS-001: DISPATCHER, and PLATFORM_ADMIN with MFA), so the
+ * search is offered to the listOrders roles that can also open that detail. VIEWER lists orders
+ * but cannot open the detail, so it is not offered the search.
+ */
+export const orderDetailRoles = ["DISPATCHER", "PLATFORM_ADMIN"] as const;
+
+export function canSearchOrders(role: string | null): boolean {
+  return canPerform(role, "listOrders") && (orderDetailRoles as readonly (string | null)[]).includes(role);
+}
+
 /** VIEWER never receives exact coordinates (D5-VIEWER-LOCATION-PRECISION-2026-09-27). */
 export function mayHandleExactCoordinates(role: string | null): boolean {
   return role === "DISPATCHER" || role === "PLATFORM_ADMIN";
