@@ -57,6 +57,10 @@ export const screenOperationsMatrix = {
   // exactly the assignDriver roles.
   assignDriver: ["DISPATCHER", "PLATFORM_ADMIN"],
   listAssignableDrivers: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // UI-PHASE2-QUEUE-COUNTS-2026-10-05: the dashboard indicators read
+  // getOperationsQueueCounts (x-capability-matrix operations_queue_operations),
+  // which admits exactly the operations dashboard roles.
+  getOperationsQueueCounts: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 const allOperations: Readonly<Record<string, readonly string[]>> = {
@@ -101,6 +105,7 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "issueTrackingLink",
     "assignDriver",
     "listAssignableDrivers",
+    "getOperationsQueueCounts",
   ],
 };
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## Conteos reales de la bandeja de operaciones (UI-PHASE2-QUEUE-COUNTS-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`. Fase 2: "Conteos para la bandeja" (conteo real del servidor; hoy los indicadores cuentan solo lo
+  cargado).
+- AI-05: `getOperationsQueueCounts` (`GET /operations/queue-counts`, esquemas `OperationsQueueCounts`,
+  `OperationsQueues` y `OperationsCount`, módulo Reporting). Solo conteos enteros sobre las órdenes que la organización
+  activa puede leer como dueña u operadora (RLS): `total`, `by_status` con los 17 estados AI-04 (incluye ceros) y
+  `queues` (`unassigned`, `needs_attention`, `price_review`, `delivered_not_closed`, `en_route`), cada una con una regla
+  que el tablero ya aplica. Sin parámetros ni filtros (cualquier query es 400). Mismos roles que el tablero:
+  DISPATCHER y PLATFORM_ADMIN con MFA (`x-capability-matrix.operations_queue_operations`); VIEWER recibe 403.
+- AI-07 `/ops/dashboard` `queue_counts`: indicadores "Sin asignar", "Requiere atención", "Revisar precio",
+  "Entregadas sin cerrar" y "En ruta", y "N en total" por grupo de estado, recargados junto con la lista.
+- Sin migraciones, tablas, índices, roles, grants ni flujos nuevos; AI-04, AI-06 y AI-18 sin cambios.
+
 ## Código de la regla incumplida al cambiar el estado (ORD-002-GUARD-CODES-2026-10-05) — 2026-10-05
 
 - Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en

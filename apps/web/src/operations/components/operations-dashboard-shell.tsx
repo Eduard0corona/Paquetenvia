@@ -6,6 +6,7 @@ import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
 import { OperationsPositions } from "./operations-positions";
 import { orderStatusGroupIds, statusGroup } from "../contracts/status-groups";
+import { statusGroupTotals } from "../contracts/queue-counts";
 import { DateTime } from "../../components/ui/date-time";
 import { EmptyState } from "../../components/ui/empty-state";
 import { PageHeader } from "../../components/ui/page-header";
@@ -24,12 +25,14 @@ export function OperationsDashboardShell() {
       })),
     [state.items],
   );
-  const summary = {
-    total: state.items.length,
-    unassigned: state.items.filter((item) => item.unassigned_alert).length,
-    delivering: state.items.filter((item) => item.status === "DELIVERING").length,
-    warnings: state.items.filter((item) => item.cost_warning !== null).length,
-  };
+  // UI-PHASE2-QUEUE-COUNTS-2026-10-05: indicators and group totals are the
+  // server counts of every order, never a count of the loaded page.
+  const counts = state.queueCounts;
+  const groupTotals = useMemo(
+    () => (counts === null ? null : statusGroupTotals(counts)),
+    [counts],
+  );
+  const pendingValue = state.queueCountsUnavailable ? "Sin dato" : "…";
 
   return (
     <div className="page" aria-busy={state.loading}>
@@ -72,11 +75,20 @@ export function OperationsDashboardShell() {
 
 
       <section className="opsSummary" aria-label="Resumen operativo">
-        <Summary label="Órdenes cargadas" value={summary.total} />
-        <Summary label="Órdenes sin asignar" value={summary.unassigned} />
-        <Summary label="Órdenes en reparto" value={summary.delivering} />
-        <Summary label="Revisar precio" value={summary.warnings} />
+        <Summary label="Sin asignar" value={counts?.queues.unassigned ?? pendingValue} />
+        <Summary label="Requiere atención" value={counts?.queues.needs_attention ?? pendingValue} />
+        <Summary label="Revisar precio" value={counts?.queues.price_review ?? pendingValue} />
+        <Summary
+          label="Entregadas sin cerrar"
+          value={counts?.queues.delivered_not_closed ?? pendingValue}
+        />
+        <Summary label="En ruta" value={counts?.queues.en_route ?? pendingValue} />
       </section>
+      <p className="opsSummaryNote">
+        {state.queueCountsUnavailable
+          ? "Los totales no están disponibles por ahora; la lista sigue actualizándose."
+          : "Totales de todas las órdenes de la organización, sin aplicar filtros."}
+      </p>
 
       <OperationsFilters
         filters={state.filters}
@@ -117,9 +129,17 @@ export function OperationsDashboardShell() {
             >
               <h2 id={`status-group-${group}`}>
                 <StatusGroupChip group={group} />
-                <span className="opsBoardCount">
-                  {items.length}
-                  <span className="srOnly"> {items.length === 1 ? "orden" : "órdenes"}</span>
+                <span className="opsBoardTotals">
+                  <span className="opsBoardCount">
+                    {items.length}
+                    <span className="srOnly">
+                      {" "}
+                      {items.length === 1 ? "orden cargada" : "órdenes cargadas"}
+                    </span>
+                  </span>
+                  {groupTotals !== null && (
+                    <span className="opsBoardTotal">{groupTotals[group]} en total</span>
+                  )}
                 </span>
               </h2>
               {items.length === 0 ? (
@@ -164,7 +184,7 @@ function Summary({
   value,
 }: {
   readonly label: string;
-  readonly value: number;
+  readonly value: number | string;
 }) {
   return (
     <article>

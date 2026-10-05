@@ -320,6 +320,35 @@ public sealed class CapabilityMatrixContractTests
             TenantCapabilities.ListAssignableDrivers.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
     }
 
+    /// <summary>
+    /// UI-PHASE2-QUEUE-COUNTS-2026-10-05: AI-05 publishes the work-queue counts read in its own section, citing the
+    /// owner literal, and the server grants exactly the roles of the operations dashboard it feeds
+    /// (OperationsRolePolicy): DISPATCHER without MFA and PLATFORM_ADMIN with MFA; VIEWER never.
+    /// </summary>
+    [Fact]
+    public void Operations_queue_operations_mirror_the_operations_dashboard_roles()
+    {
+        var decision = Matrix.Scalar("operations_queue_operations_decision");
+        Assert.StartsWith("UI-PHASE2-QUEUE-COUNTS-2026-10-05", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí a los 5 grupos de estado, avanza con la fase 2\"", decision, StringComparison.Ordinal);
+        Assert.Contains("exactly the roles of the operations dashboard", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["getOperationsQueueCounts"],
+            OperationIds(Matrix.Mapping("operations_queue_operations")).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true)],
+            TenantCapabilities.GetOperationsQueueCounts.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        foreach (var role in Enum.GetValues<OrganizationRole>())
+        {
+            foreach (var mfa in new[] { false, true })
+            {
+                var admitted = TenantCapabilities.GetOperationsQueueCounts.Grants
+                    .Any(grant => grant.Role == role && (mfa || !grant.RequiresMfa));
+                Assert.Equal(OperationsRolePolicy.IsAllowed(role, mfa), admitted);
+            }
+        }
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -406,6 +435,7 @@ public sealed class CapabilityMatrixContractTests
                  {
                      "operations", "finance_operations", "platform_operations", "membership_operations",
                      "tracking_link_operations", "incident_operations", "assignable_driver_operations",
+                     "operations_queue_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

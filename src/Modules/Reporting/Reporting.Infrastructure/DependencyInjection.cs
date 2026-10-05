@@ -47,6 +47,19 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<PostgreSqlOperationsDashboardReader>(),
                 _ => serviceProvider.GetRequiredService<DisabledOperationsDashboardReader>(),
             });
+
+        // UI-PHASE2-QUEUE-COUNTS-2026-10-05: the work-queue counts follow the dashboard provider, so a disabled
+        // dashboard also fails the counts closed (503).
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<DisabledOperationsQueueCountsReader>();
+        services.AddScoped<PostgreSqlOperationsQueueCountsReader>();
+        services.AddScoped<IOperationsQueueCountsReader>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<OperationsDashboardOptions>>().Value.Provider switch
+            {
+                OperationsDashboardProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlOperationsQueueCountsReader>(),
+                _ => serviceProvider.GetRequiredService<DisabledOperationsQueueCountsReader>(),
+            });
         services.AddHealthChecks().Add(new HealthCheckRegistration(
             "operations_dashboard",
             serviceProvider => new OperationsDashboardHealthCheck(
