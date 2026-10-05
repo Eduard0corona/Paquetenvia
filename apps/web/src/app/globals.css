@@ -1250,6 +1250,9 @@ ul.notice {
 }
 
 .opsBoard {
+  /* Contains absolutely positioned descendants (e.g. .srOnly) so they scroll with the board
+     instead of widening the page. */
+  position: relative;
   display: flex;
   gap: var(--space-4);
   overflow-x: auto;
