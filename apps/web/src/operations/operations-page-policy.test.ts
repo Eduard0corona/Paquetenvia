@@ -35,18 +35,47 @@ describe("operations page privacy policy", () => {
     expect(sources).toContain("Vista de posiciones sin cartografía.");
   });
 
-  it("keeps future actions visibly disabled", () => {
+  it("links order actions to the screens where they work instead of disabled placeholders", () => {
     const source = readFileSync(
       "src/operations/components/operations-order-detail-shell.tsx",
       "utf8",
     );
-    for (const action of [
-      "Asignar repartidor propio",
-      "Publicar oferta externa",
-      "Agregar a ruta",
-      "Abrir incidencia",
-    ])
+    for (const action of ["Publicar oferta externa", "Abrir incidencia"])
       expect(source).toContain(action);
-    expect(source).toContain("type=\"button\" disabled");
+    expect(source).toContain('href="/ops/dashboard"');
+    expect(source).toContain('href="/ops/incidents"');
+    expect(source).not.toContain("Acciones futuras");
+    expect(source).not.toContain("type=\"button\" disabled");
+  });
+
+  it("controls the creation-date inputs from the filters so clearing them empties the inputs", () => {
+    const source = readFileSync("src/operations/components/operations-filters.tsx", "utf8");
+    expect(source).toContain("value={utcToDateTimeLocal(filters.createdFrom)}");
+    expect(source).toContain("value={utcToDateTimeLocal(filters.createdTo)}");
+    expect(source).toContain("onChange({});");
+    expect(source).not.toContain("defaultValue");
+  });
+
+  it("labels the assignment the same way on the dashboard card and the order detail", () => {
+    for (const path of [
+      "src/operations/components/operations-order-card.tsx",
+      "src/operations/components/operations-order-detail-shell.tsx",
+    ]) {
+      const source = readFileSync(path, "utf8");
+      expect(source, path).toContain("assignmentTypeLabel(");
+      expect(source, path).not.toContain("Flota propia");
+    }
+  });
+
+  it("links the dashboard to order creation and finance screens to each other", () => {
+    const dashboard = readFileSync("src/operations/components/operations-dashboard-shell.tsx", "utf8");
+    expect(dashboard).toContain('href="/ops/orders/new"');
+    expect(dashboard).toContain('href="/finance/cod"');
+    const cod = readFileSync("src/finance/components/cod-shell.tsx", "utf8");
+    expect(cod).toContain('href="/finance/settlements"');
+    expect(cod).toContain('href="/ops/dashboard"');
+    const settlements = readFileSync("src/finance/components/settlements-shell.tsx", "utf8");
+    expect(settlements).toContain('href="/finance/cod"');
+    expect(settlements).toContain('href="/ops/dashboard"');
   });
 });

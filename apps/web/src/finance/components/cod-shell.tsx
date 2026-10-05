@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useConfirmDialog, type ConfirmRequest } from "../../components/confirm-dialog";
 import { ScreenGate, TenantFeedback } from "../../operations/components/tenant-feedback";
 import { formatMxnCentsWithCurrency } from "../../operations/contracts/money";
 import { formatMazatlanTime, orderStatusLabels } from "../../operations/contracts/operations-formatters";
@@ -14,23 +15,27 @@ import {
   type OrderFinancials,
   type PendingCodOrder,
 } from "../contracts/cod";
+import { codReconciliationConfirmation, pendingCodReconciliationConfirmation } from "../contracts/confirmations";
 import type { CodController, CodState } from "../state/cod-controller";
 import { useCod } from "../state/use-cod";
 
 export function CodShell() {
   const { state, controller } = useCod();
+  const { confirm, dialog } = useConfirmDialog();
   return (
     <main className="opsShell" aria-busy={state.phase === "loading" || state.loadingOrder !== null || state.busy}>
       <header className="opsHeader">
         <div>
           <p className="opsEyebrow">Finanzas</p>
           <h1>Cobro contra entrega</h1>
-          <p>Registro y conciliación de efectivo por orden con la API como autoridad. Montos en centavos exactos.</p>
+          <p>Registra y concilia el efectivo cobrado al entregar cada orden.</p>
         </div>
         <div className="opsHeaderStatus">
           <button className="opsPrimary" type="button"
             disabled={state.phase !== "ready" || state.financials === null || state.loadingOrder !== null}
             onClick={() => void controller.refresh()}>Actualizar</button>
+          <Link className="opsSecondary" href="/finance/settlements">Liquidaciones</Link>
+          <Link className="opsSecondary" href="/ops/dashboard">Volver a Operaciones</Link>
         </div>
       </header>
 
@@ -41,7 +46,7 @@ export function CodShell() {
       {state.phase === "ready" && (
         <section className="opsFormLayout">
           <div>
-            {state.canListPending && <PendingList state={state} controller={controller} />}
+            {state.canListPending && <PendingList state={state} controller={controller} confirm={confirm} />}
             <LookupForm key={`lookup-${state.formKey}`} controller={controller} disabled={state.loadingOrder !== null} />
           </div>
           <section>
@@ -50,10 +55,13 @@ export function CodShell() {
               <Financials key={`${state.financials.order_id}-${state.formKey}`} financials={state.financials}
                 state={state} controller={controller} />
             )}
-            {state.transaction !== null && <Transaction transaction={state.transaction} state={state} controller={controller} />}
+            {state.transaction !== null && (
+              <Transaction transaction={state.transaction} state={state} controller={controller} confirm={confirm} />
+            )}
           </section>
         </section>
       )}
+      {dialog}
     </main>
   );
 }
@@ -66,7 +74,8 @@ function LookupForm({ controller, disabled }: { readonly controller: CodControll
     }}>
       <fieldset>
         <legend>Consultar orden</legend>
-        <label>Orden (UUID)<input name="order_id" required /></label>
+        <label>ID de la orden<input name="order_id" required aria-describedby="cod-lookup-help" /></label>
+        <p id="cod-lookup-help" className="opsHelp">Pega el ID completo de la orden; lo encuentras al abrirla desde Operaciones.</p>
         <button className="opsSecondary" type="submit" disabled={disabled}>Consultar</button>
       </fieldset>
     </form>
@@ -74,7 +83,15 @@ function LookupForm({ controller, disabled }: { readonly controller: CodControll
 }
 
 /** API-FIN-COD-VISIBILITY-2026-09-29: collections recorded and not yet reconciled, from listOrders. */
-function PendingList({ state, controller }: { readonly state: CodState; readonly controller: CodController }) {
+function PendingList({
+  state,
+  controller,
+  confirm,
+}: {
+  readonly state: CodState;
+  readonly controller: CodController;
+  readonly confirm: (request: ConfirmRequest) => void;
+}) {
   const busy = state.busy || state.loadingOrder !== null;
   return (
     <section aria-busy={state.pendingLoading}>
@@ -88,7 +105,8 @@ function PendingList({ state, controller }: { readonly state: CodState; readonly
       ) : (
         <ul>
           {state.pending.map((order) => (
-            <PendingRow key={order.id} order={order} busy={busy} canReconcile={state.canReconcile} controller={controller} />
+            <PendingRow key={order.id} order={order} busy={busy} canReconcile={state.canReconcile} controller={controller}
+              confirm={confirm} />
           ))}
         </ul>
       )}
@@ -105,11 +123,13 @@ function PendingRow({
   busy,
   canReconcile,
   controller,
+  confirm,
 }: {
   readonly order: PendingCodOrder;
   readonly busy: boolean;
   readonly canReconcile: boolean;
   readonly controller: CodController;
+  readonly confirm: (request: ConfirmRequest) => void;
 }) {
   const status = (orderStatusLabels as Readonly<Record<string, string>>)[order.status] ?? order.status;
   return (
@@ -120,7 +140,10 @@ function PendingRow({
       </button>
       {canReconcile && (
         <button className="opsPrimary" type="button" disabled={busy}
-          onClick={() => void controller.reconcileFromList(order.id)}>Conciliar</button>
+          onClick={() => confirm({
+            ...pendingCodReconciliationConfirmation(order),
+            onConfirm: () => void controller.reconcileFromList(order.id),
+          })}>Conciliar</button>
       )}
     </li>
   );
@@ -199,10 +222,12 @@ function Transaction({
   transaction,
   state,
   controller,
+  confirm,
 }: {
   readonly transaction: CodTransaction;
   readonly state: CodState;
   readonly controller: CodController;
+  readonly confirm: (request: ConfirmRequest) => void;
 }) {
   return (
     <section>
@@ -214,7 +239,10 @@ function Transaction({
         <div><dt>Conciliado</dt><dd>{transaction.reconciled_at === null ? "—" : formatMazatlanTime(transaction.reconciled_at)}</dd></div>
       </dl>
       {transaction.status === "RECORDED" && state.canReconcile && (
-        <button className="opsPrimary" type="button" disabled={state.busy} onClick={() => void controller.reconcile()}>
+        <button className="opsPrimary" type="button" disabled={state.busy} onClick={() => confirm({
+          ...codReconciliationConfirmation(transaction),
+          onConfirm: () => void controller.reconcile(),
+        })}>
           Conciliar este cobro
         </button>
       )}

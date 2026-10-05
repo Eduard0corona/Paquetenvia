@@ -302,7 +302,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 .WaitForAsync();
             await page.GetByRole(
                     AriaRole.Heading,
-                    new() { Name = "Timeline", Exact = true })
+                    new() { Name = "Historial", Exact = true })
                 .WaitForAsync();
             Assert.Equal(
                 documentsBeforeDetail,
@@ -320,14 +320,21 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             Assert.Equal(
                 await FormatInMazatlanAsync(page, timelineIso),
                 (await timelineTime.TextContentAsync())?.Trim());
-            Assert.True(await page.GetByRole(
-                    AriaRole.Button,
-                    new() { Name = "Asignar repartidor propio", Exact = true })
-                .IsDisabledAsync());
-            Assert.True(await page.GetByRole(
-                    AriaRole.Button,
-                    new() { Name = "Abrir incidencia", Exact = true })
-                .IsDisabledAsync());
+            Assert.Equal(
+                0,
+                await page.Locator("main button[disabled]").CountAsync());
+            Assert.Equal(
+                "/ops/incidents",
+                await page.GetByRole(
+                        AriaRole.Link,
+                        new() { Name = "Abrir incidencia", Exact = true })
+                    .GetAttributeAsync("href"));
+            Assert.Equal(
+                "/ops/dashboard",
+                await page.GetByRole(
+                        AriaRole.Link,
+                        new() { Name = "Publicar oferta externa desde el tablero", Exact = true })
+                    .GetAttributeAsync("href"));
 
             var persistence = await page.EvaluateAsync<PersistenceEvidence>(
                 """

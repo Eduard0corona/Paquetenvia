@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useConfirmDialog } from "../../components/confirm-dialog";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
 import { OperationsPositions } from "./operations-positions";
@@ -15,6 +16,7 @@ import { useOperationsDashboard } from "../state/use-operations-dashboard";
 export function OperationsDashboardShell() {
   const state = useOperationsDashboard();
   const [view, setView] = useState<"list" | "positions">("list");
+  const { confirm, dialog } = useConfirmDialog();
   const grouped = useMemo(
     () =>
       orderStatuses.map((status) => ({
@@ -54,6 +56,7 @@ export function OperationsDashboardShell() {
           >
             Actualizar
           </button>
+          <Link className="opsPrimary" href="/ops/orders/new">Nueva orden</Link>
           <Link className="opsPrimary" href="/ops/routes">Rutas manuales</Link>
           <Link className="opsPrimary" href="/ops/orders/import">Importar CSV</Link>
           <Link className="opsPrimary" href="/ops/incidents">Incidencias</Link>
@@ -148,6 +151,7 @@ export function OperationsDashboardShell() {
                   <OperationsOrderCard
                     key={item.order_id}
                     order={item}
+                    confirm={confirm}
                     onPublishExternalOffer={state.publishExternalOffer}
                   />
                 ))}
@@ -170,6 +174,7 @@ export function OperationsDashboardShell() {
       <p className="opsLive" aria-live="polite">
         {state.loading ? "Actualizando operaciones." : ""}
       </p>
+      {dialog}
     </main>
   );
 }

@@ -1,8 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { useConfirmDialog, type ConfirmRequest } from "../../components/confirm-dialog";
 import { formatMxnCentsWithCurrency } from "../../operations/contracts/money";
 import { formatMazatlanTime } from "../../operations/contracts/operations-formatters";
+import {
+  settlementAdjustmentConfirmation,
+  settlementApprovalConfirmation,
+  settlementPaymentConfirmation,
+  settlementVoidConfirmation,
+} from "../contracts/confirmations";
 import {
   settlementLineTypeLabels,
   settlementStatuses,
@@ -19,17 +26,20 @@ import { useSettlements } from "../state/use-settlements";
 
 export function SettlementsShell() {
   const { state, controller } = useSettlements();
+  const { confirm, dialog } = useConfirmDialog();
   return (
     <main className="opsShell" aria-busy={state.loading || state.busy}>
       <header className="opsHeader">
         <div>
           <p className="opsEyebrow">Finanzas</p>
           <h1>Liquidaciones</h1>
-          <p>Liquidaciones de repartidores con la API como autoridad. Montos en centavos exactos.</p>
+          <p>Calcula, revisa, aprueba y paga las liquidaciones de tus repartidores.</p>
         </div>
         <div className="opsHeaderStatus">
           <button className="opsPrimary" type="button" disabled={state.phase !== "ready" || state.loading}
             onClick={() => void controller.refresh()}>Actualizar</button>
+          <Link className="opsSecondary" href="/finance/cod">Cobro contra entrega</Link>
+          <Link className="opsSecondary" href="/ops/dashboard">Volver a Operaciones</Link>
         </div>
       </header>
 
@@ -78,10 +88,12 @@ export function SettlementsShell() {
           <section className="opsRouteDetail">
             {state.selected === null
               ? <p>Selecciona una liquidación para ver sus líneas.</p>
-              : <Detail key={`${state.selected.id}-${state.formKey}`} settlement={state.selected} state={state} controller={controller} />}
+              : <Detail key={`${state.selected.id}-${state.formKey}`} settlement={state.selected} state={state}
+                controller={controller} confirm={confirm} />}
           </section>
         </section>
       )}
+      {dialog}
     </main>
   );
 }
@@ -124,7 +136,8 @@ function Filters({ controller, disabled }: { readonly controller: SettlementsCon
           {settlementStatuses.map((status) => <option key={status} value={status}>{settlementStatusLabels[status]}</option>)}
         </select>
       </label>
-      <label>Repartidor (UUID)<input name="payee_id" /></label>
+      <label>ID del repartidor (opcional)<input name="payee_id" aria-describedby="settlement-filter-payee-help" /></label>
+      <p id="settlement-filter-payee-help" className="opsHelp">Pega el ID completo del repartidor; déjalo vacío para ver todos.</p>
       <label>Periodo desde<input name="period_from" type="date" /></label>
       <label>Periodo hasta<input name="period_to" type="date" /></label>
       <button className="opsSecondary" type="submit" disabled={disabled}>Aplicar filtros</button>
@@ -145,7 +158,8 @@ function CreateForm({ controller, disabled }: { readonly controller: Settlements
     }}>
       <h2>Calcular liquidación</h2>
       <p>Solo periodos ya cerrados (días operativos completos, hora de Mazatlán).</p>
-      <label>Repartidor (UUID)<input name="driver_id" required /></label>
+      <label>ID del repartidor<input name="driver_id" required aria-describedby="settlement-create-driver-help" /></label>
+      <p id="settlement-create-driver-help" className="opsHelp">Pega el ID completo del repartidor.</p>
       <label>Periodo desde<input name="period_from" type="date" required /></label>
       <label>Periodo hasta<input name="period_to" type="date" required /></label>
       <button className="opsPrimary" type="submit" disabled={disabled}>Calcular</button>
@@ -157,10 +171,12 @@ function Detail({
   settlement,
   state,
   controller,
+  confirm,
 }: {
   readonly settlement: Settlement;
   readonly state: SettlementsState;
   readonly controller: SettlementsController;
+  readonly confirm: (request: ConfirmRequest) => void;
 }) {
   const actions = visibleSettlementActions(state.role, settlement.status);
   const mfaHint = settlementMfaHint(state.role, actions);
@@ -199,11 +215,17 @@ function Detail({
       <div className="opsFormActions">
         {actions.includes("approve") && (
           <button type="button" className="opsPrimary" disabled={locked}
-            onClick={() => void controller.approve()}>Aprobar</button>
+            onClick={() => confirm({
+              ...settlementApprovalConfirmation(settlement),
+              onConfirm: () => void controller.approve(),
+            })}>Aprobar</button>
         )}
         {actions.includes("pay") && (
           <button type="button" className="opsPrimary" disabled={locked}
-            onClick={() => void controller.markPaid()}>Marcar pagada</button>
+            onClick={() => confirm({
+              ...settlementPaymentConfirmation(settlement),
+              onConfirm: () => void controller.markPaid(),
+            })}>Marcar pagada</button>
         )}
         {actions.includes("export") && (
           <button type="button" className="opsSecondary" disabled={locked}
@@ -216,7 +238,14 @@ function Detail({
         <form className="opsForm" autoComplete="off" onSubmit={(event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
-          void controller.addAdjustment(String(data.get("amount") ?? ""), String(data.get("reason") ?? ""));
+          const amount = String(data.get("amount") ?? "");
+          const reason = String(data.get("reason") ?? "");
+          const text = settlementAdjustmentConfirmation(settlement, amount);
+          if (text === null) {
+            void controller.addAdjustment(amount, reason);
+            return;
+          }
+          confirm({ ...text, onConfirm: () => void controller.addAdjustment(amount, reason) });
         }}>
           <h3>Agregar ajuste</h3>
           <label>Monto en MXN (negativo para descontar)
@@ -230,7 +259,11 @@ function Detail({
       {actions.includes("void") && (
         <form className="opsForm" autoComplete="off" onSubmit={(event) => {
           event.preventDefault();
-          void controller.voidSettlement(String(new FormData(event.currentTarget).get("reason") ?? ""));
+          const reason = String(new FormData(event.currentTarget).get("reason") ?? "");
+          confirm({
+            ...settlementVoidConfirmation(settlement),
+            onConfirm: () => void controller.voidSettlement(reason),
+          });
         }}>
           <h3>Anular liquidación</h3>
           <p>Las líneas y el total se conservan; anular solo libera sus fuentes para otra liquidación.</p>

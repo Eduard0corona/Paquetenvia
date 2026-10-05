@@ -169,7 +169,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
   public async loadProofs(orderId: string): Promise<void> {
     if (!this.getSnapshot().canListProofs) return;
     if (!isCanonicalUuid(orderId)) {
-      this.update({ errors: ["La orden debe ser un UUID."], message: null, stepUpHref: null });
+      this.update({ errors: ["El ID de la orden no es válido."], message: null, stepUpHref: null });
       return;
     }
     await this.read(
@@ -215,7 +215,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
       result.body,
       (api, key, body, signal) => api.open(orderId, body, key, signal),
       (incident) => incident.order_id === orderId,
-      "Incidencia abierta y registrada por el servidor.",
+      "Incidencia abierta y registrada.",
     );
   }
 
@@ -232,7 +232,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
       result.body,
       (api, key, body, signal) => api.resolve(incidentId, body, key, signal),
       (incident) => incident.id === incidentId && (incident.status === "RESOLVED" || incident.status === "REJECTED"),
-      "Resolución registrada por el servidor.",
+      "Resolución registrada.",
     );
   }
 

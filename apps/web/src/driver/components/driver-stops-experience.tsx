@@ -409,7 +409,7 @@ function ExternalOffersPanel({
               </div>
               <dl className={styles.stopFacts}>
                 <div>
-                  <dt>Comision</dt>
+                  <dt>Comisión</dt>
                   <dd>{formatCommission(offer.commission.amount_cents)}</dd>
                 </div>
                 <div>
@@ -676,7 +676,7 @@ function StopDetail({
           </div>
           {stop.pendingCount > 0 ? (
             <div>
-              <dt>Proyección pendiente</dt>
+              <dt>Estado por sincronizar</dt>
               <dd>
                 <span className={styles.pendingBadge}>
                   {driverStopStatusLabel(stop.projectedStatus)}

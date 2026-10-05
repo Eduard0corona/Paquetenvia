@@ -3,15 +3,15 @@ import Link from "next/link";
 export default function HomePage() {
   return (
     <main className="shell">
-      <section className="card">
-        <p className="eyebrow">FND-001 · Foundation</p>
-        <h1>Paquetenvia</h1>
+      <section className="card" aria-labelledby="home-title">
+        <p className="eyebrow">Paquetenvia</p>
+        <h1 id="home-title">Envíos y entregas en un solo lugar</h1>
         <p>
-          El workspace web está listo para crecer sobre los contratos normativos,
-          sin autenticación ni flujos de negocio en esta etapa.
+          Crea órdenes, asigna repartidores, da seguimiento a cada entrega y
+          concilia tus cobros.
         </p>
-        <Link className="button" href="/health">
-          Ver estado local
+        <Link className="button" href="/login">
+          Iniciar sesión
         </Link>
       </section>
     </main>

@@ -5,7 +5,7 @@ import { parseManualRoute, parseManualRouteDetail, parseManualRoutePage } from "
 
 export class RoutesApiError extends Error {
   public constructor(public readonly category: "unauthorized" | "forbidden" | "not_found" | "conflict" | "invalid" | "network") {
-    super("La operacion de rutas no esta disponible.");
+    super("La operación de rutas no está disponible.");
     this.name = "RoutesApiError";
   }
 }

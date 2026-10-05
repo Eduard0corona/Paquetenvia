@@ -209,7 +209,7 @@ export class CodController extends ExternalStore<CodState> {
     const api = this.api;
     if (api === null || this.getSnapshot().phase !== "ready") return;
     if (!isCanonicalUuid(orderId)) {
-      this.update({ errors: ["La orden debe ser un UUID."], message: null, stepUpHref: null });
+      this.update({ errors: ["El ID de la orden no es válido."], message: null, stepUpHref: null });
       return;
     }
     const generation = this.generation;
@@ -263,7 +263,7 @@ export class CodController extends ExternalStore<CodState> {
       result.body,
       (api, key, body, signal) => api.record(orderId, body, key, signal),
       (transaction) => transaction.order_id === orderId,
-      "Cobro registrado por el servidor.",
+      "Cobro registrado.",
       orderId,
     );
   }
@@ -274,7 +274,7 @@ export class CodController extends ExternalStore<CodState> {
     if (!state.canReconcile) return;
     const codId = codIdText ?? state.transaction?.id ?? reconcilableRecord(state.financials)?.id ?? null;
     if (codId === null || !isCanonicalUuid(codId)) {
-      this.update({ errors: ["El registro de cobro debe ser un UUID."], message: null, stepUpHref: null });
+      this.update({ errors: ["El ID del registro de cobro no es válido."], message: null, stepUpHref: null });
       return;
     }
     await this.write(
@@ -283,7 +283,7 @@ export class CodController extends ExternalStore<CodState> {
       undefined,
       (api, key, _body, signal) => api.reconcile(codId, key, signal),
       (transaction) => transaction.id === codId,
-      "Cobro conciliado por el servidor.",
+      "Cobro conciliado.",
       state.financials?.order_id ?? null,
     );
   }

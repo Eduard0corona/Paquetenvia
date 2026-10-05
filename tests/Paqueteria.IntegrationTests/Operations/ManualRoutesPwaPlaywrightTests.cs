@@ -50,15 +50,15 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
         Assert.NotNull(response);
         await page.GetByRole(AriaRole.Heading, new() { Name = "Rutas manuales", Exact = true }).WaitForAsync();
 
-        await page.GetByLabel("Driver OWN (UUID)").FillAsync(DriverId);
-        await page.GetByLabel("Ciudad (UUID)").FillAsync(CityId);
-        await page.GetByRole(AriaRole.Button, new() { Name = "Crear DRAFT", Exact = true }).ClickAsync();
+        await page.GetByLabel("ID del repartidor (flota propia)").FillAsync(DriverId);
+        await page.GetByLabel("ID de la ciudad").FillAsync(CityId);
+        await page.GetByRole(AriaRole.Button, new() { Name = "Crear ruta (borrador)", Exact = true }).ClickAsync();
         await page.GetByRole(AriaRole.Heading, new() { Name = "Ruta a1000000", Exact = true }).WaitForAsync();
 
         foreach (var orderId in RouteApiState.OrderIds)
         {
-            await page.GetByLabel("Orden con assignment OWN (UUID)").FillAsync(orderId);
-            await page.GetByRole(AriaRole.Button, new() { Name = "Agregar DELIVERY", Exact = true }).ClickAsync();
+            await page.GetByLabel("ID de la orden").FillAsync(orderId);
+            await page.GetByRole(AriaRole.Button, new() { Name = "Agregar entrega", Exact = true }).ClickAsync();
         }
         await ExpectStopCountAsync(page, 3);
 
@@ -71,12 +71,15 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
         state.FailNextReorderAsStale = true;
         await page.GetByRole(AriaRole.Button, new() { Name = "Mover orden 83000000 arriba", Exact = true }).ClickAsync();
         await page.GetByRole(AriaRole.Status).GetByText(
-            "La ruta cambio en el servidor. Se recupero la version autoritativa.",
+            "La ruta cambió mientras la editabas. Se cargó la versión más reciente; revisa y vuelve a intentar.",
             new() { Exact = true }).WaitForAsync();
         Assert.True(state.DetailReadsAfterConflict > 0);
 
         await page.GetByRole(AriaRole.Button, new() { Name = "Mover orden 81000000 arriba", Exact = true }).ClickAsync();
-        await page.GetByRole(AriaRole.Button, new() { Name = "Retirar", Exact = true }).First.ClickAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Retirar orden", Exact = false }).First.ClickAsync();
+        await page.GetByRole(AriaRole.Dialog)
+            .GetByRole(AriaRole.Button, new() { Name = "Retirar", Exact = true })
+            .ClickAsync();
         await ExpectStopCountAsync(page, 2);
         Assert.True(state.LastMutationVersion == state.Version);
 

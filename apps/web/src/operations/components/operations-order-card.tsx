@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
+import type { ConfirmRequest } from "../../components/confirm-dialog";
+import { externalOfferConfirmation } from "../contracts/external-offer-confirmation";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
+  assignmentTypeLabel,
   formatMazatlanTime,
   orderStatusLabels,
   serviceTypeLabel,
@@ -14,9 +17,11 @@ import { operationsOrderHref } from "../routing/operations-routing";
 
 export function OperationsOrderCard({
   order,
+  confirm,
   onPublishExternalOffer,
 }: {
   readonly order: OperationsDashboardOrder;
+  readonly confirm: (request: ConfirmRequest) => void;
   readonly onPublishExternalOffer: (
     orderId: string,
     commissionCents: number,
@@ -37,9 +42,9 @@ export function OperationsOrderCard({
         <span className="opsStatus">{orderStatusLabels[order.status]}</span>
       </div>
       <dl>
-        <Row label="Owner" value={order.owner.display_name} />
+        <Row label="Dueño" value={order.owner.display_name} />
         <Row
-          label="Operator"
+          label="Opera"
           value={order.operator?.display_name ?? "Sin operador"}
         />
         <Row label="Cliente" value={order.client?.display_name ?? "No disponible"} />
@@ -52,7 +57,7 @@ export function OperationsOrderCard({
         <Row label="Entrega" value={formatServiceWindow(order.delivery_window)} />
         <Row
           label="Asignación"
-          value={assignmentLabel(order.assignment?.assignment_type)}
+          value={assignmentTypeLabel(order.assignment?.assignment_type)}
         />
         <Row
           label="Repartidor"
@@ -84,26 +89,32 @@ export function OperationsOrderCard({
             const expires = String(data.get("expires"));
             const vehicle = String(data.get("vehicle")) as
               | "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER";
-            if (commissionCents === null || !expires) {
+            const expiresAt = new Date(expires);
+            if (commissionCents === null || !expires || Number.isNaN(expiresAt.getTime())) {
               setMessage("Completa una comisión y una expiración válidas.");
               return;
             }
-            const key = keyRef.current ?? crypto.randomUUID();
-            keyRef.current = key;
-            setPublishing(true);
-            setMessage(null);
-            void onPublishExternalOffer(
-              order.order_id,
-              commissionCents,
-              new Date(expires).toISOString(),
-              vehicle,
-              key,
-            ).then(() => {
-              keyRef.current = null;
-              setMessage("Oferta externa publicada.");
-            }).catch(() => {
-              setMessage("No fue posible publicar la oferta.");
-            }).finally(() => setPublishing(false));
+            confirm({
+              ...externalOfferConfirmation(order.public_id, commissionCents, expiresAt, vehicle),
+              onConfirm: () => {
+                const key = keyRef.current ?? crypto.randomUUID();
+                keyRef.current = key;
+                setPublishing(true);
+                setMessage(null);
+                void onPublishExternalOffer(
+                  order.order_id,
+                  commissionCents,
+                  expiresAt.toISOString(),
+                  vehicle,
+                  key,
+                ).then(() => {
+                  keyRef.current = null;
+                  setMessage("Oferta externa publicada.");
+                }).catch(() => {
+                  setMessage("No fue posible publicar la oferta.");
+                }).finally(() => setPublishing(false));
+              },
+            });
           }}
         >
           <strong>Publicar oferta externa</strong>
@@ -141,15 +152,5 @@ function Row({ label, value }: { readonly label: string; readonly value: string 
       <dt>{label}</dt>
       <dd>{value}</dd>
     </div>
-  );
-}
-
-function assignmentLabel(value?: string): string {
-  return (
-    {
-      OWN: "Flota propia",
-      EXTERNAL: "Externa",
-      ALLY_CAPACITY: "Capacidad aliada",
-    }[value ?? ""] ?? "Sin asignación"
   );
 }

@@ -182,7 +182,7 @@ export function parseProofIds(text: string): string[] {
 
 export function buildOpenIncidentBody(draft: OpenIncidentDraft, now: Date): BuildResult<OpenIncidentBody> {
   const errors: string[] = [];
-  if (!isCanonicalUuid(draft.orderId)) errors.push("La orden debe ser un UUID.");
+  if (!isCanonicalUuid(draft.orderId)) errors.push("El ID de la orden no es válido.");
   if (!incidentTypePattern.test(draft.type))
     errors.push("El tipo usa solo mayúsculas y guion bajo (1 a 64 caracteres), por ejemplo FAILED_ATTEMPT.");
   if (!(incidentSeverities as readonly string[]).includes(draft.severity)) errors.push("Elige una severidad.");
@@ -200,8 +200,8 @@ export function buildOpenIncidentBody(draft: OpenIncidentDraft, now: Date): Buil
       errors.push("El intento tiene más de 72 horas; el servidor no lo admite.");
   }
   const proofs = parseProofIds(draft.evidence);
-  if (proofs.length < 1 || proofs.length > 10) errors.push("Indica de 1 a 10 evidencias (UUID de prueba).");
-  else if (!proofs.every(isCanonicalUuid)) errors.push("Cada evidencia debe ser un UUID.");
+  if (proofs.length < 1 || proofs.length > 10) errors.push("Indica de 1 a 10 evidencias.");
+  else if (!proofs.every(isCanonicalUuid)) errors.push("Cada ID de evidencia debe ser válido.");
   else if (new Set(proofs).size !== proofs.length) errors.push("Las evidencias no pueden repetirse.");
   if (errors.length > 0) return { ok: false, errors };
   return {
@@ -233,7 +233,7 @@ export function buildResolveIncidentBody(
   reason: string,
 ): BuildResult<ResolveIncidentBody> {
   const errors: string[] = [];
-  if (!isCanonicalUuid(incidentId)) errors.push("La incidencia debe ser un UUID.");
+  if (!isCanonicalUuid(incidentId)) errors.push("El ID de la incidencia no es válido.");
   if (!(incidentOutcomes as readonly string[]).includes(outcome)) errors.push("Elige resolver o rechazar.");
   if (!isValidResolutionReason(reason))
     errors.push("El motivo es obligatorio (máximo 500 caracteres) y no puede iniciar ni terminar con espacios.");

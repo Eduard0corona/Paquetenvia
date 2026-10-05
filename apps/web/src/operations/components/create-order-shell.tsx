@@ -47,7 +47,7 @@ export function CreateOrderShell({
         <div>
           <p className="opsEyebrow">Despacho</p>
           <h1>Nueva orden</h1>
-          <p>Cotización y aceptación con la API como autoridad.</p>
+          <p>Cotiza el envío y confirma la orden con la aceptación del cliente.</p>
         </div>
         <div className="opsHeaderStatus">
           <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
@@ -227,7 +227,8 @@ function QuoteForm({
           </select>
         </label>
         <label className="opsCheckbox"><input type="checkbox" name="consolidated_route" /> Ruta consolidada</label>
-        <label>Cuenta cliente (UUID, opcional)<input name="client_account_id" /></label>
+        <label>ID de la cuenta cliente (opcional)<input name="client_account_id" aria-describedby="create-order-client-help" /></label>
+        <p id="create-order-client-help" className="opsHelp">Déjalo vacío si la orden no pertenece a una cuenta cliente.</p>
       </fieldset>
       {lowPriceAuthorization && (
         <fieldset>

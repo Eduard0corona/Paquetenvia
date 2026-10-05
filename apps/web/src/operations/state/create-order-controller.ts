@@ -144,7 +144,7 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
       const quote = await api.createQuote(submission.payload, submission.key, this.controller?.signal);
       if (generation !== this.generation) return;
       this.pending.settle("quote");
-      this.update({ quote, busy: false, message: "Cotización calculada por el servidor." });
+      this.update({ quote, busy: false, message: "Cotización calculada." });
     } catch (error) {
       if (generation !== this.generation) return;
       this.settleUnlessRetryable("quote", error);
@@ -198,7 +198,7 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
         orderCodExpectedCents: submission.payload.cod_expected_cents ?? 0,
         quote: null,
         busy: false,
-        message: "Orden creada y confirmada por el servidor.",
+        message: "Orden creada y confirmada.",
       });
     } catch (error) {
       if (generation !== this.generation) return;

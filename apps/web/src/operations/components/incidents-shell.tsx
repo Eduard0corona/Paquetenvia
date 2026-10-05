@@ -32,7 +32,7 @@ export function IncidentsShell() {
         <div>
           <p className="opsEyebrow">Despacho</p>
           <h1>Incidencias</h1>
-          <p>Registro de intentos fallidos y su resolución con la API como autoridad.</p>
+          <p>Registra los intentos de entrega fallidos y da seguimiento a su resolución.</p>
         </div>
         <div className="opsHeaderStatus">
           <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
@@ -80,9 +80,11 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
     }}>
       <fieldset>
         <legend>Abrir incidencia de intento fallido</legend>
-        <label>Orden (UUID)
-          <input name="order_id" required value={orderId} onChange={(event) => setOrderId(event.target.value)} />
+        <label>ID de la orden
+          <input name="order_id" required value={orderId} aria-describedby="incident-order-help"
+            onChange={(event) => setOrderId(event.target.value)} />
         </label>
+        <p id="incident-order-help" className="opsHelp">Pega el ID completo de la orden; lo encuentras al abrirla desde Operaciones.</p>
         <label>Tipo<input name="type" required defaultValue="FAILED_ATTEMPT" pattern="[A-Z_]{1,64}" /></label>
         <label>Severidad
           <select name="severity" required defaultValue="">
@@ -136,7 +138,7 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
             )}
           </fieldset>
         ) : (
-          <label>Evidencias (UUID de prueba, de 1 a 10, separados por coma o renglón)
+          <label>IDs de las evidencias (de 1 a 10, separados por coma o renglón)
             <textarea name="evidence" rows={3} required />
           </label>
         )}
@@ -226,7 +228,7 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
       )}
       {incidents.length === 0 ? <p>Sin incidencias para mostrar.</p> : (
         <table className="opsTable">
-          <caption>Tal como las devolvió el servidor</caption>
+          <caption>Incidencias registradas</caption>
           <thead>
             <tr>
               <th scope="col">Incidencia</th><th scope="col">Orden</th><th scope="col">Estado</th>

@@ -25,7 +25,7 @@ export function CsvImportShell() {
         <div>
           <p className="opsEyebrow">Despacho</p>
           <h1>Importar órdenes por CSV</h1>
-          <p>El servidor prevalida el archivo fila por fila; ninguna orden se crea hasta que confirmas el lote.</p>
+          <p>Revisamos el archivo fila por fila; ninguna orden se crea hasta que confirmas el lote.</p>
         </div>
         <div className="opsHeaderStatus">
           <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
@@ -64,7 +64,7 @@ function UploadForm({
       <fieldset>
         <legend>Archivo</legend>
         <p>
-          Formato CSV-001 en UTF-8 con encabezado <code>{csvHeader}</code>;
+          Archivo CSV en UTF-8 con encabezado <code>{csvHeader}</code>;
           hasta 500 filas y 1 MiB. Cada fila usa una cotización vigente de esta organización.
         </p>
         <p>

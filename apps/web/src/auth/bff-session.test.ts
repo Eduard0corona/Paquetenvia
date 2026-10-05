@@ -12,6 +12,7 @@ import {
 import {
   bootstrapBffSession,
   installBffSession,
+  landingPathForRole,
   selectSessionInstallation,
   type SessionHost,
 } from "./bff-session-installation";
@@ -200,20 +201,39 @@ describe("BFF session installation", () => {
       kind: "operations",
       organizationId: organizationB,
       displayName: "B",
+      landingPath: "/ops/dashboard",
     });
     expect(selectSessionInstallation(contexts, organizationA)).toEqual({
       kind: "driver",
       organizationId: organizationA,
       displayName: "A",
+      landingPath: "/driver/stops",
     });
     expect(selectSessionInstallation([])).toEqual({ kind: "none" });
+  });
+
+  it("lands FINANCE on COD with the operations session, DRIVER on stops and the rest on the dashboard", () => {
+    expect(
+      selectSessionInstallation([
+        { organization_id: organizationA, display_name: "A", role: "FINANCE", is_default: true },
+      ]),
+    ).toEqual({
+      kind: "operations",
+      organizationId: organizationA,
+      displayName: "A",
+      landingPath: "/finance/cod",
+    });
+    expect(landingPathForRole("FINANCE")).toBe("/finance/cod");
+    expect(landingPathForRole("DRIVER")).toBe("/driver/stops");
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN", "BUSINESS_ADMIN", "ALLY_ADMIN", "VIEWER", "UNKNOWN"])
+      expect(landingPathForRole(role), role).toBe("/ops/dashboard");
   });
 
   it("installs a cookie-mode session without access tokens", () => {
     const target = host();
     installBffSession(
       target,
-      { kind: "operations", organizationId: organizationB, displayName: "B" },
+      { kind: "operations", organizationId: organizationB, displayName: "B", landingPath: "/ops/dashboard" },
       csrf,
       namespace,
     );

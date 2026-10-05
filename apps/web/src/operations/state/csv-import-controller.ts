@@ -190,7 +190,7 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
       if (result.kind === "committed") {
         this.update({
           commit: result.commit,
-          message: `Lote confirmado por el servidor: ${result.commit.created_rows} creada(s), ${result.commit.failed_rows} con error.`,
+          message: `Lote confirmado: ${result.commit.created_rows} creada(s), ${result.commit.failed_rows} con error.`,
         });
       } else {
         this.update({
