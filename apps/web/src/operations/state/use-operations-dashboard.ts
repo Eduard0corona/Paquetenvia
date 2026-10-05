@@ -1,5 +1,6 @@
 "use client";
 
+import { clientApiBaseUrl } from "@/lib/api-base-url";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import type {
@@ -65,7 +66,7 @@ export interface OperationsDashboardState {
 export function useOperationsDashboard(
   telemetry: OperationsDashboardTelemetry = noOpOperationsTelemetry,
 ): OperationsDashboardState {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? windowOrigin();
+  const apiBaseUrl = clientApiBaseUrl();
   const [items, setItems] = useState<readonly OperationsDashboardOrder[]>([]);
   const [contexts, setContexts] = useState<
     readonly OperationsOrganizationContext[]
@@ -456,8 +457,4 @@ function filterCategory(
 ): string {
   const keys = Object.keys(next) as (keyof OperationsDashboardFilters)[];
   return keys.find((key) => previous[key] !== next[key]) ?? "clear";
-}
-
-function windowOrigin(): string {
-  return typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
 }

@@ -1,7 +1,10 @@
 import Link from "next/link";
 
-/** Validation errors and the last server outcome, with the MFA step-up link when it applies. */
-export function TenantFeedback({
+/**
+ * Validation errors and the last server outcome of a tenant screen, with the MFA step-up
+ * link when it applies. The only implementation in the app (UI-001 phase 1).
+ */
+export function Feedback({
   errors,
   message,
   stepUpHref,
@@ -27,7 +30,7 @@ export function TenantFeedback({
   );
 }
 
-/** The no-session and no-access panels every UI-001 screen shows before any tenant data. */
+/** The no-session and no-access panels every tenant screen shows before any tenant data. */
 export function ScreenGate({
   phase,
   accessMessage,

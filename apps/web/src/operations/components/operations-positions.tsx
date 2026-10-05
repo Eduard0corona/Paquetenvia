@@ -1,5 +1,6 @@
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
-import { formatMazatlanTime } from "../contracts/operations-formatters";
+import { EmptyState } from "../../components/ui/empty-state";
+import { DateTime } from "../../components/ui/date-time";
 
 export function OperationsPositions({
   items,
@@ -58,9 +59,7 @@ export function OperationsPositions({
             <strong>{item.assignment.driver_reference}</strong>
             <span>
               Capturada{" "}
-              <time dateTime={item.latest_driver_location.captured_at}>
-                {formatMazatlanTime(item.latest_driver_location.captured_at)}
-              </time>
+              <DateTime value={item.latest_driver_location.captured_at} />
             </span>
             <span>
               Precisión aproximada:{" "}
@@ -69,7 +68,7 @@ export function OperationsPositions({
           </li>
         ))}
       </ul>
-      {positions.length === 0 && <p>No hay posiciones disponibles.</p>}
+      {positions.length === 0 && <EmptyState>No hay posiciones disponibles.</EmptyState>}
     </section>
   );
 }

@@ -19,11 +19,15 @@ import {
   vatIncludedLabel,
 } from "../contracts/create-order";
 import { lowPriceAuthorizationRequiresMfa, mayHandleExactCoordinates } from "../contracts/capabilities";
-import { formatMxnCentsWithCurrency } from "../contracts/money";
 import { maximumServiceWindowHours, serviceWindowTimeZone } from "../contracts/service-window";
-import { formatMazatlanTime, serviceTypeLabel } from "../contracts/operations-formatters";
+import { serviceTypeLabel } from "../contracts/operations-formatters";
 import { operationsOrderHref } from "../routing/operations-routing";
-import type { CreateOrderController, CreateOrderState } from "../state/create-order-controller";
+import type { CreateOrderController } from "../state/create-order-controller";
+import { DateTime } from "../../components/ui/date-time";
+import { DescriptionList } from "../../components/ui/description-list";
+import { Feedback, ScreenGate } from "../../components/ui/feedback";
+import { Money } from "../../components/ui/money";
+import { PageHeader } from "../../components/ui/page-header";
 import { useCreateOrder } from "../state/use-create-order";
 
 const payerLabels: Readonly<Record<string, string>> = {
@@ -42,53 +46,39 @@ export function CreateOrderShell({
 }) {
   const { state, controller } = useCreateOrder(acceptanceVersions);
   return (
-    <main className="opsShell" aria-busy={state.phase === "loading" || state.busy}>
-      <header className="opsHeader">
-        <div>
-          <p className="opsEyebrow">Despacho</p>
-          <h1>Nueva orden</h1>
-          <p>Cotiza el envío y confirma la orden con la aceptación del cliente.</p>
-        </div>
-        <div className="opsHeaderStatus">
-          <Link className="btn btnPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
-        </div>
-      </header>
+    <div className="page" aria-busy={state.phase === "loading" || state.busy}>
+      <PageHeader
+        eyebrow="Despacho"
+        title="Nueva orden"
+        description="Cotiza el envío y confirma la orden con la aceptación del cliente."
+      />
 
-      {state.phase === "no_session" && (
-        <section className="panel" role="alert">
-          <h2>Sin sesión de Operaciones</h2>
-          <p>Inicia sesión y selecciona una organización.</p>
-        </section>
-      )}
-      {state.phase === "access_unavailable" && (
-        <section className="panel" role="alert">
-          <h2>Acceso no disponible</h2>
-          <p>Tu rol en la organización activa no puede crear cotizaciones ni órdenes.</p>
-        </section>
-      )}
-      {state.phase === "loading" && <p className="live" aria-live="polite">Cargando permisos.</p>}
-
-      <Feedback state={state} />
+      <ScreenGate
+        phase={state.phase}
+        accessMessage="Tu rol en la organización activa no puede crear cotizaciones ni órdenes."
+      />
+      <Feedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
 
       {state.phase === "ready" && state.order !== null && (
         <section className="panel" aria-labelledby="order-created">
           <h2 id="order-created">Orden {state.order.public_id}</h2>
-          <dl className="descList descListMoney">
-            <MoneyRow label="Neto sin IVA" cents={state.order.price_net.amount_cents} />
-            <MoneyRow label={`Total (${vatIncludedLabel})`} cents={state.order.total.amount_cents} />
-            {state.orderCodExpectedCents !== null && (
-              <div>
-                <dt>Cobro contra entrega declarado</dt>
-                <dd>{state.orderCodExpectedCents === 0 ? "Sin cobro" : formatMxnCentsWithCurrency(state.orderCodExpectedCents)}</dd>
-              </div>
-            )}
-          </dl>
+          <DescriptionList
+            variant="money"
+            items={[
+              { label: "Neto sin IVA", value: <Money cents={state.order.price_net.amount_cents} /> },
+              { label: `Total (${vatIncludedLabel})`, value: <Money cents={state.order.total.amount_cents} /> },
+              state.orderCodExpectedCents !== null && {
+                label: "Cobro contra entrega declarado",
+                value: state.orderCodExpectedCents === 0 ? "Sin cobro" : <Money cents={state.orderCodExpectedCents} />,
+              },
+            ]}
+          />
           <p>Servicio: {serviceTypeLabel(state.order.service_type)} · versión {state.order.version}</p>
           <p>
             Ventana de entrega:{" "}
             {state.order.service_window === null
               ? "horario de la zona"
-              : `${formatMazatlanTime(state.order.service_window.from)} a ${formatMazatlanTime(state.order.service_window.to)} (hora de Mazatlán)`}
+              : <><DateTime value={state.order.service_window.from} /> a <DateTime value={state.order.service_window.to} /> (hora de Mazatlán)</>}
           </p>
           <div className="opsFormActions">
             <Link className="btn btnPrimary" href={operationsOrderHref(state.order.id)}>Abrir orden</Link>
@@ -119,25 +109,7 @@ export function CreateOrderShell({
           )}
         </div>
       )}
-    </main>
-  );
-}
-
-function Feedback({ state }: { readonly state: CreateOrderState }) {
-  return (
-    <>
-      {state.errors.length > 0 && (
-        <ul className="notice noticeCrit" role="alert">
-          {state.errors.map((error) => <li key={error}>{error}</li>)}
-        </ul>
-      )}
-      {state.message !== null && (
-        <p className={state.stepUpHref === null ? "notice noticeWarn" : "notice noticeCrit"} role="status">
-          {state.message}{" "}
-          {state.stepUpHref !== null && <Link className="btn btnPrimary" href={state.stepUpHref}>Verificar identidad</Link>}
-        </p>
-      )}
-    </>
+    </div>
   );
 }
 
@@ -321,28 +293,30 @@ function QuoteSummary({
   return (
     <section className="panel" aria-labelledby="quote-title">
       <h2 id="quote-title">Cotización</h2>
-      <dl className="descList descListMoney">
-        <MoneyRow label="Neto sin IVA" cents={quote.net.amount_cents} />
-        <MoneyRow label="IVA" cents={quote.tax.amount_cents} />
-        {quote.breakdown.map((line, index) => (
-          <div key={index}>
-            <dt>{line.line_type === null ? "Concepto" : breakdownLabels[line.line_type] ?? line.line_type}</dt>
-            <dd>{line.amount_cents === null ? "Sin monto" : formatMxnCentsWithCurrency(line.amount_cents)}</dd>
-          </div>
-        ))}
-        <MoneyRow label={`Total (${vatIncludedLabel})`} cents={quote.total.amount_cents} strong />
-      </dl>
+      <DescriptionList
+        variant="money"
+        items={[
+          { label: "Neto sin IVA", value: <Money cents={quote.net.amount_cents} /> },
+          { label: "IVA", value: <Money cents={quote.tax.amount_cents} /> },
+          ...quote.breakdown.map((line, index) => ({
+            key: `line-${index}`,
+            label: line.line_type === null ? "Concepto" : breakdownLabels[line.line_type] ?? line.line_type,
+            value: line.amount_cents === null ? "Sin monto" : <Money cents={line.amount_cents} />,
+          })),
+          { label: `Total (${vatIncludedLabel})`, value: <Money cents={quote.total.amount_cents} strong /> },
+        ]}
+      />
       <p>
         Regla aplicada: tarifa {quote.pricing_tier}, política {quote.pricing_policy_version},
-        {" "}{quote.rule_ids.length} regla(s). Mínimo de referencia {formatMxnCentsWithCurrency(quote.minimum_total_cents_snapshot)} ({vatIncludedLabel}).
+        {" "}{quote.rule_ids.length} regla(s). Mínimo de referencia <Money cents={quote.minimum_total_cents_snapshot} /> ({vatIncludedLabel}).
       </p>
       <p>
         {serviceTypeLabel(quote.service_type)} · {quote.package_count} paquete(s) ·
-        {quote.consolidated_route ? " ruta consolidada" : " sin ruta consolidada"} · vence {formatMazatlanTime(quote.expires_at)} (hora de Mazatlán)
+        {quote.consolidated_route ? " ruta consolidada" : " sin ruta consolidada"} · vence <DateTime value={quote.expires_at} /> (hora de Mazatlán)
       </p>
       {quote.low_price_authorization !== null && (
         <p className="notice noticeWarn" role="status">
-          Envío de bajo monto autorizado; vigente hasta {formatMazatlanTime(quote.low_price_authorization.valid_until)} (hora de Mazatlán).
+          Envío de bajo monto autorizado; vigente hasta <DateTime value={quote.low_price_authorization.valid_until} /> (hora de Mazatlán).
           {quote.low_price_authorization.reason !== null && <> Motivo: {quote.low_price_authorization.reason}</>}
         </p>
       )}
@@ -402,11 +376,15 @@ function QuoteSummary({
             {acceptanceVersions === null ? (
               <p className="notice noticeWarn" role="alert">{acceptanceVersionsUnavailableMessage}</p>
             ) : (
-              <dl className="descList descListMoney" aria-label="Documentos que acepta el cliente">
-                <div><dt>Versión de términos vigente</dt><dd>{acceptanceVersions.termsVersion}</dd></div>
-                <div><dt>Versión del aviso de privacidad vigente</dt><dd>{acceptanceVersions.privacyVersion}</dd></div>
-                <div><dt>Canal de aceptación</dt><dd>Asistido por operador</dd></div>
-              </dl>
+              <DescriptionList
+                variant="money"
+                label="Documentos que acepta el cliente"
+                items={[
+                  { label: "Versión de términos vigente", value: acceptanceVersions.termsVersion },
+                  { label: "Versión del aviso de privacidad vigente", value: acceptanceVersions.privacyVersion },
+                  { label: "Canal de aceptación", value: "Asistido por operador" },
+                ]}
+              />
             )}
             <label className="opsCheckbox">
               <input type="checkbox" name="accepted" required /> El cliente vio el desglose y aceptó términos y aviso de privacidad
@@ -424,14 +402,5 @@ function QuoteSummary({
         <p className="notice noticeWarn">Tu rol no puede confirmar órdenes.</p>
       )}
     </section>
-  );
-}
-
-function MoneyRow({ label, cents, strong = false }: { readonly label: string; readonly cents: number; readonly strong?: boolean }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{strong ? <strong>{formatMxnCentsWithCurrency(cents)}</strong> : formatMxnCentsWithCurrency(cents)}</dd>
-    </div>
   );
 }

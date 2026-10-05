@@ -1,5 +1,6 @@
 "use client";
 
+import { clientApiBaseUrl } from "@/lib/api-base-url";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { realtimeCredentials } from "@/auth/request-credentials";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
@@ -97,7 +98,7 @@ export function useManualRoutes(): ManualRoutesState {
       setRoutes([]);
       setConnected(false);
       if (session === null || cancelled) { apiRef.current = null; return; }
-      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? window.location.origin;
+      const baseUrl = clientApiBaseUrl();
       const api = createRoutesApi(baseUrl, session);
       apiRef.current = api;
       try {

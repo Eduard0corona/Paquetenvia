@@ -13,6 +13,60 @@
   padding: 1rem 0 1.25rem;
 }
 
+.headerTop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem 0.75rem;
+  font-size: var(--text-sm);
+}
+
+.accountName {
+  max-width: 12rem;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountLogout {
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.85rem;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.accountLogout:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.accountLogout:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.accountHint {
+  flex-basis: 100%;
+  color: var(--muted);
+  text-align: right;
+}
+
 .header h1 {
   margin: 0.2rem 0 0.45rem;
   font-size: clamp(var(--text-xl), 7vw, var(--text-2xl));

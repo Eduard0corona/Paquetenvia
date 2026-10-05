@@ -1,16 +1,14 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useConfirmDialog } from "../../components/confirm-dialog";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
 import { OperationsPositions } from "./operations-positions";
 import { orderStatuses } from "../contracts/operations-dashboard";
-import {
-  formatMazatlanTime,
-  orderStatusLabels,
-} from "../contracts/operations-formatters";
+import { orderStatusLabels } from "../contracts/operations-formatters";
+import { DateTime } from "../../components/ui/date-time";
+import { PageHeader } from "../../components/ui/page-header";
 import { useOperationsDashboard } from "../state/use-operations-dashboard";
 
 export function OperationsDashboardShell() {
@@ -33,61 +31,31 @@ export function OperationsDashboardShell() {
   };
 
   return (
-    <main className="opsShell" aria-busy={state.loading}>
-      <header className="opsHeader">
-        <div>
-          <p className="opsEyebrow">Despacho</p>
-          <h1>Operaciones</h1>
-          <p>{state.activeOrganizationName}</p>
-        </div>
-        <div className="opsHeaderStatus" aria-live="polite">
-          <span>{state.connection}</span>
-          <span>
-            Última actualización:{" "}
-            {state.lastUpdated === null
-              ? "Pendiente"
-              : formatMazatlanTime(state.lastUpdated)}
-          </span>
-          <button
-            type="button"
-            className="btn btnPrimary"
-            onClick={state.refresh}
-            disabled={state.loading || state.accessUnavailable}
-          >
-            Actualizar
-          </button>
-          <Link className="btn btnPrimary" href="/ops/orders/new">Nueva orden</Link>
-          <Link className="btn btnPrimary" href="/ops/routes">Rutas manuales</Link>
-          <Link className="btn btnPrimary" href="/ops/orders/import">Importar CSV</Link>
-          <Link className="btn btnPrimary" href="/ops/incidents">Incidencias</Link>
-          <Link className="btn btnPrimary" href="/finance/cod">Cobro contra entrega</Link>
-        </div>
-      </header>
+    <div className="page" aria-busy={state.loading}>
+      <PageHeader
+        eyebrow="Despacho"
+        title="Operaciones"
+        live
+        actions={
+          <>
+            <span className="opsConnection">{state.connection}</span>
+            <span>
+              Última actualización:{" "}
+              {state.lastUpdated === null ? "Pendiente" : <DateTime value={state.lastUpdated} />}
+            </span>
+            <button
+              type="button"
+              className="btn btnSecondary"
+              onClick={state.refresh}
+              disabled={state.loading || state.accessUnavailable}
+            >
+              Actualizar
+            </button>
+          </>
+        }
+      />
 
       <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
-
-      {state.contexts.length > 1 && state.canChangeOrganization ? (
-        <label className="opsInlineField">
-          Organización activa
-          <select
-            value={
-              state.contexts.find(
-                (context) =>
-                  context.display_name === state.activeOrganizationName,
-              )?.organization_id ?? ""
-            }
-            onChange={(event) =>
-              void state.requestOrganizationChange(event.target.value)
-            }
-          >
-            {state.contexts.map((context) => (
-              <option key={context.organization_id} value={context.organization_id}>
-                {context.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
 
       {state.accessUnavailable && (
         <section className="panel" role="alert">
@@ -100,6 +68,7 @@ export function OperationsDashboardShell() {
           {state.error}
         </p>
       )}
+
 
       <section className="opsSummary" aria-label="Resumen operativo">
         <Summary label="Órdenes cargadas" value={summary.total} />
@@ -177,7 +146,7 @@ export function OperationsDashboardShell() {
         {state.loading ? "Actualizando operaciones." : ""}
       </p>
       {dialog}
-    </main>
+    </div>
   );
 }
 

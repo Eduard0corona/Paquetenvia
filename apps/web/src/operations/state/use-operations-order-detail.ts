@@ -1,5 +1,6 @@
 "use client";
 
+import { clientApiBaseUrl } from "@/lib/api-base-url";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import {
@@ -44,9 +45,7 @@ export interface OperationsOrderDetailState {
 export function useOperationsOrderDetail(
   orderId: string,
 ): OperationsOrderDetailState {
-  const apiBaseUrl =
-    process.env.NEXT_PUBLIC_API_BASE_URL ??
-    (typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin);
+  const apiBaseUrl = clientApiBaseUrl();
   const [order, setOrder] = useState<OperationsOrderDetail | null>(null);
   const [projection, setProjection] =
     useState<OperationsDashboardOrder | null>(null);

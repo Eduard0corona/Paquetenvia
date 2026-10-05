@@ -22,26 +22,24 @@ import { formatMazatlanTime } from "../contracts/operations-formatters";
 import { operationsOrderHref } from "../routing/operations-routing";
 import type { IncidentsController, IncidentsState } from "../state/incidents-controller";
 import { useIncidents } from "../state/use-incidents";
-import { ScreenGate, TenantFeedback } from "./tenant-feedback";
+import { DateTime } from "../../components/ui/date-time";
+import { EmptyState } from "../../components/ui/empty-state";
+import { Feedback, ScreenGate } from "../../components/ui/feedback";
+import { PageHeader } from "../../components/ui/page-header";
 
 export function IncidentsShell() {
   const { state, controller } = useIncidents();
   return (
-    <main className="opsShell" aria-busy={state.phase === "loading" || state.busy || state.listing}>
-      <header className="opsHeader">
-        <div>
-          <p className="opsEyebrow">Despacho</p>
-          <h1>Incidencias</h1>
-          <p>Registra los intentos de entrega fallidos y da seguimiento a su resolución.</p>
-        </div>
-        <div className="opsHeaderStatus">
-          <Link className="btn btnPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
-        </div>
-      </header>
+    <div className="page" aria-busy={state.phase === "loading" || state.busy || state.listing}>
+      <PageHeader
+        eyebrow="Despacho"
+        title="Incidencias"
+        description="Registra los intentos de entrega fallidos y da seguimiento a su resolución."
+      />
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no gestiona incidencias." />
-      <TenantFeedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
-      {state.mfaHint !== null && <p className="pageNote">{state.mfaHint}</p>}
+      <Feedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
+      {state.mfaHint !== null && <p className="notice noticeInfo">{state.mfaHint}</p>}
 
       {state.phase === "ready" && (
         <>
@@ -52,7 +50,7 @@ export function IncidentsShell() {
           <IncidentList state={state} controller={controller} />
         </>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -126,7 +124,7 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
                   <li key={proof.id}>
                     <label>
                       <input type="checkbox" name="evidence" value={proof.id} />
-                      {proofTypeLabels[proof.proof_type]} · capturada {formatMazatlanTime(proof.captured_at)}
+                      {proofTypeLabels[proof.proof_type]} · capturada <DateTime value={proof.captured_at} />
                     </label>
                   </li>
                 ))}
@@ -227,7 +225,7 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
           <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.refresh()}>Actualizar</button>
         </div>
       )}
-      {incidents.length === 0 ? <p>Sin incidencias para mostrar.</p> : (
+      {incidents.length === 0 ? <EmptyState>Sin incidencias para mostrar.</EmptyState> : (
         <table className="opsTable">
           <caption>Incidencias registradas</caption>
           <thead>
@@ -247,8 +245,8 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
                 <td>{incidentReasonLabels[incident.reason_code]}</td>
                 <td>{incidentNextActionLabels[incident.next_action]}</td>
                 <td>{incident.custody_acquired ? "Con custodia" : "Sin custodia"}</td>
-                <td>{formatMazatlanTime(incident.occurred_at)}</td>
-                <td>{formatMazatlanTime(incident.sla_due_at)}</td>
+                <td><DateTime value={incident.occurred_at} /></td>
+                <td><DateTime value={incident.sla_due_at} /></td>
               </tr>
             ))}
           </tbody>

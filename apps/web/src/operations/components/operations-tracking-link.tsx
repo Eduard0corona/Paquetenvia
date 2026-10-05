@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { createOperationsApi } from "../api/operations-api";
 import {
   canManageTrackingLink,
   createTrackingLinkApi,
 } from "../api/tracking-link-api";
-import { formatMazatlanTime } from "../contracts/operations-formatters";
+import { DateTime } from "../../components/ui/date-time";
 import {
   readOperationsSession,
   subscribeToOperationsSession,
@@ -36,9 +37,7 @@ export function OperationsTrackingLink({
   readonly orderId: string;
   readonly ownerOrganizationId: string;
 }) {
-  const apiBaseUrl =
-    process.env.NEXT_PUBLIC_API_BASE_URL ??
-    (typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin);
+  const apiBaseUrl = clientApiBaseUrl();
   const [allowed, setAllowed] = useState(false);
   const [state, setState] = useState<TrackingLinkState>({
     kind: "idle",
@@ -111,7 +110,7 @@ export function OperationsTrackingLink({
         entregarse, devolverse o cancelarse. El envío al cliente por WhatsApp o
         correo todavía no está disponible.
       </p>
-      <div className="opsHeaderStatus">
+      <div className="opsFormActions">
         <button
           type="button"
           className="btn btnPrimary"
@@ -136,9 +135,9 @@ export function OperationsTrackingLink({
           <p>
             {state.validUntil === null
               ? "Vigente mientras la orden esté en curso."
-              : `Vigente hasta: ${formatMazatlanTime(state.validUntil)}`}
+              : <>Vigente hasta: <DateTime value={state.validUntil} /></>}
           </p>
-          <div className="opsHeaderStatus">
+          <div className="opsFormActions">
             <button
               type="button"
               className="btn btnPrimary"

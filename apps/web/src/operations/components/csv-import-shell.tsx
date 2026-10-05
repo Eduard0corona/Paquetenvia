@@ -11,29 +11,25 @@ import {
   type CsvImportCommit,
   type CsvImportPreview,
 } from "../contracts/csv-import";
-import { formatMxnCentsWithCurrency } from "../contracts/money";
 import { operationsOrderHref } from "../routing/operations-routing";
 import type { CsvImportController, CsvImportState } from "../state/csv-import-controller";
 import { useCsvImport } from "../state/use-csv-import";
-import { ScreenGate, TenantFeedback } from "./tenant-feedback";
+import { Feedback, ScreenGate } from "../../components/ui/feedback";
+import { Money } from "../../components/ui/money";
+import { PageHeader } from "../../components/ui/page-header";
 
 export function CsvImportShell() {
   const { state, controller } = useCsvImport();
   return (
-    <main className="opsShell" aria-busy={state.phase === "loading" || state.busy}>
-      <header className="opsHeader">
-        <div>
-          <p className="opsEyebrow">Despacho</p>
-          <h1>Importar órdenes por CSV</h1>
-          <p>Revisamos el archivo fila por fila; ninguna orden se crea hasta que confirmas el lote.</p>
-        </div>
-        <div className="opsHeaderStatus">
-          <Link className="btn btnPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
-        </div>
-      </header>
+    <div className="page" aria-busy={state.phase === "loading" || state.busy}>
+      <PageHeader
+        eyebrow="Despacho"
+        title="Importar órdenes por CSV"
+        description="Revisamos el archivo fila por fila; ninguna orden se crea hasta que confirmas el lote."
+      />
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no importa órdenes." />
-      <TenantFeedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
+      <Feedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
 
       {state.phase === "ready" && (
         <section className="opsFormLayout">
@@ -45,7 +41,7 @@ export function CsvImportShell() {
           </section>
         </section>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -165,9 +161,9 @@ function PreviewReport({
 }
 
 /** Server-reported integer cents only; the client never parses the COD cell. */
-function codLabel(cents: number | null): string {
+function codLabel(cents: number | null) {
   if (cents === null) return "—";
-  return cents === 0 ? "Sin cobro" : formatMxnCentsWithCurrency(cents);
+  return cents === 0 ? "Sin cobro" : <Money cents={cents} />;
 }
 
 function CommitReport({
