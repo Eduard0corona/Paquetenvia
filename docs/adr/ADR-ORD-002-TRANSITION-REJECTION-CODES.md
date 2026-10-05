@@ -89,7 +89,8 @@ reproduce, igual que antes.
 
 ## Consecuencias
 
-- AI-05 cambia de forma aditiva (enum y descripciones); AI-07 documenta los mensajes es-MX. AI-04, AI-06 y AI-18 no
+- AI-05 cambia de forma aditiva (enum y descripciones); AI-07 documenta los mensajes es-MX. AI-04 solo agrega
+  `CLAIM_RESOLVED: [claim_resolution_reason_present]` a `guards`, regla que el código ya aplicaba; AI-06 y AI-18 no
   cambian; no hay migración, rol, grant ni flujo cross-module nuevo.
 - La web traduce cada código a un mensaje es-MX en un solo helper; un código desconocido usa el mensaje genérico.
 - La cola offline del repartidor sigue guardando `VERSION_CONFLICT` como estado de atención: su esquema persistido en

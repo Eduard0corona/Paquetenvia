@@ -163,7 +163,12 @@ public sealed class OrdersOpenApiImplementationTests
             .ToHashSet(StringComparer.Ordinal);
         // AI-04 names the retry guard as one composite; the registry splits it in two.
         ai04Guards.Remove("if_from_failed_attempt_then_custody_acquired_true_and_valid_assignment");
-        Assert.Subset(published.Keys.ToHashSet(StringComparer.Ordinal), ai04Guards);
+        ai04Guards.Add("retry_custody_acquired_true");
+        ai04Guards.Add("retry_valid_assignment");
+        // Both directions: every AI-04 guard is published and no published guard is missing from AI-04.
+        Assert.Equal(
+            ai04Guards.Order(StringComparer.Ordinal),
+            published.Keys.Order(StringComparer.Ordinal));
 
         var source = ReadRepositoryFile("src", "Modules", "Orders", "Orders.Endpoints", "OrderEndpoints.cs");
         Assert.Contains("OrderTransitionRejectionCodes.IsDefined(rejectionCode)", source, StringComparison.Ordinal);

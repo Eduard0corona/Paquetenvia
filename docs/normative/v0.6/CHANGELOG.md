@@ -29,7 +29,9 @@
   siguen recibiendo el mismo 409 uniforme sin código. Sin datos personales, identificadores ni montos.
 - AI-07 "Siguiente paso": mensaje es-MX por código desde un solo helper; código ausente o desconocido usa el mensaje
   genérico.
-- Sin migraciones, tablas, roles, grants ni flujos nuevos; AI-04, AI-06 y AI-18 sin cambios.
+- Sin migraciones, tablas, roles, grants ni flujos nuevos; AI-06 y AI-18 sin cambios.
+- AI-04 `guards` documenta `CLAIM_RESOLVED: [claim_resolution_reason_present]`, guarda que el código ya aplicaba;
+  el mapa de códigos y AI-04 se verifican ahora en ambas direcciones.
 
 ## Búsqueda por guía y acciones válidas de la orden (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05) — 2026-10-05
 
