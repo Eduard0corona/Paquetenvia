@@ -2,7 +2,6 @@
 
 import { useMemo } from "react";
 import {
-  orderStatuses,
   type OperationsDashboardOrder,
   type OperationsDashboardFilters,
   type OperationsServiceType,
@@ -10,6 +9,7 @@ import {
 } from "../contracts/operations-dashboard";
 import { dateTimeLocalToUtc, utcToDateTimeLocal } from "../contracts/filter-datetime";
 import { orderStatusLabels } from "../contracts/operations-formatters";
+import { orderStatusGroupIds, orderStatusGroups, statusesInGroup } from "../contracts/status-groups";
 
 interface Props {
   readonly filters: OperationsDashboardFilters;
@@ -43,10 +43,14 @@ export function OperationsFilters({
           }
         >
           <option value="">Todos</option>
-          {orderStatuses.map((status) => (
-            <option key={status} value={status}>
-              {orderStatusLabels[status]}
-            </option>
+          {orderStatusGroupIds.map((group) => (
+            <optgroup key={group} label={orderStatusGroups[group].label}>
+              {statusesInGroup(group).map((status) => (
+                <option key={status} value={status}>
+                  {orderStatusLabels[status]}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </label>

@@ -8,6 +8,7 @@ import { Feedback, ScreenGate } from "./feedback";
 import { Field, type FieldControlProps } from "./field";
 import { Money } from "./money";
 import { PageHeader } from "./page-header";
+import { StatusBadge, StatusGroupChip } from "./status-badge";
 
 /** Renders a Field the way screens do, with its control as the render-prop child. */
 function FieldProbe() {
@@ -84,6 +85,24 @@ describe("shared UI components", () => {
     expect(feedback).toContain("Verificar identidad");
     expect(html(createElement(EmptyState, { title: "Nada" }, "Sin datos."))).toBe(
       '<div class="emptyState"><strong>Nada</strong>Sin datos.</div>',
+    );
+  });
+
+  it("shows an order status as group chip (dot + text) plus the exact status label", () => {
+    expect(html(createElement(StatusBadge, { status: "FAILED_ATTEMPT" }))).toBe(
+      '<span class="statusBadge"><span class="statusChip statusToneWarn"><span class="statusDot" aria-hidden="true"></span>' +
+        '<span class="statusChipText">Requiere atención</span></span><span class="srOnly">: </span>' +
+        '<span class="statusBadgeLabel">Intento fallido</span></span>',
+    );
+    expect(html(createElement(StatusBadge, { status: "DELIVERING", showGroup: false }))).toBe(
+      '<span class="statusBadge statusToneAccent"><span class="statusDot" aria-hidden="true"></span>' +
+        '<span class="statusBadgeLabel">En reparto</span></span>',
+    );
+    expect(html(createElement(StatusBadge, { status: "CLOSED" }))).toContain("Terminadas");
+    expect(html(createElement(StatusBadge, { status: "DRAFT" }))).toContain("statusToneMuted");
+    expect(html(createElement(StatusGroupChip, { group: "PICKUP" }, "3"))).toBe(
+      '<span class="statusChip statusToneInfo"><span class="statusDot" aria-hidden="true"></span>' +
+        '<span class="statusChipText">En recolección</span>3</span>',
     );
   });
 });

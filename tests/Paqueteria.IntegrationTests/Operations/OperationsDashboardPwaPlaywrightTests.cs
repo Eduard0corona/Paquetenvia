@@ -119,6 +119,12 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             Assert.True(
                 await recorder.WaitForNextOperationsAcceptedAsync(
                     TimeSpan.FromSeconds(10)));
+            Assert.Equal(
+                ["Por preparar", "En recolección", "En ruta", "Requiere atención", "Terminadas"],
+                (await page.Locator(".opsBoardColumn > h2 .statusChipText")
+                    .AllTextContentsAsync())
+                    .Select(text => text.Trim())
+                    .ToArray());
             Assert.Contains(
                 "no-cache",
                 (await response.AllHeadersAsync())["cache-control"],
@@ -190,7 +196,8 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 "PROCESSED",
                 await WaitForOutboxAsync(database, statusEvent.OutboxId));
             await WaitForDashboardRequestAsync(requests, dashboardRequests);
-            await page.Locator(".opsOrderCard .opsStatus")
+            await page.Locator(
+                    ".opsBoardColumn:has(#status-group-EN_ROUTE) .opsOrderCard .statusBadgeLabel")
                 .GetByText("En reparto", new() { Exact = true })
                 .WaitForAsync();
 
@@ -277,7 +284,8 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 reconnectRequests[1] >= reconnectObservedAt,
                 $"Mandatory REST started at {reconnectRequests[1]:O}, " +
                 $"before reconnect was observed at {reconnectObservedAt:O}.");
-            await page.Locator(".opsOrderCard .opsStatus")
+            await page.Locator(
+                    ".opsBoardColumn:has(#status-group-FINISHED) .opsOrderCard .statusBadgeLabel")
                 .GetByText("Cerrada", new() { Exact = true })
                 .WaitForAsync(new LocatorWaitForOptions { Timeout = 30_000 });
             await page.GetByText("Conectada", new() { Exact = true }).WaitForAsync(

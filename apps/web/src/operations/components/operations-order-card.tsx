@@ -7,11 +7,11 @@ import { externalOfferConfirmation } from "../contracts/external-offer-confirmat
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
-  orderStatusLabels,
   serviceTypeLabel,
 } from "../contracts/operations-formatters";
 import { DateTime } from "../../components/ui/date-time";
 import { DescriptionList } from "../../components/ui/description-list";
+import { StatusBadge } from "../../components/ui/status-badge";
 import { parseMxnToCents } from "../contracts/money";
 import { formatServiceWindow } from "../contracts/service-window";
 import { operationsOrderHref } from "../routing/operations-routing";
@@ -40,7 +40,7 @@ export function OperationsOrderCard({
     <article className="opsOrderCard">
       <div className="opsCardHeading">
         <h3>{order.public_id}</h3>
-        <span className="opsStatus">{orderStatusLabels[order.status]}</span>
+        <StatusBadge status={order.status} showGroup={false} />
       </div>
       <DescriptionList
         items={[
