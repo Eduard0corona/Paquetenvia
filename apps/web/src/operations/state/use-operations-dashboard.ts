@@ -52,7 +52,6 @@ export interface OperationsDashboardState {
   setFilters(filters: OperationsDashboardFilters): void;
   refresh(): void;
   loadMore(): void;
-  requestOrganizationChange(organizationId: string): Promise<void>;
   publishExternalOffer(
     orderId: string,
     commissionCents: number,
@@ -373,12 +372,6 @@ export function useOperationsDashboard(
     [performLoad, telemetry],
   );
 
-  const requestOrganizationChange = useCallback(async (organizationId: string) => {
-    const session = sessionRef.current;
-    if (session?.requestOrganizationChange === undefined) return;
-    await session.requestOrganizationChange(organizationId);
-  }, []);
-
   const publishExternalOffer = useCallback(
     async (
       orderId: string,
@@ -423,7 +416,6 @@ export function useOperationsDashboard(
       void performLoad("replace", "manual");
     },
     loadMore: () => void performLoad("append", "pagination"),
-    requestOrganizationChange,
     publishExternalOffer,
   };
 }
