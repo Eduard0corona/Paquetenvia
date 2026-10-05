@@ -8,6 +8,7 @@ import {
   orderStatusLabels,
   serviceTypeLabel,
 } from "../contracts/operations-formatters";
+import { parseMxnToCents } from "../contracts/money";
 import { formatServiceWindow } from "../contracts/service-window";
 import { operationsOrderHref } from "../routing/operations-routing";
 
@@ -79,12 +80,12 @@ export function OperationsOrderCard({
             event.preventDefault();
             if (publishing) return;
             const data = new FormData(event.currentTarget);
-            const commission = Number(data.get("commission"));
+            const commissionCents = parseMxnToCents(String(data.get("commission") ?? ""));
             const expires = String(data.get("expires"));
             const vehicle = String(data.get("vehicle")) as
               | "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER";
-            if (!Number.isFinite(commission) || commission < 0 || !expires) {
-              setMessage("Completa una comision y expiracion validas.");
+            if (commissionCents === null || !expires) {
+              setMessage("Completa una comisión y una expiración válidas.");
               return;
             }
             const key = keyRef.current ?? crypto.randomUUID();
@@ -93,7 +94,7 @@ export function OperationsOrderCard({
             setMessage(null);
             void onPublishExternalOffer(
               order.order_id,
-              Math.round(commission * 100),
+              commissionCents,
               new Date(expires).toISOString(),
               vehicle,
               key,
@@ -106,11 +107,11 @@ export function OperationsOrderCard({
           }}
         >
           <strong>Publicar oferta externa</strong>
-          <label>Comision (MXN)<input name="commission" type="number" min="0" step="0.01" required /></label>
-          <label>Expiracion<input name="expires" type="datetime-local" required /></label>
-          <label>Vehiculo<select name="vehicle" defaultValue="MOTORCYCLE">
+          <label>Comisión (MXN)<input name="commission" type="text" inputMode="decimal" pattern="\d{1,13}(\.\d{1,2})?" placeholder="45.00" required /></label>
+          <label>Expiración<input name="expires" type="datetime-local" required /></label>
+          <label>Vehículo<select name="vehicle" defaultValue="MOTORCYCLE">
             <option value="MOTORCYCLE">Motocicleta</option>
-            <option value="CAR">Automovil</option>
+            <option value="CAR">Automóvil</option>
             <option value="VAN">Van</option>
             <option value="BICYCLE">Bicicleta</option>
             <option value="WALKER">A pie</option>
