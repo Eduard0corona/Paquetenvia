@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Orders.Application.Orders;
-using Orders.Domain;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
@@ -481,7 +480,7 @@ public static class OrderEndpoints
                 item.EventType,
                 item.OccurredAt)).ToArray(),
             result.AllowedTransitions.Select(item => new OrderAllowedTransitionResponse(
-                item.Target.ToContractValue(),
+                item.TargetStatus,
                 item.RequiredMetadata.ToArray())).ToArray());
     }
 

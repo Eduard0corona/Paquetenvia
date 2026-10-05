@@ -6,7 +6,11 @@ namespace Orders.Application.Orders;
 /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: one ORD-002 transition the caller could request now, with the metadata
 /// members transitionOrder requires for it (<see cref="OrderTransitionInputPolicy.RequiredMetadataKeys"/>).
 /// </summary>
-public sealed record OrderAllowedTransition(OrderStatus Target, IReadOnlyList<string> RequiredMetadata);
+public sealed record OrderAllowedTransition(OrderStatus Target, IReadOnlyList<string> RequiredMetadata)
+{
+    /// <summary>The AI-05 OrderStatus value of <see cref="Target"/>.</summary>
+    public string TargetStatus => Target.ToContractValue();
+}
 
 /// <summary>
 /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the advisory <c>allowed_transitions</c> of getOrder, so the UI never
