@@ -1,6 +1,6 @@
 "use client";
 
-import { clientApiBaseUrl } from "@/lib/api-base-url";
+import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ManagedRealtimeConnection } from "@/realtime/base-connection";
 import type {

@@ -1,4 +1,4 @@
-import { formatMxnCents, formatMxnCentsWithCurrency } from "@/operations/contracts/money";
+import { formatMxnCents, formatMxnCentsWithCurrency } from "../../operations/contracts/money";
 
 /**
  * Integer MXN cents for display (AI-01 §4.15): formatting is delegated to formatMxnCents,

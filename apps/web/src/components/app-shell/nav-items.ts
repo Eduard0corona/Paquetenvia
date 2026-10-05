@@ -1,4 +1,4 @@
-import { canPerform } from "@/operations/contracts/capabilities";
+import { canPerform } from "../../operations/contracts/capabilities";
 
 /**
  * Navigation of the app shell for /ops and /finance. Every item is derived from the client

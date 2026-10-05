@@ -1,17 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { isSessionBootstrapSettled, sessionBootstrapSettledEvent } from "@/auth/bootstrap-state";
-import { readSessionAccount, type SessionAccount } from "@/auth/session-account";
-import { clientApiBaseUrl } from "@/lib/api-base-url";
-import { createOperationsApi } from "@/operations/api/operations-api";
-import type { OperationsOrganizationContext } from "@/operations/contracts/operations-dashboard";
-import { resolveActiveRole } from "@/operations/contracts/capabilities";
+import { isSessionBootstrapSettled, sessionBootstrapSettledEvent } from "../../auth/bootstrap-state";
+import { readSessionAccount, type SessionAccount } from "../../auth/session-account";
+import { clientApiBaseUrl } from "../../lib/api-base-url";
+import { createOperationsApi } from "../../operations/api/operations-api";
+import type { OperationsOrganizationContext } from "../../operations/contracts/operations-dashboard";
+import { resolveActiveRole } from "../../operations/contracts/capabilities";
 import {
   readOperationsSession,
   subscribeToOperationsSession,
   type OperationsSession,
-} from "@/operations/session/operations-session";
+} from "../../operations/session/operations-session";
 
 export type ShellContext =
   | { readonly status: "loading" }

@@ -74,7 +74,7 @@ export function SettlementsShell() {
           <section className="panel opsRouteDetail">
             {state.selected === null
               ? <EmptyState>Selecciona una liquidación para ver sus líneas.</EmptyState>
-              : <Detail key={`${state.selected.id}-${state.formKey}`} settlement={state.selected} state={state}
+              : <SettlementDetail key={`${state.selected.id}-${state.formKey}`} settlement={state.selected} state={state}
                 controller={controller} confirm={confirm} />}
           </section>
         </section>
@@ -135,7 +135,7 @@ function CreateForm({ controller, disabled }: { readonly controller: Settlements
   );
 }
 
-function Detail({
+function SettlementDetail({
   settlement,
   state,
   controller,

@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { bootstrapBffSession, landingPathForRole } from "@/auth/bff-session-installation";
-import { isBffAuthenticationEnabled } from "@/auth/auth-mode";
-import { signOutInstalledSession } from "@/auth/logout";
-import { accountLabel } from "@/auth/session-account";
+import { bootstrapBffSession, landingPathForRole } from "../../auth/bff-session-installation";
+import { isBffAuthenticationEnabled } from "../../auth/auth-mode";
+import { signOutInstalledSession } from "../../auth/logout";
+import { accountLabel } from "../../auth/session-account";
 import { activeNavKey, navItemsForRole, type NavItem, type NavKey } from "./nav-items";
 import { useShellContext, type ShellContext } from "./use-shell-context";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { clientApiBaseUrl } from "@/lib/api-base-url";
+import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useState } from "react";
 import {
   publicStatusLabels,
