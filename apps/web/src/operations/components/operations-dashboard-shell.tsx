@@ -50,24 +50,24 @@ export function OperationsDashboardShell() {
           </span>
           <button
             type="button"
-            className="opsPrimary"
+            className="btn btnPrimary"
             onClick={state.refresh}
             disabled={state.loading || state.accessUnavailable}
           >
             Actualizar
           </button>
-          <Link className="opsPrimary" href="/ops/orders/new">Nueva orden</Link>
-          <Link className="opsPrimary" href="/ops/routes">Rutas manuales</Link>
-          <Link className="opsPrimary" href="/ops/orders/import">Importar CSV</Link>
-          <Link className="opsPrimary" href="/ops/incidents">Incidencias</Link>
-          <Link className="opsPrimary" href="/finance/cod">Cobro contra entrega</Link>
+          <Link className="btn btnPrimary" href="/ops/orders/new">Nueva orden</Link>
+          <Link className="btn btnPrimary" href="/ops/routes">Rutas manuales</Link>
+          <Link className="btn btnPrimary" href="/ops/orders/import">Importar CSV</Link>
+          <Link className="btn btnPrimary" href="/ops/incidents">Incidencias</Link>
+          <Link className="btn btnPrimary" href="/finance/cod">Cobro contra entrega</Link>
         </div>
       </header>
 
-      <p className="opsTimezone">Horarios mostrados en hora de Mazatlán.</p>
+      <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
 
       {state.contexts.length > 1 && state.canChangeOrganization ? (
-        <label className="opsOrganizationSelector">
+        <label className="opsInlineField">
           Organización activa
           <select
             value={
@@ -90,13 +90,13 @@ export function OperationsDashboardShell() {
       ) : null}
 
       {state.accessUnavailable && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Acceso no disponible</h2>
           <p>No es posible mostrar información de operaciones.</p>
         </section>
       )}
       {state.error !== null && (
-        <p className="opsAlert" role="alert">
+        <p className="notice noticeCrit" role="alert">
           {state.error}
         </p>
       )}
@@ -119,6 +119,7 @@ export function OperationsDashboardShell() {
         <legend>Vista</legend>
         <button
           type="button"
+          className="btn btnSecondary"
           aria-pressed={view === "list"}
           onClick={() => setView("list")}
         >
@@ -126,6 +127,7 @@ export function OperationsDashboardShell() {
         </button>
         <button
           type="button"
+          className="btn btnSecondary"
           aria-pressed={view === "positions"}
           onClick={() => setView("positions")}
         >
@@ -164,14 +166,14 @@ export function OperationsDashboardShell() {
       {view === "list" && state.nextCursor !== null && (
         <button
           type="button"
-          className="opsLoadMore"
+          className="btn btnSecondary"
           onClick={state.loadMore}
           disabled={state.loadingMore}
         >
           {state.loadingMore ? "Cargando…" : "Cargar más"}
         </button>
       )}
-      <p className="opsLive" aria-live="polite">
+      <p className="live" aria-live="polite">
         {state.loading ? "Actualizando operaciones." : ""}
       </p>
       {dialog}

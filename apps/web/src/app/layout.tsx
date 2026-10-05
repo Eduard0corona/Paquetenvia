@@ -12,7 +12,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#102a43",
+  // Mirrors --surface in globals.css for the light and dark color schemes.
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#161e20" },
+  ],
+  colorScheme: "light dark",
 };
 
 export default async function RootLayout({

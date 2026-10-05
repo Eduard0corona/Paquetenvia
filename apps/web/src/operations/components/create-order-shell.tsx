@@ -50,30 +50,30 @@ export function CreateOrderShell({
           <p>Cotiza el envío y confirma la orden con la aceptación del cliente.</p>
         </div>
         <div className="opsHeaderStatus">
-          <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
+          <Link className="btn btnPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
         </div>
       </header>
 
       {state.phase === "no_session" && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Sin sesión de Operaciones</h2>
           <p>Inicia sesión y selecciona una organización.</p>
         </section>
       )}
       {state.phase === "access_unavailable" && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Acceso no disponible</h2>
           <p>Tu rol en la organización activa no puede crear cotizaciones ni órdenes.</p>
         </section>
       )}
-      {state.phase === "loading" && <p className="opsLive" aria-live="polite">Cargando permisos.</p>}
+      {state.phase === "loading" && <p className="live" aria-live="polite">Cargando permisos.</p>}
 
       <Feedback state={state} />
 
       {state.phase === "ready" && state.order !== null && (
-        <section className="opsMessage" aria-labelledby="order-created">
+        <section className="panel" aria-labelledby="order-created">
           <h2 id="order-created">Orden {state.order.public_id}</h2>
-          <dl className="opsMoneyList">
+          <dl className="descList descListMoney">
             <MoneyRow label="Neto sin IVA" cents={state.order.price_net.amount_cents} />
             <MoneyRow label={`Total (${vatIncludedLabel})`} cents={state.order.total.amount_cents} />
             {state.orderCodExpectedCents !== null && (
@@ -91,8 +91,8 @@ export function CreateOrderShell({
               : `${formatMazatlanTime(state.order.service_window.from)} a ${formatMazatlanTime(state.order.service_window.to)} (hora de Mazatlán)`}
           </p>
           <div className="opsFormActions">
-            <Link className="opsPrimary" href={operationsOrderHref(state.order.id)}>Abrir orden</Link>
-            <button type="button" className="opsSecondary" onClick={() => controller.reset()}>Capturar otra orden</button>
+            <Link className="btn btnPrimary" href={operationsOrderHref(state.order.id)}>Abrir orden</Link>
+            <button type="button" className="btn btnSecondary" onClick={() => controller.reset()}>Capturar otra orden</button>
           </div>
         </section>
       )}
@@ -127,14 +127,14 @@ function Feedback({ state }: { readonly state: CreateOrderState }) {
   return (
     <>
       {state.errors.length > 0 && (
-        <ul className="opsAlert" role="alert">
+        <ul className="notice noticeCrit" role="alert">
           {state.errors.map((error) => <li key={error}>{error}</li>)}
         </ul>
       )}
       {state.message !== null && (
-        <p className={state.stepUpHref === null ? "opsWarning" : "opsAlert"} role="status">
+        <p className={state.stepUpHref === null ? "notice noticeWarn" : "notice noticeCrit"} role="status">
           {state.message}{" "}
-          {state.stepUpHref !== null && <Link className="opsPrimary" href={state.stepUpHref}>Verificar identidad</Link>}
+          {state.stepUpHref !== null && <Link className="btn btnPrimary" href={state.stepUpHref}>Verificar identidad</Link>}
         </p>
       )}
     </>
@@ -199,7 +199,7 @@ function QuoteForm({
       <fieldset>
         <legend>3. Paquetes</legend>
         {Array.from({ length: packages }, (_, index) => (
-          <fieldset key={index} className="opsPackage">
+          <fieldset key={index}>
             <legend>Paquete {index + 1}</legend>
             <label>Descripción<input name={`package_${index}_description`} maxLength={250} required /></label>
             <label>Peso (gramos)<input name={`package_${index}_weight`} inputMode="numeric" pattern="[0-9]+" required /></label>
@@ -210,9 +210,9 @@ function QuoteForm({
           </fieldset>
         ))}
         <div className="opsFormActions">
-          <button type="button" className="opsSecondary" disabled={packages >= maximumPackages}
+          <button type="button" className="btn btnSecondary" disabled={packages >= maximumPackages}
             onClick={() => setPackages((count) => Math.min(maximumPackages, count + 1))}>Agregar paquete</button>
-          <button type="button" className="opsSecondary" disabled={packages <= 1}
+          <button type="button" className="btn btnSecondary" disabled={packages <= 1}
             onClick={() => setPackages((count) => Math.max(1, count - 1))}>Quitar último paquete</button>
         </div>
       </fieldset>
@@ -228,7 +228,7 @@ function QuoteForm({
         </label>
         <label className="opsCheckbox"><input type="checkbox" name="consolidated_route" /> Ruta consolidada</label>
         <label>ID de la cuenta cliente (opcional)<input name="client_account_id" aria-describedby="create-order-client-help" /></label>
-        <p id="create-order-client-help" className="opsHelp">Déjalo vacío si la orden no pertenece a una cuenta cliente.</p>
+        <p id="create-order-client-help" className="fieldHint">Déjalo vacío si la orden no pertenece a una cuenta cliente.</p>
       </fieldset>
       {lowPriceAuthorization && (
         <fieldset>
@@ -259,7 +259,7 @@ function QuoteForm({
           </p>
         </fieldset>
       )}
-      <button className="opsPrimary" type="submit" disabled={disabled}>
+      <button className="btn btnPrimary" type="submit" disabled={disabled}>
         {disabled ? "Cotizando..." : "5. Cotizar"}
       </button>
     </form>
@@ -319,9 +319,9 @@ function QuoteSummary({
   const [now] = useState(() => new Date());
   const blockers = evaluateConfirmation(quote, now);
   return (
-    <section className="opsMessage" aria-labelledby="quote-title">
+    <section className="panel" aria-labelledby="quote-title">
       <h2 id="quote-title">Cotización</h2>
-      <dl className="opsMoneyList">
+      <dl className="descList descListMoney">
         <MoneyRow label="Neto sin IVA" cents={quote.net.amount_cents} />
         <MoneyRow label="IVA" cents={quote.tax.amount_cents} />
         {quote.breakdown.map((line, index) => (
@@ -341,13 +341,13 @@ function QuoteSummary({
         {quote.consolidated_route ? " ruta consolidada" : " sin ruta consolidada"} · vence {formatMazatlanTime(quote.expires_at)} (hora de Mazatlán)
       </p>
       {quote.low_price_authorization !== null && (
-        <p className="opsWarning" role="status">
+        <p className="notice noticeWarn" role="status">
           Envío de bajo monto autorizado; vigente hasta {formatMazatlanTime(quote.low_price_authorization.valid_until)} (hora de Mazatlán).
           {quote.low_price_authorization.reason !== null && <> Motivo: {quote.low_price_authorization.reason}</>}
         </p>
       )}
       {blockers.length > 0 && (
-        <ul className="opsWarning" role="status">
+        <ul className="notice noticeWarn" role="status">
           {blockers.map((blocker) => <li key={blocker}>{confirmationBlockerLabels[blocker]}</li>)}
         </ul>
       )}
@@ -400,9 +400,9 @@ function QuoteSummary({
             </label>
             <p id="cod-amount-help">Monto que el repartidor cobrará al entregar, en pesos con hasta 2 decimales (por ejemplo 150.50), máximo $20,000.00 por pedido.</p>
             {acceptanceVersions === null ? (
-              <p className="opsWarning" role="alert">{acceptanceVersionsUnavailableMessage}</p>
+              <p className="notice noticeWarn" role="alert">{acceptanceVersionsUnavailableMessage}</p>
             ) : (
-              <dl className="opsMoneyList" aria-label="Documentos que acepta el cliente">
+              <dl className="descList descListMoney" aria-label="Documentos que acepta el cliente">
                 <div><dt>Versión de términos vigente</dt><dd>{acceptanceVersions.termsVersion}</dd></div>
                 <div><dt>Versión del aviso de privacidad vigente</dt><dd>{acceptanceVersions.privacyVersion}</dd></div>
                 <div><dt>Canal de aceptación</dt><dd>Asistido por operador</dd></div>
@@ -416,12 +416,12 @@ function QuoteSummary({
               artículos prohibidos (queda registrado en la orden)
             </label>
           </fieldset>
-          <button className="opsPrimary" type="submit" disabled={busy || blockers.length > 0 || acceptanceVersions === null}>
+          <button className="btn btnPrimary" type="submit" disabled={busy || blockers.length > 0 || acceptanceVersions === null}>
             {busy ? "Confirmando..." : "Confirmar orden"}
           </button>
         </form>
       ) : (
-        <p className="opsWarning">Tu rol no puede confirmar órdenes.</p>
+        <p className="notice noticeWarn">Tu rol no puede confirmar órdenes.</p>
       )}
     </section>
   );

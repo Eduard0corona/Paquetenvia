@@ -31,32 +31,32 @@ export function SettlementsShell() {
           <p>Calcula, revisa, aprueba y paga las liquidaciones de tus repartidores.</p>
         </div>
         <div className="opsHeaderStatus">
-          <button className="opsPrimary" type="button" disabled={state.phase !== "ready" || state.loading}
+          <button className="btn btnPrimary" type="button" disabled={state.phase !== "ready" || state.loading}
             onClick={() => void controller.refresh()}>Actualizar</button>
-          <Link className="opsSecondary" href="/finance/cod">Cobro contra entrega</Link>
-          <Link className="opsSecondary" href="/ops/dashboard">Volver a Operaciones</Link>
+          <Link className="btn btnSecondary" href="/finance/cod">Cobro contra entrega</Link>
+          <Link className="btn btnSecondary" href="/ops/dashboard">Volver a Operaciones</Link>
         </div>
       </header>
 
       {state.phase === "no_session" && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Sin sesión</h2>
           <p>Inicia sesión y selecciona una organización.</p>
         </section>
       )}
       {state.phase === "access_unavailable" && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Acceso no disponible</h2>
           <p>Tu rol en la organización activa no opera liquidaciones.</p>
         </section>
       )}
-      {state.phase === "loading" && <p className="opsLive" aria-live="polite">Cargando permisos.</p>}
+      {state.phase === "loading" && <p className="live" aria-live="polite">Cargando permisos.</p>}
 
       <Feedback state={state} />
 
       {state.phase === "ready" && (
         <section className="opsRouteLayout">
-          <aside className="opsRoutePanel">
+          <aside className="panel opsRoutePanel">
             <Filters key={`filters-${state.formKey}`} controller={controller} disabled={state.loading} />
             {state.canCreate && <CreateForm key={`create-${state.formKey}`} controller={controller} disabled={state.busy} />}
             <h2>Liquidaciones</h2>
@@ -74,13 +74,13 @@ export function SettlementsShell() {
               ))}
             </ul>
             {state.nextCursor !== null && (
-              <button type="button" className="opsLoadMore" disabled={state.loading}
+              <button type="button" className="btn btnSecondary" disabled={state.loading}
                 onClick={() => void controller.loadMore()}>
                 {state.loading ? "Cargando…" : "Cargar más"}
               </button>
             )}
           </aside>
-          <section className="opsRouteDetail">
+          <section className="panel opsRouteDetail">
             {state.selected === null
               ? <p>Selecciona una liquidación para ver sus líneas.</p>
               : <Detail key={`${state.selected.id}-${state.formKey}`} settlement={state.selected} state={state}
@@ -97,14 +97,14 @@ function Feedback({ state }: { readonly state: SettlementsState }) {
   return (
     <>
       {state.errors.length > 0 && (
-        <ul className="opsAlert" role="alert">
+        <ul className="notice noticeCrit" role="alert">
           {state.errors.map((error) => <li key={error}>{error}</li>)}
         </ul>
       )}
       {state.message !== null && (
-        <p className={state.stepUpHref === null ? "opsWarning" : "opsAlert"} role="status">
+        <p className={state.stepUpHref === null ? "notice noticeWarn" : "notice noticeCrit"} role="status">
           {state.message}{" "}
-          {state.stepUpHref !== null && <Link className="opsPrimary" href={state.stepUpHref}>Verificar identidad</Link>}
+          {state.stepUpHref !== null && <Link className="btn btnPrimary" href={state.stepUpHref}>Verificar identidad</Link>}
         </p>
       )}
     </>
@@ -132,10 +132,10 @@ function Filters({ controller, disabled }: { readonly controller: SettlementsCon
         </select>
       </label>
       <label>ID del repartidor (opcional)<input name="payee_id" aria-describedby="settlement-filter-payee-help" /></label>
-      <p id="settlement-filter-payee-help" className="opsHelp">Pega el ID completo del repartidor; déjalo vacío para ver todos.</p>
+      <p id="settlement-filter-payee-help" className="fieldHint">Pega el ID completo del repartidor; déjalo vacío para ver todos.</p>
       <label>Periodo desde<input name="period_from" type="date" /></label>
       <label>Periodo hasta<input name="period_to" type="date" /></label>
-      <button className="opsSecondary" type="submit" disabled={disabled}>Aplicar filtros</button>
+      <button className="btn btnSecondary" type="submit" disabled={disabled}>Aplicar filtros</button>
     </form>
   );
 }
@@ -154,10 +154,10 @@ function CreateForm({ controller, disabled }: { readonly controller: Settlements
       <h2>Calcular liquidación</h2>
       <p>Solo periodos ya cerrados (días operativos completos, hora de Mazatlán).</p>
       <label>ID del repartidor<input name="driver_id" required aria-describedby="settlement-create-driver-help" /></label>
-      <p id="settlement-create-driver-help" className="opsHelp">Pega el ID completo del repartidor.</p>
+      <p id="settlement-create-driver-help" className="fieldHint">Pega el ID completo del repartidor.</p>
       <label>Periodo desde<input name="period_from" type="date" required /></label>
       <label>Periodo hasta<input name="period_to" type="date" required /></label>
-      <button className="opsPrimary" type="submit" disabled={disabled}>Calcular</button>
+      <button className="btn btnPrimary" type="submit" disabled={disabled}>Calcular</button>
     </form>
   );
 }
@@ -205,28 +205,28 @@ function Detail({
         </tbody>
       </table>
 
-      {mfaHint !== null && <p className="opsTimezone">{mfaHint}</p>}
+      {mfaHint !== null && <p className="pageNote">{mfaHint}</p>}
 
       <div className="opsFormActions">
         {actions.includes("approve") && (
-          <button type="button" className="opsPrimary" disabled={locked}
+          <button type="button" className="btn btnPrimary" disabled={locked}
             onClick={() => confirm({
               ...settlementApprovalConfirmation(settlement),
               onConfirm: () => void controller.approve(),
             })}>Aprobar</button>
         )}
         {actions.includes("pay") && (
-          <button type="button" className="opsPrimary" disabled={locked}
+          <button type="button" className="btn btnPrimary" disabled={locked}
             onClick={() => confirm({
               ...settlementPaymentConfirmation(settlement),
               onConfirm: () => void controller.markPaid(),
             })}>Marcar pagada</button>
         )}
         {actions.includes("export") && (
-          <button type="button" className="opsSecondary" disabled={locked}
+          <button type="button" className="btn btnSecondary" disabled={locked}
             onClick={() => void controller.exportCsv()}>Exportar CSV</button>
         )}
-        <button type="button" className="opsSecondary" onClick={() => controller.clearSelection()}>Cerrar</button>
+        <button type="button" className="btn btnSecondary" onClick={() => controller.clearSelection()}>Cerrar</button>
       </div>
 
       {actions.includes("adjust") && (
@@ -240,7 +240,7 @@ function Detail({
             <input name="amount" inputMode="decimal" pattern="-?[0-9]+(\.[0-9]{1,2})?" required />
           </label>
           <label>Motivo<textarea name="reason" maxLength={500} required /></label>
-          <button className="opsPrimary" type="submit" disabled={locked}>Agregar ajuste</button>
+          <button className="btn btnPrimary" type="submit" disabled={locked}>Agregar ajuste</button>
         </form>
       )}
 
@@ -252,7 +252,7 @@ function Detail({
           <h3>Anular liquidación</h3>
           <p>Las líneas y el total se conservan; anular solo libera sus fuentes para otra liquidación.</p>
           <label>Motivo<textarea name="reason" maxLength={500} required /></label>
-          <button className="opsSecondary" type="submit" disabled={locked}>Anular</button>
+          <button className="btn btnSecondary" type="submit" disabled={locked}>Anular</button>
         </form>
       )}
     </>

@@ -18,17 +18,17 @@ export function ManualRoutesShell() {
   const dragged = useRef<string | null>(null);
   const { confirm, dialog } = useConfirmDialog();
   return (
-    <main className="opsShell opsRoutes" aria-busy={state.loading || state.mutating}>
+    <main className="opsShell" aria-busy={state.loading || state.mutating}>
       <header className="opsHeader">
         <div><p className="opsEyebrow">Despacho</p><h1>Rutas manuales</h1><p>Planeación de rutas para tu flota propia.</p></div>
         <div className="opsHeaderStatus"><span>{state.connected ? "Tiempo real conectado" : "Actualización manual"}</span>
-          <button className="opsPrimary" type="button" onClick={() => void state.refresh()} disabled={state.loading}>Actualizar</button>
-          <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link></div>
+          <button className="btn btnPrimary" type="button" onClick={() => void state.refresh()} disabled={state.loading}>Actualizar</button>
+          <Link className="btn btnPrimary" href="/ops/dashboard">Volver a Operaciones</Link></div>
       </header>
 
-      {state.message && <p className="opsAlert" role="status">{state.message}</p>}
+      {state.message && <p className="notice noticeCrit" role="status">{state.message}</p>}
       <section className="opsRouteLayout">
-        <aside className="opsRoutePanel">
+        <aside className="panel opsRoutePanel">
           <h2>Crear ruta</h2>
           <form onSubmit={(event) => {
             event.preventDefault(); const data = new FormData(event.currentTarget);
@@ -39,7 +39,7 @@ export function ManualRoutesShell() {
             <Field name="city" label="ID de la ciudad" help="Pega el ID completo de la ciudad." required />
             <Field name="serviceArea" label="ID del área de servicio (opcional)" help="Déjalo vacío si la ruta cubre toda la ciudad." />
             <label>Fecha<input name="scheduledFor" type="date" /></label>
-            <button className="opsPrimary" type="submit" disabled={state.mutating}>Crear ruta (borrador)</button>
+            <button className="btn btnPrimary" type="submit" disabled={state.mutating}>Crear ruta (borrador)</button>
           </form>
           <h2>Rutas</h2>
           <ul className="opsRouteList">{state.routes.map((route) => <li key={route.id}>
@@ -49,13 +49,13 @@ export function ManualRoutesShell() {
             </button></li>)}</ul>
         </aside>
 
-        <section className="opsRouteDetail">
+        <section className="panel opsRouteDetail">
           {state.selected === null ? <p>Selecciona una ruta para ver sus paradas.</p> : <>
             <header><h2>Ruta {short(state.selected.id)}</h2><p>Repartidor {short(state.selected.driver_id)} · {routeStatusLabels[state.selected.status]} · versión {state.selected.version}</p>
               <strong>{money(state.selected.assignment_cost_cents_total)}</strong></header>
             <form className="opsRouteAdd" onSubmit={(event) => { event.preventDefault(); const value = String(new FormData(event.currentTarget).get("order")); void state.addStop(value); }}>
               <Field name="order" label="ID de la orden" help="La orden debe estar asignada a tu flota propia." required defaultValue={queryOrder()} />
-              <button className="opsPrimary" type="submit" disabled={state.mutating || state.selected.status !== "DRAFT"}>Agregar entrega</button>
+              <button className="btn btnPrimary" type="submit" disabled={state.mutating || state.selected.status !== "DRAFT"}>Agregar entrega</button>
             </form>
             <ol className="opsRouteStops">{state.selected.stops.map((stop, index, stops) =>
               <li key={stop.id} draggable={state.selected?.status === "DRAFT"}
@@ -64,11 +64,11 @@ export function ManualRoutesShell() {
                 onDrop={() => { const source = dragged.current; dragged.current = null; if (source && source !== stop.id) void state.reorder(move(stops, source, stop.id)); }}>
                 <span className="opsDrag" aria-hidden="true">::</span><div><strong>{stop.sequence}. Orden {short(stop.order_id)}</strong><small>{routeStopTypeLabels[stop.stop_type]} · {routeStopStatusLabels[stop.status]}</small></div>
                 <div className="opsStopActions">
-                  <button type="button" aria-label={`Mover orden ${short(stop.order_id)} arriba`} disabled={index === 0 || state.mutating}
+                  <button type="button" className="btn btnSecondary" aria-label={`Mover orden ${short(stop.order_id)} arriba`} disabled={index === 0 || state.mutating}
                     onClick={() => void state.reorder(swap(stops, index, index - 1))}>Subir</button>
-                  <button type="button" aria-label={`Mover orden ${short(stop.order_id)} abajo`} disabled={index === stops.length - 1 || state.mutating}
+                  <button type="button" className="btn btnSecondary" aria-label={`Mover orden ${short(stop.order_id)} abajo`} disabled={index === stops.length - 1 || state.mutating}
                     onClick={() => void state.reorder(swap(stops, index, index + 1))}>Bajar</button>
-                  <button type="button" aria-label={`Retirar orden ${short(stop.order_id)} de la ruta`} disabled={state.mutating}
+                  <button type="button" className="btn btnSecondary" aria-label={`Retirar orden ${short(stop.order_id)} de la ruta`} disabled={state.mutating}
                     onClick={() => confirm({
                       ...removeRouteStopConfirmation(stop),
                       onConfirm: () => void state.removeStop(stop.id),
@@ -88,7 +88,7 @@ function Field({ name, label, help, required = false, defaultValue }: { readonly
   const helpId = help === undefined ? undefined : `route-field-${name}-help`;
   return <>
     <label>{label}<input name={name} required={required} defaultValue={defaultValue} autoComplete="off" aria-describedby={helpId} /></label>
-    {help !== undefined && <p id={helpId} className="opsHelp">{help}</p>}
+    {help !== undefined && <p id={helpId} className="fieldHint">{help}</p>}
   </>;
 }
 function nullable(value: string): string | null { return value.trim() || null; }

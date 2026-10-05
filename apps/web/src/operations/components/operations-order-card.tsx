@@ -69,12 +69,12 @@ export function OperationsOrderCard({
         />
       </dl>
       {order.unassigned_alert && (
-        <p className="opsAlert" role="status">
+        <p className="notice noticeCrit" role="status">
           Requiere asignación
         </p>
       )}
       {order.cost_warning !== null && (
-        <p className="opsWarning" title="Revisión operativa de precio requerida.">
+        <p className="notice noticeWarn" title="Revisión operativa de precio requerida.">
           Revisar precio
         </p>
       )}
@@ -127,18 +127,18 @@ export function OperationsOrderCard({
             <option value="BICYCLE">Bicicleta</option>
             <option value="WALKER">A pie</option>
           </select></label>
-          <button className="opsPrimary" type="submit" disabled={publishing}>
+          <button className="btn btnPrimary" type="submit" disabled={publishing}>
             {publishing ? "Publicando..." : "Publicar oferta"}
           </button>
           <span role="status" aria-live="polite">{message}</span>
         </form>
       ) : null}
-      <Link className="opsPrimary" href={operationsOrderHref(order.order_id)}>
+      <Link className="btn btnPrimary" href={operationsOrderHref(order.order_id)}>
         Abrir orden
       </Link>
       {order.assignment?.assignment_type === "OWN" &&
       ["ACCEPTED", "ACTIVE"].includes(order.assignment.status) ? (
-        <Link className="opsPrimary" href={`/ops/routes?orderId=${encodeURIComponent(order.order_id)}`}>
+        <Link className="btn btnPrimary" href={`/ops/routes?orderId=${encodeURIComponent(order.order_id)}`}>
           Agregar a ruta
         </Link>
       ) : null}

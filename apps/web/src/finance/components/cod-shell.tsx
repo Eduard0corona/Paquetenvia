@@ -31,17 +31,17 @@ export function CodShell() {
           <p>Registra y concilia el efectivo cobrado al entregar cada orden.</p>
         </div>
         <div className="opsHeaderStatus">
-          <button className="opsPrimary" type="button"
+          <button className="btn btnPrimary" type="button"
             disabled={state.phase !== "ready" || state.financials === null || state.loadingOrder !== null}
             onClick={() => void controller.refresh()}>Actualizar</button>
-          <Link className="opsSecondary" href="/finance/settlements">Liquidaciones</Link>
-          <Link className="opsSecondary" href="/ops/dashboard">Volver a Operaciones</Link>
+          <Link className="btn btnSecondary" href="/finance/settlements">Liquidaciones</Link>
+          <Link className="btn btnSecondary" href="/ops/dashboard">Volver a Operaciones</Link>
         </div>
       </header>
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no consulta cobros contra entrega." />
       <TenantFeedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
-      {state.mfaHint !== null && <p className="opsTimezone">{state.mfaHint}</p>}
+      {state.mfaHint !== null && <p className="pageNote">{state.mfaHint}</p>}
 
       {state.phase === "ready" && (
         <section className="opsFormLayout">
@@ -50,7 +50,7 @@ export function CodShell() {
             <LookupForm key={`lookup-${state.formKey}`} controller={controller} disabled={state.loadingOrder !== null} />
           </div>
           <section>
-            {state.loadingOrder !== null && <p className="opsLive" aria-live="polite">Cargando la orden.</p>}
+            {state.loadingOrder !== null && <p className="live" aria-live="polite">Cargando la orden.</p>}
             {state.financials !== null && state.loadingOrder === null && (
               <Financials key={`${state.financials.order_id}-${state.formKey}`} financials={state.financials}
                 state={state} controller={controller} />
@@ -75,8 +75,8 @@ function LookupForm({ controller, disabled }: { readonly controller: CodControll
       <fieldset>
         <legend>Consultar orden</legend>
         <label>ID de la orden<input name="order_id" required aria-describedby="cod-lookup-help" /></label>
-        <p id="cod-lookup-help" className="opsHelp">Pega el ID completo de la orden; lo encuentras al abrirla desde Operaciones.</p>
-        <button className="opsSecondary" type="submit" disabled={disabled}>Consultar</button>
+        <p id="cod-lookup-help" className="fieldHint">Pega el ID completo de la orden; lo encuentras al abrirla desde Operaciones.</p>
+        <button className="btn btnSecondary" type="submit" disabled={disabled}>Consultar</button>
       </fieldset>
     </form>
   );
@@ -96,10 +96,10 @@ function PendingList({
   return (
     <section aria-busy={state.pendingLoading}>
       <h2>Cobros pendientes de conciliar</h2>
-      <button className="opsSecondary" type="button" disabled={state.pendingLoading}
+      <button className="btn btnSecondary" type="button" disabled={state.pendingLoading}
         onClick={() => void controller.loadPending()}>Actualizar lista</button>
       {state.pending === null ? (
-        state.pendingLoading ? <p className="opsLive" aria-live="polite">Cargando cobros pendientes.</p> : null
+        state.pendingLoading ? <p className="live" aria-live="polite">Cargando cobros pendientes.</p> : null
       ) : state.pending.length === 0 ? (
         <p>No hay cobros registrados pendientes de conciliar.</p>
       ) : (
@@ -111,7 +111,7 @@ function PendingList({
         </ul>
       )}
       {state.pendingCursor !== null && (
-        <button className="opsSecondary" type="button" disabled={state.pendingLoading}
+        <button className="btn btnSecondary" type="button" disabled={state.pendingLoading}
           onClick={() => void controller.loadPending(true)}>Cargar más</button>
       )}
     </section>
@@ -135,11 +135,11 @@ function PendingRow({
   return (
     <li>
       <span>{order.public_id} · {status}</span>{" "}
-      <button className="opsSecondary" type="button" disabled={busy} onClick={() => void controller.load(order.id)}>
+      <button className="btn btnSecondary" type="button" disabled={busy} onClick={() => void controller.load(order.id)}>
         Ver cobro
       </button>
       {canReconcile && (
-        <button className="opsPrimary" type="button" disabled={busy}
+        <button className="btn btnPrimary" type="button" disabled={busy}
           onClick={() => confirm({
             ...pendingCodReconciliationConfirmation(order),
             onConfirm: () => void controller.reconcileFromList(order.id),
@@ -166,7 +166,7 @@ function Financials({
         Estado: {orderStatusLabels[financials.order_status]} ·{" "}
         <Link href={operationsOrderHref(financials.order_id)}>Abrir orden</Link>
       </p>
-      <dl className="opsMoneyList">
+      <dl className="descList descListMoney">
         <div><dt>Ingreso</dt><dd>{formatMxnCentsWithCurrency(financials.revenue_cents)}</dd></div>
         {financials.cost_by_modality.map((bucket) => (
           <div key={bucket.modality}>
@@ -186,7 +186,7 @@ function Financials({
 
       <h3>Cobro contra entrega</h3>
       {cod.expected_cents === 0 && cod.status === null ? <p>La orden no tiene cobro contra entrega.</p> : (
-        <dl className="opsMoneyList">
+        <dl className="descList descListMoney">
           <div><dt>Esperado</dt><dd>{formatMxnCentsWithCurrency(cod.expected_cents)}</dd></div>
           <div><dt>Estado</dt><dd>{cod.status === null ? "Sin cobro registrado" : codStatusLabels[cod.status]}</dd></div>
           {cod.amount_cents !== null && (
@@ -210,7 +210,7 @@ function Financials({
             <label>Referencia (máximo 200 caracteres, sin espacios al inicio o al final)
               <input name="reference" maxLength={200} required />
             </label>
-            <button className="opsPrimary" type="submit" disabled={state.busy}>Registrar cobro</button>
+            <button className="btn btnPrimary" type="submit" disabled={state.busy}>Registrar cobro</button>
           </fieldset>
         </form>
       )}
@@ -232,14 +232,14 @@ function Transaction({
   return (
     <section>
       <h3>Registro de cobro {transaction.id}</h3>
-      <dl className="opsMoneyList">
+      <dl className="descList descListMoney">
         <div><dt>Monto</dt><dd>{formatMxnCentsWithCurrency(transaction.amount_cents)}</dd></div>
         <div><dt>Estado</dt><dd>{codStatusLabels[transaction.status]}</dd></div>
         <div><dt>Registrado</dt><dd>{transaction.recorded_at === null ? "—" : formatMazatlanTime(transaction.recorded_at)}</dd></div>
         <div><dt>Conciliado</dt><dd>{transaction.reconciled_at === null ? "—" : formatMazatlanTime(transaction.reconciled_at)}</dd></div>
       </dl>
       {transaction.status === "RECORDED" && state.canReconcile && (
-        <button className="opsPrimary" type="button" disabled={state.busy} onClick={() => confirm({
+        <button className="btn btnPrimary" type="button" disabled={state.busy} onClick={() => confirm({
           ...codReconciliationConfirmation(transaction),
           onConfirm: () => void controller.reconcile(),
         })}>

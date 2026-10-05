@@ -21,10 +21,10 @@ export function OperationsOrderDetailShell({
   const state = useOperationsOrderDetail(orderId);
   if (state.notFound) {
     return (
-      <main className="opsShell opsDetail">
+      <main className="opsShell">
         <h1>Orden no disponible</h1>
         <p>No es posible mostrar esta orden.</p>
-        <Link className="opsPrimary" href="/ops/dashboard">
+        <Link className="btn btnPrimary" href="/ops/dashboard">
           Volver al tablero
         </Link>
       </main>
@@ -32,7 +32,7 @@ export function OperationsOrderDetailShell({
   }
   if (state.accessUnavailable) {
     return (
-      <main className="opsShell opsDetail">
+      <main className="opsShell">
         <h1>Acceso no disponible</h1>
         <p>No es posible mostrar información de operaciones.</p>
       </main>
@@ -40,7 +40,7 @@ export function OperationsOrderDetailShell({
   }
   if (state.order === null || state.projection === null) {
     return (
-      <main className="opsShell opsDetail" aria-busy={state.loading}>
+      <main className="opsShell" aria-busy={state.loading}>
         <h1>Detalle de orden</h1>
         <p>{state.error ?? "Cargando información operativa…"}</p>
       </main>
@@ -49,7 +49,7 @@ export function OperationsOrderDetailShell({
 
   const { order, projection } = state;
   return (
-    <main className="opsShell opsDetail" aria-busy={state.loading}>
+    <main className="opsShell" aria-busy={state.loading}>
       <header className="opsHeader">
         <div>
           <p className="opsEyebrow">Orden</p>
@@ -64,15 +64,15 @@ export function OperationsOrderDetailShell({
               ? "Pendiente"
               : formatMazatlanTime(state.lastUpdated)}
           </span>
-          <button type="button" className="opsPrimary" onClick={state.refresh}>
+          <button type="button" className="btn btnPrimary" onClick={state.refresh}>
             Actualizar
           </button>
-          <Link className="opsSecondary" href="/ops/dashboard">
+          <Link className="btn btnSecondary" href="/ops/dashboard">
             Volver al tablero
           </Link>
         </div>
       </header>
-      <p className="opsTimezone">Horarios mostrados en hora de Mazatlán.</p>
+      <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
 
       <section className="opsDetailGrid" aria-label="Resumen de la orden">
         <Detail label="Dueño" value={projection.owner.display_name} />
@@ -118,7 +118,7 @@ export function OperationsOrderDetailShell({
       </section>
 
       {projection.unassigned_alert && (
-        <p className="opsAlert" role="status">
+        <p className="notice noticeCrit" role="status">
           Requiere asignación
         </p>
       )}
@@ -149,10 +149,10 @@ export function OperationsOrderDetailShell({
           tablero de Operaciones. Los intentos fallidos se registran en Incidencias.
         </p>
         <div className="opsFormActions">
-          <Link className="opsSecondary" href="/ops/dashboard">
+          <Link className="btn btnSecondary" href="/ops/dashboard">
             Publicar oferta externa desde el tablero
           </Link>
-          <Link className="opsSecondary" href="/ops/incidents">
+          <Link className="btn btnSecondary" href="/ops/incidents">
             Abrir incidencia
           </Link>
         </div>

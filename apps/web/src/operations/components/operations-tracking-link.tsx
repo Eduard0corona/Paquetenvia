@@ -103,7 +103,7 @@ export function OperationsTrackingLink({
 
   const busy = state.kind === "busy";
   return (
-    <section aria-labelledby="tracking-link-title" className="opsTrackingLink">
+    <section aria-labelledby="tracking-link-title" className="panel opsTrackingLink">
       <h2 id="tracking-link-title">Enlace de seguimiento</h2>
       <p>
         La orden tiene su enlace público desde que se creó; siempre es el mismo.
@@ -114,7 +114,7 @@ export function OperationsTrackingLink({
       <div className="opsHeaderStatus">
         <button
           type="button"
-          className="opsPrimary"
+          className="btn btnPrimary"
           disabled={busy}
           onClick={() => void controllerRef.current?.show()}
         >
@@ -141,7 +141,7 @@ export function OperationsTrackingLink({
           <div className="opsHeaderStatus">
             <button
               type="button"
-              className="opsPrimary"
+              className="btn btnPrimary"
               onClick={() =>
                 void controllerRef.current?.copy(
                   typeof navigator === "undefined"
@@ -154,7 +154,7 @@ export function OperationsTrackingLink({
             </button>
             <button
               type="button"
-              className="opsSecondary"
+              className="btn btnSecondary"
               onClick={() => controllerRef.current?.hide()}
             >
               Ocultar
@@ -164,13 +164,13 @@ export function OperationsTrackingLink({
       )}
       {state.kind === "idle" && state.message !== null && (
         <p
-          className={state.stepUpHref === null ? undefined : "opsAlert"}
+          className={state.stepUpHref === null ? undefined : "notice noticeCrit"}
           role="status"
           aria-live="polite"
         >
           {state.message}{" "}
           {state.stepUpHref !== null && (
-            <Link className="opsPrimary" href={state.stepUpHref}>
+            <Link className="btn btnPrimary" href={state.stepUpHref}>
               Verificar identidad
             </Link>
           )}

@@ -35,13 +35,13 @@ export function IncidentsShell() {
           <p>Registra los intentos de entrega fallidos y da seguimiento a su resolución.</p>
         </div>
         <div className="opsHeaderStatus">
-          <Link className="opsPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
+          <Link className="btn btnPrimary" href="/ops/dashboard">Volver a Operaciones</Link>
         </div>
       </header>
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no gestiona incidencias." />
       <TenantFeedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
-      {state.mfaHint !== null && <p className="opsTimezone">{state.mfaHint}</p>}
+      {state.mfaHint !== null && <p className="pageNote">{state.mfaHint}</p>}
 
       {state.phase === "ready" && (
         <>
@@ -84,7 +84,7 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
           <input name="order_id" required value={orderId} aria-describedby="incident-order-help"
             onChange={(event) => setOrderId(event.target.value)} />
         </label>
-        <p id="incident-order-help" className="opsHelp">Pega el ID completo de la orden; lo encuentras al abrirla desde Operaciones.</p>
+        <p id="incident-order-help" className="fieldHint">Pega el ID completo de la orden; lo encuentras al abrirla desde Operaciones.</p>
         <label>Tipo<input name="type" required defaultValue="FAILED_ATTEMPT" pattern="[A-Z_]{1,64}" /></label>
         <label>Severidad
           <select name="severity" required defaultValue="">
@@ -110,6 +110,7 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
             <legend>Evidencias de la orden (elige de 1 a 10)</legend>
             <button
               type="button"
+              className="btn btnSecondary"
               disabled={state.listing || typedOrder.length === 0}
               onClick={() => void controller.loadProofs(typedOrder)}
             >
@@ -132,7 +133,7 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
               </ul>
             )}
             {proofsForOrder && state.proofsCursor !== null && (
-              <button type="button" disabled={state.listing} onClick={() => void controller.loadMoreProofs()}>
+              <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.loadMoreProofs()}>
                 Cargar más evidencias
               </button>
             )}
@@ -145,7 +146,7 @@ function OpenForm({ state, controller }: { readonly state: IncidentsState; reado
         <label>Descripción (no incluyas datos personales innecesarios)
           <textarea name="description" rows={4} maxLength={2000} required />
         </label>
-        <button className="opsPrimary" type="submit" disabled={state.busy}>Abrir incidencia</button>
+        <button className="btn btnPrimary" type="submit" disabled={state.busy}>Abrir incidencia</button>
       </fieldset>
     </form>
   );
@@ -196,7 +197,7 @@ function ResolveForm({ state, controller }: { readonly state: IncidentsState; re
         <label>Motivo (máximo 500 caracteres; queda en auditoría)
           <textarea name="reason" rows={3} maxLength={500} required />
         </label>
-        <button className="opsPrimary" type="submit" disabled={state.busy || pending.length === 0}>
+        <button className="btn btnPrimary" type="submit" disabled={state.busy || pending.length === 0}>
           Registrar resolución
         </button>
       </fieldset>
@@ -210,8 +211,8 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
     <section>
       <h2>Incidencias de la organización</h2>
       {state.canList && (
-        <div className="opsFormLayout">
-          <label>Estado
+        <div className="opsFormActions">
+          <label className="opsInlineField">Estado
             <select
               value={state.statusFilter ?? ""}
               disabled={state.listing}
@@ -223,7 +224,7 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
               {incidentStatuses.map((value) => <option key={value} value={value}>{incidentStatusLabels[value]}</option>)}
             </select>
           </label>
-          <button type="button" disabled={state.listing} onClick={() => void controller.refresh()}>Actualizar</button>
+          <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.refresh()}>Actualizar</button>
         </div>
       )}
       {incidents.length === 0 ? <p>Sin incidencias para mostrar.</p> : (
@@ -254,7 +255,7 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
         </table>
       )}
       {state.canList && state.nextCursor !== null && (
-        <button type="button" disabled={state.listing} onClick={() => void controller.loadMore()}>Cargar más</button>
+        <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.loadMore()}>Cargar más</button>
       )}
     </section>
   );

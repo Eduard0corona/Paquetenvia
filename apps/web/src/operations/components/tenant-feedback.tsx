@@ -13,14 +13,14 @@ export function TenantFeedback({
   return (
     <>
       {errors.length > 0 && (
-        <ul className="opsAlert" role="alert">
+        <ul className="notice noticeCrit" role="alert">
           {errors.map((error) => <li key={error}>{error}</li>)}
         </ul>
       )}
       {message !== null && (
-        <p className={stepUpHref === null ? "opsWarning" : "opsAlert"} role="status">
+        <p className={stepUpHref === null ? "notice noticeWarn" : "notice noticeCrit"} role="status">
           {message}{" "}
-          {stepUpHref !== null && <Link className="opsPrimary" href={stepUpHref}>Verificar identidad</Link>}
+          {stepUpHref !== null && <Link className="btn btnPrimary" href={stepUpHref}>Verificar identidad</Link>}
         </p>
       )}
     </>
@@ -38,18 +38,18 @@ export function ScreenGate({
   return (
     <>
       {phase === "no_session" && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Sin sesión</h2>
           <p>Inicia sesión y selecciona una organización.</p>
         </section>
       )}
       {phase === "access_unavailable" && (
-        <section className="opsMessage" role="alert">
+        <section className="panel" role="alert">
           <h2>Acceso no disponible</h2>
           <p>{accessMessage}</p>
         </section>
       )}
-      {phase === "loading" && <p className="opsLive" aria-live="polite">Cargando permisos.</p>}
+      {phase === "loading" && <p className="live" aria-live="polite">Cargando permisos.</p>}
     </>
   );
 }
