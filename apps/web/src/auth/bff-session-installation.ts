@@ -5,6 +5,7 @@ import { driverSessionChangedEvent } from "../driver/session/driver-session";
 import type { OperationsSession } from "../operations/session/operations-session";
 import { operationsSessionChangedEvent } from "../operations/session/operations-session";
 import { fetchBffSession, type BffSessionState } from "./bff-session";
+import type { SessionAccount } from "./session-account";
 
 export type BffSessionInstallation =
   | {
@@ -30,6 +31,7 @@ export function landingPathForRole(role: string): string {
 export interface SessionHost {
   __paquetenviaOperationsSession?: OperationsSession;
   __paquetenviaDriverSession?: DriverSession;
+  __paquetenviaAccount?: SessionAccount;
   dispatchEvent(event: Event): boolean;
 }
 
@@ -57,16 +59,29 @@ export function selectSessionInstallation(
   };
 }
 
+export interface InstallOptions {
+  /** Shown by the app shell and the driver account area; kept in memory only. */
+  readonly account?: SessionAccount;
+  /**
+   * Switches the active organization (app shell selector). It re-runs the bootstrap with
+   * the chosen organization, so every screen clears its tenant state on the
+   * session-changed events exactly as on a new sign-in.
+   */
+  readonly onOrganizationChange?: (organizationId: string) => Promise<void>;
+}
+
 export function installBffSession(
   host: SessionHost,
   installation: BffSessionInstallation,
   csrfToken: string,
   sessionNamespace: string,
+  options: InstallOptions = {},
 ): void {
   clearInstalledSessions(host);
   if (installation.kind === "none") {
     return;
   }
+  host.__paquetenviaAccount = options.account ?? { displayName: null };
   const credentials = {
     credentialMode: "cookie" as const,
     getCsrfToken: () => csrfToken,
@@ -84,6 +99,9 @@ export function installBffSession(
     organizationId: installation.organizationId,
     sessionNamespace,
     ...credentials,
+    ...(options.onOrganizationChange === undefined
+      ? {}
+      : { requestOrganizationChange: options.onOrganizationChange }),
   };
   host.dispatchEvent(new Event(operationsSessionChangedEvent));
 }
@@ -94,6 +112,7 @@ export function clearInstalledSessions(host: SessionHost): void {
     host.__paquetenviaDriverSession !== undefined;
   delete host.__paquetenviaOperationsSession;
   delete host.__paquetenviaDriverSession;
+  delete host.__paquetenviaAccount;
   if (hadSession) {
     host.dispatchEvent(new Event(operationsSessionChangedEvent));
     host.dispatchEvent(new Event(driverSessionChangedEvent));
@@ -140,6 +159,11 @@ export async function bootstrapBffSession(
     contexts === null
       ? ({ kind: "none" } as const)
       : selectSessionInstallation(contexts, preferredOrganizationId);
-  installBffSession(host, installation, session.csrfToken, session.sessionNamespace);
+  installBffSession(host, installation, session.csrfToken, session.sessionNamespace, {
+    account: { displayName: session.user.name },
+    onOrganizationChange: async (organizationId) => {
+      await bootstrapBffSession(host, fetcher, organizationId);
+    },
+  });
   return { session, installation };
 }
