@@ -1511,3 +1511,78 @@ ul.notice {
     display: none;
   }
 }
+
+/* ---------- Order detail: assign an OWN driver (UI-PHASE2-DRIVER-PICKER-2026-10-05) ---------- */
+
+.opsDriverAssignment {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.opsDriverPicker {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.opsDriverPicker fieldset {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.opsDriverPicker legend {
+  padding: 0 var(--space-1);
+  font-weight: 700;
+}
+
+.opsDriverChoices {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.opsDriverChoices li {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+.opsDriverChoices label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.opsDriverChoices input[type="radio"] {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.opsDriverIneligible label {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.opsDriverPicker input[type="text"] {
+  min-width: 0;
+  min-height: var(--target);
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  padding: var(--space-2) var(--space-3);
+}

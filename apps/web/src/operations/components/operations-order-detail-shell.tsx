@@ -13,6 +13,7 @@ import { DateTime } from "../../components/ui/date-time";
 import { DescriptionList } from "../../components/ui/description-list";
 import { PageHeader } from "../../components/ui/page-header";
 import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
+import { OperationsDriverAssignment } from "./operations-driver-assignment";
 import { OperationsTrackingLink } from "./operations-tracking-link";
 
 export function OperationsOrderDetailShell({
@@ -114,6 +115,13 @@ export function OperationsOrderDetailShell({
         </p>
       )}
 
+      <OperationsDriverAssignment
+        orderId={order.id}
+        publicId={order.public_id}
+        assignable={admitsAssignment(order.status, projection)}
+        onOrderChanged={state.refresh}
+      />
+
       <section aria-labelledby="timeline-title">
         <h2 id="timeline-title">Historial</h2>
         <ol className="opsTimeline">
@@ -153,4 +161,9 @@ export function OperationsOrderDetailShell({
 function assignmentText(order: OperationsDashboardOrder): string {
   if (order.assignment === null) return assignmentTypeLabel(null);
   return `${assignmentTypeLabel(order.assignment.assignment_type)} · ${order.assignment.driver_reference}`;
+}
+
+/** assignDriver accepts only READY_FOR_PICKUP or RESCHEDULED orders without an active assignment. */
+function admitsAssignment(status: string, order: OperationsDashboardOrder): boolean {
+  return (status === "READY_FOR_PICKUP" || status === "RESCHEDULED") && order.assignment === null;
 }

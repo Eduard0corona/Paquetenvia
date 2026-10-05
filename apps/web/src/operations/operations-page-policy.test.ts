@@ -48,6 +48,36 @@ describe("operations page privacy policy", () => {
     expect(source).not.toContain("type=\"button\" disabled");
   });
 
+  it("assigns an OWN driver from a list on the order detail, only while the order admits it (UI-PHASE2-DRIVER-PICKER-2026-10-05)", () => {
+    const detail = readFileSync("src/operations/components/operations-order-detail-shell.tsx", "utf8");
+    expect(detail).toContain("<OperationsDriverAssignment");
+    expect(detail).toContain("assignable={admitsAssignment(order.status, projection)}");
+    expect(detail).toContain("onOrderChanged={state.refresh}");
+    expect(detail).toContain('(status === "READY_FOR_PICKUP" || status === "RESCHEDULED") && order.assignment === null');
+    // The fallback stays in "Otras acciones" and is not duplicated by the picker.
+    expect(detail).toContain("Publicar oferta externa desde el tablero");
+
+    const picker = readFileSync("src/operations/components/operations-driver-assignment.tsx", "utf8");
+    expect(picker).toContain('canPerform(role, "listAssignableDrivers")');
+    expect(picker).toContain('canPerform(role, "assignDriver")');
+    expect(picker).toContain('type="radio"');
+    expect(picker).toContain("disabled={!driver.eligible}");
+    expect(picker).toContain("parseMxnToCents(cost)");
+    expect(picker).toContain("driverAssignmentConfirmation(");
+    expect(picker).toContain("{driver.driver_reference}");
+    expect(picker).not.toMatch(/>\s*\{driver\.driver_id\}/);
+    expect(picker).not.toContain('href="/ops/dashboard"');
+    expect(picker).not.toMatch(/ID del repartidor|Pega el ID|parseFloat|Number\(cost/);
+    expect(picker).not.toMatch(/<button[^>]*\sdisabled[=\s>]/);
+
+    const sources = [
+      picker,
+      readFileSync("src/operations/state/driver-assignment-controller.ts", "utf8"),
+      readFileSync("src/operations/api/assignment-api.ts", "utf8"),
+    ].join("\n");
+    expect(sources).not.toMatch(/localStorage|sessionStorage|indexedDB|caches\.|console\./);
+  });
+
   it("controls the creation-date inputs from the filters so clearing them empties the inputs", () => {
     const source = readFileSync("src/operations/components/operations-filters.tsx", "utf8");
     expect(source).toContain("value={utcToDateTimeLocal(filters.createdFrom)}");

@@ -95,6 +95,21 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     }
   });
 
+  it("mirrors AI-05 assignable_driver_operations with the assignDriver roles (UI-PHASE2-DRIVER-PICKER-2026-10-05)", () => {
+    const published = publishedSection("assignable_driver_operations", "  low_price_authorization_decision:");
+    expect(published).toEqual({ listAssignableDrivers: ["DISPATCHER", "PLATFORM_ADMIN"] });
+    expect(screenOperationsMatrix.listAssignableDrivers).toEqual(published.listAssignableDrivers);
+    expect(screenOperationsMatrix.assignDriver).toEqual(screenOperationsMatrix.listAssignableDrivers);
+    for (const operation of ["assignDriver", "listAssignableDrivers"] as const) {
+      expect(canPerform("DISPATCHER", operation), operation).toBe(true);
+      expect(canPerform("PLATFORM_ADMIN", operation), operation).toBe(true);
+      for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", null])
+        expect(canPerform(role, operation), `${role} ${operation}`).toBe(false);
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+      expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
+    }
+  });
+
   it("each mirrored operation exists in AI-05", () => {
     for (const operation of [
       ...Object.keys(capabilityMatrix),

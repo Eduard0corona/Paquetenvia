@@ -1,5 +1,20 @@
 # Changelog
 
+## Asignar repartidor desde el detalle de la orden (UI-PHASE2-DRIVER-PICKER-2026-10-05) — 2026-10-05
+
+- Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
+  `decision-log.md`.
+- AI-05: `listAssignableDrivers` (`GET /orders/{orderId}/assignable-drivers`, esquemas `AssignableDriver` y
+  `AssignableDriverPage`). Lista por cursor los repartidores OWN de la organización activa (no INACTIVE) con
+  `driver_id`, la referencia `DRV-xxxxxxxx` que ya muestra el tablero (no hay nombre de repartidor en AI-06; no se lee
+  ni devuelve nombre, correo, teléfono, documentos ni ubicación), vehículo, si `assignDriver` lo aceptaría ahora para
+  esa orden con la misma política DSP-001 y los códigos estables cuando no, y sus asignaciones ACCEPTED/ACTIVE.
+  Mismos roles que `assignDriver` (`x-capability-matrix.assignable_driver_operations`); 404 uniforme; 409 CONFLICT si la
+  orden no admite asignación; solo lectura.
+- AI-07 `/ops/orders/:id`: panel "Asignar repartidor" (lista, costo en MXN a centavos enteros, confirmación, misma
+  Idempotency-Key en reintentos, recarga REST); "Publicar oferta externa desde el tablero" sigue como alternativa.
+- Sin migraciones, tablas, índices, roles, grants ni flujos nuevos; AI-06 y AI-18 sin cambios.
+
 ## El repartidor del operador recibe los cambios de estado del dueño (ORD-002-OPERATOR-DRIVER-EVENTS-2026-10-03) — 2026-10-03
 
 - Respuesta literal del project owner: "Solo avisar a su repartidor"; registrada en `decision-log.md`.

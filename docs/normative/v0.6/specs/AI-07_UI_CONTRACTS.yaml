@@ -76,6 +76,24 @@ routes:
     - proofs
     - incidents
     - price_audit
+    # UI-PHASE2-DRIVER-PICKER-2026-10-05 (project owner, 2026-10-05): the dispatcher assigns an OWN driver from a
+    # list, never by typing an id; the backend and RLS remain the barrier and REST is the source of truth.
+    assignment_picker:
+      decision: UI-PHASE2-DRIVER-PICKER-2026-10-05
+      sources:
+        list: GET /orders/{orderId}/assignable-drivers (listAssignableDrivers)
+        assign: POST /orders/{orderId}/assignments (assignDriver, assignment_type OWN, route_id null)
+      roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      shown_when: the order is READY_FOR_PICKUP or RESCHEDULED without an ACCEPTED or ACTIVE assignment
+      display:
+      - each driver by its DRV- reference, vehicle and current ACCEPTED or ACTIVE assignments; no name, phone or id
+      - ineligible drivers stay visible but cannot be picked, with the reason in Spanish
+      - when no driver is eligible, "Publicar oferta externa desde el tablero" is the alternative
+      input: assignment cost in MXN, parsed to integer cents (int64) without floating point
+      confirmation: required; names the driver reference and the cost
+      idempotency: one Idempotency-Key per confirmed assignment, reused for a retry of the same payload
+      recovery: after success or a conflict the order and the list are fetched again; optimistic UI is never
+        authoritative
   /ops/routes:
     roles:
     - platform_admin

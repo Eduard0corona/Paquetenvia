@@ -358,6 +358,71 @@ paths:
           $ref: '#/components/responses/DispatchAssignmentConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/assignable-drivers:
+    get:
+      tags:
+      - Dispatch
+      operationId: listAssignableDrivers
+      description: >-
+        UI-PHASE2-DRIVER-PICKER-2026-10-05 returns one page of the OWN drivers
+        of the selected organization so the dispatcher picks the driver for
+        assignDriver from a list instead of typing an id. Every OWN driver
+        profile of the selected organization that is not INACTIVE is listed by
+        driver_id; drivers of any other organization are never listed. Each item
+        carries the driver_id to send to assignDriver, the non-personal
+        driver_reference the operations dashboard already shows (DRV- and eight
+        lowercase hexadecimal characters; AI-06 stores no driver name), the
+        vehicle_type, whether assignDriver would accept that driver for this
+        order now under the shared DSP-001 DriverEligibilityPolicy (the order
+        city, service area and package requirement, the driver organization's
+        eligibility policy version, evaluated at the server clock), the stable
+        policy codes when it would not, and how many ACCEPTED or ACTIVE
+        assignments the driver holds. No name, email, phone, document data or
+        location is read or returned. Same capability as assignDriver:
+        DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA
+        challenge (x-capability-matrix assignable_driver_operations); VIEWER,
+        DRIVER, FINANCE and every other role receive the uniform 403 before any
+        order or driver is read. The order must be visible to the selected
+        organization as its owner or its operator, as for assignDriver; a
+        malformed, missing or other-tenant order is the same uniform 404. An
+        order that is not READY_FOR_PICKUP or RESCHEDULED, or that already has
+        an ACCEPTED or ACTIVE assignment, is 409 CONFLICT. The server owns the
+        page size; the only query parameter is cursor, at most once, and an
+        unknown or repeated parameter or a cursor this operation did not issue
+        is 409 INVALID_REQUEST, decided before capability. The listing is
+        advisory: assignDriver re-evaluates eligibility in its own transaction.
+        The read never writes and takes no row lock.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - order_packages
+      - driver_profile_documents
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+      responses:
+        '200':
+          description: One page of the selected organization's OWN drivers with their eligibility for the order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignableDriverPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/DispatchAssignmentConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /routes:
     post:
       tags:
@@ -3405,6 +3470,92 @@ components:
           - CANCELLED
         cost:
           $ref: '#/components/schemas/Money'
+    AssignableDriver:
+      type: object
+      additionalProperties: false
+      description: >-
+        UI-PHASE2-DRIVER-PICKER-2026-10-05. One OWN driver of the selected
+        organization and its eligibility for the order. eligible is true exactly
+        when ineligibility_reasons is empty.
+      required:
+      - driver_id
+      - driver_reference
+      - vehicle_type
+      - eligible
+      - ineligibility_reasons
+      - active_assignment_count
+      properties:
+        driver_id:
+          type: string
+          format: uuid
+        driver_reference:
+          type: string
+          pattern: ^DRV-[0-9a-f]{8}$
+          description: >-
+            Non-personal label shown instead of a name: DRV- and the first four
+            bytes, in lowercase hexadecimal, of the SHA-256 of the driver id's
+            16 big-endian bytes; the same value the operations dashboard shows
+            for an assigned driver.
+        vehicle_type:
+          type: string
+          enum:
+          - MOTORCYCLE
+          - CAR
+          - VAN
+          - BICYCLE
+          - WALKER
+        eligible:
+          type: boolean
+        ineligibility_reasons:
+          type: array
+          uniqueItems: true
+          description: >-
+            DSP-001 DriverEligibilityPolicy codes in the policy's stable order;
+            empty when eligible. A code outside this list fails closed as 503.
+          items:
+            type: string
+            enum:
+            - DRIVER_UNAVAILABLE
+            - DRIVER_STATUS_NOT_ACTIVE
+            - USER_NOT_ACTIVE
+            - DRIVER_MEMBERSHIP_NOT_ACTIVE
+            - HOME_CITY_MISMATCH
+            - SERVICE_AREA_REQUIRED
+            - SERVICE_AREA_NOT_ELIGIBLE
+            - DOCUMENT_POLICY_UNAVAILABLE
+            - REQUIRED_DOCUMENT_MISSING
+            - DOCUMENT_STATUS_NOT_VALID
+            - DOCUMENT_EXPIRED
+            - DOCUMENT_EXPIRY_MISSING
+            - DOCUMENT_HASH_INVALID
+            - VEHICLE_CAPACITY_POLICY_UNAVAILABLE
+            - PACKAGE_REQUIREMENT_INVALID
+            - PACKAGE_COUNT_EXCEEDED
+            - TOTAL_WEIGHT_EXCEEDED
+            - SINGLE_PACKAGE_WEIGHT_EXCEEDED
+            - PACKAGE_LENGTH_EXCEEDED
+            - PACKAGE_WIDTH_EXCEEDED
+            - PACKAGE_HEIGHT_EXCEEDED
+        active_assignment_count:
+          type: integer
+          minimum: 0
+          description: ACCEPTED or ACTIVE assignments the driver currently holds.
+    AssignableDriverPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssignableDriver'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Opaque cursor of the next page; null on the last page.
     CreateOfferRequest:
       type: object
       required:
@@ -6018,6 +6169,13 @@ x-capability-matrix:
     listIncidents: [DISPATCHER, PLATFORM_ADMIN]
     getIncident: [DISPATCHER, PLATFORM_ADMIN]
     listOrderProofs: [DISPATCHER, PLATFORM_ADMIN]
+  assignable_driver_operations_decision: UI-PHASE2-DRIVER-PICKER-2026-10-05 (project owner, 2026-10-05, "Sí a los 5
+    grupos de estado, avanza con la fase 2") - the driver picker read listAssignableDrivers admits exactly the roles of
+    assignDriver, which it serves - DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA
+    challenge (403 MFA_REQUIRED when only the second factor is missing); every other role receives the uniform 403
+    before any order or driver is read
+  assignable_driver_operations:
+    listAssignableDrivers: [DISPATCHER, PLATFORM_ADMIN]
   low_price_authorization_decision: LOW-PRICE-MANUAL-AUTH-2026-10-02 (project owner, 2026-10-02, "Sí, con autorización")
     - the createQuote field low_price_authorization admits DISPATCHER members without MFA and PLATFORM_ADMIN members
     with a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor is missing); every other role receives

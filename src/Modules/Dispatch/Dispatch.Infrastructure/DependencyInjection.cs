@@ -92,9 +92,11 @@ public static class DependencyInjection
         services.AddSingleton<DisabledAssignmentService>();
         services.AddSingleton<DisabledDriverStopsQuery>();
         services.AddSingleton<DisabledExternalOfferService>();
+        services.AddSingleton<DisabledAssignableDriversQuery>();
         services.AddScoped<PostgreSqlAssignmentToOrderCoordinator>();
         services.AddScoped<PostgreSqlDriverStopsQuery>();
         services.AddScoped<PostgreSqlExternalOfferService>();
+        services.AddScoped<PostgreSqlAssignableDriversQuery>();
         services.AddScoped<IAssignmentService>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value.Provider switch
             {
@@ -115,6 +117,13 @@ public static class DependencyInjection
                 DispatchProviderKind.PostgreSql =>
                     serviceProvider.GetRequiredService<PostgreSqlExternalOfferService>(),
                 _ => serviceProvider.GetRequiredService<DisabledExternalOfferService>(),
+            });
+        services.AddScoped<IAssignableDriversQuery>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value.Provider switch
+            {
+                DispatchProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlAssignableDriversQuery>(),
+                _ => serviceProvider.GetRequiredService<DisabledAssignableDriversQuery>(),
             });
         return services;
     }

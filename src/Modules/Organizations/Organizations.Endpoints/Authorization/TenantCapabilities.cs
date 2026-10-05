@@ -71,6 +71,11 @@ public static class TenantCapabilities
     public static readonly TenantCapability TransitionOrder =
         Create("transitionOrder", Dispatcher, PlatformAdminMfa, Driver);
     public static readonly TenantCapability AssignDriver = Create("assignDriver", Dispatcher, PlatformAdminMfa);
+
+    // x-capability-matrix assignable_driver_operations (UI-PHASE2-DRIVER-PICKER-2026-10-05): the driver picker read
+    // admits exactly who may assignDriver; a VIEWER, a DRIVER, FINANCE and every other role never.
+    public static readonly TenantCapability ListAssignableDrivers =
+        Create("listAssignableDrivers", Dispatcher, PlatformAdminMfa);
     public static readonly TenantCapability CreateExternalOffer =
         Create("createExternalOffer", Dispatcher, PlatformAdminMfa);
     public static readonly TenantCapability AcceptExternalOffer = Create("acceptExternalOffer", Driver);
