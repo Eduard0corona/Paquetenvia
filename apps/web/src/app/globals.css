@@ -996,3 +996,40 @@ p {
     overflow-x: auto;
   }
 }
+
+.opsHelp {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+  color: #4a615f;
+}
+
+.confirmDialog {
+  width: min(32rem, calc(100vw - 2rem));
+  border: 1px solid #b7cbc7;
+  border-radius: 0.9rem;
+  padding: 1.25rem;
+  background: #fff;
+  color: #102a43;
+}
+
+.confirmDialog::backdrop {
+  background: rgb(16 42 67 / 55%);
+}
+
+.confirmDialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+.confirmDialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.confirmDialog button:focus-visible {
+  outline: 3px solid #f0a21a;
+  outline-offset: 3px;
+}

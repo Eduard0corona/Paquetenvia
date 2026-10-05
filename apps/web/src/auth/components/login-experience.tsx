@@ -28,11 +28,6 @@ type ViewState =
       readonly installation: BffSessionInstallation;
     };
 
-const destinations = {
-  operations: "/ops/dashboard",
-  driver: "/driver/stops",
-} as const;
-
 export function LoginExperience() {
   const search = useSearchParams();
   const requested = search.get("return_url");
@@ -166,7 +161,7 @@ function SessionView({
       ) : (
         <>
           <p>Organización activa: {installation.displayName}.</p>
-          <a className="button" href={returnUrl ?? destinations[installation.kind]}>
+          <a className="button" href={returnUrl ?? installation.landingPath}>
             Continuar
           </a>
         </>

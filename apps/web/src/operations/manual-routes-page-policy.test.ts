@@ -8,7 +8,9 @@ describe("manual route planner policy", () => {
     expect(shell).toContain("draggable=");
     expect(shell).toContain("onDrop=");
     expect(shell).toContain("Mover orden");
-    expect(shell).toContain("Agregar DELIVERY");
+    expect(shell).toContain("Agregar entrega");
+    expect(shell).toContain(">Subir<");
+    expect(shell).toContain(">Bajar<");
     expect(`${shell}\n${state}`).not.toMatch(/localStorage|sessionStorage|indexedDB|caches\./i);
   });
 

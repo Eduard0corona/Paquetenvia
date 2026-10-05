@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
+  assignmentTypeLabel,
   formatMazatlanTime,
   orderStatusLabels,
   serviceTypeLabel,
@@ -74,9 +75,9 @@ export function OperationsOrderDetailShell({
       <p className="opsTimezone">Horarios mostrados en hora de Mazatlán.</p>
 
       <section className="opsDetailGrid" aria-label="Resumen de la orden">
-        <Detail label="Owner" value={projection.owner.display_name} />
+        <Detail label="Dueño" value={projection.owner.display_name} />
         <Detail
-          label="Operator"
+          label="Opera"
           value={projection.operator?.display_name ?? "Sin operador"}
         />
         <Detail
@@ -123,7 +124,7 @@ export function OperationsOrderDetailShell({
       )}
 
       <section aria-labelledby="timeline-title">
-        <h2 id="timeline-title">Timeline</h2>
+        <h2 id="timeline-title">Historial</h2>
         <ol className="opsTimeline">
           {order.timeline.map((item, index) => (
             <li key={`${item.occurred_at}-${index}`}>
@@ -136,34 +137,24 @@ export function OperationsOrderDetailShell({
         </ol>
       </section>
 
-      <Unavailable
-        title="Proofs"
-        text="Resumen no disponible en el contrato de lectura actual."
-      />
-      <Unavailable
-        title="Incidencias"
-        text="Disponible después de INC-001."
-      />
-      <Unavailable title="Ruta" text="Disponible después de RTE-001." />
-
       <OperationsTrackingLink
         orderId={order.id}
         ownerOrganizationId={order.owner_org_id}
       />
 
       <section aria-labelledby="actions-title">
-        <h2 id="actions-title">Acciones futuras</h2>
-        <div className="opsDisabledActions">
-          {[
-            ["Asignar repartidor propio", "Requiere discovery de conductores."],
-            ["Publicar oferta externa", "Disponible después de EXT-001."],
-            ["Agregar a ruta", "Disponible después de RTE-001."],
-            ["Abrir incidencia", "Disponible después de INC-001."],
-          ].map(([label, reason]) => (
-            <button key={label} type="button" disabled title={reason}>
-              {label}
-            </button>
-          ))}
+        <h2 id="actions-title">Otras acciones</h2>
+        <p>
+          Para publicar una oferta externa o agregar la orden a una ruta, búscala en el
+          tablero de Operaciones. Los intentos fallidos se registran en Incidencias.
+        </p>
+        <div className="opsFormActions">
+          <Link className="opsSecondary" href="/ops/dashboard">
+            Publicar oferta externa desde el tablero
+          </Link>
+          <Link className="opsSecondary" href="/ops/incidents">
+            Abrir incidencia
+          </Link>
         </div>
       </section>
     </main>
@@ -179,22 +170,7 @@ function Detail({ label, value }: { readonly label: string; readonly value: stri
   );
 }
 
-function Unavailable({
-  title,
-  text,
-}: {
-  readonly title: string;
-  readonly text: string;
-}) {
-  return (
-    <section className="opsUnavailable">
-      <h2>{title}</h2>
-      <p>{text}</p>
-    </section>
-  );
-}
-
 function assignmentText(order: OperationsDashboardOrder): string {
-  if (order.assignment === null) return "Sin asignación";
-  return `${order.assignment.assignment_type} · ${order.assignment.driver_reference}`;
+  if (order.assignment === null) return assignmentTypeLabel(null);
+  return `${assignmentTypeLabel(order.assignment.assignment_type)} · ${order.assignment.driver_reference}`;
 }

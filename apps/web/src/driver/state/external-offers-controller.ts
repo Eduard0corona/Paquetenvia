@@ -49,10 +49,10 @@ export class ExternalOffersController {
     try {
       await this.api.accept(offerId, key);
       this.idempotency.delete(offerId);
-      await this.refresh("Oferta aceptada. La asignacion externa quedo confirmada.");
+      await this.refresh("Oferta aceptada. La asignación externa quedó confirmada.");
     } catch (error) {
       const message = error instanceof ExternalOffersApiError && error.category === "conflict"
-        ? "La oferta ya no esta disponible o fue aceptada por otro repartidor."
+        ? "La oferta ya no está disponible o fue aceptada por otro repartidor."
         : "No pudimos aceptar la oferta. Intenta nuevamente.";
       this.setState({ ...this.state, pendingOfferId: null, message });
       if (error instanceof ExternalOffersApiError && error.category === "conflict") await this.refresh(message);

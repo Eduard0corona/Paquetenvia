@@ -195,7 +195,7 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
   public async applyFilters(filters: SettlementFilters): Promise<void> {
     if (buildSettlementSearch(filters) === null) {
       this.update({
-        errors: ["Revisa los filtros: repartidor UUID, estado válido y un periodo con fin posterior al inicio."],
+        errors: ["Revisa los filtros: ID de repartidor válido, estado válido y un periodo con fin posterior al inicio."],
       });
       return;
     }
@@ -347,7 +347,7 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
       const csv = await api.exportCsv(selected.id, this.controller?.signal);
       if (generation !== this.generation) return;
       this.dependencies.download(csv);
-      this.update({ message: "Exportación generada; el servidor la registra en auditoría." });
+      this.update({ message: "Exportación generada; queda registrada en la bitácora de auditoría." });
     } catch (error) {
       if (generation === this.generation) this.fail(error, selected.id);
     } finally {
@@ -380,7 +380,7 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
       if (token === this.selection)
         this.update({
           selected: settlement,
-          message: "Cambio confirmado por el servidor.",
+          message: "Cambio guardado.",
           formKey: this.getSnapshot().formKey + 1,
         });
     } catch (error) {

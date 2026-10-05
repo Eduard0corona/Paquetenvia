@@ -11,8 +11,21 @@ export type BffSessionInstallation =
       readonly kind: "operations" | "driver";
       readonly organizationId: string;
       readonly displayName: string;
+      /** Where "Continuar" sends the person after login; see {@link landingPathForRole}. */
+      readonly landingPath: string;
     }
   | { readonly kind: "none" };
+
+/**
+ * First screen for a membership role after login. FINANCE works from the COD and settlement
+ * screens, DRIVER from its stops; every other role starts on the operations dashboard. This
+ * only picks a page: each screen still asks the API what the role may do.
+ */
+export function landingPathForRole(role: string): string {
+  if (role === "DRIVER") return "/driver/stops";
+  if (role === "FINANCE") return "/finance/cod";
+  return "/ops/dashboard";
+}
 
 export interface SessionHost {
   __paquetenviaOperationsSession?: OperationsSession;
@@ -40,6 +53,7 @@ export function selectSessionInstallation(
     kind: selected.role === "DRIVER" ? "driver" : "operations",
     organizationId: selected.organization_id,
     displayName: selected.display_name,
+    landingPath: landingPathForRole(selected.role),
   };
 }
 

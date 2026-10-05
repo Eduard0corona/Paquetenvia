@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Paquetenvia",
-  description: "Foundation workspace for the Paquetenvia modular monolith.",
+  description: "Gestión de envíos, entregas y cobros para operaciones de paquetería.",
   manifest: "/manifest.webmanifest",
 };
 
