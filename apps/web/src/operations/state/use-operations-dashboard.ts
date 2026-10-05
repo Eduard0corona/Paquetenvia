@@ -60,7 +60,6 @@ export interface OperationsDashboardState {
     vehicleType: "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER",
     idempotencyKey: string,
   ): Promise<void>;
-  readonly canChangeOrganization: boolean;
 }
 
 export function useOperationsDashboard(
@@ -81,7 +80,6 @@ export function useOperationsDashboard(
     useState<ConnectionState>("Sin sesión");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeOrganizationId, setActiveOrganizationId] = useState("");
-  const [canChangeOrganization, setCanChangeOrganization] = useState(false);
   const sessionRef = useRef<OperationsSession | null>(null);
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const connectionRef = useRef<ManagedRealtimeConnection | null>(null);
@@ -242,9 +240,6 @@ export function useOperationsDashboard(
       return;
     }
     setActiveOrganizationId(session.organizationId);
-    setCanChangeOrganization(
-      session.requestOrganizationChange !== undefined,
-    );
     const api = createOperationsApi(apiBaseUrl, session);
     apiRef.current = api;
     setConnection("Conectando");
@@ -430,7 +425,6 @@ export function useOperationsDashboard(
     loadMore: () => void performLoad("append", "pagination"),
     requestOrganizationChange,
     publishExternalOffer,
-    canChangeOrganization,
   };
 }
 
