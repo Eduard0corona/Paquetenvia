@@ -1,3 +1,5 @@
+import type { AllowedTransition } from "./order-transitions";
+
 export const orderStatuses = [
   "DRAFT",
   "CONFIRMED",
@@ -134,6 +136,11 @@ export interface OperationsOrderDetail {
   /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: null means the zone's schedule applies. */
   readonly service_window: OperationsTimeWindow | null;
   readonly timeline: readonly OperationsOrderTimelineItem[];
+  /**
+   * UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the transitions the server says this person may
+   * request now; empty when none (or from an API that predates the field).
+   */
+  readonly allowed_transitions: readonly AllowedTransition[];
 }
 
 export interface OperationsOrganizationContext {

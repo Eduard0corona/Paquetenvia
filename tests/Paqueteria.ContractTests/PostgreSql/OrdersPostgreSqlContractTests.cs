@@ -64,10 +64,10 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.True(Orders.Domain.OrderPublicIdPolicy.IsValid(created.PublicId));
 
         var page = await scope.Service.ListAsync(
-            scenario.UserId, scenario.OrganizationId, "DRAFT", scenario.OrganizationId, null, false, false, CancellationToken.None);
+            scenario.UserId, scenario.OrganizationId, "DRAFT", scenario.OrganizationId, null, false, false, null, CancellationToken.None);
         Assert.Single(page.Items);
         var detail = await scope.Service.GetAsync(
-            scenario.UserId, scenario.OrganizationId, created.Id, CancellationToken.None);
+            scenario.UserId, scenario.OrganizationId, created.Id, false, CancellationToken.None);
         Assert.Equal(created, detail.Order);
         Assert.Collection(detail.Timeline, item => Assert.Equal("ORDER_CREATED", item.EventType));
 
@@ -417,10 +417,10 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
             command with { ServiceWindow = null }, CancellationToken.None));
         Assert.Equal(OrderConflictCode.IdempotencyConflict, noWindow.Code);
 
-        var detail = await scope.Service.GetAsync(scenario.UserId, scenario.OrganizationId, created.Id, CancellationToken.None);
+        var detail = await scope.Service.GetAsync(scenario.UserId, scenario.OrganizationId, created.Id, false, CancellationToken.None);
         Assert.Equal(window, detail.Order.ServiceWindow);
         var page = await scope.Service.ListAsync(
-            scenario.UserId, scenario.OrganizationId, null, null, null, false, false, CancellationToken.None);
+            scenario.UserId, scenario.OrganizationId, null, null, null, false, false, null, CancellationToken.None);
         Assert.Equal(window, Assert.Single(page.Items, item => item.Id == created.Id).ServiceWindow);
 
         await using (var verify = fixture.AdminDataSource.CreateCommand(

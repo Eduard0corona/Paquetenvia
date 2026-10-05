@@ -441,6 +441,96 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
     }
 
+    /// <summary>
+    /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: public_id is an exact match; an unknown, malformed or foreign
+    /// number returns the same empty page, after the listOrders capability.
+    /// </summary>
+    [Fact]
+    public async Task GET_list_searches_the_exact_public_id_uniformly()
+    {
+        var created = await CreateIdentityAsync(Guid.NewGuid(), Key());
+        using var detail = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders/{created:D}");
+        using var detailJson = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+        var publicId = detailJson.RootElement.GetProperty("public_id").GetString()!;
+
+        using var found = await SendAuthenticatedAsync(
+            HttpMethod.Get, $"/api/v1/orders?public_id={Uri.EscapeDataString(publicId)}");
+        Assert.Equal(HttpStatusCode.OK, found.StatusCode);
+        using (var json = JsonDocument.Parse(await found.Content.ReadAsStringAsync()))
+        {
+            var item = Assert.Single(json.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(created, item.GetProperty("id").GetGuid());
+        }
+
+        foreach (var probe in new[]
+        {
+            "ORD_" + new string('Z', 22),
+            publicId.ToLowerInvariant(),
+            publicId[..^1],
+            publicId + "A",
+            "ORD_%25%25",
+            "nombre del destinatario",
+        })
+        {
+            using var response = await SendAuthenticatedAsync(
+                HttpMethod.Get, $"/api/v1/orders?public_id={Uri.EscapeDataString(probe)}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("{\"items\":[],\"next_cursor\":null}", await response.Content.ReadAsStringAsync());
+        }
+
+        using var foreign = Authenticated(
+            HttpMethod.Get,
+            $"/api/v1/orders?public_id={Uri.EscapeDataString(publicId)}",
+            MockIdentityProfiles.ForeignOrganizationId);
+        using var forbidden = await client.SendAsync(foreign);
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+    }
+
+    /// <summary>
+    /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: getOrder returns allowed_transitions computed for the caller; the
+    /// session MFA reaches the policy, VIEWER gets none and no guard detail is exposed.
+    /// </summary>
+    [Fact]
+    public async Task GET_detail_returns_allowed_transitions_for_the_caller()
+    {
+        var orderId = await CreateIdentityAsync(Guid.NewGuid(), Key());
+
+        var dispatcher = await AllowedTransitionsAsync(orderId, MockIdentityProfiles.ActiveDispatcher);
+        Assert.Equal(
+            ["CONFIRMED|restricted_goods_acknowledged", "CANCELLED|"],
+            dispatcher);
+        Assert.Empty(await AllowedTransitionsAsync(orderId, MockIdentityProfiles.ActiveViewer));
+        Assert.Empty(await AllowedTransitionsAsync(orderId, MockIdentityProfiles.ActivePlatformAdminNoMfa));
+        Assert.Equal(dispatcher, await AllowedTransitionsAsync(orderId, MockIdentityProfiles.ActivePlatformAdminMfa));
+
+        using var request = Authenticated(HttpMethod.Get, $"/api/v1/orders/{orderId:D}");
+        using var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("guard", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("restricted_goods_check", body, StringComparison.Ordinal);
+    }
+
+    private async Task<string[]> AllowedTransitionsAsync(Guid orderId, string token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/orders/{orderId:D}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.Add("X-Organization-Id", MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return json.RootElement.GetProperty("allowed_transitions").EnumerateArray()
+            .Select(item =>
+            {
+                Assert.Equal(
+                    ["required_metadata", "target_status"],
+                    item.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+                return item.GetProperty("target_status").GetString() + "|" + string.Join(
+                    ',',
+                    item.GetProperty("required_metadata").EnumerateArray().Select(value => value.GetString()));
+            })
+            .ToArray();
+    }
+
     private async Task<Guid> CreateIdentityAsync(Guid quoteId, string key)
     {
         using var response = await CreateAsync(quoteId, key);

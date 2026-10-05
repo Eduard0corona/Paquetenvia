@@ -354,6 +354,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             string? cursor,
             bool codPendingReconciliation,
             bool mfaSatisfied,
+            string? publicId,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -375,9 +376,17 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 return Task.FromResult(new OrderPageResult([], null));
             }
 
+            // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: like the PostgreSQL service, a malformed tracking number
+            // matches nothing; a well-formed one matches exactly.
+            if (publicId is not null && !OrderPublicIdPolicy.IsValid(publicId))
+            {
+                return Task.FromResult(new OrderPageResult([], null));
+            }
+
             var items = orders.Values
                 .Where(order => order.OwnerOrganizationId == organizationId)
                 .Where(order => status is null || order.Status == status)
+                .Where(order => publicId is null || string.Equals(order.PublicId, publicId, StringComparison.Ordinal))
                 // Only orders marked with a RECORDED, unreconciled COD collection are pending reconciliation.
                 .Where(order => !codPendingReconciliation || codPendingOrders.ContainsKey(order.Id))
                 .OrderByDescending(order => order.Id)
@@ -389,6 +398,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             Guid actorId,
             Guid organizationId,
             Guid orderId,
+            bool mfaSatisfied,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -399,9 +409,42 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 throw new OrderNotFoundException();
             }
 
+            // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the same policy the PostgreSQL service applies, with this
+            // stub's role table standing in for the membership snapshot.
+            var allowed = OrderAllowedTransitionsPolicy.Compute(
+                new StubAuthorizer(this, actorId, organizationId, orderId),
+                organizationId,
+                order,
+                new OrderTransitionAuthorizationSnapshot(null, false),
+                mfaSatisfied,
+                DateTimeOffset.UtcNow);
             return Task.FromResult(new OrderDetailResult(
                 order,
-                timelines[orderId]));
+                timelines[orderId],
+                allowed));
+        }
+
+        private sealed class StubAuthorizer(
+            StubOrderService service,
+            Guid actorId,
+            Guid organizationId,
+            Guid orderId) : IOrderTransitionAuthorizer
+        {
+            public bool IsAuthorized(OrderTransitionAuthorizationContext context) =>
+                service.IsAuthorized(
+                    new TransitionOrderCommand(
+                        actorId,
+                        organizationId,
+                        "stub-allowed-transitions",
+                        orderId,
+                        context.Target.ToContractValue(),
+                        "stub",
+                        1,
+                        null,
+                        context.MfaSatisfied,
+                        null),
+                    context.Source,
+                    context.Target);
         }
 
         private bool IsAuthorized(

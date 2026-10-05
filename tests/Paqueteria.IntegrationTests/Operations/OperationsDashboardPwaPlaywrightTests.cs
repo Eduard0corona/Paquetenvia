@@ -344,6 +344,27 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                         new() { Name = "Publicar oferta externa desde el tablero", Exact = true })
                     .GetAttributeAsync("href"));
 
+            // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Buscar guía" searches the exact tracking number through
+            // listOrders on the real API; an unknown number shows the uniform message and a match opens the order.
+            var search = page.GetByRole(AriaRole.Search, new() { Name = "Buscar guía", Exact = true });
+            var searchBox = search.GetByRole(AriaRole.Searchbox);
+            await searchBox.FillAsync("ORD_" + new string('Z', 22));
+            await search.GetByRole(AriaRole.Button, new() { Name = "Buscar", Exact = true }).ClickAsync();
+            await search.GetByText("No encontramos esa guía", new() { Exact = true }).WaitForAsync();
+            await searchBox.FillAsync(PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId);
+            await search.GetByRole(AriaRole.Button, new() { Name = "Buscar", Exact = true }).ClickAsync();
+            await page.WaitForFunctionAsync(
+                "() => document.querySelector('form[role=search] input')?.value === ''");
+            await page.GetByRole(
+                    AriaRole.Heading,
+                    new()
+                    {
+                        Name = PostgreSqlSecurityWebApplicationFactory.ValidPublicOrderId,
+                        Exact = true,
+                    })
+                .WaitForAsync();
+            Assert.Equal(0, await search.GetByText("No encontramos esa guía", new() { Exact = true }).CountAsync());
+
             var persistence = await page.EvaluateAsync<PersistenceEvidence>(
                 """
                 async () => {

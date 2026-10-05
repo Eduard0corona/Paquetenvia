@@ -73,6 +73,32 @@ public static class OrderTransitionInputPolicy
     public const int MaximumMetadataDepth = 2;
     public const int DefaultMaximumMetadataUtf8Bytes = 4_096;
 
+    /// <summary>The only metadata member DRAFT -> CONFIRMED accepts; the restricted_goods_check guard needs it true.</summary>
+    public const string RestrictedGoodsAcknowledgedKey = "restricted_goods_acknowledged";
+
+    /// <summary>The only metadata member a FAILED_ATTEMPT target accepts, and the one it requires.</summary>
+    public const string IncidentIdKey = "incident_id";
+
+    private static readonly IReadOnlyList<string> NoRequiredMetadata = [];
+    private static readonly IReadOnlyList<string> RestrictedGoodsMetadata = [RestrictedGoodsAcknowledgedKey];
+    private static readonly IReadOnlyList<string> IncidentMetadata = [IncidentIdKey];
+
+    /// <summary>
+    /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the metadata members a transitionOrder request for this edge must
+    /// carry to be accepted, read from the same keys <see cref="TryNormalizeMetadata"/> parses: DRAFT -> CONFIRMED
+    /// needs <c>restricted_goods_acknowledged</c> (true) and every FAILED_ATTEMPT target needs <c>incident_id</c>.
+    /// Every other edge takes no metadata. The reason is always required and is not listed here.
+    /// </summary>
+    public static IReadOnlyList<string> RequiredMetadataKeys(OrderStatus source, OrderStatus target)
+    {
+        if (source == OrderStatus.Draft && target == OrderStatus.Confirmed)
+        {
+            return RestrictedGoodsMetadata;
+        }
+
+        return target == OrderStatus.FailedAttempt ? IncidentMetadata : NoRequiredMetadata;
+    }
+
     public static bool TryNormalizeMetadata(
         string? metadataJson,
         OrderStatus source,
@@ -116,7 +142,7 @@ public static class OrderTransitionInputPolicy
                 }
 
                 if (properties.Length != 1 ||
-                    !string.Equals(properties[0].Name, "restricted_goods_acknowledged", StringComparison.Ordinal) ||
+                    !string.Equals(properties[0].Name, RestrictedGoodsAcknowledgedKey, StringComparison.Ordinal) ||
                     properties[0].Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 {
                     return false;
@@ -133,7 +159,7 @@ public static class OrderTransitionInputPolicy
             if (target == OrderStatus.FailedAttempt)
             {
                 if (properties.Length != 1 ||
-                    !string.Equals(properties[0].Name, "incident_id", StringComparison.Ordinal) ||
+                    !string.Equals(properties[0].Name, IncidentIdKey, StringComparison.Ordinal) ||
                     properties[0].Value.ValueKind != JsonValueKind.String ||
                     !Guid.TryParseExact(properties[0].Value.GetString(), "D", out var incidentId) ||
                     incidentId == Guid.Empty)

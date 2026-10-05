@@ -670,6 +670,42 @@ button {
   font-size: var(--text-sm);
 }
 
+/* UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Buscar guía" in the top bar. */
+.appSearch {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.appSearch input {
+  width: 16rem;
+  min-width: 0;
+  min-height: var(--target);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0 var(--space-2);
+}
+
+.appSearchMessage {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+
 .appContent {
   width: 100%;
   max-width: 92rem;
@@ -742,6 +778,16 @@ button {
 
   .appAccountName {
     max-width: 8rem;
+  }
+
+  .appSearch {
+    order: 4;
+    width: 100%;
+  }
+
+  .appSearch input {
+    width: auto;
+    flex: 1;
   }
 
   .appContent {
@@ -1666,4 +1712,31 @@ ul.notice {
   background: var(--surface);
   color: var(--ink);
   padding: var(--space-2) var(--space-3);
+}
+
+/* UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Siguiente paso" on the order detail. */
+.opsNextStep {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.opsNextStepForm {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.opsNextStepForm textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  padding: var(--space-2);
+  font: inherit;
+}
+
+.opsNextStepForm .opsCheckbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }

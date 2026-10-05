@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canAuthorizeLowPrice,
+  canSearchOrders,
   canListPendingCod,
   lowPriceAuthorizationMatrix,
   lowPriceAuthorizationRequiresMfa,
@@ -108,6 +109,13 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
       expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
       expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
     }
+  });
+
+  it("offers the tracking-number search to the roles that open the order detail (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)", () => {
+    expect(canSearchOrders("DISPATCHER")).toBe(true);
+    expect(canSearchOrders("PLATFORM_ADMIN")).toBe(true);
+    for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", null])
+      expect(canSearchOrders(role), String(role)).toBe(false);
   });
 
   it("each mirrored operation exists in AI-05", () => {

@@ -58,11 +58,20 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     IAuditPayloadRedactor auditRedactor,
     IOptions<OrdersOptions> options,
     IClock clock,
-    IOrderTrackingLinkIssuer? trackingLinkIssuer = null) : IOrderService
+    IOrderTrackingLinkIssuer? trackingLinkIssuer = null,
+    IOrderTransitionAuthorizationReader? transitionAuthorizationReader = null,
+    IOrderTransitionAuthorizer? transitionAuthorizer = null) : IOrderService
 {
     // TRK-002-AUTO-LINK: the order's first public tracking link is issued in this same transaction when public
     // tracking is enabled; without an issuer (public tracking disabled) orders are created without a link.
     private readonly IOrderTrackingLinkIssuer trackingLinks = trackingLinkIssuer ?? new DisabledOrderTrackingLinkIssuer();
+
+    // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: getOrder's allowed_transitions read the same role snapshot and apply
+    // the same authorizer transitionOrder uses; both are stateless, so the defaults are the registered ones.
+    private readonly IOrderTransitionAuthorizationReader transitionAuthorization =
+        transitionAuthorizationReader ?? new PostgreSqlOrderTransitionAuthorizationReader();
+    private readonly IOrderTransitionAuthorizer transitionAuthorizerPolicy =
+        transitionAuthorizer ?? new OrderTransitionAuthorizer();
 
     internal const string IdempotencyScope = "ORD-001:CREATE_ORDER";
     private const string PublicIdUniqueConstraint = "orders_public_id_key";
@@ -172,11 +181,13 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         string? cursor,
         bool codPendingReconciliation,
         bool mfaSatisfied,
+        string? publicId,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty ||
             (status is not null && !OrderStatuses.Contains(status)) ||
-            (ownerOrganizationId is { } owner && owner != organizationId))
+            (ownerOrganizationId is { } owner && owner != organizationId) ||
+            (publicId is not null && !OrderPublicIdPolicy.IsValid(publicId)))
         {
             return Task.FromResult(new OrderPageResult([], null));
         }
@@ -198,6 +209,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 status,
                 codPendingReconciliation,
                 mfaSatisfied,
+                publicId,
                 hasCursor,
                 cursorCreatedAt,
                 cursorId,
@@ -209,6 +221,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         Guid actorId,
         Guid organizationId,
         Guid orderId,
+        bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty || orderId == Guid.Empty)
@@ -218,7 +231,13 @@ public sealed class QuoteSnapshotToOrderCoordinator(
 
         return transactionContext.ExecuteAsync(
             new TenantDatabaseExecutionContext(actorId, [organizationId]),
-            (dbContext, token) => GetWithinTransactionAsync(dbContext, orderId, token),
+            (dbContext, token) => GetWithinTransactionAsync(
+                dbContext,
+                actorId,
+                organizationId,
+                orderId,
+                mfaSatisfied,
+                token),
             cancellationToken);
     }
 
@@ -466,6 +485,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         string? status,
         bool codPendingReconciliation,
         bool mfaSatisfied,
+        string? publicId,
         bool hasCursor,
         DateTimeOffset cursorCreatedAt,
         Guid cursorId,
@@ -499,12 +519,14 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                    service_window_from,service_window_to
             FROM orders.orders
             WHERE (@status IS NULL OR status=@status)
+              AND (@public_id IS NULL OR public_id=@public_id)
               AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
               AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
             ORDER BY created_at DESC,id DESC
             LIMIT @take
             """);
         command.Parameters.Add(P("status", NpgsqlDbType.Text, status));
+        command.Parameters.Add(P("public_id", NpgsqlDbType.Text, publicId));
         command.Parameters.Add(P("cod_pending", NpgsqlDbType.Boolean, codPendingReconciliation));
         command.Parameters.Add(P("has_cursor", NpgsqlDbType.Boolean, hasCursor));
         command.Parameters.Add(P("cursor_created_at", NpgsqlDbType.TimestampTz, cursorCreatedAt));
@@ -532,7 +554,10 @@ public sealed class QuoteSnapshotToOrderCoordinator(
 
     private async Task<OrderDetailResult> GetWithinTransactionAsync(
         OrdersDbContext dbContext,
+        Guid actorId,
+        Guid organizationId,
         Guid orderId,
+        bool mfaSatisfied,
         CancellationToken cancellationToken)
     {
         var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
@@ -568,15 +593,38 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             "SELECT event_type,occurred_at FROM orders.order_events WHERE order_id=@id ORDER BY occurred_at,aggregate_version;");
         timelineCommand.Parameters.Add(P("id", NpgsqlDbType.Uuid, orderId));
         var timeline = new List<OrderTimelineItem>();
-        await using var timelineReader = await timelineCommand.ExecuteReaderAsync(cancellationToken);
-        while (await timelineReader.ReadAsync(cancellationToken))
+        await using (var timelineReader = await timelineCommand.ExecuteReaderAsync(cancellationToken))
         {
-            timeline.Add(new OrderTimelineItem(
-                timelineReader.GetString(0),
-                timelineReader.GetFieldValue<DateTimeOffset>(1)));
+            while (await timelineReader.ReadAsync(cancellationToken))
+            {
+                timeline.Add(new OrderTimelineItem(
+                    timelineReader.GetString(0),
+                    timelineReader.GetFieldValue<DateTimeOffset>(1)));
+            }
         }
 
-        return new OrderDetailResult(order.Result, timeline);
+        // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: advisory transitions for this caller, computed in this same
+        // transaction from the role snapshot transitionOrder reads; only the owner organization ever gets any.
+        IReadOnlyList<OrderAllowedTransition> allowedTransitions = [];
+        if (order.Result.OwnerOrganizationId == organizationId)
+        {
+            var authorization = await transitionAuthorization.ReadAsync(
+                connection,
+                transaction,
+                actorId,
+                organizationId,
+                orderId,
+                cancellationToken);
+            allowedTransitions = OrderAllowedTransitionsPolicy.Compute(
+                transitionAuthorizerPolicy,
+                organizationId,
+                order.Result,
+                authorization,
+                mfaSatisfied,
+                clock.UtcNow);
+        }
+
+        return new OrderDetailResult(order.Result, timeline, allowedTransitions);
     }
 
     private static void Validate(CreateOrderCommand command)
