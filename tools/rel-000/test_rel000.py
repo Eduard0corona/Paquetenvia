@@ -5408,6 +5408,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             {
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
@@ -5686,8 +5687,16 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         self.assertNotIn(
             rel000.NEXT_OG_CRITICAL_REMEDIATION_ID, fixture["remediation_issues"]
         )
+        self.assertEqual(
+            205, fixture["remediation_issues"][rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]
+        )
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
+        self.assertIn(
+            "github.head_ref == 'fix/security-2026-11-next-sharp-source-map' "
+            "&& 'SEC-2026-11-NEXT-SHARP-SOURCEMAP'",
+            workflow,
+        )
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
         for name in ("ci.yml", "pr-validation.yml"):
             retired = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
@@ -7240,6 +7249,854 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             [],
         )
         self.assertEqual("BLOCKED", blocked["dependency_security_status"])
+
+
+class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
+    """SEC-2026-11: Next.js, Sharp and source-map-js advisories, mirroring SEC-2026-10.
+
+    The same remediation rebinds the braces accepted known advisory (Issue #180): the
+    authorized base still carries the 16.3.6 graph, the branch the 16.3.8 graph, and
+    Issue #205 cites the braces advisory that Issue #180 keeps tracking.
+    """
+
+    ISSUE = "205"
+    KNOWN_ADVISORY = "GHSA-vfj7-8cjw-p6xm"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-next-sharp-sourcemap-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
+        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID
+            )
+        )
+
+    def base_file(self, relative: str) -> bytes:
+        return subprocess.check_output(
+            ["git", "show", f"{self.authorization()['authorized_base_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def dependency_repo(self):
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        files = authorization["required_dependency_files"]
+        for relative in files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.base_file(relative))
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        # The remediation is active, so its graph is the checkout's (as SEC-2026-10 did
+        # while PR #176 was open). Once a later change moves the graph, pin
+        # validated_target_sha and replay that commit instead.
+        for relative in files:
+            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+        return root, base, authorization
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    @staticmethod
+    def rewrite(path: Path, old: str, new: str) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert old in text, old
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        for item in value["active_remediations"]:
+            if item["id"] == rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID:
+                mutate(item)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def real_advisory(
+        advisory_id: str,
+        package: str,
+        severity: str,
+        version: str,
+        affected: str,
+        patched: str,
+        direct_or_transitive: str = "transitive",
+        path_count: int = 1,
+    ):
+        return {
+            "advisory_id": advisory_id,
+            "package": package,
+            "installed_versions": [version],
+            "severity": severity,
+            "affected_range": affected,
+            "patched_range": patched,
+            "direct_or_transitive": direct_or_transitive,
+            "dependency_path_count": path_count,
+            "fix_available": True,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def braces_advisory(self):
+        return self.real_advisory(
+            self.KNOWN_ADVISORY, "braces", "high", "3.0.3", "<=3.0.3", ">=3.0.4"
+        )
+
+    def base_advisories(self):
+        """The sanitized pnpm 11.15.1 audit of the authorized base bd588de, field for field."""
+
+        next_range = ">=16.0.0 <16.3.8"
+        return [
+            self.real_advisory(
+                "GHSA-39w2-rjm5-chcv", "next", "low", "16.3.6", next_range, ">=16.3.8", "direct"
+            ),
+            self.real_advisory(
+                "GHSA-3w37-wq28-93x7",
+                "next",
+                "moderate",
+                "16.3.6",
+                ">=16.3.0 <16.3.8",
+                ">=16.3.8",
+                "direct",
+            ),
+            self.real_advisory(
+                "GHSA-4jqv-mc3x-m676", "next", "moderate", "16.3.6", next_range, ">=16.3.8", "direct"
+            ),
+            self.real_advisory(
+                "GHSA-68fv-2mgg-jv7q",
+                "source-map-js",
+                "high",
+                "1.2.1",
+                ">=1.0.0 <1.2.2",
+                ">=1.2.2",
+                path_count=3,
+            ),
+            self.real_advisory(
+                "GHSA-cjq9-62q9-8jv4", "next", "high", "16.3.6", next_range, ">=16.3.8", "direct"
+            ),
+            self.real_advisory(
+                "GHSA-f87g-xv8r-7p7x", "next", "moderate", "16.3.6", next_range, ">=16.3.8", "direct"
+            ),
+            self.real_advisory(
+                "GHSA-mcj8-r9mp-w47p", "next", "moderate", "16.3.6", next_range, ">=16.3.8", "direct"
+            ),
+            self.braces_advisory(),
+            self.real_advisory(
+                "GHSA-wq5f-xc86-pv6w", "sharp", "high", "0.35.4", "<0.35.5", ">=0.35.5"
+            ),
+        ]
+
+    @staticmethod
+    def audit(advisories):
+        values = copy.deepcopy(advisories)
+        totals = {
+            key: sum(item["severity"] == key for item in values)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(values)
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 1 if values else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "affected_packages": sorted({item["package"] for item in values}),
+            "advisories": values,
+        }
+
+    def known_issue(self, **changes):
+        braces = next(
+            item
+            for item in self.policy_value["active_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )
+        issue = {
+            "number": 180,
+            "state": "OPEN",
+            "title": braces["tracked_issue_title"],
+            "url": "https://github.com/example/issues/180",
+            "tracked_advisory_ids": [self.KNOWN_ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def tracking(self, state="OPEN", tracked=None, known_issues=None):
+        authorization = self.authorization()
+        # The sanitizer keeps every GHSA in the body, and Issue #205 also cites braces.
+        cited = [*authorization["issue_advisories"][self.ISSUE], self.KNOWN_ADVISORY]
+        return {
+            "number": 205,
+            "state": state,
+            "title": authorization["tracked_issue_title"],
+            "url": "https://github.com/example/issues/205",
+            "tracked_advisory_ids": sorted(
+                value.upper() for value in (cited if tracked is None else tracked)
+            ),
+            # CI always attaches the SEC-2026-08 related Issue; SEC-2026-11 ignores it.
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": "SEC-2026-08: remediate transitive SSH.NET advisory",
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": ["GHSA-Q939-RPR3-3284"],
+            },
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def accepted(self, root, base, tracking=None, remediation=None, base_audit=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            self.policy(),
+            tracking if tracking is not None else self.tracking(),
+            base_audit if base_audit is not None else self.audit(self.base_advisories()),
+            self.audit([self.braces_advisory()]),
+            remediation if remediation is not None else self.authorization(),
+        )
+
+    def security(self, tracking=None, base=None, branch=None, accepted=None):
+        tracking = tracking if tracking is not None else self.tracking()
+        base = base if base is not None else self.audit(self.base_advisories())
+        branch = branch if branch is not None else self.audit([self.braces_advisory()])
+        if accepted is None:
+            root, base_sha, _ = self.dependency_repo()
+            accepted = self.accepted(root, base_sha, self.tracking())
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base,
+            branch,
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            accepted,
+        )
+
+    def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            "fix/security-2026-11-next-sharp-source-map", authorization["authorized_source_branch"]
+        )
+        self.assertEqual(
+            "bd588de36d2b5888404d483009b693d19d8090c3", authorization["authorized_base_sha"]
+        )
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], authorization["id"]
+            ),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED",
+            lambda: rel000.resolve_rel000_mode(policy, authorization["authorized_source_branch"]),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", authorization["id"]),
+        )
+
+    def test_wrong_base_sha_is_rejected(self):
+        authorization = self.authorization()
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                self.policy(),
+                authorization["authorized_source_branch"],
+                "0" * 40,
+                authorization["id"],
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            authorization["expected_base_advisories"],
+            [
+                *authorization["issue_advisories"][self.ISSUE],
+                *authorization["issue_cited_known_advisories"][self.ISSUE],
+            ],
+        )
+        self.assertEqual(
+            {"from": "16.3.6", "to": "16.3.8"},
+            authorization["expected_direct_version_changes"]["next"],
+        )
+        self.assertEqual("16.3.8", authorization["next_first_patched_version"])
+        self.assertEqual("0.35.5", authorization["allowed_overrides"]["next@16.3.8>sharp"])
+        self.assertEqual("1.2.2", authorization["allowed_overrides"]["source-map-js@<1.2.2"])
+        self.assertEqual(40, len(authorization["expected_lock_version_replacements"]))
+        self.assertEqual([], authorization["allowed_lock_metadata_additions"])
+        mutations = [
+            lambda item: item.update(tracked_issue=175),
+            lambda item: item.update(tracked_issue_title="SEC-2026-11: something else"),
+            lambda item: item["expected_base_advisories"].pop(),
+            lambda item: item["issue_advisories"][self.ISSUE].append(self.KNOWN_ADVISORY),
+            lambda item: item["issue_cited_known_advisories"].update({self.ISSUE: []}),
+            lambda item: item["expected_base_packages"].update({self.KNOWN_ADVISORY: "micromatch"}),
+            lambda item: item["expected_base_severities"].update({"GHSA-39w2-rjm5-chcv": "moderate"}),
+            lambda item: item["expected_base_totals"].update(high=3, total=8),
+            lambda item: item["expected_branch_totals"].update(high=0, total=0),
+            lambda item: item["allowed_direct_packages"].append("vitest"),
+            lambda item: item["allowed_non_dependency_files"].append("apps/web/next.config.ts"),
+            lambda item: item["allowed_non_dependency_files"].remove(
+                "tools/security/sharp-runtime-smoke.mjs"
+            ),
+            lambda item: item["expected_direct_version_changes"]["next"].update(to="16.4.0"),
+            lambda item: item.update(next_affected_range=">=16.2.0 <16.3.8"),
+            lambda item: item["expected_override_changes"]["next@16.3.6>sharp"].update(to="0.35.4"),
+            lambda item: item["expected_override_additions"][0].update(selector="source-map-js@<1.2.3"),
+            lambda item: item["allowed_overrides"].update({"source-map-js@<1.2.2": "1.2.1"}),
+            lambda item: item["expected_lock_version_replacements"].update(
+                {"react": {"from": ["19.2.7"], "to": ["19.2.8"]}}
+            ),
+            lambda item: item["expected_lock_version_replacements"].pop("@img/sharp-wasm32"),
+            lambda item: item["allowed_lock_metadata_additions"].append(
+                {"package": "next@16.3.8", "line": "    deprecated: anything"}
+            ),
+            lambda item: item["known_advisory_base_binding"]["lock_path"].pop(1),
+            lambda item: item["known_advisory_base_binding"].update(
+                expected_lockfile_sha256="0" * 64
+            ),
+            lambda item: item["known_advisory_base_binding"].update(
+                remediation_id=rel000.WEB_TRANSITIVE_REMEDIATION_ID
+            ),
+            lambda item: item.update(expected_lockfile_sha256="x"),
+            lambda item: item.update(expected_lock_package_count=476),
+            lambda item: item.update(related_tracked_issue=40),
+            lambda item: item.update(target_sharp_version="0.35.4"),
+            lambda item: item.update(manual_lockfile_edits_allowed=True),
+        ]
+        for mutate in mutations:
+            path = self.policy_with(mutate)
+            self.assert_reason(
+                "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+            )
+
+    def test_rebinding_and_citation_belong_only_to_this_authorization(self):
+        authorization = self.authorization()
+        for field in ("known_advisory_base_binding", "issue_cited_known_advisories"):
+            for target in (rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.BRACES_KNOWN_ADVISORY_ID):
+                with self.subTest(field=field, target=target):
+                    value = copy.deepcopy(self.policy_value)
+                    for item in value["active_remediations"]:
+                        if item["id"] == target:
+                            item[field] = copy.deepcopy(authorization[field])
+                    path = self.root / "policy.json"
+                    path.write_text(json.dumps(value), encoding="utf-8")
+                    self.assert_reason(
+                        "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                    )
+
+    def test_exact_generated_dependency_graph_is_accepted(self):
+        root, base, authorization = self.dependency_repo()
+        result = self.validate_dependency(root, base, authorization)
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual(
+            ["apps/web/package.json", "apps/web/pnpm-lock.yaml", "apps/web/pnpm-workspace.yaml"],
+            result["changed_dependency_files"],
+        )
+        self.assertEqual(475, result["lock_package_count"])
+        self.assertEqual(authorization["expected_lockfile_sha256"], result["lockfile_sha256"])
+        self.assertEqual("next@16.3.8>sharp", result["sharp_override_selector"])
+        self.assertEqual("0.35.5", result["sharp_override_version"])
+        self.assertEqual(["1.2.2"], result["source_map_js_versions"])
+
+    def test_previous_next_version_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["dependencies"]["next"] = "16.3.7"
+        value["devDependencies"]["eslint-config-next"] = "16.3.7"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_VERSION_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_prerelease_next_version_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["dependencies"]["next"] = "16.3.8-canary.0"
+        value["devDependencies"]["eslint-config-next"] = "16.3.8-canary.0"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_next_and_eslint_config_alignment_is_required(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["devDependencies"]["eslint-config-next"] = "16.3.6"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "NEXT_DEPENDENCY_ALIGNMENT_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_unauthorized_package_manifest_drift_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/package.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["devDependencies"]["vitest"] = "4.1.12"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_file_outside_allowlist_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        (root / "apps/web/next.config.ts").write_text("export default {};\n", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_override_drift_is_rejected(self):
+        source_map = '  "source-map-js@<1.2.2": 1.2.2\n'
+        sharp = '  "next@16.3.8>sharp": 0.35.5\n'
+        for old, new in (
+            # The Sharp edge keeps the vulnerable 0.35.4.
+            ('"next@16.3.8>sharp": 0.35.5', '"next@16.3.8>sharp": 0.35.4'),
+            # The source-map-js override is widened, dropped or moved after the Sharp edge.
+            ('"source-map-js@<1.2.2": 1.2.2', '"source-map-js@<1.2.3": 1.2.3'),
+            (source_map, ""),
+            (source_map + sharp, sharp + source_map),
+            ("  postcss: 8.5.23\n", "  postcss: 8.5.23\n  \"react@<19.2.8\": 19.2.8\n"),
+        ):
+            with self.subTest(old=old):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / "apps/web/pnpm-workspace.yaml", old, new)
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_lock_change_outside_the_authorized_graph_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        # Any package outside next/@next/*/eslint-config-next/sharp/@img/*/source-map-js
+        # is pinned to its base bytes.
+        self.rewrite(
+            root / "apps/web/pnpm-lock.yaml", "\n  react@19.2.7:\n", "\n  react@19.2.8:\n"
+        )
+        failure = self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual("react@19.2.8", failure.details["package"])
+
+    def test_unrelated_packages_sharing_a_moved_version_keep_their_base_bytes(self):
+        base_lock = self.base_file("apps/web/pnpm-lock.yaml").decode("utf-8")
+        for key in ("define-properties@1.2.1", "array.prototype.flat@1.3.3"):
+            self.assertIn(f"\n  {key}:\n", base_lock)
+        for old, new in (
+            ("\n  define-properties@1.2.1:\n", "\n  define-properties@1.2.2:\n"),
+            ("      define-properties: 1.2.1\n", "      define-properties: 1.2.2\n"),
+            ("\n  array.prototype.flat@1.3.3:\n", "\n  array.prototype.flat@1.3.4:\n"),
+        ):
+            with self.subTest(old=old):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / "apps/web/pnpm-lock.yaml", old, new)
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_integrity_change_of_an_unmoved_package_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/pnpm-lock.yaml"
+        text = path.read_text(encoding="utf-8")
+        marker = "\n  react@19.2.7:\n    resolution: {integrity: sha512-"
+        start = text.index(marker) + len(marker)
+        path.write_text(
+            text[:start] + ("B" if text[start] != "B" else "C") + text[start + 1 :],
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_no_lock_metadata_change_is_admitted(self):
+        line = rel000.NEXT_OG_ESLINT_DEPRECATION
+        for old, new in (
+            # A new deprecation notice, even on a moved package, is outside the graph.
+            ("\n  next@16.3.8:\n", "\n  next@16.3.8:\n    deprecated: anything\n"),
+            # The base eslint notice stays exactly where it was.
+            (line + "\n", ""),
+        ):
+            with self.subTest(old=old):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / "apps/web/pnpm-lock.yaml", old, new)
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_generated_lockfile_drift_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "apps/web/pnpm-lock.yaml"
+        path.write_bytes(path.read_bytes() + b"\n")
+        self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lockfile_sha256"] = "0" * 64
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_vulnerable_sharp_or_source_map_js_cannot_be_retained(self):
+        for package, old, new in (
+            ("source-map-js", "1.2.2", "1.2.1"),
+            ("sharp", "0.35.5", "0.35.4"),
+        ):
+            with self.subTest(package=package):
+                root, base, authorization = self.dependency_repo()
+                path = root / "apps/web/pnpm-lock.yaml"
+                text = path.read_text(encoding="utf-8")
+                path.write_text(
+                    text.replace(f"  {package}@{old}", f"  {package}@{new}").replace(
+                        f"      {package}: {old}", f"      {package}: {new}"
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_new_lock_override_must_precede_the_sharp_edge(self):
+        root, base, authorization = self.dependency_repo()
+        self.rewrite(
+            root / "apps/web/pnpm-lock.yaml",
+            "  source-map-js@<1.2.2: 1.2.2\n  next@16.3.8>sharp: 0.35.5\n",
+            "  next@16.3.8>sharp: 0.35.5\n  source-map-js@<1.2.2: 1.2.2\n",
+        )
+        self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_base_lockfile_must_be_the_authorized_vulnerable_graph(self):
+        authorization = self.authorization()
+        base_lock = self.base_file("apps/web/pnpm-lock.yaml").decode("utf-8")
+        lock = (REPOSITORY_ROOT / "apps/web/pnpm-lock.yaml").read_text(encoding="utf-8")
+        rel000.validate_next_sharp_sourcemap_exact_lock_graph(base_lock, lock, authorization)
+        for old, new in (
+            ("\n  source-map-js@1.2.1:\n", "\n  source-map-js@1.2.0:\n"),
+            (
+                "  next@16.3.6>sharp: 0.35.4\n",
+                "  source-map-js@<1.2.2: 1.2.2\n  next@16.3.6>sharp: 0.35.4\n",
+            ),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, base_lock)
+                self.assert_reason(
+                    "BASE_LOCK_GRAPH_UNEXPECTED",
+                    lambda: rel000.validate_next_sharp_sourcemap_exact_lock_graph(
+                        base_lock.replace(old, new, 1), lock, authorization
+                    ),
+                )
+
+    def test_real_audits_and_issues_are_pending_merge_with_braces_accepted(self):
+        authorization = self.authorization()
+        result = self.security()
+        self.assertEqual(rel000.SECURITY_REMEDIATION, result["mode"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual(
+            "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION",
+            result["release_candidate_status"],
+        )
+        self.assertEqual(
+            [
+                ("Issue #5", "CLOSED", 1, "REMEDIATED"),
+                ("Issue #205", "OPEN", 8, "REMEDIATED_PENDING_MERGE"),
+                ("Issue #180", "OPEN", 1, "ACCEPTED_KNOWN_ADVISORY"),
+            ],
+            [
+                (item["id"], item["state"], item["tracked_advisories"], item["remediation_status"])
+                for item in result["known_security_issues"]
+            ],
+        )
+        self.assertEqual([self.KNOWN_ADVISORY], result["remaining_advisory_ids"])
+        self.assertEqual(
+            sorted(authorization["issue_advisories"][self.ISSUE]), result["removed_advisory_ids"]
+        )
+        self.assertEqual(
+            {"Issue #205"}, {item["tracking_issue"] for item in result["remediated_advisories"]}
+        )
+        self.assertEqual("Issue #180", result["dependency_advisories"][0]["tracking_issue"])
+        self.assertEqual(
+            [
+                {
+                    "advisory_id": self.KNOWN_ADVISORY,
+                    "package": "braces",
+                    "severity": "high",
+                    "dependency_scope": "dev",
+                    "tracking_issue": "Issue #180",
+                    "remediation_id": rel000.BRACES_KNOWN_ADVISORY_ID,
+                    "lockfile_sha256": authorization["expected_lockfile_sha256"],
+                }
+            ],
+            result["accepted_known_advisories"],
+        )
+        self.assertEqual(
+            {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0},
+            result["branch_totals"],
+        )
+        rel000.assert_redacted(result["accepted_known_advisories"])
+
+    def test_retained_advisory_is_rejected_or_blocks(self):
+        sharp = self.base_advisories()[-1]
+        self.assert_reason(
+            "BRANCH_AUDIT_NOT_ZERO",
+            lambda: self.security(branch=self.audit([self.braces_advisory(), sharp])),
+        )
+        # A retained advisory that replaces braces in the totals still blocks the gate.
+        self.assertEqual(
+            "BLOCKED", self.security(branch=self.audit([sharp]))["dependency_security_status"]
+        )
+
+    def test_base_audit_must_match_the_authorized_baseline(self):
+        self.assert_reason(
+            "BASE_AUDIT_UNEXPECTED",
+            lambda: self.security(base=self.audit(self.base_advisories()[:-1])),
+        )
+
+    def test_base_severity_drift_is_rejected(self):
+        advisories = self.base_advisories()
+        by_id = {item["advisory_id"]: item for item in advisories}
+        # Swapping two severities keeps every total, so only the exact mapping catches it.
+        by_id["GHSA-cjq9-62q9-8jv4"]["severity"] = "moderate"
+        by_id["GHSA-3w37-wq28-93x7"]["severity"] = "high"
+        self.assert_reason(
+            "BASE_ADVISORY_SEVERITIES_UNEXPECTED",
+            lambda: self.security(base=self.audit(advisories)),
+        )
+
+    def test_tracking_issue_must_be_open_and_exact(self):
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: self.security(tracking=self.tracking(state="CLOSED")),
+        )
+        tracked = self.authorization()["issue_advisories"][self.ISSUE]
+        for ids in (
+            tracked,
+            [*tracked[1:], self.KNOWN_ADVISORY],
+            [*tracked, self.KNOWN_ADVISORY, "GHSA-aaaa-bbbb-cccc"],
+        ):
+            with self.subTest(ids=ids):
+                self.assert_reason(
+                    "ADDITIONAL_SECURITY_TRACKING_INVALID",
+                    lambda: self.security(tracking=self.tracking(tracked=ids)),
+                )
+
+    def test_cited_braces_advisory_must_stay_accepted_under_issue_180(self):
+        failure = self.assert_reason(
+            "ADDITIONAL_SECURITY_TRACKING_INVALID", lambda: self.security(accepted=[])
+        )
+        self.assertEqual([self.KNOWN_ADVISORY.lower()], failure.details["advisories"])
+        root, base, _ = self.dependency_repo()
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(
+                root, base, self.tracking(known_issues=[self.known_issue(state="CLOSED")])
+            ),
+        )
+
+    def test_base_binding_reads_the_16_3_6_graph_only_in_this_remediation(self):
+        root, base, authorization = self.dependency_repo()
+        accepted = self.accepted(root, base)
+        self.assertEqual([rel000.BRACES_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted])
+        self.assertEqual(authorization["expected_lockfile_sha256"], accepted[0]["lockfile_sha256"])
+        braces = next(
+            item
+            for item in self.policy_value["active_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )
+        # Normal mode and any other remediation read the base against the rebound graph.
+        for remediation in ({}, braces):
+            with self.subTest(remediation=remediation.get("id")):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                    lambda: self.accepted(root, base, remediation=remediation),
+                )
+        tampered = copy.deepcopy(authorization)
+        tampered["known_advisory_base_binding"]["expected_lockfile_sha256"] = "0" * 64
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+            lambda: self.accepted(root, base, remediation=tampered),
+        )
+        tampered = copy.deepcopy(authorization)
+        tampered["known_advisory_base_binding"]["advisory_id"] = "GHSA-aaaa-bbbb-cccc"
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+            lambda: self.accepted(root, base, remediation=tampered),
+        )
+        # The branch can never keep the 16.3.6 graph: it is read against the rebound graph.
+        (root / "apps/web/pnpm-lock.yaml").write_bytes(self.base_file("apps/web/pnpm-lock.yaml"))
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID", lambda: self.accepted(root, base)
+        )
+
+    def test_tested_base_policy_predating_the_rebinding_still_loads(self):
+        authorization = self.authorization()
+        base_policy = json.loads(self.base_file(rel000.REMEDIATION_POLICY_PATH))
+        self.assertNotIn(
+            rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
+            {item["id"] for item in base_policy["active_remediations"]},
+        )
+        self.assertEqual(
+            ["AUTH-001-OIDC", "ADP-001-AZURE"],
+            [
+                item["id"]
+                for item in rel000.load_base_dependency_admissions(
+                    REPOSITORY_ROOT, authorization["authorized_base_sha"]
+                )
+            ],
+        )
+        # The tree under test must carry the rebound graph; only a tested base may not.
+        self.assert_reason(
+            "REMEDIATION_POLICY_INVALID",
+            lambda: rel000.validate_remediation_policy(copy.deepcopy(base_policy)),
+        )
+        rel000.validate_remediation_policy(copy.deepcopy(self.policy_value), base_policy=True)
+
+        def braces(value):
+            return next(
+                item
+                for item in value["active_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )["accepted_known_advisory"]
+
+        with_remediation = copy.deepcopy(base_policy)
+        with_remediation["active_remediations"].append(copy.deepcopy(authorization))
+        mutations = {
+            "other path": lambda value: braces(value)["lock_path"].pop(1),
+            "other hash": lambda value: braces(value).update(expected_lockfile_sha256="0" * 64),
+            "rebound path on an older base": lambda value: braces(value).update(
+                lock_path=rel000.BRACES_KNOWN_ADVISORY["lock_path"]
+            ),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(case=label):
+                value = copy.deepcopy(base_policy)
+                mutate(value)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID",
+                    lambda: rel000.validate_remediation_policy(value, base_policy=True),
+                )
+        with self.subTest(case="old path beside the rebinding authorization"):
+            self.assert_reason(
+                "REMEDIATION_POLICY_INVALID",
+                lambda: rel000.validate_remediation_policy(with_remediation, base_policy=True),
+            )
+
+    def test_sharp_runtime_smoke_requires_the_0_35_5_target(self):
+        authorization = self.authorization()
+
+        def smoke(version):
+            return {
+                "result": "SHARP_RUNTIME_SMOKE_PASSED",
+                "sharp_version": version,
+                "dependency_parent": "next",
+                "node_version": "24.13.0",
+                "platform": "linux",
+                "architecture": "x64",
+                "output_format": "png",
+                "output_bytes": 95,
+            }
+
+        result = rel000.validate_sharp_runtime_smoke(
+            smoke("0.35.5"), rel000.SECURITY_REMEDIATION, authorization
+        )
+        self.assertEqual(("PASSED", "0.35.5"), (result["status"], result["sharp_version"]))
+        self.assert_reason(
+            "SHARP_RUNTIME_SMOKE_VERSION_INVALID",
+            lambda: rel000.validate_sharp_runtime_smoke(
+                smoke("0.35.4"), rel000.SECURITY_REMEDIATION, authorization
+            ),
+        )
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            205, fixture["remediation_issues"][rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]
+        )
+        self.assertEqual(
+            {rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"]
+        )
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-11-next-sharp-source-map' "
+                    "&& 'SEC-2026-11-NEXT-SHARP-SOURCEMAP'",
+                    workflow,
+                )
 
 
 class TestedProvenanceResolutionTests(unittest.TestCase):
