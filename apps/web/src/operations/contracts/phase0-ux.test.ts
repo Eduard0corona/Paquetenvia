@@ -57,6 +57,11 @@ describe("dashboard creation-date filter conversions", () => {
     expect(utcToDateTimeLocal(utc)).toBe("2026-10-05T08:15");
   });
 
+  it("reads and writes the filter in Mazatlan time, not the device zone", () => {
+    expect(dateTimeLocalToUtc("2026-10-05T08:15")).toBe("2026-10-05T15:15:00.000Z");
+    expect(utcToDateTimeLocal("2026-10-05T15:15:00.000Z")).toBe("2026-10-05T08:15");
+  });
+
   it("empties the input when the filter is cleared or invalid", () => {
     expect(dateTimeLocalToUtc("")).toBeUndefined();
     expect(dateTimeLocalToUtc("not a date")).toBeUndefined();
