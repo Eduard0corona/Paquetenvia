@@ -111,7 +111,7 @@ export function OperationsFilters({
         </select>
       </label>
       <label>
-        Fecha de creación desde
+        Fecha de creación desde (hora de Mazatlán)
         <input
           type="datetime-local"
           value={utcToDateTimeLocal(filters.createdFrom)}
@@ -125,7 +125,7 @@ export function OperationsFilters({
         />
       </label>
       <label>
-        Fecha de creación hasta
+        Fecha de creación hasta (hora de Mazatlán)
         <input
           type="datetime-local"
           value={utcToDateTimeLocal(filters.createdTo)}
