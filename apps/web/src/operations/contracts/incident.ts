@@ -10,6 +10,7 @@ import {
   timestamp,
   uuid,
 } from "./strict-json";
+import { mazatlanWallTimeToInstant } from "../../lib/mazatlan-time";
 
 /**
  * /ops/incidents (AI-07 incident_desk) over AI-05 openIncident, resolveIncident and
@@ -131,49 +132,12 @@ export type BuildResult<T> =
   | { readonly ok: true; readonly body: T }
   | { readonly ok: false; readonly errors: readonly string[] };
 
-const localPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
-const mazatlanParts = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/Mazatlan",
-  hourCycle: "h23",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+const localPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
-function mazatlanWallMillis(instant: number): number {
-  const parts = Object.fromEntries(
-    mazatlanParts.formatToParts(new Date(instant)).map((part) => [part.type, part.value]),
-  );
-  return Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-  );
-}
-
-/** Converts Mazatlán wall time to a UTC instant; `null` for a malformed or impossible value. */
+/** Converts Mazatlán wall time (`YYYY-MM-DDTHH:mm`) to a UTC instant; `null` for a malformed or impossible value. */
 export function mazatlanLocalToUtc(value: string): string | null {
-  const match = localPattern.exec(value);
-  if (match === null) return null;
-  const [year, month, day, hour, minute] = match.slice(1).map(Number);
-  const wall = Date.UTC(year, month - 1, day, hour, minute);
-  const check = new Date(wall);
-  if (
-    check.getUTCFullYear() !== year ||
-    check.getUTCMonth() !== month - 1 ||
-    check.getUTCDate() !== day ||
-    hour > 23 ||
-    minute > 59
-  )
-    return null;
-  const offset = mazatlanWallMillis(wall) - wall;
-  const instant = wall - offset;
-  if (mazatlanWallMillis(instant) !== wall) return null;
-  return new Date(instant).toISOString();
+  if (!localPattern.test(value)) return null;
+  return mazatlanWallTimeToInstant(value)?.toISOString() ?? null;
 }
 
 export function parseProofIds(text: string): string[] {
