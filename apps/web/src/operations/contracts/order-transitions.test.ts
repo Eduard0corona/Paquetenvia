@@ -13,6 +13,7 @@ import {
   transitionRequestBody,
   type AllowedTransition,
 } from "./order-transitions";
+import { orderStatuses } from "./operations-dashboard";
 
 const confirm: AllowedTransition = { target_status: "CONFIRMED", required_metadata: ["restricted_goods_acknowledged"] };
 const cancel: AllowedTransition = { target_status: "CANCELLED", required_metadata: [] };
@@ -52,10 +53,58 @@ describe("order transitions contract (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)",
     ]);
     expect(actions.map((action) => [action.target, action.label, action.danger])).toEqual([
       ["READY_FOR_PICKUP", "Liberar para recolección", false],
+      ["CLAIM_OPEN", "Abrir reclamación", false],
       ["CANCELLED", "Cancelar orden", true],
     ]);
     expect(nextStepActions([])).toEqual([]);
     expect(nextStepActions([{ target_status: "CLOSED", required_metadata: [] }])[0].label).toBe("Cerrar orden");
+  });
+
+  // UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09: every AI-04 target is either offered here or
+  // explicitly left to another screen, so a new status forces a decision.
+  it("offers reschedules, returns and claims, and leaves the rest to their own screens", () => {
+    const everyTarget = nextStepActions(
+      orderStatuses.map((status) => ({ target_status: status, required_metadata: [] })),
+    );
+    expect(everyTarget.map((action) => [action.target, action.label, action.reasonLabel, action.danger])).toEqual([
+      ["CONFIRMED", "Confirmar orden", "Motivo: confirmar orden", false],
+      ["READY_FOR_PICKUP", "Liberar para recolección", "Motivo: liberar para recolección", false],
+      ["RESCHEDULED", "Reprogramar entrega", "Motivo de la reprogramación", false],
+      ["RETURNING", "Iniciar devolución", "Motivo de la devolución", false],
+      ["RETURNED", "Marcar como devuelta", "Detalle de la devolución", false],
+      ["CLOSED", "Cerrar orden", "Motivo: cerrar orden", false],
+      ["CLAIM_OPEN", "Abrir reclamación", "Motivo de la reclamación", false],
+      ["CLAIM_RESOLVED", "Resolver reclamación", "Cómo se resolvió la reclamación", false],
+      ["CANCELLED", "Cancelar orden", "Motivo: cancelar orden", true],
+    ]);
+    const offeredTargets = new Set(everyTarget.map((action) => action.target));
+    expect(orderStatuses.filter((status) => !offeredTargets.has(status))).toEqual([
+      "DRAFT",
+      "ASSIGNED",
+      "AT_PICKUP",
+      "PICKED_UP",
+      "IN_TRANSIT",
+      "DELIVERING",
+      "FAILED_ATTEMPT",
+      "DELIVERED",
+    ]);
+  });
+
+  it("builds claim and return bodies with only the reason, which the claim guards require", () => {
+    // Actions come back in the fixed screen order, not the order the server listed them.
+    const [returning, claim, resolution] = nextStepActions([
+      { target_status: "CLAIM_OPEN", required_metadata: [] },
+      { target_status: "CLAIM_RESOLVED", required_metadata: [] },
+      { target_status: "RETURNING", required_metadata: [] },
+    ]);
+    expect(transitionRequestBody(returning, " Destinatario rechazó ", 7, false)).toEqual({
+      target_status: "RETURNING",
+      reason: "Destinatario rechazó",
+      expected_version: 7,
+    });
+    expect(transitionRequestBody(claim, "Paquete dañado", 9, false).target_status).toBe("CLAIM_OPEN");
+    expect(transitionRequestBody(resolution, "Reembolso acordado", 10, false).target_status).toBe("CLAIM_RESOLVED");
+    expect(() => transitionRequestBody(claim, "  ", 9, false)).toThrow();
   });
 
   it("never shows a transition whose metadata this screen cannot collect", () => {

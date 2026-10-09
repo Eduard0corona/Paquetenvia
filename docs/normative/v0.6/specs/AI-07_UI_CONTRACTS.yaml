@@ -130,8 +130,14 @@ routes:
         shows no button
       - es-MX labels - CONFIRMED "Confirmar orden", READY_FOR_PICKUP "Liberar para recolección", CLOSED "Cerrar
         orden", CANCELLED "Cancelar orden" (danger style)
+      # UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09 (project owner, 2026-10-09): reschedules, returns and claims are offered
+      # too, still only when allowed_transitions lists them; the reason of CLAIM_OPEN and CLAIM_RESOLVED is the
+      # claim (resolution) reason their guards require.
+      - es-MX labels - RESCHEDULED "Reprogramar entrega", RETURNING "Iniciar devolución", RETURNED "Marcar como
+        devuelta", CLAIM_OPEN "Abrir reclamación", CLAIM_RESOLVED "Resolver reclamación"
       - transitions the screen does not offer here are not shown - ASSIGNED (assignment picker), FAILED_ATTEMPT
-        (needs incident_id, recorded from Incidencias), the driver steps and returns and claims
+        (needs incident_id, recorded from Incidencias) and the driver steps AT_PICKUP, PICKED_UP, IN_TRANSIT,
+        DELIVERING and DELIVERED
       input: reason (required, at most 500 characters); for required_metadata restricted_goods_acknowledged a
         required checkbox sends the JSON literal true
       confirmation: required (ConfirmDialog) naming the order and the action

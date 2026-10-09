@@ -150,7 +150,7 @@ export function OperationsNextStep({
           }}
         >
           <Field
-            label={`Motivo: ${selected.label.toLowerCase()}`}
+            label={selected.reasonLabel}
             hint="Queda en el historial de la orden. No escribas datos personales."
             error={inputError}
           >
