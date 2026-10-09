@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const expectedVersion = process.env.EXPECTED_SHARP_VERSION ?? "0.35.4";
+const expectedVersion = process.env.EXPECTED_SHARP_VERSION ?? "0.35.5";
 const webRoot = fileURLToPath(new URL("../../apps/web/", import.meta.url));
 const rootRequire = createRequire(import.meta.url);
 const nextPackagePath = rootRequire.resolve("next/package.json", {
