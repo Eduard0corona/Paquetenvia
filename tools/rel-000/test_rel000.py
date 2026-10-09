@@ -5408,7 +5408,6 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             {
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
-                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
@@ -5416,6 +5415,9 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         self.assertEqual("MERGED", historical[rel000.SHARP_REMEDIATION_ID]["status"])
         self.assertEqual("MERGED", historical[rel000.NEXT_CRITICAL_REMEDIATION_ID]["status"])
         self.assertEqual("MERGED", historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["status"])
+        self.assertEqual(
+            "MERGED", historical[rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]["status"]
+        )
 
     def test_web_transitive_mode_requires_exact_branch_and_id(self):
         policy = self.policy()
@@ -5687,16 +5689,11 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         self.assertNotIn(
             rel000.NEXT_OG_CRITICAL_REMEDIATION_ID, fixture["remediation_issues"]
         )
-        self.assertEqual(
-            205, fixture["remediation_issues"][rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]
+        self.assertNotIn(
+            rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID, fixture["remediation_issues"]
         )
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
-        self.assertIn(
-            "github.head_ref == 'fix/security-2026-11-next-sharp-source-map' "
-            "&& 'SEC-2026-11-NEXT-SHARP-SOURCEMAP'",
-            workflow,
-        )
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
         for name in ("ci.yml", "pr-validation.yml"):
             retired = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
@@ -5709,6 +5706,10 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
                     "github.head_ref == 'fix/security-2026-09-next-critical'", retired
                 )
                 self.assertNotIn("SEC-2026-09-NEXT-CRITICAL", retired)
+                self.assertNotIn(
+                    "github.head_ref == 'fix/security-2026-11-next-sharp-source-map'", retired
+                )
+                self.assertNotIn("SEC-2026-11-NEXT-SHARP-SOURCEMAP", retired)
 
 
 class NextCriticalRemediationPolicyTests(unittest.TestCase):
@@ -7265,8 +7266,39 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-next-sharp-sourcemap-tests-")
         self.root = Path(self.temp.name)
-        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
-        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+        self.repository_policy_path = (
+            REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
+        )
+        current_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # PR #206 merged, so the authorization is historical; the regression suite replays it
+        # as the active authorization it was while the remediation branch was open.
+        next_sharp_sourcemap = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID
+            )
+        )
+        next_sharp_sourcemap.pop("status", None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID
+        ]
+        active = self.policy_value["active_remediations"]
+        # Its original slot is right after the braces authorization it rebound.
+        braces_index = next(
+            (
+                index
+                for index, item in enumerate(active)
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            ),
+            len(active) - 1,
+        )
+        active.insert(braces_index + 1, next_sharp_sourcemap)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -7295,6 +7327,14 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
             cwd=REPOSITORY_ROOT,
         )
 
+    def target_file(self, relative: str) -> bytes:
+        """The file exactly as PR #206 validated it (validated_target_sha), not the checkout."""
+
+        return subprocess.check_output(
+            ["git", "show", f"{self.authorization()['validated_target_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
     def dependency_repo(self):
         authorization = self.authorization()
         root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
@@ -7313,11 +7353,10 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
         base = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip()
-        # The remediation is active, so its graph is the checkout's (as SEC-2026-10 did
-        # while PR #176 was open). Once a later change moves the graph, pin
-        # validated_target_sha and replay that commit instead.
+        # Later changes may move the checkout past this graph, so the regression suite
+        # replays the exact target that PR #206 validated (validated_target_sha).
         for relative in files:
-            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+            (root / relative).write_bytes(self.target_file(relative))
         return root, base, authorization
 
     def validate_dependency(self, root, base, authorization=None):
@@ -7515,6 +7554,40 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
             accepted,
         )
 
+    def test_merged_authorization_is_historical_and_not_active(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        historical = {item["id"]: item for item in policy["historical_remediations"]}
+        retired = historical[rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]
+        self.assertEqual("MERGED", retired["status"])
+        self.assertEqual(
+            "b28d2bafe0e1417f5b9f6571df4bf61c464d262a", retired["validated_target_sha"]
+        )
+        # The policy still loads, so the rebinding and citation stay admitted on the
+        # historical entry of this exact ID.
+        self.assertEqual(
+            rel000.NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING,
+            retired["known_advisory_base_binding"],
+        )
+        self.assertEqual(
+            {self.ISSUE: [self.KNOWN_ADVISORY]}, retired["issue_cited_known_advisories"]
+        )
+        self.assertNotIn(
+            rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
+            {item["id"] for item in policy["active_remediations"]},
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy,
+                "fix/security-2026-11-next-sharp-source-map",
+                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-11-next-sharp-source-map"),
+        )
+
     def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
         policy = self.policy()
         authorization = self.authorization()
@@ -7628,10 +7701,15 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
     def test_rebinding_and_citation_belong_only_to_this_authorization(self):
         authorization = self.authorization()
         for field in ("known_advisory_base_binding", "issue_cited_known_advisories"):
-            for target in (rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.BRACES_KNOWN_ADVISORY_ID):
+            # A retired authorization of another ID cannot carry them either.
+            for target in (
+                rel000.WEB_TRANSITIVE_REMEDIATION_ID,
+                rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.NEXT_OG_CRITICAL_REMEDIATION_ID,
+            ):
                 with self.subTest(field=field, target=target):
                     value = copy.deepcopy(self.policy_value)
-                    for item in value["active_remediations"]:
+                    for item in [*value["historical_remediations"], *value["active_remediations"]]:
                         if item["id"] == target:
                             item[field] = copy.deepcopy(authorization[field])
                     path = self.root / "policy.json"
@@ -7839,7 +7917,7 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
     def test_base_lockfile_must_be_the_authorized_vulnerable_graph(self):
         authorization = self.authorization()
         base_lock = self.base_file("apps/web/pnpm-lock.yaml").decode("utf-8")
-        lock = (REPOSITORY_ROOT / "apps/web/pnpm-lock.yaml").read_text(encoding="utf-8")
+        lock = self.target_file("apps/web/pnpm-lock.yaml").decode("utf-8")
         rel000.validate_next_sharp_sourcemap_exact_lock_graph(base_lock, lock, authorization)
         for old, new in (
             ("\n  source-map-js@1.2.1:\n", "\n  source-map-js@1.2.0:\n"),
@@ -8020,6 +8098,10 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
             lambda: rel000.validate_remediation_policy(copy.deepcopy(base_policy)),
         )
         rel000.validate_remediation_policy(copy.deepcopy(self.policy_value), base_policy=True)
+        # Retired, the authorization still counts: a tested base that records SEC-2026-11 as
+        # MERGED (every base after this retirement) loads only with the rebound graph.
+        retired_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        rel000.validate_remediation_policy(copy.deepcopy(retired_policy), base_policy=True)
 
         def braces(value):
             return next(
@@ -8050,6 +8132,17 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
                 "REMEDIATION_POLICY_INVALID",
                 lambda: rel000.validate_remediation_policy(with_remediation, base_policy=True),
             )
+        with self.subTest(case="old graph beside the retired rebinding authorization"):
+            old_graph = rel000.NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING
+            value = copy.deepcopy(retired_policy)
+            braces(value).update(
+                lock_path=copy.deepcopy(old_graph["lock_path"]),
+                expected_lockfile_sha256=old_graph["expected_lockfile_sha256"],
+            )
+            self.assert_reason(
+                "REMEDIATION_POLICY_INVALID",
+                lambda: rel000.validate_remediation_policy(value, base_policy=True),
+            )
 
     def test_sharp_runtime_smoke_requires_the_0_35_5_target(self):
         authorization = self.authorization()
@@ -8078,11 +8171,10 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
         )
 
     def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
-        fixture = json.loads(
-            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        # The retirement removed this binding from the checkout (see the web-transitive
+        # binding test); the tree PR #206 validated (validated_target_sha) carried it in the
+        # fixture and in both workflows.
+        fixture = json.loads(self.target_file("tests/fixtures/rel-000/security-tracking.json"))
         self.assertEqual(
             205, fixture["remediation_issues"][rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]
         )
@@ -8090,7 +8182,7 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
             {rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"]
         )
         for name in ("ci.yml", "pr-validation.yml"):
-            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            workflow = self.target_file(f".github/workflows/{name}").decode("utf-8")
             with self.subTest(workflow=name):
                 self.assertIn(
                     "github.head_ref == 'fix/security-2026-11-next-sharp-source-map' "
