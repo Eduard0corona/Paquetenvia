@@ -140,6 +140,7 @@ BRACES_KNOWN_ADVISORY_ISSUE_TITLE = (
 )
 # Exact accepted known advisory: no patched braces release exists on npm, so the
 # advisory is tolerated only on this package, severity, version and dev-only lock path.
+# SEC-2026-11 rebound only the path and pinned graph to the Next.js 16.3.8 lockfile.
 BRACES_KNOWN_ADVISORY = {
     "advisory_id": "GHSA-vfj7-8cjw-p6xm",
     "package": "braces",
@@ -151,8 +152,8 @@ BRACES_KNOWN_ADVISORY = {
     "dependency_path_count": 1,
     "dependency_scope": "dev",
     "lock_path": [
-        "eslint-config-next@16.3.6",
-        "@next/eslint-plugin-next@16.3.6",
+        "eslint-config-next@16.3.8",
+        "@next/eslint-plugin-next@16.3.8",
         "fast-glob@3.3.1",
         "micromatch@4.0.8",
         "braces@3.0.3",
@@ -171,6 +172,81 @@ KNOWN_ADVISORY_AUDIT_FIELDS = (
     "direct_or_transitive",
     "dependency_path_count",
 )
+NEXT_SHARP_SOURCEMAP_REMEDIATION_ID = "SEC-2026-11-NEXT-SHARP-SOURCEMAP"
+# Exact SEC-2026-11 graph: the only packages whose lockfile versions may move.
+NEXT_SHARP_SOURCEMAP_LOCK_VERSION_REPLACEMENTS = {
+    **{
+        package: {"from": ["16.3.6"], "to": ["16.3.8"]}
+        for package in (
+            "next",
+            "eslint-config-next",
+            "@next/env",
+            "@next/eslint-plugin-next",
+            "@next/swc-darwin-arm64",
+            "@next/swc-darwin-x64",
+            "@next/swc-linux-arm64-gnu",
+            "@next/swc-linux-arm64-musl",
+            "@next/swc-linux-x64-gnu",
+            "@next/swc-linux-x64-musl",
+            "@next/swc-win32-arm64-msvc",
+            "@next/swc-win32-x64-msvc",
+        )
+    },
+    "sharp": {"from": ["0.35.4"], "to": ["0.35.5"]},
+    **{
+        f"@img/sharp-{platform}": {"from": ["0.35.4"], "to": ["0.35.5"]}
+        for platform in (
+            "darwin-arm64",
+            "darwin-x64",
+            "freebsd-wasm32",
+            "linux-arm",
+            "linux-arm64",
+            "linux-ppc64",
+            "linux-riscv64",
+            "linux-s390x",
+            "linux-x64",
+            "linuxmusl-arm64",
+            "linuxmusl-x64",
+            "wasm32",
+            "webcontainers-wasm32",
+            "win32-arm64",
+            "win32-ia32",
+            "win32-x64",
+        )
+    },
+    **{
+        f"@img/sharp-libvips-{platform}": {"from": ["1.3.3"], "to": ["1.3.4"]}
+        for platform in (
+            "darwin-arm64",
+            "darwin-x64",
+            "linux-arm",
+            "linux-arm64",
+            "linux-ppc64",
+            "linux-riscv64",
+            "linux-s390x",
+            "linux-x64",
+            "linuxmusl-arm64",
+            "linuxmusl-x64",
+        )
+    },
+    "source-map-js": {"from": ["1.2.1"], "to": ["1.2.2"]},
+}
+# The braces accepted known advisory was bound to the 16.3.6 graph until SEC-2026-11
+# rebound it. Only that remediation's own run reads this graph (its base lockfile), and
+# only a tested base policy that predates SEC-2026-11 may still pin it.
+NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING = {
+    "remediation_id": BRACES_KNOWN_ADVISORY_ID,
+    "advisory_id": BRACES_KNOWN_ADVISORY["advisory_id"],
+    "lockfile": BRACES_KNOWN_ADVISORY["lockfile"],
+    "lock_path": [
+        "eslint-config-next@16.3.6",
+        "@next/eslint-plugin-next@16.3.6",
+        "fast-glob@3.3.1",
+        "micromatch@4.0.8",
+        "braces@3.0.3",
+    ],
+    "expected_lockfile_sha256": "a85a581a4b6b0a4169c8632091aa5bdc2981891c4fa40661344cbc8b43e4522d",
+}
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -514,7 +590,14 @@ def load_remediation_policy(path: Path) -> dict[str, Any]:
     return validate_remediation_policy(load_json(path))
 
 
-def validate_remediation_policy(policy: Any) -> dict[str, Any]:
+def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> dict[str, Any]:
+    """Validate the remediation policy field by field.
+
+    ``base_policy`` marks a policy read from a tested base commit, never the tree under
+    test. Such a base may predate SEC-2026-11 and still carry, exactly, the braces graph
+    SEC-2026-11 rebound; every other check is identical.
+    """
+
     if not isinstance(policy, dict):
         fail("REMEDIATION_POLICY_INVALID", "The remediation policy must be a JSON object.")
     if policy.get("format_version") != REMEDIATION_POLICY_FORMAT:
@@ -818,6 +901,17 @@ def validate_remediation_policy(policy: Any) -> dict[str, Any]:
         if authorization.get("id") == BRACES_KNOWN_ADVISORY_ID:
             accepted = authorization.get("accepted_known_advisory")
             totals = {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
+            expected_known = BRACES_KNOWN_ADVISORY
+            if base_policy and NEXT_SHARP_SOURCEMAP_REMEDIATION_ID not in identifiers:
+                # A tested base that predates SEC-2026-11 carries the exact 16.3.6 graph
+                # that SEC-2026-11 rebound, pinned by its hash; nothing else is accepted.
+                expected_known = {
+                    **BRACES_KNOWN_ADVISORY,
+                    "lock_path": NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING["lock_path"],
+                    "expected_lockfile_sha256": NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING[
+                        "expected_lockfile_sha256"
+                    ],
+                }
             if (
                 authorization.get("tracked_issue") != BRACES_KNOWN_ADVISORY_ISSUE
                 or authorization.get("tracked_issue_title") != BRACES_KNOWN_ADVISORY_ISSUE_TITLE
@@ -845,7 +939,7 @@ def validate_remediation_policy(policy: Any) -> dict[str, Any]:
                 or not isinstance(accepted, dict)
                 or set(accepted)
                 != {*BRACES_KNOWN_ADVISORY, "expected_lockfile_sha256", "exit_condition"}
-                or any(accepted.get(key) != value for key, value in BRACES_KNOWN_ADVISORY.items())
+                or any(accepted.get(key) != value for key, value in expected_known.items())
                 or re.fullmatch(r"[0-9a-f]{64}", str(accepted.get("expected_lockfile_sha256", "")))
                 is None
                 or not isinstance(accepted.get("exit_condition"), str)
@@ -860,6 +954,127 @@ def validate_remediation_policy(policy: Any) -> dict[str, Any]:
                     "REMEDIATION_POLICY_INVALID",
                     "The braces accepted known advisory authorization is incomplete or inconsistent.",
                 )
+        if authorization.get("id") == NEXT_SHARP_SOURCEMAP_REMEDIATION_ID:
+            tracked_ids = [
+                "GHSA-cjq9-62q9-8jv4",
+                "GHSA-3w37-wq28-93x7",
+                "GHSA-4jqv-mc3x-m676",
+                "GHSA-mcj8-r9mp-w47p",
+                "GHSA-f87g-xv8r-7p7x",
+                "GHSA-39w2-rjm5-chcv",
+                "GHSA-wq5f-xc86-pv6w",
+                "GHSA-68fv-2mgg-jv7q",
+            ]
+            known_id = BRACES_KNOWN_ADVISORY["advisory_id"]
+            dependency_files = [
+                "apps/web/package.json",
+                "apps/web/pnpm-lock.yaml",
+                "apps/web/pnpm-workspace.yaml",
+            ]
+            if (
+                authorization.get("tracked_issue") != 205
+                or authorization.get("tracked_issue_title")
+                != "SEC-2026-11: remediate Next.js, sharp and source-map-js advisories"
+                or "related_tracked_issue" in authorization
+                or authorization.get("issue_advisories") != {"205": tracked_ids}
+                or authorization.get("issue_cited_known_advisories") != {"205": [known_id]}
+                or authorization.get("expected_base_advisories") != [*tracked_ids, known_id]
+                or authorization.get("expected_base_packages")
+                != {
+                    "GHSA-cjq9-62q9-8jv4": "next",
+                    "GHSA-3w37-wq28-93x7": "next",
+                    "GHSA-4jqv-mc3x-m676": "next",
+                    "GHSA-mcj8-r9mp-w47p": "next",
+                    "GHSA-f87g-xv8r-7p7x": "next",
+                    "GHSA-39w2-rjm5-chcv": "next",
+                    "GHSA-wq5f-xc86-pv6w": "sharp",
+                    "GHSA-68fv-2mgg-jv7q": "source-map-js",
+                    known_id: BRACES_KNOWN_ADVISORY["package"],
+                }
+                or authorization.get("expected_base_severities")
+                != {
+                    "GHSA-cjq9-62q9-8jv4": "high",
+                    "GHSA-3w37-wq28-93x7": "moderate",
+                    "GHSA-4jqv-mc3x-m676": "moderate",
+                    "GHSA-mcj8-r9mp-w47p": "moderate",
+                    "GHSA-f87g-xv8r-7p7x": "moderate",
+                    "GHSA-39w2-rjm5-chcv": "low",
+                    "GHSA-wq5f-xc86-pv6w": "high",
+                    "GHSA-68fv-2mgg-jv7q": "high",
+                    known_id: BRACES_KNOWN_ADVISORY["severity"],
+                }
+                or authorization.get("expected_base_totals")
+                != {"total": 9, "critical": 0, "high": 4, "moderate": 4, "low": 1}
+                or authorization.get("expected_branch_totals")
+                != {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
+                or authorization.get("allowed_direct_packages") != ["next", "eslint-config-next"]
+                or authorization.get("allowed_dependency_files") != dependency_files
+                or authorization.get("required_dependency_files") != dependency_files
+                or authorization.get("allowed_non_dependency_files")
+                != [
+                    ".github/workflows/ci.yml",
+                    ".github/workflows/pr-validation.yml",
+                    "tests/fixtures/rel-000/security-tracking.json",
+                    "tools/rel-000/rel000.py",
+                    "tools/rel-000/security-remediation-policy.json",
+                    "tools/rel-000/test_rel000.py",
+                    "tools/security/sharp-runtime-smoke.mjs",
+                ]
+                or authorization.get("expected_direct_version_changes")
+                != {
+                    "next": {"from": "16.3.6", "to": "16.3.8"},
+                    "eslint-config-next": {"from": "16.3.6", "to": "16.3.8"},
+                }
+                or authorization.get("next_affected_range") != ">=16.0.0 <16.3.8"
+                or authorization.get("next_first_patched_version") != "16.3.8"
+                or authorization.get("expected_override_changes")
+                != {
+                    "next@16.3.6>sharp": {
+                        "selector": "next@16.3.8>sharp",
+                        "from": "0.35.4",
+                        "to": "0.35.5",
+                    }
+                }
+                or authorization.get("expected_override_additions")
+                != [
+                    {
+                        "selector": "source-map-js@<1.2.2",
+                        "to": "1.2.2",
+                        "before": "next@16.3.8>sharp",
+                    }
+                ]
+                or authorization.get("allowed_overrides")
+                != {
+                    "postcss": "8.5.23",
+                    "brace-expansion@<1.1.21": "1.1.21",
+                    "brace-expansion@>=4.0.0 <5.0.12": "5.0.12",
+                    "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+                    "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+                    "browserslist@<=4.28.6": "4.28.7",
+                    "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+                    "source-map-js@<1.2.2": "1.2.2",
+                    "next@16.3.8>sharp": "0.35.5",
+                }
+                or authorization.get("expected_lock_version_replacements")
+                != NEXT_SHARP_SOURCEMAP_LOCK_VERSION_REPLACEMENTS
+                or authorization.get("allowed_lock_metadata_additions") != []
+                or authorization.get("known_advisory_base_binding")
+                != NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING
+                or authorization.get("expected_lock_package_count") != 475
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", str(authorization.get("expected_lockfile_sha256", ""))
+                )
+                is None
+                or authorization.get("target_sharp_version") != "0.35.5"
+                or authorization.get("require_sharp_runtime_smoke") is not True
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The Next.js, Sharp and source-map-js remediation authorization is "
+                    "incomplete or inconsistent.",
+                )
     # An accepted known advisory exists only under its own exact authorization.
     for authorization in [*historical, *active]:
         if "accepted_known_advisory" in authorization and authorization.get("id") != (
@@ -868,6 +1083,16 @@ def validate_remediation_policy(policy: Any) -> dict[str, Any]:
             fail(
                 "REMEDIATION_POLICY_INVALID",
                 "Only the exact braces authorization may declare an accepted known advisory.",
+            )
+        # Rebinding an accepted graph or citing an accepted advisory in another tracking
+        # Issue exists only under the exact SEC-2026-11 authorization.
+        if (
+            "known_advisory_base_binding" in authorization
+            or "issue_cited_known_advisories" in authorization
+        ) and authorization.get("id") != NEXT_SHARP_SOURCEMAP_REMEDIATION_ID:
+            fail(
+                "REMEDIATION_POLICY_INVALID",
+                "Only the exact SEC-2026-11 authorization may rebind or cite a known advisory.",
             )
     validate_dependency_admission_registry(policy, identifiers, branches)
     return policy
@@ -1304,7 +1529,7 @@ def load_base_dependency_admissions(
         )
     if isinstance(policy, dict) and policy.get("format_version") in LEGACY_REMEDIATION_POLICY_FORMATS:
         return []
-    return validate_remediation_policy(policy)["dependency_admissions"]
+    return validate_remediation_policy(policy, base_policy=True)["dependency_admissions"]
 
 
 def resolve_rel000_mode(
@@ -6335,9 +6560,16 @@ def resolve_accepted_known_advisories(
     tracking_issue: dict[str, Any],
     base_audit: dict[str, Any],
     branch_audit: dict[str, Any],
+    remediation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Bind each accepted known advisory present in an audit to its open Issue and lock graph."""
+    """Bind each accepted known advisory present in an audit to its open Issue and lock graph.
 
+    Base and branch lockfiles must both carry the accepted graph. The only exception is the
+    active remediation that rebound it: its exact ``known_advisory_base_binding`` names the
+    graph its authorized base still carries, and only that run reads the base against it.
+    """
+
+    base_binding = (remediation or {}).get("known_advisory_base_binding")
     present = _audit_advisory_ids(base_audit) | _audit_advisory_ids(branch_audit)
     known_issues = tracking_issue.get("known_advisory_issues") or []
     if not isinstance(known_issues, list) or not all(
@@ -6385,7 +6617,23 @@ def resolve_accepted_known_advisories(
         )
         if base_lock.returncode:
             fail("KNOWN_ADVISORY_LOCK_GRAPH_CHANGED", "The base lockfile is missing.")
-        validate_known_advisory_lock_graph(base_lock.stdout, accepted, "base")
+        base_accepted = accepted
+        if base_binding is not None and base_binding["remediation_id"] == authorization["id"]:
+            if (
+                base_binding["advisory_id"] != accepted["advisory_id"]
+                or base_binding["lockfile"] != lockfile
+            ):
+                fail(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    "The declared base binding does not match the accepted known advisory.",
+                    remediation_id=authorization["id"],
+                )
+            base_accepted = {
+                **accepted,
+                "lock_path": base_binding["lock_path"],
+                "expected_lockfile_sha256": base_binding["expected_lockfile_sha256"],
+            }
+        validate_known_advisory_lock_graph(base_lock.stdout, base_accepted, "base")
         lock_hash = validate_known_advisory_lock_graph(
             (repository_root / lockfile).read_bytes(), accepted, "branch"
         )
@@ -6440,6 +6688,329 @@ def validate_braces_known_advisory_diff(
         "lockfile_consistency_verified": True,
         "lockfile_sha256": lock_hash,
         "vulnerable_lock_versions": [],
+    }
+
+
+def _next_sharp_sourcemap_expected_lock_lines(
+    base_lock_text: str, authorization: dict[str, Any]
+) -> list[str]:
+    """Apply only the authorized SEC-2026-11 moves and new overrides to the base lines.
+
+    Package moves and the Sharp edge rename reuse the exact SEC-2026-10 line mapping;
+    each authorized new override is then inserted right before its anchor override.
+    """
+
+    expected = _next_og_expected_lock_lines(
+        base_lock_text,
+        authorization["expected_lock_version_replacements"],
+        authorization["expected_override_changes"],
+    )
+    if expected.count("overrides:") != 1:
+        fail(
+            "BASE_LOCK_GRAPH_UNEXPECTED",
+            "The base lockfile overrides section is missing or duplicated.",
+        )
+    start = expected.index("overrides:") + 1
+    for addition in authorization["expected_override_additions"]:
+        end = next(
+            (
+                index
+                for index in range(start, len(expected))
+                if not expected[index].startswith("  ")
+            ),
+            len(expected),
+        )
+        section = expected[start:end]
+        anchors = [
+            start + offset
+            for offset, line in enumerate(section)
+            if re.fullmatch(rf"  {re.escape(addition['before'])}: \S+", line)
+        ]
+        if len(anchors) != 1 or any(
+            re.fullmatch(rf"  {re.escape(addition['selector'])}: \S+", line) for line in section
+        ):
+            fail(
+                "BASE_LOCK_GRAPH_UNEXPECTED",
+                "The base lockfile overrides no longer match the authorized graph.",
+                override=addition["selector"],
+            )
+        expected.insert(anchors[0], f"  {addition['selector']}: {addition['to']}")
+    return expected
+
+
+def validate_next_sharp_sourcemap_exact_lock_graph(
+    base_lock_text: str,
+    lock_text: str,
+    authorization: dict[str, Any],
+) -> None:
+    """Prove the regenerated lockfile is the base graph plus only the SEC-2026-11 moves.
+
+    Every line must equal the base line after the authorized package version moves, the
+    Sharp edge rename and the inserted source-map-js override. The only other admitted
+    difference is the registry integrity of a moved package; no metadata line may change.
+    Unlike SEC-2026-10, other base packages share moved versions (for example
+    define-properties@1.2.1 or array.prototype.flat@1.3.3). Every substitution is anchored
+    on an exact package name, so those packages must keep their base bytes.
+    """
+
+    replacements = authorization["expected_lock_version_replacements"]
+    for package, replacement in replacements.items():
+        base_versions = _lock_key_versions(base_lock_text, package)
+        if base_versions != set(replacement["from"]):
+            fail(
+                "BASE_LOCK_GRAPH_UNEXPECTED",
+                "The base lockfile no longer matches the authorized vulnerable graph.",
+                package=package,
+                expected=sorted(replacement["from"]),
+                actual=sorted(base_versions),
+            )
+
+    expected_lines = _next_sharp_sourcemap_expected_lock_lines(base_lock_text, authorization)
+    moved_keys = {
+        f"{package}@{version}"
+        for package, replacement in replacements.items()
+        for version in replacement["to"]
+    }
+    metadata = {
+        (item["package"], item["line"]) for item in authorization["allowed_lock_metadata_additions"]
+    }
+    integrity = re.compile(r"    resolution: \{integrity: sha512-[A-Za-z0-9+/=]+\}")
+    added_metadata: set[tuple[str | None, str]] = set()
+    position = 0
+    current_key: str | None = None
+    for line in lock_text.splitlines():
+        block_key = _lock_package_block_key(line)
+        if block_key is not None:
+            current_key = block_key
+        if position < len(expected_lines) and line == expected_lines[position]:
+            position += 1
+            continue
+        if (
+            position < len(expected_lines)
+            and current_key in moved_keys
+            and integrity.fullmatch(line)
+            and integrity.fullmatch(expected_lines[position])
+        ):
+            position += 1
+            continue
+        if (current_key, line) in metadata and (current_key, line) not in added_metadata:
+            added_metadata.add((current_key, line))
+            continue
+        fail(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            "The lockfile changed outside the exact authorized Next.js, Sharp and "
+            "source-map-js graph.",
+            package=current_key,
+            line=line[:200],
+        )
+    if position != len(expected_lines):
+        fail(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            "The lockfile dropped base content outside the exact authorized graph.",
+            line=expected_lines[position][:200],
+        )
+
+
+def validate_next_sharp_sourcemap_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_all = set(authorization["allowed_dependency_files"]) | set(
+        authorization["allowed_non_dependency_files"]
+    )
+    unexpected = sorted(set(all_changed) - allowed_all)
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The Next.js, Sharp and source-map-js remediation changed a file outside its "
+            "exact authorization.",
+            files=unexpected,
+        )
+    required = set(authorization["required_dependency_files"])
+    if set(changed_dependency_files) != required:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The Next.js, Sharp and source-map-js remediation dependency files do not match "
+            "the exact authorization.",
+            expected=sorted(required),
+            actual=changed_dependency_files,
+        )
+
+    current_package = load_json(repository_root / "apps/web/package.json")
+    try:
+        base_package = json.loads(
+            run_git(repository_root, "show", f"{base_main_sha}:apps/web/package.json")
+        )
+    except json.JSONDecodeError as exc:
+        fail("BASE_DEPENDENCY_MANIFEST_INVALID", "The base package manifest is invalid.", error=str(exc))
+    version_changes = authorization["expected_direct_version_changes"]
+    if set(version_changes) != set(authorization["allowed_direct_packages"]):
+        fail(
+            "SECURITY_REMEDIATION_DIRECT_SCOPE_INVALID",
+            "The direct dependency authorization is inconsistent.",
+        )
+    next_version = current_package.get("dependencies", {}).get("next")
+    if current_package.get("devDependencies", {}).get("eslint-config-next") != next_version:
+        fail(
+            "NEXT_DEPENDENCY_ALIGNMENT_INVALID",
+            "Next.js and eslint-config-next must remain aligned stable versions.",
+        )
+    expected_package = copy.deepcopy(base_package)
+    for package, replacement in version_changes.items():
+        section = "dependencies" if package == "next" else "devDependencies"
+        actual_version = current_package.get(section, {}).get(package)
+        if _semver_tuple(str(actual_version)) is None:
+            fail(
+                "PRERELEASE_DEPENDENCY_REJECTED",
+                "Prerelease dependency versions are forbidden.",
+                package=package,
+            )
+        if base_package.get(section, {}).get(package) != replacement["from"]:
+            fail(
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+                "A base direct dependency differs from its exact authorization.",
+                package=package,
+            )
+        if actual_version != replacement["to"]:
+            fail(
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+                "A direct dependency differs from its exact minimum patched target.",
+                package=package,
+            )
+        expected_package[section][package] = replacement["to"]
+    if current_package != expected_package:
+        fail(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            "Only the two exact authorized direct dependency updates are permitted.",
+        )
+    if next_version != authorization["next_first_patched_version"]:
+        fail(
+            "SECURITY_REMEDIATION_VERSION_INVALID",
+            "Next.js must use the exact minimum patched version.",
+        )
+    if any(
+        "sharp" in (current_package.get(section) or {})
+        for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+    ):
+        fail("DIRECT_SHARP_DEPENDENCY_REJECTED", "Sharp must remain transitive and optional.")
+
+    override_changes = authorization["expected_override_changes"]
+    override_additions = authorization["expected_override_additions"]
+    base_workspace = run_git(
+        repository_root, "show", f"{base_main_sha}:apps/web/pnpm-workspace.yaml"
+    )
+    current_workspace = (repository_root / "apps/web/pnpm-workspace.yaml").read_text(
+        encoding="utf-8"
+    )
+    base_overrides = _workspace_overrides(base_workspace)
+    if any(
+        base_overrides.get(selector) != change["from"]
+        for selector, change in override_changes.items()
+    ) or any(addition["selector"] in base_overrides for addition in override_additions):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "A base override differs from its exact authorization.",
+        )
+    # Git output is stripped, so the workspace is compared line by line: the authorized
+    # renames apply in place and each new override sits right before its anchor.
+    line_changes = {
+        f'  "{selector}": {change["from"]}': f'  "{change["selector"]}": {change["to"]}'
+        for selector, change in override_changes.items()
+    }
+    expected_workspace = [line_changes.get(line, line) for line in base_workspace.splitlines()]
+    for addition in override_additions:
+        anchors = [
+            index
+            for index, line in enumerate(expected_workspace)
+            if line.startswith(f'  "{addition["before"]}": ')
+        ]
+        if len(anchors) != 1:
+            fail(
+                "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+                "The anchor of an authorized new override is missing or duplicated.",
+                override=addition["selector"],
+            )
+        expected_workspace.insert(anchors[0], f'  "{addition["selector"]}": {addition["to"]}')
+    current_overrides = _workspace_overrides(current_workspace)
+    if (
+        current_overrides != authorization["allowed_overrides"]
+        or current_workspace.splitlines() != expected_workspace
+        or not current_workspace.endswith("\n")
+    ):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "The workspace overrides differ from the exact Next.js, Sharp and source-map-js "
+            "remediation authorization.",
+            expected=authorization["allowed_overrides"],
+            actual=current_overrides,
+        )
+
+    lock_bytes = (repository_root / "apps/web/pnpm-lock.yaml").read_bytes()
+    lock_text = lock_bytes.decode("utf-8")
+    validate_next_sharp_sourcemap_exact_lock_graph(
+        run_git(repository_root, "show", f"{base_main_sha}:apps/web/pnpm-lock.yaml"),
+        lock_text,
+        authorization,
+    )
+    lock_hash = hashlib.sha256(lock_bytes).hexdigest()
+    if lock_hash != authorization["expected_lockfile_sha256"]:
+        fail(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            "The pnpm lockfile differs from the exact authorized generated graph.",
+            expected=authorization["expected_lockfile_sha256"],
+            actual=lock_hash,
+        )
+    lock_keys = _lock_package_keys(lock_text)
+    if len(lock_keys) != authorization["expected_lock_package_count"]:
+        fail(
+            "LOCKFILE_PACKAGE_COUNT_CHANGED",
+            "The remediation lockfile package count changed.",
+            expected=authorization["expected_lock_package_count"],
+            actual=len(lock_keys),
+        )
+    exact_versions = {
+        package: set(replacement["to"])
+        for package, replacement in authorization["expected_lock_version_replacements"].items()
+    }
+    exact_versions["sharp"] = {authorization["target_sharp_version"]}
+    for package, expected_versions in exact_versions.items():
+        versions = _lock_key_versions(lock_text, package)
+        if versions != expected_versions:
+            fail(
+                "SECURITY_REMEDIATION_LOCK_VERSION_INVALID",
+                "A security target differs from its exact authorized lockfile version.",
+                package=package,
+                expected=sorted(expected_versions),
+                actual=sorted(versions),
+            )
+    lock_lines = lock_text.splitlines()
+    if f"next@{next_version}>sharp: {authorization['target_sharp_version']}" not in lock_text or any(
+        f"  {addition['selector']}: {addition['to']}" not in lock_lines
+        for addition in override_additions
+    ):
+        fail(
+            "LOCKFILE_INCONSISTENT",
+            "The lockfile does not apply the authorized Sharp edge and new overrides.",
+        )
+
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": True,
+        "dependency_lockfile_changed": True,
+        "dependency_workspace_changed": True,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": changed_dependency_files,
+        "lockfile_consistency_verified": True,
+        "lockfile_sha256": lock_hash,
+        "lock_package_count": len(lock_keys),
+        "vulnerable_lock_versions": [],
+        "sharp_versions": [authorization["target_sharp_version"]],
+        "sharp_override_selector": f"next@{next_version}>sharp",
+        "sharp_override_version": authorization["target_sharp_version"],
+        "source_map_js_versions": sorted(_lock_key_versions(lock_text, "source-map-js")),
     }
 
 
@@ -6664,6 +7235,17 @@ def validate_dependency_diff(
     if authorization is not None and authorization.get("id") == BRACES_KNOWN_ADVISORY_ID:
         return validate_braces_known_advisory_diff(
             repository_root,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if (
+        authorization is not None
+        and authorization.get("id") == NEXT_SHARP_SOURCEMAP_REMEDIATION_ID
+    ):
+        return validate_next_sharp_sourcemap_remediation_diff(
+            repository_root,
+            base_main_sha,
             all_changed,
             changed,
             authorization,
@@ -6978,6 +7560,18 @@ def validate_issue_and_audit(
             else ISSUE30_ADVISORIES
         )
     }
+    # The policy may name accepted known advisories the tracking Issue only cites, because
+    # another open Issue tracks them; they must be accepted in this same run (checked below).
+    cited_known_ids = (
+        {
+            value.lower()
+            for value in (authorization.get("issue_cited_known_advisories") or {}).get(
+                str(authorization["tracked_issue"]), []
+            )
+        }
+        if policy_tracks_additional
+        else set()
+    )
     if (
         int(additional_issue.get("number", 0)) != expected_additional_number
         or additional_state not in {"OPEN", "CLOSED"}
@@ -6986,7 +7580,7 @@ def validate_issue_and_audit(
             str(value).lower()
             for value in additional_issue.get("tracked_advisory_ids") or []
         }
-        != expected_additional_ids
+        != expected_additional_ids | cited_known_ids
     ):
         fail(
             "ADDITIONAL_SECURITY_TRACKING_INVALID",
@@ -7068,6 +7662,19 @@ def validate_issue_and_audit(
                         fields=mismatched,
                     )
     accepted_ids = set(accepted_by_id)
+    uncited = sorted(
+        advisory_id
+        for advisory_id in cited_known_ids
+        if advisory_id not in accepted_by_id
+        or accepted_by_id[advisory_id]["issue"]["number"]
+        == int(additional_issue.get("number", 0))
+    )
+    if uncited:
+        fail(
+            "ADDITIONAL_SECURITY_TRACKING_INVALID",
+            "The tracking Issue cites a known advisory that is not accepted under its own Issue.",
+            advisories=uncited,
+        )
     base_totals = base["totals"]
     branch_totals = branch["totals"]
     if branch_totals["critical"] > 0:
@@ -7124,6 +7731,24 @@ def validate_issue_and_audit(
                     "The base advisory-to-package mapping differs from the authorization.",
                     expected=normalized_expected_packages,
                     actual=actual_packages,
+                )
+        expected_severities = (
+            authorization.get("expected_base_severities") if authorization else None
+        )
+        if expected_severities is not None:
+            actual_severities = {
+                item["advisory_id"].lower(): item["severity"] for item in base["advisories"]
+            }
+            normalized_expected_severities = {
+                advisory_id.lower(): severity
+                for advisory_id, severity in expected_severities.items()
+            }
+            if actual_severities != normalized_expected_severities:
+                fail(
+                    "BASE_ADVISORY_SEVERITIES_UNEXPECTED",
+                    "The base advisory-to-severity mapping differs from the authorization.",
+                    expected=normalized_expected_severities,
+                    actual=actual_severities,
                 )
         expected_branch_totals = (
             authorization.get("expected_branch_totals") if authorization else None
@@ -8069,6 +8694,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         additional_issue,
         base_audit,
         branch_audit,
+        authorization,
     )
     dependency_diff = validate_dependency_diff(
         repository_root,
