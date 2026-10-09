@@ -140,6 +140,7 @@ BRACES_KNOWN_ADVISORY_ISSUE_TITLE = (
 )
 # Exact accepted known advisory: no patched braces release exists on npm, so the
 # advisory is tolerated only on this package, severity, version and dev-only lock path.
+# SEC-2026-11 rebound only the path and pinned graph to the Next.js 16.3.8 lockfile.
 BRACES_KNOWN_ADVISORY = {
     "advisory_id": "GHSA-vfj7-8cjw-p6xm",
     "package": "braces",
@@ -151,8 +152,8 @@ BRACES_KNOWN_ADVISORY = {
     "dependency_path_count": 1,
     "dependency_scope": "dev",
     "lock_path": [
-        "eslint-config-next@16.3.6",
-        "@next/eslint-plugin-next@16.3.6",
+        "eslint-config-next@16.3.8",
+        "@next/eslint-plugin-next@16.3.8",
         "fast-glob@3.3.1",
         "micromatch@4.0.8",
         "braces@3.0.3",

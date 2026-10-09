@@ -632,14 +632,14 @@
         "dependency_path_count": 1,
         "dependency_scope": "dev",
         "lock_path": [
-          "eslint-config-next@16.3.6",
-          "@next/eslint-plugin-next@16.3.6",
+          "eslint-config-next@16.3.8",
+          "@next/eslint-plugin-next@16.3.8",
           "fast-glob@3.3.1",
           "micromatch@4.0.8",
           "braces@3.0.3"
         ],
         "lockfile": "apps/web/pnpm-lock.yaml",
-        "expected_lockfile_sha256": "a85a581a4b6b0a4169c8632091aa5bdc2981891c4fa40661344cbc8b43e4522d",
+        "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
         "tracked_issue": 180,
         "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
         "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."

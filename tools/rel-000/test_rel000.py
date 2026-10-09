@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -6643,14 +6644,15 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
         return path
 
     def base_lock(self) -> bytes:
-        return subprocess.check_output(
-            [
-                "git",
-                "show",
-                f"{self.authorization()['authorized_base_sha']}:apps/web/pnpm-lock.yaml",
-            ],
-            cwd=REPOSITORY_ROOT,
-        )
+        """The graph the advisory is accepted on: the committed lockfile, pinned by hash.
+
+        SEC-2026-11 rebound the accepted path and graph to the lockfile it generated, so
+        the bound graph is the checkout's lockfile and no longer the authorized base's.
+        """
+        accepted = self.authorization()["accepted_known_advisory"]
+        lock = (REPOSITORY_ROOT / accepted["lockfile"]).read_bytes()
+        self.assertEqual(accepted["expected_lockfile_sha256"], hashlib.sha256(lock).hexdigest())
+        return lock
 
     def repo(self, base_lock: bytes | None = None, branch_lock: bytes | None = None):
         authorization = self.authorization()
@@ -6660,8 +6662,8 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(
-                base_lock
-                if base_lock is not None and relative == "apps/web/pnpm-lock.yaml"
+                (base_lock if base_lock is not None else self.base_lock())
+                if relative == "apps/web/pnpm-lock.yaml"
                 else subprocess.check_output(
                     ["git", "show", f"{authorization['authorized_base_sha']}:{relative}"],
                     cwd=REPOSITORY_ROOT,
@@ -6847,6 +6849,15 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             lambda value: braces(value)["accepted_known_advisory"].update(dependency_path_count=2),
             lambda value: braces(value)["accepted_known_advisory"].update(installed_versions=["3.0.2"]),
             lambda value: braces(value)["accepted_known_advisory"]["lock_path"].pop(1),
+            lambda value: braces(value)["accepted_known_advisory"].update(
+                lock_path=[
+                    "eslint-config-next@16.3.6",
+                    "@next/eslint-plugin-next@16.3.6",
+                    "fast-glob@3.3.1",
+                    "micromatch@4.0.8",
+                    "braces@3.0.3",
+                ]
+            ),
             lambda value: braces(value)["accepted_known_advisory"].update(tracked_issue=38),
             lambda value: braces(value)["accepted_known_advisory"].update(expected_lockfile_sha256="x"),
             lambda value: braces(value)["accepted_known_advisory"].update(exit_condition="never"),
@@ -6862,6 +6873,40 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             self.assert_reason(
                 "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
             )
+
+    def test_accepted_graph_is_rebound_to_the_next_16_3_8_lockfile(self):
+        accepted = self.authorization()["accepted_known_advisory"]
+        self.assertEqual(
+            [
+                "eslint-config-next@16.3.8",
+                "@next/eslint-plugin-next@16.3.8",
+                "fast-glob@3.3.1",
+                "micromatch@4.0.8",
+                "braces@3.0.3",
+            ],
+            accepted["lock_path"],
+        )
+        self.assertEqual(
+            "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
+            accepted["expected_lockfile_sha256"],
+        )
+        self.assertEqual(
+            accepted["expected_lockfile_sha256"],
+            rel000.validate_known_advisory_lock_graph(self.base_lock(), accepted, "branch"),
+        )
+        # The 16.3.6 graph the advisory was first accepted on no longer satisfies the binding.
+        previous = subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{self.authorization()['authorized_base_sha']}:apps/web/pnpm-lock.yaml",
+            ],
+            cwd=REPOSITORY_ROOT,
+        )
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            lambda: rel000.validate_known_advisory_lock_graph(previous, accepted, "base"),
+        )
 
     def test_exit_condition_is_recorded_in_the_policy(self):
         exit_condition = self.authorization()["accepted_known_advisory"]["exit_condition"]
