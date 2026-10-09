@@ -15,6 +15,7 @@ import { StatusBadge } from "../../components/ui/status-badge";
 import { parseMxnToCents } from "../contracts/money";
 import { formatServiceWindow } from "../contracts/service-window";
 import { operationsOrderHref } from "../routing/operations-routing";
+import { mazatlanWallTimeToInstant } from "../../lib/mazatlan-time";
 
 export function OperationsOrderCard({
   order,
@@ -77,8 +78,9 @@ export function OperationsOrderCard({
             const expires = String(data.get("expires"));
             const vehicle = String(data.get("vehicle")) as
               | "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER";
-            const expiresAt = new Date(expires);
-            if (commissionCents === null || !expires || Number.isNaN(expiresAt.getTime())) {
+            // The typed expiry is America/Mazatlan wall-clock time, whatever the device zone.
+            const expiresAt = mazatlanWallTimeToInstant(expires);
+            if (commissionCents === null || expiresAt === null) {
               setMessage("Completa una comisión y una expiración válidas.");
               return;
             }
@@ -107,7 +109,7 @@ export function OperationsOrderCard({
         >
           <strong>Publicar oferta externa</strong>
           <label>Comisión (MXN)<input name="commission" type="text" inputMode="decimal" pattern="\d{1,13}(\.\d{1,2})?" placeholder="45.00" required /></label>
-          <label>Expiración<input name="expires" type="datetime-local" required /></label>
+          <label>Expiración (hora de Mazatlán)<input name="expires" type="datetime-local" required /></label>
           <label>Vehículo<select name="vehicle" defaultValue="MOTORCYCLE">
             <option value="MOTORCYCLE">Motocicleta</option>
             <option value="CAR">Automóvil</option>

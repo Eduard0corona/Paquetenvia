@@ -38,14 +38,18 @@ export interface NextStepAction {
   readonly danger: boolean;
   /** What the confirmation says will happen. */
   readonly effect: string;
+  /** Label of the required reason field, which names what the reason records. */
+  readonly reasonLabel: string;
   /** The person must confirm the shipment carries no prohibited goods (restricted_goods_acknowledged). */
   readonly needsRestrictedGoodsAcknowledgement: boolean;
 }
 
 /**
  * The transitions "Siguiente paso" offers, in this order. ASSIGNED has its own picker,
- * FAILED_ATTEMPT needs an incident recorded from Incidencias, and the driver steps, returns
- * and claims are not offered from this screen; they never get a button here.
+ * FAILED_ATTEMPT needs an incident recorded from Incidencias, and the driver steps
+ * (AT_PICKUP, PICKED_UP, IN_TRANSIT, DELIVERING, DELIVERED) are not offered from this
+ * screen; they never get a button here. UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09 added
+ * reschedules, returns and claims.
  */
 const offered: readonly Omit<NextStepAction, "needsRestrictedGoodsAcknowledgement">[] = [
   {
@@ -53,24 +57,63 @@ const offered: readonly Omit<NextStepAction, "needsRestrictedGoodsAcknowledgemen
     label: "Confirmar orden",
     danger: false,
     effect: "La orden quedará confirmada y lista para prepararse.",
+    reasonLabel: "Motivo: confirmar orden",
   },
   {
     target: "READY_FOR_PICKUP",
     label: "Liberar para recolección",
     danger: false,
     effect: "La orden quedará lista para asignar un repartidor y recolectarla.",
+    reasonLabel: "Motivo: liberar para recolección",
+  },
+  {
+    target: "RESCHEDULED",
+    label: "Reprogramar entrega",
+    danger: false,
+    effect: "La orden quedará reprogramada; después podrás liberarla para recolección o asignarle un repartidor.",
+    reasonLabel: "Motivo de la reprogramación",
+  },
+  {
+    target: "RETURNING",
+    label: "Iniciar devolución",
+    danger: false,
+    effect: "El paquete regresará a quien lo envió.",
+    reasonLabel: "Motivo de la devolución",
+  },
+  {
+    target: "RETURNED",
+    label: "Marcar como devuelta",
+    danger: false,
+    effect: "Se registrará que el paquete ya regresó a quien lo envió.",
+    reasonLabel: "Detalle de la devolución",
   },
   {
     target: "CLOSED",
     label: "Cerrar orden",
     danger: false,
     effect: "La orden se cerrará; todavía podrá abrirse una reclamación dentro del plazo.",
+    reasonLabel: "Motivo: cerrar orden",
+  },
+  {
+    target: "CLAIM_OPEN",
+    label: "Abrir reclamación",
+    danger: false,
+    effect: "Se abrirá una reclamación sobre la orden; quedará en atención hasta resolverla.",
+    reasonLabel: "Motivo de la reclamación",
+  },
+  {
+    target: "CLAIM_RESOLVED",
+    label: "Resolver reclamación",
+    danger: false,
+    effect: "La reclamación quedará resuelta y registrada en el historial de la orden.",
+    reasonLabel: "Cómo se resolvió la reclamación",
   },
   {
     target: "CANCELLED",
     label: "Cancelar orden",
     danger: true,
     effect: "La orden se cancelará y ya no podrá continuar.",
+    reasonLabel: "Motivo: cancelar orden",
   },
 ];
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Reprogramar, devolver y reclamaciones en "Siguiente paso" (UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09) — 2026-10-09
+
+- Respuesta literal del project owner: "haz los opcionales mientras decido lo de la fase 3"; registrada en
+  `decision-log.md`.
+- AI-07 `/ops/orders/:id` next_step: además de confirmar, liberar, cerrar y cancelar, el detalle ofrece "Reprogramar
+  entrega", "Iniciar devolución", "Marcar como devuelta", "Abrir reclamación" y "Resolver reclamación", solo cuando
+  `allowed_transitions` los incluye, con motivo obligatorio, confirmación y los mensajes de ORD-002-GUARD-CODES.
+- Siguen fuera de esta pantalla ASSIGNED (selector de repartidor), FAILED_ATTEMPT (incidencia) y los pasos del
+  repartidor. AI-04, AI-05, reglas del servidor y roles sin cambios.
+
 ## Conteos reales de la bandeja de operaciones (UI-PHASE2-QUEUE-COUNTS-2026-10-05) — 2026-10-05
 
 - Respuesta literal del project owner: "Sí a los 5 grupos de estado, avanza con la fase 2"; registrada en
