@@ -141,6 +141,20 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
       expect(canOpenWorkInbox(role), role).toBe(canPerform(role, "getOperationsQueueCounts"));
   });
 
+  it("confirms the new order with transitionOrder, PLATFORM_ADMIN only with MFA (UI-PHASE3-ORDER-WIZARD-2026-10-10)", () => {
+    expect(screenOperationsMatrix.transitionOrder).toEqual(["DISPATCHER", "PLATFORM_ADMIN"]);
+    // Every role that creates an order from the screen can also confirm it.
+    expect(screenOperationsMatrix.transitionOrder).toEqual([...capabilityMatrix.createOrder]);
+    expect(requiresMfa("PLATFORM_ADMIN", "transitionOrder")).toBe(true);
+    expect(requiresMfa("DISPATCHER", "transitionOrder")).toBe(false);
+    expect(requiresMfa("PLATFORM_ADMIN", "createOrder")).toBe(false);
+    for (const role of ["VIEWER", "FINANCE", "DRIVER", "CUSTOMER_SUPPORT", null])
+      expect(canPerform(role, "transitionOrder"), String(role)).toBe(false);
+    expect(tenantCapabilities.replace(/\s+/g, " ")).toContain(
+      'Create("transitionOrder", Dispatcher, PlatformAdminMfa, Driver)',
+    );
+  });
+
   it("each mirrored operation exists in AI-05", () => {
     for (const operation of [
       ...Object.keys(capabilityMatrix),
