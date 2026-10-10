@@ -90,6 +90,15 @@ El límite de 10 MiB está alineado con el default técnico actual de Custody; n
 es una política legal inmutable. IndexedDB puede ser purgado por el navegador,
 por lo que la UI nunca presenta una acción proyectada como confirmada.
 
+Vista previa (UI-001 fase 3): al tomar la foto la PWA la muestra en “Vista
+previa de la foto” desde un object URL en memoria, sin persistir nada nuevo;
+sólo se previsualiza una foto JPEG/PNG de hasta 10 MiB (mismas reglas, sin leer
+ni hashear el archivo). “Repetir” la descarta y reabre la cámara; sólo “Usar
+esta foto” encola la acción con ese mismo `Blob`, con la validación, el SHA-256,
+la escritura IndexedDB y la idempotencia de siempre. Si la cola no la guarda,
+la misma foto vuelve a la vista previa. El object URL se revoca al repetir, al
+usarla y al desmontar el paso.
+
 ## Proyección local
 
 La proyección comienza en `status` y `aggregate_version` confirmados por REST.

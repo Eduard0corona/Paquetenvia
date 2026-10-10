@@ -55,6 +55,7 @@ import {
 import { disabledDriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
 import { formatMxnCents } from "../../operations/contracts/money";
 import { DriverAccount } from "./driver-account";
+import { DriverProofCapture } from "./driver-proof-capture";
 import styles from "./driver-stops.module.css";
 
 const unavailableState: DriverStopsViewState = Object.freeze({
@@ -308,8 +309,8 @@ export function DriverStopsExperience() {
           )}
           mutating={operationsState.mutating}
           onEnqueue={(kind, blob) =>
-            stop
-              ? void operationsControllerRef.current?.enqueue(
+            stop && operationsControllerRef.current
+              ? operationsControllerRef.current.enqueue(
                   {
                     orderId: stop.order_id,
                     kind,
@@ -318,7 +319,7 @@ export function DriverStopsExperience() {
                   },
                   blob,
                 )
-              : undefined
+              : Promise.resolve(false)
           }
           onDiscard={(id, status, version) =>
             void operationsControllerRef.current?.discard(id, status, version)
@@ -363,7 +364,7 @@ export function DriverStopsExperience() {
           offline={dataIsOffline}
           operations={[]}
           mutating={operationsState.mutating}
-          onEnqueue={() => undefined}
+          onEnqueue={() => Promise.resolve(false)}
           onDiscard={() => undefined}
           onNewSession={() => undefined}
           onRetrySame={() => undefined}
@@ -623,7 +624,7 @@ function StopDetail({
   offline: boolean;
   operations: readonly DriverOfflineOperation[];
   mutating: boolean;
-  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => void;
+  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
   onDiscard: (
     operationId: string,
     status: DriverOperationalStatus | null,
@@ -731,10 +732,8 @@ function StopAction({
 }: Readonly<{
   stop: ProjectedDriverStop;
   disabled: boolean;
-  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => void;
+  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
 }>) {
-  const [proof, setProof] = useState<Blob | undefined>();
-  const [fileError, setFileError] = useState<string | null>(null);
   const kind = nextDriverOperationKind(stop.projectedStatus);
   if (!kind || stop.attentionCount > 0) return null;
   const proofRequired = kind === "PICKUP_PROOF" || kind === "DELIVERY_PROOF";
@@ -742,50 +741,21 @@ function StopAction({
     <fieldset className={styles.actions} disabled={disabled}>
       <legend>Siguiente acción</legend>
       {proofRequired ? (
-        <>
-          <label htmlFor={`proof-${stop.order_id}`}>
-            Foto de evidencia (JPEG o PNG, máximo 10 MiB)
-          </label>
-          <input
-            id={`proof-${stop.order_id}`}
-            type="file"
-            accept="image/jpeg,image/png"
-            capture="environment"
-            aria-describedby={
-              fileError ? `proof-error-${stop.order_id}` : undefined
-            }
-            aria-invalid={fileError ? true : undefined}
-            onChange={(event) => {
-              const files = event.currentTarget.files;
-              if (!files || files.length !== 1) {
-                setProof(undefined);
-                setFileError("Selecciona exactamente una foto.");
-                return;
-              }
-              setProof(files[0]);
-              setFileError(null);
-            }}
-          />
-          {fileError ? (
-            <p id={`proof-error-${stop.order_id}`} role="alert">
-              {fileError}
-            </p>
-          ) : null}
-        </>
-      ) : null}
-      <button
-        type="button"
-        disabled={disabled || (proofRequired && !proof)}
-        onClick={() => {
-          if (proofRequired && !proof) {
-            setFileError("Selecciona una foto antes de continuar.");
-            return;
-          }
-          onEnqueue(kind, proof);
-        }}
-      >
-        {driverOperationLabel(kind)}
-      </button>
+        // The photo is queued only from its preview ("Usar esta foto").
+        <DriverProofCapture
+          orderId={stop.order_id}
+          actionLabel={driverOperationLabel(kind)}
+          onUse={(photo) => onEnqueue(kind, photo)}
+        />
+      ) : (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => void onEnqueue(kind)}
+        >
+          {driverOperationLabel(kind)}
+        </button>
+      )}
     </fieldset>
   );
 }

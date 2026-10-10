@@ -255,6 +255,58 @@
   min-height: 1.4rem;
 }
 
+.proofAction,
+.proofProblem {
+  margin: 0;
+  font-weight: 800;
+}
+
+.proofProblem {
+  color: var(--crit);
+}
+
+.proofCapture,
+.proofPreview {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.proofCapture[hidden] {
+  display: none;
+}
+
+.proofPreview h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.proofPreview h3:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.proofImage {
+  display: block;
+  width: 100%;
+  max-height: min(60vh, 28rem);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  object-fit: contain;
+}
+
+.proofPreviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.actions .retakeButton {
+  border: 2px solid var(--accent);
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
 .conflict {
   border-color: var(--warn);
   background: var(--warn-soft);
