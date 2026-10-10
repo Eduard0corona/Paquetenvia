@@ -11,6 +11,7 @@ import {
   type DriverOfflineOperation,
   type DriverProofBlobRecord,
 } from "../offline/operation-contract";
+import type { ValidatedDriverProof } from "../proofs/proof-file";
 import type { DriverSession } from "../session/driver-session";
 import {
   DriverOperationsController,
@@ -146,6 +147,67 @@ describe("driver operations conflict resolution", () => {
       status: "PENDING",
       safeError: null,
     });
+    await harness.controller.dispose();
+  });
+});
+
+describe("driver operations enqueue result (photo preview)", () => {
+  const pickupProof = {
+    orderId,
+    kind: "PICKUP_PROOF" as const,
+    projectedStatus: "AT_PICKUP" as const,
+    projectedVersion: 4,
+  };
+
+  it("resolves true once the action and the same photo Blob are stored", async () => {
+    const harness = await createHarness([]);
+    const photo = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+      type: "image/png",
+    });
+
+    await expect(harness.controller.enqueue(pickupProof, photo)).resolves.toBe(true);
+
+    expect(harness.queue.operations).toHaveLength(1);
+    expect(harness.queue.operations[0]).toMatchObject({
+      kind: "PICKUP_PROOF",
+      expectedVersion: 4,
+      contentType: "image/png",
+      sizeBytes: 4,
+    });
+    expect(harness.queue.proofs.get(harness.queue.operations[0].id)?.blob).toBe(photo);
+    expect(harness.controller.current.message).toBe(
+      "Acción guardada. Se sincronizará cuando haya conexión.",
+    );
+    await harness.controller.dispose();
+  });
+
+  it("resolves false and stores nothing when the queue refuses the photo", async () => {
+    const harness = await createHarness([]);
+    const gif = new Blob([new Uint8Array([0x47, 0x49, 0x46])], { type: "image/gif" });
+
+    await expect(harness.controller.enqueue(pickupProof, gif)).resolves.toBe(false);
+
+    expect(harness.queue.operations).toEqual([]);
+    expect(harness.queue.proofs.size).toBe(0);
+    expect(harness.controller.current).toMatchObject({
+      mutating: false,
+      message:
+        "No fue posible guardar la foto. Verifica tipo, tamaño y espacio disponible.",
+    });
+    await harness.controller.dispose();
+  });
+
+  it("resolves false when the step no longer matches the stop", async () => {
+    const harness = await createHarness([]);
+
+    await expect(
+      harness.controller.enqueue(
+        { ...pickupProof, projectedStatus: "ASSIGNED" },
+        new Blob([new Uint8Array([1])], { type: "image/png" }),
+      ),
+    ).resolves.toBe(false);
+
+    expect(harness.queue.operations).toEqual([]);
     await harness.controller.dispose();
   });
 });
@@ -302,10 +364,22 @@ class MemoryQueue implements DriverOfflineQueue {
   }
 
   public async enqueue(
-    _partition: DriverCachePartition,
+    partition: DriverCachePartition,
     value: DriverOfflineOperation,
+    proof?: ValidatedDriverProof,
   ): Promise<void> {
     this.operations.push(value);
+    if (proof) {
+      this.proofs.set(value.id, {
+        schemaVersion: 1,
+        partitionKey: partition.key,
+        operationId: value.id,
+        blob: proof.blob,
+        contentType: proof.contentType,
+        sizeBytes: proof.sizeBytes,
+        sha256: proof.sha256,
+      });
+    }
   }
 
   public async replaceOperation(

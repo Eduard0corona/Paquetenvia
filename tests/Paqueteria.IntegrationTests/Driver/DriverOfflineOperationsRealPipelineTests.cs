@@ -358,13 +358,18 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
 
+    /// <summary>
+    /// UI-001 phase 3: the step names the action, the photo is shown in
+    /// "Vista previa de la foto" and only "Usar esta foto" queues it.
+    /// </summary>
     private static async Task EnqueueProofAsync(
         IPage page,
-        string button,
+        string action,
         string fileName,
         string mimeType = "image/png",
         byte[]? bytes = null)
     {
+        await page.GetByText(action, new() { Exact = true }).First.WaitForAsync();
         await page.Locator("input[type=file]").SetInputFilesAsync(
             new FilePayload
             {
@@ -372,7 +377,12 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                 MimeType = mimeType,
                 Buffer = bytes ?? SyntheticPng,
             });
-        await page.GetByRole(AriaRole.Button, new() { Name = button }).ClickAsync();
+        await page.GetByRole(
+                AriaRole.Heading,
+                new() { Name = "Vista previa de la foto" })
+            .WaitForAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+            .ClickAsync();
         await page.WaitForTimeoutAsync(100);
     }
 
