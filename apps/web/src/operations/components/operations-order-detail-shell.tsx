@@ -19,13 +19,23 @@ import { OperationsTrackingLink } from "./operations-tracking-link";
 
 export function OperationsOrderDetailShell({
   orderId,
+  inboxHref = null,
 }: {
   readonly orderId: string;
+  /** UI-PHASE3-INBOX-2026-10-10: the inbox view this detail was opened from, if any. */
+  readonly inboxHref?: string | null;
 }) {
   const state = useOperationsOrderDetail(orderId);
+  const backToInbox =
+    inboxHref === null ? null : (
+      <Link className="btnLink opsBackLink" href={inboxHref}>
+        <span aria-hidden="true">←</span> Volver a la bandeja
+      </Link>
+    );
   if (state.notFound) {
     return (
       <div className="page">
+        {backToInbox}
         <PageHeader title="Orden no disponible" description="No es posible mostrar esta orden." />
         <div className="opsFormActions">
           <Link className="btn btnSecondary" href="/ops/dashboard">
@@ -38,6 +48,7 @@ export function OperationsOrderDetailShell({
   if (state.accessUnavailable) {
     return (
       <div className="page">
+        {backToInbox}
         <PageHeader
           title="Acceso no disponible"
           description="No es posible mostrar información de operaciones."
@@ -48,6 +59,7 @@ export function OperationsOrderDetailShell({
   if (state.order === null || state.projection === null) {
     return (
       <div className="page" aria-busy={state.loading}>
+        {backToInbox}
         <PageHeader
           title="Detalle de orden"
           description={state.error ?? "Cargando información operativa…"}
@@ -59,6 +71,7 @@ export function OperationsOrderDetailShell({
   const { order, projection } = state;
   return (
     <div className="page" aria-busy={state.loading}>
+      {backToInbox}
       <PageHeader
         eyebrow="Orden"
         title={order.public_id}

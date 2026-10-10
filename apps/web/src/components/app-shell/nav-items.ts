@@ -1,4 +1,4 @@
-import { canPerform } from "../../operations/contracts/capabilities";
+import { canOpenWorkInbox, canPerform } from "../../operations/contracts/capabilities";
 
 /**
  * Navigation of the app shell for /ops and /finance. Every item is derived from the client
@@ -10,11 +10,12 @@ export interface NavItem {
   readonly key: NavKey;
   readonly href: string;
   readonly label: string;
-  /** Rendered as the prominent "+ Nueva orden" action instead of a list link. */
+  /** Rendered as the prominent "+ Nueva orden" action instead of a plain link. */
   readonly primary?: true;
 }
 
 export type NavKey =
+  | "inbox"
   | "operations"
   | "new-order"
   | "csv-import"
@@ -24,12 +25,31 @@ export type NavKey =
   | "settlements";
 
 interface NavRule extends NavItem {
-  /** Other path prefixes that belong to this section (the order detail is under Operaciones). */
+  /** Other path prefixes that belong to this section (the order detail is under Bandeja). */
   readonly sectionPrefixes?: readonly string[];
   readonly visible: (role: string) => boolean;
 }
 
+/**
+ * Display order of UI-PHASE3-INBOX-2026-10-10 (approved menu "Bandeja · Órdenes · + Nueva
+ * orden · Rutas · Incidencias · Importar CSV · Repartidores"): the operations board keeps the
+ * second place as "Tablero"; there is no Repartidores screen yet; the finance items follow.
+ */
 const rules: readonly NavRule[] = [
+  {
+    key: "inbox",
+    href: "/ops/inbox",
+    label: "Bandeja",
+    // The order detail is opened from the inbox and returns to it.
+    sectionPrefixes: ["/ops/orders/"],
+    visible: canOpenWorkInbox,
+  },
+  {
+    key: "operations",
+    href: "/ops/dashboard",
+    label: "Tablero",
+    visible: (role) => canPerform(role, "listOrders"),
+  },
   {
     key: "new-order",
     href: "/ops/orders/new",
@@ -37,19 +57,6 @@ const rules: readonly NavRule[] = [
     primary: true,
     // AI-07 /ops/orders/new: quote then order.
     visible: (role) => canPerform(role, "createQuote") && canPerform(role, "createOrder"),
-  },
-  {
-    key: "operations",
-    href: "/ops/dashboard",
-    label: "Operaciones",
-    sectionPrefixes: ["/ops/orders/"],
-    visible: (role) => canPerform(role, "listOrders"),
-  },
-  {
-    key: "csv-import",
-    href: "/ops/orders/import",
-    label: "Importar CSV",
-    visible: (role) => canPerform(role, "previewOrderCsv"),
   },
   {
     key: "routes",
@@ -64,6 +71,12 @@ const rules: readonly NavRule[] = [
     href: "/ops/incidents",
     label: "Incidencias",
     visible: (role) => canPerform(role, "listIncidents"),
+  },
+  {
+    key: "csv-import",
+    href: "/ops/orders/import",
+    label: "Importar CSV",
+    visible: (role) => canPerform(role, "previewOrderCsv"),
   },
   {
     key: "cod",
@@ -89,7 +102,7 @@ export function navItemsForRole(role: string | null): readonly NavItem[] {
 
 /**
  * The item that owns a pathname: its own href, or a section prefix, choosing the most
- * specific match (/ops/orders/new is "Nueva orden", /ops/orders/{id} is "Operaciones").
+ * specific match (/ops/orders/new is "Nueva orden", /ops/orders/{id} is "Bandeja").
  */
 export function activeNavKey(items: readonly NavItem[], pathname: string): NavKey | null {
   let best: { key: NavKey; length: number } | null = null;
