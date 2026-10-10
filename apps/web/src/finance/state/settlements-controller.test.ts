@@ -4,7 +4,7 @@ import type { OperationsSession } from "../../operations/session/operations-sess
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
 import type { SettlementsApi } from "../api/settlements-api";
 import { parseSettlement } from "../contracts/settlement";
-import { settlementId, settlementResponse } from "../contracts/settlement.fixtures";
+import { driverId, settlementId, settlementResponse } from "../contracts/settlement.fixtures";
 import {
   actionNeedsMfa,
   SettlementsController,
@@ -217,6 +217,34 @@ describe("authoritative writes", () => {
     await controller.select(settlementId);
     await controller.approve();
     expect(controller.getSnapshot().message).toContain("efectivo contra entrega");
+  });
+
+  it("validates a calculation before its confirmation without sending anything", async () => {
+    const { controller, api } = setup({ [orgA]: "FINANCE" });
+    await controller.start();
+    const body = { driver_id: driverId, period_from: "2026-09-01", period_to: "2026-09-15" };
+
+    expect(controller.prepareCreate({ ...body, period_to: "2026-08-31" })).toBeNull();
+    expect(controller.getSnapshot().errors).toEqual(["El fin del periodo no puede ser anterior al inicio."]);
+    expect(controller.prepareCreate({ ...body, driver_id: "no-es-uuid" })).toBeNull();
+
+    expect(controller.prepareCreate(body)).toEqual(body);
+    expect(controller.getSnapshot().errors).toEqual([]);
+    expect(api.create).not.toHaveBeenCalled();
+
+    // Confirmed: the same body is sent once.
+    await controller.create(body);
+    expect(api.create).toHaveBeenCalledOnce();
+    expect(vi.mocked(api.create).mock.calls[0][0]).toEqual(body);
+  });
+
+  it.each(["DISPATCHER", "VIEWER"])("never prepares a calculation for %s", async (role) => {
+    const { controller, api } = setup({ [orgA]: role });
+    await controller.start();
+    expect(
+      controller.prepareCreate({ driver_id: driverId, period_from: "2026-09-01", period_to: "2026-09-15" }),
+    ).toBeNull();
+    expect(api.create).not.toHaveBeenCalled();
   });
 
   it("hands the export to the browser without keeping it in state", async () => {

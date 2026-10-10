@@ -150,6 +150,10 @@ export class DriverOperationsController {
     }
   }
 
+  /**
+   * Resolves `true` only when this call stored the operation (and its proof photo) in the
+   * local queue, so the photo preview knows whether to offer the same photo again.
+   */
   public async enqueue(
     input: {
       readonly orderId: string;
@@ -158,12 +162,12 @@ export class DriverOperationsController {
       readonly projectedVersion: number;
     },
     blob?: Blob,
-  ): Promise<void> {
-    if (!this.partition || this.state.mutating) return;
+  ): Promise<boolean> {
+    if (!this.partition || this.state.mutating) return false;
     const definition = driverOperationDefinitions[input.kind];
     if (definition.sourceStatus !== input.projectedStatus) {
       this.setMessage("Actualiza la parada antes de registrar esta acción.");
-      return;
+      return false;
     }
     if (
       this.state.operations.some(
@@ -174,14 +178,15 @@ export class DriverOperationsController {
           candidate.status !== "NEEDS_ATTENTION",
       )
     ) {
-      return;
+      return false;
     }
 
     this.beginMutation();
+    let operation: DriverOfflineOperation;
+    let proof: ValidatedDriverProof | undefined;
     try {
-      let proof: ValidatedDriverProof | undefined;
       if (definition.proofType) proof = await validateDriverProof(blob);
-      const operation = createDriverOfflineOperation({
+      operation = createDriverOfflineOperation({
         partitionKey: this.partition.key,
         orderId: input.orderId,
         kind: input.kind,
@@ -191,13 +196,6 @@ export class DriverOperationsController {
         randomUuid: this.options.randomUuid,
       });
       await this.queue.enqueue(this.partition, operation, proof);
-      if (proof) {
-        this.telemetry.proofBytesQueued(
-          driverProofSizeBucket(proof.sizeBytes),
-        );
-      }
-      await this.reload("Acción guardada. Se sincronizará cuando haya conexión.");
-      void this.scheduler?.requestSync(false);
     } catch {
       this.setState({
         ...this.state,
@@ -207,7 +205,29 @@ export class DriverOperationsController {
             ? "No fue posible guardar la foto. Verifica tipo, tamaño y espacio disponible."
             : "No fue posible guardar la acción.",
       });
+      return false;
     }
+
+    const saved = "Acción guardada. Se sincronizará cuando haya conexión.";
+    try {
+      if (proof) {
+        this.telemetry.proofBytesQueued(
+          driverProofSizeBucket(proof.sizeBytes),
+        );
+      }
+      await this.reload(saved);
+    } catch {
+      // The write already succeeded. If the queue cannot be read back, the action still
+      // shows as saved and stays in the local list, so the duplicate check above sees it.
+      this.setState({
+        operations: [...this.state.operations, operation],
+        loading: false,
+        mutating: false,
+        message: saved,
+      });
+    }
+    void this.scheduler?.requestSync(false);
+    return true;
   }
 
   public async syncNow(): Promise<void> {

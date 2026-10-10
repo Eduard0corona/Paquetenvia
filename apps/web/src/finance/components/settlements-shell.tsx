@@ -10,6 +10,7 @@ import { shortId } from "../../lib/short-id";
 import {
   settlementAdjustmentConfirmation,
   settlementApprovalConfirmation,
+  settlementCreationConfirmation,
   settlementPaymentConfirmation,
   settlementVoidConfirmation,
 } from "../contracts/confirmations";
@@ -49,7 +50,9 @@ export function SettlementsShell() {
         <section className="opsRouteLayout">
           <aside className="panel opsRoutePanel">
             <Filters key={`filters-${state.formKey}`} controller={controller} disabled={state.loading} />
-            {state.canCreate && <CreateForm key={`create-${state.formKey}`} controller={controller} disabled={state.busy} />}
+            {state.canCreate && (
+              <CreateForm key={`create-${state.formKey}`} controller={controller} disabled={state.busy} confirm={confirm} />
+            )}
             <h2>Liquidaciones</h2>
             {state.items.length === 0 && !state.loading && <EmptyState>Sin liquidaciones para estos filtros.</EmptyState>}
             <ul className="opsRouteList">
@@ -113,15 +116,29 @@ function Filters({ controller, disabled }: { readonly controller: SettlementsCon
   );
 }
 
-function CreateForm({ controller, disabled }: { readonly controller: SettlementsController; readonly disabled: boolean }) {
+function CreateForm({
+  controller,
+  disabled,
+  confirm,
+}: {
+  readonly controller: SettlementsController;
+  readonly disabled: boolean;
+  readonly confirm: (request: ConfirmRequest) => void;
+}) {
   return (
     <form className="opsForm" autoComplete="off" onSubmit={(event) => {
       event.preventDefault();
       const data = new FormData(event.currentTarget);
-      void controller.create({
+      // Validated first; the dialog names the driver and the period before anything is sent.
+      const body = controller.prepareCreate({
         driver_id: String(data.get("driver_id") ?? "").trim(),
         period_from: String(data.get("period_from") ?? ""),
         period_to: String(data.get("period_to") ?? ""),
+      });
+      if (body === null) return;
+      confirm({
+        ...settlementCreationConfirmation(body),
+        onConfirm: () => void controller.create(body),
       });
     }}>
       <h2>Calcular liquidación</h2>
@@ -196,11 +213,17 @@ function SettlementDetail({
             })}>Marcar pagada</button>
         )}
         {actions.includes("export") && (
-          <button type="button" className="btn btnSecondary" disabled={locked}
+          <button type="button" className="btn btnSecondary" disabled={locked} aria-describedby="settlement-export-note"
             onClick={() => void controller.exportCsv()}>Exportar CSV</button>
         )}
         <button type="button" className="btn btnSecondary" onClick={() => controller.clearSelection()}>Cerrar</button>
       </div>
+      {/* D7-SETTLEMENT-RULES: "la exportación se audita". */}
+      {actions.includes("export") && (
+        <p id="settlement-export-note" className="fieldHint">
+          Cada exportación a CSV queda registrada en la bitácora de auditoría.
+        </p>
+      )}
 
       {actions.includes("adjust") && (
         <form className="opsForm" autoComplete="off" onSubmit={(event) => {

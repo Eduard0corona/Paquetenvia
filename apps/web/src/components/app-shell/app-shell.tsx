@@ -129,31 +129,30 @@ function ShellNav({
       </p>
     );
   }
-  const primary = items.find((item) => item.primary === true);
-  const links = items.filter((item) => item.primary !== true);
+  // UI-PHASE3-INBOX-2026-10-10: the items keep the approved order; "+ Nueva orden" stays the
+  // one prominent action, in its place within the list.
   return (
-    <>
-      {primary !== undefined && (
-        <Link
-          className="btn btnPrimary appNewOrder"
-          href={primary.href}
-          aria-current={active === primary.key ? "page" : undefined}
-        >
-          <span aria-hidden="true">+</span> {primary.label}
-        </Link>
-      )}
-      <nav className="appNav" aria-label="Secciones">
-        <ul>
-          {links.map((item) => (
-            <li key={item.key}>
-              <Link href={item.href} aria-current={active === item.key ? "page" : undefined}>
-                {item.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
-    </>
+    <nav className="appNav" aria-label="Secciones">
+      <ul>
+        {items.map((item) => (
+          <li key={item.key}>
+            <Link
+              className={item.primary === true ? "btn btnPrimary appNewOrder" : undefined}
+              href={item.href}
+              aria-current={active === item.key ? "page" : undefined}
+            >
+              {item.primary === true ? (
+                <>
+                  <span aria-hidden="true">+</span> {item.label}
+                </>
+              ) : (
+                item.label
+              )}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 

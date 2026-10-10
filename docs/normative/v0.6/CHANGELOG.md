@@ -20,6 +20,23 @@
 - Sin cambios en AI-05, AI-06 ni AI-12; no es un sexto flujo de AI-13 §4 (cada cierre es la transición ORD-002 de una
   orden).
 
+## Bandeja de trabajo de despacho (UI-PHASE3-INBOX-2026-10-10) — 2026-10-10
+
+- Respuesta literal del project owner: "avanza con la fase 3"; registrada en `decision-log.md`.
+- AI-07 `/ops/inbox` (contrato `work_inbox`): "Bandeja de trabajo" para DISPATCHER y PLATFORM_ADMIN con MFA, su
+  página de inicio y primer elemento del menú (Bandeja · Tablero · + Nueva orden · Rutas · Incidencias · Importar CSV).
+  VIEWER y los demás roles quedan fuera, igual que en el tablero y los conteos.
+- Colas con los conteos reales de `getOperationsQueueCounts`: Sin asignar, Requiere atención, Precio por revisar (solo
+  conteo con nota), Entregadas sin cerrar y En ruta. Cada cola se lee con los filtros existentes de
+  `GET /operations/dashboard`; las de varios estados se combinan en el orden del servidor sin saltar ni reordenar filas.
+- Tabla (Guía, Estado, Destino por zona, Ventana en hora de Mazatlán, Repartidor) con chips que filtran en el servidor,
+  "Cargar más" y las acciones "Abrir" y "Asignar" (selector de repartidor del detalle). La cola y los chips viven en la
+  URL; el detalle abierto desde la bandeja ofrece "Volver a la bandeja".
+- `/ops/dashboard` sigue disponible como "Tablero", con su vista de posiciones ("Mapa de posiciones" desde la bandeja).
+- Pendientes: columna Total (el tablero no trae el total de la orden), lista de Precio por revisar (sin filtro del
+  servidor), acciones masivas con vista previa y las entradas Órdenes y Repartidores. Sin cambios en API, AI-04, AI-05,
+  AI-06, AI-18, roles ni migraciones.
+
 ## Reprogramar, devolver y reclamaciones en "Siguiente paso" (UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09) — 2026-10-09
 
 - Respuesta literal del project owner: "haz los opcionales mientras decido lo de la fase 3"; registrada en

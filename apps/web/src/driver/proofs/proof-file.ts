@@ -24,16 +24,28 @@ export class DriverProofFileError extends Error {
   }
 }
 
+/**
+ * The synchronous part of `validateDriverProof` (presence, size, exact MIME), so the photo
+ * preview can turn away a file the queue would refuse without reading or hashing it.
+ */
+export function checkDriverProofFile(
+  blob: Blob | null | undefined,
+): DriverProofFileFailure | null {
+  if (!blob) return "missing";
+  if (blob.size < 1) return "empty";
+  if (blob.size > MaximumDriverProofBytes) return "too-large";
+  if (blob.type !== "image/jpeg" && blob.type !== "image/png") {
+    return "unsupported-type";
+  }
+  return null;
+}
+
 export async function validateDriverProof(
   blob: Blob | null | undefined,
 ): Promise<ValidatedDriverProof> {
-  if (!blob) throw new DriverProofFileError("missing");
-  if (blob.size < 1) throw new DriverProofFileError("empty");
-  if (blob.size > MaximumDriverProofBytes) {
-    throw new DriverProofFileError("too-large");
-  }
-  if (blob.type !== "image/jpeg" && blob.type !== "image/png") {
-    throw new DriverProofFileError("unsupported-type");
+  const failure = checkDriverProofFile(blob);
+  if (failure !== null || !blob) {
+    throw new DriverProofFileError(failure ?? "missing");
   }
 
   const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
@@ -42,7 +54,8 @@ export async function validateDriverProof(
     .join("");
   return Object.freeze({
     blob,
-    contentType: blob.type,
+    // checkDriverProofFile accepted only these two exact types.
+    contentType: blob.type as DriverProofContentType,
     sizeBytes: blob.size,
     sha256,
   });

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Playwright;
 
@@ -19,6 +20,27 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     private const string SyntheticStorageOrigin = DriverStopsNextServerFixture.TestStorageOrigin;
     private static readonly byte[] SyntheticPng =
         [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+    /// <summary>Decodable 1x1 PNGs (two colours) for the photo preview.</summary>
+    private static readonly byte[] FirstPreviewPng =
+    [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+        0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xe0, 0x2f, 0xcb, 0x03,
+        0x00, 0x01, 0x8b, 0x00, 0xf4, 0x02, 0x38, 0xf3, 0x86, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    private static readonly byte[] SecondPreviewPng =
+    [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+        0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xb8, 0x59, 0xce, 0x06,
+        0x00, 0x03, 0x83, 0x01, 0x57, 0x51, 0xa6, 0x6c, 0xcb, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
 
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
@@ -230,6 +252,83 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             backend.SessionAttempts,
             attempt => Assert.StartsWith("drv2-", attempt.Key, StringComparison.Ordinal));
         Assert.Equal(2, backend.UploadCount);
+    }
+
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Proof_photo_is_previewed_retaken_and_queued_only_from_Usar_esta_foto()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-ui001-photo-preview");
+        await RecordRevokedObjectUrlsAsync(page);
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("AT_PICKUP", 4);
+        await backend.RouteAsync(page);
+        var secondSha256 = Convert.ToHexStringLower(SHA256.HashData(SecondPreviewPng));
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await page.Locator("input[type=file]").SetInputFilesAsync(
+                new FilePayload
+                {
+                    Name = "first-preview.png",
+                    MimeType = "image/png",
+                    Buffer = FirstPreviewPng,
+                });
+            var firstUrl = await WaitForDecodedPreviewAsync(page);
+            Assert.StartsWith("blob:", firstUrl, StringComparison.Ordinal);
+            Assert.False(await IsObjectUrlRevokedAsync(page, firstUrl));
+            await page.WaitForFunctionAsync(
+                "() => document.activeElement?.textContent === 'Vista previa de la foto'");
+            // Previewing stores nothing.
+            Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
+            Assert.Equal(0, await ReadStoreCountAsync(page, "proof_blobs"));
+
+            // "Repetir" reopens the camera picker and revokes the first preview.
+            var chooser = await page.RunAndWaitForFileChooserAsync(
+                () => page.GetByRole(AriaRole.Button, new() { Name = "Repetir" })
+                    .ClickAsync());
+            Assert.True(await IsObjectUrlRevokedAsync(page, firstUrl));
+            await chooser.SetFilesAsync(
+                new FilePayload
+                {
+                    Name = "second-preview.png",
+                    MimeType = "image/png",
+                    Buffer = SecondPreviewPng,
+                });
+            var secondUrl = await WaitForDecodedPreviewAsync(page, firstUrl);
+            Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
+
+            await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+                .ClickAsync();
+            await WaitForOperationCountAsync(page, 1);
+            await WaitForProofCountAsync(page, 1);
+            await ExpectTextAsync(page, "Iniciar traslado");
+            Assert.True(await IsObjectUrlRevokedAsync(page, secondUrl));
+            Assert.Equal(
+                $"{SecondPreviewPng.Length}|{secondSha256}|{secondSha256}",
+                await ReadSingleProofAsync(page));
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.WaitForFunctionAsync("() => navigator.onLine === true");
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        // Only the retaken photo travels: one upload, sessions for its hash only.
+        Assert.Equal(1, backend.UploadCount);
+        Assert.Equal([secondSha256], backend.SessionSha256.Distinct());
+        Assert.Equal(["PICKED_UP"], backend.TransitionTargets);
     }
 
     [Fact]
@@ -602,11 +701,16 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             NextLabel(name));
     }
 
+    /// <summary>
+    /// UI-001 phase 3: the step names the action, the photo is shown in
+    /// "Vista previa de la foto" and only "Usar esta foto" queues it.
+    /// </summary>
     private static async Task EnqueueProofAsync(
         IPage page,
-        string button,
+        string action,
         string fileName)
     {
+        await ExpectTextAsync(page, action);
         await page.Locator("input[type=file]").SetInputFilesAsync(
             new FilePayload
             {
@@ -614,9 +718,98 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 MimeType = "image/png",
                 Buffer = SyntheticPng,
             });
-        await page.GetByRole(AriaRole.Button, new() { Name = button }).ClickAsync();
+        await page.GetByRole(
+                AriaRole.Heading,
+                new() { Name = "Vista previa de la foto" })
+            .WaitForAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+            .ClickAsync();
         await page.WaitForTimeoutAsync(100);
     }
+
+    /// <summary>
+    /// Waits until the preview shows a decoded image other than
+    /// <paramref name="previous"/> and returns its object URL.
+    /// </summary>
+    private static async Task<string> WaitForDecodedPreviewAsync(
+        IPage page,
+        string? previous = null)
+    {
+        await page.WaitForFunctionAsync(
+            """
+            previous => {
+              const image = document.querySelector('img[alt="Foto de evidencia tomada"]');
+              return image !== null && image.src !== previous &&
+                image.complete && image.naturalWidth > 0;
+            }
+            """,
+            previous);
+        return await page.GetByRole(
+                AriaRole.Img,
+                new() { Name = "Foto de evidencia tomada" })
+            .GetAttributeAsync("src") ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Records every <c>URL.revokeObjectURL</c> call. The page CSP keeps
+    /// <c>blob:</c> out of <c>connect-src</c>, so a revoked URL cannot be
+    /// probed with <c>fetch</c>.
+    /// </summary>
+    private static Task RecordRevokedObjectUrlsAsync(IPage page) =>
+        page.AddInitScriptAsync(
+            """
+            (() => {
+              const revoked = [];
+              const revoke = URL.revokeObjectURL.bind(URL);
+              URL.revokeObjectURL = url => {
+                revoked.push(String(url));
+                revoke(url);
+              };
+              window.__paquetenviaRevokedObjectUrls = revoked;
+            })();
+            """);
+
+    private static Task<bool> IsObjectUrlRevokedAsync(IPage page, string url) =>
+        page.EvaluateAsync<bool>(
+            "url => window.__paquetenviaRevokedObjectUrls.includes(url)",
+            url);
+
+    /// <summary>
+    /// The stored proof's recorded size and SHA-256, plus the SHA-256 of the
+    /// stored Blob bytes themselves.
+    /// </summary>
+    private static Task<string> ReadSingleProofAsync(IPage page) =>
+        page.EvaluateAsync<string>(
+            """
+            () => new Promise((resolve, reject) => {
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const request = database.transaction("proof_blobs", "readonly")
+                  .objectStore("proof_blobs").getAll();
+                request.onerror = () => {
+                  database.close();
+                  reject(request.error);
+                };
+                request.onsuccess = async () => {
+                  database.close();
+                  if (request.result.length !== 1) {
+                    reject(new Error("expected exactly one stored proof"));
+                    return;
+                  }
+                  const proof = request.result[0];
+                  const digest = new Uint8Array(await crypto.subtle.digest(
+                    "SHA-256",
+                    await proof.blob.arrayBuffer()));
+                  const blobSha256 = [...digest]
+                    .map(value => value.toString(16).padStart(2, "0"))
+                    .join("");
+                  resolve(`${proof.sizeBytes}|${proof.sha256}|${blobSha256}`);
+                };
+              };
+            })
+            """);
 
     private static string NextLabel(string current) => current switch
     {
@@ -911,6 +1104,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         internal List<string> TransitionKeys { get; } = [];
         internal List<string?> TransitionClientOccurredAt { get; } = [];
         internal List<string?> SessionClientOccurredAt { get; } = [];
+        internal List<string?> SessionSha256 { get; } = [];
         internal List<(string Key, string ProofType)> SessionAttempts { get; } = [];
         internal List<string> FinalizeKeys { get; } = [];
         internal List<(string ProofType, string CapturedAt)> FinalizedProofs { get; } = [];
@@ -1075,6 +1269,10 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             {
                 SessionAttempts.Add((key, proofType));
                 SessionClientOccurredAt.Add(ReadClientOccurredAt(request));
+                SessionSha256.Add(
+                    request.TryGetProperty("sha256", out var sha256)
+                        ? sha256.GetString()
+                        : null);
                 if (!sessionsByKey.TryGetValue(key, out var existingSessionId))
                 {
                     sessionSequence += 1;

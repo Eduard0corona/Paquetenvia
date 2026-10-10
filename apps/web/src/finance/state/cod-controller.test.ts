@@ -99,6 +99,28 @@ describe("COD flows", () => {
     expect(controller.getSnapshot().message).toBe("Cobro registrado.");
   });
 
+  it("validates a collection before its confirmation without sending anything", async () => {
+    const { controller, api } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await controller.load(orderId);
+
+    expect(controller.prepareRecord("250.49", "Recibo 17")).toBeNull();
+    expect(controller.getSnapshot().errors[0]).toContain("exactamente");
+    expect(controller.prepareRecord("250.50", " Recibo 17")).toBeNull();
+
+    // The exact integer cents the confirmation states; the errors of the earlier try go away.
+    expect(controller.prepareRecord("250.50", "Recibo 17")).toEqual({ amount_cents: 25_050, reference: "Recibo 17" });
+    expect(controller.getSnapshot().errors).toEqual([]);
+    expect(api.record).not.toHaveBeenCalled();
+  });
+
+  it("never prepares a collection for FINANCE", async () => {
+    const { controller } = setup({ [orgA]: "FINANCE" });
+    await controller.start();
+    await controller.load(orderId);
+    expect(controller.prepareRecord("250.50", "Recibo 17")).toBeNull();
+  });
+
   it("refuses an amount that differs from the expectation without calling the API", async () => {
     const { controller, api } = setup({ [orgA]: "DISPATCHER" });
     await controller.start();
@@ -226,7 +248,7 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
     expect(controller.getSnapshot().stepUpHref).toContain(encodeURIComponent("/finance/cod"));
   });
 
-  it("reconciles from the list with the record the financials name and refreshes the list", async () => {
+  it("reads the amount before the confirmation, then reconciles that record and refreshes the list", async () => {
     const financials = vi
       .fn<CodApi["financials"]>()
       .mockResolvedValueOnce(recorded())
@@ -241,12 +263,55 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
       .mockResolvedValue({ items: [], next_cursor: null });
     const { controller, api } = setup({ [orgA]: "DISPATCHER" }, { financials, pendingReconciliation });
     await controller.start();
-    await controller.reconcileFromList(orderId);
+
+    const record = await controller.readReconcilableFromList(orderId);
     expect(financials.mock.calls[0][0]).toBe(orderId);
+    // The confirmation can state the amount; nothing is reconciled yet.
+    expect(record).toMatchObject({ id: codId, order_id: orderId, amount_cents: 25_050, status: "RECORDED" });
+    expect(api.reconcile).not.toHaveBeenCalled();
+
+    await controller.reconcileFromList(orderId, codId);
     expect(vi.mocked(api.reconcile).mock.calls[0][0]).toBe(codId);
+    expect(api.reconcile).toHaveBeenCalledOnce();
     expect(pendingReconciliation).toHaveBeenCalledTimes(2);
     expect(controller.getSnapshot()).toMatchObject({ pending: [], message: "Cobro conciliado." });
     expect(controller.getSnapshot().financials?.cod.status).toBe("RECONCILED");
+  });
+
+  it("shows an error instead of a confirmation when the amount cannot be read", async () => {
+    const { controller, api } = setup(
+      { [orgA]: "DISPATCHER" },
+      { financials: vi.fn(async () => { throw new TenantApiError("network"); }) },
+    );
+    await controller.start();
+
+    await expect(controller.readReconcilableFromList(orderId)).resolves.toBeNull();
+
+    expect(api.reconcile).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().errors).toEqual([
+      "No se pudo leer el cobro de esta orden; no se concilió nada. Vuelve a intentarlo.",
+    ]);
+    expect(controller.getSnapshot().message).toContain("Sin respuesta válida del servidor");
+  });
+
+  it("reconciles from the list only the record it read, while the screen still shows it", async () => {
+    const context = setup(
+      { [orgA]: "DISPATCHER", [orgB]: "DISPATCHER" },
+      { financials: vi.fn(async () => recorded()) },
+    );
+    await context.controller.start();
+    const record = await context.controller.readReconcilableFromList(orderId);
+    expect(record?.id).toBe(codId);
+
+    await context.controller.reconcileFromList(orderId, syntheticUuid(0x777));
+    expect(context.api.reconcile).not.toHaveBeenCalled();
+    expect(context.controller.getSnapshot().errors[0]).toContain("no se concilió nada");
+
+    // A tenant switch while the confirmation is open drops the read: nothing is reconciled.
+    context.switchTo(orgB);
+    await context.controller.start();
+    await context.controller.reconcileFromList(orderId, codId);
+    expect(context.api.reconcile).not.toHaveBeenCalled();
   });
 
   it("shows the recorded collection as reconcilable once its order is opened", async () => {
@@ -258,10 +323,10 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
     expect(vi.mocked(api.reconcile).mock.calls[0][0]).toBe(codId);
   });
 
-  it("does not reconcile when the order is no longer pending and refreshes the list", async () => {
+  it("opens no confirmation when the order is no longer pending and refreshes the list", async () => {
     const { controller, api } = setup({ [orgA]: "DISPATCHER" });
     await controller.start();
-    await controller.reconcileFromList(orderId);
+    await expect(controller.readReconcilableFromList(orderId)).resolves.toBeNull();
     expect(api.reconcile).not.toHaveBeenCalled();
     expect(api.pendingReconciliation).toHaveBeenCalledTimes(2);
     expect(controller.getSnapshot().errors[0]).toContain("ya no está pendiente");
@@ -299,7 +364,8 @@ describe("COD pending list (API-FIN-COD-VISIBILITY-2026-09-29)", () => {
       .mockResolvedValue({ items: [], next_cursor: null });
     const { controller, api } = setup({ [orgA]: "FINANCE" }, { financials, pendingReconciliation });
     await controller.start();
-    await controller.reconcileFromList(orderId);
+    const record = await controller.readReconcilableFromList(orderId);
+    await controller.reconcileFromList(orderId, record!.id);
     expect(vi.mocked(api.reconcile).mock.calls[0][0]).toBe(codId);
     expect(api.record).not.toHaveBeenCalled();
     expect(controller.getSnapshot()).toMatchObject({ canRecord: false, pending: [] });

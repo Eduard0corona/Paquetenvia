@@ -279,13 +279,23 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
     return state.selecting === null ? state.selected : null;
   }
 
-  public async create(body: CreateSettlementBody): Promise<void> {
-    if (!this.getSnapshot().canCreate) return;
+  /**
+   * Validates a calculation before its confirmation: the body createSettlement would
+   * receive, or null after showing why it cannot be sent.
+   */
+  public prepareCreate(body: CreateSettlementBody): CreateSettlementBody | null {
+    if (!this.getSnapshot().canCreate) return null;
     const errors = validateCreateSettlement(body);
     if (errors.length > 0) {
       this.update({ errors, message: null });
-      return;
+      return null;
     }
+    this.update({ errors: [] });
+    return body;
+  }
+
+  public async create(body: CreateSettlementBody): Promise<void> {
+    if (this.prepareCreate(body) === null) return;
     await this.write("create", JSON.stringify(body), body, (api, key, payload, signal) =>
       api.create(payload, key, signal), null);
   }

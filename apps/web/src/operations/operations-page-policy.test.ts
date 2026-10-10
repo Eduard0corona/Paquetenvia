@@ -142,7 +142,7 @@ describe("operations page privacy policy", () => {
 
   it("reaches order creation and the finance screens from the shared app shell navigation", () => {
     const nav = readFileSync("src/components/app-shell/nav-items.ts", "utf8");
-    for (const href of ["/ops/orders/new", "/ops/dashboard", "/finance/cod", "/finance/settlements"])
+    for (const href of ["/ops/inbox", "/ops/orders/new", "/ops/dashboard", "/finance/cod", "/finance/settlements"])
       expect(nav).toContain(`href: "${href}"`);
     for (const layout of ["src/app/ops/layout.tsx", "src/app/finance/layout.tsx"])
       expect(readFileSync(layout, "utf8")).toContain("<AppShell>");
