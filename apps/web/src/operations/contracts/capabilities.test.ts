@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canAuthorizeLowPrice,
+  canOpenWorkInbox,
   canSearchOrders,
   canListPendingCod,
   lowPriceAuthorizationMatrix,
@@ -128,6 +129,16 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(canSearchOrders("PLATFORM_ADMIN")).toBe(true);
     for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", null])
       expect(canSearchOrders(role), String(role)).toBe(false);
+  });
+
+  it("offers the work inbox to exactly the dashboard and queue-count roles (UI-PHASE3-INBOX-2026-10-10)", () => {
+    expect(canOpenWorkInbox("DISPATCHER")).toBe(true);
+    expect(canOpenWorkInbox("PLATFORM_ADMIN")).toBe(true);
+    for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", "BUSINESS_ADMIN", "ALLY_ADMIN", null])
+      expect(canOpenWorkInbox(role), String(role)).toBe(false);
+    // Same roles as getOperationsQueueCounts, which the inbox tabs read.
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER", "FINANCE", "DRIVER"])
+      expect(canOpenWorkInbox(role), role).toBe(canPerform(role, "getOperationsQueueCounts"));
   });
 
   it("each mirrored operation exists in AI-05", () => {

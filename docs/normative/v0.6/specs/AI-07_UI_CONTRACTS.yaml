@@ -73,6 +73,18 @@ routes:
         visibility, polling or filter change)
       failure: the indicators show "Sin dato" and the list keeps working; a response that breaks the contract is
         discarded
+    # UI-PHASE3-INBOX-2026-10-10: shown as "Tablero" in the app shell, after Bandeja; DISPATCHER and PLATFORM_ADMIN
+    # land on /ops/inbox instead, and /ops/dashboard?view=positions opens the positions view directly.
+  # UI-PHASE3-INBOX-2026-10-10 (project owner, 2026-10-09, "avanza con la fase 3"): the dispatcher's work inbox
+  # ("Bandeja de trabajo"), built only on existing operations; the backend and RLS remain the barrier.
+  /ops/inbox:
+    roles:
+    - platform_admin
+    - dispatcher
+    release: MVP-1
+    screen_contract: work_inbox
+    decisions:
+    - UI-PHASE3-INBOX-2026-10-10
   # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the app shell top bar offers "Buscar guía" to the roles that open the
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
@@ -275,6 +287,72 @@ screen_contracts:
       assignment_scope: existing OWN assignment only
       navigation: /ops/routes
       optimistic_ui_as_authority: forbidden
+  work_inbox:
+    release: MVP-1
+    route: /ops/inbox
+    decision: UI-PHASE3-INBOX-2026-10-10
+    authority: REST API + PostgreSQL
+    sources:
+      counts: GET /operations/queue-counts (getOperationsQueueCounts)
+      list: GET /operations/dashboard (OBS-001 read model, ADR-OBS-001, not declared in AI-05) with its existing
+        filters only - unassigned, status, service_type, delivery_zone_id and cursor
+      assign: the /ops/orders/:id assignment_picker sources (listAssignableDrivers, assignDriver)
+    roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+    excluded_roles: VIEWER and every other role, exactly as for the operations dashboard and the queue counts; the
+      shell does not offer the inbox to them and the API answers 403
+    landing: DISPATCHER and PLATFORM_ADMIN land on /ops/inbox after login and after an organization switch away from a
+      page their role cannot use; FINANCE (/finance/cod), DRIVER (/driver/stops) and every other role (/ops/dashboard)
+      keep their landing
+    navigation: the shell lists Bandeja (/ops/inbox) first, then Tablero (/ops/dashboard), + Nueva orden, Rutas,
+      Incidencias, Importar CSV and the finance items the role holds; the order detail belongs to Bandeja
+    queues:
+    - Sin asignar (queues.unassigned) - dashboard unassigned=true
+    - Requiere atención (queues.needs_attention) - FAILED_ATTEMPT, RESCHEDULED, RETURNING and CLAIM_OPEN, one dashboard
+      query per status
+    - Precio por revisar (queues.price_review) - count only, with a note that its list comes later and that the count
+      includes finished orders
+    - Entregadas sin cerrar (queues.delivered_not_closed) - dashboard status=DELIVERED
+    - En ruta (queues.en_route) - IN_TRANSIT and DELIVERING, one dashboard query per status
+    counts: each queue shows its getOperationsQueueCounts value, which covers every order of the organization and never
+      applies the chips (the screen says so); the queues show "Sin dato" when the counts fail and the list keeps working
+    merge: the queries of one queue are merged newest first by updated_at and order id, the dashboard order; a row is
+      shown only once every query that still has pages reached it, so "Cargar más" never places an older row above a
+      shown one nor skips one
+    filters: chips are server filters of the dashboard queries only - one status of a multi-status queue, service type
+      and delivery zone (zones seen in the loaded rows); "Limpiar filtros" removes them; search stays the shell's
+      "Buscar guía" (exact tracking number)
+    url_state: queue, status, service_type and zone live in the /ops/inbox query; a row opens /ops/orders/:id carrying
+      the view, and the detail offers "Volver a la bandeja" to that canonical inbox URL only
+    table:
+      columns:
+      - Guía (public_id, link to the order)
+      - Estado (exact AI-04 label with its status-group color; "Precio por revisar" when cost_warning is set)
+      - Destino (delivery zone name; the read model carries no address and addresses stay out of lists)
+      - Ventana de entrega (delivery_window in America/Mazatlan; "Horario de la zona" when absent)
+      - Repartidor (DRV- reference)
+      states: loading, empty per queue, error keeping the rows ("No fue posible actualizar la bandeja."), no session
+        and access unavailable
+    actions:
+    - open_order (the guide, "Abrir" or a click on the row)
+    - assign_own ("Asignar" only on rows with unassigned_alert, the /ops/orders/:id assignment_picker with the same
+      list, integer cents and confirmation naming driver and cost; the inbox and its counts are read again afterwards)
+    - open_positions ("Mapa de posiciones" opens /ops/dashboard in its positions view)
+    recovery:
+    - load, view change, refresh, assignment, realtime event (250 ms debounce), reconnect, visibility and 30 s polling
+      read the REST queries and the counts again; a reconnect resynchronizes from that read
+    - optimistic UI is never authoritative; a 401 or 403 clears the rows and stops the realtime hub
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears rows, zones and counts
+    - no internal identifier, personal data or amount in the table
+    forbidden:
+    - bulk status change without preview (this version offers no bulk action)
+    - a queue, count or chip computed by filtering loaded rows
+    not_supported:
+    - Total column - the dashboard read model carries no order total; showing it needs a separate change of that read
+      model
+    - Precio por revisar list - needs a server filter for cost_warning
+    - bulk actions - a later change, always with a preview first
+    - Órdenes and Repartidores menu items of the approved menu - no screen yet
   route_planner:
     release: MVP-1
     route: /ops/routes

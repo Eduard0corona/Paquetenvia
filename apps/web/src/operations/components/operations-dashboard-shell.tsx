@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useConfirmDialog } from "../../components/confirm-dialog";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
@@ -17,6 +17,13 @@ export function OperationsDashboardShell() {
   const state = useOperationsDashboard();
   const [view, setView] = useState<"list" | "positions">("list");
   const { confirm, dialog } = useConfirmDialog();
+  // UI-PHASE3-INBOX-2026-10-10: "Mapa de posiciones" in the inbox opens the positions view.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (new URL(window.location.href).searchParams.get("view") === "positions") setView("positions");
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
   const grouped = useMemo(
     () =>
       orderStatusGroupIds.map((group) => ({

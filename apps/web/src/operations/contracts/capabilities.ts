@@ -187,6 +187,18 @@ export function canSearchOrders(role: string | null): boolean {
   return canPerform(role, "listOrders") && (orderDetailRoles as readonly (string | null)[]).includes(role);
 }
 
+/**
+ * UI-PHASE3-INBOX-2026-10-10: the work inbox reads the operations dashboard (OBS-001) and
+ * getOperationsQueueCounts, so it is offered exactly to the roles both admit (DISPATCHER, and
+ * PLATFORM_ADMIN with MFA, which the API enforces); VIEWER and every other role are excluded
+ * as from the dashboard and the counts.
+ */
+export function canOpenWorkInbox(role: string | null): boolean {
+  return (
+    canPerform(role, "getOperationsQueueCounts") && (orderDetailRoles as readonly (string | null)[]).includes(role)
+  );
+}
+
 /** VIEWER never receives exact coordinates (D5-VIEWER-LOCATION-PRECISION-2026-09-27). */
 export function mayHandleExactCoordinates(role: string | null): boolean {
   return role === "DISPATCHER" || role === "PLATFORM_ADMIN";
