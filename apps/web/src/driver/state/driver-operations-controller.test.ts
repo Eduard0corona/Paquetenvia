@@ -197,6 +197,34 @@ describe("driver operations enqueue result (photo preview)", () => {
     await harness.controller.dispose();
   });
 
+  it("keeps a stored action as saved and deduplicated when the queue cannot be read back", async () => {
+    const harness = await createHarness([]);
+    const listOperations = vi
+      .spyOn(harness.queue, "listOperations")
+      .mockRejectedValueOnce(new Error("synthetic read failure"));
+    const photo = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+      type: "image/png",
+    });
+
+    await expect(harness.controller.enqueue(pickupProof, photo)).resolves.toBe(true);
+
+    expect(listOperations).toHaveBeenCalled();
+    expect(harness.queue.operations).toHaveLength(1);
+    expect(harness.controller.current).toMatchObject({
+      mutating: false,
+      message: "Acción guardada. Se sincronizará cuando haya conexión.",
+    });
+    expect(harness.controller.current.operations.map((value) => value.id)).toEqual([
+      harness.queue.operations[0].id,
+    ]);
+    expect(harness.scheduler.requestSync).toHaveBeenCalledWith(false);
+
+    // The same step again is recognised as already queued: no second operation.
+    await expect(harness.controller.enqueue(pickupProof, photo)).resolves.toBe(false);
+    expect(harness.queue.operations).toHaveLength(1);
+    await harness.controller.dispose();
+  });
+
   it("resolves false when the step no longer matches the stop", async () => {
     const harness = await createHarness([]);
 
@@ -353,7 +381,8 @@ class MemoryQueue implements DriverOfflineQueue {
   }
 
   public async listOperations(): Promise<readonly DriverOfflineOperation[]> {
-    return this.operations;
+    // A fresh frozen list, like IndexedDbDriverOfflineQueue: no aliasing with the store.
+    return Object.freeze([...this.operations]);
   }
 
   public async readProof(
