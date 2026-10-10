@@ -103,6 +103,13 @@ Otherwise the deploy job stops before logging in to Azure.
   administrator has created `paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS` with SET for the deployment
   role (like the lifecycle executor); nothing is written before that check. The role is never granted to the API,
   the Worker or an operator login.
+- ORD-AUTO-CLOSE-2026-10-10: on a pilot database whose baseline predates the auto-close executor, the Orders lane
+  `20261010000100_AddOrderAutoCloseDiscovery` stops in its E-002 bridge with
+  `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_auto_close_executor` until an Azure administrator has
+  created `paqueteria_auto_close_executor NOLOGIN BYPASSRLS` with SET for the deployment role; nothing is written
+  before that check. The role is never granted to the API, the Worker or an operator login. The Worker runs the job
+  with `Orders__AutoClose__Enabled=true` (`apps.bicep`); its `orders_auto_close` readiness check fails until the lane
+  has installed the discovery function.
 - `job-pv-pilot-logins` runs the new migrator command `runtime-logins`. It creates or re-keys
   `pv_pilot_api` → `paqueteria_app` and `pv_pilot_worker` → `paqueteria_worker` as
   `LOGIN NOINHERIT NOBYPASSRLS` with exactly one membership. It receives **SCRAM-SHA-256 verifiers

@@ -1,5 +1,25 @@
 # Changelog
 
+## Cierre automático de órdenes entregadas (ORD-AUTO-CLOSE-2026-10-10) — 2026-10-10
+
+- Pregunta y respuesta literales del project owner: "Cierre de órdenes: hoy una orden entregada se cierra a mano con "Cerrar orden". El servidor solo lo permite si no tiene incidencias abiertas y el cobro contra entrega ya está conciliado. Aun cerrada, se puede abrir una reclamación dentro del plazo. ¿Quieres que se cierre sola cuando cumpla esas reglas?" → "Sí, que se cierre sola" (descripción de la opción: "Agrego en la fase 3 un proceso en el servidor que la cierra en cuanto cumple las reglas. Requiere ADR, porque cambia el comportamiento.");
+  también dijo "avanza con la fase 3". Cambio MAJOR (AI-01 §7) registrado como ADR en `decision-log.md` y en
+  `docs/adr/ADR-ORD-AUTO-CLOSE.md`.
+- AI-04 `order_state_machine.automatic_close`: el sistema cierra (DELIVERED -> CLOSED) una orden entregada en cuanto
+  cumple todas las guardas de CLOSED, con la misma transición ORD-002 que el cierre manual y solo para la organización
+  dueña; escribe el mismo evento, outbox y auditoría, sin actor (`actor_id` nulo) y con el motivo "Cierre automático".
+  La reclamación dentro del plazo, la finalización LIF-001 y el cierre manual no cambian.
+- AI-24 `order_auto_close`: job `orders.auto-close` del Worker (apagado por defecto; intervalo 60 s, lotes de 100,
+  10 lotes por ciclo), descubrimiento de organizaciones dueñas, lectura de candidatas por tenant, bloqueo de fila y
+  versión optimista, manejo de fallos, telemetría sin identificadores y rollback.
+- AI-18: `paqueteria_auto_close_executor NOLOGIN BYPASSRLS` con `USAGE` en `orders` y `SELECT (owner_org_id,status)`
+  sobre `orders.orders`; aserciones 32-34. La función `security.list_auto_close_owner_organizations(uuid,integer)` la
+  instala el lane Orders (`20261010000100_AddOrderAutoCloseDiscovery`), con `EXECUTE` solo para `paqueteria_worker`.
+- AI-03 §25.2 y §25.8, AI-08 LIF-001 (salida y criterio de aceptación) y `tools/validate_contracts.py` (contrato
+  exacto del ejecutor).
+- Sin cambios en AI-05, AI-06 ni AI-12; no es un sexto flujo de AI-13 §4 (cada cierre es la transición ORD-002 de una
+  orden).
+
 ## Reprogramar, devolver y reclamaciones en "Siguiente paso" (UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09) — 2026-10-09
 
 - Respuesta literal del project owner: "haz los opcionales mientras decido lo de la fase 3"; registrada en

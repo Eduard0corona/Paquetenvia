@@ -138,6 +138,15 @@ public static class E002RoutineMap
         new("security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)", "paqueteria_operator_outbox_executor", ["paqueteria_app"]),
     ];
 
+    /// <summary>
+    /// ORD-AUTO-CLOSE-2026-10-10: installed by the Orders lane migration 20261010000100_AddOrderAutoCloseDiscovery,
+    /// owned by paqueteria_auto_close_executor and executable only by paqueteria_worker.
+    /// </summary>
+    private static readonly E002RoutineEntry[] OrderAutoCloseEntries =
+    [
+        new("security.list_auto_close_owner_organizations(uuid,integer)", "paqueteria_auto_close_executor", ["paqueteria_worker"]),
+    ];
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -159,7 +168,8 @@ public static class E002RoutineMap
             BffPurgeEntries.Length != 1 || BffPurgeEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             Reg002Entries.Length != 4 || Reg002Entries.Sum(entry => 1 + entry.Grantees.Count) != 8 ||
             Mdm001Entries.Length != 1 || Mdm001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
-            OperatorOutboxEntries.Length != 2 || OperatorOutboxEntries.Sum(entry => 1 + entry.Grantees.Count) != 4)
+            OperatorOutboxEntries.Length != 2 || OperatorOutboxEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
+            OrderAutoCloseEntries.Length != 1 || OrderAutoCloseEntries.Sum(entry => 1 + entry.Grantees.Count) != 2)
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
@@ -175,7 +185,8 @@ public static class E002RoutineMap
         bool bffPurgeApplied = false,
         bool reg002Applied = false,
         bool mdm001Applied = false,
-        bool operatorOutboxApplied = false)
+        bool operatorOutboxApplied = false,
+        bool orderAutoCloseApplied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -229,6 +240,11 @@ public static class E002RoutineMap
             selected = selected.Concat(OperatorOutboxEntries);
         }
 
+        if (orderAutoCloseApplied)
+        {
+            selected = selected.Concat(OrderAutoCloseEntries);
+        }
+
         return Array.AsReadOnly(selected.ToArray());
     }
 
@@ -242,7 +258,8 @@ public static class E002RoutineMap
         bool bffPurgeApplied = false,
         bool reg002Applied = false,
         bool mdm001Applied = false,
-        bool operatorOutboxApplied = false)
+        bool operatorOutboxApplied = false,
+        bool orderAutoCloseApplied = false)
     {
         var prefix = state switch
         {
@@ -261,6 +278,7 @@ public static class E002RoutineMap
             (reg002Applied ? "_PLUS_REG002" : string.Empty) +
             (mdm001Applied ? "_PLUS_MDM001" : string.Empty) +
             (operatorOutboxApplied ? "_PLUS_DSPOPOUTBOX" : string.Empty) +
+            (orderAutoCloseApplied ? "_PLUS_ORDAUTOCLOSE" : string.Empty) +
             "_V1";
     }
 }

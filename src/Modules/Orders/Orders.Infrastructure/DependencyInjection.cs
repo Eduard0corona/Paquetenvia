@@ -137,6 +137,9 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<TenantSaveChangesGuardInterceptor>());
         });
         services.AddScoped<TenantTransactionContext<OrdersDbContext>>();
+        // ORD-AUTO-CLOSE-2026-10-10: the API runs every ORD-002 transition as paqueteria_app.
+        services.AddScoped<ITenantTransactionRunner<OrdersDbContext>>(serviceProvider =>
+            serviceProvider.GetRequiredService<TenantTransactionContext<OrdersDbContext>>());
         services.TryAddSingleton<IClock, SystemClock>();
         services.AddOfflineOperationAgePolicy(configuration);
         services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
@@ -233,6 +236,102 @@ public static class DependencyInjection
         services.AddHostedService<ClaimWindowFinalizationHostedService>();
         services.AddHealthChecks().AddCheck<ClaimWindowFinalizationHealthCheck>(
             "orders_claim_window_finalization",
+            tags: ["ready"]);
+        return services;
+    }
+
+    /// <summary>
+    /// ORD-AUTO-CLOSE-2026-10-10 Worker composition: the automatic close of DELIVERED orders whose CLOSED guards hold,
+    /// behind <see cref="IJobScheduler"/>. It stays idle unless <c>Orders:AutoClose:Enabled</c>. The ORD-002
+    /// transition service is composed here with the Worker credential (<c>paqueteria_worker</c>, NOBYPASSRLS) and is
+    /// reachable only as <see cref="IOrderSystemTransitionService"/>, which allows DELIVERED -> CLOSED and nothing else.
+    /// </summary>
+    public static IServiceCollection AddOrdersAutoClose(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddOptions<OrderAutoCloseOptions>()
+            .Bind(configuration.GetSection(OrderAutoCloseOptions.SectionName))
+            .Validate(OrderAutoCloseOptions.IsValid, "Orders:AutoClose contains an invalid bounded option.")
+            .Validate(options => !options.Enabled ||
+                    !string.IsNullOrWhiteSpace(configuration.GetConnectionString(
+                        OrderAutoCloseOptions.WorkerConnectionStringName)),
+                "Orders:AutoClose:Enabled requires ConnectionStrings:PaqueteriaWorker.")
+            .ValidateOnStart();
+
+        // The transition reads these settings exactly as the API does (command timeout, idempotency lifetime,
+        // metadata bound); the API-only provider switch is not consulted by the Worker.
+        services.AddOptions<OrdersOptions>()
+            .Bind(configuration.GetSection(OrdersOptions.SectionName))
+            .Validate(options => options.CommandTimeoutSeconds is >= 1 and <= 60,
+                "Orders:CommandTimeoutSeconds must be between 1 and 60.")
+            .Validate(options => options.IdempotencyLifetimeMinutes is >= 1 and <= 10_080,
+                "Orders:IdempotencyLifetimeMinutes must be between 1 and 10080.")
+            .Validate(options => options.ClaimWindowHours is >= 1 and <= 720,
+                "Orders:ClaimWindowHours must be between 1 and 720.")
+            .Validate(options => options.TransitionMetadataMaximumBytes is >= 256 and <= 16_384,
+                "Orders:TransitionMetadataMaximumBytes must be between 256 and 16384.");
+        services.AddOptions<OrderTransitionDriverEligibilityOptions>()
+            .Bind(configuration.GetSection(OrderTransitionDriverEligibilityOptions.SectionName));
+
+        services.TryAddSingleton(_ => new OrdersWorkerDataSource(
+            configuration.GetConnectionString(OrderAutoCloseOptions.WorkerConnectionStringName) ?? string.Empty));
+        services.TryAddScoped<TenantDatabaseExecutionState>();
+        services.TryAddScoped<TenantTransactionGuardInterceptor>();
+        services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
+        services.AddDbContext<OrdersDbContext>((serviceProvider, dbOptions) =>
+        {
+            var ordersOptions = serviceProvider.GetRequiredService<IOptions<OrdersOptions>>().Value;
+            dbOptions.UseNpgsql(
+                    serviceProvider.GetRequiredService<OrdersWorkerDataSource>().DataSource,
+                    postgres =>
+                    {
+                        postgres.CommandTimeout(ordersOptions.CommandTimeoutSeconds);
+                        postgres.EnableRetryOnFailure();
+                    })
+                .AddInterceptors(
+                    serviceProvider.GetRequiredService<TenantTransactionGuardInterceptor>(),
+                    serviceProvider.GetRequiredService<TenantSaveChangesGuardInterceptor>());
+        });
+        services.TryAddScoped<WorkerTenantTransactionContext<OrdersDbContext>>();
+        services.TryAddScoped<ITenantTransactionRunner<OrdersDbContext>>(serviceProvider =>
+            serviceProvider.GetRequiredService<WorkerTenantTransactionContext<OrdersDbContext>>());
+
+        services.TryAddSingleton<IClock, SystemClock>();
+        services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
+        services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
+        services.TryAddSingleton<IOrderTransitionFailureInjector, NoOpOrderTransitionFailureInjector>();
+        services.TryAddSingleton<IOrderTransitionAuthorizer, OrderTransitionAuthorizer>();
+        // The parameterless constructor holds the AI-04 guards. A type registration would let the container pick the
+        // IEnumerable<IOrderTransitionGuard> constructor, which it always satisfies (with no guard at all), and every
+        // DELIVERED order would close whatever its incidents, COD or claim window.
+        services.TryAddSingleton(_ => new OrderTransitionGuardRegistry());
+        services.TryAddScoped<IOrderTransitionAuthorizationReader, PostgreSqlOrderTransitionAuthorizationReader>();
+        services.TryAddScoped<IOrderTransitionReplayAuthorizationReader,
+            PostgreSqlOrderTransitionReplayAuthorizationReader>();
+        services.TryAddScoped<IOrderQuoteAcceptanceGuardReader, PostgreSqlOrderQuoteAcceptanceGuardReader>();
+        services.TryAddScoped<IOrderAssignmentGuardReader, PostgreSqlOrderAssignmentGuardReader>();
+        services.TryAddScoped<IOrderProofGuardReader, PostgreSqlOrderProofGuardReader>();
+        services.TryAddScoped<IOrderCustodyGuardReader, PostgreSqlOrderCustodyGuardReader>();
+        services.TryAddScoped<IOrderIncidentGuardReader, PostgreSqlOrderIncidentGuardReader>();
+        services.TryAddScoped<IOrderCodGuardReader, PostgreSqlOrderCodGuardReader>();
+        services.TryAddScoped<PostgreSqlOrderTransitionService>();
+        services.TryAddScoped<IOrderSystemTransitionService>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgreSqlOrderTransitionService>());
+
+        services.AddSingleton<IOrderAutoCloseOwnerDiscovery>(serviceProvider =>
+            new PostgreSqlOrderAutoCloseOwnerDiscovery(
+                serviceProvider.GetRequiredService<OrdersWorkerDataSource>().DataSource));
+        services.AddSingleton<IOrderAutoCloseCandidateReader, PostgreSqlOrderAutoCloseCandidateReader>();
+        services.AddSingleton<IOrderAutoCloseAttempter, OrderAutoCloseAttempter>();
+        services.AddSingleton<OrderAutoCloseCycle>();
+        services.AddSingleton<OrderAutoCloseTelemetry>();
+        services.AddSingleton<OrderAutoCloseJob>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IJobScheduler, PeriodicJobScheduler>();
+        services.AddHostedService<OrderAutoCloseHostedService>();
+        services.AddHealthChecks().AddCheck<OrderAutoCloseHealthCheck>(
+            "orders_auto_close",
             tags: ["ready"]);
         return services;
     }
