@@ -1,5 +1,19 @@
 # Changelog
 
+## Total de la orden en la bandeja de trabajo (UI-PHASE3-INBOX-TOTAL-2026-10-10) — 2026-10-10
+
+- Completa la columna Total de la tabla aprobada en la fase 3 (respuesta literal del project owner: "avanza con la
+  fase 3"); registrada en `decision-log.md`.
+- El read model OBS-001 `GET /operations/dashboard` (ADR-OBS-001, fuera de AI-05) agrega `total` a cada orden: el
+  `total_cents` guardado de la orden, con IVA incluido, en la forma `Money` de AI-05 `Order.total` (`currency` MXN,
+  `amount_cents` en centavos int64). Un valor negativo o en otra moneda falla cerrado (503).
+- Mismos lectores que hoy (DISPATCHER y PLATFORM_ADMIN con MFA), que ya leen ese total en `listOrders`/`getOrder` y
+  `getOrderFinancials`; FINANCE, VIEWER y los demás roles siguen con el 403 uniforme. Sin tarifa, desglose, costo de
+  asignación, margen ni cobro contra entrega.
+- AI-07 `work_inbox`: columna "Total (IVA incluido)" después de Repartidor, desde centavos enteros con el formato MXN
+  compartido; se retira de `not_supported` y la regla de privacidad permite solo ese monto.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, roles, capacidades, migraciones ni flujos.
+
 ## Bandeja de trabajo de despacho (UI-PHASE3-INBOX-2026-10-10) — 2026-10-10
 
 - Respuesta literal del project owner: "avanza con la fase 3"; registrada en `decision-log.md`.

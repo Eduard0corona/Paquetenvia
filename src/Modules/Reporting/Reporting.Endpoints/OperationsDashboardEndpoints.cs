@@ -285,6 +285,7 @@ public static class OperationsDashboardEndpoints
                 item.LatestDriverLocation.Longitude,
                 item.LatestDriverLocation.AccuracyMeters,
                 item.LatestDriverLocation.CapturedAt),
+        new OperationsMoneyResponse(item.Total.Currency, item.Total.AmountCents),
         item.CostWarning,
         item.UnassignedAlert);
 
@@ -334,8 +335,17 @@ public sealed record OperationsDashboardOrderResponse(
     [property: JsonPropertyName("delivery_zone")] OperationsZoneResponse? DeliveryZone,
     [property: JsonPropertyName("assignment")] OperationsAssignmentResponse? Assignment,
     [property: JsonPropertyName("latest_driver_location")] OperationsDriverLocationResponse? LatestDriverLocation,
+    [property: JsonPropertyName("total")] OperationsMoneyResponse Total,
     [property: JsonPropertyName("cost_warning")] string? CostWarning,
     [property: JsonPropertyName("unassigned_alert")] bool UnassignedAlert);
+
+/// <summary>
+/// UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total in the AI-05 <c>Money</c> shape of <c>Order.total</c>
+/// (currency MXN, integer cents, IVA included); never a floating-point value.
+/// </summary>
+public sealed record OperationsMoneyResponse(
+    [property: JsonPropertyName("currency")] string Currency,
+    [property: JsonPropertyName("amount_cents")] long AmountCents);
 
 public sealed record OperationsOrganizationResponse(
     [property: JsonPropertyName("organization_id")] Guid OrganizationId,

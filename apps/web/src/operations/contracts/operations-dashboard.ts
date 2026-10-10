@@ -81,6 +81,11 @@ export interface OperationsDashboardOrder {
   readonly delivery_zone: OperationsZoneSummary | null;
   readonly assignment: OperationsAssignmentSummary | null;
   readonly latest_driver_location: OperationsDriverLocation | null;
+  /**
+   * UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total in integer MXN cents with IVA included, the same
+   * value and shape as the order's `total` (AI-05 Order.total).
+   */
+  readonly total: OperationsMoney;
   readonly cost_warning: OperationsCostWarning | null;
   readonly unassigned_alert: boolean;
 }

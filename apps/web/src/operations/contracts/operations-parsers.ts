@@ -166,6 +166,7 @@ function parseDashboardOrder(value: unknown): OperationsDashboardOrder {
     "delivery_zone",
     "assignment",
     "latest_driver_location",
+    "total",
     "cost_warning",
     "unassigned_alert",
   ]);
@@ -194,6 +195,8 @@ function parseDashboardOrder(value: unknown): OperationsDashboardOrder {
       object.latest_driver_location === null
         ? null
         : location(object.latest_driver_location),
+    // UI-PHASE3-INBOX-TOTAL-2026-10-10: MXN and a non-negative safe integer of cents, or the page fails closed.
+    total: money(object.total),
     cost_warning:
       object.cost_warning === null
         ? null

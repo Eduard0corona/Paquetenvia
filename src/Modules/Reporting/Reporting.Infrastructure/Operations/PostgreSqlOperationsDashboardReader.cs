@@ -52,6 +52,7 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             destination_zone.name AS zone_name,
             destination_zone.zone_type,
             order_row.total_cents,
+            order_row.currency,
             order_row.minimum_total_cents_snapshot,
             order_row.financial_override,
             order_row.service_window_from,
@@ -146,7 +147,9 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             ELSE NULL
           END AS cost_warning,
           page.service_window_from,
-          page.service_window_to
+          page.service_window_to,
+          page.total_cents,
+          page.currency
         FROM page
         LEFT JOIN active_assignment AS assignment
           ON assignment.order_id = page.id AND assignment.row_number = 1
@@ -425,6 +428,15 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             deliveryWindow = new OperationsTimeWindow(windowFrom, windowTo);
         }
 
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total, integer MXN cents with IVA included, exactly as stored;
+        // the same value AI-05 Order.total returns to these roles. A negative or non-MXN total fails closed.
+        var totalCents = reader.GetInt64(28);
+        var currency = NullableString(reader, 29);
+        if (!OperationsDashboardProjectionPolicy.IsValidTotal(currency, totalCents))
+        {
+            throw new OperationsDashboardContractException("Order total is invalid.");
+        }
+
         return new OperationsDashboardOrder(
             orderId,
             reader.GetInt32(1),
@@ -441,6 +453,7 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             zoneId is null ? null : new OperationsZoneSummary(zoneId.Value, zoneName!, zoneType!),
             assignment,
             location,
+            new OperationsMoney(currency, totalCents),
             costWarning,
             OperationsDashboardProjectionPolicy.IsUnassignedAlert(status, assignment is not null),
             deliveryWindow);

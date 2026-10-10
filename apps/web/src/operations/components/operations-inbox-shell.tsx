@@ -6,8 +6,10 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode }
 import { DateTime } from "../../components/ui/date-time";
 import { EmptyState } from "../../components/ui/empty-state";
 import { ScreenGate } from "../../components/ui/feedback";
+import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
 import { StatusBadge } from "../../components/ui/status-badge";
+import { vatIncludedLabel } from "../contracts/create-order";
 import {
   hasInboxFilters,
   inboxHref,
@@ -198,18 +200,7 @@ export function OperationsInboxShell() {
                 <caption id="inbox-caption">
                   <strong>{queue.label}:</strong> {queue.description}
                 </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Guía</th>
-                    <th scope="col">Estado</th>
-                    <th scope="col">Destino (zona)</th>
-                    <th scope="col">Ventana de entrega</th>
-                    <th scope="col">Repartidor</th>
-                    <th scope="col">
-                      <span className="srOnly">Acciones</span>
-                    </th>
-                  </tr>
-                </thead>
+                <InboxTableHead />
                 <tbody>
                   {rows.map((row) => (
                     <InboxRow
@@ -264,7 +255,32 @@ export function OperationsInboxShell() {
   );
 }
 
-function InboxRow({
+/**
+ * The table columns in the order of the approved design (AI-07 work_inbox.table.columns): Guía, Estado,
+ * Destino, Ventana, Repartidor and Total. Total is the order total with IVA included
+ * (GATE-011-VAT-INCLUDED-2026-09-29, UI-PHASE3-INBOX-TOTAL-2026-10-10).
+ */
+export function InboxTableHead() {
+  return (
+    <thead>
+      <tr>
+        <th scope="col">Guía</th>
+        <th scope="col">Estado</th>
+        <th scope="col">Destino (zona)</th>
+        <th scope="col">Ventana de entrega</th>
+        <th scope="col">Repartidor</th>
+        <th scope="col" className="opsInboxTotal">
+          Total ({vatIncludedLabel})
+        </th>
+        <th scope="col">
+          <span className="srOnly">Acciones</span>
+        </th>
+      </tr>
+    </thead>
+  );
+}
+
+export function InboxRow({
   row,
   href,
   assigning,
@@ -301,6 +317,10 @@ function InboxRow({
       <td>{row.delivery_zone?.name ?? "Sin zona asignada"}</td>
       <td>{formatServiceWindow(row.delivery_window)}</td>
       <td>{row.assignment?.driver_reference ?? "Sin repartidor"}</td>
+      {/* Integer MXN cents from the API, formatted by the shared Money component (no floating point). */}
+      <td className="opsInboxTotal">
+        <Money cents={row.total.amount_cents} />
+      </td>
       <td>
         <span className="opsInboxActions">
           <Link className="btn btnSecondary" href={href}>

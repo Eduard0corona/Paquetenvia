@@ -1624,7 +1624,7 @@ a.opsInboxQueue[aria-current="page"] {
 
 .opsInboxTable {
   width: 100%;
-  min-width: 48rem;
+  min-width: 56rem;
   border-collapse: collapse;
   font-size: var(--text-sm);
 }
@@ -1698,6 +1698,12 @@ a.opsInboxQueue[aria-current="page"] {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* Amounts align on the right with tabular figures (Money) and never wrap. */
+.opsInboxTable .opsInboxTotal {
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* ---------- Order detail ---------- */
