@@ -424,8 +424,9 @@ jobs:
           echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"
           echo "dbops=$(build db-ops deploy/azure/pilot/Dockerfile.db-ops)" >> "${GITHUB_OUTPUT}"
           # AUTH-001 BFF web build: same origin, NEXT_PUBLIC_API_BASE_URL never defined (see the Dockerfile header).
+          # GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10: no NEXT_PUBLIC_TRACKING_BRAND_NAME while GATE-001 is open,
+          # so public tracking shows the neutral heading "Seguimiento de envío" (next.config.ts refuses the brand).
           echo "web=$(build web deploy/azure/pilot/Dockerfile.web \
-            --build-arg NEXT_PUBLIC_TRACKING_BRAND_NAME=Paquetenvia \
             --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL=${support_url}")" >> "${GITHUB_OUTPUT}"
 
       - name: Stage 3 - migration, runtime-login and verify jobs (jobs.bicep), then run them

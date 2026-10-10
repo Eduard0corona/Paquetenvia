@@ -379,7 +379,7 @@ button {
   line-height: 1.55;
 }
 
-.trackingCard .trackingBrand {
+.trackingCard .trackingHeading {
   color: var(--accent);
   font-weight: 800;
   letter-spacing: 0.04em;

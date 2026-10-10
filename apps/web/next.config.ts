@@ -90,6 +90,26 @@ export function assertSameOriginApiForBff(
   }
 }
 
+/**
+ * GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10: until the commercial name is
+ * validated before IMPI (GATE-001), the public tracking page shows the neutral
+ * heading "Seguimiento de envío" and no brand. NEXT_PUBLIC_TRACKING_BRAND_NAME
+ * stays optional and unset; the build refuses a value that names the
+ * unvalidated commercial name in any letter case, accents or spacing.
+ */
+export function assertNeutralTrackingBrand(value: string | undefined): void {
+  const folded = (value ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (folded.includes("paquetenvia")) {
+    throw new Error(
+      "NEXT_PUBLIC_TRACKING_BRAND_NAME must stay neutral while GATE-001 is open (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10).",
+    );
+  }
+}
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 if (
   apiBaseUrl !== undefined &&
@@ -115,6 +135,7 @@ if (supportUrl !== undefined) {
     throw new Error("NEXT_PUBLIC_TRACKING_SUPPORT_URL is not safe.");
   }
 }
+assertNeutralTrackingBrand(process.env.NEXT_PUBLIC_TRACKING_BRAND_NAME);
 // The Content-Security-Policy is nonce-based and emitted per request by
 // src/proxy.ts (see src/security/security-headers.ts). Only static headers are
 // declared here; a second CSP header would be enforced in addition to it.

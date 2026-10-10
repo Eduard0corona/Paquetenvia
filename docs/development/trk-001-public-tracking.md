@@ -180,12 +180,25 @@ propiedades de ventana, 200 eventos, códigos/timestamps válidos y orden
 temporal. Una respuesta ampliada o inválida falla cerrado y no reemplaza el
 último snapshot válido.
 
-La página muestra marca de plataforma (`Paquetenvia`), public ID, estado,
-timeline, ventana/fallback, actualización, conexión, soporte y botón Actualizar.
-Sólo agrega `NEXT_PUBLIC_TRACKING_BRAND_NAME` y
+La página muestra el encabezado neutro “Seguimiento de envío”, public ID,
+estado, timeline, ventana/fallback, actualización, conexión, soporte y botón
+Actualizar. Sólo agrega `NEXT_PUBLIC_TRACKING_BRAND_NAME` y
 `NEXT_PUBLIC_TRACKING_SUPPORT_URL`; soporte admite HTTPS o `mailto:`. Sin URL
 muestra “Comunícate por el mismo canal donde recibiste este enlace.” No existe
 branding o soporte tenant-specific.
+
+Marca neutra mientras GATE-001 siga abierto
+(`GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10`, AI-07
+`public_tracking.branding`): el nombre comercial no está validado ante el IMPI,
+así que todos los estados de la página (cargando, not-found, indisponible, rate
+limited y seguimiento) abren con “Seguimiento de envío” y ninguno nombra la
+marca. El `<title>` es “Seguimiento de envío”, la descripción “Consulta el
+estado de tu envío.” y `/track` no enlaza el manifest de la PWA del repartidor;
+el 404 de un enlace mal formado (`/track/a/b`) se titula “Página no encontrada”.
+`NEXT_PUBLIC_TRACKING_BRAND_NAME` queda sin definir (sin marca) y `next build`
+falla si nombra “Paquetenvia” en cualquier variante; sólo una marca validada,
+tras cerrar GATE-001, puede ir encima del encabezado. Las pantallas internas, el
+login y la PWA del repartidor conservan “Paquetenvia”.
 
 Los timestamps llegan en UTC y todas las superficies públicas se muestran
 mediante `Intl.DateTimeFormat` con `timeZone: "America/Mazatlan"`,
@@ -280,6 +293,10 @@ TrackingHub, `.trx` al fallar, diagnósticos redacted y limpieza.
 - Rate limiting es por instancia y Redis aún no participa.
 - SignalR no sustituye REST. No hay GPS, ETA calculada, branding o soporte
   tenant-specific. Estados no mapeados fallan cerrado.
+- GATE-001 sigue abierto: la página pública no muestra marca. El host del
+  enlace (`paquetenvia.com`, PILOT-DOMAIN-PRODUCTION) y el destino por defecto
+  del soporte en el piloto (`https://paquetenvia.com`, la página de inicio
+  interna) no cambian con esta decisión.
 - Issue #5 sigue abierto. GATE-007, GATE-010, GATE-013, GATE-014 y GATE-011
   siguen abiertos. ADR-032/033 no se implementaron.
 - `pnpm audit` puede conservar advisories; se reporta el resultado real.

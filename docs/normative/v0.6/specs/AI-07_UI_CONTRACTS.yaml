@@ -474,7 +474,7 @@ screen_contracts:
       rejected_status_or_endpoint: forbidden
   public_tracking:
     show:
-    - brand
+    - heading (no brand while GATE-001 is open, see branding)
     - public_id
     - simplified status
     - timeline
@@ -510,6 +510,20 @@ screen_contracts:
     - CANCELLED
     fail_closed: invalid/expired/revoked token, cross-tenant reference or unmapped internal state all render the same not-found
       experience
+    branding:
+      decision: GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10
+      heading: Seguimiento de envío
+      until: GATE-001 closes (the commercial name is validated before IMPI); GATE-001 stays open
+      rules:
+      - every state (loading, not found, unavailable, rate limited, tracking) opens with the heading and names no brand; the
+        commercial name never appears in public tracking text, page title or metadata
+      - the page title is the heading and the page links no PWA manifest; the not-found page a malformed tracking link
+        reaches names no brand either
+      - NEXT_PUBLIC_TRACKING_BRAND_NAME stays unset (no brand) and the web build refuses the unvalidated commercial name
+      - messages to the recipient that carry the tracking link (TRK-002, GATE-004 templates) use the same neutral text and
+        never name the commercial name
+      - internal screens, login, onboarding and the driver PWA keep the platform name
+      - the link host follows PILOT-DOMAIN-PRODUCTION and is not changed by this decision
   csv_order_import:
     release: MVP-1
     route: /ops/orders/import
