@@ -11,7 +11,7 @@ public sealed class OrderTransitionRejectionCodesTests
     [Fact]
     public void The_closed_enum_is_distinct_upper_snake_and_excludes_the_offline_code()
     {
-        Assert.Equal(23, OrderTransitionRejectionCodes.All.Count);
+        Assert.Equal(24, OrderTransitionRejectionCodes.All.Count);
         Assert.Equal(
             OrderTransitionRejectionCodes.All.Count,
             OrderTransitionRejectionCodes.All.Distinct(StringComparer.Ordinal).Count());
@@ -107,6 +107,7 @@ public sealed class OrderTransitionRejectionCodesTests
     [InlineData("retry_custody_acquired_true", "CUSTODY_NOT_ACQUIRED")]
     [InlineData("retry_valid_assignment", "VALID_ASSIGNMENT_REQUIRED")]
     [InlineData("failed_attempt_next_action_respected", "NEXT_ACTION_MISMATCH")]
+    [InlineData("failed_attempt_dispatch_decides", "DISPATCH_DECISION_REQUIRED")]
     public void Each_failing_guard_maps_to_its_code(string guardCode, string expected)
     {
         var result = new OrderTransitionGuardRegistry().Evaluate(FirstFailing(guardCode));
@@ -246,6 +247,13 @@ public sealed class OrderTransitionRejectionCodesTests
         "failed_attempt_next_action_respected" => With(Base(OrderStatus.FailedAttempt, OrderStatus.Rescheduled), c => c with
         {
             Incidents = new IncidentGuardSnapshot(false, false, false, false, "RETURNING"),
+            ActorRole = "DISPATCHER",
+        }),
+        // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: a driver report waits for dispatch.
+        "failed_attempt_dispatch_decides" => With(Base(OrderStatus.FailedAttempt, OrderStatus.Rescheduled), c => c with
+        {
+            Incidents = new IncidentGuardSnapshot(false, false, false, true, null, LatestFailedAttemptIncidentFound: true),
+            ActorRole = "DRIVER",
         }),
         _ => throw new ArgumentOutOfRangeException(nameof(guardCode)),
     }).Build();
@@ -269,6 +277,7 @@ public sealed class OrderTransitionRejectionCodesTests
         public IncidentGuardSnapshot Incidents { get; init; } = new(false, false, false, false);
         public CodGuardSnapshot Cod { get; init; } = new(false, null, null);
         public CustodyGuardSnapshot Custody { get; init; } = new(false);
+        public string? ActorRole { get; init; }
 
         public OrderTransitionGuardContext Build() => new()
         {
@@ -287,6 +296,7 @@ public sealed class OrderTransitionRejectionCodesTests
             Incidents = Incidents,
             Cod = Cod,
             Custody = Custody,
+            ActorRole = ActorRole,
         };
     }
 }

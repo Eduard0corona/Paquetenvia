@@ -271,14 +271,23 @@ public sealed class IncidentsResolutionPostgreSqlContractTests(PostgreSqlContrac
         await MakeScenarioUserTheAssignedDriverAsync(scenario);
         var proofId = await InsertProofAsync(scenario);
 
-        // The active assignment is exactly what lets this driver open the incident...
+        // The active assignment is exactly what lets this driver open the incident, with the reason and the
+        // evidence only (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11)...
         IncidentResult incident;
         await using (var opening = CreateIncidentScope(OpenedAt))
         {
             incident = await opening.Service.OpenAsync(
-                OpenCommand(scenario, proofId) with { MfaSatisfied = false },
+                OpenCommand(scenario, proofId) with
+                {
+                    MfaSatisfied = false,
+                    Severity = null,
+                    Description = null,
+                    NextAction = null,
+                },
                 CancellationToken.None);
         }
+
+        Assert.Null(incident.NextAction);
 
         // ...and it never lets them resolve or reject it, with or without MFA.
         foreach (var outcome in new[] { IncidentContract.Resolved, IncidentContract.Rejected })

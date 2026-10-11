@@ -41,6 +41,12 @@ public static class OrderTransitionRejectionCodes
     public const string CustodyNotAcquired = "CUSTODY_NOT_ACQUIRED";
     public const string NextActionMismatch = "NEXT_ACTION_MISMATCH";
 
+    /// <summary>
+    /// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the failed attempt waits for dispatch to choose its successor,
+    /// so the caller (a DRIVER) may not leave it.
+    /// </summary>
+    public const string DispatchDecisionRequired = "DISPATCH_DECISION_REQUIRED";
+
     /// <summary>Every rule code in AI-05 enum order, after the existing OFFLINE_OPERATION_EXPIRED.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -67,6 +73,7 @@ public static class OrderTransitionRejectionCodes
         IncidentRequired,
         CustodyNotAcquired,
         NextActionMismatch,
+        DispatchDecisionRequired,
     ];
 
     private static readonly FrozenSet<string> Defined = All.ToFrozenSet(StringComparer.Ordinal);
@@ -98,6 +105,7 @@ public static class OrderTransitionRejectionCodes
         ["retry_custody_acquired_true"] = CustodyNotAcquired,
         ["retry_valid_assignment"] = ValidAssignmentRequired,
         ["failed_attempt_next_action_respected"] = NextActionMismatch,
+        ["failed_attempt_dispatch_decides"] = DispatchDecisionRequired,
     }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>The AI-04 guard codes this map covers, for the completeness tests.</summary>

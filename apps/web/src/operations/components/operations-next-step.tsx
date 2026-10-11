@@ -6,6 +6,7 @@ import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useConfirmDialog } from "../../components/confirm-dialog";
 import { Field } from "../../components/ui/field";
 import { createOrderActionsApi } from "../api/order-actions-api";
+import type { OrderStatus } from "../contracts/operations-dashboard";
 import {
   maximumReasonLength,
   nextStepActions,
@@ -30,16 +31,21 @@ import {
  * ones this screen supports; there are no disabled placeholders and no status logic here.
  * Each one asks for a reason, then a confirmation, then calls transitionOrder with the
  * version just read; the order detail refetches REST afterwards.
+ * INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: from FAILED_ATTEMPT the buttons are the
+ * dispatcher's decision ("Reprogramar", "Reintentar hoy", "Regresar"), still only the ones the
+ * server listed.
  */
 export function OperationsNextStep({
   orderId,
   publicId,
+  status,
   version,
   allowedTransitions,
   onOrderChanged,
 }: {
   readonly orderId: string;
   readonly publicId: string;
+  readonly status: OrderStatus;
   readonly version: number;
   readonly allowedTransitions: readonly AllowedTransition[];
   readonly onOrderChanged: () => void;
@@ -53,7 +59,7 @@ export function OperationsNextStep({
   const controllerRef = useRef<OrderTransitionController | null>(null);
   const onOrderChangedRef = useRef(onOrderChanged);
   const { confirm, dialog } = useConfirmDialog();
-  const actions = nextStepActions(allowedTransitions);
+  const actions = nextStepActions(allowedTransitions, status);
   const offeredKey = `${version}|${actions.map((action) => action.target).join(",")}`;
 
   useEffect(() => {

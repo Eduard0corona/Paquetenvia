@@ -48,7 +48,8 @@ export interface NextStepAction {
  * The transitions "Siguiente paso" offers, in this order. ASSIGNED has its own picker,
  * FAILED_ATTEMPT needs an incident recorded from Incidencias, and the driver steps
  * (AT_PICKUP, PICKED_UP, IN_TRANSIT, DELIVERING, DELIVERED) are not offered from this
- * screen; they never get a button here. UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09 added
+ * screen; they never get a button here, except the retry of a failed attempt
+ * ({@link failedAttemptDecision}). UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09 added
  * reschedules, returns and claims.
  */
 const offered: readonly Omit<NextStepAction, "needsRestrictedGoodsAcknowledgement">[] = [
@@ -117,13 +118,51 @@ const offered: readonly Omit<NextStepAction, "needsRestrictedGoodsAcknowledgemen
   },
 ];
 
+/**
+ * INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: from FAILED_ATTEMPT the dispatcher decides
+ * how the order continues ("Despacho decide"), with the owner's words and in this order. The
+ * server lists only the exits the failed attempt's decision and custody allow; DELIVERING is
+ * offered nowhere else, it stays a driver step.
+ */
+const failedAttemptDecision: readonly Omit<NextStepAction, "needsRestrictedGoodsAcknowledgement">[] = [
+  {
+    target: "RESCHEDULED",
+    label: "Reprogramar",
+    danger: false,
+    effect: "La orden quedará reprogramada; después podrás liberarla para recolección o asignarle un repartidor.",
+    reasonLabel: "Motivo de la reprogramación",
+  },
+  {
+    target: "DELIVERING",
+    label: "Reintentar hoy",
+    danger: false,
+    effect: "El mismo repartidor volverá a intentar la entrega hoy; necesitará una nueva foto de entrega.",
+    reasonLabel: "Motivo del reintento",
+  },
+  {
+    target: "RETURNING",
+    label: "Regresar",
+    danger: false,
+    effect: "El paquete regresará a quien lo envió.",
+    reasonLabel: "Motivo de la devolución",
+  },
+];
+
 /** Metadata this screen can collect; a transition needing any other is not offered. */
 const collectableMetadata: ReadonlySet<TransitionMetadataKey> = new Set(["restricted_goods_acknowledged"]);
 
-/** The buttons to show: only server-allowed transitions this screen supports. */
-export function nextStepActions(allowed: readonly AllowedTransition[]): readonly NextStepAction[] {
+/**
+ * The buttons to show: only server-allowed transitions this screen supports. `currentStatus`
+ * is the order's status as getOrder returned it; it only chooses the wording of a failed
+ * attempt's decision and never adds a transition the server did not list.
+ */
+export function nextStepActions(
+  allowed: readonly AllowedTransition[],
+  currentStatus: OrderStatus | null = null,
+): readonly NextStepAction[] {
   const byTarget = new Map(allowed.map((item) => [item.target_status, item]));
-  return offered.flatMap((action) => {
+  const actions = currentStatus === "FAILED_ATTEMPT" ? failedAttemptDecision : offered;
+  return actions.flatMap((action) => {
     const transition = byTarget.get(action.target);
     if (transition === undefined) return [];
     if (transition.required_metadata.some((key) => !collectableMetadata.has(key))) return [];
@@ -211,6 +250,7 @@ export const transitionRejectionMessages = Object.freeze({
   INCIDENT_REQUIRED: "Falta registrar la incidencia de este intento.",
   CUSTODY_NOT_ACQUIRED: "El paquete aún no ha sido recolectado.",
   NEXT_ACTION_MISMATCH: "La incidencia registrada indica otro siguiente paso.",
+  DISPATCH_DECISION_REQUIRED: "El siguiente paso de este intento fallido lo decide el despacho.",
 } as const);
 
 export type TransitionRejectionCode = keyof typeof transitionRejectionMessages;

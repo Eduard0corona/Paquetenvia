@@ -195,6 +195,24 @@ public sealed class OperationsDashboardTests
         Assert.True(OperationsDashboardEndpoints.TryBindFilters(query, out var filters));
         Assert.Equal("DELIVERING", filters!.Status);
         Assert.True(filters.Unassigned);
+        Assert.Null(filters.PriceReview);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void Price_review_filter_binds_exact_booleans(string value, bool expected)
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: the inbox "Precio por revisar" list.
+        var query = Query(new Dictionary<string, StringValues>
+        {
+            ["price_review"] = value,
+            ["service_type"] = "URGENT",
+        });
+
+        Assert.True(OperationsDashboardEndpoints.TryBindFilters(query, out var filters));
+        Assert.Equal(expected, filters!.PriceReview);
+        Assert.Null(filters.Unassigned);
     }
 
     [Theory]
@@ -203,6 +221,10 @@ public sealed class OperationsDashboardTests
     [InlineData("order_id", "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")]
     [InlineData("created_from", "2026-07-01T00:00:00-07:00")]
     [InlineData("unassigned", "TRUE")]
+    [InlineData("price_review", "TRUE")]
+    [InlineData("price_review", "1")]
+    [InlineData("price_review", "yes")]
+    [InlineData("price_review", "")]
     public void Invalid_filters_fail_closed(string name, string value)
     {
         var query = Query(new Dictionary<string, StringValues> { [name] = value });
@@ -210,15 +232,43 @@ public sealed class OperationsDashboardTests
         Assert.False(OperationsDashboardEndpoints.TryBindFilters(query, out _));
     }
 
-    [Fact]
-    public void Repeated_query_is_rejected()
+    [Theory]
+    [InlineData("status", "DRAFT", "CONFIRMED")]
+    [InlineData("price_review", "true", "true")]
+    [InlineData("price_review", "true", "false")]
+    public void Repeated_query_is_rejected(string name, string first, string second)
     {
         var query = Query(new Dictionary<string, StringValues>
         {
-            ["status"] = new StringValues(["DRAFT", "CONFIRMED"]),
+            [name] = new StringValues([first, second]),
         });
 
         Assert.False(OperationsDashboardEndpoints.TryBindFilters(query, out _));
+    }
+
+    [Fact]
+    public void Finished_statuses_are_the_terminadas_group_and_partition_the_seventeen_statuses()
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: "finished" is the UI-STATUS-GROUPS-2026-10-05 group
+        // "Terminadas"; every other status is active and stays in the price review queue while it has a warning.
+        Assert.Equal(
+            ["DELIVERED", "RETURNED", "CLAIM_RESOLVED", "CLOSED", "CANCELLED"],
+            OperationsQueuePolicy.FinishedStatuses.ToArray());
+        Assert.All(OperationsQueuePolicy.FinishedStatuses, status => Assert.True(OperationsDashboardVocabulary.IsStatus(status)));
+        Assert.Equal(
+            ["DRAFT", "CONFIRMED", "READY_FOR_PICKUP", "ASSIGNED", "AT_PICKUP", "PICKED_UP", "IN_TRANSIT", "DELIVERING",
+             "FAILED_ATTEMPT", "RESCHEDULED", "RETURNING", "CLAIM_OPEN"],
+            OperationsDashboardVocabulary.Statuses.Except(OperationsQueuePolicy.FinishedStatuses).ToArray());
+    }
+
+    [Theory]
+    [MemberData(nameof(Statuses))]
+    public void Price_review_is_a_cost_warning_on_an_order_that_has_not_finished(string status)
+    {
+        var finished = OperationsQueuePolicy.FinishedStatuses.Contains(status);
+        Assert.Equal(!finished, OperationsQueuePolicy.IsPriceReview(status, "BELOW_MINIMUM_SNAPSHOT"));
+        Assert.Equal(!finished, OperationsQueuePolicy.IsPriceReview(status, "AUTHORIZED_OVERRIDE"));
+        Assert.False(OperationsQueuePolicy.IsPriceReview(status, costWarning: null));
     }
 
     [Fact]

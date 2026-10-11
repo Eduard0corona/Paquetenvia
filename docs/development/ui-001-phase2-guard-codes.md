@@ -14,7 +14,9 @@ otros tenants". ADR: `docs/adr/ADR-ORD-002-TRANSITION-REJECTION-CODES.md`.
 ```
 
 - Enum cerrado en AI-05 `TransitionConflictProblem.code`: `OFFLINE_OPERATION_EXPIRED` (ya existía) y 23 códigos de
-  regla. Mapa guarda AI-04 → código publicado como `x-ord-002-guard-codes`.
+  regla; INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 agregó el 24.º, `DISPATCH_DECISION_REQUIRED`
+  (`docs/development/inc-failed-attempt-dispatch-decides.md`). Mapa guarda AI-04 → código publicado como
+  `x-ord-002-guard-codes`.
 - Único lugar del mapeo: `Orders.Application.Orders.OrderTransitionRejectionCodes` (`ForRule` para versión y matriz,
   `ForGuard` para las guardas de `OrderTransitionGuardRegistry`). Las reglas no cambiaron.
 - Quién recibe el código: solo si la orden se bloqueó como orden de la organización seleccionada (dueña) y

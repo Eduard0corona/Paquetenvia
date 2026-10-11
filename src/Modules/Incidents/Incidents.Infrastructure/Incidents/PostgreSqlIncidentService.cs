@@ -66,10 +66,8 @@ public sealed partial class PostgreSqlIncidentService(
             throw new IncidentConflictException("INVALID_REQUEST");
         }
 
-        _ = IncidentContract.TryParseSeverity(command.Severity, out var severity);
-        _ = IncidentContract.TryParseNextAction(command.NextAction, out var nextAction);
+        _ = IncidentContract.TryParseReasonCode(command.ReasonCode, out var reasonCode);
         var occurredAt = UtcMicrosecondPrecision.Normalize(command.OccurredAt);
-        var slaDueAt = UtcMicrosecondPrecision.Normalize(policy.DueAt(occurredAt, severity));
         var requestHash = ComputeRequestHash(command, occurredAt);
 
         try
@@ -78,23 +76,36 @@ public sealed partial class PostgreSqlIncidentService(
             // so the owner is read (and authorized) in a read-only transaction first. The order's
             // owner never changes; the writing transaction below re-checks it.
             var incidentId = Guid.NewGuid();
-            var ownerOrganizationId = await transactionContext.ExecuteAsync(
+            var authorized = await transactionContext.ExecuteAsync(
                 new TenantDatabaseExecutionContext(command.ActorId, [command.OrganizationId]),
-                async (dbContext, token) => (await IncidentsSql.ReadAuthorizedOrderAsync(
+                async (dbContext, token) => await IncidentsSql.ReadAuthorizedOrderAsync(
                     dbContext,
                     command.OrderId,
                     command.ActorId,
                     command.OrganizationId,
                     command.MfaSatisfied,
-                    token) ?? throw new IncidentNotFoundException()).OwnerOrganizationId,
+                    token) ?? throw new IncidentNotFoundException(),
                 cancellationToken);
+            var ownerOrganizationId = authorized.OwnerOrganizationId;
+
+            // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: dispatch sends the complete report and a
+            // driver the bare one; what the server records follows from who reports. Nothing has been
+            // written yet, so a mismatch is the same invalid request as any other malformed opening.
+            if (!IncidentRequestPolicy.IsValidReportShape(command, authorized.Reporter))
+            {
+                throw new IncidentConflictException("INVALID_REQUEST");
+            }
+
+            var report = ResolveReport(command, authorized.Reporter, reasonCode);
+            var slaDueAt = UtcMicrosecondPrecision.Normalize(policy.DueAt(occurredAt, report.Severity));
 
             // The description is protected before the writing transaction opens. If protection is
             // unavailable the request ends as 503 having written no incident, no evidence, no
-            // idempotency reservation and no audit entry.
+            // idempotency reservation and no audit entry. A driver report's description is the
+            // fixed sentence built from its reason, protected exactly the same way.
             var protectedDescription = await ProtectDescriptionAsync(
                 new IncidentPiiBinding(ownerOrganizationId, incidentId),
-                command.Description,
+                report.Description,
                 cancellationToken);
 
             return await transactionContext.ExecuteAsync(
@@ -108,7 +119,11 @@ public sealed partial class PostgreSqlIncidentService(
                         command.OrganizationId,
                         command.MfaSatisfied,
                         token) ?? throw new IncidentNotFoundException();
-                    if (order.OwnerOrganizationId != ownerOrganizationId)
+                    // A membership that changed between the two transactions changes who reports;
+                    // the request is then answered as a conflict rather than recorded under the
+                    // other reporter's rules.
+                    if (order.OwnerOrganizationId != ownerOrganizationId ||
+                        order.Reporter != authorized.Reporter)
                     {
                         throw new IncidentConflictException("CONFLICT");
                     }
@@ -129,11 +144,12 @@ public sealed partial class PostgreSqlIncidentService(
                     // Nothing can be returned before custody was acquired: ORD-002 and ADR-014
                     // own that precondition, so INC-001 refuses an opening whose next action the
                     // state machine could never honour instead of persisting it beside
-                    // custody_acquired=false.
+                    // custody_acquired=false. A driver report records no next action; only its
+                    // opening state is judged here.
                     if (!IncidentOrderStatePolicy.IsAllowedNextAction(
                             order.Status,
                             order.CustodyAcquired,
-                            nextAction))
+                            report.NextAction))
                     {
                         throw new IncidentConflictException("ORDER_STATE_NOT_ALLOWED");
                     }
@@ -155,10 +171,10 @@ public sealed partial class PostgreSqlIncidentService(
                         incidentId,
                         command.OrderId,
                         IncidentContract.Open,
-                        severity.ToContractValue(),
+                        report.Severity.ToContractValue(),
                         command.IncidentType,
                         command.ReasonCode,
-                        command.NextAction,
+                        report.NextAction?.ToContractValue(),
                         order.CustodyAcquired,
                         occurredAt,
                         slaDueAt,
@@ -236,8 +252,34 @@ public sealed partial class PostgreSqlIncidentService(
     }
 
     /// <summary>
-    /// The canonical form of an opening request. Evidence order is irrelevant to the identity of
-    /// the attempt, so it is sorted before hashing and a reordered retry still replays.
+    /// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the report the server records. Dispatch
+    /// reports what it sent; a driver report gets the severity of its reason, the fixed description
+    /// built from it and no next action, so dispatch decides.
+    /// </summary>
+    private static IncidentReport ResolveReport(
+        OpenIncidentCommand command,
+        IncidentReporter reporter,
+        IncidentReasonCode reasonCode)
+    {
+        if (reporter == IncidentReporter.Driver)
+        {
+            return new IncidentReport(
+                IncidentDriverReportPolicy.Severity(reasonCode),
+                IncidentDriverReportPolicy.Description(reasonCode),
+                null);
+        }
+
+        _ = IncidentContract.TryParseSeverity(command.Severity, out var severity);
+        _ = IncidentContract.TryParseNextAction(command.NextAction, out var nextAction);
+        return new IncidentReport(severity, command.Description!, nextAction);
+    }
+
+    /// <summary>
+    /// The canonical form of an opening request, exactly as the client sent it: an absent severity,
+    /// description or next action is hashed as null, so a driver report and its retry replay while
+    /// the values the server derives never enter the request's identity. Evidence order is
+    /// irrelevant to the identity of the attempt, so it is sorted before hashing and a reordered
+    /// retry still replays. A dispatch report hashes exactly as it did before.
     /// </summary>
     private static byte[] ComputeRequestHash(OpenIncidentCommand command, DateTimeOffset occurredAt)
     {
@@ -252,7 +294,14 @@ public sealed partial class PostgreSqlIncidentService(
             writer.WriteString("reason_code", command.ReasonCode);
             writer.WriteString("next_action", command.NextAction);
             writer.WriteString("occurred_at", occurredAt.UtcDateTime.ToString("O"));
-            writer.WriteBase64String("description", Encoding.UTF8.GetBytes(command.Description));
+            if (command.Description is null)
+            {
+                writer.WriteNull("description");
+            }
+            else
+            {
+                writer.WriteBase64String("description", Encoding.UTF8.GetBytes(command.Description));
+            }
             writer.WritePropertyName("evidence_proof_ids");
             writer.WriteStartArray();
             foreach (var proofId in command.EvidenceProofIds.Order())
@@ -315,7 +364,7 @@ public sealed partial class PostgreSqlIncidentService(
             storedReader.GetString(2) != result.Severity ||
             storedReader.GetString(3) != result.IncidentType ||
             storedReader.GetString(4) != result.ReasonCode ||
-            storedReader.GetString(5) != result.NextAction ||
+            (storedReader.IsDBNull(5) ? null : storedReader.GetString(5)) != result.NextAction ||
             storedReader.GetBoolean(6) != result.CustodyAcquired ||
             storedReader.GetFieldValue<DateTimeOffset>(7) != result.OccurredAt ||
             storedReader.GetFieldValue<DateTimeOffset>(8) != result.SlaDueAt ||
@@ -460,7 +509,8 @@ public sealed partial class PostgreSqlIncidentService(
         insert.Parameters.Add(IncidentsSql.P("description", NpgsqlDbType.Bytea, description.Ciphertext));
         insert.Parameters.Add(IncidentsSql.P("pii_key_version", NpgsqlDbType.Text, description.KeyVersion));
         insert.Parameters.Add(IncidentsSql.P("reason_code", NpgsqlDbType.Text, command.ReasonCode));
-        insert.Parameters.Add(IncidentsSql.P("next_action", NpgsqlDbType.Text, command.NextAction));
+        // NULL for a driver report: dispatch decides (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11).
+        insert.Parameters.Add(IncidentsSql.P("next_action", NpgsqlDbType.Text, result.NextAction));
         insert.Parameters.Add(IncidentsSql.P("occurred", NpgsqlDbType.TimestampTz, result.OccurredAt));
         insert.Parameters.Add(IncidentsSql.P("sla_due", NpgsqlDbType.TimestampTz, result.SlaDueAt));
         insert.Parameters.Add(IncidentsSql.P("actor", NpgsqlDbType.Uuid, command.ActorId));
@@ -588,6 +638,15 @@ public sealed partial class PostgreSqlIncidentService(
 
 /// <summary>The protected description and the key version stored beside it.</summary>
 internal readonly record struct ProtectedDescription(byte[] Ciphertext, string KeyVersion);
+
+/// <summary>
+/// What an opening records: the reporter's severity, description and next action, or for a driver
+/// report the ones the server derives (<see cref="IncidentDriverReportPolicy"/>).
+/// </summary>
+internal readonly record struct IncidentReport(
+    IncidentSeverity Severity,
+    string Description,
+    IncidentNextAction? NextAction);
 
 public sealed class DisabledIncidentService : IIncidentService
 {

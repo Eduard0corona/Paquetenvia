@@ -29,6 +29,55 @@
   cobro" (intento fallido). Datos de prueba hasta cerrar GATE-007. Sin cambios en AI-04, AI-06, AI-18, roles, permisos
   ni migraciones, y sin un flujo atómico nuevo.
 
+## Bandeja: "Precio por revisar" solo con órdenes activas y "Asignar seleccionadas…" con costo por orden (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "Solo órdenes activas (Recommended)" ("Lista y conteo solo de órdenes que no han terminado; al terminar,
+  salen solas. Nadie tiene que marcar nada.") y "Costo por orden (Recommended)" ("La vista previa muestra cada orden
+  con su costo para capturar; cuando exista el tabulador, se llena solo."). La fase 3 se aprobó con "avanza con la
+  fase 3".
+- AI-05 `getOperationsQueueCounts`: `queues.price_review` cuenta solo las órdenes con `cost_warning` que no han
+  terminado, es decir, en cualquier estado salvo DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED y CANCELLED (el grupo
+  "Terminadas" de UI-STATUS-GROUPS-2026-10-05). La terminalidad de AI-04, el plazo de reclamación y LIF-001 no cambian;
+  una orden en CLAIM_OPEN vuelve a estar activa.
+- El read model OBS-001 (`GET /api/v1/operations/dashboard`, ADR-OBS-001, fuera de AI-05) agrega el filtro booleano
+  `price_review` con la misma regla, dentro de la misma consulta con RLS y con el mismo cursor. La pestaña "Precio por
+  revisar" de la bandeja es una lista del servidor y ya no lleva la nota de "solo conteo".
+- AI-07 `work_inbox.bulk_assignment` ("Asignar seleccionadas…"): casillas solo en las filas con `unassigned_alert`,
+  "Seleccionar todas" y un máximo de 20 órdenes por lote; solo se ofrecen los repartidores elegibles para todas las
+  órdenes, y los demás aparecen con las órdenes que los bloquean. La vista previa pide el costo de cada orden en
+  pesos, vacío y obligatorio, y lo convierte a centavos enteros; nada se llena solo mientras no exista el tabulador.
+  La confirmación nombra al repartidor, el número de órdenes y la suma de los costos. `assignDriver` se envía una
+  orden tras otra, cada una con su Idempotency-Key, con resultado por fila y nueva lectura de la cola y los conteos.
+  Es una secuencia de operaciones existentes, no un flujo atómico nuevo de AI-13 §4.
+- Pendiente: "Agregar a ruta…" en lote (las rutas solo aceptan órdenes ya asignadas al repartidor de la ruta y ninguna
+  cola de la bandeja las lista). Sin cambios en AI-04, AI-06, AI-18, roles, capacidades ni migraciones.
+
+## El despacho decide el siguiente paso de un intento fallido reportado por el repartidor (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Despacho decide
+  (Recommended)", "Lista cerrada (Recommended)" y "Según el motivo (Recommended)"; registradas con sus preguntas y el
+  texto de cada opción en `decision-log.md` como cambio MAJOR (AI-01 §7), cuyo ADR es esa fila.
+- AI-05 `openIncident` y `OpenIncidentRequest` (`x-reporter-shape`): el despacho (DISPATCHER, o PLATFORM_ADMIN con MFA)
+  reporta como hoy, con severidad, descripción y siguiente acción. El repartidor manda solo tipo, motivo, hora del
+  intento y evidencias; si manda severidad, descripción o siguiente acción recibe 409 `INVALID_REQUEST`. El servidor
+  fija la severidad por motivo (alta para "Riesgo de seguridad" y "Paquete dañado", media para los demás), guarda
+  cifrada una descripción fija armada con el motivo y deja `next_action` en null: decide el despacho. `Incident`
+  publica `next_action` null en ese caso.
+- Migración del carril Incidents `20261011000100_AllowDispatchDecidedNextAction`: `incidents.incidents.next_action`
+  admite NULL. Su reversa restaura NOT NULL y se niega (`INC_DISPATCH_DECISION_DOWNGRADE_BLOCKED`) mientras exista una
+  incidencia que deja la decisión al despacho. AI-06 y AI-18 no cambian.
+- AI-04: guarda nueva `failed_attempt_dispatch_decides`. Mientras la incidencia del intento fallido no tenga siguiente
+  acción, solo DISPATCHER o PLATFORM_ADMIN con MFA sacan la orden de FAILED_ATTEMPT hacia RESCHEDULED ("Reprogramar"),
+  DELIVERING ("Reintentar hoy") o RETURNING ("Regresar"); el repartidor recibe 409 `DISPATCH_DECISION_REQUIRED`. Las
+  demás guardas (custodia, asignación válida) siguen igual y los reportes del despacho se comportan como antes.
+- getOrder `allowed_transitions` lista desde FAILED_ATTEMPT solo las salidas que esa decisión y la custodia permiten.
+- AI-07: el detalle de la orden muestra el motivo del intento fallido, si falta la decisión del despacho y el plazo de
+  atención; "Siguiente paso" ofrece "Reprogramar", "Reintentar hoy" y "Regresar" solo cuando el servidor los permite;
+  la bandeja de incidencias muestra "Lo decide despacho". AI-08 INC-001 precisa el criterio de siguiente acción.
+- Pendiente para otra entrega: la pantalla "No se pudo entregar" de la PWA del repartidor y su cola sin conexión. No se
+  agrega un sexto flujo atómico, ni roles, permisos, RLS u outbox.
+
 ## Correo del piloto: se mantiene Azure Communication Services (NTF-EMAIL-ACS-PILOT-2026-10-11) — 2026-10-11
 
 - Respuesta literal del project owner a "Correo: Microsoft anunció el 23 de septiembre de 2026 que retira Azure

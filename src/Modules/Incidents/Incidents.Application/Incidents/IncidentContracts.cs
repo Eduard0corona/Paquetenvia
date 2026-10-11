@@ -2,6 +2,11 @@ using Incidents.Domain;
 
 namespace Incidents.Application.Incidents;
 
+/// <summary>
+/// An INC-001 opening as the client sent it. <see cref="Severity"/>, <see cref="Description"/> and
+/// <see cref="NextAction"/> are <see langword="null"/> when absent: a dispatch report carries all
+/// three, a driver report none (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11).
+/// </summary>
 public sealed record OpenIncidentCommand(
     Guid ActorId,
     Guid OrganizationId,
@@ -9,10 +14,10 @@ public sealed record OpenIncidentCommand(
     string IdempotencyKey,
     Guid OrderId,
     string IncidentType,
-    string Severity,
-    string Description,
+    string? Severity,
+    string? Description,
     string ReasonCode,
-    string NextAction,
+    string? NextAction,
     DateTimeOffset OccurredAt,
     IReadOnlyList<Guid> EvidenceProofIds,
     string? RequestId);
@@ -31,6 +36,10 @@ public sealed record ResolveIncidentCommand(
     string Reason,
     string? RequestId);
 
+/// <param name="NextAction">
+/// <see langword="null"/> when dispatch decides the successor of the failed attempt (a driver report,
+/// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11).
+/// </param>
 public sealed record IncidentResult(
     Guid Id,
     Guid OrderId,
@@ -38,7 +47,7 @@ public sealed record IncidentResult(
     string Severity,
     string IncidentType,
     string ReasonCode,
-    string NextAction,
+    string? NextAction,
     bool CustodyAcquired,
     DateTimeOffset OccurredAt,
     DateTimeOffset SlaDueAt,
@@ -79,16 +88,45 @@ public static class IncidentRequestPolicy
         evidenceProofIds.Distinct().Count() == evidenceProofIds.Count;
 
 
+    /// <summary>
+    /// The shape every opening must have before any transaction: identifiers, type, reason and
+    /// evidence, and then either the complete dispatch report or the bare driver report. A request
+    /// that mixes them (for example a next action without a description) is never a valid opening.
+    /// Which of the two the actor may send is settled by <see cref="IsValidReportShape"/> once the
+    /// actor's authorization on the order is known.
+    /// </summary>
     public static bool IsValidCommandShape(OpenIncidentCommand command) =>
         command.ActorId != Guid.Empty &&
         command.OrganizationId != Guid.Empty &&
         command.OrderId != Guid.Empty &&
         IsValidIncidentType(command.IncidentType) &&
+        IncidentContract.TryParseReasonCode(command.ReasonCode, out _) &&
+        IsValidEvidence(command.EvidenceProofIds) &&
+        (IsDispatchReportShape(command) || IsDriverReportShape(command));
+
+    /// <summary>A dispatch report, as before: severity, description and next action, all valid.</summary>
+    public static bool IsDispatchReportShape(OpenIncidentCommand command) =>
         IncidentContract.TryParseSeverity(command.Severity, out _) &&
         IsValidDescription(command.Description) &&
-        IncidentContract.TryParseReasonCode(command.ReasonCode, out _) &&
-        IncidentContract.TryParseNextAction(command.NextAction, out _) &&
-        IsValidEvidence(command.EvidenceProofIds);
+        IncidentContract.TryParseNextAction(command.NextAction, out _);
+
+    /// <summary>
+    /// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: a driver report sends no severity, no
+    /// description and no next action; the server derives the first two and dispatch decides the
+    /// third. A client value, even one equal to what the server would derive, is refused.
+    /// </summary>
+    public static bool IsDriverReportShape(OpenIncidentCommand command) =>
+        command.Severity is null &&
+        command.Description is null &&
+        command.NextAction is null;
+
+    /// <summary>The shape the reporter must send: dispatch the complete report, a driver the bare one.</summary>
+    public static bool IsValidReportShape(OpenIncidentCommand command, IncidentReporter reporter) => reporter switch
+    {
+        IncidentReporter.Dispatch => IsDispatchReportShape(command),
+        IncidentReporter.Driver => IsDriverReportShape(command),
+        _ => false,
+    };
 
     public const int MaximumResolutionReasonLength = 500;
 

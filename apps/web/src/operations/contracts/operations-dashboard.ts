@@ -107,6 +107,11 @@ export interface OperationsDashboardFilters {
   readonly createdFrom?: string;
   readonly createdTo?: string;
   readonly unassigned?: boolean;
+  /**
+   * UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: `price_review=true` lists only the orders with a cost warning
+   * that have not finished (the inbox "Precio por revisar" list; the same rule as queues.price_review).
+   */
+  readonly priceReview?: boolean;
   readonly cursor?: string;
 }
 

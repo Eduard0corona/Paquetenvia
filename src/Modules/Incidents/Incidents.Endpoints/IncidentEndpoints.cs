@@ -109,6 +109,9 @@ public static class IncidentEndpoints
             return Conflict("INVALID_REQUEST");
         }
 
+        // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: severity, description and next_action stay
+        // null when absent; a dispatch report carries all three and a driver report none, which the
+        // service settles once it knows who reports.
         var command = new OpenIncidentCommand(
             actorId,
             organizationId,
@@ -116,10 +119,10 @@ public static class IncidentEndpoints
             idempotencyKey,
             parsedOrderId,
             request.Type ?? string.Empty,
-            request.Severity ?? string.Empty,
-            request.Description ?? string.Empty,
+            request.Severity,
+            request.Description,
             request.ReasonCode ?? string.Empty,
-            request.NextAction ?? string.Empty,
+            request.NextAction,
             occurredAt,
             evidenceProofIds,
             httpContext.TraceIdentifier);
@@ -464,7 +467,7 @@ public sealed record IncidentResponse(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("reason_code")] string ReasonCode,
-    [property: JsonPropertyName("next_action")] string NextAction,
+    [property: JsonPropertyName("next_action")] string? NextAction,
     [property: JsonPropertyName("custody_acquired")] bool CustodyAcquired,
     [property: JsonPropertyName("occurred_at")] DateTimeOffset OccurredAt,
     [property: JsonPropertyName("sla_due_at")] DateTimeOffset SlaDueAt,

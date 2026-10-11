@@ -43,14 +43,20 @@ public sealed class OperationsQueueCountsPostgreSqlContractTests(PostgreSqlContr
         await AddOrderAsync(a, "DRAFT", priceReview: PriceReview.BelowMinimum);
         await AddOrderAsync(a, "CONFIRMED", priceReview: PriceReview.Override);
         var completedOnly = await AddOrderAsync(a, "RESCHEDULED");
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: finished orders keep their warning but leave price review.
+        await AddOrderAsync(a, "DELIVERED", priceReview: PriceReview.BelowMinimum);
+        await AddOrderAsync(a, "CLOSED", priceReview: PriceReview.Override);
+        await AddOrderAsync(a, "CANCELLED", priceReview: PriceReview.Override);
         var driverId = await AddDriverAsync(a);
         await AddAssignmentAsync(a, assigned, driverId, "ACCEPTED");
         await AddAssignmentAsync(a, completedOnly, driverId, "COMPLETED");
 
-        // B owns its CLOSED scenario order, a CLAIM_OPEN and a RETURNING with an override that A operates, and an
-        // IN_TRANSIT order of its own; C owns a READY_FOR_PICKUP and a DELIVERING that B operates.
+        // B owns its CLOSED scenario order, a CLAIM_OPEN and a RETURNING with an override that A operates, a finished
+        // CLAIM_RESOLVED with an override that A operates too, and an IN_TRANSIT order of its own; C owns a
+        // READY_FOR_PICKUP and a DELIVERING that B operates.
         await AddOrderAsync(b, "CLAIM_OPEN", operatorOrganizationId: a.OrganizationId);
         await AddOrderAsync(b, "RETURNING", operatorOrganizationId: a.OrganizationId, priceReview: PriceReview.Override);
+        await AddOrderAsync(b, "CLAIM_RESOLVED", operatorOrganizationId: a.OrganizationId, priceReview: PriceReview.Override);
         await AddOrderAsync(b, "IN_TRANSIT");
         await AddOrderAsync(c, "DELIVERING", operatorOrganizationId: b.OrganizationId);
 
@@ -66,14 +72,19 @@ public sealed class OperationsQueueCountsPostgreSqlContractTests(PostgreSqlContr
             ["FAILED_ATTEMPT"] = 1,
             ["RESCHEDULED"] = 2,
             ["RETURNING"] = 1,
-            ["DELIVERED"] = 1,
+            ["DELIVERED"] = 2,
+            ["CLOSED"] = 1,
             ["CLAIM_OPEN"] = 1,
+            ["CLAIM_RESOLVED"] = 1,
+            ["CANCELLED"] = 1,
         });
-        Assert.Equal(12, forA.Total);
+        Assert.Equal(16, forA.Total);
         Assert.Equal(3, forA.Unassigned); // scenario order and both RESCHEDULED; the ACCEPTED one is assigned
         Assert.Equal(5, forA.NeedsAttention);
+        // The DRAFT and the CONFIRMED A owns and the RETURNING it operates; never the finished DELIVERED, CLOSED and
+        // CANCELLED it owns nor the CLAIM_RESOLVED it operates, although all of them keep their warning.
         Assert.Equal(3, forA.PriceReview);
-        Assert.Equal(1, forA.DeliveredNotClosed);
+        Assert.Equal(2, forA.DeliveredNotClosed);
         Assert.Equal(2, forA.EnRoute);
         Assert.Equal(TimeSpan.Zero, forA.GeneratedAt.Offset);
 
@@ -82,11 +93,12 @@ public sealed class OperationsQueueCountsPostgreSqlContractTests(PostgreSqlContr
         {
             ["CLOSED"] = 1,
             ["CLAIM_OPEN"] = 1,
+            ["CLAIM_RESOLVED"] = 1,
             ["RETURNING"] = 1,
             ["IN_TRANSIT"] = 1,
             ["DELIVERING"] = 1,
         });
-        Assert.Equal(5, forB.Total);
+        Assert.Equal(6, forB.Total);
         Assert.Equal(0, forB.Unassigned);
         Assert.Equal(2, forB.NeedsAttention);
         Assert.Equal(1, forB.PriceReview);
