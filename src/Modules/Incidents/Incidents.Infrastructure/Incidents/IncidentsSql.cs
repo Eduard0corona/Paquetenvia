@@ -1,5 +1,6 @@
 using System.Data.Common;
 using Incidents.Application.Incidents;
+using Incidents.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
@@ -7,12 +8,18 @@ using NpgsqlTypes;
 
 namespace Incidents.Infrastructure.Incidents;
 
+/// <param name="Reporter">
+/// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: <see cref="IncidentReporter.Dispatch"/> when the
+/// actor is authorized as an active DISPATCHER or an MFA-satisfied PLATFORM_ADMIN of the
+/// organization; <see cref="IncidentReporter.Driver"/> when only the driver assignment authorizes it.
+/// </param>
 internal sealed record AuthorizedOrder(
     Guid OwnerOrganizationId,
     Guid? OperatorOrganizationId,
     string Status,
     bool CustodyAcquired,
-    DateTimeOffset? LatestStatusChangeAt = null)
+    DateTimeOffset? LatestStatusChangeAt = null,
+    IncidentReporter Reporter = IncidentReporter.Dispatch)
 {
     /// <summary>
     /// The time an incident opened on this order records. The application clock is read before
@@ -38,7 +45,7 @@ internal sealed record LockedIncident(
     string Severity,
     string IncidentType,
     string ReasonCode,
-    string NextAction,
+    string? NextAction,
     bool CustodyAcquired,
     DateTimeOffset OccurredAt,
     DateTimeOffset SlaDueAt,
@@ -62,7 +69,10 @@ internal static class IncidentsSql
     /// The lock is taken by its own statement first: a READ COMMITTED statement that waits for a
     /// row lock re-reads only the locked row, while its subqueries keep the snapshot taken before
     /// the wait. Reading status, history and custody in a second statement gives them all the
-    /// snapshot that already holds whatever the lock waited for.
+    /// snapshot that already holds whatever the lock waited for. The reporter
+    /// (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) is dispatch whenever the DISPATCHER or the
+    /// MFA-satisfied PLATFORM_ADMIN branch admits the actor, and a driver only when the assignment
+    /// branch alone does; who may open is unchanged.
     /// </summary>
     internal static async Task<AuthorizedOrder?> ReadAuthorizedOrderAsync(
         DbContext context,
@@ -131,7 +141,15 @@ internal static class IncidentsSql
                 SELECT max(e.occurred_at) FROM orders.order_events e
                 WHERE e.order_id=o.id AND e.owner_org_id=o.owner_org_id
                   AND e.event_type='ORDER_STATUS_CHANGED'
-              ) AS latest_status_change_at
+              ) AS latest_status_change_at,
+              EXISTS (
+                SELECT 1
+                FROM identity.users u
+                JOIN organizations.organization_memberships m ON m.user_id=u.id
+                WHERE u.id=@actor AND u.status='ACTIVE'
+                  AND m.organization_id=@organization AND m.status='ACTIVE'
+                  AND (m.role='DISPATCHER' OR (@mfa AND m.role='PLATFORM_ADMIN'))
+              ) AS reports_for_dispatch
             FROM orders.orders o
             WHERE o.id=@order
             """,
@@ -157,7 +175,8 @@ internal static class IncidentsSql
             reader.IsDBNull(1) ? null : reader.GetGuid(1),
             reader.GetString(2),
             reader.GetBoolean(3),
-            reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5));
+            reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
+            reader.GetBoolean(6) ? IncidentReporter.Dispatch : IncidentReporter.Driver);
     }
 
     /// <summary>
@@ -259,7 +278,7 @@ internal static class IncidentsSql
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.GetString(4),
-                reader.GetString(5),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.GetBoolean(6),
                 reader.GetFieldValue<DateTimeOffset>(7),
                 reader.GetFieldValue<DateTimeOffset>(8),

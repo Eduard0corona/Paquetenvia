@@ -411,6 +411,9 @@ public sealed class PostgreSqlOrderTransitionService(
             Custody = custody,
             Incidents = incidents,
             Cod = cod,
+            // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the role the edge authorization above judged decides
+            // whether this actor may take a failed attempt's pending decision.
+            ActorRole = authorization.ActiveRole,
         };
         var guard = guardRegistry.Evaluate(guardContext);
         if (!guard.Satisfied)

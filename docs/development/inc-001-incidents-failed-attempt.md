@@ -42,7 +42,7 @@ Columnas agregadas a `incidents.incidents`:
 | Columna | Tipo | Regla |
 | --- | --- | --- |
 | `reason_code` | `text NOT NULL` | motivo obligatorio |
-| `next_action` | `text NOT NULL` | `CHECK IN ('RESCHEDULED','RETURNING')` |
+| `next_action` | `text` (NOT NULL hasta `20261011000100_AllowDispatchDecidedNextAction`) | `CHECK IN ('RESCHEDULED','RETURNING')`; NULL: lo decide despacho |
 | `occurred_at` | `timestamptz NOT NULL` | hora del intento reportada por el cliente |
 | `sla_due_at` | `timestamptz NOT NULL` | `CHECK (sla_due_at > occurred_at)` |
 
@@ -109,6 +109,11 @@ política junto con el resto. La migración verifica al final que la política n
   "evidence_proof_ids": ["..."]
 }
 ```
+
+Ese es el reporte del despacho. INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: el repartidor manda solo `type`,
+`reason_code`, `occurred_at` y `evidence_proof_ids`; el servidor gradúa la severidad por motivo, guarda una descripción
+fija y deja `next_action` en null para que decida el despacho
+([inc-failed-attempt-dispatch-decides.md](inc-failed-attempt-dispatch-decides.md)).
 
 Motivos admitidos: `RECIPIENT_ABSENT`, `ADDRESS_NOT_FOUND`, `RECIPIENT_REFUSED`,
 `ACCESS_RESTRICTED`, `PAYMENT_UNAVAILABLE`, `PACKAGE_DAMAGED`, `SECURITY_RISK`.
@@ -236,7 +241,8 @@ ORD-002 ya define:
    tenant, no está `OPEN`/`INVESTIGATING`, se abrió antes de entrar al estado actual o ya justificó
    otro `FAILED_ATTEMPT`: una incidencia justifica un solo intento fallido.
 6. `no_unresolved_incident` sigue bloqueando `CLOSED` mientras la incidencia siga abierta.
-7. Al salir de `FAILED_ATTEMPT`, ORD-002 respeta `next_action`: `RETURNING` solo permite
+7. Al salir de `FAILED_ATTEMPT`, ORD-002 respeta `next_action` (si es null, el despacho elige y el repartidor no
+   puede salir; ver INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11): `RETURNING` solo permite
    `RETURNING`; `RESCHEDULED` permite `RESCHEDULED` o el reintento `DELIVERING` desde `FAILED_ATTEMPT` (D8-RESCHEDULED-NO-DIRECT-DELIVERY: no existe `RESCHEDULED → DELIVERING`). Una incidencia
    adoptada de una instalación previa (sin evidencia; su `next_action` lo rellenó el backfill) no
    restringe el sucesor.

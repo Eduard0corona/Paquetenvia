@@ -75,7 +75,8 @@ internal sealed class IncidentRow
     public string Status { get; set; } = string.Empty;
     public bool CustodyAcquired { get; set; }
     public string ReasonCode { get; set; } = string.Empty;
-    public string NextAction { get; set; } = string.Empty;
+    /// <summary>Null when dispatch decides the successor (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11).</summary>
+    public string? NextAction { get; set; }
     public DateTimeOffset OccurredAt { get; set; }
     public DateTimeOffset SlaDueAt { get; set; }
     public byte[]? DescriptionCiphertext { get; set; }

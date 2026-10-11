@@ -97,3 +97,11 @@ reproduce, igual que antes.
   IndexedDB no cambia en esta decisión.
 - `allowed_transitions` sigue siendo orientativo y no evalúa guardas.
 - Reversión: revertir el cambio devuelve el 409 sin código; los clientes ya caen al mensaje genérico.
+
+## Enmienda INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11
+
+- La guarda nueva `failed_attempt_dispatch_decides` (el despacho decide un intento fallido que reportó el repartidor)
+  se publica con el código `DISPATCH_DECISION_REQUIRED`, al final del enum cerrado. Ver
+  `docs/development/inc-failed-attempt-dispatch-decides.md`.
+- `allowed_transitions` aplica, solo para las salidas de FAILED_ATTEMPT, esa decisión y la custodia que necesitan
+  RETURNING y DELIVERING; para todo lo demás sigue sin evaluar guardas.

@@ -24,6 +24,31 @@
 - Pendiente: "Agregar a ruta…" en lote (las rutas solo aceptan órdenes ya asignadas al repartidor de la ruta y ninguna
   cola de la bandeja las lista). Sin cambios en AI-04, AI-06, AI-18, roles, capacidades ni migraciones.
 
+## El despacho decide el siguiente paso de un intento fallido reportado por el repartidor (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Despacho decide
+  (Recommended)", "Lista cerrada (Recommended)" y "Según el motivo (Recommended)"; registradas con sus preguntas y el
+  texto de cada opción en `decision-log.md` como cambio MAJOR (AI-01 §7), cuyo ADR es esa fila.
+- AI-05 `openIncident` y `OpenIncidentRequest` (`x-reporter-shape`): el despacho (DISPATCHER, o PLATFORM_ADMIN con MFA)
+  reporta como hoy, con severidad, descripción y siguiente acción. El repartidor manda solo tipo, motivo, hora del
+  intento y evidencias; si manda severidad, descripción o siguiente acción recibe 409 `INVALID_REQUEST`. El servidor
+  fija la severidad por motivo (alta para "Riesgo de seguridad" y "Paquete dañado", media para los demás), guarda
+  cifrada una descripción fija armada con el motivo y deja `next_action` en null: decide el despacho. `Incident`
+  publica `next_action` null en ese caso.
+- Migración del carril Incidents `20261011000100_AllowDispatchDecidedNextAction`: `incidents.incidents.next_action`
+  admite NULL. Su reversa restaura NOT NULL y se niega (`INC_DISPATCH_DECISION_DOWNGRADE_BLOCKED`) mientras exista una
+  incidencia que deja la decisión al despacho. AI-06 y AI-18 no cambian.
+- AI-04: guarda nueva `failed_attempt_dispatch_decides`. Mientras la incidencia del intento fallido no tenga siguiente
+  acción, solo DISPATCHER o PLATFORM_ADMIN con MFA sacan la orden de FAILED_ATTEMPT hacia RESCHEDULED ("Reprogramar"),
+  DELIVERING ("Reintentar hoy") o RETURNING ("Regresar"); el repartidor recibe 409 `DISPATCH_DECISION_REQUIRED`. Las
+  demás guardas (custodia, asignación válida) siguen igual y los reportes del despacho se comportan como antes.
+- getOrder `allowed_transitions` lista desde FAILED_ATTEMPT solo las salidas que esa decisión y la custodia permiten.
+- AI-07: el detalle de la orden muestra el motivo del intento fallido, si falta la decisión del despacho y el plazo de
+  atención; "Siguiente paso" ofrece "Reprogramar", "Reintentar hoy" y "Regresar" solo cuando el servidor los permite;
+  la bandeja de incidencias muestra "Lo decide despacho". AI-08 INC-001 precisa el criterio de siguiente acción.
+- Pendiente para otra entrega: la pantalla "No se pudo entregar" de la PWA del repartidor y su cola sin conexión. No se
+  agrega un sexto flujo atómico, ni roles, permisos, RLS u outbox.
+
 ## Correo del piloto: se mantiene Azure Communication Services (NTF-EMAIL-ACS-PILOT-2026-10-11) — 2026-10-11
 
 - Respuesta literal del project owner a "Correo: Microsoft anunció el 23 de septiembre de 2026 que retira Azure

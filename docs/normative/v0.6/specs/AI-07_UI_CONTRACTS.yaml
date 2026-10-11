@@ -153,9 +153,15 @@ routes:
       # claim (resolution) reason their guards require.
       - es-MX labels - RESCHEDULED "Reprogramar entrega", RETURNING "Iniciar devolución", RETURNED "Marcar como
         devuelta", CLAIM_OPEN "Abrir reclamación", CLAIM_RESOLVED "Resolver reclamación"
+      # INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 (project owner, 2026-10-11, "Despacho decide"): from
+      # FAILED_ATTEMPT the dispatcher chooses the next step; getOrder lists only the exits the failed attempt's
+      # decision and custody allow (OrderDetail.allowed_transitions).
+      - from FAILED_ATTEMPT the es-MX labels are the decision - RESCHEDULED "Reprogramar", DELIVERING "Reintentar
+        hoy" (the same assigned driver tries again today) and RETURNING "Regresar"; DELIVERING is offered only from
+        FAILED_ATTEMPT
       - transitions the screen does not offer here are not shown - ASSIGNED (assignment picker), FAILED_ATTEMPT
         (needs incident_id, recorded from Incidencias) and the driver steps AT_PICKUP, PICKED_UP, IN_TRANSIT,
-        DELIVERING and DELIVERED
+        DELIVERING (except the FAILED_ATTEMPT retry) and DELIVERED
       input: reason (required, at most 500 characters); for required_metadata restricted_goods_acknowledged a
         required checkbox sends the JSON literal true
       confirmation: required (ConfirmDialog) naming the order and the action
@@ -174,6 +180,27 @@ routes:
           personal data
         - an absent, malformed or unknown code shows the generic 409 message
         - the order is still fetched again after the answer; the code never changes the offered actions by itself
+        - DISPATCH_DECISION_REQUIRED (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) "El siguiente paso de este
+          intento fallido lo decide el despacho."
+    # INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 (project owner, 2026-10-11): an order in FAILED_ATTEMPT shows
+    # why the attempt failed and whether dispatch still has to decide; REST is the source of truth.
+    failed_attempt:
+      decision: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11
+      shown_when: the order is FAILED_ATTEMPT
+      sources:
+        incident: GET /incidents?order_id= (listIncidents), the newest incident of the order
+      roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      display:
+      - the reason with its es-MX label - RECIPIENT_ABSENT "No había nadie", ADDRESS_NOT_FOUND "Dirección
+        incorrecta", RECIPIENT_REFUSED "Rechazó el paquete", PAYMENT_UNAVAILABLE "No pagó el cobro",
+        ACCESS_RESTRICTED "Acceso restringido", PACKAGE_DAMAGED "Paquete dañado", SECURITY_RISK "Riesgo de
+        seguridad"
+      - a null next_action says the driver reported it and dispatch chooses in "Siguiente paso" (reprogramar,
+        reintentar hoy o regresar); a recorded one names the next step dispatch already chose
+      - the attention deadline (sla_due_at, America/Mazatlan)
+      - no description, evidence identifier, incident identifier or personal data
+      recovery: refetched with the order; a failed read says the reason could not be read and never blocks
+        "Siguiente paso"
   /ops/routes:
     roles:
     - platform_admin
@@ -728,6 +755,8 @@ screen_contracts:
       with further pages loaded through next_cursor; an Incident returned by openIncident or resolveIncident replaces
       the listed one with the same id
     - status, severity, reason_code, next_action, custody_acquired, occurred_at and sla_due_at
+    - reason_code uses the labels of the driver's closed list (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11, see
+      /ops/orders/:id failed_attempt); a null next_action reads "Lo decide despacho"
     - proofs show proof_type and captured_at only; no image, download or signed URL is requested or rendered
     - description and resolution reason are never echoed back after submission
     idempotency:

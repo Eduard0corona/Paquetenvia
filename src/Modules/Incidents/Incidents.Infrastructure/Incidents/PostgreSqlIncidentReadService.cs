@@ -185,19 +185,21 @@ public sealed class PostgreSqlIncidentReadService(
 
     /// <summary>
     /// Maps one row to the published Incident. A stored value outside the published vocabulary, or
-    /// an incident without its mandatory evidence, fails closed instead of being published.
+    /// an incident without its mandatory evidence, fails closed instead of being published. A null
+    /// next action is published as null: dispatch decides it
+    /// (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11).
     /// </summary>
     private static (IncidentResult Incident, DateTimeOffset CreatedAt) ReadIncident(NpgsqlDataReader reader)
     {
         var status = reader.GetString(2);
         var severity = reader.GetString(3);
         var reasonCode = reader.GetString(5);
-        var nextAction = reader.GetString(6);
+        var nextAction = reader.IsDBNull(6) ? null : reader.GetString(6);
         var evidence = reader.GetFieldValue<Guid[]>(11);
         if (!IncidentContract.TryParseStatus(status, out _) ||
             !IncidentContract.TryParseSeverity(severity, out _) ||
             !IncidentContract.TryParseReasonCode(reasonCode, out _) ||
-            !IncidentContract.TryParseNextAction(nextAction, out _) ||
+            (nextAction is not null && !IncidentContract.TryParseNextAction(nextAction, out _)) ||
             evidence.Length is < IncidentEvidencePolicy.MinimumEvidenceCount or > IncidentEvidencePolicy.MaximumEvidenceCount)
         {
             throw new IncidentInfrastructureException("A stored incident is outside the published contract.");
