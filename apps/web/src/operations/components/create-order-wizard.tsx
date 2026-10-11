@@ -25,7 +25,7 @@ import {
 import { maximumServiceWindowHours } from "../contracts/service-window";
 import type { CreateOrderController, CreateOrderState } from "../state/create-order-controller";
 import { Feedback } from "../../components/ui/feedback";
-import { Field } from "../../components/ui/field";
+import { Field, type FieldControlProps } from "../../components/ui/field";
 import { Money } from "../../components/ui/money";
 import { OrderSummary, payerLabels } from "./create-order-summary";
 import { focusLater, orderStepTitleId as stepHeadingId } from "./focus-later";
@@ -222,6 +222,18 @@ function WhereStep({ state, controller }: { readonly state: CreateOrderState; re
   );
 }
 
+/**
+ * A message shown once for several controls (both coordinates, the three measurements) is also
+ * linked to each of them, so a screen reader says why the control is invalid.
+ */
+function withSharedError(control: FieldControlProps, errorId: string | undefined): FieldControlProps {
+  if (errorId === undefined) return control;
+  const describedBy = [control["aria-describedby"], errorId]
+    .filter((value): value is string => value !== undefined)
+    .join(" ");
+  return { ...control, "aria-describedby": describedBy, "aria-invalid": true };
+}
+
 function AddressFieldset({
   side,
   legend,
@@ -299,10 +311,12 @@ function AddressFieldset({
           <Field id={id("longitude")} label="Longitud" hint="Por ejemplo -107.3940.">
             {(control) => (
               <input
-                {...control}
+                {...withSharedError(
+                  control,
+                  error("coordinates") === undefined ? undefined : `${id("coordinates")}-error`,
+                )}
                 inputMode="decimal"
                 required
-                aria-invalid={error("coordinates") === undefined ? undefined : true}
                 value={address.lng}
                 onChange={(event) => onChange({ lng: event.currentTarget.value })}
               />
@@ -341,6 +355,8 @@ function WhatStep({ state, controller }: { readonly state: CreateOrderState; rea
         const id = (field: string) => fieldControlId(`packages.${index}.${field}`);
         const error = (field: string) => errorFor(errors, `packages.${index}.${field}`);
         const change = (patch: Partial<typeof item>) => controller.updatePackage(index, patch);
+        const measurementsErrorId =
+          error("dimensions") === undefined ? undefined : `${id("dimensions")}-measurements-error`;
         return (
           <fieldset key={index}>
             <legend>Paquete {index + 1}</legend>
@@ -391,14 +407,15 @@ function WhatStep({ state, controller }: { readonly state: CreateOrderState; rea
             </div>
             <fieldset>
               <legend>Medidas en milímetros (opcional)</legend>
-              {error("dimensions") !== undefined && <p className="fieldError">{error("dimensions")}</p>}
+              {measurementsErrorId !== undefined && (
+                <p id={measurementsErrorId} className="fieldError">{error("dimensions")}</p>
+              )}
               <div className="opsWizardTrio">
                 <Field id={id("dimensions")} label="Largo">
                   {(control) => (
                     <input
-                      {...control}
+                      {...withSharedError(control, measurementsErrorId)}
                       inputMode="numeric"
-                      aria-invalid={error("dimensions") === undefined ? undefined : true}
                       value={item.lengthMm}
                       onChange={(event) => change({ lengthMm: event.currentTarget.value })}
                     />
@@ -407,9 +424,8 @@ function WhatStep({ state, controller }: { readonly state: CreateOrderState; rea
                 <Field id={id("width")} label="Ancho">
                   {(control) => (
                     <input
-                      {...control}
+                      {...withSharedError(control, measurementsErrorId)}
                       inputMode="numeric"
-                      aria-invalid={error("dimensions") === undefined ? undefined : true}
                       value={item.widthMm}
                       onChange={(event) => change({ widthMm: event.currentTarget.value })}
                     />
@@ -418,9 +434,8 @@ function WhatStep({ state, controller }: { readonly state: CreateOrderState; rea
                 <Field id={id("height")} label="Alto">
                   {(control) => (
                     <input
-                      {...control}
+                      {...withSharedError(control, measurementsErrorId)}
                       inputMode="numeric"
-                      aria-invalid={error("dimensions") === undefined ? undefined : true}
                       value={item.heightMm}
                       onChange={(event) => change({ heightMm: event.currentTarget.value })}
                     />
