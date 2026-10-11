@@ -1,5 +1,29 @@
 # Changelog
 
+## Repartidores del despacho y selector de repartidor en liquidaciones (UI-PHASE3-DRIVERS-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Lista de consulta
+  (Recommended)" y "Sí, con referencia DRV- (Recommended)"; registradas con sus preguntas y el texto de cada opción en
+  `decision-log.md` como cambio MAJOR (AI-01 §7), cuyo ADR es esa fila.
+- AI-05 `listOrganizationDrivers` (`GET /drivers`, esquemas `OrganizationDriver` y `OrganizationDriverPage`): lista por
+  cursor los repartidores OWN de la organización activa que no están INACTIVE, con la referencia `DRV-`, vehículo,
+  estado, paradas activas (las mismas que el repartidor ve en su app, sin filtro por día) y la hora de su última
+  ubicación, nunca la ubicación. Solo DISPATCHER y PLATFORM_ADMIN con MFA, los roles del selector de asignación.
+- AI-05 `listSettlementPayees` (`GET /settlement-payees`, esquemas `SettlementPayee` y `SettlementPayeePage`): lista por
+  cursor todos los repartidores de la organización que `createSettlement` acepta (cualquier tipo y estado, para pagar
+  también a uno suspendido o dado de baja), solo con `DRV-` y vehículo. Solo FINANCE y PLATFORM_ADMIN con MFA, los
+  roles de `createSettlement`; Finanzas no ve estado, paradas ni ubicaciones.
+- Ambas operaciones en `x-capability-matrix.driver_list_operations`; capacidad antes de leer, 403 uniforme, sin 404,
+  falla cerrada con 503 y no leen nombre, correo, teléfono ni documentos. Solo lectura, sin migraciones, tablas,
+  índices, roles, grants ni flujos nuevos; AI-06 y AI-18 sin cambios.
+- AI-07: ruta `/ops/drivers` con el contrato `driver_roster` ("Repartidores" después de "Importar CSV", sin acciones) y
+  contrato `settlement_desk` de `/finance/settlements`: el repartidor se elige de la lista, el periodo es "Semana
+  pasada", "Quincena pasada" (hora de Mazatlán) o "Fechas a mano" con las fechas explicadas ("1–7 sep 2026"), y cada
+  liquidación nombra a su repartidor por `DRV-`.
+- Libreta de direcciones de "Nueva orden" (UI-PHASE3-ADDRESS-BOOK-MVP2-2026-10-11): respuesta literal "Después del
+  piloto (Recommended)" ("Se queda en MVP-2, como dice el backlog."); sigue en BUS-001 (MVP-2) y el asistente del piloto
+  sigue capturando las direcciones. Sin cambios de contrato ni de código.
+
 ## El despacho decide el siguiente paso de un intento fallido reportado por el repartidor (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) — 2026-10-11
 
 - Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Despacho decide

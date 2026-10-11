@@ -15,13 +15,21 @@ import {
   type SettlementFilters,
   type SettlementPage,
 } from "../contracts/settlement";
+import {
+  parseSettlementPayeePage,
+  settlementPayeeSearch,
+  type SettlementPayeePage,
+} from "../contracts/settlement-payee";
 
 export interface SettlementCsv {
   readonly filename: string;
   readonly content: Blob;
 }
 
-/** The eight AI-05 settlement operations (SET-001, AI05-LIST-SETTLEMENTS). */
+/**
+ * The eight AI-05 settlement operations (SET-001, AI05-LIST-SETTLEMENTS) and listSettlementPayees
+ * (UI-PHASE3-DRIVERS-2026-10-11), the drivers createSettlement accepts as payee.
+ */
 export interface SettlementsApi {
   list(filters: SettlementFilters, signal?: AbortSignal): Promise<SettlementPage>;
   get(settlementId: string, signal?: AbortSignal): Promise<Settlement>;
@@ -41,6 +49,7 @@ export interface SettlementsApi {
     signal?: AbortSignal,
   ): Promise<Settlement>;
   exportCsv(settlementId: string, signal?: AbortSignal): Promise<SettlementCsv>;
+  listPayees(cursor?: string | null, signal?: AbortSignal): Promise<SettlementPayeePage>;
 }
 
 export function createSettlementsApi(baseUrl: string, session: OperationsSession): SettlementsApi {
@@ -82,6 +91,16 @@ export function createSettlementsApi(baseUrl: string, session: OperationsSession
     async void(settlementId, body, key, signal) {
       if (!isValidReason(body.reason)) throw new TenantApiError("invalid", "INVALID_REQUEST");
       return post(path(settlementId, "/void"), key, body, signal);
+    },
+    async listPayees(cursor, signal) {
+      let search: URLSearchParams;
+      try {
+        search = settlementPayeeSearch(cursor);
+      } catch {
+        throw new TenantApiError("invalid", "INVALID_REQUEST");
+      }
+      const response = await send({ method: "GET", path: "/api/v1/settlement-payees", search, signal });
+      return (await readJson(response, parseSettlementPayeePage)) as SettlementPayeePage;
     },
     async exportCsv(settlementId, signal) {
       const response = await send({

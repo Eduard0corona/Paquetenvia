@@ -250,6 +250,11 @@ routes:
     - finance
     - platform_admin
     release: MVP-1
+    # UI-PHASE3-DRIVERS-2026-10-11 (project owner, 2026-10-11, "Sí, con referencia DRV- (Recommended)"): "Calcular
+    # liquidación" picks the payee from a list and a predefined period; payees are named by their DRV- reference.
+    screen_contract: settlement_desk
+    decisions:
+    - UI-PHASE3-DRIVERS-2026-10-11
   # UI-001-SCREENS-CSV-INC-COD (project owner, 2026-09-28): CSV import, incident and COD
   # screens built only on existing AI-05 operations; D5-CAPABILITY-MATRIX and the MFA
   # step-up still apply and the backend remains the authorization barrier.
@@ -285,6 +290,17 @@ routes:
     - UI-001-SCREENS-CSV-INC-COD
     - FINANCE-COD-RECONCILIATION
     - FINANCE-COD-MFA-2026-09-27
+  # UI-PHASE3-DRIVERS-2026-10-11 (project owner, 2026-10-11, "Lista de consulta (Recommended)"): the dispatcher's
+  # read-only "Repartidores" list, the last operations item of the approved menu; the backend and RLS remain the
+  # barrier.
+  /ops/drivers:
+    roles:
+    - platform_admin
+    - dispatcher
+    release: MVP-1
+    screen_contract: driver_roster
+    decisions:
+    - UI-PHASE3-DRIVERS-2026-10-11
 screen_contracts:
   dispatch_dashboard:
     must_show:
@@ -337,7 +353,8 @@ screen_contracts:
       page their role cannot use; FINANCE (/finance/cod), DRIVER (/driver/stops) and every other role (/ops/dashboard)
       keep their landing
     navigation: the shell lists Bandeja (/ops/inbox) first, then Tablero (/ops/dashboard), + Nueva orden, Rutas,
-      Incidencias, Importar CSV and the finance items the role holds; the order detail belongs to Bandeja
+      Incidencias, Importar CSV, Repartidores (/ops/drivers, UI-PHASE3-DRIVERS-2026-10-11) and the finance items the
+      role holds; the order detail belongs to Bandeja
     queues:
     - Sin asignar (queues.unassigned) - dashboard unassigned=true
     - Requiere atención (queues.needs_attention) - FAILED_ATTEMPT, RESCHEDULED, RETURNING and CLAIM_OPEN, one dashboard
@@ -387,7 +404,7 @@ screen_contracts:
     not_supported:
     - Precio por revisar list - needs a server filter for cost_warning
     - bulk actions - a later change, always with a preview first
-    - Órdenes and Repartidores menu items of the approved menu - no screen yet
+    - Órdenes menu item of the approved menu - no screen yet (Repartidores is /ops/drivers, UI-PHASE3-DRIVERS-2026-10-11)
   route_planner:
     release: MVP-1
     route: /ops/routes
@@ -760,6 +777,91 @@ screen_contracts:
     - the COD reference is never echoed back after submission nor logged
     not_supported:
     - listing COD records across orders other than through the listOrders pending filter
+  # UI-PHASE3-DRIVERS-2026-10-11 (project owner, 2026-10-11): "Lista de consulta (Recommended)" for the dispatcher and
+  # "Sí, con referencia DRV- (Recommended)" for Finance's payee picker.
+  driver_roster:
+    release: MVP-1
+    route: /ops/drivers
+    decision: UI-PHASE3-DRIVERS-2026-10-11
+    authority: REST API + PostgreSQL
+    sources:
+      list: GET /drivers (listOrganizationDrivers)
+    roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+    excluded_roles: FINANCE, VIEWER, DRIVER and every other role; the shell does not offer the screen to them and the
+      API answers 403
+    navigation: the shell item Repartidores, right after Importar CSV, closing the operations items of the approved
+      menu (UI-PHASE3-INBOX-2026-10-10)
+    population: the OWN drivers of the selected organization that are not INACTIVE, the drivers the assignment picker
+      lists; drivers of other organizations, EXTERNAL and ALLY profiles and retired drivers are not listed
+    table:
+      columns:
+      - Repartidor (DRV- reference; AI-06 stores no driver name)
+      - Vehículo (es-MX vehicle label)
+      - Estado (Pendiente de activar, Activo or Suspendido; dot and text, never color alone)
+      - Paradas activas (the stops the driver holds now, the same stops its app shows; no calendar-day filter)
+      - Última ubicación (capture time of the latest position in America/Mazatlan; Sin ubicación registrada when none)
+      order: by DRV- reference
+      states: loading, empty (Sin repartidores), error keeping the rows, no session, access unavailable and the MFA
+        step-up when only the second factor is missing
+    pagination: Cargar más follows next_cursor; a repeated cursor stops the paging with a message
+    recovery:
+    - load, Actualizar, the page becoming visible and window focus read the first page again (never while hidden and
+      never twice within 5 seconds); optimistic UI is never authoritative
+    - a 401 or 403 clears the rows
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears the list
+    - no name, phone, email, document data, coordinate or internal identifier is shown; the latest position is reduced
+      to its capture time
+    forbidden:
+    - adding, editing, suspending or removing a driver (sin altas ni bajas)
+    - names and phones while GATE-007 is open
+    not_supported:
+    - EXTERNAL drivers and retired (INACTIVE) drivers - outside the approved list
+  settlement_desk:
+    release: MVP-1
+    route: /finance/settlements
+    decision: UI-PHASE3-DRIVERS-2026-10-11
+    authority: REST API + PostgreSQL
+    sources:
+      list: GET /settlements (listSettlements)
+      read: GET /settlements/{settlementId} (getSettlement)
+      calculate: POST /settlements (createSettlement)
+      payees: GET /settlement-payees (listSettlementPayees)
+      adjust: POST /settlements/{settlementId}/adjustments (addSettlementAdjustment)
+      approve: POST /settlements/{settlementId}/approve (approveSettlement)
+      pay: POST /settlements/{settlementId}/pay (markSettlementPaid)
+      void: POST /settlements/{settlementId}/void (voidSettlement)
+      export: GET /settlements/{settlementId}/export.csv (exportSettlementCsv)
+    roles:
+      operate: [FINANCE, PLATFORM_ADMIN with MFA]
+      approve_and_pay: FINANCE and PLATFORM_ADMIN, both with MFA (D7-SETTLEMENT-MFA)
+      note: DISPATCHER, DRIVER and VIEWER never reach the screen and the API answers 403
+    calculate:
+      payee: picked from listSettlementPayees, every driver of the organization createSettlement accepts (any type or
+        status, so a retired driver can still be paid for past work), each shown as its DRV- reference and vehicle;
+        the id is sent, never typed or shown
+      periods:
+      - Semana pasada - Monday to Sunday of the previous week in America/Mazatlan
+      - Quincena pasada - the half month before the current one, the 1st to the 15th or the 16th to the month's end,
+        in America/Mazatlan
+      - Fechas a mano - two typed dates
+      explanation: the form spells out the dates of each preset in readable es-MX ("1–7 sep 2026") before anything is
+        sent; presets always end before today, so they are closed periods
+      confirmation: the existing ConfirmDialog names the payee by DRV- reference and vehicle and the exact period sent
+    display:
+    - every settlement names its payee by the DRV- reference of the payee list, never the internal id; sin referencia
+      when that list failed or does not have the payee, and the screen says the list could not be read
+    - periods in readable dates ("1–7 sep 2026") in the list, the detail and the confirmations
+    - the payee filter offers the same list plus Todos
+    money:
+    - totals, lines and adjustments are integer MXN cents; typed adjustments are parsed to integer cents without
+      floating point; the confirmations keep stating the amounts
+    recovery:
+    - Actualizar reads the settlements and the payee list again; every write reads the settlements again
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears settlements, payees and keys
+    not_supported:
+    - driver names (GATE-007); the CSV export keeps payee_id as AI-05 publishes it
 prototype_file: prototype/index.html
 meta:
   version: '0.6'

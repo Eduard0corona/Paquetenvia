@@ -97,6 +97,13 @@ public static class DependencyInjection
                     serviceProvider.GetRequiredService<PostgreSqlSettlementService>(),
                 _ => serviceProvider.GetRequiredService<DisabledSettlementService>(),
             });
+        services.AddScoped<ISettlementPayeeQuery>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<FinanceOptions>>().Value.Provider switch
+            {
+                FinanceProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlSettlementService>(),
+                _ => serviceProvider.GetRequiredService<DisabledSettlementService>(),
+            });
         return services;
     }
 }

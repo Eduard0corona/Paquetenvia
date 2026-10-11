@@ -91,7 +91,8 @@ historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #
 
 - Lista de "Precio por revisar": requiere un filtro de servidor por `cost_warning`.
 - Acciones masivas, siempre con vista previa (AI-07 prohíbe "bulk status change without preview").
-- Entradas "Órdenes" y "Repartidores" del menú aprobado: aún no hay pantallas.
+- Entrada "Órdenes" del menú aprobado: aún no hay pantalla. "Repartidores" ya existe (`/ops/drivers`,
+  UI-PHASE3-DRIVERS-2026-10-11; ver `ui-001-phase3-drivers.md`).
 
 ## Validación
 

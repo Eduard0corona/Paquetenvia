@@ -2,7 +2,9 @@ using Dispatch.Application.Assignments;
 using Dispatch.Application.Stops;
 using Dispatch.Infrastructure.Assignments;
 using Dispatch.Application.ExternalOffers;
+using Dispatch.Application.Fleet;
 using Dispatch.Infrastructure.ExternalOffers;
+using Dispatch.Infrastructure.Fleet;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Stops;
 using Microsoft.EntityFrameworkCore;
@@ -95,10 +97,12 @@ public static class DependencyInjection
         services.AddSingleton<DisabledDriverStopsQuery>();
         services.AddSingleton<DisabledExternalOfferService>();
         services.AddSingleton<DisabledAssignableDriversQuery>();
+        services.AddSingleton<DisabledOrganizationDriversQuery>();
         services.AddScoped<PostgreSqlAssignmentToOrderCoordinator>();
         services.AddScoped<PostgreSqlDriverStopsQuery>();
         services.AddScoped<PostgreSqlExternalOfferService>();
         services.AddScoped<PostgreSqlAssignableDriversQuery>();
+        services.AddScoped<PostgreSqlOrganizationDriversQuery>();
         services.AddScoped<IAssignmentService>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value.Provider switch
             {
@@ -126,6 +130,13 @@ public static class DependencyInjection
                 DispatchProviderKind.PostgreSql =>
                     serviceProvider.GetRequiredService<PostgreSqlAssignableDriversQuery>(),
                 _ => serviceProvider.GetRequiredService<DisabledAssignableDriversQuery>(),
+            });
+        services.AddScoped<IOrganizationDriversQuery>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value.Provider switch
+            {
+                DispatchProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlOrganizationDriversQuery>(),
+                _ => serviceProvider.GetRequiredService<DisabledOrganizationDriversQuery>(),
             });
         return services;
     }

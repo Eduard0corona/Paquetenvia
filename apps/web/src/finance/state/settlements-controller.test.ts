@@ -7,6 +7,8 @@ import { parseSettlement } from "../contracts/settlement";
 import { driverId, settlementId, settlementResponse } from "../contracts/settlement.fixtures";
 import {
   actionNeedsMfa,
+  maximumPayeePages,
+  payeeLabel,
   SettlementsController,
   settlementMfaHint,
   visibleSettlementActions,
@@ -14,6 +16,8 @@ import {
 
 const orgA = "11111111-1111-4111-8111-111111111111";
 const orgB = "22222222-2222-4222-8222-222222222222";
+/** UI-PHASE3-DRIVERS-2026-10-11: the fixture settlement's payee as listSettlementPayees returns it. */
+const payee = { driver_id: driverId, driver_reference: "DRV-3d93b4c6", vehicle_type: "MOTORCYCLE" } as const;
 const calculated = () => parseSettlement(settlementResponse());
 const approved = () => parseSettlement(settlementResponse({ status: "APPROVED" }));
 
@@ -36,6 +40,7 @@ function setup(
     markPaid: vi.fn(async () => parseSettlement(settlementResponse({ status: "PAID" }))),
     void: vi.fn(async () => parseSettlement(settlementResponse({ status: "VOID" }))),
     exportCsv: vi.fn(async () => ({ filename: `settlement-${settlementId}.csv`, content: new Blob(["x"]) })),
+    listPayees: vi.fn(async () => ({ items: [payee], next_cursor: null })),
     ...overrides,
   };
   const download = vi.fn();
@@ -370,5 +375,101 @@ describe("tenant switch", () => {
     await env.controller.start();
     expect(env.controller.getSnapshot()).toMatchObject({ phase: "ready", selected: null, filters: {} });
     expect(env.api.list).toHaveBeenLastCalledWith({}, expect.any(AbortSignal));
+  });
+});
+
+describe("payee picker and DRV- names (UI-PHASE3-DRIVERS-2026-10-11)", () => {
+  const other = { driver_id: "d71e0000-0000-4000-8000-0000000000aa", driver_reference: "DRV-00aa11bb", vehicle_type: "VAN" } as const;
+  const later = { driver_id: "d71e0000-0000-4000-8000-0000000000bb", driver_reference: "DRV-ffee0011", vehicle_type: "CAR" } as const;
+
+  it("reads every payee page with the list and names each settlement's payee by its reference", async () => {
+    const listPayees = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [later, payee], next_cursor: "page-2" })
+      .mockResolvedValueOnce({ items: [other], next_cursor: null });
+    const { controller, api } = setup({ [orgA]: "FINANCE" }, { listPayees });
+    await controller.start();
+    expect(listPayees.mock.calls.map((call) => call[0])).toEqual([null, "page-2"]);
+    const state = controller.getSnapshot();
+    expect(state).toMatchObject({ payeesStatus: "ready", payeesTruncated: false });
+    // Sorted by reference for the picker; the API pages by id.
+    expect(state.payees.map((item) => item.driver_reference)).toEqual(["DRV-00aa11bb", "DRV-3d93b4c6", "DRV-ffee0011"]);
+    expect(payeeLabel(state, driverId)).toBe("DRV-3d93b4c6");
+    expect(payeeLabel(state, "d71e0000-0000-4000-8000-0000000000ff")).toBe("sin referencia");
+    expect(controller.payee(other.driver_id)).toEqual(other);
+    expect(api.list).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the settlement list working and says so when the payee list fails", async () => {
+    const { controller } = setup(
+      { [orgA]: "FINANCE" },
+      { listPayees: vi.fn().mockRejectedValue(new TenantApiError("unavailable")) },
+    );
+    await controller.start();
+    const state = controller.getSnapshot();
+    expect(state).toMatchObject({ phase: "ready", payeesStatus: "failed", payees: [] });
+    expect(state.items).toHaveLength(1);
+    expect(payeeLabel(state, driverId)).toBe("sin referencia");
+    expect(payeeLabel({ payees: [], payeesStatus: "loading" }, driverId)).toBe("…");
+  });
+
+  it("stops at a repeated payee cursor and cuts a list longer than the pages it reads", async () => {
+    const cycling = setup(
+      { [orgA]: "FINANCE" },
+      { listPayees: vi.fn().mockResolvedValue({ items: [payee], next_cursor: "same" }) },
+    );
+    await cycling.controller.start();
+    expect(cycling.controller.getSnapshot().payeesStatus).toBe("failed");
+    expect(cycling.api.listPayees).toHaveBeenCalledTimes(2);
+
+    let page = 0;
+    const endless = setup(
+      { [orgA]: "FINANCE" },
+      { listPayees: vi.fn(async () => ({ items: [payee], next_cursor: `page-${++page}` })) },
+    );
+    await endless.controller.start();
+    expect(endless.api.listPayees).toHaveBeenCalledTimes(maximumPayeePages);
+    expect(endless.controller.getSnapshot()).toMatchObject({ payeesStatus: "ready", payeesTruncated: true });
+  });
+
+  it("calculates only for a driver the payee list returned", async () => {
+    const { controller, api } = setup({ [orgA]: "FINANCE" });
+    await controller.start();
+    const body = { driver_id: driverId, period_from: "2026-09-28", period_to: "2026-10-04" };
+    expect(controller.prepareCreate({ ...body, driver_id: "" })).toBeNull();
+    expect(controller.getSnapshot().errors).toEqual(["Elige al repartidor que vas a liquidar."]);
+    expect(controller.prepareCreate({ ...body, driver_id: other.driver_id })).toBeNull();
+    expect(controller.getSnapshot().errors).toEqual(["Elige un repartidor de la lista."]);
+    expect(controller.prepareCreate(body)).toEqual(body);
+    await controller.create(body);
+    expect(api.create).toHaveBeenCalledWith(body, expect.any(String), expect.any(AbortSignal));
+  });
+
+  it("filters by a picked payee and reloads the payees with Actualizar", async () => {
+    const { controller, api } = setup({ [orgA]: "FINANCE" });
+    await controller.start();
+    await controller.applyFilters({ payeeId: driverId });
+    expect(api.list).toHaveBeenLastCalledWith({ payeeId: driverId }, expect.any(AbortSignal));
+    await controller.reload();
+    expect(api.listPayees).toHaveBeenCalledTimes(2);
+    expect(api.list).toHaveBeenCalledTimes(3);
+  });
+
+  it("never reads payees without the capability and forgets them on a tenant switch", async () => {
+    const dispatcher = setup({ [orgA]: "DISPATCHER" });
+    await dispatcher.controller.start();
+    expect(dispatcher.api.listPayees).not.toHaveBeenCalled();
+
+    const env = setup({ [orgA]: "FINANCE", [orgB]: "VIEWER" });
+    await env.controller.start();
+    expect(env.controller.getSnapshot().payees).toHaveLength(1);
+    env.switchTo(orgB);
+    await env.controller.start();
+    expect(env.controller.getSnapshot()).toMatchObject({ phase: "access_unavailable", payees: [], payeesStatus: "idle" });
+  });
+
+  it("asks a PLATFORM_ADMIN for MFA on every settlement operation, the payee list included", () => {
+    expect(settlementMfaHint("PLATFORM_ADMIN", [])).toBe("Operar liquidaciones requiere verificar tu identidad (MFA).");
+    expect(settlementMfaHint("FINANCE", [])).toBeNull();
   });
 });
