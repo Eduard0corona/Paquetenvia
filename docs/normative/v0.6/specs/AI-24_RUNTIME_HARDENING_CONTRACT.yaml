@@ -148,6 +148,39 @@ legal_acceptance:
     canonical_utf8: '{"schema_version":"order-acceptance-v1","order_id":"11111111-1111-1111-1111-111111111111","quote_id":"22222222-2222-2222-2222-222222222222","owner_org_id":"33333333-3333-3333-3333-333333333333","actor_id":"44444444-4444-4444-4444-444444444444","terms_version":"terms-2026-07","privacy_version":"privacy-2026-07","accepted_at_client":"2026-07-20T12:34:56.1234560Z","acceptance_channel":"PWA"}'
     sha256_hex: 2a09176e270ddcc52e0fee157f3d5bd869f36047f7f946daa7caed4816ae0b37
     sha256_base64: KgkXbicN3MUuD+4Vfz1b2GnzYEf3+Ubap8rtSBauCzc=
+order_auto_close:
+  decision: ORD-AUTO-CLOSE-2026-10-10
+  host: Paqueteria.Worker job orders.auto-close behind IJobScheduler (ADR-034 periodic BackgroundService)
+  settings:
+    enabled: Orders:AutoClose:Enabled, false by default; true requires ConnectionStrings:PaqueteriaWorker
+    interval: Orders:AutoClose:PollIntervalSeconds, default 60, 1..3600
+    batch: Orders:AutoClose:BatchSize, default 100, 1..1000 orders per batch
+    batches_per_cycle: Orders:AutoClose:MaxBatchesPerCycle, default 10, 1..100
+  discovery: security.list_auto_close_owner_organizations(uuid,integer), owned by paqueteria_auto_close_executor
+    NOLOGIN BYPASSRLS, executable only by paqueteria_worker; returns only owner organization identifiers with at
+    least one DELIVERED order, ascending and strictly after a cursor, limit 1..1000; no tenant context, no order
+    identifier and no guard input
+  candidates: per owner organization, an explicit Worker tenant transaction (BEGIN, set_config(..., true) with only
+    that organization in app.current_org_ids as uuid[], SET LOCAL ROLE paqueteria_worker) reads its DELIVERED orders
+    (owner_org_id = that organization) by ascending id with their version
+  close: per order, its own owner tenant transaction runs the ORD-002 transition DELIVERED -> CLOSED as the system
+    actor with the read version; guards, order update, event, outbox, audit and idempotency rows are the manual
+    close's
+  lock: no job-level lock; the order row lock (FOR UPDATE) and the optimistic version decide, so two Workers or a
+    concurrent manual close never close an order twice; the loser sees a version or state conflict and writes nothing
+  resume: the cycle stops at the end of the DELIVERED orders or after the batch cap and then resumes after the last
+    order tried (in-memory hint; a restart starts over)
+  failure_handling:
+    guard_not_satisfied: the order stays DELIVERED; counted per AI-05 rule code, not logged per order
+    superseded: version, state, visibility or concurrency conflict; nothing written; counted
+    unexpected_error: rolled back; the rest of the batch continues; the cycle then ends failed (ScheduledJobCycle
+      failure for the OBS-002 job-failure alert) and the order is retried on a later pass
+    discovery_or_read_error: the cycle ends failed and the next one runs after the interval
+  telemetry: meter Paquetenvia.Orders.AutoClose, orders.auto_close.cycles (outcome drained, capped or failed) and
+    orders.auto_close.attempts (outcome closed, superseded, failed or the lower-case rule code); counts only, never an
+    identifier or personal datum
+  rollback: Orders:AutoClose:Enabled=false; REVOKE EXECUTE on the discovery function from paqueteria_worker; orders
+    already closed stay closed
 tenant_context:
   current_org_ids: parameterized uuid[] cast to text for set_config; empty is {} and never NULL
   statement: SELECT set_config('app.current_org_ids', @organization_ids::uuid[]::text, true)

@@ -8,7 +8,7 @@ namespace Paqueteria.Infrastructure.Tenancy;
 
 public sealed class TenantTransactionContext<TDbContext>(
     TDbContext dbContext,
-    TenantDatabaseExecutionState state)
+    TenantDatabaseExecutionState state) : ITenantTransactionRunner<TDbContext>
     where TDbContext : DbContext
 {
     private const string SetUserSql = "SELECT set_config('app.current_user_id', @user_id::uuid::text, true);";

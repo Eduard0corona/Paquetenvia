@@ -429,6 +429,12 @@ var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, worker
     name: 'Orders__ClaimWindowFinalization__Enabled'
     value: 'true'
   }
+  // ORD-AUTO-CLOSE-2026-10-10 ("Sí, que se cierre sola"): close DELIVERED orders whose CLOSED guards hold, with the
+  // contract defaults (60 s interval, batches of 100, 10 batches per cycle; not overridden).
+  {
+    name: 'Orders__AutoClose__Enabled'
+    value: 'true'
+  }
   // PILOT-CLEANUPS-ENABLED. OPS-004: purge only old PROCESSED/DEAD outbox rows through the maintenance
   // functions, with the contract retention defaults (business 7 d / 30 d, location 1 d / 7 d; not overridden).
   {
