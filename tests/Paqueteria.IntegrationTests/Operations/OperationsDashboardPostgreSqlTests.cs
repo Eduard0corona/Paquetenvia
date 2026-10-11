@@ -203,6 +203,123 @@ public sealed class OperationsDashboardPostgreSqlTests(
     }
 
     [Fact]
+    public async Task Price_review_lists_exactly_the_active_orders_the_queue_count_counts()
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 ("Solo órdenes activas"): finished orders keep their warning
+        // but leave the list and the count; another organization never sees them.
+        var finished = new[]
+        {
+            (Order: Guid.NewGuid(), Quote: Guid.NewGuid(), Status: "DELIVERED"),
+            (Order: Guid.NewGuid(), Quote: Guid.NewGuid(), Status: "CANCELLED"),
+        };
+        await AddFinishedCopiesAsync(finished);
+        try
+        {
+            var listed = await ReadAllPriceReviewAsync(
+                MockIdentityProfiles.ActivePlatformAdminMfa,
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId);
+            var publicIds = listed.Select(item => item.GetProperty("public_id").GetString()).ToArray();
+            Assert.Contains("ORD_obs_ready", publicIds);
+            Assert.Contains("ORD_obs_assigned", publicIds);
+            Assert.DoesNotContain(publicIds, id => id!.StartsWith("ORD_obs_done_", StringComparison.Ordinal));
+            Assert.All(listed, item =>
+            {
+                Assert.NotEqual(JsonValueKind.Null, item.GetProperty("cost_warning").ValueKind);
+                Assert.DoesNotContain(
+                    item.GetProperty("status").GetString(),
+                    new[] { "DELIVERED", "RETURNED", "CLAIM_RESOLVED", "CLOSED", "CANCELLED" });
+            });
+
+            using var counts = await SendAsync(
+                MockIdentityProfiles.ActivePlatformAdminMfa,
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,
+                path: "/api/v1/operations/queue-counts");
+            Assert.Equal(HttpStatusCode.OK, counts.StatusCode);
+            var queues = (await counts.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("queues");
+            Assert.Equal(listed.Count, queues.GetProperty("price_review").GetInt64());
+
+            // The dispatcher of another organization lists none of these orders.
+            var foreign = await ReadAllPriceReviewAsync(
+                MockIdentityProfiles.ActiveMultiOrganization,
+                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId);
+            Assert.DoesNotContain(
+                foreign,
+                item => item.GetProperty("public_id").GetString()!.StartsWith("ORD_obs_", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await using var connection = new NpgsqlConnection(factory.AdminConnectionString);
+            await connection.OpenAsync();
+            await using var cleanup = new NpgsqlCommand(
+                """
+                DELETE FROM orders.orders WHERE id = ANY(@orders);
+                DELETE FROM pricing.quotes WHERE id = ANY(@quotes);
+                """,
+                connection);
+            cleanup.Parameters.AddWithValue("orders", finished.Select(item => item.Order).ToArray());
+            cleanup.Parameters.AddWithValue("quotes", finished.Select(item => item.Quote).ToArray());
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    /// <summary>Every page of <c>price_review=true</c> for one organization, following the cursor.</summary>
+    private async Task<List<JsonElement>> ReadAllPriceReviewAsync(string credential, Guid organizationId)
+    {
+        var items = new List<JsonElement>();
+        string? cursor = null;
+        for (var page = 0; page < 20; page++)
+        {
+            using var response = await SendAsync(
+                credential,
+                organizationId,
+                "?price_review=true" + (cursor is null ? string.Empty : "&cursor=" + Uri.EscapeDataString(cursor)));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            items.AddRange(body.GetProperty("items").EnumerateArray().Select(item => item.Clone()));
+            if (body.GetProperty("next_cursor").ValueKind == JsonValueKind.Null)
+            {
+                return items;
+            }
+
+            cursor = body.GetProperty("next_cursor").GetString();
+        }
+
+        throw new InvalidOperationException("The price review list did not end.");
+    }
+
+    /// <summary>
+    /// Finished copies of the assigned order, with its authorized financial override (so they keep a cost warning),
+    /// each with its own quote. The test deletes them afterwards.
+    /// </summary>
+    private async Task AddFinishedCopiesAsync(IEnumerable<(Guid Order, Guid Quote, string Status)> copies)
+    {
+        await using var connection = new NpgsqlConnection(factory.AdminConnectionString);
+        await connection.OpenAsync();
+        var index = 0;
+        foreach (var copy in copies)
+        {
+            index++;
+            await using var command = new NpgsqlCommand(
+                """
+                INSERT INTO pricing.quotes
+                SELECT (jsonb_populate_record(NULL::pricing.quotes, to_jsonb(q) || jsonb_build_object(
+                  'id',@quote,'input_hash',decode(md5(@quote::text) || md5(@quote::text),'hex')))).*
+                FROM pricing.quotes q WHERE q.id='76000000-0000-0000-0000-000000000002';
+                INSERT INTO orders.orders
+                SELECT (jsonb_populate_record(NULL::orders.orders, to_jsonb(o) || jsonb_build_object(
+                  'id',@order,'quote_id',@quote,'public_id',@public_id,'status',@status))).*
+                FROM orders.orders o WHERE o.id='71000000-0000-0000-0000-000000000002';
+                """,
+                connection);
+            command.Parameters.AddWithValue("quote", copy.Quote);
+            command.Parameters.AddWithValue("order", copy.Order);
+            command.Parameters.AddWithValue("public_id", $"ORD_obs_done_{index}");
+            command.Parameters.AddWithValue("status", copy.Status);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
     public async Task Invalid_queries_are_uniform_and_unknown_query_is_ignored()
     {
         foreach (var query in new[]
@@ -212,6 +329,9 @@ public sealed class OperationsDashboardPostgreSqlTests(
             "?cursor=" + new string('a', 513),
             "?status=DRAFT&status=CONFIRMED",
             "?created_from=2026-01-01T00%3A00%3A00Z&created_to=2026-02-02T00%3A00%3A00Z",
+            "?price_review=TRUE",
+            "?price_review=1",
+            "?price_review=true&price_review=true",
         })
         {
             using var invalid = await SendAsync(
@@ -264,7 +384,8 @@ public sealed class OperationsDashboardPostgreSqlTests(
     private async Task<HttpResponseMessage> SendAsync(
         string credential,
         Guid? organizationId,
-        string query = "")
+        string query = "",
+        string path = "/api/v1/operations/dashboard")
     {
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -272,7 +393,7 @@ public sealed class OperationsDashboardPostgreSqlTests(
         });
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            "/api/v1/operations/dashboard" + query);
+            path + query);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential);
         if (organizationId is not null)
         {

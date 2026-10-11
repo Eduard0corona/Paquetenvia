@@ -88,6 +88,19 @@ PLATFORM_ADMIN con MFA) y ya reciben ese total por `listOrders`/`getOrder` y `ge
 los demás roles siguen con 403. No se agregan tarifa, desglose, costo de assignment, margen ni cobro contra entrega.
 El endpoint sigue fuera de AI-05.
 
+## Enmienda 2026-10-11: filtro `price_review` (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11)
+
+Para la lista "Precio por revisar" de la bandeja (respuesta del owner: "Solo órdenes activas (Recommended)"), el
+endpoint acepta el filtro booleano `price_review`, que se lee igual que `unassigned`: `true` deja solo las órdenes con
+`cost_warning` (total menor que `minimum_total_cents_snapshot` o `financial_override` autorizado, la misma regla de la
+proyección) que no han terminado, es decir, cuyo estado no es DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED ni CANCELLED
+(grupo "Terminadas" de UI-STATUS-GROUPS-2026-10-05); `false` o ausente no filtra; otro valor o un parámetro repetido
+responde 400. Se evalúa en el WHERE de la misma consulta CTE, dentro de la misma transacción con RLS, y se combina con
+los demás filtros y con el cursor, que pagina las filas ya filtradas. Si la consulta devolviera una fila fuera de la
+regla, la proyección es inconsistente y responde 503. No cambian la forma de la respuesta ni los lectores (DISPATCHER y
+PLATFORM_ADMIN con MFA); los demás roles siguen con 403. `getOperationsQueueCounts` (AI-05) cuenta `queues.price_review`
+con el mismo predicado. El endpoint sigue fuera de AI-05 y es la única excepción de `HttpSurfaceOpenApiCoverageTests`.
+
 ## Alternativas descartadas
 
 - Ampliar `listOrders`: modificaría AI-05 y acoplaría consumidores existentes.

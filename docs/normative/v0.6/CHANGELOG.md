@@ -1,5 +1,29 @@
 # Changelog
 
+## Bandeja: "Precio por revisar" solo con órdenes activas y "Asignar seleccionadas…" con costo por orden (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "Solo órdenes activas (Recommended)" ("Lista y conteo solo de órdenes que no han terminado; al terminar,
+  salen solas. Nadie tiene que marcar nada.") y "Costo por orden (Recommended)" ("La vista previa muestra cada orden
+  con su costo para capturar; cuando exista el tabulador, se llena solo."). La fase 3 se aprobó con "avanza con la
+  fase 3".
+- AI-05 `getOperationsQueueCounts`: `queues.price_review` cuenta solo las órdenes con `cost_warning` que no han
+  terminado, es decir, en cualquier estado salvo DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED y CANCELLED (el grupo
+  "Terminadas" de UI-STATUS-GROUPS-2026-10-05). La terminalidad de AI-04, el plazo de reclamación y LIF-001 no cambian;
+  una orden en CLAIM_OPEN vuelve a estar activa.
+- El read model OBS-001 (`GET /api/v1/operations/dashboard`, ADR-OBS-001, fuera de AI-05) agrega el filtro booleano
+  `price_review` con la misma regla, dentro de la misma consulta con RLS y con el mismo cursor. La pestaña "Precio por
+  revisar" de la bandeja es una lista del servidor y ya no lleva la nota de "solo conteo".
+- AI-07 `work_inbox.bulk_assignment` ("Asignar seleccionadas…"): casillas solo en las filas con `unassigned_alert`,
+  "Seleccionar todas" y un máximo de 20 órdenes por lote; solo se ofrecen los repartidores elegibles para todas las
+  órdenes, y los demás aparecen con las órdenes que los bloquean. La vista previa pide el costo de cada orden en
+  pesos, vacío y obligatorio, y lo convierte a centavos enteros; nada se llena solo mientras no exista el tabulador.
+  La confirmación nombra al repartidor, el número de órdenes y la suma de los costos. `assignDriver` se envía una
+  orden tras otra, cada una con su Idempotency-Key, con resultado por fila y nueva lectura de la cola y los conteos.
+  Es una secuencia de operaciones existentes, no un flujo atómico nuevo de AI-13 §4.
+- Pendiente: "Agregar a ruta…" en lote (las rutas solo aceptan órdenes ya asignadas al repartidor de la ruta y ninguna
+  cola de la bandeja las lista). Sin cambios en AI-04, AI-06, AI-18, roles, capacidades ni migraciones.
+
 ## Correo del piloto: se mantiene Azure Communication Services (NTF-EMAIL-ACS-PILOT-2026-10-11) — 2026-10-11
 
 - Respuesta literal del project owner a "Correo: Microsoft anunció el 23 de septiembre de 2026 que retira Azure

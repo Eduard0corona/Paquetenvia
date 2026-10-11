@@ -74,6 +74,12 @@ public sealed class OperationsQueueCountsTests
         { [new OperationsQueueStatusRow("READY_FOR_PICKUP", 1, -1, 0)] },
         { [new OperationsQueueStatusRow("ASSIGNED", 1, 1, 0)] },
         { [new OperationsQueueStatusRow("DRAFT", 1, 0, 0), new OperationsQueueStatusRow("DRAFT", 1, 0, 0)] },
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: a finished order never counts for price review.
+        { [new OperationsQueueStatusRow("DELIVERED", 2, 0, 1)] },
+        { [new OperationsQueueStatusRow("RETURNED", 1, 0, 1)] },
+        { [new OperationsQueueStatusRow("CLAIM_RESOLVED", 1, 0, 1)] },
+        { [new OperationsQueueStatusRow("CLOSED", 3, 0, 3)] },
+        { [new OperationsQueueStatusRow("CANCELLED", 1, 0, 1)] },
     };
 
     [Theory]
@@ -81,6 +87,25 @@ public sealed class OperationsQueueCountsTests
     public void An_inconsistent_projection_fails_closed(OperationsQueueStatusRow[] rows)
     {
         Assert.Throws<OperationsDashboardContractException>(() => OperationsQueueCounts.From(At, rows));
+    }
+
+    [Fact]
+    public void Price_review_sums_only_orders_that_have_not_finished()
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 ("Solo órdenes activas"): finished statuses carry no price
+        // review count, and the queue is the sum over the active ones (CLAIM_OPEN is active again).
+        var counts = OperationsQueueCounts.From(At,
+        [
+            new OperationsQueueStatusRow("DRAFT", 2, 0, 1),
+            new OperationsQueueStatusRow("ASSIGNED", 1, 0, 1),
+            new OperationsQueueStatusRow("CLAIM_OPEN", 1, 0, 1),
+            new OperationsQueueStatusRow("DELIVERED", 4, 0, 0),
+            new OperationsQueueStatusRow("CLOSED", 5, 0, 0),
+            new OperationsQueueStatusRow("CANCELLED", 1, 0, 0),
+        ]);
+
+        Assert.Equal(3, counts.PriceReview);
+        Assert.Equal(14, counts.Total);
     }
 
     [Fact]

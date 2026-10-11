@@ -463,9 +463,15 @@ paths:
         unassigned_alert); needs_attention: FAILED_ATTEMPT, RESCHEDULED, RETURNING
         and CLAIM_OPEN; price_review: the orders the dashboard flags with a
         cost_warning (total below the minimum snapshot, or an authorized
-        financial override); delivered_not_closed: DELIVERED; en_route:
-        IN_TRANSIT and DELIVERING. A queue may overlap another (a RESCHEDULED
-        order without an assignment is both unassigned and needs_attention).
+        financial override) that have not finished - every status except
+        DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED and CANCELLED, the
+        UI-STATUS-GROUPS-2026-10-05 group Terminadas - so a finished order
+        leaves the count by itself and nobody marks anything
+        (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11; the same rule as the
+        dashboard price_review filter); delivered_not_closed: DELIVERED;
+        en_route: IN_TRANSIT and DELIVERING. A queue may overlap another (a
+        RESCHEDULED order without an assignment is both unassigned and
+        needs_attention).
         The operation takes no query parameter and applies no filter; any query
         string is 400 before capability and before any order is read. Same roles
         as the operations dashboard it feeds - DISPATCHER members and
@@ -3803,7 +3809,10 @@ components:
           - $ref: '#/components/schemas/OperationsCount'
           description: >-
             Orders the dashboard flags with a cost_warning - total below the
-            minimum snapshot or an authorized financial override.
+            minimum snapshot or an authorized financial override - that have
+            not finished - every status except DELIVERED, RETURNED,
+            CLAIM_RESOLVED, CLOSED and CANCELLED
+            (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11).
         delivered_not_closed:
           allOf:
           - $ref: '#/components/schemas/OperationsCount'

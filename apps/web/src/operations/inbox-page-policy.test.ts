@@ -12,6 +12,10 @@ const inboxSources = [
   "src/operations/state/inbox-controller.ts",
   "src/operations/state/inbox-merge.ts",
   "src/operations/state/use-operations-inbox.ts",
+  // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: "Asignar seleccionadas…".
+  "src/operations/components/operations-bulk-assignment.tsx",
+  "src/operations/contracts/bulk-assignment.ts",
+  "src/operations/state/bulk-assignment-controller.ts",
 ];
 
 const shell = () => read("src/operations/components/operations-inbox-shell.tsx");
@@ -33,7 +37,7 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     }
   });
 
-  it("reads only the existing dashboard and queue-count operations, never a new endpoint", () => {
+  it("reads only existing operations (dashboard, queue counts, assignable drivers, assignDriver), never a new endpoint", () => {
     for (const path of inboxSources) {
       const source = read(path);
       expect(source, path).not.toMatch(/\bfetch\(|\/api\/v1\//);
@@ -44,27 +48,52 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     const controller = read("src/operations/state/inbox-controller.ts");
     expect(controller).toContain("inboxQueries(this.getSnapshot().view)");
     expect(controller).toContain("api.queueCounts(signal)");
+    // The bulk assignment calls the order detail's operations, one order at a time.
+    const bulk = read("src/operations/components/operations-bulk-assignment.tsx");
+    expect(bulk).toContain("createAssignmentApi(apiBaseUrl, session)");
+    const bulkController = read("src/operations/state/bulk-assignment-controller.ts");
+    expect(bulkController).toContain("this.api.listAssignableDrivers(orderId, cursor, this.abort.signal)");
+    expect(bulkController).toContain("await this.api.assignDriver(");
+    expect(bulkController).not.toMatch(/Promise\.all|transitionOrder|routes/);
   });
 
-  it("shows server counts on the queues and price review only as a count with a note", () => {
+  it("shows server counts on every queue tab, price review a server list like the others", () => {
     const source = shell();
     expect(source).toContain("inboxQueueCount(state.counts, id)");
     expect(source).toContain('"Sin dato"');
     expect(source).toContain("sin aplicar filtros");
-    // The price review tile is not a link: there is no list behind it yet.
-    const tile = source.slice(source.indexOf("id === priceReviewQueue.id ?"), source.indexOf(") : ("));
-    expect(tile).toContain("opsInboxQueueStatic");
-    expect(tile).toContain("priceReviewQueue.note");
-    expect(tile).not.toContain("<Link");
+    // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: every tab is a link to its server list; the
+    // count-only tile and its note are gone.
+    expect(source).not.toMatch(/opsInboxQueueStatic|priceReviewQueue|Solo conteo/);
+    const tabs = source.slice(source.indexOf("inboxQueueTabs.map((id) => ("), source.indexOf("</nav>"));
+    expect(tabs).toContain("<Link");
+    expect(read("src/operations/contracts/inbox.ts")).toContain('if (queue.flag === "priceReview") return [{ ...shared, priceReview: true, ...status }];');
   });
 
-  it("offers Abrir and Asignar per row, reusing the driver picker, and no bulk action", () => {
+  it("offers Abrir and Asignar per row, reusing the driver picker, and bulk assignment only through a preview", () => {
     const source = shell();
     expect(source).toContain("inboxOrderHref(row.order_id, view)");
     expect(source).toContain("<OperationsDriverAssignment");
     expect(source).toContain("{row.unassigned_alert && (");
     expect(source).toContain('onOrderChanged={() => state.refresh("assignment")}');
-    expect(source).not.toMatch(/type="checkbox"|Seleccionar todo|Cambiar estado|transitionOrder/);
+    // Checkboxes only on rows the server flags as assignable, "Seleccionar todas", a capped batch and
+    // the approved footer; no bulk status change exists.
+    expect(source.match(/type="checkbox"/g)).toHaveLength(2);
+    expect(source).toContain("{row.unassigned_alert && (\n            <label>");
+    expect(source).toContain("Seleccionar todas");
+    expect(source).toContain("Asignar seleccionadas…");
+    expect(source).toContain("selected.length >= bulkSelectionLimit");
+    expect(source).toContain("Las acciones en lote siempre muestran una vista previa antes de ejecutarse.");
+    expect(source).toContain("inboxFooterText({");
+    expect(source).not.toMatch(/Cambiar estado|transitionOrder|Agregar a ruta/);
+    expect(source).toContain('onChanged={() => state.refresh("assignment")}');
+    // The batch belongs to the session, not to the view: changing the queue never stops a running batch.
+    expect(source).toContain("batch.sessionGeneration === state.sessionGeneration ? batch : null");
+    const bulk = read("src/operations/components/operations-bulk-assignment.tsx");
+    expect(bulk).toContain("<strong>Vista previa:</strong>");
+    expect(bulk).toContain("bulkAssignmentConfirmation(run.driver, state.orders.length, check.totalCents)");
+    expect(bulk).toContain("parseBulkCosts(state.orders, typed)");
+    expect(bulk).toContain("eligibility.eligible.map((choice) => (");
     // Drivers by their DRV- reference, ids never shown, times in Mazatlán; the only amount is the order
     // total (UI-PHASE3-INBOX-TOTAL-2026-10-10), integer cents through the shared Money component.
     expect(source).toContain("row.assignment?.driver_reference");

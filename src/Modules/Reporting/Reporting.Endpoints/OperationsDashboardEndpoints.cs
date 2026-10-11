@@ -25,6 +25,8 @@ public static class OperationsDashboardEndpoints
         "created_from",
         "created_to",
         "unassigned",
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: the inbox "Precio por revisar" list.
+        "price_review",
         "cursor",
     ];
 
@@ -115,6 +117,7 @@ public static class OperationsDashboardEndpoints
             !TryUtc(query, "created_from", out var createdFrom) ||
             !TryUtc(query, "created_to", out var createdTo) ||
             !TryBoolean(query, "unassigned", out var unassigned) ||
+            !TryBoolean(query, "price_review", out var priceReview) ||
             !TryCursor(query, out var cursor))
         {
             return false;
@@ -138,6 +141,7 @@ public static class OperationsDashboardEndpoints
             createdFrom,
             createdTo,
             unassigned,
+            priceReview,
             cursor);
         return true;
     }
