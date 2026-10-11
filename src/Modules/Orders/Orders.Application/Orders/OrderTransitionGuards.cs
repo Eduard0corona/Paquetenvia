@@ -41,16 +41,32 @@ public interface IOrderTransitionGuard
     OrderTransitionGuardResult Evaluate(OrderTransitionGuardContext context);
 }
 
+/// <summary>
+/// The AI-04 transition guards, evaluated in order by the ORD-002 transition and by the Dispatch assignment and
+/// external-offer flows before an order moves.
+/// </summary>
+/// <remarks>
+/// ORD-002-API-GUARD-REGISTRY: the parameterless constructor is the only public one, so no host can compose a registry
+/// without the AI-04 guards. A container activates the longest public constructor it can satisfy, and an
+/// <c>IEnumerable&lt;IOrderTransitionGuard&gt;</c> parameter is always satisfiable (empty when no guard is
+/// registered): while the guard-list constructor was public, the type registrations of the Orders and Dispatch modules
+/// gave the API a registry with no guard at all.
+/// </remarks>
 public sealed class OrderTransitionGuardRegistry
 {
     private readonly IReadOnlyList<IOrderTransitionGuard> guards;
 
+    /// <summary>The AI-04 guards: the registry every host composes.</summary>
     public OrderTransitionGuardRegistry()
         : this(CreateDefaults())
     {
     }
 
-    public OrderTransitionGuardRegistry(IEnumerable<IOrderTransitionGuard> guards)
+    /// <summary>
+    /// A registry over explicit guards, for the uniqueness and ordering tests only. It stays internal so that no
+    /// container can ever select it (see the remarks on <see cref="OrderTransitionGuardRegistry"/>).
+    /// </summary>
+    internal OrderTransitionGuardRegistry(IEnumerable<IOrderTransitionGuard> guards)
     {
         this.guards = guards.OrderBy(guard => guard.Order).ThenBy(guard => guard.Code, StringComparer.Ordinal).ToArray();
         if (this.guards.Select(guard => guard.Code).Distinct(StringComparer.Ordinal).Count() != this.guards.Count)

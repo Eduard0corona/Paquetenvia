@@ -81,7 +81,9 @@ public static class DependencyInjection
         services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.TryAddSingleton<IDispatchAssignmentAuthorizer, DispatchAssignmentAuthorizer>();
-        services.TryAddSingleton<OrderTransitionGuardRegistry>();
+        // ORD-002-API-GUARD-REGISTRY: the AI-04 guards the assignment and external-offer flows evaluate before ASSIGNED,
+        // built by the same explicit factory as the Orders compositions (never a type registration).
+        services.TryAddSingleton(static _ => new OrderTransitionGuardRegistry());
         services.TryAddSingleton<IAssignmentFailureInjector, NoOpAssignmentFailureInjector>();
         services.TryAddScoped<IDispatchAuthorizationReader, PostgreSqlDispatchAuthorizationReader>();
         services.TryAddScoped<IAssignmentIdempotencyAccess, PostgreSqlAssignmentIdempotencyAccess>();

@@ -148,7 +148,7 @@ public static class DependencyInjection
         services.TryAddSingleton<IOrderCreationFailureInjector, NoOpOrderCreationFailureInjector>();
         services.TryAddSingleton<IOrderTransitionFailureInjector, NoOpOrderTransitionFailureInjector>();
         services.TryAddSingleton<IOrderTransitionAuthorizer, OrderTransitionAuthorizer>();
-        services.TryAddSingleton<OrderTransitionGuardRegistry>();
+        AddOrderTransitionGuardRegistry(services);
         services.TryAddScoped<IOrderTransitionAuthorizationReader, PostgreSqlOrderTransitionAuthorizationReader>();
         services.TryAddScoped<IOrderTransitionReplayAuthorizationReader,
             PostgreSqlOrderTransitionReplayAuthorizationReader>();
@@ -302,10 +302,7 @@ public static class DependencyInjection
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.TryAddSingleton<IOrderTransitionFailureInjector, NoOpOrderTransitionFailureInjector>();
         services.TryAddSingleton<IOrderTransitionAuthorizer, OrderTransitionAuthorizer>();
-        // The parameterless constructor holds the AI-04 guards. A type registration would let the container pick the
-        // IEnumerable<IOrderTransitionGuard> constructor, which it always satisfies (with no guard at all), and every
-        // DELIVERED order would close whatever its incidents, COD or claim window.
-        services.TryAddSingleton(_ => new OrderTransitionGuardRegistry());
+        AddOrderTransitionGuardRegistry(services);
         services.TryAddScoped<IOrderTransitionAuthorizationReader, PostgreSqlOrderTransitionAuthorizationReader>();
         services.TryAddScoped<IOrderTransitionReplayAuthorizationReader,
             PostgreSqlOrderTransitionReplayAuthorizationReader>();
@@ -335,6 +332,15 @@ public static class DependencyInjection
             tags: ["ready"]);
         return services;
     }
+
+    /// <summary>
+    /// ORD-002-API-GUARD-REGISTRY: the one registration of the AI-04 guards for both Orders compositions (the API's
+    /// <see cref="AddOrdersInfrastructure"/> and the Worker's <see cref="AddOrdersAutoClose"/>). The explicit factory
+    /// builds the AI-04 defaults whatever constructors the registry exposes; Dispatch, which may not reference this
+    /// module's infrastructure, registers the same factory.
+    /// </summary>
+    private static void AddOrderTransitionGuardRegistry(IServiceCollection services) =>
+        services.TryAddSingleton(static _ => new OrderTransitionGuardRegistry());
 
     private static bool AreValidOrigins(IReadOnlyCollection<string>? origins)
     {
