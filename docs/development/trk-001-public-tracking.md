@@ -185,7 +185,9 @@ estado, timeline, ventana/fallback, actualización, conexión, soporte y botón
 Actualizar. Sólo agrega `NEXT_PUBLIC_TRACKING_BRAND_NAME` y
 `NEXT_PUBLIC_TRACKING_SUPPORT_URL`; soporte admite HTTPS o `mailto:`. Sin URL
 muestra “Comunícate por el mismo canal donde recibiste este enlace.” No existe
-branding o soporte tenant-specific.
+branding o soporte tenant-specific. Mientras GATE-001 siga abierto no hay enlace
+de soporte (`GATE-001-TRACKING-SUPPORT-LINK-2026-10-11`): el workflow del piloto
+lo deja vacío por omisión y `next build` rechaza un enlace que nombre la marca.
 
 Marca neutra mientras GATE-001 siga abierto
 (`GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10`, AI-07

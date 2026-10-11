@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertNeutralTrackingBrand } from "../../../next.config";
+import {
+  assertNeutralTrackingBrand,
+  assertNeutralTrackingSupportUrl,
+} from "../../../next.config";
 import {
   publicTrackingHeading,
   publicTrackingMetadata,
@@ -39,6 +42,21 @@ describe("public tracking branding while GATE-001 is open", () => {
     }
     for (const value of [undefined, "", publicTrackingHeading, "Marca validada"]) {
       expect(() => assertNeutralTrackingBrand(value)).not.toThrow();
+    }
+  });
+
+  // GATE-001-TRACKING-SUPPORT-LINK-2026-10-11: no support link that names the brand.
+  it("refuses a support link that names the unvalidated commercial name", () => {
+    for (const value of [
+      "https://paquetenvia.com",
+      "https://www.PAQUETENVIA.com/ayuda",
+      "mailto:soporte@paquetenvia.com",
+      "https://soporte.paquet-envía.mx",
+    ]) {
+      expect(() => assertNeutralTrackingSupportUrl(value), value).toThrow(/GATE-001/);
+    }
+    for (const value of [undefined, "", "https://soporte.example.com", "mailto:ayuda@example.com"]) {
+      expect(() => assertNeutralTrackingSupportUrl(value)).not.toThrow();
     }
   });
 });

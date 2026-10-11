@@ -110,6 +110,25 @@ export function assertNeutralTrackingBrand(value: string | undefined): void {
   }
 }
 
+/**
+ * GATE-001-TRACKING-SUPPORT-LINK-2026-10-11: while GATE-001 is open the public
+ * tracking page has no support link (it tells the recipient to answer through
+ * the channel the link came by). NEXT_PUBLIC_TRACKING_SUPPORT_URL stays empty;
+ * the build refuses a link that names the unvalidated commercial name.
+ */
+export function assertNeutralTrackingSupportUrl(value: string | undefined): void {
+  const folded = (value ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (folded.includes("paquetenvia")) {
+    throw new Error(
+      "NEXT_PUBLIC_TRACKING_SUPPORT_URL must not point to the commercial name while GATE-001 is open (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11).",
+    );
+  }
+}
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 if (
   apiBaseUrl !== undefined &&
@@ -124,7 +143,8 @@ const apiProxyRewrites = buildApiProxyRewrites(
   parseApiProxyOrigin(process.env.PAQUETENVIA_API_PROXY_ORIGIN),
 );
 const supportUrl = process.env.NEXT_PUBLIC_TRACKING_SUPPORT_URL;
-if (supportUrl !== undefined) {
+// An empty build argument (the pilot default) means no support link.
+if (supportUrl !== undefined && supportUrl.trim() !== "") {
   const parsedSupportUrl = new URL(supportUrl);
   if (
     (parsedSupportUrl.protocol !== "https:" &&
@@ -136,6 +156,7 @@ if (supportUrl !== undefined) {
   }
 }
 assertNeutralTrackingBrand(process.env.NEXT_PUBLIC_TRACKING_BRAND_NAME);
+assertNeutralTrackingSupportUrl(process.env.NEXT_PUBLIC_TRACKING_SUPPORT_URL);
 // The Content-Security-Policy is nonce-based and emitted per request by
 // src/proxy.ts (see src/security/security-headers.ts). Only static headers are
 // declared here; a second CSP header would be enforced in addition to it.

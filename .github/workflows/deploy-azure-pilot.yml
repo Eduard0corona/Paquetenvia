@@ -408,7 +408,9 @@ jobs:
           set -euo pipefail
           [[ "$(git rev-parse HEAD)" == "${TESTED_GIT_SHA}" ]] || { echo "::error::checkout is not tested_git_sha"; exit 1; }
           az acr login --name "${REGISTRY}" --only-show-errors
-          support_url="${PILOT_TRACKING_SUPPORT_URL:-https://${PILOT_HOST}}"
+          # GATE-001-TRACKING-SUPPORT-LINK-2026-10-11: no support link by default while GATE-001 is open (the host shows
+          # the commercial name); an empty value makes public tracking point the recipient to the channel the link came by.
+          support_url="${PILOT_TRACKING_SUPPORT_URL:-}"
           build() {
             local name="$1" dockerfile="$2"; shift 2
             local ref="${REGISTRY_SERVER}/paquetenvia-${name}:${TESTED_GIT_SHA}"

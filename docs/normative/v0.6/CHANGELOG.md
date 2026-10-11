@@ -1,5 +1,16 @@
 # Changelog
 
+## Sin enlace de soporte en el seguimiento público (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner: "Quitarlo por ahora (Recommended)"; registrada, con su pregunta, en
+  `decision-log.md`. GATE-001 sigue abierto.
+- Mientras GATE-001 siga abierto, el seguimiento público no muestra enlace de soporte: el workflow del piloto ya no
+  usa el host del piloto como valor por omisión de `PILOT_TRACKING_SUPPORT_URL`, un
+  `NEXT_PUBLIC_TRACKING_SUPPORT_URL` vacío significa sin enlace (la página indica responder por el mismo canal del
+  enlace) y `next build` rechaza un enlace que nombre la marca en cualquier variante.
+- AI-07 `public_tracking.branding` agrega la regla del canal de soporte. Sin cambios en API, AI-04, AI-05, AI-06,
+  AI-18, roles ni migraciones.
+
 ## Nombre neutro en el seguimiento público mientras GATE-001 sigue abierto (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10) — 2026-10-10
 
 - Respuestas literales del project owner: "Interno sí, público neutro (Recommended)" y "Seguimiento de envío

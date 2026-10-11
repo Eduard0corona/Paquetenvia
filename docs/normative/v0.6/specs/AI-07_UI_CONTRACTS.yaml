@@ -524,6 +524,9 @@ screen_contracts:
         never name the commercial name
       - internal screens, login, onboarding and the driver PWA keep the platform name
       - the link host follows PILOT-DOMAIN-PRODUCTION and is not changed by this decision
+      - 'support channel (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11): no support link while GATE-001 is open;
+        NEXT_PUBLIC_TRACKING_SUPPORT_URL stays empty, the page tells the recipient to reply through the channel the link
+        came by, and the web build refuses a link that names the commercial name'
   csv_order_import:
     release: MVP-1
     route: /ops/orders/import

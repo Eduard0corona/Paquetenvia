@@ -96,6 +96,14 @@ describe("public tracking neutral branding", () => {
     );
   });
 
+  it("has no support link by default while GATE-001 is open", () => {
+    const workflow = read("../../.github/workflows/deploy-azure-pilot.yml");
+    expect(workflow).toContain('support_url="${PILOT_TRACKING_SUPPORT_URL:-}"');
+    expect(workflow).not.toContain("PILOT_TRACKING_SUPPORT_URL:-https://");
+    const aiSeven = read("../../docs/normative/v0.6/specs/AI-07_UI_CONTRACTS.yaml");
+    expect(aiSeven).toContain("GATE-001-TRACKING-SUPPORT-LINK-2026-10-11");
+  });
+
   it("follows the AI-07 public tracking branding contract", () => {
     const aiSeven = read("../../docs/normative/v0.6/specs/AI-07_UI_CONTRACTS.yaml");
     const contract = aiSeven.slice(aiSeven.indexOf("  public_tracking:"));
