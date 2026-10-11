@@ -296,7 +296,7 @@ public sealed class OrderTransitionDomainTests
     public void Guard_registry_has_unique_codes_and_deterministic_order()
     {
         var registry = new OrderTransitionGuardRegistry();
-        Assert.Equal(24, registry.Guards.Count);
+        Assert.Equal(25, registry.Guards.Count);
         Assert.Equal(
             registry.Guards.Select(guard => guard.Code).Distinct(StringComparer.Ordinal).Count(),
             registry.Guards.Count);
@@ -444,6 +444,120 @@ public sealed class OrderTransitionDomainTests
             Assert.Equal("custody_acquired_true", result.Code);
         }
     }
+
+    /// <summary>
+    /// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: a driver report records no next action, so dispatch chooses any
+    /// of the three exits ("Reprogramar", "Reintentar hoy", "Regresar") and a driver is refused before anything else.
+    /// </summary>
+    [Theory]
+    [InlineData("DISPATCHER", OrderStatus.Rescheduled, true)]
+    [InlineData("DISPATCHER", OrderStatus.Delivering, true)]
+    [InlineData("DISPATCHER", OrderStatus.Returning, true)]
+    [InlineData("PLATFORM_ADMIN", OrderStatus.Rescheduled, true)]
+    [InlineData("PLATFORM_ADMIN", OrderStatus.Delivering, true)]
+    [InlineData("PLATFORM_ADMIN", OrderStatus.Returning, true)]
+    [InlineData("DRIVER", OrderStatus.Rescheduled, false)]
+    [InlineData("DRIVER", OrderStatus.Delivering, false)]
+    [InlineData("DRIVER", OrderStatus.Returning, false)]
+    [InlineData(null, OrderStatus.Rescheduled, false)]
+    [InlineData("VIEWER", OrderStatus.Returning, false)]
+    public void A_pending_failed_attempt_is_decided_by_dispatch_only(string? role, OrderStatus target, bool satisfied)
+    {
+        var result = new OrderTransitionGuardRegistry().Evaluate(LeaveFailedAttempt(
+            target,
+            role,
+            new IncidentGuardSnapshot(false, false, true, true, null, LatestFailedAttemptIncidentFound: true),
+            custody: true,
+            validAssignment: true));
+
+        Assert.Equal(satisfied, result.Satisfied);
+        if (!satisfied)
+        {
+            Assert.Equal("failed_attempt_dispatch_decides", result.Code);
+        }
+    }
+
+    [Fact]
+    public void Dispatch_choice_still_meets_every_other_guard_of_the_target()
+    {
+        var registry = new OrderTransitionGuardRegistry();
+        var pending = new IncidentGuardSnapshot(false, false, false, true, null, LatestFailedAttemptIncidentFound: true);
+
+        // Nothing is returned, or retried today, without custody; a retry keeps a valid assignment.
+        Assert.Equal(
+            "custody_acquired_true",
+            registry.Evaluate(LeaveFailedAttempt(OrderStatus.Returning, "DISPATCHER", pending, custody: false, validAssignment: true)).Code);
+        Assert.Equal(
+            "retry_custody_acquired_true",
+            registry.Evaluate(LeaveFailedAttempt(OrderStatus.Delivering, "DISPATCHER", pending, custody: false, validAssignment: true)).Code);
+        Assert.Equal(
+            "retry_valid_assignment",
+            registry.Evaluate(LeaveFailedAttempt(OrderStatus.Delivering, "DISPATCHER", pending, custody: true, validAssignment: false)).Code);
+        Assert.True(
+            registry.Evaluate(LeaveFailedAttempt(OrderStatus.Rescheduled, "DISPATCHER", pending, custody: false, validAssignment: false)).Satisfied);
+    }
+
+    [Theory]
+    [InlineData("DRIVER", OrderStatus.Rescheduled, "RESCHEDULED", true)]
+    [InlineData("DRIVER", OrderStatus.Delivering, "RESCHEDULED", true)]
+    [InlineData("DRIVER", OrderStatus.Returning, "RESCHEDULED", false)]
+    [InlineData("DRIVER", OrderStatus.Returning, "RETURNING", true)]
+    [InlineData("DISPATCHER", OrderStatus.Rescheduled, "RETURNING", false)]
+    public void A_next_action_dispatch_recorded_keeps_todays_rule_for_drivers_too(
+        string role,
+        OrderStatus target,
+        string nextAction,
+        bool satisfied)
+    {
+        var result = new OrderTransitionGuardRegistry().Evaluate(LeaveFailedAttempt(
+            target,
+            role,
+            new IncidentGuardSnapshot(false, false, true, true, nextAction, LatestFailedAttemptIncidentFound: true),
+            custody: true,
+            validAssignment: true));
+
+        Assert.Equal(satisfied, result.Satisfied);
+        if (!satisfied)
+        {
+            Assert.Equal("failed_attempt_next_action_respected", result.Code);
+        }
+    }
+
+    [Fact]
+    public void A_justifying_incident_that_cannot_be_read_allows_no_exit()
+    {
+        // Not found is not "dispatch decides": a null next action alone never opens the three exits.
+        var missing = new IncidentGuardSnapshot(false, false, true, true);
+        Assert.False(FailedAttemptDecisionPolicy.IsDecisionPending(missing));
+        foreach (var target in new[] { OrderStatus.Rescheduled, OrderStatus.Delivering, OrderStatus.Returning })
+        {
+            var result = new OrderTransitionGuardRegistry().Evaluate(
+                LeaveFailedAttempt(target, "DISPATCHER", missing, custody: true, validAssignment: true));
+            Assert.Equal("failed_attempt_next_action_respected", result.Code);
+        }
+    }
+
+    private static OrderTransitionGuardContext LeaveFailedAttempt(
+        OrderStatus target,
+        string? role,
+        IncidentGuardSnapshot incidents,
+        bool custody,
+        bool validAssignment) => new()
+        {
+            Source = OrderStatus.FailedAttempt,
+            Target = target,
+            Reason = "synthetic",
+            OccurredAt = Now,
+            ClaimWindowEndsAt = null,
+            FinalizedAt = null,
+            CodExpectedCents = 0,
+            MonetaryIntegrityValid = true,
+            Metadata = NormalizedTransitionMetadata.Empty,
+            Custody = new CustodyGuardSnapshot(custody),
+            Assignment = new AssignmentGuardSnapshot(validAssignment, validAssignment, true, true),
+            Incidents = incidents,
+            ActorRole = role,
+        };
 
     [Fact]
     public void Central_redactor_removes_sensitive_reason_values()

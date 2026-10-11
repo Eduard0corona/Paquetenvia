@@ -83,13 +83,46 @@ public sealed partial class IncidentsOpenApiImplementationTests
 
         Assert.Equal(transport, PropertyNames(schema));
 
-        // AI-08 makes every INC-001 opening field mandatory; none of them may become optional.
-        Assert.Equal(transport, Required(schema));
+        // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: type, reason, occurrence and evidence stay mandatory for
+        // everyone (AI-08); severity, description and next action are required from dispatch and omitted by a
+        // driver, and nothing else may become optional.
+        string[] reporterFields = ["description", "next_action", "severity"];
+        Assert.Equal(transport.Except(reporterFields, StringComparer.Ordinal), Required(schema));
+        var shape = schema.Mapping("x-reporter-shape");
+        Assert.Equal(AllowDispatchDecidedNextActionDecision, shape.Scalar("decision"));
+        Assert.Equal(reporterFields, ScalarSequence(shape, "dispatch_requires"));
+        Assert.Equal(reporterFields, ScalarSequence(shape, "driver_omits"));
         Assert.Equal("false", schema.Scalar("additionalProperties"));
 
         // The closed schema is enforced at runtime, not merely documented.
         Assert.Contains("request.ExtensionData is { Count: > 0 }", EndpointSource(), StringComparison.Ordinal);
+
+        // The endpoint hands the three reporter fields to the service untouched (null when omitted), and the
+        // service settles them against who reports before anything is protected or written.
+        var handler = HandlerSource("OpenIncidentAsync");
+        foreach (var member in new[] { "request.Severity,", "request.Description,", "request.NextAction," })
+        {
+            Assert.Contains(member, handler, StringComparison.Ordinal);
+        }
+
+        var service = ReadRepositoryFile(
+            "src", "Modules", "Incidents", "Incidents.Infrastructure", "Incidents", "PostgreSqlIncidentService.cs");
+        var reporterShape = service.IndexOf(
+            "IncidentRequestPolicy.IsValidReportShape(command, authorized.Reporter)",
+            StringComparison.Ordinal);
+        var protection = service.IndexOf("await ProtectDescriptionAsync(", StringComparison.Ordinal);
+        Assert.True(reporterShape >= 0 && protection > reporterShape);
     }
+
+    private const string AllowDispatchDecidedNextActionDecision =
+        Incidents.Infrastructure.Persistence.Migrations.AllowDispatchDecidedNextAction.DecisionId;
+
+    private static string[] ScalarSequence(YamlMappingNode mapping, string key) =>
+        mapping.Sequence(key).Children
+            .Cast<YamlScalarNode>()
+            .Select(node => node.Value!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
     [Fact]
     public void AI05_incident_schema_is_exactly_the_implemented_IncidentResponse()
@@ -123,8 +156,26 @@ public sealed partial class IncidentsOpenApiImplementationTests
         {
             AssertEnum(properties.Mapping("severity"), severities);
             AssertEnum(properties.Mapping("reason_code"), reasonCodes);
-            AssertEnum(properties.Mapping("next_action"), nextActions);
         }
+
+        AssertEnum(request.Mapping("next_action"), nextActions);
+        // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: an Incident whose next action dispatch decides publishes null.
+        var publishedNextAction = incident.Mapping("next_action");
+        Assert.Equal(
+            ["string", "null"],
+            publishedNextAction.Sequence("type").Children.Cast<YamlScalarNode>().Select(node => node.Value!));
+        var publishedNextActions = publishedNextAction.Sequence("enum").Children.Cast<YamlScalarNode>().ToArray();
+        Assert.Equal(
+            nextActions.Order(StringComparer.Ordinal),
+            publishedNextActions.Where(node => node.Value != "null").Select(node => node.Value!).Order(StringComparer.Ordinal));
+        Assert.Single(publishedNextActions, node => node.Value == "null");
+        var nullability = new NullabilityInfoContext();
+        Assert.Equal(
+            NullabilityState.Nullable,
+            nullability.Create(typeof(IncidentResponse).GetProperty(nameof(IncidentResponse.NextAction))!).ReadState);
+        Assert.Equal(
+            NullabilityState.NotNull,
+            nullability.Create(typeof(IncidentResponse).GetProperty(nameof(IncidentResponse.ReasonCode))!).ReadState);
 
         AssertEnum(incident.Mapping("status"), statuses);
 
@@ -649,6 +700,23 @@ public sealed partial class IncidentsOpenApiImplementationTests
         Assert.Contains("active DISPATCHER member", description, StringComparison.Ordinal);
         Assert.Contains("PLATFORM_ADMIN member with a satisfied MFA challenge", description, StringComparison.Ordinal);
         Assert.Contains("ACCEPTED or ACTIVE assignment", description, StringComparison.Ordinal);
+        // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the published report rule is the one the domain applies.
+        Assert.Contains(AllowDispatchDecidedNextActionDecision, description, StringComparison.Ordinal);
+        Assert.Contains("severity HIGH for SECURITY_RISK and PACKAGE_DAMAGED and MEDIUM", description, StringComparison.Ordinal);
+        Assert.Equal(IncidentSeverity.High, IncidentDriverReportPolicy.Severity(IncidentReasonCode.SecurityRisk));
+        Assert.Equal(IncidentSeverity.High, IncidentDriverReportPolicy.Severity(IncidentReasonCode.PackageDamaged));
+        Assert.All(
+            Enum.GetValues<IncidentReasonCode>()
+                .Where(reason => reason is not (IncidentReasonCode.SecurityRisk or IncidentReasonCode.PackageDamaged)),
+            reason => Assert.Equal(IncidentSeverity.Medium, IncidentDriverReportPolicy.Severity(reason)));
+        const string fixedDescription = "Intento fallido reportado por el repartidor. Motivo:";
+        Assert.Contains($"\"{fixedDescription}\"", description, StringComparison.Ordinal);
+        Assert.All(
+            Enum.GetValues<IncidentReasonCode>(),
+            reason => Assert.StartsWith(
+                fixedDescription + " ",
+                IncidentDriverReportPolicy.Description(reason),
+                StringComparison.Ordinal));
     }
 
     private static YamlMappingNode Contract() =>

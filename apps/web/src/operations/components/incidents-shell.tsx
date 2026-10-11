@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import {
+  incidentNextActionLabel,
   incidentNextActionLabels,
   incidentNextActions,
   incidentOutcomeLabels,
@@ -243,7 +244,7 @@ function IncidentList({ state, controller }: { readonly state: IncidentsState; r
                 <td>{incidentStatusLabels[incident.status]}</td>
                 <td>{incidentSeverityLabels[incident.severity]}</td>
                 <td>{incidentReasonLabels[incident.reason_code]}</td>
-                <td>{incidentNextActionLabels[incident.next_action]}</td>
+                <td>{incidentNextActionLabel(incident.next_action)}</td>
                 <td>{incident.custody_acquired ? "Con custodia" : "Sin custodia"}</td>
                 <td><DateTime value={incident.occurred_at} /></td>
                 <td><DateTime value={incident.sla_due_at} /></td>

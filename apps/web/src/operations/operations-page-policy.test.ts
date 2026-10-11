@@ -86,7 +86,9 @@ describe("operations page privacy policy", () => {
     expect(detail).toContain("onOrderChanged={state.refresh}");
 
     const step = readFileSync("src/operations/components/operations-next-step.tsx", "utf8");
-    expect(step).toContain("nextStepActions(allowedTransitions)");
+    // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the status only words a failed attempt's decision.
+    expect(detail).toContain("status={order.status}");
+    expect(step).toContain("nextStepActions(allowedTransitions, status)");
     expect(step).toContain("transitionConfirmation(");
     expect(step).toContain('name="reason"');
     // No disabled placeholders and no status logic in the screen.
@@ -95,6 +97,10 @@ describe("operations page privacy policy", () => {
 
     const contract = readFileSync("src/operations/contracts/order-transitions.ts", "utf8");
     expect(contract).not.toMatch(/source|from status|transitionsFrom/i);
+    // The one status the contract reads picks the decision's wording; every action still needs the server's list.
+    expect(contract.match(/currentStatus ===/g)).toEqual(["currentStatus ==="]);
+    expect(contract).toContain('currentStatus === "FAILED_ATTEMPT" ? failedAttemptDecision : offered');
+    expect(contract).toContain("if (transition === undefined) return [];");
 
     const sources = [
       step,
@@ -106,6 +112,27 @@ describe("operations page privacy policy", () => {
     ].join("\n");
     expect(sources).not.toMatch(/localStorage|sessionStorage|indexedDB|caches\.|console\./);
     expect(sources).not.toMatch(/parseFloat/);
+  });
+
+  it("shows why a failed attempt failed and who decides it (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11)", () => {
+    const detail = readFileSync("src/operations/components/operations-order-detail-shell.tsx", "utf8");
+    expect(detail).toContain(
+      "<OperationsFailedAttempt orderId={order.id} status={order.status} version={order.version} />",
+    );
+    // The reason comes before the decision it explains.
+    expect(detail.indexOf("<OperationsFailedAttempt")).toBeLessThan(detail.indexOf("<OperationsNextStep"));
+
+    const panel = readFileSync("src/operations/components/operations-failed-attempt.tsx", "utf8");
+    expect(panel).toContain("loadFailedAttempt(createIncidentsApi(apiBaseUrl, session), orderId, signal)");
+    expect(panel).toContain("[apiBaseUrl, orderId, status, version]");
+    const sources = [
+      panel,
+      readFileSync("src/operations/state/failed-attempt-loader.ts", "utf8"),
+      readFileSync("src/operations/contracts/failed-attempt.ts", "utf8"),
+    ].join("\n");
+    expect(sources).not.toMatch(/localStorage|sessionStorage|indexedDB|caches\.|console\./);
+    // Only the reason, the decision and the deadline: never the description or the evidence.
+    expect(sources).not.toMatch(/\.description\b|evidence_proof_ids|\.id\b/);
   });
 
   it("searches only the exact tracking number from the top bar (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)", () => {

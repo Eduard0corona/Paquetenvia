@@ -32,7 +32,8 @@ public sealed class OrderTransitionGuardRegistryCompositionTests
         var constructor = Assert.Single(typeof(OrderTransitionGuardRegistry).GetConstructors());
 
         Assert.Empty(constructor.GetParameters());
-        Assert.Equal(24, Ai04GuardCodes.Length);
+        // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 added failed_attempt_dispatch_decides.
+        Assert.Equal(25, Ai04GuardCodes.Length);
     }
 
     [Fact]

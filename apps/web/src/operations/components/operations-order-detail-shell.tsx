@@ -14,6 +14,7 @@ import { PageHeader } from "../../components/ui/page-header";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
+import { OperationsFailedAttempt } from "./operations-failed-attempt";
 import { OperationsNextStep } from "./operations-next-step";
 import { OperationsTrackingLink } from "./operations-tracking-link";
 
@@ -129,9 +130,12 @@ export function OperationsOrderDetailShell({
         </p>
       )}
 
+      <OperationsFailedAttempt orderId={order.id} status={order.status} version={order.version} />
+
       <OperationsNextStep
         orderId={order.id}
         publicId={order.public_id}
+        status={order.status}
         version={order.version}
         allowedTransitions={order.allowed_transitions}
         onOrderChanged={state.refresh}

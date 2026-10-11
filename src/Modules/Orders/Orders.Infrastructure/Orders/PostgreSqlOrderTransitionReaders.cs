@@ -469,7 +469,8 @@ public sealed class PostgreSqlOrderCustodyGuardReader : IOrderCustodyGuardReader
 /// a deferred constraint trigger refuses every later incident without evidence, while nothing adds
 /// evidence to an existing incident. An incident without evidence is therefore exactly one that
 /// existed before the adoption, whose next action the backfill derived from
-/// <c>custody_acquired</c>.
+/// <c>custody_acquired</c>. A found incident whose next action is NULL is a driver report whose
+/// successor dispatch decides (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11).
 /// </summary>
 public sealed class PostgreSqlOrderIncidentGuardReader : IOrderIncidentGuardReader
 {
@@ -523,13 +524,15 @@ public sealed class PostgreSqlOrderIncidentGuardReader : IOrderIncidentGuardRead
                 WHERE i.order_id=@order AND (i.owner_org_id=@org OR i.operator_org_id=@org)
                   AND i.status IN ('OPEN','INVESTIGATING')),
               latest_incident.next_action,
-              COALESCE(latest_incident.adopted,false)
+              COALESCE(latest_incident.adopted,false),
+              COALESCE(latest_incident.found,false)
             FROM (SELECT 1) anchor
             LEFT JOIN LATERAL (
               SELECT i.next_action,
                      NOT EXISTS (
                        SELECT 1 FROM incidents.incident_evidence ev WHERE ev.incident_id=i.id
-                     ) AS adopted
+                     ) AS adopted,
+                     true AS found
               FROM incidents.incidents i
               JOIN (
                 SELECT f.incident_id FROM failed_attempts f
@@ -549,7 +552,8 @@ public sealed class PostgreSqlOrderIncidentGuardReader : IOrderIncidentGuardRead
                 reader.GetBoolean(2),
                 reader.GetBoolean(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.GetBoolean(5))
+                reader.GetBoolean(5),
+                reader.GetBoolean(6))
             : new(false, false, false, false);
     }
 }

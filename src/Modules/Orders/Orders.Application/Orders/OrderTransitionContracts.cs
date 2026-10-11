@@ -454,6 +454,9 @@ public interface IOrderCustodyGuardReader
 /// <c>LatestFailedAttemptIncidentAdopted</c> marks that incident as one INC-001 adopted from a
 /// pre-INC-001 installation: its next action was derived by the adoption backfill, never chosen by
 /// anyone, so it does not bind the successor of the failed attempt.
+/// <c>LatestFailedAttemptIncidentFound</c> says that incident was read at all, which tells a next
+/// action left to dispatch (found, <see langword="null"/>; INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11)
+/// apart from a missing incident, which binds every successor closed.
 /// </summary>
 public sealed record IncidentGuardSnapshot(
     bool RequestedIncidentValid,
@@ -461,7 +464,8 @@ public sealed record IncidentGuardSnapshot(
     bool AnyCustodyAcquired,
     bool HasUnresolvedIncident,
     string? LatestFailedAttemptNextAction = null,
-    bool LatestFailedAttemptIncidentAdopted = false);
+    bool LatestFailedAttemptIncidentAdopted = false,
+    bool LatestFailedAttemptIncidentFound = false);
 
 public interface IOrderIncidentGuardReader
 {
