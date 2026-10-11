@@ -1169,11 +1169,14 @@ items:
   outputs:
   - finalization job
   - claim window configuration
+  - automatic close job (ORD-AUTO-CLOSE-2026-10-10)
   - tests
   acceptance_criteria:
   - claim cannot open after window
   - CLOSED is finalized by idempotent job
   - archival waits for privacy retention gate
+  - a DELIVERED order whose CLOSED guards hold is closed by the idempotent system job through the ORD-002 transition,
+    for its owner organization only, with the event, outbox and audit rows of a manual close (ORD-AUTO-CLOSE-2026-10-10)
 - id: SCL-006
   title: Particionar telemetría antes de crecimiento local
   priority: P1

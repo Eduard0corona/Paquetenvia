@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useMemo } from "react";
 import { useConfirmDialog } from "../../components/confirm-dialog";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
 import { OperationsPositions } from "./operations-positions";
+import { dashboardViewHref, parseDashboardView, type DashboardView } from "../contracts/dashboard-view";
 import { orderStatusGroupIds, statusGroup } from "../contracts/status-groups";
 import { statusGroupTotals } from "../contracts/queue-counts";
 import { DateTime } from "../../components/ui/date-time";
@@ -15,15 +17,17 @@ import { useOperationsDashboard } from "../state/use-operations-dashboard";
 
 export function OperationsDashboardShell() {
   const state = useOperationsDashboard();
-  const [view, setView] = useState<"list" | "positions">("list");
   const { confirm, dialog } = useConfirmDialog();
-  // UI-PHASE3-INBOX-2026-10-10: "Mapa de posiciones" in the inbox opens the positions view.
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (new URL(window.location.href).searchParams.get("view") === "positions") setView("positions");
-    }, 0);
-    return () => clearTimeout(timer);
-  }, []);
+  // UI-PHASE3-INBOX-2026-10-10: the view lives in the URL and is read while rendering, so a deep link
+  // (/ops/dashboard?view=positions, "Mapa de posiciones" in the inbox) opens the positions view without
+  // painting the list first, and a later navigation with another query shows the view it names.
+  const searchParams = useSearchParams();
+  const view = parseDashboardView(searchParams);
+  // The toggle rewrites the URL in place; Next.js syncs useSearchParams with history.replaceState, so
+  // switching needs no server request, adds no history entry and keeps the loaded orders.
+  const showView = (next: DashboardView) => {
+    if (next !== view) window.history.replaceState(null, "", dashboardViewHref(next, searchParams));
+  };
   const grouped = useMemo(
     () =>
       orderStatusGroupIds.map((group) => ({
@@ -110,7 +114,7 @@ export function OperationsDashboardShell() {
           type="button"
           className="btn btnSecondary"
           aria-pressed={view === "list"}
-          onClick={() => setView("list")}
+          onClick={() => showView("list")}
         >
           Lista
         </button>
@@ -118,7 +122,7 @@ export function OperationsDashboardShell() {
           type="button"
           className="btn btnSecondary"
           aria-pressed={view === "positions"}
-          onClick={() => setView("positions")}
+          onClick={() => showView("positions")}
         >
           Posiciones
         </button>

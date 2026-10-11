@@ -1624,7 +1624,7 @@ a.opsInboxQueue[aria-current="page"] {
 
 .opsInboxTable {
   width: 100%;
-  min-width: 48rem;
+  min-width: 56rem;
   border-collapse: collapse;
   font-size: var(--text-sm);
 }
@@ -1698,6 +1698,282 @@ a.opsInboxQueue[aria-current="page"] {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* Amounts align on the right with tabular figures (Money) and never wrap. */
+.opsInboxTable .opsInboxTotal {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ---------- New order wizard (UI-PHASE3-ORDER-WIZARD-2026-10-10) ---------- */
+
+.opsWizard {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+/* Stepper: four columns down to 320px; the label wraps under its marker. */
+.opsWizardSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.opsWizardStep {
+  /* Contains the connector and the .srOnly texts. */
+  position: relative;
+  min-width: 0;
+}
+
+.opsWizardStep + .opsWizardStep::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--space-1) + 1rem - 1px);
+  right: calc(50% + 1.25rem);
+  left: calc(-50% + 1.25rem);
+  height: 2px;
+  background: var(--line);
+}
+
+.opsWizardStep-done + .opsWizardStep::before {
+  background: var(--accent);
+}
+
+.opsWizardStepItem {
+  display: grid;
+  width: 100%;
+  min-height: var(--target);
+  justify-items: center;
+  align-content: start;
+  gap: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  padding: var(--space-1);
+  color: var(--muted);
+  font: inherit;
+  text-align: center;
+}
+
+button.opsWizardStepItem {
+  cursor: pointer;
+}
+
+button.opsWizardStepItem:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.opsWizardStepMarker {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 2px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.opsWizardStepLabel {
+  max-width: 100%;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: break-word;
+}
+
+.opsWizardStep-current .opsWizardStepMarker {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.opsWizardStep-current .opsWizardStepLabel {
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.opsWizardStep-done .opsWizardStepMarker {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.opsWizardStep-done .opsWizardStepLabel {
+  color: var(--ink);
+}
+
+/* Phones and narrow screens: one column in document order (the summary goes after the fields,
+   and before them on the last step). Wide screens: the summary is fixed on the right. */
+.opsWizardLayout {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.opsWizardForm {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: var(--space-4);
+}
+
+.opsWizardStepHeader h2 {
+  margin-bottom: var(--space-1);
+}
+
+.opsWizardStepHeader h2:focus {
+  outline: none;
+}
+
+.opsWizardStepHeader h2:focus-visible {
+  outline: 3px solid var(--focus);
+}
+
+.opsWizardStepCount {
+  display: block;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.opsWizardPair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: var(--space-3);
+}
+
+.opsWizardTrio {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.5rem), 1fr));
+  gap: var(--space-3);
+}
+
+.opsWizardForm .opsCheckbox {
+  min-height: var(--target);
+  align-items: flex-start;
+  padding: var(--space-2) 0;
+  cursor: pointer;
+}
+
+.opsWizardForm .opsCheckbox input {
+  margin: 0.1rem 0 0;
+}
+
+.opsWizardPriceStatus {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.opsWizardPriceStatus p {
+  margin: 0;
+}
+
+.opsWizardNav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
+}
+
+.opsWizardPrimary {
+  margin-left: auto;
+}
+
+.opsWizardSummary {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.opsWizardSummary h2,
+.opsWizardSummary h3 {
+  margin: 0;
+}
+
+.opsWizardSummary h3 {
+  font-size: var(--text-md);
+}
+
+.opsWizardPrice {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
+}
+
+.opsWizardPrice p {
+  margin: 0;
+}
+
+.opsWizardOutcome {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.opsWizardOutcome h2:focus {
+  outline: none;
+}
+
+.opsWizardOutcome h2:focus-visible {
+  outline: 3px solid var(--focus);
+}
+
+.opsWizardOutcome p {
+  margin: 0;
+  /* A tracking number is one long word; it wraps instead of widening the page at 320px. */
+  overflow-wrap: anywhere;
+}
+
+/* The message under the field says what is wrong; the border is only a second cue. */
+.opsWizardForm [aria-invalid="true"] {
+  border-color: var(--crit);
+}
+
+.opsWizardGuide {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+/* While a request runs, controls stay focusable (aria-disabled) and the screen ignores them. */
+.opsWizard [aria-disabled="true"],
+.opsWizardOutcome [aria-disabled="true"] {
+  cursor: progress;
+}
+
+.noticeOk {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+@media (min-width: 1100px) {
+  .opsWizardLayout {
+    grid-template-columns: minmax(0, 1fr) minmax(17rem, 22rem);
+    grid-template-areas: "form summary";
+  }
+
+  .opsWizardForm {
+    grid-area: form;
+  }
+
+  .opsWizardSummary {
+    position: sticky;
+    top: var(--space-4);
+    grid-area: summary;
+  }
 }
 
 /* ---------- Order detail ---------- */

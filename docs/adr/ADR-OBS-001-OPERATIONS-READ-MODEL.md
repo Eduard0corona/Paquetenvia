@@ -78,6 +78,16 @@ GATE-003 permanece abierto.
 - El despliegue sigue single-instance para realtime/rate limiting; Redis no
   participa y GATE-013 permanece abierto.
 
+## Enmienda 2026-10-10: total de la orden (UI-PHASE3-INBOX-TOTAL-2026-10-10)
+
+Para la columna Total de la bandeja de trabajo (UI-PHASE3-INBOX-2026-10-10), cada item agrega `total`: el
+`orders.total_cents` persistido de la orden, con IVA incluido, en la forma `Money` de AI-05 `Order.total`
+(`currency` MXN, `amount_cents` int64). Se lee en la misma consulta CTE, dentro de la misma transacción con RLS; un
+valor negativo o en otra moneda es una proyección inconsistente y responde 503. Los lectores no cambian (DISPATCHER y
+PLATFORM_ADMIN con MFA) y ya reciben ese total por `listOrders`/`getOrder` y `getOrderFinancials`; FINANCE, VIEWER y
+los demás roles siguen con 403. No se agregan tarifa, desglose, costo de assignment, margen ni cobro contra entrega.
+El endpoint sigue fuera de AI-05.
+
 ## Alternativas descartadas
 
 - Ampliar `listOrders`: modificaría AI-05 y acoplaría consumidores existentes.

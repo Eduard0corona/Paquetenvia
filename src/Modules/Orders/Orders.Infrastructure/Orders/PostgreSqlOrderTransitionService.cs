@@ -54,8 +54,16 @@ public sealed class DisabledOrderTransitionService : IOrderTransitionService
     }
 }
 
+/// <remarks>
+/// ORD-AUTO-CLOSE-2026-10-10: <see cref="CloseDeliveredAsync"/> runs this same transition for the system actor, which
+/// may only take DELIVERED -> CLOSED (<see cref="OrderSystemTransitionPolicy"/>). The order lock, version, AI-04
+/// matrix, every guard, the order update and the event, outbox, audit and idempotency rows are shared with
+/// <see cref="TransitionAsync"/>; only the actor differs: no membership is read, the event and audit rows carry no
+/// actor, and the transaction runs under the transaction runner of the host that composed the service (the Worker
+/// composes it with <c>paqueteria_worker</c>).
+/// </remarks>
 public sealed class PostgreSqlOrderTransitionService(
-    TenantTransactionContext<OrdersDbContext> transactionContext,
+    ITenantTransactionRunner<OrdersDbContext> transactionContext,
     IOrderTransitionAuthorizationReader authorizationReader,
     IOrderTransitionReplayAuthorizationReader replayAuthorizationReader,
     IOrderQuoteAcceptanceGuardReader quoteAcceptanceReader,
@@ -70,7 +78,7 @@ public sealed class PostgreSqlOrderTransitionService(
     IAuditPayloadRedactor auditRedactor,
     IOrderTransitionFailureInjector failureInjector,
     IOptions<OrdersOptions> options,
-    IClock clock) : IOrderTransitionService
+    IClock clock) : IOrderTransitionService, IOrderSystemTransitionService
 {
     internal const string IdempotencyScope = "ORD-002:TRANSITION_ORDER";
     internal const string OutboxTopic = "orders.status-changed";
@@ -81,11 +89,46 @@ public sealed class PostgreSqlOrderTransitionService(
         DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
-    public async Task<OrderResult> TransitionAsync(
+    public Task<OrderResult> TransitionAsync(
         TransitionOrderCommand command,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
+        return TransitionAsActorAsync(command, TransitionActor.User, cancellationToken);
+    }
+
+    /// <summary>
+    /// ORD-AUTO-CLOSE-2026-10-10: DELIVERED -> CLOSED as the system actor for the owner organization only. The system
+    /// actor has no user: a fresh random identity names only this transaction's <c>app.current_user_id</c> (no user,
+    /// membership or driver profile ever has it, so FORCE RLS grants it nothing), and a fresh random idempotency key
+    /// means an automatic close never replays a stored response.
+    /// </summary>
+    public Task<OrderResult> CloseDeliveredAsync(
+        SystemCloseOrderCommand command,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return TransitionAsActorAsync(
+            new TransitionOrderCommand(
+                Guid.NewGuid(),
+                command.OwnerOrganizationId,
+                $"{OrderSystemTransitionPolicy.IdempotencyKeyPrefix}{Guid.NewGuid():N}",
+                command.OrderId,
+                OrderStatus.Closed.ToContractValue(),
+                OrderSystemTransitionPolicy.AutoCloseReason,
+                command.ExpectedVersion,
+                null,
+                false,
+                null),
+            TransitionActor.System,
+            cancellationToken);
+    }
+
+    private async Task<OrderResult> TransitionAsActorAsync(
+        TransitionOrderCommand command,
+        TransitionActor actor,
+        CancellationToken cancellationToken)
+    {
         if (!OrderTransitionInputPolicy.IsValidCommandShape(
                 command,
                 options.Value.TransitionMetadataMaximumBytes) ||
@@ -110,6 +153,7 @@ public sealed class PostgreSqlOrderTransitionService(
                 (dbContext, token) => TransitionWithinTransactionAsync(
                     dbContext,
                     command,
+                    actor,
                     target,
                     metadata,
                     requestHash,
@@ -149,6 +193,7 @@ public sealed class PostgreSqlOrderTransitionService(
     private async Task<OrderResult> TransitionWithinTransactionAsync(
         OrdersDbContext dbContext,
         TransitionOrderCommand command,
+        TransitionActor actor,
         OrderStatus target,
         NormalizedTransitionMetadata metadata,
         byte[] requestHash,
@@ -170,7 +215,9 @@ public sealed class PostgreSqlOrderTransitionService(
             var replay = ReadCompletedResponse(idempotency);
             if (replay is not null)
             {
-                if (command.ExpectedVersion == int.MaxValue)
+                // ORD-AUTO-CLOSE-2026-10-10: every system attempt has its own random key, so a stored response for
+                // it can only be a conflict, never a replay.
+                if (actor == TransitionActor.System || command.ExpectedVersion == int.MaxValue)
                 {
                     throw new OrderTransitionConflictException(
                         OrderTransitionConflictCode.IdempotencyConflict);
@@ -243,18 +290,22 @@ public sealed class PostgreSqlOrderTransitionService(
             cancellationToken);
         // ORD-002-GUARD-CODES-2026-10-05: the order is locked as an order of the selected (owner) organization, so
         // the membership snapshot decides whether a rejection may carry its rule code. It is read once, here, and
-        // is the same snapshot the edge authorization below uses.
-        var authorization = await authorizationReader.ReadAsync(
-            connection,
-            transaction,
-            command.ActorId,
-            command.OrganizationId,
-            command.OrderId,
-            cancellationToken);
-        var disclosesRejectionCode = authorizer.HoldsTransitionCapability(
-            authorization.ActiveRole,
-            command.MfaSatisfied,
-            authorization.HasMatchingDriverAssignment);
+        // is the same snapshot the edge authorization below uses. ORD-AUTO-CLOSE-2026-10-10: the system actor has
+        // no membership to read; its rejections reach only the Worker job, which counts the rule code.
+        var authorization = actor == TransitionActor.System
+            ? new OrderTransitionAuthorizationSnapshot(null, false)
+            : await authorizationReader.ReadAsync(
+                connection,
+                transaction,
+                command.ActorId,
+                command.OrganizationId,
+                command.OrderId,
+                cancellationToken);
+        var disclosesRejectionCode = actor == TransitionActor.System ||
+            authorizer.HoldsTransitionCapability(
+                authorization.ActiveRole,
+                command.MfaSatisfied,
+                authorization.HasMatchingDriverAssignment);
 
         var version = OrderTransitionMatrix.EvaluateVersion(order.Version, command.ExpectedVersion);
         if (!version.Allowed)
@@ -279,12 +330,15 @@ public sealed class PostgreSqlOrderTransitionService(
                 rejectionCode: disclosesRejectionCode ? OrderTransitionRejectionCodes.ForRule(state.Code) : null);
         }
 
-        if (!authorizer.IsAuthorized(new OrderTransitionAuthorizationContext(
+        var authorized = actor == TransitionActor.System
+            ? OrderSystemTransitionPolicy.IsAllowed(source, target)
+            : authorizer.IsAuthorized(new OrderTransitionAuthorizationContext(
                 authorization.ActiveRole,
                 source,
                 target,
                 command.MfaSatisfied,
-                authorization.HasMatchingDriverAssignment)))
+                authorization.HasMatchingDriverAssignment));
+        if (!authorized)
         {
             throw new OrderTransitionForbiddenException();
         }
@@ -398,12 +452,14 @@ public sealed class PostgreSqlOrderTransitionService(
         var reasonRedacted = RedactReason(command.Reason!);
         var publicEventCode = OrderPublicEventCodePolicy.Map(target);
         var eventId = Guid.NewGuid();
+        // ORD-AUTO-CLOSE-2026-10-10: the system actor is no user, so its event and audit rows carry no actor.
+        var recordedActorId = actor == TransitionActor.System ? (Guid?)null : command.ActorId;
         await InsertEventAsync(
             connection,
             transaction,
             eventId,
             order,
-            command.ActorId,
+            recordedActorId,
             source,
             target,
             newVersion,
@@ -475,7 +531,7 @@ public sealed class PostgreSqlOrderTransitionService(
             new AuditEntry(
                 Guid.NewGuid(),
                 order.OwnerOrganizationId,
-                command.ActorId,
+                recordedActorId,
                 "ORDER_STATUS_CHANGED",
                 "Order",
                 order.Id,
@@ -763,7 +819,7 @@ public sealed class PostgreSqlOrderTransitionService(
         NpgsqlTransaction transaction,
         Guid eventId,
         OrderRow order,
-        Guid actorId,
+        Guid? actorId,
         OrderStatus source,
         OrderStatus target,
         int newVersion,
@@ -1185,6 +1241,13 @@ public sealed class PostgreSqlOrderTransitionService(
         {
             throw new OrderTransitionInfrastructureException(message);
         }
+    }
+
+    /// <summary>Who requests the transition: a member (transitionOrder) or the system (ORD-AUTO-CLOSE-2026-10-10).</summary>
+    private enum TransitionActor
+    {
+        User,
+        System,
     }
 
     private sealed record IdempotencyRow(

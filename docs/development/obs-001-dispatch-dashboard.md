@@ -71,7 +71,10 @@ conserva el DTO exacto de OBS-001:
 - `driver_reference` no PII `DRV-xxxxxxxx`; el ID contractual no se renderiza;
 - posición persistida más reciente del conductor activo;
 - `AUTHORIZED_OVERRIDE` o `BELOW_MINIMUM_SNAPSHOT` cuando aplica;
-- alerta sin assignment sólo para `READY_FOR_PICKUP` y `RESCHEDULED`.
+- alerta sin assignment sólo para `READY_FOR_PICKUP` y `RESCHEDULED`;
+- `total`: el `orders.total_cents` de la orden con IVA incluido, en la forma `Money` de AI-05 `Order.total`
+  (`currency` MXN, `amount_cents` int64), el mismo valor que esos roles ya leen en `listOrders`/`getOrder`; negativo
+  o en otra moneda falla cerrado (UI-PHASE3-INBOX-TOTAL-2026-10-10).
 
 No se incluyen costo de assignment, email, teléfono, dirección, package, proof,
 notas, token ni payload SignalR. Telemetría usa categorías de baja cardinalidad.

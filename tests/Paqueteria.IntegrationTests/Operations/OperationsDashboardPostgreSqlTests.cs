@@ -69,6 +69,15 @@ public sealed class OperationsDashboardPostgreSqlTests(
         Assert.Equal(JsonValueKind.Null, item.GetProperty("delivery_window").ValueKind);
         Assert.False(item.GetProperty("unassigned_alert").GetBoolean());
         Assert.Equal(23.25, item.GetProperty("latest_driver_location").GetProperty("lat").GetDouble());
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the persisted orders.total_cents (IVA included) in the AI-05 Money shape,
+        // an exact JSON integer.
+        var total = item.GetProperty("total");
+        Assert.Equal(
+            ["amount_cents", "currency"],
+            total.EnumerateObject().Select(property => property.Name).Order().ToArray());
+        Assert.Equal("MXN", total.GetProperty("currency").GetString());
+        Assert.Equal(JsonValueKind.Number, total.GetProperty("amount_cents").ValueKind);
+        Assert.Equal("10000", total.GetProperty("amount_cents").GetRawText());
     }
 
     [Fact]
@@ -99,6 +108,10 @@ public sealed class OperationsDashboardPostgreSqlTests(
                 credential,
                 PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId);
             Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            // UI-PHASE3-INBOX-TOTAL-2026-10-10: a denied role never receives an order or its total.
+            var deniedBody = await denied.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("amount_cents", deniedBody, StringComparison.Ordinal);
+            Assert.DoesNotContain("ORD_obs_", deniedBody, StringComparison.Ordinal);
         }
 
         using var missingOrganization = await SendAsync(
@@ -155,6 +168,9 @@ public sealed class OperationsDashboardPostgreSqlTests(
         Assert.Equal(
             "BELOW_MINIMUM_SNAPSHOT",
             item.GetProperty("cost_warning").GetString());
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the total the warning compares (9000 below the 10000 minimum snapshot).
+        Assert.Equal("MXN", item.GetProperty("total").GetProperty("currency").GetString());
+        Assert.Equal(9_000L, item.GetProperty("total").GetProperty("amount_cents").GetInt64());
         Assert.Equal(JsonValueKind.Null, item.GetProperty("assignment").ValueKind);
         Assert.Equal(JsonValueKind.Null, item.GetProperty("latest_driver_location").ValueKind);
         // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the order's own window is its delivery window.

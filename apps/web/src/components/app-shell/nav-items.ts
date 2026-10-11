@@ -55,7 +55,8 @@ const rules: readonly NavRule[] = [
     href: "/ops/orders/new",
     label: "Nueva orden",
     primary: true,
-    // AI-07 /ops/orders/new: quote then order.
+    // AI-07 /ops/orders/new: the four-step wizard that quotes, creates and confirms the order
+    // (UI-PHASE3-ORDER-WIZARD-2026-10-10).
     visible: (role) => canPerform(role, "createQuote") && canPerform(role, "createOrder"),
   },
   {

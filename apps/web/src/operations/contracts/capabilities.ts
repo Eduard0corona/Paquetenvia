@@ -61,6 +61,10 @@ export const screenOperationsMatrix = {
   // getOperationsQueueCounts (x-capability-matrix operations_queue_operations),
   // which admits exactly the operations dashboard roles.
   getOperationsQueueCounts: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // UI-PHASE3-ORDER-WIZARD-2026-10-10: "Nueva orden" confirms the order it creates with
+  // transitionOrder, which admits DISPATCHER and PLATFORM_ADMIN with MFA (AI-05
+  // TransitionConflict); DRIVER only from /driver for its own assignment.
+  transitionOrder: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 const allOperations: Readonly<Record<string, readonly string[]>> = {
@@ -106,6 +110,7 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "assignDriver",
     "listAssignableDrivers",
     "getOperationsQueueCounts",
+    "transitionOrder",
   ],
 };
 

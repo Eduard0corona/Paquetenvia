@@ -85,7 +85,12 @@ describe("app shell policy", () => {
   });
 
   it("leaves no local Row/Detail/Summary/MoneyRow label-value helpers nor ad-hoc money or time formatting", () => {
-    for (const path of [...screens, "src/operations/components/operations-order-card.tsx"]) {
+    for (const path of [
+      ...screens,
+      "src/operations/components/operations-order-card.tsx",
+      "src/operations/components/create-order-wizard.tsx",
+      "src/operations/components/create-order-summary.tsx",
+    ]) {
       const source = read(path);
       expect(source, path).not.toMatch(/function\s+(Row|Detail|MoneyRow|short|money)\s*\(/);
       expect(source, path).not.toMatch(/<dt>/);

@@ -44,9 +44,17 @@ function item() {
       accuracy_m: 4.5,
       captured_at: "2026-07-27T01:59:00Z",
     },
+    total: { currency: "MXN", amount_cents: 12_345 },
     cost_warning: null,
     unassigned_alert: false,
   };
+}
+
+/** A page whose only item has `total` replaced (or removed when `undefined`). */
+function pageWithTotal(total: unknown) {
+  const changed: Record<string, unknown> = { ...item(), total };
+  if (total === undefined) delete changed.total;
+  return { ...page(), items: [changed] };
 }
 
 function page() {
@@ -62,6 +70,31 @@ describe("operations dashboard parser", () => {
     expect(parseOperationsDashboard(page()).items[0]?.public_id).toBe(
       "ORD_synthetic",
     );
+  });
+
+  it("keeps the order total as exact integer MXN cents (UI-PHASE3-INBOX-TOTAL-2026-10-10)", () => {
+    expect(parseOperationsDashboard(page()).items[0]?.total).toEqual({ currency: "MXN", amount_cents: 12_345 });
+    expect(parseOperationsDashboard(pageWithTotal({ currency: "MXN", amount_cents: 0 })).items[0]?.total).toEqual({
+      currency: "MXN",
+      amount_cents: 0,
+    });
+    const largest = { currency: "MXN", amount_cents: Number.MAX_SAFE_INTEGER };
+    expect(parseOperationsDashboard(pageWithTotal(largest)).items[0]?.total).toEqual(largest);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["null", null],
+    ["a bare number", 12_345],
+    ["fractional cents", { currency: "MXN", amount_cents: 123.45 }],
+    ["negative cents", { currency: "MXN", amount_cents: -1 }],
+    ["cents as text", { currency: "MXN", amount_cents: "12345" }],
+    ["unsafe integer", { currency: "MXN", amount_cents: Number.MAX_SAFE_INTEGER + 1 }],
+    ["another currency", { currency: "USD", amount_cents: 12_345 }],
+    ["missing currency", { amount_cents: 12_345 }],
+    ["an extra property", { currency: "MXN", amount_cents: 12_345, net_cents: 10_642 }],
+  ])("rejects a total that is %s", (_name, total) => {
+    expect(() => parseOperationsDashboard(pageWithTotal(total))).toThrow(OperationsContractError);
   });
 
   it("accepts the explicit zero offset emitted by ASP.NET as UTC", () => {
