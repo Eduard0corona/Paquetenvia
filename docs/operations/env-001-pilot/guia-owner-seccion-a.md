@@ -17,6 +17,9 @@ Convenciones:
   suscripción** (bootstrap.md, introducción). Los comandos `gh` se corren en tu máquina con el GitHub CLI
   real (`gh auth login` primero).
 
+> **Con fecha límite, 23 de octubre de 2026:** crea los recursos de correo de Azure Communication Services
+> (sección 8). No depende del despliegue, y después de esa fecha Microsoft puede ya no dejar crearlos.
+
 ---
 
 ## Resumen: qué detiene el deploy y cuándo
@@ -638,6 +641,57 @@ Si algo falla: README §6.7 (logs en Log Analytics:
 
 ---
 
+## 8. Correo: crear los recursos de Azure Communication Services antes del 23 de octubre de 2026
+
+Fuente: decisión `NTF-EMAIL-ACS-PILOT-2026-10-11` en `decision-log.md` y la guía de retiro de ACS de Microsoft
+(<https://learn.microsoft.com/en-us/azure/communication-services/acs-retirement-and-breaking-changes-guide>,
+actualizada el 2026-10-08).
+
+Microsoft retira Azure Communication Services (ACS) el 30 de septiembre de 2028. Desde el **23 de octubre de 2026**
+empieza a limitar las altas de clientes que no tengan un recurso de ACS creado antes de esa fecha, y avisa que las altas
+nuevas de correo pueden cambiar "en cualquier momento". Los recursos que ya existan siguen funcionando hasta el retiro.
+Por eso este paso **no espera al primer despliegue**: hazlo ya, aunque el resto de la guía siga pendiente.
+
+Qué se crea y qué no:
+
+- Dos recursos vacíos en `rg-pv-pilot`: **Communication Services** y **Email Communication Services**. No cuestan nada
+  mientras no se envíen correos (README §4: unos 0.00025 USD por correo).
+- No se agrega dominio ni remitente, no se generan claves y no se tocan el workflow ni las plantillas Bicep. El
+  `Worker` usará su identidad administrada; conectarlo (endpoint, remitente y rol de Azure) es un cambio posterior. El
+  despliegue corre en modo incremental, así que no borra estos recursos.
+
+**Ubicación de datos (Data location):** ACS no ofrece México, y la guía de correo de Microsoft indica
+`United States`. Es donde ACS procesa el contenido de los correos y guarda el remitente, así que entra en el análisis
+de transferencia internacional de GATE-007. Si tu abogado pide otra, dímelo antes de crear los recursos. Usa la misma
+en los dos.
+
+```bash
+# Cloud Shell (bash), como Owner de la suscripción, con las variables de la sección 1 (RG).
+# Si rg-pv-pilot aún no existe, haz antes 1.b.
+az provider register --namespace Microsoft.Communication --wait
+az extension add --name communication --upgrade
+
+SUFFIX="$(openssl rand -hex 3)"        # 6 caracteres; anótalo
+ACS_NAME="acs-pv-pilot-${SUFFIX}"
+ECS_NAME="ecs-pv-pilot-${SUFFIX}"
+DATA_LOCATION="United States"
+
+az communication create --name "$ACS_NAME" --location "Global" \
+  --data-location "$DATA_LOCATION" --resource-group "$RG"
+az communication email create --name "$ECS_NAME" --location "Global" \
+  --data-location "$DATA_LOCATION" --resource-group "$RG"
+
+# Verificación: debe aparecer un recurso de cada tipo
+az resource list --resource-group "$RG" --resource-type Microsoft.Communication/communicationServices -o table
+az resource list --resource-group "$RG" --resource-type Microsoft.Communication/emailServices -o table
+```
+
+Después mándame los dos nombres (no son secretos) para el cambio que conecte el `Worker`.
+
+> Antes de producción el correo pasa a otro proveedor (AI-10 `release_gates.PRODUCTION`). Cuál, lo decides después.
+
+---
+
 ## Preguntas abiertas (consolidado)
 
 1. **GATE-007 (bloqueante):** no hay ninguna fila `GATE-007-*` con Type `Gate resolution`/`Gate scoping`
@@ -661,3 +715,5 @@ Si algo falla: README §6.7 (logs en Log Analytics:
     en 5.3.
 12. ~~README §9 desactualizado~~: corregido; los adaptadores ADP-001 constan como fusionados y pendientes
     solo de verificación contra Azure real.
+13. **Ubicación de datos de ACS** (sección 8): ACS no ofrece México. ¿`United States` u otra que pida tu abogado
+    por GATE-007? Crea los recursos antes del 23 de octubre de 2026.
