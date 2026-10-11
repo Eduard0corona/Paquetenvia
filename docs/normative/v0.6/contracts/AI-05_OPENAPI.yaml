@@ -464,9 +464,15 @@ paths:
         unassigned_alert); needs_attention: FAILED_ATTEMPT, RESCHEDULED, RETURNING
         and CLAIM_OPEN; price_review: the orders the dashboard flags with a
         cost_warning (total below the minimum snapshot, or an authorized
-        financial override); delivered_not_closed: DELIVERED; en_route:
-        IN_TRANSIT and DELIVERING. A queue may overlap another (a RESCHEDULED
-        order without an assignment is both unassigned and needs_attention).
+        financial override) that have not finished - every status except
+        DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED and CANCELLED, the
+        UI-STATUS-GROUPS-2026-10-05 group Terminadas - so a finished order
+        leaves the count by itself and nobody marks anything
+        (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11; the same rule as the
+        dashboard price_review filter); delivered_not_closed: DELIVERED;
+        en_route: IN_TRANSIT and DELIVERING. A queue may overlap another (a
+        RESCHEDULED order without an assignment is both unassigned and
+        needs_attention).
         The operation takes no query parameter and applies no filter; any query
         string is 400 before capability and before any order is read. Same roles
         as the operations dashboard it feeds - DISPATCHER members and
@@ -950,6 +956,25 @@ paths:
         with an ACTIVE driver profile in that organization, only for an order
         it currently holds an ACCEPTED or ACTIVE assignment for. Every other
         role, and a driver without that assignment, receives the generic 403.
+        INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 (project owner,
+        2026-10-11, "Despacho decide"): who reports decides what the request
+        carries (OpenIncidentRequest x-reporter-shape). Dispatch - the
+        DISPATCHER or MFA-satisfied PLATFORM_ADMIN rule above, which also
+        covers an actor who is the assigned driver too - sends severity,
+        description and next_action exactly as before. A DRIVER admitted only
+        through its assignment omits all three (a JSON null counts as
+        omitted); sending any of them is 409 INVALID_REQUEST, even with the
+        value the server would derive. For a DRIVER report the server records
+        severity HIGH for SECURITY_RISK and PACKAGE_DAMAGED and MEDIUM for
+        every other reason (sla_due_at follows from it), stores as the
+        description the fixed es-MX sentence "Intento fallido reportado por el
+        repartidor. Motivo:" followed by the label of the reason, protected
+        exactly like any description, and records next_action null: dispatch
+        decides the successor when the order leaves FAILED_ATTEMPT
+        (failed_attempt_dispatch_decides). A request that is neither shape
+        (for example next_action without description) is 409 INVALID_REQUEST
+        before any transaction. Evidence, states, custody and every other rule
+        are unchanged.
       x-shape-validation: invalid-request-without-productive-transaction
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
@@ -3932,6 +3957,16 @@ components:
               reconciliation) are not evaluated here, so a listed transition may
               still be refused with 409; that 409 names the failed rule
               (TransitionConflictProblem.code, ORD-002-GUARD-CODES-2026-10-05).
+              INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the exits of
+              FAILED_ATTEMPT are the exception. They also follow the decision of
+              the incident that justified the failed attempt, read in the same
+              transaction as the guards read it: a recorded next_action allows
+              only its successors (RETURNING; RESCHEDULED or DELIVERING) unless
+              INC-001 adopted the incident, a null next_action (dispatch
+              decides) lists RESCHEDULED, DELIVERING and RETURNING to dispatch
+              and none to a DRIVER, a missing incident lists none, and RETURNING and
+              DELIVERING are listed only once custody was acquired; the retry's
+              assignment is still judged only by transitionOrder.
               The list is advisory: transitionOrder re-evaluates everything in
               its own transaction.
               Items follow the AI-04 status order.
@@ -4268,7 +4303,10 @@ components:
           - $ref: '#/components/schemas/OperationsCount'
           description: >-
             Orders the dashboard flags with a cost_warning - total below the
-            minimum snapshot or an authorized financial override.
+            minimum snapshot or an authorized financial override - that have
+            not finished - every status except DELIVERED, RETURNED,
+            CLAIM_RESOLVED, CLOSED and CANCELLED
+            (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11).
         delivered_not_closed:
           allOf:
           - $ref: '#/components/schemas/OperationsCount'
@@ -4420,14 +4458,26 @@ components:
     OpenIncidentRequest:
       type: object
       additionalProperties: false
+      description: >-
+        type, reason_code, occurred_at and evidence_proof_ids are always
+        required. INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: severity,
+        description and next_action are required from dispatch and omitted by
+        a DRIVER (x-reporter-shape; openIncident).
       required:
       - type
-      - severity
-      - description
       - reason_code
-      - next_action
       - occurred_at
       - evidence_proof_ids
+      x-reporter-shape:
+        decision: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11
+        dispatch_requires:
+        - severity
+        - description
+        - next_action
+        driver_omits:
+        - severity
+        - description
+        - next_action
       properties:
         type:
           type: string
@@ -4436,6 +4486,10 @@ components:
           pattern: ^[A-Z_]+$
         severity:
           type: string
+          description: >-
+            Required from dispatch; omitted by a DRIVER, whose report the server
+            grades by reason (HIGH for SECURITY_RISK and PACKAGE_DAMAGED, MEDIUM
+            otherwise).
           enum:
           - LOW
           - MEDIUM
@@ -4443,6 +4497,9 @@ components:
           - CRITICAL
         description:
           type: string
+          description: >-
+            Required from dispatch and stored protected; omitted by a DRIVER,
+            whose description the server builds from the reason.
           minLength: 1
           maxLength: 2000
         reason_code:
@@ -4457,6 +4514,9 @@ components:
           - SECURITY_RISK
         next_action:
           type: string
+          description: >-
+            Required from dispatch; omitted by a DRIVER, so that dispatch
+            decides the successor of the failed attempt.
           enum:
           - RESCHEDULED
           - RETURNING
@@ -4540,10 +4600,16 @@ components:
           - PACKAGE_DAMAGED
           - SECURITY_RISK
         next_action:
-          type: string
+          type:
+          - string
+          - 'null'
+          description: >-
+            null when dispatch decides the successor of the failed attempt: the
+            incident is a DRIVER report (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11).
           enum:
           - RESCHEDULED
           - RETURNING
+          - null
         custody_acquired:
           type: boolean
         occurred_at:
@@ -5328,6 +5394,7 @@ components:
           - INCIDENT_REQUIRED
           - CUSTODY_NOT_ACQUIRED
           - NEXT_ACTION_MISMATCH
+          - DISPATCH_DECISION_REQUIRED
           x-ord-002-guard-codes:
             valid_active_quote: QUOTE_NOT_VALID
             payer_acceptance: PAYER_ACCEPTANCE_REQUIRED
@@ -5353,6 +5420,7 @@ components:
             retry_custody_acquired_true: CUSTODY_NOT_ACQUIRED
             retry_valid_assignment: VALID_ASSIGNMENT_REQUIRED
             failed_attempt_next_action_respected: NEXT_ACTION_MISMATCH
+            failed_attempt_dispatch_decides: DISPATCH_DECISION_REQUIRED
     ProofConflictProblem:
       type: object
       required:

@@ -3,8 +3,10 @@ import { OperationsApiError } from "../api/operations-api";
 import {
   inboxQueries,
   inboxViewKey,
+  isPriceReviewRow,
   type InboxView,
 } from "../contracts/inbox";
+import { ContractViolationError } from "../contracts/strict-json";
 import type {
   OperationsDashboardFilters,
   OperationsDashboardOrder,
@@ -286,6 +288,14 @@ export class InboxController extends ExternalStore<InboxState> {
   }
 
   private apply(result: LoadResult): void {
+    // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: a price review query lists only orders with a
+    // cost warning that have not finished; any other row means the filter was not applied, so the
+    // read fails closed instead of showing it.
+    result.pages.forEach((page, pageIndex) => {
+      const filters =
+        result.kind === "replace" ? result.queries[pageIndex] : this.sources[result.indexes[pageIndex]].filters;
+      if (filters.priceReview === true && !page.items.every(isPriceReviewRow)) throw new ContractViolationError();
+    });
     let sources: Source[];
     if (result.kind === "replace") {
       sources = result.queries.map((filters, index) => ({

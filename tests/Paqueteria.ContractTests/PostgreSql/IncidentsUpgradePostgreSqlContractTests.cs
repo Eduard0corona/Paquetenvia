@@ -208,12 +208,21 @@ public sealed class IncidentsUpgradePostgreSqlContractTests(PostgreSqlContractFi
 
     private static async Task AssertConstraintsAsync(string connectionString)
     {
-        Assert.Equal(4L, await ScalarAsync<long>(connectionString, """
+        Assert.Equal(3L, await ScalarAsync<long>(connectionString, """
             SELECT count(*) FROM information_schema.columns
             WHERE table_schema='incidents' AND table_name='incidents'
-              AND column_name IN ('reason_code','next_action','occurred_at','sla_due_at')
+              AND column_name IN ('reason_code','occurred_at','sla_due_at')
               AND is_nullable='NO'
             """));
+
+        // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the later Incidents lane step lets a driver report leave
+        // next_action NULL, while every backfilled incident keeps the next action the adoption derived.
+        Assert.Equal("YES", await ScalarAsync<string>(connectionString, """
+            SELECT is_nullable FROM information_schema.columns
+            WHERE table_schema='incidents' AND table_name='incidents' AND column_name='next_action'
+            """));
+        Assert.Equal(0L, await ScalarAsync<long>(connectionString,
+            "SELECT count(*) FROM incidents.incidents WHERE next_action IS NULL"));
 
         Assert.Equal(3L, await ScalarAsync<long>(connectionString, """
             SELECT count(*) FROM pg_constraint

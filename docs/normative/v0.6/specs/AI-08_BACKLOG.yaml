@@ -730,7 +730,8 @@ items:
   - failed attempt workflow
   acceptance_criteria:
   - motivo/evidencia obligatorios
-  - siguiente acción explícita
+  - siguiente acción explícita; en un reporte del repartidor la elige despacho al salir de FAILED_ATTEMPT
+    (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11)
   - SLA timestamp
   - operaciones de apertura exigen Idempotency-Key
   required_tests:

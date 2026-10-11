@@ -236,6 +236,8 @@ export function buildOperationsDashboardSearch(
   append(search, "created_to", filters.createdTo);
   if (filters.unassigned !== undefined)
     search.set("unassigned", String(filters.unassigned));
+  if (filters.priceReview !== undefined)
+    search.set("price_review", String(filters.priceReview));
   append(search, "cursor", filters.cursor);
   return search;
 }

@@ -57,8 +57,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261003000100_AddOperatorOwnerOutboxExecutor.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionPurge.cs"),
-        ("Incidents", "__ef_migrations_history_incidents", IndexIncidentEvidenceByOrderProof.MigrationId,
-            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260927000100_IndexIncidentEvidenceByOrderProof.cs"),
+        ("Incidents", "__ef_migrations_history_incidents", AllowDispatchDecidedNextAction.MigrationId,
+            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20261011000100_AllowDispatchDecidedNextAction.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
         ("Notifications", "__ef_migrations_history_notifications", FailStaleWhatsAppNotificationLeases.MigrationId,
@@ -145,6 +145,11 @@ internal sealed class ModuleMigrationCoordinator
                 // and the recipient call request table; its rollback refuses while any request or phone exists and
                 // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
                 "Drivers" => IsDriverVoiceBridgeSource(source),
+                // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the lane's latest step only lets
+                // incidents.incidents.next_action be NULL (dispatch decides); its rollback restores NOT NULL and
+                // refuses while any incident leaves the decision to dispatch. The evidence index before it is
+                // verified below with its own rule.
+                "Incidents" => IsIncidentDispatchDecisionSource(source),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -287,6 +292,11 @@ internal sealed class ModuleMigrationCoordinator
             "Incidents",
             AdoptCanonicalIncidentsBaseline.MigrationId,
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs");
+        VerifyIncidentsSource(
+            root,
+            IndexIncidentEvidenceByOrderProof.MigrationId,
+            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260927000100_IndexIncidentEvidenceByOrderProof.cs",
+            IsIncidentEvidenceIndexSource);
 
         return result;
     }
@@ -533,7 +543,11 @@ internal sealed class ModuleMigrationCoordinator
                     VersionDispatchPoliciesPerOrganization.MigrationId,
                 ],
             "Incidents" =>
-                [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
+                [
+                    AdoptCanonicalIncidentsBaseline.MigrationId,
+                    IndexIncidentEvidenceByOrderProof.MigrationId,
+                    AllowDispatchDecidedNextAction.MigrationId,
+                ],
             "Dispatch" =>
                 [AdoptCanonicalDispatchAssignmentsBaseline.MigrationId, AddOperatorOwnerOutboxExecutor.MigrationId],
             "DataProtection" =>
@@ -837,6 +851,65 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: one nullability change on incidents.incidents and a
+    /// rollback that restores NOT NULL or refuses while any incident leaves its next action to dispatch; no row,
+    /// grant, policy, trigger, check or other object is added, dropped or rewritten.</summary>
+    private static bool IsIncidentDispatchDecisionSource(string source) =>
+        source.Contains(AllowDispatchDecidedNextAction.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AllowDispatchDecidedNextAction.DowngradeBlocked, StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE incidents.incidents ALTER COLUMN next_action DROP NOT NULL;", StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE incidents.incidents ALTER COLUMN next_action SET NOT NULL;", StringComparison.Ordinal) &&
+        source.Split("ALTER TABLE", StringSplitOptions.None).Length - 1 == 2 &&
+        source.Split("DROP ", StringSplitOptions.None).Length - 1 == 1 &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP CONSTRAINT", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP TRIGGER", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ROW LEVEL SECURITY;", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE incidents", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>The INC-001 evidence index step: it only adds incident_evidence_order_proof_idx, and its rollback
+    /// drops exactly that index.</summary>
+    private static bool IsIncidentEvidenceIndexSource(string source) =>
+        source.Contains("CREATE INDEX IF NOT EXISTS incident_evidence_order_proof_idx", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS incidents.incident_evidence_order_proof_idx;", StringComparison.Ordinal) &&
+        source.Split("DROP ", StringSplitOptions.None).Length - 1 == 1 &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>An earlier Incidents lane migration that must keep its reviewed shape.</summary>
+    private static void VerifyIncidentsSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException("Incidents evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) || !isValid(source))
+        {
+            throw new BaselineVerificationException(
+                "Incidents evolution migration is destructive or has an unexpected identifier.");
+        }
+    }
 
     /// <summary>An earlier Organizations lane migration that must keep its reviewed shape.</summary>
     private static void VerifyOrganizationsSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)

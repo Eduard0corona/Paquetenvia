@@ -21,6 +21,14 @@ public sealed class OrderTransitionGuardContext
     public CustodyGuardSnapshot Custody { get; init; } = new(false);
 
     /// <summary>
+    /// The transitionOrder active role of the actor (the membership snapshot the authorizer judged), read by
+    /// <c>failed_attempt_dispatch_decides</c> (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11). Null for the system
+    /// actor and for the flows that never leave <c>FAILED_ATTEMPT</c>; a null role never decides a pending failed
+    /// attempt.
+    /// </summary>
+    public string? ActorRole { get; init; }
+
+    /// <summary>
     /// Custody comes only from the <c>PICKED_UP</c> history. A pickup photo is evidence of an
     /// attempt, not custody: an incident at pickup must carry one while the parcel never left.
     /// </summary>
@@ -154,21 +162,21 @@ public sealed class OrderTransitionGuardRegistry
                 c => c.Source != OrderStatus.AtPickup || !c.CustodyAcquired),
             Guard(180, "attempt_stage_recorded", Fail, c => c.Metadata.IncidentId is not null && c.Incidents.RequestedIncidentValid),
             Guard(190, "custody_acquired_recorded", Fail, c => c.Incidents.RequestedIncidentValid),
+            // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: a driver report leaves the decision to dispatch, so
+            // only a DISPATCHER or an MFA-satisfied PLATFORM_ADMIN leaves FAILED_ATTEMPT while it is pending. It runs
+            // before the target's own guards, so a driver is always told who decides.
+            Guard(195, "failed_attempt_dispatch_decides", LeaveFailedAttempt,
+                c => FailedAttemptDecisionPolicy.DecidedByDispatch(c.Incidents, c.ActorRole)),
             Guard(200, "custody_acquired_true", Return, c => c.CustodyAcquired),
             Guard(210, "retry_custody_acquired_true", RetryDelivery, c => c.CustodyAcquired),
             Guard(220, "retry_valid_assignment", RetryDelivery,
                 c => c.Assignment.ExactlyOneActive && c.Assignment.EligibleDriver),
             // An adopted incident's next action is a backfilled default, not a decision: it does
-            // not bind the successor. Every other guard of the target (custody for RETURNING, a
-            // valid assignment for redelivery) still applies.
+            // not bind the successor. A pending decision admits RESCHEDULED, DELIVERING and
+            // RETURNING. Every other guard of the target (custody for RETURNING, a valid assignment
+            // for redelivery) still applies.
             Guard(230, "failed_attempt_next_action_respected", LeaveFailedAttempt,
-                c => c.Incidents.LatestFailedAttemptIncidentAdopted || c.Target switch
-                {
-                    OrderStatus.Returning => c.Incidents.LatestFailedAttemptNextAction == "RETURNING",
-                    OrderStatus.Rescheduled or OrderStatus.Delivering =>
-                        c.Incidents.LatestFailedAttemptNextAction == "RESCHEDULED",
-                    _ => false,
-                }),
+                c => FailedAttemptDecisionPolicy.RespectsNextAction(c.Incidents, c.Target)),
         ];
     }
 

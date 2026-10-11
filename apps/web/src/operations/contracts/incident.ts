@@ -44,7 +44,11 @@ export interface Incident {
   readonly status: IncidentStatus;
   readonly severity: IncidentSeverity;
   readonly reason_code: IncidentReasonCode;
-  readonly next_action: IncidentNextAction;
+  /**
+   * INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: null when the driver reported the
+   * attempt and dispatch decides the next step.
+   */
+  readonly next_action: IncidentNextAction | null;
   readonly custody_acquired: boolean;
   readonly occurred_at: string;
   readonly sla_due_at: string;
@@ -63,12 +67,17 @@ export const incidentSeverityLabels: Readonly<Record<IncidentSeverity, string>> 
   HIGH: "Alta",
   CRITICAL: "Crítica",
 };
+/**
+ * INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the labels of the driver's closed list
+ * ("No se pudo entregar" and its "Otro…" group), used wherever a reason is shown so one
+ * reason reads the same for the driver and for dispatch.
+ */
 export const incidentReasonLabels: Readonly<Record<IncidentReasonCode, string>> = {
-  RECIPIENT_ABSENT: "Destinatario ausente",
-  ADDRESS_NOT_FOUND: "Domicilio no encontrado",
-  RECIPIENT_REFUSED: "Destinatario rechazó el paquete",
+  RECIPIENT_ABSENT: "No había nadie",
+  ADDRESS_NOT_FOUND: "Dirección incorrecta",
+  RECIPIENT_REFUSED: "Rechazó el paquete",
   ACCESS_RESTRICTED: "Acceso restringido",
-  PAYMENT_UNAVAILABLE: "Pago no disponible",
+  PAYMENT_UNAVAILABLE: "No pagó el cobro",
   PACKAGE_DAMAGED: "Paquete dañado",
   SECURITY_RISK: "Riesgo de seguridad",
 };
@@ -76,6 +85,12 @@ export const incidentNextActionLabels: Readonly<Record<IncidentNextAction, strin
   RESCHEDULED: "Reprogramar",
   RETURNING: "Devolver al remitente",
 };
+/** A null next action: the driver reported the attempt and dispatch chooses the next step. */
+export const dispatchDecidesLabel = "Lo decide despacho";
+
+export function incidentNextActionLabel(nextAction: IncidentNextAction | null): string {
+  return nextAction === null ? dispatchDecidesLabel : incidentNextActionLabels[nextAction];
+}
 export const incidentOutcomeLabels: Readonly<Record<IncidentOutcome, string>> = {
   RESOLVED: "Resolver",
   REJECTED: "Rechazar",
@@ -229,7 +244,7 @@ export function parseIncident(value: unknown): Incident {
     status: oneOf(object.status, incidentStatuses),
     severity: oneOf(object.severity, incidentSeverities),
     reason_code: oneOf(object.reason_code, incidentReasonCodes),
-    next_action: oneOf(object.next_action, incidentNextActions),
+    next_action: nullable(object.next_action, (value) => oneOf(value, incidentNextActions)),
     custody_acquired: boolean(object.custody_acquired),
     occurred_at: timestamp(object.occurred_at),
     sla_due_at: timestamp(object.sla_due_at),
