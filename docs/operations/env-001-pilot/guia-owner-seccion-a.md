@@ -243,7 +243,7 @@ En la misma pantalla del environment → *Environment variables → Add variable
 | `PILOT_RESOURCE_GROUP` | Sí | `rg-pv-pilot` | `^[A-Za-z0-9._-]{1,90}$` y región `mexicocentral` |
 | `PILOT_BUDGET_START_DATE` | Sí | Primer día del mes actual o siguiente, p. ej. `2026-10-01`. **No lo cambies después.** | `^20YY-MM-01$` |
 | `PILOT_BUDGET_EMAILS` | No | Correos extra separados por coma, sin espacios (`<CORREO1>,<CORREO2>`). Los Owners del grupo siempre reciben el aviso. | `^[A-Za-z0-9._%+@,-]+$` |
-| `PILOT_TRACKING_SUPPORT_URL` | No | URL `https://` de soporte en el tracking público (por defecto `https://paquetenvia.com`) | `^https://[A-Za-z0-9./_-]+$` |
+| `PILOT_TRACKING_SUPPORT_URL` | No | URL `https://` de soporte en el tracking público. **Déjala vacía mientras siga abierto GATE-001** (por defecto no hay enlace y la compilación rechaza un enlace con la marca) | `^https://[A-Za-z0-9./_-]+$` |
 | `PILOT_GATE_012_DECISION` | Sí | `GATE-012-PILOT-SCOPE` | fila válida en `decision-log.md` |
 | `PILOT_GATE_007_DECISION` | Sí | `<ID_FILA_GATE-007>` (ver 0.1; hoy no existe) | fila válida en `decision-log.md`; `GATE-007-PRIVACY-DRAFT` se rechaza |
 

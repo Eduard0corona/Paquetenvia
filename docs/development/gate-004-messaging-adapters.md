@@ -147,6 +147,13 @@ start with a message that names keys, never values.
 | `Messaging__Email__AzureCommunicationServices__TimeoutSeconds` | `15` (1–60) | app setting |
 | `Messaging__Email__Templates__<key>__Subject` / `__PlainText` / `__ParameterCount` | owner-provided text with `{{1}}`…`{{n}}` exactly | app setting |
 
+Neutral recipient text while GATE-001 is open (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10, AI-07
+`public_tracking.branding`): the commercial name is not validated before IMPI, so the WhatsApp templates
+approved in WhatsApp Manager and the email `Subject`/`PlainText` sent to recipients use the neutral
+"Seguimiento de envío" and never name "Paquetenvia". The repository holds no recipient text: these
+adapters have no default template, and the only stored template (`orders.created.operations`, `IN_APP`)
+goes to dispatchers.
+
 Key Vault mappings follow PILOT-KEYVAULT-PRIVATE-APP-READ, for example
 `KeyVaultSecrets__Mappings__2__SecretName=whatsapp-cloud-api-token`,
 `KeyVaultSecrets__Mappings__2__ConfigurationKey=Messaging:WhatsApp:MetaCloudApi:AccessToken`,

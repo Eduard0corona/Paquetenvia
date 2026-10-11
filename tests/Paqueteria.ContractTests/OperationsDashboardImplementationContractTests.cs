@@ -48,11 +48,16 @@ public sealed class OperationsDashboardImplementationContractTests
             "aggregate_version", "assignment", "client", "cost_warning",
             "created_at", "delivery_window", "delivery_zone", "latest_driver_location",
             "operator", "order_id", "owner", "pickup_window", "public_id",
-            "service_type", "status", "unassigned_alert", "updated_at");
+            "service_type", "status", "total", "unassigned_alert", "updated_at");
         AssertJsonProperties<OperationsAssignmentResponse>(
             "assignment_id", "assignment_type", "driver_id", "driver_reference", "status");
         AssertJsonProperties<OperationsDriverLocationResponse>(
             "accuracy_m", "captured_at", "lat", "lng");
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total in the AI-05 Money shape, int64 cents only.
+        AssertJsonProperties<OperationsMoneyResponse>("amount_cents", "currency");
+        Assert.Equal(
+            typeof(long),
+            typeof(OperationsMoneyResponse).GetProperty(nameof(OperationsMoneyResponse.AmountCents))!.PropertyType);
 
         var allNames = typeof(OperationsDashboardOrderResponse)
             .GetProperties()
@@ -62,7 +67,10 @@ public sealed class OperationsDashboardImplementationContractTests
             name.Contains("Phone", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("Email", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("Address", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("AssignmentCost", StringComparison.OrdinalIgnoreCase));
+            name.Contains("AssignmentCost", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("Margin", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("Cod", StringComparison.Ordinal) ||
+            name.Contains("Tariff", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -77,6 +85,9 @@ public sealed class OperationsDashboardImplementationContractTests
             source,
             StringComparison.Ordinal);
         Assert.Contains("SET LOCAL ROLE paqueteria_app", source, StringComparison.Ordinal);
+        // The in-transaction membership check admits only the dashboard roles, so the order total
+        // (UI-PHASE3-INBOX-TOTAL-2026-10-10) never reaches FINANCE, VIEWER or any other role.
+        Assert.Contains("AND m.role IN ('PLATFORM_ADMIN', 'DISPATCHER')", source, StringComparison.Ordinal);
         Assert.Contains("BeginTransactionAsync", source, StringComparison.Ordinal);
         Assert.Contains("CommitAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("SECURITY DEFINER", source, StringComparison.OrdinalIgnoreCase);

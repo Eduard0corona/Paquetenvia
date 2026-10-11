@@ -22,6 +22,65 @@
 - Sin cambios en AI-06, AI-18 ni AI-12: el lane Drivers `20261011000100_AddDriverVoiceBridge` agrega las columnas del
   celular del repartidor y la tabla `drivers.recipient_call_requests`. No es un sexto flujo de AI-13 §4.
 
+## Sin enlace de soporte en el seguimiento público (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner: "Quitarlo por ahora (Recommended)"; registrada, con su pregunta, en
+  `decision-log.md`. GATE-001 sigue abierto.
+- Mientras GATE-001 siga abierto, el seguimiento público no muestra enlace de soporte: el workflow del piloto ya no
+  usa el host del piloto como valor por omisión de `PILOT_TRACKING_SUPPORT_URL`, un
+  `NEXT_PUBLIC_TRACKING_SUPPORT_URL` vacío significa sin enlace (la página indica responder por el mismo canal del
+  enlace) y `next build` rechaza un enlace que nombre la marca en cualquier variante.
+- AI-07 `public_tracking.branding` agrega la regla del canal de soporte. Sin cambios en API, AI-04, AI-05, AI-06,
+  AI-18, roles ni migraciones.
+
+## Nombre neutro en el seguimiento público mientras GATE-001 sigue abierto (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10) — 2026-10-10
+
+- Respuestas literales del project owner: "Interno sí, público neutro (Recommended)" y "Seguimiento de envío
+  (Recommended)"; registradas, con sus preguntas, en `decision-log.md`. GATE-001 sigue abierto: solo fija el texto
+  público provisional mientras el nombre comercial no esté validado ante el IMPI.
+- AI-07 `public_tracking.branding`: todos los estados del seguimiento abren con "Seguimiento de envío" y ninguno nombra
+  la marca; el título de la página es "Seguimiento de envío", `/track` no enlaza el manifest de la PWA del repartidor y
+  el 404 al que lleva un enlace mal formado se titula "Página no encontrada". En `show`, `brand` pasa a `heading`.
+- `NEXT_PUBLIC_TRACKING_BRAND_NAME` se conserva sin definir (sin marca): el workflow del piloto ya no pasa
+  "Paquetenvia" y `next build` rechaza ese nombre en cualquier variante.
+- Los mensajes al destinatario que llevan el enlace (TRK-002, plantillas GATE-004) usan el mismo texto neutro; hoy el
+  repositorio no contiene textos para destinatarios.
+- Pantallas internas, login, onboarding y PWA del repartidor conservan "Paquetenvia". Sin cambios en API, AI-04, AI-05,
+  AI-06, AI-18, roles ni migraciones; el dominio `paquetenvia.com` (PILOT-DOMAIN-PRODUCTION) no cambia.
+
+## Asistente de nueva orden en 4 pasos que crea y confirma (UI-PHASE3-ORDER-WIZARD-2026-10-10) — 2026-10-10
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, a la pregunta "Asistente de nueva
+  orden: al terminar los 4 pasos, ¿cómo debe quedar la orden?", "Confirmada (Recommended)" ("El asistente la crea y la
+  confirma con las casillas del paso 4 (términos y artículos prohibidos). Queda lista para preparar."); registradas en
+  `decision-log.md` como cambio MAJOR de operación (AI-01 §7).
+- AI-07 `/ops/orders/new` y `create_order.wizard`: "1. Dónde", "2. Qué se envía", "3. Servicio y precio" y
+  "4. Confirmar" (solo quién paga y las dos casillas), con stepper, validación por paso junto a cada campo y un resumen
+  fijo (apilado en teléfonos) con el desglose: neto, IVA, total "IVA incluido" y la regla en palabras, antes de
+  confirmar. "Autorizar envío de bajo monto" sigue en el paso 3 con motivo obligatorio.
+- Al terminar: `createOrder` y después `transitionOrder` DRAFT → CONFIRMED con el motivo "Confirmada al crear la orden",
+  `restricted_goods_acknowledged` de la casilla del paso 4 y la versión de la orden creada. Si la confirmación se
+  rechaza, la orden queda en borrador, la pantalla lo dice con el mensaje de ORD-002-GUARD-CODES (o la verificación MFA)
+  y enlaza al detalle, donde "Siguiente paso" la confirma. Los reintentos usan la misma Idempotency-Key: nunca se crea
+  una segunda orden.
+- Pendientes: libreta de direcciones (BUS-001, MVP-2) y selector de cuenta cliente (no hay operación que las liste).
+  La importación CSV y la API siguen creando órdenes en borrador. Sin cambios en API, AI-04, AI-05, AI-06, AI-18, roles
+  ni migraciones.
+
+## Total de la orden en la bandeja de trabajo (UI-PHASE3-INBOX-TOTAL-2026-10-10) — 2026-10-10
+
+- Completa la columna Total de la tabla aprobada en la fase 3 (respuesta literal del project owner: "avanza con la
+  fase 3"); registrada en `decision-log.md`.
+- El read model OBS-001 `GET /operations/dashboard` (ADR-OBS-001, fuera de AI-05) agrega `total` a cada orden: el
+  `total_cents` guardado de la orden, con IVA incluido, en la forma `Money` de AI-05 `Order.total` (`currency` MXN,
+  `amount_cents` en centavos int64). Un valor negativo o en otra moneda falla cerrado (503).
+- Mismos lectores que hoy (DISPATCHER y PLATFORM_ADMIN con MFA), que ya leen ese total en `listOrders`/`getOrder` y
+  `getOrderFinancials`; FINANCE, VIEWER y los demás roles siguen con el 403 uniforme. Sin tarifa, desglose, costo de
+  asignación, margen ni cobro contra entrega.
+- AI-07 `work_inbox`: columna "Total (IVA incluido)" después de Repartidor, desde centavos enteros con el formato MXN
+  compartido; se retira de `not_supported` y la regla de privacidad permite solo ese monto.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, roles, capacidades, migraciones ni flujos.
+
 ## Cierre automático de órdenes entregadas (ORD-AUTO-CLOSE-2026-10-10) — 2026-10-10
 
 - Pregunta y respuesta literales del project owner: "Cierre de órdenes: hoy una orden entregada se cierra a mano con "Cerrar orden". El servidor solo lo permite si no tiene incidencias abiertas y el cobro contra entrega ya está conciliado. Aun cerrada, se puede abrir una reclamación dentro del plazo. ¿Quieres que se cierre sola cuando cumpla esas reglas?" → "Sí, que se cierre sola" (descripción de la opción: "Agrego en la fase 3 un proceso en el servidor que la cierra en cuanto cumple las reglas. Requiere ADR, porque cambia el comportamiento.");
