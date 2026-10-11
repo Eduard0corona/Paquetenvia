@@ -399,6 +399,21 @@ order_state_machine:
     eligible_driver: Evaluated with the shared DriverEligibilityPolicy (documents, zone, membership) on ASSIGNED and on the immediate retry from FAILED_ATTEMPT to DELIVERING, which keeps the active assignment (D8-RESCHEDULED-NO-DIRECT-DELIVERY).
     capacity_available: Evaluated with the same DriverEligibilityPolicy capacity rules (vehicle capacity against the order packages) on the same transitions.
     failed_attempt_next_action_respected: When leaving FAILED_ATTEMPT, the justifying incident next_action decides the successor. RETURNING allows only RETURNING. RESCHEDULED allows only RESCHEDULED or DELIVERING (the immediate FAILED_ATTEMPT -> DELIVERING retry; RESCHEDULED -> DELIVERING does not exist, D8-RESCHEDULED-NO-DIRECT-DELIVERY). Incidents adopted by the INC-001 backfill carry a default next_action and do not bind the successor; every other guard of the target still applies.
+  automatic_close:
+    decision: ORD-AUTO-CLOSE-2026-10-10
+    edge: DELIVERED -> CLOSED
+    rules:
+    - the system closes a DELIVERED order as soon as every CLOSED guard holds (no_unresolved_incident,
+      if_cod_expected_then_cod_status_reconciled, financial_reconciliation_complete, claim_window_ends_at_set); it is
+      the only transition the system may take
+    - the guards are evaluated only by the ORD-002 transition, the same code path as a manual close; an order whose
+      guards do not hold stays DELIVERED, and the system tries again later
+    - the system acts only for the owner organization (owner_org_id), in a tenant transaction of that organization
+      alone; an operator organization never changes the order state
+    - the order event, the outbox rows and the audit row are the ones a manual close writes, in the same transaction;
+      the system is no user, so the event and audit actor_id are null and the reason says "Cierre automático"
+    - a closed order still accepts CLAIM_OPEN until claim_window_ends_at and is finalized after it exactly as a
+      manually closed order; the manual close is unchanged and either close can happen first
 decided_pending_translation:
   status: DECIDED_2026-09-26_27_TRANSLATION_PENDING
   source: decision-log D8-REASSIGNMENT-NEW-ASSIGNMENT (working session with the project owner via Claude Code)

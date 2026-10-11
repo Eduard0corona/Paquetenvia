@@ -1659,7 +1659,7 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 await transaction.RollbackAsync();
                 var semantic = await new E002SemanticAssertions().AssertAsync(
                     connection, await E002NotificationStateReader.ReadAsync(connection));
-                Assert.EndsWith("_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1", semantic.RoutineMap, StringComparison.Ordinal);
+                Assert.EndsWith("_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1", semantic.RoutineMap, StringComparison.Ordinal);
             }
 
             Assert.Equal("paqueteria_migrator", await ScalarAsync<string>(connectionString,

@@ -65,9 +65,14 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(source).toContain("{row.unassigned_alert && (");
     expect(source).toContain('onOrderChanged={() => state.refresh("assignment")}');
     expect(source).not.toMatch(/type="checkbox"|Seleccionar todo|Cambiar estado|transitionOrder/);
-    // Drivers by their DRV- reference, money and ids never shown, times in Mazatlán.
+    // Drivers by their DRV- reference, ids never shown, times in Mazatlán; the only amount is the order
+    // total (UI-PHASE3-INBOX-TOTAL-2026-10-10), integer cents through the shared Money component.
     expect(source).toContain("row.assignment?.driver_reference");
     expect(source).not.toMatch(/>\s*\{row\.(order_id|assignment\??\.driver_id)\}/);
+    expect(source).toContain("<Money cents={row.total.amount_cents} />");
+    expect(source).toContain("Total ({vatIncludedLabel})");
+    expect(source.match(/<Money\b/g)).toHaveLength(1);
+    expect(source).not.toMatch(/cost_cents|margin|cod_|price_net/);
     expect(source).toContain("formatServiceWindow(row.delivery_window)");
     expect(source).toContain("Horarios mostrados en hora de Mazatlán.");
     expect(source).not.toMatch(/toLocale(Date|Time)?String|new Intl\.DateTimeFormat/);
@@ -97,7 +102,8 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(nav).toContain('href: "/ops/dashboard",\n    label: "Tablero"');
     expect(shell()).toContain('href="/ops/dashboard?view=positions"');
     const dashboard = read("src/operations/components/operations-dashboard-shell.tsx");
-    expect(dashboard).toContain('searchParams.get("view") === "positions"');
+    // The view comes from the URL while rendering (contracts/dashboard-view.ts, tested there).
+    expect(dashboard).toContain("parseDashboardView(searchParams)");
     expect(dashboard).toContain("<OperationsPositions");
   });
 });

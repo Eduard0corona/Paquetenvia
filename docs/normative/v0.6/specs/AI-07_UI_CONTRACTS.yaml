@@ -296,6 +296,7 @@ screen_contracts:
     release: MVP-1
     route: /ops/inbox
     decision: UI-PHASE3-INBOX-2026-10-10
+    decision_amendment: UI-PHASE3-INBOX-TOTAL-2026-10-10
     authority: REST API + PostgreSQL
     sources:
       counts: GET /operations/queue-counts (getOperationsQueueCounts)
@@ -335,6 +336,9 @@ screen_contracts:
       - Destino (delivery zone name; the read model carries no address and addresses stay out of lists)
       - Ventana de entrega (delivery_window in America/Mazatlan; "Horario de la zona" when absent)
       - Repartidor (DRV- reference)
+      - Total ("Total (IVA incluido)"; the dashboard item total, the order total in integer MXN cents with IVA
+        included, the same value and shape as AI-05 Order.total, shown with the shared MXN formatter and never as a
+        floating-point value; UI-PHASE3-INBOX-TOTAL-2026-10-10)
       states: loading, empty per queue, error keeping the rows ("No fue posible actualizar la bandeja."), no session
         and access unavailable
     actions:
@@ -348,13 +352,12 @@ screen_contracts:
     - optimistic UI is never authoritative; a 401 or 403 clears the rows and stops the realtime hub
     privacy:
     - no browser persistence and no client logging; an organization switch clears rows, zones and counts
-    - no internal identifier, personal data or amount in the table
+    - no internal identifier or personal data in the table; its only amount is the order total, never an assignment
+      cost, margin, COD amount or tariff
     forbidden:
     - bulk status change without preview (this version offers no bulk action)
     - a queue, count or chip computed by filtering loaded rows
     not_supported:
-    - Total column - the dashboard read model carries no order total; showing it needs a separate change of that read
-      model
     - Precio por revisar list - needs a server filter for cost_warning
     - bulk actions - a later change, always with a preview first
     - Órdenes and Repartidores menu items of the approved menu - no screen yet

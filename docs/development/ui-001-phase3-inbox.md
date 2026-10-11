@@ -12,7 +12,25 @@ sección "Despacho: bandeja de trabajo"). Contrato: AI-07 ruta `/ops/inbox` y `s
   Importar CSV, y luego los elementos de finanzas del rol. `/ops/dashboard` no cambia y se llama "Tablero";
   `?view=positions` abre su vista de posiciones ("Mapa de posiciones" desde la bandeja). El detalle de una orden
   pertenece a Bandeja en el menú.
-- Sin cambios de API ni de backend: la bandeja solo usa operaciones existentes.
+- Sin endpoints nuevos: la bandeja solo usa operaciones existentes (el Total agrega un campo al read model del
+  tablero, ver abajo).
+
+## Total de la orden (UI-PHASE3-INBOX-TOTAL-2026-10-10)
+
+La columna Total de la tabla aprobada ("Guía, Estado, Destino, Ventana, Repartidor, Total") quedó pendiente en la
+primera entrega porque el read model del tablero no traía el total. Ahora:
+
+- `GET /api/v1/operations/dashboard` (OBS-001, ADR-OBS-001, fuera de AI-05) agrega `total` a cada orden: el
+  `orders.total_cents` guardado, con IVA incluido (GATE-011-VAT-INCLUDED-2026-09-29), en la forma `Money` de AI-05
+  `Order.total` (`{"currency":"MXN","amount_cents":<int64>}`). Se lee en la misma transacción con RLS que el resto de
+  la proyección; un total negativo o en otra moneda falla cerrado (503 genérico).
+- Sin cambio de autorización: el tablero sigue admitiendo solo DISPATCHER y PLATFORM_ADMIN con MFA, que ya leen ese
+  mismo total (como dueña u operadora, con la misma RLS) en `listOrders`/`getOrder` (`Order.total`) y en
+  `getOrderFinancials` (`revenue_cents`). FINANCE, VIEWER y los demás roles siguen recibiendo el 403 uniforme antes de
+  leer órdenes. No se agrega tarifa, desglose, costo de asignación, margen ni cobro contra entrega.
+- La web exige `total` en el parser (llaves exactas, MXN, centavos enteros seguros y no negativos) y la tabla muestra
+  "Total (IVA incluido)" después de Repartidor con el componente `Money` (centavos enteros, sin punto flotante),
+  alineado a la derecha.
 
 ## Colas
 
@@ -46,13 +64,21 @@ inválida es "Sin asignar"; estado fuera de la cola, servicio desconocido o zona
 filtran. Cada fila abre `/ops/orders/{id}?inbox=<vista>` y el detalle muestra "Volver a la bandeja" hacia la URL
 canónica reconstruida (ruta fija, vista parseada otra vez: el parámetro no puede llevar a otro sitio).
 
+"Mapa de posiciones" abre `/ops/dashboard?view=positions` (`contracts/dashboard-view.ts`). El tablero lee la vista de
+la URL al renderizar (`useSearchParams`, con la página dentro de `Suspense`): el primer HTML ya es la vista de
+posiciones, sin pintar la lista antes, y una navegación posterior a la misma ruta con otra query (por ejemplo
+"Tablero" en el menú) muestra la vista que nombra. Los botones Lista/Posiciones reescriben la URL en su lugar con
+`history.replaceState` (Next.js sincroniza `useSearchParams`): sin petición al servidor, sin entrada nueva en el
+historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #212 (efecto con `[]` y `setTimeout`).
+
 ## Pantalla (`components/operations-inbox-shell.tsx`)
 
 - Pestañas de colas con conteo; chips de filtro que son filtros del servidor (estado de la cola, servicio, zona de
   entrega vista en las filas cargadas) y "Limpiar filtros". La búsqueda sigue siendo "Buscar guía" del encabezado.
 - Tabla: Guía, Estado (estado exacto con el color de su grupo y la marca "Precio por revisar" si hay
-  `cost_warning`), Destino (zona de entrega), Ventana de entrega (hora de Mazatlán, "Horario de la zona" si no hay)
-  y Repartidor (`DRV-`). Sin ids internos, datos personales ni montos.
+  `cost_warning`), Destino (zona de entrega), Ventana de entrega (hora de Mazatlán, "Horario de la zona" si no hay),
+  Repartidor (`DRV-`) y Total (IVA incluido). Sin ids internos ni datos personales; el único monto es el total de la
+  orden.
 - Acciones por fila: "Abrir" (o clic en la fila) y, solo si el servidor marca `unassigned_alert`, "Asignar", que
   abre el mismo selector del detalle (UI-PHASE2-DRIVER-PICKER-2026-10-05: lista, centavos enteros, confirmación con
   repartidor y costo). Tras asignar se vuelven a leer la cola y los conteos. No hay acciones masivas.
@@ -63,7 +89,6 @@ canónica reconstruida (ruta fija, vista parseada otra vez: el parámetro no pue
 
 ## Pendiente (no se simula)
 
-- Columna Total: el read model del tablero no trae el total de la orden; mostrarlo requiere cambiar ese read model.
 - Lista de "Precio por revisar": requiere un filtro de servidor por `cost_warning`.
 - Acciones masivas, siempre con vista previa (AI-07 prohíbe "bulk status change without preview").
 - Entradas "Órdenes" y "Repartidores" del menú aprobado: aún no hay pantallas.
@@ -74,9 +99,13 @@ canónica reconstruida (ruta fija, vista parseada otra vez: el parámetro no pue
 cd apps/web && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build
 python3 docs/normative/v0.6/tools/validate_contracts.py
 dotnet test tests/Paqueteria.ArchitectureTests --filter "FullyQualifiedName!~ModuleTemplateTests"
+dotnet test tests/Paqueteria.UnitTests --filter "FullyQualifiedName~Reporting.OperationsDashboardTests"
+dotnet test tests/Paqueteria.ContractTests --filter "Category!=PostgreSqlContract"
+dotnet test tests/Paqueteria.IntegrationTests --filter "Category=OperationsDashboardPostgreSql|Category=OperationsDashboardPwa"
 ```
 
 ## Rollback
 
 Revertir el commit. No hay datos, esquema ni API que deshacer; DISPATCHER y PLATFORM_ADMIN vuelven a entrar al
-tablero.
+tablero. Revertir el commit del Total quita `total` del read model del tablero y la columna de la bandeja a la vez
+(web y API se despliegan juntas); no hay datos, esquema ni migración que deshacer.

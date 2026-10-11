@@ -129,6 +129,47 @@ public sealed class OperationsDashboardTests
         Assert.Equal(expected, OperationsDashboardAuthorizationPolicy.IsAllowed(role, mfa));
 
     [Fact]
+    public void Order_total_reaches_only_roles_that_already_read_order_totals()
+    {
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the dashboard total is the AI-05 Order.total, which DISPATCHER and
+        // PLATFORM_ADMIN already read (listOrders, getOrder, getOrderFinancials). FINANCE, VIEWER and every other
+        // role keep the uniform 403, with or without MFA, so the total never reaches them through this read.
+        foreach (var role in Enum.GetValues<OrganizationRole>())
+        {
+            foreach (var mfa in new[] { false, true })
+            {
+                var expected = role == OrganizationRole.Dispatcher ||
+                    (role == OrganizationRole.PlatformAdmin && mfa);
+                Assert.Equal(expected, OperationsDashboardAuthorizationPolicy.IsAllowed(role, mfa));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("MXN", 0L, true)]
+    [InlineData("MXN", 9_000L, true)]
+    [InlineData("MXN", long.MaxValue, true)]
+    [InlineData("MXN", -1L, false)]
+    [InlineData("USD", 9_000L, false)]
+    [InlineData("mxn", 9_000L, false)]
+    [InlineData(null, 9_000L, false)]
+    public void Order_total_is_non_negative_mxn_cents_or_fails_closed(
+        string? currency,
+        long amountCents,
+        bool expected) =>
+        Assert.Equal(expected, OperationsDashboardProjectionPolicy.IsValidTotal(currency, amountCents));
+
+    [Fact]
+    public void Order_total_is_int64_cents_never_floating_point()
+    {
+        Assert.Equal(typeof(long), PropertyType<OperationsMoney>(nameof(OperationsMoney.AmountCents)));
+        Assert.Equal(typeof(long), PropertyType<OperationsMoneyResponse>(nameof(OperationsMoneyResponse.AmountCents)));
+        Assert.Equal(
+            typeof(OperationsMoneyResponse),
+            PropertyType<OperationsDashboardOrderResponse>(nameof(OperationsDashboardOrderResponse.Total)));
+    }
+
+    [Fact]
     public void Options_have_fixed_page_defaults()
     {
         var options = new OperationsDashboardOptions();
@@ -217,6 +258,7 @@ public sealed class OperationsDashboardTests
                 "DeliveryZone",
                 "Assignment",
                 "LatestDriverLocation",
+                "Total",
                 "CostWarning",
                 "UnassignedAlert",
             ],
@@ -224,4 +266,7 @@ public sealed class OperationsDashboardTests
     }
 
     private static QueryCollection Query(Dictionary<string, StringValues> values) => new(values);
+
+    private static Type PropertyType<T>(string name) =>
+        typeof(T).GetProperty(name)?.PropertyType ?? throw new InvalidOperationException($"{name} is missing.");
 }

@@ -8,7 +8,7 @@ namespace Paqueteria.Infrastructure.Tenancy;
 
 public sealed class WorkerTenantTransactionContext<TDbContext>(
     TDbContext dbContext,
-    TenantDatabaseExecutionState state)
+    TenantDatabaseExecutionState state) : ITenantTransactionRunner<TDbContext>
     where TDbContext : DbContext
 {
     private const string SetUserSql =
