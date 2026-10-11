@@ -46,11 +46,17 @@ Filtros permitidos:
 
 ```text
 order_id, status, delivery_zone_id, client_account_id, owner_org_id,
-operator_org_id, service_type, created_from, created_to, unassigned, cursor
+operator_org_id, service_type, created_from, created_to, unassigned,
+price_review, cursor
 ```
 
 Cada parámetro conocido aparece una vez; UUIDs son canónicos y no vacíos,
 status/service type son exactos, fechas son UTC y el rango máximo es 31 días.
+`unassigned` y `price_review` aceptan solo `true` o `false`; `false` no filtra.
+`price_review=true` (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11) deja solo las
+órdenes con `cost_warning` que no han terminado (estado fuera de DELIVERED,
+RETURNED, CLAIM_RESOLVED, CLOSED y CANCELLED), la misma regla con la que
+`getOperationsQueueCounts` cuenta `queues.price_review`.
 Valores inválidos devuelven Problem Details 400 sin reflejar input. Los
 desconocidos se ignoran. No existe `page_size`.
 

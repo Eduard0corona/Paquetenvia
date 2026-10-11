@@ -14,10 +14,13 @@ import {
   inboxSearch,
   inboxStatusChoices,
   inboxViewKey,
+  activeOrderStatuses,
+  inboxFooterText,
+  isPriceReviewRow,
   parseInboxView,
-  priceReviewQueue,
   type InboxView,
 } from "./inbox";
+import { orderStatuses, type OperationsDashboardOrder } from "./operations-dashboard";
 import { operationsQueueIds, type OperationsQueueCounts } from "./queue-counts";
 import { statusesInGroup } from "./status-groups";
 
@@ -29,9 +32,13 @@ const parse = (query: string) => parseInboxView(new URLSearchParams(query));
 
 describe("work inbox queues (UI-PHASE3-INBOX-2026-10-10)", () => {
   it("shows the five queues of the approved design in order, with real server counts", () => {
-    expect(
-      inboxQueueTabs.map((id) => (id === priceReviewQueue.id ? priceReviewQueue.label : inboxQueues[id].label)),
-    ).toEqual(["Sin asignar", "Requiere atención", "Precio por revisar", "Entregadas sin cerrar", "En ruta"]);
+    expect(inboxQueueTabs.map((id) => inboxQueues[id].label)).toEqual([
+      "Sin asignar",
+      "Requiere atención",
+      "Precio por revisar",
+      "Entregadas sin cerrar",
+      "En ruta",
+    ]);
     // Every tab reads one getOperationsQueueCounts queue and every published queue has a tab.
     expect([...inboxQueueTabs].sort()).toEqual([...operationsQueueIds].sort());
     const counts = {
@@ -48,12 +55,55 @@ describe("work inbox queues (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(inboxQueues.unassigned.statuses).toEqual(["READY_FOR_PICKUP", "RESCHEDULED"]);
   });
 
-  it("keeps price review as a count with a note, never as a list built from loaded rows", () => {
-    expect(inboxListQueueIds).not.toContain(priceReviewQueue.id);
-    expect(priceReviewQueue.note).toMatch(/conteo/);
-    expect(priceReviewQueue.note).toMatch(/terminadas/);
-    // An URL asking for it opens the default queue instead.
-    expect(parse("queue=price_review").queue).toBe("unassigned");
+  it("lists price review from the server filter, only orders that have not finished (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11)", () => {
+    // Every queue is a server list now; none is a count-only tile or a list built from loaded rows.
+    expect(inboxListQueueIds).toContain("price_review");
+    expect(inboxQueueTabs).toEqual(inboxListQueueIds);
+    expect(parse("queue=price_review").queue).toBe("price_review");
+    expect(inboxQueries(view({ queue: "price_review" }))).toEqual([{ priceReview: true }]);
+    expect(buildOperationsDashboardSearch(inboxQueries(view({ queue: "price_review" }))[0]).toString()).toBe(
+      "price_review=true",
+    );
+    expect(inboxQueues.price_review.flag).toBe("priceReview");
+    // Active means outside the "Terminadas" group: the same five statuses the server leaves out.
+    expect(activeOrderStatuses).toEqual(orderStatuses.filter((status) => !statusesInGroup("FINISHED").includes(status)));
+    expect(statusesInGroup("FINISHED")).toEqual(["RETURNED", "DELIVERED", "CLOSED", "CLAIM_RESOLVED", "CANCELLED"]);
+    expect(inboxQueues.price_review.statuses).toEqual(activeOrderStatuses);
+    expect(inboxQueues.price_review.description).toMatch(/salen solas/);
+    expect(inboxQueues.price_review.empty).toBe("No hay órdenes activas con precio por revisar.");
+  });
+
+  it("accepts only price review rows that follow the rule, so an ignored filter fails closed", () => {
+    const row = (status: OperationsDashboardOrder["status"], warning: OperationsDashboardOrder["cost_warning"]) =>
+      ({ status, cost_warning: warning }) as OperationsDashboardOrder;
+    for (const status of orderStatuses) {
+      const finished = statusesInGroup("FINISHED").includes(status);
+      expect(isPriceReviewRow(row(status, "BELOW_MINIMUM_SNAPSHOT")), status).toBe(!finished);
+      expect(isPriceReviewRow(row(status, "AUTHORIZED_OVERRIDE")), status).toBe(!finished);
+      expect(isPriceReviewRow(row(status, null)), status).toBe(false);
+    }
+  });
+
+  it("says what the table shows as in the approved footer, with the selection", () => {
+    const base = { queue: "unassigned" as const, shown: 4, count: 6, filtered: false, hasMore: true };
+    expect(inboxFooterText({ ...base, selected: 0 })).toBe("Mostrando 4 de 6 sin asignar · seleccionadas: 0");
+    expect(inboxFooterText({ ...base, selected: 3 })).toBe("Mostrando 4 de 6 sin asignar · seleccionadas: 3");
+    // Without a selection column, the selection is not mentioned.
+    expect(inboxFooterText({ ...base, queue: "en_route", selected: null })).toBe("Mostrando 4 de 6 en ruta");
+    expect(inboxFooterText({ ...base, queue: "needs_attention", shown: 1, count: 1, selected: null })).toBe(
+      "Mostrando 1 de 1 que requiere atención",
+    );
+    expect(inboxFooterText({ ...base, queue: "price_review", selected: 0 })).toBe(
+      "Mostrando 4 de 6 con precio por revisar · seleccionadas: 0",
+    );
+    // The counts never apply the chips, and a count below the rows shown is stale: no "de M" then.
+    expect(inboxFooterText({ ...base, filtered: true, selected: 0 })).toBe(
+      "Mostrando 4 sin asignar con los filtros elegidos; hay más por cargar · seleccionadas: 0",
+    );
+    expect(inboxFooterText({ ...base, count: 3, hasMore: false, selected: null })).toBe("Mostrando 4 sin asignar");
+    expect(inboxFooterText({ ...base, count: null, queue: "delivered_not_closed", selected: null })).toBe(
+      "Mostrando 4 entregadas sin cerrar; hay más por cargar",
+    );
   });
 
   it("builds each queue only from the existing dashboard filters", () => {
@@ -90,6 +140,12 @@ describe("work inbox queues (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(inboxStatusChoices("needs_attention")).toEqual(["FAILED_ATTEMPT", "RESCHEDULED", "RETURNING", "CLAIM_OPEN"]);
     expect(inboxStatusChoices("en_route")).toEqual(["IN_TRANSIT", "DELIVERING"]);
     expect(inboxStatusChoices("delivered_not_closed")).toEqual([]);
+    // Price review offers no status chip (twelve statuses); service type and zone still narrow it.
+    expect(inboxStatusChoices("price_review")).toEqual([]);
+    expect(parse("queue=price_review&status=DRAFT").status).toBeNull();
+    expect(inboxQueries(view({ queue: "price_review", serviceType: "URGENT", zoneId: zone }))).toEqual([
+      { serviceType: "URGENT", deliveryZoneId: zone, priceReview: true },
+    ]);
   });
 });
 

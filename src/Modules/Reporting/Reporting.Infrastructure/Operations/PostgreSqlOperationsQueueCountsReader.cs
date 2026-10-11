@@ -41,8 +41,9 @@ internal sealed class PostgreSqlOperationsQueueCountsReader(
         LIMIT 1;
         """;
 
-    // One aggregate. "unassigned" and "price_review" are exactly the dashboard's unassigned_alert and cost_warning
-    // predicates (PostgreSqlOperationsDashboardReader); the assignment lookup uses one_active_assignment_per_order.
+    // One aggregate. "unassigned" is exactly the dashboard's unassigned_alert predicate and "price_review" exactly its
+    // price_review filter, a cost_warning on an order that has not finished (PostgreSqlOperationsDashboardReader;
+    // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11); the assignment lookup uses one_active_assignment_per_order.
     internal const string CountsSql = """
         SELECT
           order_row.status,
@@ -57,8 +58,11 @@ internal sealed class PostgreSqlOperationsQueueCountsReader(
               )
           )::bigint AS unassigned,
           count(*) FILTER (
-            WHERE COALESCE(order_row.total_cents < order_row.minimum_total_cents_snapshot, false)
-              OR COALESCE(order_row.financial_override ?& ARRAY['actor_id', 'reason', 'valid_until'], false)
+            WHERE order_row.status NOT IN ('DELIVERED', 'RETURNED', 'CLAIM_RESOLVED', 'CLOSED', 'CANCELLED')
+              AND (
+                COALESCE(order_row.total_cents < order_row.minimum_total_cents_snapshot, false)
+                OR COALESCE(order_row.financial_override ?& ARRAY['actor_id', 'reason', 'valid_until'], false)
+              )
           )::bigint AS price_review
         FROM orders.orders AS order_row
         GROUP BY order_row.status;

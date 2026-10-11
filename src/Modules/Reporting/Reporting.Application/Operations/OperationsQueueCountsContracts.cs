@@ -52,8 +52,8 @@ public sealed class OperationsQueueCounts
 
     /// <summary>
     /// Builds the snapshot from the per-status rows of the aggregate query. A status outside AI-04, a repeated
-    /// status, a negative count or a queue count larger than the statuses it is drawn from is an inconsistent
-    /// projection and fails closed.
+    /// status, a negative count, a queue count larger than the statuses it is drawn from, or a price review count on
+    /// a finished status is an inconsistent projection and fails closed.
     /// </summary>
     public static OperationsQueueCounts From(
         DateTimeOffset generatedAt,
@@ -75,6 +75,7 @@ public sealed class OperationsQueueCounts
                 row.Unassigned > row.Total ||
                 row.PriceReview > row.Total ||
                 (row.Unassigned > 0 && !OperationsQueuePolicy.UnassignedStatuses.Contains(row.Status)) ||
+                (row.PriceReview > 0 && OperationsQueuePolicy.FinishedStatuses.Contains(row.Status)) ||
                 !counts.TryAdd(row.Status, row))
             {
                 throw new OperationsDashboardContractException("Queue counts projection is invalid.");
@@ -106,11 +107,27 @@ public sealed record OperationsQueueStatusRow(
 
 /// <summary>
 /// The queue definitions. Each one restates a rule the dashboard already applies; none adds a business rule:
-/// unassigned is the dashboard's unassigned alert, price review its cost warning, and the status queues are the
-/// UI-STATUS-GROUPS-2026-10-05 groups "Requiere atención" and "En ruta" plus DELIVERED.
+/// unassigned is the dashboard's unassigned alert, price review its cost warning on an order that has not finished,
+/// and the status queues are the UI-STATUS-GROUPS-2026-10-05 groups "Requiere atención" and "En ruta" plus
+/// DELIVERED.
 /// </summary>
 public static class OperationsQueuePolicy
 {
+    /// <summary>
+    /// UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 (owner: "Solo órdenes activas"): an order in one of these
+    /// statuses has finished and leaves the price review queue by itself. They are the UI-STATUS-GROUPS-2026-10-05
+    /// group "Terminadas"; AI-04 terminality and the claim window are unchanged (a CLAIM_OPEN order is active again).
+    /// </summary>
+    public static readonly ImmutableArray<string> FinishedStatuses =
+        ["DELIVERED", "RETURNED", "CLAIM_RESOLVED", "CLOSED", "CANCELLED"];
+
+    /// <summary>
+    /// The price review queue: an order the dashboard flags with a cost warning that has not finished. The SQL of
+    /// the dashboard filter and of the queue count states the same rule.
+    /// </summary>
+    public static bool IsPriceReview(string status, string? costWarning) =>
+        costWarning is not null && !FinishedStatuses.Contains(status, StringComparer.Ordinal);
+
     /// <summary>
     /// Statuses that raise the dashboard's unassigned alert when the order has no ACCEPTED or ACTIVE assignment
     /// (<see cref="OperationsDashboardProjectionPolicy.IsUnassignedAlert"/>).

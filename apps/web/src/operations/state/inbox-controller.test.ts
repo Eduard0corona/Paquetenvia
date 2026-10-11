@@ -191,6 +191,41 @@ describe("work inbox controller (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(api.countRequests).toBe(1);
   });
 
+  it("lists price review through the server filter, with its own cursor (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11)", async () => {
+    const draft = row(50, "DRAFT", { cost_warning: "BELOW_MINIMUM_SNAPSHOT" });
+    const claim = row(40, "CLAIM_OPEN", { cost_warning: "AUTHORIZED_OVERRIDE" });
+    const ready = row(30, "READY_FOR_PICKUP", { cost_warning: "AUTHORIZED_OVERRIDE" });
+    const api = new FakeApi({
+      "price_review=true": () => Promise.resolve(page([draft, claim], "p-1")),
+      "price_review=true&cursor=p-1": () => Promise.resolve(page([ready])),
+    });
+    const controller = controllerFor(api, { ...defaultInboxView, queue: "price_review" });
+    await controller.start();
+    expect(controller.getSnapshot().rows).toEqual([draft, claim]);
+    await controller.loadMore();
+    // One query, paged by the server: never a list built by filtering other rows.
+    expect(api.requests).toEqual(["price_review=true", "price_review=true&cursor=p-1"]);
+    expect(controller.getSnapshot().rows).toEqual([draft, claim, ready]);
+    expect(controller.getSnapshot().error).toBeNull();
+  });
+
+  it.each([
+    ["a finished order", row(20, "DELIVERED", { cost_warning: "AUTHORIZED_OVERRIDE" })],
+    ["an order without a warning", row(20, "DRAFT")],
+  ])("fails closed when the price review answer holds %s", async (_name, outside) => {
+    const kept = row(50, "CONFIRMED", { cost_warning: "AUTHORIZED_OVERRIDE" });
+    let answer: readonly OperationsDashboardOrder[] = [kept];
+    const api = new FakeApi({ "price_review=true": () => Promise.resolve(page(answer)) });
+    const controller = controllerFor(api, { ...defaultInboxView, queue: "price_review" });
+    await controller.start();
+    expect(controller.getSnapshot().rows).toEqual([kept]);
+    answer = [kept, outside];
+    await controller.refresh("manual");
+    // The rows of the last valid read stay; the order outside the rule is never listed.
+    expect(controller.getSnapshot().rows).toEqual([kept]);
+    expect(controller.getSnapshot().error).toBe(inboxLoadFailedMessage);
+  });
+
   it("stops paging when the server repeats a cursor", async () => {
     const api = new FakeApi({
       "unassigned=true": () => Promise.resolve(page([row(30, "READY_FOR_PICKUP")], "loop")),

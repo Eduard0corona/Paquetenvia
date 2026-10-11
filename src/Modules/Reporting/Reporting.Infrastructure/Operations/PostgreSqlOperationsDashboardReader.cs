@@ -91,6 +91,17 @@ internal sealed class PostgreSqlOperationsDashboardReader(
               )
             )
             AND (
+              @price_review::boolean IS NULL
+              OR @price_review = false
+              OR (
+                order_row.status NOT IN ('DELIVERED', 'RETURNED', 'CLAIM_RESOLVED', 'CLOSED', 'CANCELLED')
+                AND (
+                  COALESCE(order_row.total_cents < order_row.minimum_total_cents_snapshot, false)
+                  OR COALESCE(order_row.financial_override ?& ARRAY['actor_id', 'reason', 'valid_until'], false)
+                )
+              )
+            )
+            AND (
               @cursor_updated_at::timestamptz IS NULL
               OR (order_row.updated_at, order_row.id) < (@cursor_updated_at, @cursor_order_id)
             )
@@ -283,6 +294,14 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             items.Add(Map(reader));
         }
 
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: the SQL filter and the queue policy state one rule; a row
+        // outside it is an inconsistent projection and fails closed instead of reaching the price review list.
+        if (request.Filters.PriceReview == true &&
+            items.Exists(item => !OperationsQueuePolicy.IsPriceReview(item.Status, item.CostWarning)))
+        {
+            throw new OperationsDashboardContractException("Price review projection is inconsistent.");
+        }
+
         var pageSize = options.Value.DefaultPageSize;
         var hasMore = items.Count > pageSize;
         if (hasMore)
@@ -308,6 +327,7 @@ internal sealed class PostgreSqlOperationsDashboardReader(
         AddNullable(command, "created_from", NpgsqlDbType.TimestampTz, filters.CreatedFrom);
         AddNullable(command, "created_to", NpgsqlDbType.TimestampTz, filters.CreatedTo);
         AddNullable(command, "unassigned", NpgsqlDbType.Boolean, filters.Unassigned);
+        AddNullable(command, "price_review", NpgsqlDbType.Boolean, filters.PriceReview);
         AddNullable(command, "cursor_updated_at", NpgsqlDbType.TimestampTz, filters.Cursor?.UpdatedAt);
         AddNullable(command, "cursor_order_id", NpgsqlDbType.Uuid, filters.Cursor?.OrderId);
         command.Parameters.Add(new NpgsqlParameter<int>("page_limit", NpgsqlDbType.Integer)
