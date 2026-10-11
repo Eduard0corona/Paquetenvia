@@ -35,6 +35,8 @@ describe("confirmation before risky money and destructive actions", () => {
     ["src/operations/components/manual-routes-shell.tsx", ["removeRouteStopConfirmation("], ["state.removeStop(stop.id)"]],
     ["src/operations/components/operations-order-card.tsx", ["externalOfferConfirmation("], ["void onPublishExternalOffer("]],
     ["src/operations/components/operations-driver-assignment.tsx", ["driverAssignmentConfirmation("], ["assign(driver, costCents)"]],
+    // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: a batch is sent only from its confirmation.
+    ["src/operations/components/operations-bulk-assignment.tsx", ["bulkAssignmentConfirmation("], ["execute(run)"]],
     ["src/operations/components/operations-next-step.tsx", ["transitionConfirmation("], ["submit(action, trimmed, version, acknowledged)"]],
   ] as const)("%s runs each risky action only from the confirmation", (path, builders, actions) => {
     const source = read(path);

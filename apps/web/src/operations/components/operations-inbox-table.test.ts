@@ -115,6 +115,12 @@ describe("work inbox table (UI-PHASE3-INBOX-TOTAL-2026-10-10)", () => {
     expect(() => table(order({ total: { currency: "MXN", amount_cents: 12.5 } }))).toThrow();
   });
 
+  it("has no selection column unless the table offers one", () => {
+    const html = table(order({ unassigned_alert: true, status: "READY_FOR_PICKUP", assignment: null }));
+    expect(html).not.toContain('type="checkbox"');
+    expect(text(html)).not.toContain("Seleccionar");
+  });
+
   it("shows no internal identifier next to the total", () => {
     const assigned = text(table(order()));
     expect(assigned).not.toContain(orderId);
@@ -124,5 +130,95 @@ describe("work inbox table (UI-PHASE3-INBOX-TOTAL-2026-10-10)", () => {
     expect(text(unassigned)).toContain("Asignar");
     expect(text(cells(unassigned).row[4] ?? "")).toBe("Sin repartidor");
     expect(text(cells(unassigned).row[5] ?? "")).toBe("$1,234.56 MXN");
+  });
+});
+
+/** The table with the selection column of UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11. */
+function selectableTable(
+  rows: readonly { readonly row: OperationsDashboardOrder; readonly selected?: boolean; readonly disabled?: boolean }[],
+  allState: "none" | "some" | "all" = "none",
+): string {
+  return renderToStaticMarkup(
+    createElement(
+      "table",
+      null,
+      createElement(InboxTableHead, { selection: { state: allState, disabled: false, onToggleAll: () => undefined } }),
+      createElement(
+        "tbody",
+        null,
+        ...rows.map(({ row, selected = false, disabled = false }) =>
+          createElement(InboxRow, {
+            key: row.order_id,
+            row,
+            href: `/ops/orders/${row.order_id}?inbox=queue%3Dunassigned`,
+            assigning: false,
+            selection: { selected, disabled, onToggle: () => undefined },
+            onOpen: () => undefined,
+            onAssign: () => undefined,
+          }),
+        ),
+      ),
+    ),
+  );
+}
+
+describe("work inbox selection column (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11)", () => {
+  const assignable = order({
+    order_id: "1a1b2c3d-1111-4222-8333-944445555666",
+    public_id: "ORD_0000000000000000000043",
+    unassigned_alert: true,
+    status: "READY_FOR_PICKUP",
+    assignment: null,
+  });
+  const enRoute = order();
+
+  it("opens the header with Seleccionar todas before the approved columns", () => {
+    const html = selectableTable([{ row: assignable }]);
+    expect(cells(html).header).toEqual([
+      "Seleccionar todas",
+      "Guía",
+      "Estado",
+      "Destino (zona)",
+      "Ventana de entrega",
+      "Repartidor",
+      "Total (IVA incluido)",
+      "Acciones",
+    ]);
+    expect(selectableTable([{ row: assignable }], "all")).toMatch(/<th[^>]*opsInboxSelect[\s\S]*?checked=""/);
+  });
+
+  it("offers a checkbox only on rows the server flags as assignable", () => {
+    const html = selectableTable([{ row: assignable, selected: true }, { row: enRoute }]);
+    const body = html.slice(html.indexOf("<tbody>"));
+    expect(body.match(/type="checkbox"/g)).toHaveLength(1);
+    expect(text(body)).toContain("Seleccionar la orden ORD_0000000000000000000043");
+    expect(text(body)).not.toContain("Seleccionar la orden ORD_0000000000000000000042");
+    expect(body).toMatch(/type="checkbox"[^>]*checked=""/);
+    // Every row keeps the cell, so the columns stay aligned.
+    expect(cells(html).row).toHaveLength(16);
+  });
+
+  it("disables a checkbox past the batch limit or while a batch is open, and the single Asignar with it", () => {
+    const html = selectableTable([{ row: assignable, disabled: true }]);
+    expect(html).toMatch(/type="checkbox" disabled=""/);
+    const frozen = renderToStaticMarkup(
+      createElement(
+        "table",
+        null,
+        createElement(
+          "tbody",
+          null,
+          createElement(InboxRow, {
+            row: assignable,
+            href: "/ops/orders/x",
+            assigning: false,
+            assignDisabled: true,
+            onOpen: () => undefined,
+            onAssign: () => undefined,
+          }),
+        ),
+      ),
+    );
+    expect(frozen).toMatch(/<button[^>]*disabled=""[^>]*>Asignar/);
   });
 });

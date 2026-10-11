@@ -112,7 +112,8 @@ public sealed class OperationsQueueCountsImplementationContractTests
         Assert.DoesNotContain("FOR UPDATE", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("owner_org_id =", source, StringComparison.Ordinal);
 
-        // The two queues computed in SQL are exactly the dashboard's alert and cost-warning predicates.
+        // The two queues computed in SQL are exactly the dashboard's alert predicate and its price_review filter
+        // (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: a cost warning on an order that has not finished).
         var dashboard = Read(
             "src", "Modules", "Reporting", "Reporting.Infrastructure", "Operations",
             "PostgreSqlOperationsDashboardReader.cs");
@@ -122,12 +123,49 @@ public sealed class OperationsQueueCountsImplementationContractTests
                      "candidate.status IN ('ACCEPTED', 'ACTIVE')",
                      "minimum_total_cents_snapshot",
                      "financial_override ?& ARRAY['actor_id', 'reason', 'valid_until']",
+                     FinishedStatusesSql(),
+                     "COALESCE(order_row.total_cents < order_row.minimum_total_cents_snapshot, false)",
+                     "OR COALESCE(order_row.financial_override ?& ARRAY['actor_id', 'reason', 'valid_until'], false)",
                  })
         {
             Assert.Contains(fragment, source, StringComparison.Ordinal);
             Assert.Contains(fragment, dashboard, StringComparison.Ordinal);
         }
+
+        Assert.Equal(1, Count(source, FinishedStatusesSql()));
+        Assert.Equal(1, Count(dashboard, FinishedStatusesSql()));
     }
+
+    [Fact]
+    public void AI05_price_review_count_leaves_out_exactly_the_finished_statuses()
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 ("Solo órdenes activas"): the published count and the
+        // implementation name the same finished statuses, the UI-STATUS-GROUPS-2026-10-05 group Terminadas.
+        var finished = string.Join(", ", OperationsQueuePolicy.FinishedStatuses.SkipLast(1)) +
+            " and " + OperationsQueuePolicy.FinishedStatuses[^1];
+        Assert.Equal("DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED and CANCELLED", finished);
+
+        var operation = Contract.Mapping("paths").Mapping("/operations/queue-counts").Mapping("get");
+        var description = operation.Scalar("description");
+        Assert.Contains(
+            "price_review: the orders the dashboard flags with a cost_warning (total below the minimum snapshot, " +
+            "or an authorized financial override) that have not finished - every status except " + finished,
+            description,
+            StringComparison.Ordinal);
+        Assert.Contains("UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11", description, StringComparison.Ordinal);
+
+        var queue = Contract.Mapping("components").Mapping("schemas").Mapping("OperationsQueues")
+            .Mapping("properties").Mapping("price_review");
+        var queueDescription = queue.Scalar("description");
+        Assert.Contains("that have not finished - every status except " + finished, queueDescription, StringComparison.Ordinal);
+        Assert.Contains("UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11", queueDescription, StringComparison.Ordinal);
+    }
+
+    /// <summary>The finished statuses as the SQL of both readers spells them.</summary>
+    private static string FinishedStatusesSql() =>
+        "order_row.status NOT IN (" +
+        string.Join(", ", OperationsQueuePolicy.FinishedStatuses.Select(status => $"'{status}'")) +
+        ")";
 
     private static string[] Required(YamlMappingNode schema) =>
         schema.Sequence("required").Children.Select(node => ((YamlScalarNode)node).Value!).ToArray();

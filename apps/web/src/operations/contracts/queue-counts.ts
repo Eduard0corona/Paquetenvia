@@ -35,7 +35,8 @@ const queueStatuses: Readonly<Partial<Record<OperationsQueueId, readonly OrderSt
  * Fail-closed reader: exactly the published keys, every count a non-negative
  * safe integer, a UTC timestamp, and counts that agree with each other
  * (total is the sum of by_status, the status queues are their statuses, and
- * unassigned and price_review never exceed what they are drawn from).
+ * unassigned and price_review never exceed what they are drawn from; price_review
+ * counts only orders that have not finished).
  */
 export function parseOperationsQueueCounts(value: unknown): OperationsQueueCounts {
   const object = exactObject(value, ["generated_at", "total", "by_status", "queues"]);
@@ -58,7 +59,9 @@ export function parseOperationsQueueCounts(value: unknown): OperationsQueueCount
     if (queues[queue] !== sum(statuses, byStatus)) fail();
   }
   if (queues.unassigned > byStatus.READY_FOR_PICKUP + byStatus.RESCHEDULED) fail();
-  if (queues.price_review > total) fail();
+  // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: price review counts only orders that have not
+  // finished, so it never exceeds the orders outside the "Terminadas" group.
+  if (queues.price_review > total - sum(statusesInGroup("FINISHED"), byStatus)) fail();
 
   return { generated_at: generatedAt, total, by_status: byStatus, queues };
 }

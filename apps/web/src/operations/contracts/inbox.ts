@@ -1,9 +1,12 @@
-import type {
-  OperationsDashboardFilters,
-  OperationsServiceType,
-  OrderStatus,
+import {
+  orderStatuses,
+  type OperationsDashboardFilters,
+  type OperationsDashboardOrder,
+  type OperationsServiceType,
+  type OrderStatus,
 } from "./operations-dashboard";
 import type { OperationsQueueCounts, OperationsQueueId } from "./queue-counts";
+import { statusGroup } from "./status-groups";
 import { operationsOrderHref } from "../routing/operations-routing";
 
 /**
@@ -15,15 +18,19 @@ import { operationsOrderHref } from "../routing/operations-routing";
  */
 export const inboxPath = "/ops/inbox";
 
-/** The queues listed as a table, in the order of the approved design. */
+/** Every queue is listed as a table; the tabs follow the order of the approved design. */
 export const inboxListQueueIds = [
   "unassigned",
   "needs_attention",
+  "price_review",
   "delivered_not_closed",
   "en_route",
 ] as const;
 
 export type InboxQueueId = (typeof inboxListQueueIds)[number];
+
+/** A dashboard flag that lists a queue in one query instead of one query per status. */
+export type InboxQueueFlag = "unassigned" | "priceReview";
 
 export interface InboxQueue {
   readonly id: InboxQueueId;
@@ -31,14 +38,28 @@ export interface InboxQueue {
   /** What the queue holds, in plain es-MX (table caption). */
   readonly description: string;
   readonly empty: string;
-  /**
-   * The AI-04 statuses the queue lists. A multi-status queue is one dashboard query per
-   * status, merged; a person may narrow it to one of them with a status chip.
-   */
+  /** Footer words after "Mostrando N de M", for one order and for several (for example "sin asignar"). */
+  readonly shownLabel: { readonly one: string; readonly other: string };
+  /** The AI-04 statuses the queue can list. */
   readonly statuses: readonly OrderStatus[];
-  /** Listed through the dashboard `unassigned=true` filter instead of one query per status. */
-  readonly unassignedFilter: boolean;
+  /**
+   * The dashboard flag that lists the queue (`unassigned=true`, or `price_review=true` from
+   * UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11); null for a status queue, read as one dashboard
+   * query per status and merged.
+   */
+  readonly flag: InboxQueueFlag | null;
+  /** Statuses a person may narrow the queue to with a chip; empty when the queue offers none. */
+  readonly statusChoices: readonly OrderStatus[];
 }
+
+/**
+ * UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 ("Solo órdenes activas"): an order has finished when
+ * its status is in the UI-STATUS-GROUPS-2026-10-05 group "Terminadas"; the price review list and
+ * its count keep only the others, so a finished order leaves them by itself.
+ */
+export const activeOrderStatuses: readonly OrderStatus[] = orderStatuses.filter(
+  (status) => statusGroup(status) !== "FINISHED",
+);
 
 export const inboxQueues: Readonly<Record<InboxQueueId, InboxQueue>> = {
   unassigned: {
@@ -46,55 +67,62 @@ export const inboxQueues: Readonly<Record<InboxQueueId, InboxQueue>> = {
     label: "Sin asignar",
     description: "Órdenes listas para recolección o reprogramadas que todavía no tienen repartidor.",
     empty: "No hay órdenes sin asignar.",
+    shownLabel: { one: "sin asignar", other: "sin asignar" },
     // The dashboard `unassigned` rule: READY_FOR_PICKUP or RESCHEDULED without an ACCEPTED
     // or ACTIVE assignment (the same rule as queues.unassigned).
     statuses: ["READY_FOR_PICKUP", "RESCHEDULED"],
-    unassignedFilter: true,
+    flag: "unassigned",
+    statusChoices: ["READY_FOR_PICKUP", "RESCHEDULED"],
   },
   needs_attention: {
     id: "needs_attention",
     label: "Requiere atención",
     description: "Intentos fallidos, entregas reprogramadas, devoluciones y reclamaciones abiertas.",
     empty: "No hay órdenes que requieran atención.",
+    shownLabel: { one: "que requiere atención", other: "que requieren atención" },
     statuses: ["FAILED_ATTEMPT", "RESCHEDULED", "RETURNING", "CLAIM_OPEN"],
-    unassignedFilter: false,
+    flag: null,
+    statusChoices: ["FAILED_ATTEMPT", "RESCHEDULED", "RETURNING", "CLAIM_OPEN"],
+  },
+  price_review: {
+    id: "price_review",
+    label: "Precio por revisar",
+    description:
+      "Órdenes que no han terminado con un total menor al mínimo de referencia o con envío de bajo monto " +
+      "autorizado. Al terminar, salen solas de esta lista.",
+    empty: "No hay órdenes activas con precio por revisar.",
+    shownLabel: { one: "con precio por revisar", other: "con precio por revisar" },
+    // The dashboard `price_review` rule: a cost warning on an order that has not finished (the
+    // same rule as queues.price_review). Twelve statuses would be noise as chips; service type and
+    // zone still narrow it.
+    statuses: activeOrderStatuses,
+    flag: "priceReview",
+    statusChoices: [],
   },
   delivered_not_closed: {
     id: "delivered_not_closed",
     label: "Entregadas sin cerrar",
     description: "Órdenes entregadas que todavía no se cierran.",
     empty: "No hay órdenes entregadas pendientes de cerrar.",
+    shownLabel: { one: "entregada sin cerrar", other: "entregadas sin cerrar" },
     statuses: ["DELIVERED"],
-    unassignedFilter: false,
+    flag: null,
+    statusChoices: [],
   },
   en_route: {
     id: "en_route",
     label: "En ruta",
     description: "Órdenes en tránsito o en reparto.",
     empty: "No hay órdenes en ruta.",
+    shownLabel: { one: "en ruta", other: "en ruta" },
     statuses: ["IN_TRANSIT", "DELIVERING"],
-    unassignedFilter: false,
+    flag: null,
+    statusChoices: ["IN_TRANSIT", "DELIVERING"],
   },
 };
 
-/**
- * "Precio por revisar" (queues.price_review) has no server filter and its count includes
- * finished orders, so it stays a count with a note: the inbox never fakes its list.
- */
-export const priceReviewQueue = {
-  id: "price_review",
-  label: "Precio por revisar",
-  note: "Solo conteo por ahora: su lista llegará después y el total incluye órdenes ya terminadas.",
-} as const;
-
-/** The queue tabs in the order of the approved design; price review is the count-only tile. */
-export const inboxQueueTabs: readonly (InboxQueueId | typeof priceReviewQueue.id)[] = [
-  "unassigned",
-  "needs_attention",
-  priceReviewQueue.id,
-  "delivered_not_closed",
-  "en_route",
-];
+/** The queue tabs in the order of the approved design. */
+export const inboxQueueTabs: readonly InboxQueueId[] = inboxListQueueIds;
 
 /** The server count shown on a queue tab (getOperationsQueueCounts `queues`). */
 export function inboxQueueCount(
@@ -102,6 +130,15 @@ export function inboxQueueCount(
   queue: OperationsQueueId,
 ): number | null {
   return counts === null ? null : counts.queues[queue];
+}
+
+/**
+ * Whether a row the dashboard returned for `price_review=true` follows that rule (a cost warning
+ * on an order that has not finished). A row outside it means the server ignored the filter, so the
+ * inbox fails closed instead of listing it.
+ */
+export function isPriceReviewRow(row: OperationsDashboardOrder): boolean {
+  return row.cost_warning !== null && statusGroup(row.status) !== "FINISHED";
 }
 
 const serviceTypeIds: readonly OperationsServiceType[] = ["SAME_DAY", "URGENT", "SCHEDULED_ROUTE"];
@@ -133,16 +170,15 @@ function isListQueue(value: string | null): value is InboxQueueId {
   return value !== null && (inboxListQueueIds as readonly string[]).includes(value);
 }
 
-/** Statuses a person may pick inside a queue; empty for a single-status queue. */
+/** Statuses a person may pick inside a queue; empty when the queue offers no status chip. */
 export function inboxStatusChoices(queue: InboxQueueId): readonly OrderStatus[] {
-  const statuses = inboxQueues[queue].statuses;
-  return statuses.length > 1 ? statuses : [];
+  return inboxQueues[queue].statusChoices;
 }
 
 /**
  * Reads the view from the URL. Anything unknown or malformed is dropped rather than sent: an
- * unknown queue is "Sin asignar", a status outside the queue, an unknown service type or a
- * zone that is not a canonical id is no filter.
+ * unknown queue is "Sin asignar", a status outside the queue's chips, an unknown service type or
+ * a zone that is not a canonical id is no filter.
  */
 export function parseInboxView(search: { get(name: string): string | null }): InboxView {
   const queueValue = search.get("queue");
@@ -188,11 +224,36 @@ export function inboxQueries(view: InboxView): readonly OperationsDashboardFilte
     ...(view.serviceType === null ? {} : { serviceType: view.serviceType }),
     ...(view.zoneId === null ? {} : { deliveryZoneId: view.zoneId }),
   };
-  if (queue.unassignedFilter) {
-    return [{ ...shared, unassigned: true, ...(view.status === null ? {} : { status: view.status }) }];
-  }
+  const status = view.status === null ? {} : { status: view.status };
+  if (queue.flag === "unassigned") return [{ ...shared, unassigned: true, ...status }];
+  if (queue.flag === "priceReview") return [{ ...shared, priceReview: true, ...status }];
   const statuses = view.status === null ? queue.statuses : [view.status];
-  return statuses.map((status) => ({ ...shared, status }));
+  return statuses.map((value) => ({ ...shared, status: value }));
+}
+
+/**
+ * The line under the table, as in the approved design ("Mostrando 4 de 6 sin asignar ·
+ * seleccionadas: 0"). "de M" is the queue's server count, so it is said only without chips (the
+ * counts never apply them) and while it is not below the rows already shown; the selection part
+ * appears only when the table offers selection.
+ */
+export function inboxFooterText(input: {
+  readonly queue: InboxQueueId;
+  readonly shown: number;
+  readonly count: number | null;
+  readonly filtered: boolean;
+  readonly hasMore: boolean;
+  readonly selected: number | null;
+}): string {
+  const words = inboxQueues[input.queue].shownLabel;
+  const ofCount = !input.filtered && input.count !== null && input.count >= input.shown;
+  const last = ofCount ? (input.count ?? input.shown) : input.shown;
+  const label = last === 1 ? words.one : words.other;
+  const shown = ofCount
+    ? `Mostrando ${input.shown} de ${input.count} ${label}`
+    : `Mostrando ${input.shown} ${label}${input.filtered ? " con los filtros elegidos" : ""}` +
+      (input.hasMore ? "; hay más por cargar" : "");
+  return input.selected === null ? shown : `${shown} · seleccionadas: ${input.selected}`;
 }
 
 /** Query parameter of the order detail that remembers the inbox view to return to. */

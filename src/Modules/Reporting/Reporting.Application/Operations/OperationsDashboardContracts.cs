@@ -39,6 +39,11 @@ public static class OperationsDashboardVocabulary
         value is not null && ServiceTypes.Contains(value, StringComparer.Ordinal);
 }
 
+/// <param name="PriceReview">
+/// UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: <c>true</c> keeps only the orders of the price review queue, those
+/// with a cost warning that have not finished (<see cref="OperationsQueuePolicy.IsPriceReview"/>); <c>false</c> or
+/// absent applies no filter, exactly like <paramref name="Unassigned"/>.
+/// </param>
 public sealed record OperationsDashboardFilters(
     Guid? OrderId,
     string? Status,
@@ -50,6 +55,7 @@ public sealed record OperationsDashboardFilters(
     DateTimeOffset? CreatedFrom,
     DateTimeOffset? CreatedTo,
     bool? Unassigned,
+    bool? PriceReview,
     OperationsDashboardCursor? Cursor);
 
 public sealed record OperationsDashboardRequest(

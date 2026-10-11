@@ -85,6 +85,7 @@ routes:
     screen_contract: work_inbox
     decisions:
     - UI-PHASE3-INBOX-2026-10-10
+    - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
   # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the app shell top bar offers "Buscar guía" to the roles that open the
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
@@ -339,13 +340,17 @@ screen_contracts:
     release: MVP-1
     route: /ops/inbox
     decision: UI-PHASE3-INBOX-2026-10-10
-    decision_amendment: UI-PHASE3-INBOX-TOTAL-2026-10-10
+    decision_amendments:
+    - UI-PHASE3-INBOX-TOTAL-2026-10-10
+    - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
     authority: REST API + PostgreSQL
     sources:
       counts: GET /operations/queue-counts (getOperationsQueueCounts)
-      list: GET /operations/dashboard (OBS-001 read model, ADR-OBS-001, not declared in AI-05) with its existing
-        filters only - unassigned, status, service_type, delivery_zone_id and cursor
-      assign: the /ops/orders/:id assignment_picker sources (listAssignableDrivers, assignDriver)
+      list: GET /operations/dashboard (OBS-001 read model, ADR-OBS-001, not declared in AI-05) with its filters only -
+        unassigned, price_review (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11), status, service_type,
+        delivery_zone_id and cursor
+      assign: the /ops/orders/:id assignment_picker sources (listAssignableDrivers, assignDriver), for one order and
+        for bulk_assignment
     roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
     excluded_roles: VIEWER and every other role, exactly as for the operations dashboard and the queue counts; the
       shell does not offer the inbox to them and the API answers 403
@@ -359,8 +364,12 @@ screen_contracts:
     - Sin asignar (queues.unassigned) - dashboard unassigned=true
     - Requiere atención (queues.needs_attention) - FAILED_ATTEMPT, RESCHEDULED, RETURNING and CLAIM_OPEN, one dashboard
       query per status
-    - Precio por revisar (queues.price_review) - count only, with a note that its list comes later and that the count
-      includes finished orders
+    # UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 (project owner, 2026-10-11, "Solo órdenes activas (Recommended)"):
+    # list and count hold only the orders that have not finished; a finished order leaves them by itself.
+    - Precio por revisar (queues.price_review) - dashboard price_review=true in one query, the orders with a
+      cost_warning that have not finished, every status except the UI-STATUS-GROUPS-2026-10-05 group Terminadas
+      (DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED and CANCELLED); nobody marks anything; no status chip; a row outside
+      that rule fails the read closed
     - Entregadas sin cerrar (queues.delivered_not_closed) - dashboard status=DELIVERED
     - En ruta (queues.en_route) - IN_TRANSIT and DELIVERING, one dashboard query per status
     counts: each queue shows its getOperationsQueueCounts value, which covers every order of the organization and never
@@ -368,13 +377,16 @@ screen_contracts:
     merge: the queries of one queue are merged newest first by updated_at and order id, the dashboard order; a row is
       shown only once every query that still has pages reached it, so "Cargar más" never places an older row above a
       shown one nor skips one
-    filters: chips are server filters of the dashboard queries only - one status of a multi-status queue, service type
-      and delivery zone (zones seen in the loaded rows); "Limpiar filtros" removes them; search stays the shell's
-      "Buscar guía" (exact tracking number)
+    filters: chips are server filters of the dashboard queries only - one status of a multi-status queue (Precio por
+      revisar offers none), service type and delivery zone (zones seen in the loaded rows); "Limpiar filtros" removes
+      them; search stays the shell's "Buscar guía" (exact tracking number)
     url_state: queue, status, service_type and zone live in the /ops/inbox query; a row opens /ops/orders/:id carrying
       the view, and the detail offers "Volver a la bandeja" to that canonical inbox URL only
     table:
       columns:
+      - Selección (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11; present when a loaded row can be selected - a checkbox
+        only on rows with unassigned_alert, "Seleccionar todas" in the header for the loaded selectable rows, at most
+        20 per batch)
       - Guía (public_id, link to the order)
       - Estado (exact AI-04 label with its status-group color; "Precio por revisar" when cost_warning is set)
       - Destino (delivery zone name; the read model carries no address and addresses stay out of lists)
@@ -385,25 +397,66 @@ screen_contracts:
         floating-point value; UI-PHASE3-INBOX-TOTAL-2026-10-10)
       states: loading, empty per queue, error keeping the rows ("No fue posible actualizar la bandeja."), no session
         and access unavailable
+      footer: '"Mostrando N de M <cola> · seleccionadas: K" as in the approved design - M is the queue''s server count,
+        said only without chips and while it is not below N; the selection part only with the selection column'
     actions:
     - open_order (the guide, "Abrir" or a click on the row)
     - assign_own ("Asignar" only on rows with unassigned_alert, the /ops/orders/:id assignment_picker with the same
-      list, integer cents and confirmation naming driver and cost; the inbox and its counts are read again afterwards)
+      list, integer cents and confirmation naming driver and cost; the inbox and its counts are read again afterwards;
+      unavailable while a bulk assignment is open)
+    - bulk_assign_own ("Asignar seleccionadas…"; see bulk_assignment)
     - open_positions ("Mapa de posiciones" opens /ops/dashboard in its positions view)
+    # UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 (project owner, 2026-10-11, "Costo por orden (Recommended)"): the
+    # approved design's "Asignar seleccionadas…", always with a preview before anything is sent.
+    bulk_assignment:
+      decision: UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
+      sources:
+        list: GET /orders/{orderId}/assignable-drivers (listAssignableDrivers) for every order of the batch, every
+          page, one order after another
+        assign: POST /orders/{orderId}/assignments (assignDriver, assignment_type OWN, route_id null) for one order
+          after another
+      flow: a sequence of the existing single-order operations, never a new cross-module flow (AI-13 §4) and never a
+        status change; the backend and RLS decide every assignment again
+      selection: only rows with unassigned_alert; at most 20 orders per batch and the screen says so; the batch is the
+        selection taken when "Asignar seleccionadas…" is pressed, and the selection is frozen while the batch is open
+      drivers: only drivers eligible for every order of the batch can be picked (DRV- reference, vehicle and
+        deliveries in progress; no name, phone or id); every other driver is listed with the orders that keep it out
+        and the es-MX reason; an order whose list cannot be read says why and can be read again or taken out of the
+        batch
+      preview: one row per order before anything is sent - Guía, Destino (delivery zone), Total (IVA incluido) and
+        Costo de la asignación (MXN) typed for that order, empty and required, parsed to integer cents (int64) without
+        floating point, zero allowed as in the assignment_picker; nothing is prefilled until the tariff table exists;
+        the sum of the costs in integer cents (a sum beyond a safe integer is refused)
+      confirmation: required (ConfirmDialog) naming the driver reference, the number of orders and the sum of the
+        costs
+      idempotency: one Idempotency-Key per order, kept with the same payload until the server answers definitively and
+        reused when that order is sent again
+      execution: one order after another; a 409 or 404 answers for that order only and the next order is sent; any
+        other failure (session, role, MFA, network, server or an unexpected answer) stops the batch and the rest stay
+        "Sin enviar"; "Reintentar las pendientes" resends, with the same keys and payloads, only the orders left
+        without an answer by a network or server failure
+      results: every row shows its own result - assigned to the driver, or the es-MX message of its
+        DispatchAssignmentConflictProblem code (DRIVER_INELIGIBLE, DRIVER_DOCUMENT_EXPIRED, CONFLICT, INVALID_REQUEST)
+        or of the uniform 404; a summary says how many were assigned; a partial failure is never hidden
+      recovery: the inbox queue and the counts are read again after every run; changing the queue keeps the batch
+        open, a session or organization change drops it
     recovery:
     - load, view change, refresh, assignment, realtime event (250 ms debounce), reconnect, visibility and 30 s polling
       read the REST queries and the counts again; a reconnect resynchronizes from that read
     - optimistic UI is never authoritative; a 401 or 403 clears the rows and stops the realtime hub
     privacy:
-    - no browser persistence and no client logging; an organization switch clears rows, zones and counts
+    - no browser persistence and no client logging; an organization switch clears rows, zones, counts, the selection
+      and the batch
     - no internal identifier or personal data in the table; its only amount is the order total, never an assignment
-      cost, margin, COD amount or tariff
+      cost, margin, COD amount or tariff; the bulk assignment preview adds only the assignment cost the dispatcher
+      types for each order
     forbidden:
-    - bulk status change without preview (this version offers no bulk action)
+    - bulk status change without preview (the only bulk action, bulk_assignment, always shows its preview and a
+      confirmation first)
     - a queue, count or chip computed by filtering loaded rows
     not_supported:
-    - Precio por revisar list - needs a server filter for cost_warning
-    - bulk actions - a later change, always with a preview first
+    - '"Agregar a ruta…" in bulk of the approved design - addRouteStop takes only orders already assigned (OWN) to the
+      route''s driver and no inbox queue lists them; a later change'
     - Órdenes menu item of the approved menu - no screen yet (Repartidores is /ops/drivers, UI-PHASE3-DRIVERS-2026-10-11)
   route_planner:
     release: MVP-1

@@ -40,6 +40,35 @@ public sealed class OperationsDashboardImplementationContractTests
     }
 
     [Fact]
+    public void Price_review_filter_is_bound_once_and_evaluated_inside_the_projection_query()
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: one more filter of the same undeclared read model (ADR-OBS-001),
+        // a boolean like unassigned, applied in the CTE of the single RLS-scoped projection command.
+        var endpoint = Read(
+            "src", "Modules", "Reporting", "Reporting.Endpoints",
+            "OperationsDashboardEndpoints.cs");
+        // Listed once among the known parameters (each may appear once in the query) and bound once.
+        Assert.Equal(1, Count(endpoint, "        \"price_review\",\n"));
+        Assert.Contains("!TryBoolean(query, \"price_review\", out var priceReview)", endpoint, StringComparison.Ordinal);
+
+        var reader = Read(
+            "src", "Modules", "Reporting", "Reporting.Infrastructure",
+            "Operations", "PostgreSqlOperationsDashboardReader.cs");
+        Assert.Contains("@price_review::boolean IS NULL", reader, StringComparison.Ordinal);
+        Assert.Contains("OR @price_review = false", reader, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddNullable(command, \"price_review\", NpgsqlDbType.Boolean, filters.PriceReview);",
+            reader,
+            StringComparison.Ordinal);
+        // The filter sits in the page CTE, before the ordering and the limit, so the cursor pages the filtered rows.
+        Assert.True(
+            reader.IndexOf("@price_review::boolean IS NULL", StringComparison.Ordinal) <
+            reader.IndexOf("ORDER BY order_row.updated_at DESC, order_row.id DESC", StringComparison.Ordinal));
+        // A row outside the queue rule fails closed instead of reaching the list.
+        Assert.Contains("OperationsQueuePolicy.IsPriceReview(item.Status, item.CostWarning)", reader, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Response_DTOs_are_exact_and_privacy_minimized()
     {
         AssertJsonProperties<OperationsDashboardResponse>(
