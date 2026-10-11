@@ -285,7 +285,7 @@ export function OperationsBulkAssignment({
       )}
       {state.phase === "running" && (
         <p className="live" aria-live="polite">
-          Asignando: {sent} de {count} con respuesta…
+          Asignando: {sent} de {count} con respuesta… No salgas de la bandeja hasta que termine.
         </p>
       )}
       {state.message !== null && (
