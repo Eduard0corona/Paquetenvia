@@ -901,8 +901,11 @@ function New-SeedOrder([string] $Alias) {
 }
 
 function Move-SeedOrder($Order, [string] $Alias, [string] $Status, [int] $ExpectedVersion) {
+    # AI-04 restricted_goods_check: DRAFT -> CONFIRMED carries the dispatcher's restricted-goods acknowledgement as
+    # transition metadata, as the web app and OPS-001 send it (ORD-002-API-GUARD-REGISTRY); other targets take none.
+    $metadata = if ($Status -eq "CONFIRMED") { @{ restricted_goods_acknowledged=$true } } else { @{} }
     return Invoke-ApiPost "/api/v1/orders/$($Order.id)/transitions" "local-dispatcher-mfa" "local-seed-$Alias-$($Status.ToLowerInvariant())-v1" @{
-        target_status=$Status; reason="LOCAL_SYNTHETIC_SEED"; expected_version=$ExpectedVersion; metadata=@{}
+        target_status=$Status; reason="LOCAL_SYNTHETIC_SEED"; expected_version=$ExpectedVersion; metadata=$metadata
     }
 }
 
