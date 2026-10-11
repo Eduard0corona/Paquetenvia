@@ -15,6 +15,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_session_executor NOLOGIN BYPASSRLS; EXCEPTION
 DO $$ BEGIN CREATE ROLE paqueteria_master_data_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_auto_close_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -425,6 +426,24 @@ GRANT INSERT (id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,a
 GRANT SELECT (org_id,action,entity_type,entity_id,payload_redacted) ON platform.audit_logs TO paqueteria_operator_outbox_executor;
 GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_operator_outbox_executor;
 
+-- Automatic close of delivered orders is a separate security capability (ORD-AUTO-CLOSE-2026-10-10, project owner:
+-- "Sí, que se cierre sola"; ADR-025 and ADR-034 pattern). A Worker job closes every DELIVERED order whose CLOSED
+-- guards hold through the ORD-002 transition, in a tenant transaction of the owner organization only
+-- (paqueteria_worker, set_config(..., true) after BEGIN), recorded with no actor and the reason "Cierre automático";
+-- the guards are evaluated only by that transition. The Worker is NOBYPASSRLS, so it cannot know which organizations
+-- to visit: paqueteria_auto_close_executor owns the only cross-tenant step,
+-- security.list_auto_close_owner_organizations(uuid,integer), installed by the Orders migration lane
+-- (20261010000100_AddOrderAutoCloseDiscovery) after this baseline, STABLE SECURITY DEFINER with
+-- search_path=pg_catalog, orders, pg_temp, EXECUTE revoked from PUBLIC and granted only to paqueteria_worker. It
+-- validates a limit of 1..1000 and returns, in ascending order and strictly after the given organization, only the
+-- owner organization identifiers that hold at least one DELIVERED order: no order identifier, status, amount or guard
+-- input, no write and no decision. The executor has no INSERT, UPDATE or DELETE, no outbox, bootstrap, lifecycle,
+-- cleanup, registration, session, master data or purge right, no USAGE on schema security and no other grant. The
+-- function's rollback drops only it; the role and these grants then stay inert.
+REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker;
+GRANT USAGE ON SCHEMA orders TO paqueteria_auto_close_executor;
+GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_executor;
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
@@ -457,3 +476,6 @@ GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload
 -- 29. paqueteria_operator_outbox_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime or bootstrap role and, once the Dispatch DSP-OPERATOR-OWNER-OUTBOX lane is recorded, owns only security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamptz,timestamptz) and security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamptz). The role and its grants persist after that lane is rolled back: AI-18 declares them, and without the functions they are inert.
 -- 30. paqueteria_operator_outbox_executor holds only USAGE on schemas identity, organizations, orders, dispatch and platform and exactly the column grants above, none grantable: no table-wide grant, no UPDATE or DELETE, no CREATE, no other table, no outbox lifecycle, bootstrap, lifecycle, cleanup, registration, session, master data or purge privilege.
 -- 31. both operator outbox functions are SECURITY DEFINER with search_path=pg_catalog, pg_temp, contain no dynamic SQL and no RETURNING, and only paqueteria_app may EXECUTE them; PUBLIC, paqueteria_worker and paqueteria_bootstrap may not.
+-- 32. paqueteria_auto_close_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime or bootstrap role and, once the Orders ORD-AUTO-CLOSE lane is recorded, owns only security.list_auto_close_owner_organizations(uuid,integer). The role and its grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
+-- 33. paqueteria_auto_close_executor holds only USAGE on schema orders and SELECT(owner_org_id,status) on orders.orders, none grantable: no table-wide grant, no INSERT, UPDATE or DELETE, no CREATE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration, session, master data or purge privilege.
+-- 34. security.list_auto_close_owner_organizations(uuid,integer) is STABLE SECURITY DEFINER with search_path=pg_catalog, orders, pg_temp, contains no dynamic SQL and no RETURNING, accepts only a bounded limit, returns only owner organization identifiers, and only paqueteria_worker may EXECUTE it; PUBLIC, paqueteria_app and paqueteria_bootstrap may not.
