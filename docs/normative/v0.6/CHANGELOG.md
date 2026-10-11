@@ -1,5 +1,21 @@
 # Changelog
 
+## Correo del piloto: se mantiene Azure Communication Services (NTF-EMAIL-ACS-PILOT-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner a "Correo: Microsoft anunció el 23 de septiembre de 2026 que retira Azure
+  Communication Services el 30 de septiembre de 2028. [...] ¿Qué hacemos con el correo?": "Mantener ACS en el piloto
+  (Recommended)" ("El código ya está listo. Creas el recurso pronto, porque Microsoft puede cerrar las altas nuevas en
+  cualquier momento, y cambiamos de proveedor antes de pasar a producción."); registrada en `decision-log.md`.
+- El piloto sigue con el correo de GATE-004-CHANNELS por ACS; `AzureCommunicationEmailProvider` no cambia y el canal de
+  correo sigue `Disabled` hasta que cierre GATE-004.
+- Fuente (Microsoft Learn, guía de retiro de ACS, actualizada el 2026-10-08): desde el 2026-10-23 Microsoft empieza a
+  limitar las altas de clientes sin un recurso de ACS creado antes de esa fecha. La guía del owner (sección A §8)
+  explica cómo crear antes de esa fecha los recursos Communication Services y Email Communication Services en la
+  suscripción del piloto, sin cambiar plantillas, workflow ni código.
+- AI-10 `release_gates.PRODUCTION` agrega la condición de dejar ACS para el correo antes de producción. El proveedor
+  que lo reemplace es una decisión pendiente del owner.
+- Sin cambios en API, AI-04, AI-05, AI-06, AI-18, roles, permisos ni migraciones. GATE-004 sigue abierto.
+
 ## Sin enlace de soporte en el seguimiento público (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11) — 2026-10-11
 
 - Respuesta literal del project owner: "Quitarlo por ahora (Recommended)"; registrada, con su pregunta, en
