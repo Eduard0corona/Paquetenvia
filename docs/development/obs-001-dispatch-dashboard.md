@@ -129,7 +129,7 @@ Dashboard, órdenes, filtros, timeline, organización, referencias, posiciones,
 bearer y namespace viven sólo en memoria. No se crean cookies ni se usa
 localStorage, sessionStorage, IndexedDB o Cache API para operaciones.
 
-El Service Worker usa `paquetenvia-driver-shell-v5`. `/ops`, APIs de operations,
+El Service Worker usa `paquetenvia-driver-shell-v6`. `/ops`, APIs de operations,
 orders y contextos, OperationsHub, Authorization y `access_token` son
 network-only. El shell Driver offline se conserva.
 

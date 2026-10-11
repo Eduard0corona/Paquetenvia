@@ -14,6 +14,11 @@ import {
   isOfflineOperationExpired,
   isOfflineOperationExpiredCode,
 } from "./offline-operation-age";
+import {
+  codRejectionCodeToKeep,
+  transitionRejectionCodeToKeep,
+  type DriverRejectionCode,
+} from "./rejection-codes";
 
 export const DriverSyncBackoffMilliseconds = [
   1_000, 2_000, 5_000, 10_000, 30_000,
@@ -218,7 +223,8 @@ export class DriverSyncScheduler {
     signal: AbortSignal,
   ): Promise<void> {
     let current = operation;
-    let failurePhase: "proof" | "transition" = "transition";
+    let failurePhase: "proof" | "transition" | "cod" =
+      operation.kind === "COD_COLLECTION" ? "cod" : "transition";
     this.telemetry.syncPhaseChanged(current.status);
     try {
       const initialConfirmation = await this.confirmationByRest(current, signal);
@@ -249,23 +255,37 @@ export class DriverSyncScheduler {
       current = await this.persist(current, {
         status: "PROCESSING",
         safeError: null,
+        rejectionCode: null,
       });
-      if (isProofOperation(current)) {
-        try {
-          current = await this.processProof(current, signal);
-        } catch (error) {
-          failurePhase = "proof";
-          throw error;
+      if (current.kind === "COD_COLLECTION") {
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the cash is recorded with
+        // its own key; FIFO per order keeps it ahead of the delivery.
+        const receipt = await this.options.api.recordCodCollection(current, signal);
+        if (
+          receipt.orderId !== current.orderId ||
+          receipt.amountCents !== current.cod?.amountCents ||
+          (receipt.status !== "RECORDED" && receipt.status !== "RECONCILED")
+        ) {
+          throw new DriverSyncApiError("invalid-contract");
         }
-        if (current.status !== "PROCESSING") return;
-      }
-      const receipt = await this.options.api.transitionOrder(current, signal);
-      if (
-        receipt.id !== current.orderId ||
-        receipt.status !== current.targetStatus ||
-        receipt.version < current.expectedVersion + 1
-      ) {
-        throw new DriverSyncApiError("invalid-contract");
+      } else {
+        if (isProofOperation(current)) {
+          try {
+            current = await this.processProof(current, signal);
+          } catch (error) {
+            failurePhase = "proof";
+            throw error;
+          }
+          if (current.status !== "PROCESSING") return;
+        }
+        const receipt = await this.options.api.transitionOrder(current, signal);
+        if (
+          receipt.id !== current.orderId ||
+          receipt.status !== current.targetStatus ||
+          receipt.version < current.expectedVersion + 1
+        ) {
+          throw new DriverSyncApiError("invalid-contract");
+        }
       }
       current = await this.persist(current, {
         status: "AWAITING_REST_CONFIRMATION",
@@ -409,7 +429,7 @@ export class DriverSyncScheduler {
     operation: DriverOfflineOperation,
     error: unknown,
     signal: AbortSignal,
-    phase: "proof" | "transition",
+    phase: "proof" | "transition" | "cod",
   ): Promise<void> {
     if (!(error instanceof DriverSyncApiError)) {
       await this.defer(operation, "RETRY_WAIT");
@@ -451,9 +471,34 @@ export class DriverSyncScheduler {
       this.telemetry.conflictRaised("session-expired");
       return;
     }
+    if (
+      phase === "cod" &&
+      error.category === "conflict" &&
+      error.publicCode === "COD_ALREADY_RECORDED" &&
+      (await this.confirmationByRest(operation, signal).catch(
+        () => "pending" as const,
+      )) === "confirmed"
+    ) {
+      // Someone (for example dispatch) already recorded exactly this cash:
+      // the collection is satisfied, so it leaves the queue and the delivery
+      // behind it may proceed.
+      await this.options.queue.deleteOperation(
+        this.options.partition,
+        operation.id,
+      );
+      this.telemetry.syncCompleted(operation.kind);
+      return;
+    }
     await this.markAttentionAndBlock(
       operation,
       phase === "proof" ? "EVIDENCE_REJECTED" : "VERSION_CONFLICT",
+      error.category !== "conflict"
+        ? null
+        : phase === "cod"
+          ? codRejectionCodeToKeep(error.publicCode)
+          : phase === "transition"
+            ? transitionRejectionCodeToKeep(error.publicCode)
+            : null,
     );
   }
 
@@ -508,6 +553,7 @@ export class DriverSyncScheduler {
   private async markAttentionAndBlock(
     operation: DriverOfflineOperation,
     safeError: "VERSION_CONFLICT" | "EVIDENCE_REJECTED",
+    rejectionCode: DriverRejectionCode | null = null,
   ): Promise<void> {
     const operations = await this.options.queue.listOperations(
       this.options.partition,
@@ -520,6 +566,7 @@ export class DriverSyncScheduler {
         await this.persist(candidate, {
           status: "NEEDS_ATTENTION",
           safeError,
+          rejectionCode,
         });
       } else if (found) {
         await this.persist(candidate, { status: "BLOCKED" });
@@ -535,6 +582,14 @@ export class DriverSyncScheduler {
     const stops = await this.options.refreshStops(signal);
     const stop = stops.find((candidate) => candidate.order_id === operation.orderId);
     if (!stop) return "missing";
+    if (operation.kind === "COD_COLLECTION") {
+      // REST confirms a collection once the stop reports exactly its cash as
+      // recorded (the DELIVERED guard condition); the status never changes.
+      return stop.cod?.recorded === true &&
+        stop.cod.expected.amount_cents === operation.cod?.amountCents
+        ? "confirmed"
+        : "pending";
+    }
     return (
       stop.status === operation.targetStatus &&
       stop.aggregate_version >= operation.expectedVersion + 1

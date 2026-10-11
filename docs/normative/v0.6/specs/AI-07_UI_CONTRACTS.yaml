@@ -192,10 +192,16 @@ routes:
     - external_driver
     release: MVP-0
     offline: true
+  # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-09 "avanza con la fase 3"; 2026-10-11 "Sí, como
+  # el diseño (Recommended)", "Google Maps (Recommended)" and "Solo confirma el monto (Recommended)"): the stop shows
+  # what the driver needs at the door, "Cómo llegar" opens Google Maps and the driver records the cash collected
+  # (screen_contracts.driver_stop). The backend and RLS remain the barrier.
   /driver/stops/:id:
     roles:
     - assigned_driver
     release: MVP-0
+    decisions:
+    - UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
     actions:
     - check_in
     - pickup_proof
@@ -203,6 +209,8 @@ routes:
     - delivery_proof
     - fail_attempt
     - incident
+    - navigate
+    - cod_collection
   /track/:token:
     roles:
     - public
@@ -502,7 +510,68 @@ screen_contracts:
     privacy:
     - masked phone or relay
     - no client account history
+    - contact name only - the full name at a pickup, the short name at a delivery or return
+      (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)
     completion: cannot complete without required POD unless supervisor override ID
+    # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Sí, como el diseño (Recommended)": "Solo
+    # de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o al cerrar sesión. Con
+    # datos de prueba hasta cerrar GATE-007."): what the driver sees of each assigned stop and how long the phone
+    # keeps it.
+    details:
+      decision: UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      source: GET /driver/me/stops (listMyStops, DriverStop)
+      list:
+      - a header with the number of stops and the cash still to collect with its total ("5 paradas · 1 cobro
+        pendiente $1,250.00")
+      - each stop by position and action ("3 · Entregar"), "Siguiente" on the first one and "Pendiente" on the rest,
+        zone and contact name, service window and "Cobrar $X" while its cash is pending
+      detail:
+      - '"Entregar a M. López" ("Recoger con Farmacia Las Quintas" at a pickup, "Devolver a" a return), the tracking
+        number and "Cómo llegar"'
+      - full address with references, zone, service window and the cash step
+      # Project owner, 2026-10-11, "Completo en recolección (Recommended)": "En recolección se ve el nombre completo
+      # del contacto, como en tu diseño; en entrega, el nombre corto ("M. López")."
+      contact_name: computed by the server - a PICKUP stop carries the full contact name (contact_full_name,
+        "Farmacia Las Quintas"); DELIVERY and RETURN stops carry only the short name (contact_short_name, the initial
+        of the first word, a period and the last word, "María López Pérez" becomes "M. Pérez"); never the full name of
+        a delivery or return contact, the phone or any other contact datum
+      service_window: shown in America/Mazatlan time ("13:00–15:00"), never the browser's zone
+      money: every amount comes from the server in integer cents (int64) and is formatted without floating point
+      retention:
+      - only the requesting driver's ACCEPTED or ACTIVE assignments; another driver's or organization's stop is
+        never sent
+      - the phone keeps the details only inside the latest server snapshot of its session; a stop the server no
+        longer returns leaves the phone with the next snapshot
+      - logging out wipes every saved snapshot of the phone before leaving; 401 or 403 wipes the session's snapshot
+      - the offline queue survives a logout and carries no address or contact datum
+      - synthetic data only until GATE-007 closes
+      failure: a protected value that cannot be read fails the whole response (503); the app keeps showing the saved
+        snapshot as offline data and never shows partial details
+    # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Google Maps (Recommended)": "Funciona
+    # igual en Android y iPhone. Si no tiene la app, abre la página web de Google Maps."); GATE-003 scope: the system
+    # never calculates routes.
+    navigation:
+      decision: UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      label: Cómo llegar
+      opens: https://www.google.com/maps/search/?api=1&query=<latitude>,<longitude> of the stop, in a new tab (the
+        Google Maps app when the phone has it, its web page otherwise)
+      server_request: none
+      routing: none; no Directions or Routes request and no route calculation
+    # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Solo confirma el monto (Recommended)":
+    # "Toca "Recibí $1,250.00" y el sistema pone la referencia (guía y hora). Si no le pagan, reporta "No pagó el
+    # cobro"."): the cash collected at the door, recorded by the driver who holds the assignment.
+    cod_collection:
+      decision: UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      shown_when: a DELIVERY stop in DELIVERING whose DriverStop.cod is not recorded
+      action: '"Recibí $1,250.00" and a confirmation that names the amount; the driver types nothing'
+      request: POST /orders/{orderId}/cod-records (recordCodCollection) with amount_cents equal to cod.expected and
+        the reference "<tracking number> <phone local ISO-8601 time with offset>" (at most 200 characters)
+      offline: queued like the other stop operations, one Idempotency-Key per collection reused on every retry, and
+        synchronized before the delivery of the same order
+      delivery: '"Confirmar entrega" stays disabled until the cash is recorded or saved on the phone; the server still
+        refuses DELIVERED without the recorded cash (COD_NOT_RECORDED)'
+      rejections: each finance conflict code and COD_NOT_RECORDED has its own Spanish message; no code is shown
+      not_paid: '"No pagó el cobro" is reported through the failed attempt (fail_attempt), outside this change'
   external_driver_offers:
     release: MVP-1
     host_route: /driver/stops

@@ -14,6 +14,7 @@ namespace Dispatch.Infrastructure.Stops;
 
 public sealed class PostgreSqlDriverStopsQuery(
     TenantTransactionContext<DispatchDbContext> transactionContext,
+    IDriverStopLocationReader locationReader,
     ILogger<PostgreSqlDriverStopsQuery> logger) : IDriverStopsQuery
 {
     private static readonly Meter Meter = new("Paqueteria.Dispatch");
@@ -30,7 +31,7 @@ public sealed class PostgreSqlDriverStopsQuery(
             throw new DriverStopsForbiddenException();
         }
 
-        var result = await transactionContext.ExecuteAsync(
+        var rows = await transactionContext.ExecuteAsync(
             new TenantDatabaseExecutionContext(actorId, [organizationId]),
             async (dbContext, token) =>
             {
@@ -56,6 +57,13 @@ public sealed class PostgreSqlDriverStopsQuery(
                     token);
             },
             cancellationToken);
+
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the protected address and contact name are read in one batch
+        // only after the tenant transaction closed, and only for the requesting driver's own stops. Any value that
+        // cannot be read fails the whole response closed (503); nothing personal is logged.
+        IReadOnlyList<DriverStopResult> result = rows.Count == 0
+            ? []
+            : await ReadDetailsAsync(rows, cancellationToken);
 
         StopsCount.Record(result.Count);
         logger.LogInformation(
@@ -93,7 +101,66 @@ public sealed class PostgreSqlDriverStopsQuery(
         return result is Guid id ? id : null;
     }
 
-    private static async Task<IReadOnlyList<DriverStopResult>> ReadStopsAsync(
+    private async Task<IReadOnlyList<DriverStopResult>> ReadDetailsAsync(
+        IReadOnlyList<StopRow> rows,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<DriverStopLocationText> texts;
+        try
+        {
+            texts = await locationReader.ReadAsync(
+                rows.Select(row => row.Location.Protected).ToArray(),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (DriverStopsPiiUnavailableException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new DriverStopsPiiUnavailableException(exception);
+        }
+
+        if (texts.Count != rows.Count)
+        {
+            throw new DriverStopsPiiUnavailableException();
+        }
+
+        var stops = new DriverStopResult[rows.Count];
+        for (var index = 0; index < rows.Count; index++)
+        {
+            var row = rows[index];
+            if (!DriverStopAddressText.TrySplit(texts[index].AddressText, out var address, out var references))
+            {
+                throw new DriverStopsPiiUnavailableException();
+            }
+
+            // The owner's answer "Completo en recolección": the full name on a PICKUP stop, the short name on
+            // DELIVERY and RETURN stops; the other form stays null.
+            var contact = DriverStopContactName.ForStop(row.StopKind, texts[index].ContactName);
+            stops[index] = new DriverStopResult(
+                row.OrderId,
+                row.AggregateVersion,
+                row.OrderPublicId,
+                row.StopKind.ToContractValue(),
+                row.Status,
+                row.Location.AddressSummary,
+                contact.ShortName,
+                contact.FullName,
+                row.Location.ZoneName,
+                row.ServiceWindow,
+                row.Cod,
+                new DriverStopNavigationResult(row.Location.Latitude, row.Location.Longitude, address, references));
+        }
+
+        return stops;
+    }
+
+    private static async Task<IReadOnlyList<StopRow>> ReadStopsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         Guid driverId,
@@ -107,6 +174,11 @@ public sealed class PostgreSqlDriverStopsQuery(
         // the DELIVERY stop after it, the RETURN stop while returning. The stop type comes from
         // DriverStopPolicy, so the sequence is chosen after projection rather than re-derived in
         // SQL. Unrouted assignments keep their assignment order after the routed ones.
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: both locations are read with their protected
+        // address and contact name, point and operating zone, and the location the stop heads to is
+        // chosen after projection too. The COD is "recorded" exactly when the DELIVERED guard
+        // if_cod_expected_then_cod_status_recorded_or_reconciled would hold. Everything is read in
+        // this tenant transaction under RLS; nothing is decrypted here.
         const string sql =
             """
             SELECT o.id,o.version,o.public_id,o.status,origin.address_summary,destination.address_summary,
@@ -116,11 +188,25 @@ public sealed class PostgreSqlDriverStopsQuery(
                        AND e.event_type='ORDER_STATUS_CHANGED' AND e.payload->>'new_status'='PICKED_UP'
                    ) AS custody_acquired,
                    r.id,r.scheduled_for,r.created_at,
-                   stop.pickup_sequence,stop.delivery_sequence,stop.return_sequence,stop.any_sequence
+                   stop.pickup_sequence,stop.delivery_sequence,stop.return_sequence,stop.any_sequence,
+                   origin.id,origin.owner_org_id,origin.pii_key_version,origin.address_ciphertext,
+                   origin.contact_name_ciphertext,public.ST_Y(origin.point)::double precision,
+                   public.ST_X(origin.point)::double precision,origin_zone.name,
+                   destination.id,destination.owner_org_id,destination.pii_key_version,destination.address_ciphertext,
+                   destination.contact_name_ciphertext,public.ST_Y(destination.point)::double precision,
+                   public.ST_X(destination.point)::double precision,destination_zone.name,
+                   o.service_window_from,o.service_window_to,o.cod_expected_cents,
+                   EXISTS (
+                     SELECT 1 FROM finance.cod_transactions c
+                     WHERE c.order_id=o.id AND c.status IN ('RECORDED','RECONCILED')
+                       AND c.amount_cents=o.cod_expected_cents
+                   ) AS cod_recorded
             FROM dispatch.assignments a
             JOIN orders.orders o ON o.id=a.order_id
             JOIN locations.locations origin ON origin.id=o.origin_location_id
             JOIN locations.locations destination ON destination.id=o.destination_location_id
+            LEFT JOIN locations.operating_zones origin_zone ON origin_zone.id=origin.operating_zone_id
+            LEFT JOIN locations.operating_zones destination_zone ON destination_zone.id=destination.operating_zone_id
             LEFT JOIN routes.routes r
               ON r.id=a.route_id
              AND r.driver_id=a.driver_id
@@ -142,7 +228,7 @@ public sealed class PostgreSqlDriverStopsQuery(
               )
             ORDER BY a.created_at ASC,a.id ASC
             """;
-        var stops = new List<(DriverStopResult Stop, RouteKey Route)>();
+        var stops = new List<(StopRow Stop, RouteKey Route)>();
         await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, driverId));
         command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, organizationId));
@@ -172,14 +258,31 @@ public sealed class PostgreSqlDriverStopsQuery(
                     // to its route; it keeps the position of its earliest stop there.
                     typedSequence ?? NullableInt32(reader, 13));
 
+            var location = ReadLocation(
+                reader,
+                projection.UseOriginAddress ? OriginColumns : DestinationColumns,
+                projection.UseOriginAddress ? reader.GetString(4) : reader.GetString(5));
+            var window = reader.IsDBNull(30) || reader.IsDBNull(31)
+                ? null
+                : new DriverStopServiceWindowResult(
+                    reader.GetFieldValue<DateTimeOffset>(30),
+                    reader.GetFieldValue<DateTimeOffset>(31));
+            var codExpectedCents = reader.GetInt64(32);
+            // Cash is collected at the door: only a DELIVERY stop of an order that expects COD carries it.
+            var cod = projection.StopType == DriverStopType.Delivery && codExpectedCents > 0
+                ? new DriverStopCodResult(codExpectedCents, reader.GetBoolean(33))
+                : null;
+
             stops.Add((
-                new DriverStopResult(
+                new StopRow(
                     reader.GetGuid(0),
                     reader.GetInt32(1),
                     reader.GetString(2),
-                    projection.StopType.ToContractValue(),
+                    projection.StopType,
                     status,
-                    projection.UseOriginAddress ? reader.GetString(4) : reader.GetString(5)),
+                    location,
+                    window,
+                    cod),
                 route));
         }
 
@@ -196,6 +299,24 @@ public sealed class PostgreSqlDriverStopsQuery(
             .ToArray();
     }
 
+    /// <summary>First ordinal of the eight origin location columns.</summary>
+    private const int OriginColumns = 14;
+
+    /// <summary>First ordinal of the eight destination location columns.</summary>
+    private const int DestinationColumns = 22;
+
+    private static StopLocationRow ReadLocation(NpgsqlDataReader reader, int first, string addressSummary) => new(
+        new ProtectedDriverStopLocation(
+            reader.GetGuid(first + 1),
+            reader.GetGuid(first),
+            reader.GetString(first + 2),
+            reader.GetFieldValue<byte[]>(first + 3),
+            reader.IsDBNull(first + 4) ? null : reader.GetFieldValue<byte[]>(first + 4)),
+        addressSummary,
+        reader.GetDouble(first + 5),
+        reader.GetDouble(first + 6),
+        reader.IsDBNull(first + 7) ? null : reader.GetString(first + 7));
+
     private static int? NullableInt32(NpgsqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
 
@@ -206,6 +327,31 @@ public sealed class PostgreSqlDriverStopsQuery(
         int? Sequence)
     {
         public static RouteKey Unrouted { get; } = new(null, null, null, null);
+    }
+
+    /// <summary>One projected stop as read in the transaction, before its protected values are read.</summary>
+    private sealed record StopRow(
+        Guid OrderId,
+        long AggregateVersion,
+        string OrderPublicId,
+        DriverStopType StopKind,
+        string Status,
+        StopLocationRow Location,
+        DriverStopServiceWindowResult? ServiceWindow,
+        DriverStopCodResult? Cod)
+    {
+        public override string ToString() => $"StopRow {{ OrderId = {OrderId:D}, [details redacted] }}";
+    }
+
+    /// <summary>The location the stop heads to; the point and the zone name are not personal on their own.</summary>
+    private sealed record StopLocationRow(
+        ProtectedDriverStopLocation Protected,
+        string AddressSummary,
+        double Latitude,
+        double Longitude,
+        string? ZoneName)
+    {
+        public override string ToString() => "StopLocationRow { [redacted] }";
     }
 
     private static NpgsqlParameter P(string name, NpgsqlDbType type, object value) =>

@@ -271,6 +271,7 @@ describe("driver operations OPS-003 expiry notice", () => {
         transitionOrder: vi.fn(),
         createProofUploadSession: vi.fn(),
         finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
       } as DriverSyncApi,
       refreshStops: async () => [],
       onAccessRevoked: vi.fn(),
@@ -331,6 +332,101 @@ function operation(
   });
 }
 
+describe("cash collection at the door (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)", () => {
+  const collection = {
+    orderId,
+    orderPublicId: "ORD_abcdefghijklmnopqrstuv",
+    amountCents: 125_000,
+    projectedStatus: "DELIVERING" as const,
+    projectedVersion: 9,
+  };
+
+  it("queues exactly the stop's amount with the tracking number and phone time as reference", async () => {
+    const harness = await createHarness([]);
+
+    await expect(harness.controller.enqueueCodCollection(collection)).resolves.toBe(true);
+
+    expect(harness.queue.operations).toHaveLength(1);
+    const [operation] = harness.queue.operations;
+    expect(operation).toMatchObject({
+      kind: "COD_COLLECTION",
+      orderId,
+      expectedVersion: 9,
+      clientOccurredAt: "2026-07-26T12:01:00.000Z",
+      cod: {
+        amountCents: 125_000,
+        idempotencyKey: `drv2-${replacementId}-cod`,
+      },
+    });
+    expect(operation.cod?.reference).toMatch(
+      /^ORD_abcdefghijklmnopqrstuv \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
+    );
+    expect(harness.controller.current.message).toBe(
+      "Cobro guardado. Se registrará cuando haya conexión.",
+    );
+    expect(harness.scheduler.requestSync).toHaveBeenCalledWith(false);
+    await harness.controller.dispose();
+  });
+
+  it("never queues a second collection for the same order", async () => {
+    const harness = await createHarness([]);
+    await harness.controller.enqueueCodCollection(collection);
+
+    await expect(harness.controller.enqueueCodCollection(collection)).resolves.toBe(false);
+
+    expect(harness.queue.operations).toHaveLength(1);
+    await harness.controller.dispose();
+  });
+
+  it("refuses a stop that is not at the door yet", async () => {
+    const harness = await createHarness([]);
+
+    await expect(
+      harness.controller.enqueueCodCollection({ ...collection, projectedStatus: "IN_TRANSIT" }),
+    ).resolves.toBe(false);
+
+    expect(harness.queue.operations).toEqual([]);
+    expect(harness.controller.current.message).toBe(
+      "Actualiza la parada antes de registrar el cobro.",
+    );
+    await harness.controller.dispose();
+  });
+
+  it("retries a held collection while the stop is still at the door, whatever its version", async () => {
+    const held = {
+      ...createDriverOfflineOperation({
+        partitionKey,
+        orderId,
+        kind: "COD_COLLECTION",
+        expectedVersion: 9,
+        cod: { amountCents: 125_000, reference: "ORD_X 2026-07-26T05:00:00-07:00" },
+        now: () => new Date("2026-07-26T12:00:00.000Z"),
+        randomUuid: () => operationId,
+      }),
+      status: "NEEDS_ATTENTION" as const,
+      safeError: "VERSION_CONFLICT" as const,
+      rejectionCode: "CONFLICT" as const,
+    };
+    const harness = await createHarness(held);
+
+    await harness.controller.retrySame(operationId, "DELIVERING", 12);
+
+    expect(harness.queue.operations[0]).toMatchObject({
+      id: operationId,
+      status: "PENDING",
+      safeError: null,
+      rejectionCode: null,
+      cod: held.cod,
+    });
+    await harness.controller.rebuildForCurrentVersion(operationId, "DELIVERING", 12);
+    expect(harness.queue.operations.map((value) => value.id)).toEqual([operationId]);
+    expect(harness.controller.current.message).toBe(
+      "Reintenta el cobro o descártalo y vuelve a registrarlo.",
+    );
+    await harness.controller.dispose();
+  });
+});
+
 async function createHarness(
   initial: DriverOfflineOperation | readonly DriverOfflineOperation[],
   withProof = false,
@@ -361,6 +457,7 @@ async function createHarness(
       transitionOrder: vi.fn(),
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
+      recordCodCollection: vi.fn(),
     } as DriverSyncApi,
     refreshStops: async () => [],
     onAccessRevoked: vi.fn(),

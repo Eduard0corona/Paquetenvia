@@ -873,6 +873,7 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests(PostgreSq
             .Options;
         return new PostgreSqlDriverStopsQuery(
             new TenantTransactionContext<DispatchDbContext>(new DispatchDbContext(options, state), state),
+            new SyntheticDriverStopLocationReader(),
             NullLogger<PostgreSqlDriverStopsQuery>.Instance);
     }
 

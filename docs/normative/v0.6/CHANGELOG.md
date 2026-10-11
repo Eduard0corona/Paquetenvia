@@ -1,5 +1,34 @@
 # Changelog
 
+## Repartidor: datos de la parada, "Cómo llegar" y cobro en la puerta (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Sí, como el diseño
+  (Recommended)" ("Solo de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o al
+  cerrar sesión. Con datos de prueba hasta cerrar GATE-007."), "Google Maps (Recommended)", "Solo confirma el monto
+  (Recommended)" ("Toca "Recibí $1,250.00" y el sistema pone la referencia (guía y hora). Si no le pagan, reporta "No
+  pagó el cobro".") y "Completo en recolección (Recommended)" ("En recolección se ve el nombre completo del contacto,
+  como en tu diseño; en entrega, el nombre corto ("M. López")."); registradas, con sus preguntas, en
+  `decision-log.md` como cambio MAJOR (AI-01 §7).
+- AI-05 `DriverStop` (listMyStops) agrega `contact_short_name`, `contact_full_name`, `zone_name`, `service_window`,
+  `cod` (`expected` y `recorded`) y `navigation` (latitud, longitud, dirección y referencias), solo para las
+  asignaciones ACCEPTED o ACTIVE del repartidor que consulta. El servidor descifra la dirección y el contacto con el
+  sobre ADP-001, en un lote y después de cerrar la transacción del tenant; si algún valor no se puede leer responde 503
+  completo, nunca parcial.
+  Contacto: en recolección, el nombre completo (`contact_full_name`); en entrega y devolución, solo el nombre corto
+  (`contact_short_name`: inicial de la primera palabra, punto y última palabra, "M. Pérez"). `cod.recorded` es la
+  misma condición de la guarda de DELIVERED.
+- AI-07 `/driver/stops/:id` agrega las acciones `navigate` y `cod_collection`; `screen_contracts.driver_stop` agrega
+  `details` (lista y detalle del diseño, ventana en hora de Mazatlán, retención: solo la instantánea vigente, cerrar
+  sesión borra las instantáneas del teléfono y 401/403 la de la sesión), `navigation` (Google Maps por coordenadas en
+  una pestaña nueva, sin solicitud al servidor ni cálculo de rutas, GATE-003) y `cod_collection` ("Recibí $X" con
+  confirmación; referencia con la guía y la hora local del teléfono; una Idempotency-Key por cobro; se sincroniza antes
+  de la entrega y "Confirmar entrega" queda deshabilitado hasta guardar el cobro).
+- PWA: IndexedDB versión 3 (se descartan las instantáneas anteriores y las operaciones en cola se migran sin perderse) y
+  caché del Service Worker v6. Un rollback debe conservar la versión 3 o superior de IndexedDB.
+- Pendientes: "Hoy" y "hechas" del encabezado (listMyStops solo devuelve paradas abiertas), "Llamar" y "No pagó el
+  cobro" (intento fallido). Datos de prueba hasta cerrar GATE-007. Sin cambios en AI-04, AI-06, AI-18, roles, permisos
+  ni migraciones, y sin un flujo atómico nuevo.
+
 ## Correo del piloto: se mantiene Azure Communication Services (NTF-EMAIL-ACS-PILOT-2026-10-11) — 2026-10-11
 
 - Respuesta literal del project owner a "Correo: Microsoft anunció el 23 de septiembre de 2026 que retira Azure

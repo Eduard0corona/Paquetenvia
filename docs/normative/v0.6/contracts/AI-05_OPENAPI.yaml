@@ -829,6 +829,18 @@ paths:
       tags:
       - Driver
       operationId: listMyStops
+      description: >-
+        DSP-002 stops of the requesting driver's own ACCEPTED or ACTIVE assignments in the selected organization, in
+        route order, resolved from the actor (no driver id is accepted). UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+        (project owner, 2026-10-11, "Sí, como el diseño" and "Completo en recolección"): each stop also carries what
+        the driver needs at the door - the contact name (the full name on a PICKUP stop, the short name on DELIVERY
+        and RETURN stops), the operating zone, the order's service window, the cash to collect on a DELIVERY stop and
+        the navigation target (exact point and full address text with references). These fields exist only
+        in this response, for these stops: no other driver, organization or role receives them, and a stop that is no
+        longer assigned is no longer returned. The protected address and contact name are decrypted server-side with
+        the ADP-001 envelope in one batch after the tenant transaction; when the protector is unavailable or a stored
+        value is rejected the whole response fails closed with 503 and nothing is returned. GATE-003: the server
+        computes no route, distance or ETA.
       responses:
         '200':
           description: Active assigned stops only
@@ -2181,7 +2193,12 @@ paths:
         decided inside the order lock from the same observation that credits
         the collecting driver. Capability is decided before order existence or
         idempotency evidence is revealed. Replaying the same Idempotency-Key and
-        payload returns the stored response.
+        payload returns the stored response. UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11:
+        the driver app sends the expected amount it read in DriverStop.cod and a
+        reference it builds from the tracking number and the device time when the
+        driver confirmed the cash, with one Idempotency-Key per collection reused on
+        every retry; the delivery transition is sent only after the collection is
+        recorded.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/OrderId'
@@ -3306,7 +3323,9 @@ components:
             order is created. It is copied to orders.cod_expected_cents and is part of the Idempotency-Key request hash, so
             replaying a key with another amount is a conflict. It is read back only through the finance operations
             (CodPosition.expected_cents, cod_expected_cents_total) and settlements, never through Order, which
-            VIEWER can read.
+            VIEWER can read. UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the driver holding the order's ACCEPTED or
+            ACTIVE assignment also reads it, on the order's DELIVERY stop only, as DriverStop.cod.expected
+            (listMyStops), so it can collect and record exactly that amount.
         restricted_goods_acknowledged:
           type: boolean
           const: true
@@ -3888,6 +3907,13 @@ components:
           - 'null'
     DriverStop:
       type: object
+      description: >-
+        One stop of the requesting driver's own ACCEPTED or ACTIVE assignments (listMyStops). The location a stop
+        heads to is the origin for PICKUP and RETURN and the destination for DELIVERY.
+        UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 adds contact_short_name, contact_full_name, zone_name,
+        service_window, cod and navigation; every member is always present and an absent value is null. No phone,
+        full name of a delivery or return contact, cost, internal id other than order_id, ciphertext or key version
+        is returned.
       required:
       - order_id
       - aggregate_version
@@ -3895,6 +3921,12 @@ components:
       - stop_type
       - status
       - address_summary
+      - contact_short_name
+      - contact_full_name
+      - zone_name
+      - service_window
+      - cod
+      - navigation
       properties:
         order_id:
           type: string
@@ -3915,6 +3947,110 @@ components:
           type: string
         address_summary:
           type: string
+        contact_short_name:
+          type:
+          - string
+          - 'null'
+          minLength: 1
+          maxLength: 64
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - on DELIVERY and RETURN stops, the short form of the contact name
+            of the stop's location, derived on read and never stored: the initial of the first word, a period, a space
+            and the last word ("María López" gives "M. López", "María López Pérez" gives "M. Pérez"); a single word is
+            kept as typed; words split on white space, the initial upper-cased, a longer last word cut to fit. null on
+            PICKUP stops (they carry contact_full_name) and when the location has no contact name.
+        contact_full_name:
+          type:
+          - string
+          - 'null'
+          minLength: 1
+          maxLength: 200
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Completo en recolección") - on a
+            PICKUP stop only, the full contact name of the pickup location (often a business, "Farmacia Las
+            Quintas"), white space collapsed to single spaces and a longer name cut at the bound with an ellipsis.
+            null on DELIVERY and RETURN stops, whose contact the driver sees only as contact_short_name, and when the
+            location has no contact name.
+        zone_name:
+          type:
+          - string
+          - 'null'
+          minLength: 1
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - name of the operating zone of the stop's location; null when the
+            location has none.
+        service_window:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - from
+          - to
+          properties:
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - the order's own delivery window as UTC instants, exactly as
+            Order.service_window (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02); null when the order has none. Clients show it
+            in America/Mazatlan time.
+        cod:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - expected
+          - recorded
+          properties:
+            expected:
+              $ref: '#/components/schemas/Money'
+            recorded:
+              type: boolean
+              description: >-
+                true when a collection of exactly the expected amount is RECORDED or RECONCILED, the condition of the
+                DELIVERED guard if_cod_expected_then_cod_status_recorded_or_reconciled.
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - the cash on delivery to collect, only on a DELIVERY stop of an
+            order whose cod_expected_cents is positive; null on every other stop. expected.amount_cents is the order's
+            cod_expected_cents (int64 MXN cents); the driver records it with recordCodCollection.
+        navigation:
+          type: object
+          additionalProperties: false
+          required:
+          - latitude
+          - longitude
+          - address_text
+          - references
+          properties:
+            latitude:
+              type: number
+              minimum: -90
+              maximum: 90
+            longitude:
+              type: number
+              minimum: -180
+              maximum: 180
+            address_text:
+              type: string
+              minLength: 1
+              maxLength: 1000
+            references:
+              type:
+              - string
+              - 'null'
+              minLength: 1
+              maxLength: 500
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - where the stop is: the exact point of its location and its full
+            address text, decrypted server-side, with the references the dispatcher gave (null when none). A longer
+            stored text is cut at the bound and ends with an ellipsis. The driver app opens the phone's map app on the
+            point ("Cómo llegar"); the server computes no route, distance or ETA (GATE-003). The app may keep these
+            values on the phone only for currently assigned stops (AI-07 screen_contracts.driver_stop.details).
         contact_token:
           type: string
           description: Protected relay token; never a raw telephone number.

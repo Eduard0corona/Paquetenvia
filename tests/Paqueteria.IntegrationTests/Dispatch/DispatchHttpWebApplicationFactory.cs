@@ -41,6 +41,7 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         Guid.Parse("d2000000-0000-0000-0000-000000000007");
 
     internal void SetStops(IReadOnlyList<DriverStopResult> stops) => service.Stops = stops;
+    internal void SetStopDetailsUnavailable(bool unavailable) => service.StopDetailsUnavailable = unavailable;
     internal int AssignableDriverReads => service.AssignableDriverReads;
     internal ListAssignableDriversQuery? LastAssignableDriversQuery => service.LastAssignableDriversQuery;
     internal int Effects => service.Effects;
@@ -144,6 +145,7 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         private int invocations;
 
         public IReadOnlyList<DriverStopResult> Stops { get; set; } = [];
+        public bool StopDetailsUnavailable { get; set; }
         public int Effects => Volatile.Read(ref effects);
         public int Invocations => Volatile.Read(ref invocations);
 
@@ -242,9 +244,14 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return actorId == DriverActorId
-                ? Task.FromResult(Stops)
-                : throw new DriverStopsForbiddenException();
+            if (actorId != DriverActorId)
+            {
+                throw new DriverStopsForbiddenException();
+            }
+
+            return StopDetailsUnavailable
+                ? throw new DriverStopsPiiUnavailableException()
+                : Task.FromResult(Stops);
         }
 
         public Task<ExternalOfferResult> CreateAsync(

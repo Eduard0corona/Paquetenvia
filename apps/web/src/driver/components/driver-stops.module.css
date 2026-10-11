@@ -169,6 +169,122 @@
   text-align: center;
 }
 
+.quietBadge {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+/* UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: what the driver needs at the door. */
+.stopsSummary {
+  margin: 0 0 1rem;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* "3 · Entregar" as the design writes it: the eyebrow colour without upper-casing. */
+.rowLabel {
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.stopHighlight {
+  margin: 0.35rem 0 0;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.stopLead {
+  margin: 0.35rem 0 0;
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.addressText {
+  white-space: pre-line;
+}
+
+.navigation {
+  display: grid;
+  gap: 0.35rem;
+  margin: 1rem 0 0;
+}
+
+.navigationLink {
+  display: inline-flex;
+  width: 100%;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 1rem;
+  background: var(--surface);
+  color: var(--accent-strong);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.navigationLink:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.navigationHint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.codStep {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.codStep h3,
+.codStep p {
+  margin: 0;
+}
+
+.codStep h3 {
+  font-size: var(--text-lg);
+}
+
+.actions .codButton {
+  width: 100%;
+}
+
+.proofStep {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.proofStep:disabled {
+  opacity: 0.6;
+}
+
+.cashFirstHint {
+  margin: 0;
+  color: var(--warn);
+  font-weight: 800;
+}
+
 .pendingBadge {
   display: inline-flex;
   min-height: 2rem;

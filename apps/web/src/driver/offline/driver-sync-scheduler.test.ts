@@ -18,6 +18,7 @@ import {
   selectRunnableOperation,
 } from "./driver-sync-scheduler";
 import { OfflineOperationMaximumAgeMilliseconds } from "./offline-operation-age";
+import { syntheticNavigation } from "../contracts/driver-stop.fixtures";
 
 const partition: DriverCachePartition = { key: "D".repeat(43) };
 const orderA = "11111111-1111-4111-8111-111111111111";
@@ -70,6 +71,12 @@ describe("driver sync scheduler", () => {
       stop_type: "PICKUP",
       status: "AT_PICKUP",
       address_summary: "Zona sintética",
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     };
     const scheduler = new DriverSyncScheduler({
       partition,
@@ -78,6 +85,7 @@ describe("driver sync scheduler", () => {
         transitionOrder,
         createProofUploadSession: vi.fn(),
         finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
       } as DriverSyncApi,
       refreshStops: async () => [stop],
       onQueueChanged: vi.fn(),
@@ -199,6 +207,12 @@ describe("driver sync scheduler", () => {
           stop_type: "PICKUP",
           status: "ASSIGNED",
           address_summary: "Zona A",
+          contact_short_name: null,
+          contact_full_name: null,
+          zone_name: null,
+          service_window: null,
+          cod: null,
+          navigation: syntheticNavigation,
         },
         {
           order_id: orderB,
@@ -207,6 +221,12 @@ describe("driver sync scheduler", () => {
           stop_type: "DELIVERY",
           status: orderBConfirmed ? "DELIVERING" : "IN_TRANSIT",
           address_summary: "Zona B",
+          contact_short_name: null,
+          contact_full_name: null,
+          zone_name: null,
+          service_window: null,
+          cod: null,
+          navigation: syntheticNavigation,
         },
       ],
     );
@@ -255,6 +275,7 @@ describe("driver sync scheduler", () => {
           transitionOrder,
           createProofUploadSession: vi.fn(),
           finalizeProof: vi.fn(),
+          recordCodCollection: vi.fn(),
         },
         refreshStops: async () => [{
           order_id: orderA,
@@ -263,6 +284,12 @@ describe("driver sync scheduler", () => {
           stop_type: "PICKUP",
           status: "ASSIGNED",
           address_summary: "Zona A",
+          contact_short_name: null,
+          contact_full_name: null,
+          zone_name: null,
+          service_window: null,
+          cod: null,
+          navigation: syntheticNavigation,
         }],
         onQueueChanged: vi.fn(),
         onAccessRevoked: vi.fn(),
@@ -609,6 +636,12 @@ function expiryScheduler(
       stop_type: "DELIVERY",
       status: "IN_TRANSIT",
       address_summary: "Zona B",
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     },
   ],
 ): DriverSyncScheduler {
@@ -619,6 +652,7 @@ function expiryScheduler(
       transitionOrder: vi.fn(),
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
+      recordCodCollection: vi.fn(),
       ...apiOverrides,
     },
     refreshStops,
@@ -642,6 +676,12 @@ function stopA(
     stop_type: "PICKUP",
     status,
     address_summary: "Zona A",
+    contact_short_name: null,
+    contact_full_name: null,
+    zone_name: null,
+    service_window: null,
+    cod: null,
+    navigation: syntheticNavigation,
   };
 }
 
@@ -679,6 +719,12 @@ function schedulerFor(
       stop_type: "PICKUP",
       status: "ASSIGNED",
       address_summary: "Zona A",
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     },
     {
       order_id: orderB,
@@ -687,6 +733,12 @@ function schedulerFor(
       stop_type: "DELIVERY",
       status: "IN_TRANSIT",
       address_summary: "Zona B",
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     },
   ],
 ): DriverSyncScheduler {
@@ -694,6 +746,7 @@ function schedulerFor(
     transitionOrder: vi.fn(),
     createProofUploadSession: vi.fn(),
     finalizeProof: vi.fn(),
+    recordCodCollection: vi.fn(),
     ...apiOverrides,
   };
   return new DriverSyncScheduler({

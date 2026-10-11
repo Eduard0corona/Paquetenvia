@@ -446,13 +446,7 @@ public static class DispatchEndpoints
                 actorId,
                 tenantContext.OrganizationId,
                 cancellationToken);
-            return Results.Ok(stops.Select(value => new DriverStopResponse(
-                value.OrderId,
-                value.AggregateVersion,
-                value.OrderPublicId,
-                value.StopType,
-                value.Status,
-                value.AddressSummary)).ToArray());
+            return Results.Ok(stops.Select(ToResponse).ToArray());
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -466,7 +460,33 @@ public static class DispatchEndpoints
         {
             return Forbidden();
         }
+        catch (DriverStopsPiiUnavailableException)
+        {
+            // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the protected stop details could not be read, so nothing is
+            // returned (fail closed, as every PII_PROTECTION_UNAVAILABLE path); the driver app keeps its last snapshot.
+            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
+        }
     }
+
+    private static DriverStopResponse ToResponse(DriverStopResult value) => new(
+        value.OrderId,
+        value.AggregateVersion,
+        value.OrderPublicId,
+        value.StopType,
+        value.Status,
+        value.AddressSummary,
+        value.ContactShortName,
+        value.ContactFullName,
+        value.ZoneName,
+        value.ServiceWindow is { } window ? new DriverStopServiceWindowResponse(window.From, window.To) : null,
+        value.Cod is { } cod
+            ? new DriverStopCodResponse(new MoneyResponse("MXN", cod.ExpectedCents), cod.Recorded)
+            : null,
+        new DriverStopNavigationResponse(
+            value.Navigation.Latitude,
+            value.Navigation.Longitude,
+            value.Navigation.AddressText,
+            value.Navigation.References));
 
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
     {
@@ -576,13 +596,45 @@ public sealed record AssignableDriverPageResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<AssignableDriverResponse> Items,
     [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
+/// <summary>
+/// AI-05 <c>DriverStop</c>. UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 adds the contact name (full on a PICKUP stop,
+/// short on DELIVERY and RETURN stops), zone, service window, COD of a DELIVERY stop and the navigation target; every
+/// member is always present, absent values are JSON null.
+/// </summary>
 public sealed record DriverStopResponse(
     [property: JsonPropertyName("order_id")] Guid OrderId,
     [property: JsonPropertyName("aggregate_version")] long AggregateVersion,
     [property: JsonPropertyName("order_public_id")] string OrderPublicId,
     [property: JsonPropertyName("stop_type")] string StopType,
     [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("address_summary")] string AddressSummary);
+    [property: JsonPropertyName("address_summary")] string AddressSummary,
+    [property: JsonPropertyName("contact_short_name")] string? ContactShortName,
+    [property: JsonPropertyName("contact_full_name")] string? ContactFullName,
+    [property: JsonPropertyName("zone_name")] string? ZoneName,
+    [property: JsonPropertyName("service_window")] DriverStopServiceWindowResponse? ServiceWindow,
+    [property: JsonPropertyName("cod")] DriverStopCodResponse? Cod,
+    [property: JsonPropertyName("navigation")] DriverStopNavigationResponse Navigation)
+{
+    public override string ToString() =>
+        $"DriverStopResponse {{ OrderId = {OrderId:D}, Status = {Status}, [details redacted] }}";
+}
+
+public sealed record DriverStopServiceWindowResponse(
+    [property: JsonPropertyName("from")] DateTimeOffset From,
+    [property: JsonPropertyName("to")] DateTimeOffset To);
+
+public sealed record DriverStopCodResponse(
+    [property: JsonPropertyName("expected")] MoneyResponse Expected,
+    [property: JsonPropertyName("recorded")] bool Recorded);
+
+public sealed record DriverStopNavigationResponse(
+    [property: JsonPropertyName("latitude")] double Latitude,
+    [property: JsonPropertyName("longitude")] double Longitude,
+    [property: JsonPropertyName("address_text")] string AddressText,
+    [property: JsonPropertyName("references")] string? References)
+{
+    public override string ToString() => "DriverStopNavigationResponse { [redacted] }";
+}
 
 public sealed record CreateExternalOfferRequest(
     [property: JsonPropertyName("order_id")] Guid? OrderId,

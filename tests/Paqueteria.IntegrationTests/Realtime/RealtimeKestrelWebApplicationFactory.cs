@@ -167,6 +167,13 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 ["Realtime:OutboxDispatcher:StaleRequeueIntervalSeconds"] = "1",
                 ["ConnectionStrings:PaqueteriaWorker"] = _workerConnectionString,
             };
+            if (_enableDispatch)
+            {
+                // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: driver stops carry their protected details, read back the
+                // way Locations protected them. These hosts only hold synthetic rows, so the synthetic reader applies.
+                settings["Locations:PiiProtector"] = "Mock";
+            }
+
             foreach (var pair in _configurationOverrides)
             {
                 settings[pair.Key] = pair.Value;

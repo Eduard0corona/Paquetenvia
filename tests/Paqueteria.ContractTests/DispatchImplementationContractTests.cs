@@ -50,10 +50,19 @@ public sealed class DispatchImplementationContractTests
         AssertJsonProperties<DriverStopResponse>(
             "address_summary",
             "aggregate_version",
+            "cod",
+            "contact_full_name",
+            "contact_short_name",
+            "navigation",
             "order_id",
             "order_public_id",
+            "service_window",
             "status",
-            "stop_type");
+            "stop_type",
+            "zone_name");
+        AssertJsonProperties<DriverStopServiceWindowResponse>("from", "to");
+        AssertJsonProperties<DriverStopCodResponse>("expected", "recorded");
+        AssertJsonProperties<DriverStopNavigationResponse>("address_text", "latitude", "longitude", "references");
         AssertJsonProperties<CreateExternalOfferRequest>(
             "commission_cents", "eligible_constraints", "expires_at", "order_id");
         AssertJsonProperties<ExternalOfferConstraintsRequest>(
@@ -74,15 +83,29 @@ public sealed class DispatchImplementationContractTests
                 name.Contains("Document", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Location", StringComparison.OrdinalIgnoreCase));
 
-        var stopNames = typeof(DriverStopResponse).GetProperties()
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the only contact data are the contact name of a PICKUP stop and
+        // the short name ("M. López") of the other stops; never a phone, a cost, an internal driver or assignment id,
+        // a ciphertext or a key version.
+        var stopNames = new[]
+            {
+                typeof(DriverStopResponse),
+                typeof(DriverStopServiceWindowResponse),
+                typeof(DriverStopCodResponse),
+                typeof(DriverStopNavigationResponse),
+            }
+            .SelectMany(type => type.GetProperties())
             .Select(property => property.Name)
             .ToArray();
         Assert.DoesNotContain(stopNames, name =>
             name.Contains("Phone", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("Contact", StringComparison.OrdinalIgnoreCase) ||
+            (name.Contains("Contact", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(name, nameof(DriverStopResponse.ContactShortName), StringComparison.Ordinal) &&
+                !string.Equals(name, nameof(DriverStopResponse.ContactFullName), StringComparison.Ordinal)) ||
             name.Contains("Cost", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("DriverId", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("AssignmentId", StringComparison.OrdinalIgnoreCase));
+            name.Contains("AssignmentId", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("Ciphertext", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("KeyVersion", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -147,12 +170,40 @@ public sealed class DispatchImplementationContractTests
             [
                 "address_summary",
                 "aggregate_version",
+                "cod",
+                "contact_full_name",
+                "contact_short_name",
+                "navigation",
                 "order_id",
                 "order_public_id",
+                "service_window",
                 "status",
                 "stop_type",
+                "zone_name",
             ],
             RequiredPropertyNames(stop));
+        var stopProperties = stop.Mapping("properties");
+        Assert.Equal(
+            ["address_text", "latitude", "longitude", "references"],
+            RequiredPropertyNames(stopProperties.Mapping("navigation")));
+        Assert.Equal("false", stopProperties.Mapping("navigation").Scalar("additionalProperties"));
+        Assert.Equal(["expected", "recorded"], RequiredPropertyNames(stopProperties.Mapping("cod")));
+        Assert.Equal(
+            "#/components/schemas/Money",
+            stopProperties.Mapping("cod").Mapping("properties").Mapping("expected").Scalar("$ref"));
+        Assert.Equal(["from", "to"], RequiredPropertyNames(stopProperties.Mapping("service_window")));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopContactName.MaximumLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("contact_short_name").Scalar("maxLength"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopContactName.MaximumFullLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("contact_full_name").Scalar("maxLength"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopAddressText.MaximumAddressLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("navigation").Mapping("properties").Mapping("address_text").Scalar("maxLength"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopAddressText.MaximumReferencesLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("navigation").Mapping("properties").Mapping("references").Scalar("maxLength"));
 
         Assert.Equal(
             ["OWN", "EXTERNAL", "ALLY_CAPACITY"],

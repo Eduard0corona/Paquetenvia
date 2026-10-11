@@ -16,6 +16,7 @@ import type {
 import type { DriverSession } from "../session/driver-session";
 import type { DriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
 import { DriverStopsController } from "./driver-stops-controller";
+import { syntheticNavigation } from "../contracts/driver-stop.fixtures";
 
 const session: DriverSession = {
   organizationId: "11111111-1111-1111-1111-111111111111",
@@ -29,6 +30,12 @@ const firstStop: DriverStop = {
   stop_type: "PICKUP",
   status: "ASSIGNED",
   address_summary: "Centro, Culiacán",
+  contact_short_name: null,
+  contact_full_name: null,
+  zone_name: null,
+  service_window: null,
+  cod: null,
+  navigation: syntheticNavigation,
 };
 const secondStop: DriverStop = {
   ...firstStop,

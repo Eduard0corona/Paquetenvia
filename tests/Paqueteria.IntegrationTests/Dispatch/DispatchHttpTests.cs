@@ -536,30 +536,117 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
                 12,
                 "ORD_SYNTHETIC",
                 "DELIVERY",
-                "IN_TRANSIT",
-                "Synthetic summary"),
+                "DELIVERING",
+                "Synthetic summary",
+                "M. Sintético",
+                null,
+                "Zona Sintética",
+                new DriverStopServiceWindowResult(
+                    new DateTimeOffset(2026, 10, 11, 20, 0, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 10, 11, 22, 0, 0, TimeSpan.Zero)),
+                new DriverStopCodResult(125_000, false),
+                new DriverStopNavigationResult(24.8, -107.39, "Calle Sintética 1", "Portón sintético")),
+            new DriverStopResult(
+                Guid.Parse("00000000-0000-0000-0000-000000000702"),
+                3,
+                "ORD_SYNTHETIC_PICKUP",
+                "PICKUP",
+                "ASSIGNED",
+                "Synthetic origin",
+                null,
+                "Farmacia Sintética",
+                null,
+                null,
+                null,
+                new DriverStopNavigationResult(24.81, -107.4, "Calle Sintética 2", null)),
         ]);
         using var driver = StopRequest(MockIdentityProfiles.ActiveDriver);
         using var driverResponse = await client.SendAsync(driver);
         Assert.Equal(HttpStatusCode.OK, driverResponse.StatusCode);
         var body = await driverResponse.Content.ReadAsStringAsync();
         using var json = JsonDocument.Parse(body);
-        var stop = Assert.Single(json.RootElement.EnumerateArray().ToArray());
+        var stops = json.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(2, stops.Length);
+        foreach (var stop in stops)
+        {
+            // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: every member is present; absent values are JSON null.
+            Assert.Equal(
+                [
+                    "address_summary",
+                    "aggregate_version",
+                    "cod",
+                    "contact_full_name",
+                    "contact_short_name",
+                    "navigation",
+                    "order_id",
+                    "order_public_id",
+                    "service_window",
+                    "status",
+                    "stop_type",
+                    "zone_name",
+                ],
+                stop.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+            Assert.Equal(
+                ["address_text", "latitude", "longitude", "references"],
+                stop.GetProperty("navigation").EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+        }
+
+        var delivery = stops[0];
+        Assert.Equal("M. Sintético", delivery.GetProperty("contact_short_name").GetString());
+        Assert.Equal(JsonValueKind.Null, delivery.GetProperty("contact_full_name").ValueKind);
+        Assert.Equal("Zona Sintética", delivery.GetProperty("zone_name").GetString());
         Assert.Equal(
-            [
-                "address_summary",
-                "aggregate_version",
-                "order_id",
-                "order_public_id",
-                "status",
-                "stop_type",
-            ],
-            stop.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+            new DateTimeOffset(2026, 10, 11, 20, 0, 0, TimeSpan.Zero),
+            delivery.GetProperty("service_window").GetProperty("from").GetDateTimeOffset());
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 11, 22, 0, 0, TimeSpan.Zero),
+            delivery.GetProperty("service_window").GetProperty("to").GetDateTimeOffset());
+        var cod = delivery.GetProperty("cod");
+        Assert.Equal(["expected", "recorded"], cod.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+        Assert.Equal("MXN", cod.GetProperty("expected").GetProperty("currency").GetString());
+        Assert.Equal(125_000, cod.GetProperty("expected").GetProperty("amount_cents").GetInt64());
+        Assert.False(cod.GetProperty("recorded").GetBoolean());
+        var navigation = delivery.GetProperty("navigation");
+        Assert.Equal(24.8, navigation.GetProperty("latitude").GetDouble());
+        Assert.Equal(-107.39, navigation.GetProperty("longitude").GetDouble());
+        Assert.Equal("Calle Sintética 1", navigation.GetProperty("address_text").GetString());
+        Assert.Equal("Portón sintético", navigation.GetProperty("references").GetString());
+
+        var pickup = stops[1];
+        Assert.Equal(JsonValueKind.Null, pickup.GetProperty("contact_short_name").ValueKind);
+        Assert.Equal("Farmacia Sintética", pickup.GetProperty("contact_full_name").GetString());
+        Assert.Equal(JsonValueKind.Null, pickup.GetProperty("zone_name").ValueKind);
+        Assert.Equal(JsonValueKind.Null, pickup.GetProperty("service_window").ValueKind);
+        Assert.Equal(JsonValueKind.Null, pickup.GetProperty("cod").ValueKind);
+        Assert.Equal(JsonValueKind.Null, pickup.GetProperty("navigation").GetProperty("references").ValueKind);
+
         Assert.DoesNotContain("contact_token", body, StringComparison.Ordinal);
         Assert.DoesNotContain("phone", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("cost", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("driver_id", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("assignment_id", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ciphertext", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("key_version", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GET_stops_fails_closed_with_503_when_the_protected_details_cannot_be_read()
+    {
+        factory.SetStopDetailsUnavailable(true);
+        try
+        {
+            using var driver = StopRequest(MockIdentityProfiles.ActiveDriver);
+            using var response = await client.SendAsync(driver);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Contains("Service unavailable.", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("address", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("navigation", body, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            factory.SetStopDetailsUnavailable(false);
+        }
     }
 
     [Fact]

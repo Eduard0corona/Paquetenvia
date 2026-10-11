@@ -36,6 +36,8 @@ describe("confirmation before risky money and destructive actions", () => {
     ["src/operations/components/operations-order-card.tsx", ["externalOfferConfirmation("], ["void onPublishExternalOffer("]],
     ["src/operations/components/operations-driver-assignment.tsx", ["driverAssignmentConfirmation("], ["assign(driver, costCents)"]],
     ["src/operations/components/operations-next-step.tsx", ["transitionConfirmation("], ["submit(action, trimmed, version, acknowledged)"]],
+    // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the driver's "Recibí $X" names the amount before queuing the cash.
+    ["src/driver/components/driver-cod-collection.tsx", ["codCollectionConfirmation("], ["onCollect()"]],
   ] as const)("%s runs each risky action only from the confirmation", (path, builders, actions) => {
     const source = read(path);
     for (const builder of builders) expect(source, builder).toContain(builder);

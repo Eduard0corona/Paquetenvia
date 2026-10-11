@@ -28,14 +28,38 @@ describe("DRV-001 OpenAPI alignment", () => {
       "stop_type",
       "status",
       "address_summary",
+      // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      "contact_short_name",
+      "contact_full_name",
+      "zone_name",
+      "service_window",
+      "cod",
+      "navigation",
     ];
     for (const property of required) {
       expect(schema).toContain(`- ${property}`);
       expect(schema).toContain(`${property}:`);
     }
+    for (const property of ["latitude", "longitude", "address_text", "references", "expected", "recorded"]) {
+      expect(schema).toContain(`- ${property}`);
+    }
+    expect(schema).toContain("maxLength: 64");
+    expect(schema).toContain("maxLength: 200");
+    expect(schema).toContain("maxLength: 1000");
+    expect(schema).toContain("maxLength: 500");
+    expect(schema).toContain("$ref: '#/components/schemas/Money'");
     expect(schema).toContain("contact_token:");
     expect(schema).not.toContain("telephone:");
+    expect(schema).not.toContain("phone:");
     expect(schema).not.toContain("cost_cents:");
+    expect(schema).not.toContain("contact_name:");
+  });
+
+  it("documents the driver's cash collection on recordCodCollection", () => {
+    const operation = sliceBetween(openApi, "  /orders/{orderId}/cod-records:", "  /cod-records/{codId}/reconcile:");
+    expect(operation).toContain("operationId: recordCodCollection");
+    expect(operation).toContain("UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11");
+    expect(operation).toContain("$ref: '#/components/schemas/RecordCodRequest'");
   });
 
   it("keeps the exact stop-type vocabulary and the supported status subset", () => {

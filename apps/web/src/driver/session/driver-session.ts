@@ -17,6 +17,13 @@ declare global {
 
 export const driverSessionChangedEvent = "paquetenvia:driver-session-changed";
 
+/**
+ * Dispatched by "Cerrar sesión" before it signs out, so the stops screen stops
+ * every controller before the saved stop details are wiped
+ * (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11).
+ */
+export const driverLogoutStartedEvent = "paquetenvia:driver-logout-started";
+
 export function readBrowserDriverSession(): DriverSession | null {
   if (typeof window === "undefined") {
     return null;

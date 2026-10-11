@@ -1,9 +1,22 @@
 import type { DriverStop } from "../contracts/driver-stop";
-import type {
-  DriverOfflineOperation,
-  DriverOperationStatus,
-  DriverOperationalStatus,
+import {
+  driverOperationDefinitions,
+  type DriverOfflineOperation,
+  type DriverOperationStatus,
+  type DriverOperationalStatus,
 } from "./operation-contract";
+
+/**
+ * Where the cash of a DELIVERY stop stands for the driver: nothing to collect,
+ * still to collect, saved on the phone and waiting to sync, held for the
+ * driver's attention, or recorded on the server.
+ */
+export type DriverCodCollectionState =
+  | "none"
+  | "pending"
+  | "queued"
+  | "attention"
+  | "recorded";
 
 export interface ProjectedDriverStop
   extends Omit<DriverStop, "status" | "aggregate_version"> {
@@ -13,11 +26,41 @@ export interface ProjectedDriverStop
   readonly projectedVersion: number;
   readonly pendingCount: number;
   readonly attentionCount: number;
+  readonly codCollection: DriverCodCollectionState;
 }
 
 export interface DriverOperationProjection {
   readonly stops: readonly ProjectedDriverStop[];
   readonly operations: readonly DriverOfflineOperation[];
+}
+
+/**
+ * Whether a queued operation still applies on top of the projected status and
+ * version of its order. A transition needs its source status and the exact
+ * version it was built on; a cash collection only needs the stop to be
+ * DELIVERING, because recording cash changes neither status nor version.
+ */
+export function driverOperationApplies(
+  operation: DriverOfflineOperation,
+  status: DriverOperationalStatus,
+  version: number,
+): boolean {
+  if (operation.sourceStatus !== status) return false;
+  return (
+    !driverOperationDefinitions[operation.kind].transition ||
+    operation.expectedVersion === version
+  );
+}
+
+/** The projected status and version once the operation applied. */
+export function applyDriverOperation(
+  operation: DriverOfflineOperation,
+  status: DriverOperationalStatus,
+  version: number,
+): { readonly status: DriverOperationalStatus; readonly version: number } {
+  return driverOperationDefinitions[operation.kind].transition
+    ? { status: operation.targetStatus, version: version + 1 }
+    : { status, version };
 }
 
 /**
@@ -43,6 +86,7 @@ export function projectDriverOperations(
     let chainBlocked = false;
     let pendingCount = 0;
     let attentionCount = 0;
+    let codOperationStatus: DriverOperationStatus | null = null;
     for (const operation of operationsByOrder.get(stop.order_id) ?? []) {
       let derivedStatus: DriverOperationStatus = operation.status;
       if (chainBlocked) {
@@ -53,15 +97,11 @@ export function projectDriverOperations(
       ) {
         derivedStatus = operation.status;
         chainBlocked = true;
-      } else if (
-        operation.sourceStatus !== status ||
-        operation.expectedVersion !== version
-      ) {
+      } else if (!driverOperationApplies(operation, status, version)) {
         derivedStatus = "NEEDS_ATTENTION";
         chainBlocked = true;
       } else {
-        status = operation.targetStatus;
-        version += 1;
+        ({ status, version } = applyDriverOperation(operation, status, version));
       }
       const projected =
         derivedStatus === operation.status
@@ -77,19 +117,23 @@ export function projectDriverOperations(
       projectedOperations.set(operation.id, projected);
       pendingCount += 1;
       if (derivedStatus === "NEEDS_ATTENTION") attentionCount += 1;
+      if (operation.kind === "COD_COLLECTION") codOperationStatus = derivedStatus;
     }
 
+    const {
+      status: confirmedStatus,
+      aggregate_version: confirmedVersion,
+      ...details
+    } = stop;
     return Object.freeze({
-      order_id: stop.order_id,
-      order_public_id: stop.order_public_id,
-      stop_type: stop.stop_type,
-      address_summary: stop.address_summary,
-      confirmedStatus: stop.status,
-      confirmedVersion: stop.aggregate_version,
+      ...details,
+      confirmedStatus,
+      confirmedVersion,
       projectedStatus: status,
       projectedVersion: version,
       pendingCount,
       attentionCount,
+      codCollection: codCollectionState(stop, codOperationStatus),
     });
   });
 
@@ -116,6 +160,19 @@ export function projectDriverOperations(
       [...projectedOperations.values()].sort(compareOperations),
     ),
   });
+}
+
+function codCollectionState(
+  stop: DriverStop,
+  codOperationStatus: DriverOperationStatus | null,
+): DriverCodCollectionState {
+  if (stop.cod === null) return "none";
+  if (stop.cod.recorded) return "recorded";
+  if (codOperationStatus === null) return "pending";
+  return codOperationStatus === "NEEDS_ATTENTION" ||
+    codOperationStatus === "BLOCKED"
+    ? "attention"
+    : "queued";
 }
 
 export function nextDriverOperationKind(

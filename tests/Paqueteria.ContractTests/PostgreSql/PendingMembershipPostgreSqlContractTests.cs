@@ -575,6 +575,7 @@ public sealed class PendingMembershipPostgreSqlContractTests(PostgreSqlContractF
             .Options;
         return new PostgreSqlDriverStopsQuery(
             new TenantTransactionContext<DispatchDbContext>(new DispatchDbContext(dbOptions, state), state),
+            new SyntheticDriverStopLocationReader(),
             NullLogger<PostgreSqlDriverStopsQuery>.Instance);
     }
 

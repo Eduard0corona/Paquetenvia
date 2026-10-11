@@ -18,6 +18,17 @@ const validPayload = [
     stop_type: "DELIVERY",
     status: "IN_TRANSIT",
     address_summary: "Las Quintas, Culiacán",
+    contact_short_name: "M. Sintético",
+    contact_full_name: null,
+    zone_name: "Zona Sintética",
+    service_window: null,
+    cod: { expected: { currency: "MXN", amount_cents: 125_000 }, recorded: false },
+    navigation: {
+      latitude: 24.8,
+      longitude: -107.39,
+      address_text: "Calle Sintética 100",
+      references: null,
+    },
   },
 ];
 

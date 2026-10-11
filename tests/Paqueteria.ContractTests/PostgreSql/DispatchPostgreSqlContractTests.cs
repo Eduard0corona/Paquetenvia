@@ -1357,7 +1357,9 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             new FixedClock(now ?? OccurredAt));
     }
 
-    private static PostgreSqlDriverStopsQuery CreateStopsQuery(NpgsqlDataSource dataSource)
+    private static PostgreSqlDriverStopsQuery CreateStopsQuery(
+        NpgsqlDataSource dataSource,
+        IDriverStopLocationReader? locationReader = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -1369,6 +1371,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         var context = new DispatchDbContext(dbOptions, state);
         return new PostgreSqlDriverStopsQuery(
             new TenantTransactionContext<DispatchDbContext>(context, state),
+            locationReader ?? new SyntheticDriverStopLocationReader(),
             NullLogger<PostgreSqlDriverStopsQuery>.Instance);
     }
 

@@ -16,6 +16,7 @@ using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Dispatch.Infrastructure;
@@ -91,6 +92,26 @@ public static class DependencyInjection
         services.TryAddScoped<IAssignmentVisibilityDataReader, PostgreSqlAssignmentVisibilityDataReader>();
         services.TryAddScoped<IAssignmentVisibilityResolver, DispatchAssignmentVisibilityResolver>();
         services.TryAddScoped<IAssignmentReplayEvidenceReader, PostgreSqlAssignmentReplayEvidenceReader>();
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: stop details are read back the way Locations protected them
+        // (Locations:PiiProtector). Nothing Azure-related is built unless that is the Key Vault envelope.
+        services.AddAzureKeyVaultPiiProtection(
+            configuration,
+            serviceProvider =>
+                DriverStopLocationProtectionSetting.Resolve(serviceProvider.GetRequiredService<IConfiguration>()) ==
+                DriverStopLocationProtection.Envelope);
+        services.AddSingleton<SyntheticDriverStopLocationReader>();
+        services.AddSingleton<DisabledDriverStopLocationReader>();
+        services.AddSingleton(serviceProvider =>
+            new EnvelopeDriverStopLocationReader(serviceProvider.GetRequiredService<IPiiEnvelopeProtector>()));
+        services.AddScoped<IDriverStopLocationReader>(serviceProvider =>
+            DriverStopLocationProtectionSetting.Resolve(serviceProvider.GetRequiredService<IConfiguration>()) switch
+            {
+                DriverStopLocationProtection.Envelope =>
+                    serviceProvider.GetRequiredService<EnvelopeDriverStopLocationReader>(),
+                DriverStopLocationProtection.Synthetic =>
+                    serviceProvider.GetRequiredService<SyntheticDriverStopLocationReader>(),
+                _ => serviceProvider.GetRequiredService<DisabledDriverStopLocationReader>(),
+            });
         services.AddSingleton<DisabledAssignmentService>();
         services.AddSingleton<DisabledDriverStopsQuery>();
         services.AddSingleton<DisabledExternalOfferService>();
