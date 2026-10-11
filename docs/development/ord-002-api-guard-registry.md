@@ -54,6 +54,13 @@ registro por tipo.
 Con el código anterior estas pruebas fallan: el registro de la API tiene 0 guardas y la API responde 200 `CLOSED` con
 la incidencia abierta y 200 `DELIVERED` sin prueba de entrega.
 
+Lo único que dependía del defecto era la plataforma local: `tools/dev-platform.ps1` (semilla de `Bootstrap` y
+escenarios `ExternalOffer` y `ManualRoute`, que el job de CI "Validate local infrastructure" ejecuta) confirmaba las
+órdenes con `metadata` vacía. Ahora envía `restricted_goods_acknowledged: true` en `DRAFT -> CONFIRMED`, como la web y
+OPS-001; el resto de su flujo ya cumplía las guardas (pruebas finalizadas antes de `PICKED_UP` y `DELIVERED`, sin COD).
+Ningún flujo de producción dependía del defecto: la web ya enviaba esa metadata y el `incident_id` de
+`FAILED_ATTEMPT`.
+
 ## Riesgo residual
 
 - Datos: un entorno con datos reales pudo registrar transiciones manuales sin guardas entre el 2026-07-23 y este cambio
