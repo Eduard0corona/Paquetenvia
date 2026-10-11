@@ -12,6 +12,12 @@ public static class RecipientCallPolicy
     /// <summary>The assignment states of the driver's own current assignment (DSP-002, EXT-001).</summary>
     public static IReadOnlyList<string> CurrentAssignmentStatuses { get; } = ["ACCEPTED", "ACTIVE"];
 
+    /// <summary>
+    /// VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11: a key press counts only this long after the request; a later (or
+    /// replayed) one never dials anyone.
+    /// </summary>
+    public static TimeSpan KeypressWindow { get; } = TimeSpan.FromMinutes(15);
+
     public static bool IsCallable(string? orderStatus) =>
         string.Equals(orderStatus, CallableOrderStatus, StringComparison.Ordinal);
 }

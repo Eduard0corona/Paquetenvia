@@ -9,13 +9,16 @@ using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
 using Paqueteria.Application.Tenancy;
+using static Drivers.Endpoints.VoiceEndpointResults;
 
 namespace Drivers.Endpoints;
 
 /// <summary>
 /// VOICE-001-MASKED-CALLS-2026-10-11: the driver's own mobile number for the masked call bridge (AI-05
 /// <c>getMyDriverPhone</c>, <c>registerMyDriverPhone</c>, <c>removeMyDriverPhone</c>). DRIVER only. The number is
-/// accepted once, with explicit consent, and never returned: the answer only says whether one is stored.
+/// accepted once, with explicit consent, and never returned: the answer only says whether one is stored. Reading and
+/// removing work for the driver's own profile whatever its status (ARCO: a suspended driver can still erase its
+/// number); registering requires an ACTIVE driver.
 /// </summary>
 public static class DriverPhoneEndpoints
 {
@@ -198,29 +201,6 @@ public static class DriverPhoneEndpoints
             return Unavailable();
         }
     }
-
-    private static bool TrySession(IOrganizationRequestSession session, ITenantContext tenantContext, out Guid actorId)
-    {
-        actorId = default;
-        if (!session.IsActive || session.UserId is not { } id || !tenantContext.IsSelected)
-        {
-            return false;
-        }
-
-        actorId = id;
-        return true;
-    }
-
-    private static IResult Conflict() => Results.Problem(
-        statusCode: StatusCodes.Status409Conflict,
-        title: "Conflict.",
-        extensions: new Dictionary<string, object?> { ["code"] = "INVALID_REQUEST" });
-
-    private static IResult Forbidden() =>
-        Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");
-
-    private static IResult Unavailable() =>
-        Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
 }
 
 public sealed record RegisterDriverPhoneRequest(

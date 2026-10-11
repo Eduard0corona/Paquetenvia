@@ -196,20 +196,46 @@ public static class VoiceCallStatuses
 }
 
 /// <summary>
-/// The public webhook routes of the live provider (AI-05 <c>receiveTwilioCallStatus</c> and
-/// <c>answerTwilioInboundCall</c>). The status callback URL names the tenant and the call request in its query; the
-/// provider signs the full URL, so both are authenticated together with the form.
+/// The public webhook routes of the live provider (AI-05 <c>receiveTwilioCallStatus</c>,
+/// <c>answerTwilioInboundCall</c>, <c>confirmTwilioDriverKeypress</c>, <c>screenTwilioRecipient</c> and
+/// <c>confirmTwilioRecipientKeypress</c>). Every URL of a call names the tenant and the call request in its query; the
+/// provider signs the full URL, so both are authenticated together with the form. No URL ever carries a phone number.
 /// </summary>
 public static class VoiceWebhookPaths
 {
     public const string CallStatus = "/api/v1/voice/twilio/call-status";
     public const string Inbound = "/api/v1/voice/twilio/inbound";
+
+    /// <summary>
+    /// VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11: the driver leg's key press ("Presiona 1 para llamar al destinatario");
+    /// only a 1 bridges the recipient.
+    /// </summary>
+    public const string DriverConfirm = "/api/v1/voice/twilio/driver-confirm";
+
+    /// <summary>The recipient leg's screening TwiML (<c>&lt;Number url&gt;</c>), run when the recipient answers.</summary>
+    public const string RecipientScreen = "/api/v1/voice/twilio/recipient-screen";
+
+    /// <summary>The recipient leg's key press ("presione 1 para contestar"); only a 1 connects both legs.</summary>
+    public const string RecipientConfirm = "/api/v1/voice/twilio/recipient-confirm";
+
     public const string OrganizationParameter = "o";
     public const string CallRequestParameter = "r";
 
     public static string CallStatusPathAndQuery(Guid organizationId, Guid callRequestId) =>
-        $"{CallStatus}?{OrganizationParameter}={organizationId:D}&{CallRequestParameter}={callRequestId:D}";
+        PathAndQuery(CallStatus, organizationId, callRequestId);
+
+    /// <summary>One of the per-call routes with the tenant and the call request in its query.</summary>
+    public static string PathAndQuery(string path, Guid organizationId, Guid callRequestId) =>
+        $"{path}?{OrganizationParameter}={organizationId:D}&{CallRequestParameter}={callRequestId:D}";
 }
+
+/// <summary>
+/// One key press reported by the provider for a call request (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11), already
+/// authenticated. <paramref name="CallSid"/> is the platform's own call (for the recipient leg, the parent call), so a
+/// key press binds to the call the platform created. No phone number is carried.
+/// </summary>
+/// <param name="Confirmed">Whether the digit pressed was exactly 1; no digit, a timeout or any other digit is false.</param>
+public sealed record VoiceKeypress(Guid OrganizationId, Guid CallRequestId, string CallSid, bool Confirmed);
 
 /// <summary>One provider webhook as received: the path and query the provider requested and its form fields.</summary>
 /// <param name="PathAndQuery">The request path and raw query string, for example
@@ -247,4 +273,20 @@ public interface IVoiceWebhookVerifier
 
     /// <summary>TwiML for a call to the company number (no session lookup, no personal data).</summary>
     string BuildInboundCallResponse();
+
+    /// <summary>
+    /// TwiML after the driver pressed 1: dial the recipient with the company number as caller id, through the
+    /// recipient screening (<see cref="VoiceWebhookPaths.RecipientScreen"/>). The number appears only as the dial
+    /// target of this answer to the provider; it is never logged or stored.
+    /// </summary>
+    string BuildBridgeResponse(VoicePhoneNumber recipient, Guid organizationId, Guid callRequestId);
+
+    /// <summary>The recipient leg's screening: the neutral prompt and a one-digit gather, then hang up.</summary>
+    string BuildRecipientScreenResponse(Guid organizationId, Guid callRequestId);
+
+    /// <summary>An empty answer: the screening ends and both legs are connected.</summary>
+    string BuildConnectResponse();
+
+    /// <summary>Hang up without bridging anything.</summary>
+    string BuildHangupResponse();
 }

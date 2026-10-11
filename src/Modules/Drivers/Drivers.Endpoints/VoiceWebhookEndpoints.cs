@@ -5,19 +5,23 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Paqueteria.Application.Voice;
+using static Drivers.Endpoints.VoiceEndpointResults;
 
 namespace Drivers.Endpoints;
 
 /// <summary>
-/// VOICE-001-PROVIDER-TWILIO-2026-10-11 webhooks (AI-05 <c>receiveTwilioCallStatus</c> and
-/// <c>answerTwilioInboundCall</c>). Server-to-server: no session, cookie or CSRF; every request must carry a valid
-/// <c>X-Twilio-Signature</c> computed over the configured public URL, otherwise 403. Inert (404) unless the live
-/// provider is configured. The posted <c>From</c>, <c>To</c>, <c>Caller</c> and <c>Called</c> numbers are read only
-/// to verify the signature: they are never logged, stored, audited or put in an event. The status callback keeps
-/// only the call id, its final status and its duration.
+/// VOICE-001-PROVIDER-TWILIO-2026-10-11 webhooks (AI-05 <c>receiveTwilioCallStatus</c>, <c>answerTwilioInboundCall</c>,
+/// <c>confirmTwilioDriverKeypress</c>, <c>screenTwilioRecipient</c> and <c>confirmTwilioRecipientKeypress</c>).
+/// Server-to-server: no session, cookie or CSRF; every request must carry a valid <c>X-Twilio-Signature</c> computed
+/// over the configured public URL, otherwise 403. Inert (404) unless the live provider is configured. The posted
+/// <c>From</c>, <c>To</c>, <c>Caller</c> and <c>Called</c> numbers are read only to verify the signature: they are
+/// never logged, stored, audited or put in an event. The status callback keeps only the call id, its final status and
+/// its duration; the key-press steps (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) keep only how far the bridge got.
 /// </summary>
 public static class VoiceWebhookEndpoints
 {
+    private const string TwimlContentType = "text/xml; charset=utf-8";
+
     private static readonly FormOptions WebhookFormOptions = new()
     {
         BufferBodyLengthLimit = 16 * 1024,
@@ -48,6 +52,33 @@ public static class VoiceWebhookEndpoints
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
+        endpoints.MapPost(VoiceWebhookPaths.DriverConfirm, ConfirmDriverKeypressAsync)
+            .AllowAnonymous()
+            .DisableAntiforgery()
+            .WithName("confirmTwilioDriverKeypress")
+            .WithTags("Voice")
+            .Produces<string>(StatusCodes.Status200OK, "text/xml")
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound);
+        endpoints.MapPost(VoiceWebhookPaths.RecipientScreen, ScreenRecipientAsync)
+            .AllowAnonymous()
+            .DisableAntiforgery()
+            .WithName("screenTwilioRecipient")
+            .WithTags("Voice")
+            .Produces<string>(StatusCodes.Status200OK, "text/xml")
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound);
+        endpoints.MapPost(VoiceWebhookPaths.RecipientConfirm, ConfirmRecipientKeypressAsync)
+            .AllowAnonymous()
+            .DisableAntiforgery()
+            .WithName("confirmTwilioRecipientKeypress")
+            .WithTags("Voice")
+            .Produces<string>(StatusCodes.Status200OK, "text/xml")
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound);
         return endpoints;
     }
 
@@ -70,10 +101,7 @@ public static class VoiceWebhookEndpoints
             return failure;
         }
 
-        var query = httpContext.Request.Query;
-        if (query.Count != 2 ||
-            !TryGuid(query, VoiceWebhookPaths.OrganizationParameter, out var organizationId) ||
-            !TryGuid(query, VoiceWebhookPaths.CallRequestParameter, out var callRequestId) ||
+        if (!TryCallRequest(httpContext.Request.Query, out var organizationId, out var callRequestId) ||
             !TrySingle(form!, "CallSid", out var callSid) ||
             !TrySingle(form!, "CallStatus", out var callStatus) ||
             !VoiceCallStatuses.All.Contains(callStatus))
@@ -108,7 +136,7 @@ public static class VoiceWebhookEndpoints
         }
         catch (RecipientCallUnavailableException)
         {
-            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
+            return Unavailable();
         }
     }
 
@@ -132,7 +160,114 @@ public static class VoiceWebhookEndpoints
 
         // No session lookup by phone: a recipient who calls back hears a fixed message (or reaches the configured
         // dispatch line), never the driver.
-        return Results.Content(verifier.BuildInboundCallResponse(), "text/xml; charset=utf-8");
+        return Results.Content(verifier.BuildInboundCallResponse(), TwimlContentType);
+    }
+
+    /// <summary>
+    /// The driver leg's one-digit gather ("Presiona 1 para llamar al destinatario"). Only a first, timely 1 on the
+    /// platform's own call (<c>CallSid</c>) dials the recipient, through the screening; no digit (a voicemail or a
+    /// timeout) or any other digit hangs up without dialing anyone.
+    /// </summary>
+    private static async Task<IResult> ConfirmDriverKeypressAsync(
+        HttpContext httpContext,
+        IVoiceBridgeStatus voiceStatus,
+        IVoiceWebhookVerifier verifier,
+        IRecipientCallService service,
+        CancellationToken cancellationToken)
+    {
+        httpContext.Response.Headers.CacheControl = "no-store";
+        if (voiceStatus.Mode != VoiceBridgeMode.Live)
+        {
+            return NotFound();
+        }
+
+        var (form, failure) = await ReadVerifiedFormAsync(httpContext, verifier, cancellationToken);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        if (!TryCallRequest(httpContext.Request.Query, out var organizationId, out var callRequestId) ||
+            !TrySingle(form!, "CallSid", out var callSid) ||
+            !TryKeypress(form!, out var confirmed))
+        {
+            return BadRequest();
+        }
+
+        var decision = await service.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, callRequestId, callSid, confirmed),
+            cancellationToken);
+        return Results.Content(
+            decision.Recipient is { } recipient
+                ? verifier.BuildBridgeResponse(recipient, organizationId, callRequestId)
+                : verifier.BuildHangupResponse(),
+            TwimlContentType);
+    }
+
+    /// <summary>
+    /// The recipient leg once answered (<c>&lt;Number url&gt;</c>): the neutral prompt "Tiene una llamada sobre su
+    /// envío; presione 1 para contestar" and a one-digit gather; the legs stay apart until the answer of
+    /// <see cref="ConfirmRecipientKeypressAsync"/>.
+    /// </summary>
+    private static async Task<IResult> ScreenRecipientAsync(
+        HttpContext httpContext,
+        IVoiceBridgeStatus voiceStatus,
+        IVoiceWebhookVerifier verifier,
+        CancellationToken cancellationToken)
+    {
+        httpContext.Response.Headers.CacheControl = "no-store";
+        if (voiceStatus.Mode != VoiceBridgeMode.Live)
+        {
+            return NotFound();
+        }
+
+        var (_, failure) = await ReadVerifiedFormAsync(httpContext, verifier, cancellationToken);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        return TryCallRequest(httpContext.Request.Query, out var organizationId, out var callRequestId)
+            ? Results.Content(verifier.BuildRecipientScreenResponse(organizationId, callRequestId), TwimlContentType)
+            : BadRequest();
+    }
+
+    /// <summary>
+    /// The recipient leg's one-digit gather. The key press binds to the platform's own call (<c>ParentCallSid</c>, the
+    /// driver leg); only a 1 after the driver's own 1 connects both legs, anything else hangs up without bridging.
+    /// </summary>
+    private static async Task<IResult> ConfirmRecipientKeypressAsync(
+        HttpContext httpContext,
+        IVoiceBridgeStatus voiceStatus,
+        IVoiceWebhookVerifier verifier,
+        IRecipientCallService service,
+        CancellationToken cancellationToken)
+    {
+        httpContext.Response.Headers.CacheControl = "no-store";
+        if (voiceStatus.Mode != VoiceBridgeMode.Live)
+        {
+            return NotFound();
+        }
+
+        var (form, failure) = await ReadVerifiedFormAsync(httpContext, verifier, cancellationToken);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        if (!TryCallRequest(httpContext.Request.Query, out var organizationId, out var callRequestId) ||
+            !TrySingle(form!, "ParentCallSid", out var parentCallSid) ||
+            !TryKeypress(form!, out var confirmed))
+        {
+            return BadRequest();
+        }
+
+        var connect = await service.ConfirmRecipientAsync(
+            new VoiceKeypress(organizationId, callRequestId, parentCallSid, confirmed),
+            cancellationToken);
+        return Results.Content(
+            connect ? verifier.BuildConnectResponse() : verifier.BuildHangupResponse(),
+            TwimlContentType);
     }
 
     private static async Task<(IFormCollection? Form, IResult? Failure)> ReadVerifiedFormAsync(
@@ -174,13 +309,23 @@ public static class VoiceWebhookEndpoints
         {
             VoiceWebhookVerdict.Verified => (form, null),
             VoiceWebhookVerdict.NotConfigured => (null, NotFound()),
-            _ => (null, Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.")),
+            _ => (null, Forbidden()),
         };
     }
 
     private static bool IsFormUrlEncoded(string? contentType) =>
         contentType is not null &&
         contentType.Split(';')[0].Trim().Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Exactly the tenant (<c>o</c>) and the call request (<c>r</c>) the platform put in the URL.</summary>
+    private static bool TryCallRequest(IQueryCollection query, out Guid organizationId, out Guid callRequestId)
+    {
+        organizationId = Guid.Empty;
+        callRequestId = Guid.Empty;
+        return query.Count == 2 &&
+               TryGuid(query, VoiceWebhookPaths.OrganizationParameter, out organizationId) &&
+               TryGuid(query, VoiceWebhookPaths.CallRequestParameter, out callRequestId);
+    }
 
     private static bool TryGuid(IQueryCollection query, string name, out Guid value)
     {
@@ -201,9 +346,24 @@ public static class VoiceWebhookEndpoints
         return true;
     }
 
-    private static IResult BadRequest() =>
-        Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Bad Request.");
+    /// <summary>
+    /// The gathered <c>Digits</c>: absent or empty (a timeout, a voicemail) and any digit but 1 are a refusal; only
+    /// a repeated field is malformed.
+    /// </summary>
+    private static bool TryKeypress(IFormCollection form, out bool confirmed)
+    {
+        confirmed = false;
+        if (!form.TryGetValue("Digits", out var digits))
+        {
+            return true;
+        }
 
-    private static IResult NotFound() =>
-        Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found.");
+        if (digits.Count != 1)
+        {
+            return false;
+        }
+
+        confirmed = string.Equals(digits[0], "1", StringComparison.Ordinal);
+        return true;
+    }
 }

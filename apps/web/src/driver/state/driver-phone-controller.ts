@@ -27,6 +27,8 @@ export const driverPhoneMessages = Object.freeze({
   removed: "Borramos tu celular.",
   rejected: "Revisa el número: debe ser un celular de México de 10 dígitos.",
   unavailable: "No pudimos guardar el cambio en este momento. Intenta más tarde.",
+  // ARCO: a driver whose profile is not active can still see and erase its number, but not register a new one.
+  notActive: "Tu perfil de repartidor no está activo: no puedes registrar un celular. Sí puedes borrar el que tengas.",
   loadFailed: "No pudimos consultar tu celular. Intenta más tarde.",
 });
 
@@ -101,7 +103,11 @@ export class DriverPhoneController {
       this.apply(await this.api.registerPhone(digits), driverPhoneMessages.saved);
       return true;
     } catch (error) {
-      this.setState({ ...this.current, phase: "ready", message: this.failureMessage(error) });
+      // 403 here means the driver profile is not ACTIVE: registering is refused, erasing still works (ARCO).
+      const message = error instanceof DriverVoiceApiError && error.category === "forbidden"
+        ? driverPhoneMessages.notActive
+        : this.failureMessage(error);
+      this.setState({ ...this.current, phase: "ready", message });
       return false;
     }
   }

@@ -39,13 +39,62 @@ public static class RecipientCallStatuses
     public const string Placed = "PLACED";
     public const string Unconfirmed = "UNCONFIRMED";
     public const string Failed = "FAILED";
+
+    /// <summary>
+    /// The statuses a provider status callback may promote to PLACED: the request is in flight, placed, or ambiguous
+    /// (a timeout or a 5xx after which the call may exist). A FAILED request was answered as definitively failed (no
+    /// call was created) and is never promoted, so it never starts counting toward the limits.
+    /// </summary>
+    public static IReadOnlyList<string> PromotableByCallback { get; } = [Requested, Placed, Unconfirmed];
+
+    /// <summary>The statuses whose call may ring, so a key press may still arrive for them.</summary>
+    public static IReadOnlyList<string> MayRing { get; } = [Requested, Placed, Unconfirmed];
 }
 
-public sealed record RecipientCallAvailabilityResult(bool Available, string? Reason)
+/// <summary>
+/// VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11: how far the key-press bridge of a call request got. Stored, never a number.
+/// </summary>
+public static class RecipientCallBridgeStages
+{
+    /// <summary>The driver pressed 1: the recipient is being dialed through the screening.</summary>
+    public const string DriverConfirmed = "DRIVER_CONFIRMED";
+
+    /// <summary>No 1 on the driver leg (no key, another key, a timeout or a voicemail): hung up, nobody dialed.</summary>
+    public const string DriverNotConfirmed = "DRIVER_NOT_CONFIRMED";
+
+    /// <summary>The recipient pressed 1: both legs connected.</summary>
+    public const string RecipientConfirmed = "RECIPIENT_CONFIRMED";
+
+    /// <summary>No 1 on the recipient leg (no key, another key, a timeout or a voicemail): hung up without bridging.</summary>
+    public const string RecipientNotConfirmed = "RECIPIENT_NOT_CONFIRMED";
+
+    /// <summary>The driver pressed 1 but the recipient's number could not be used: hung up, nobody dialed.</summary>
+    public const string BridgeFailed = "BRIDGE_FAILED";
+
+    public static IReadOnlyList<string> All { get; } =
+        [DriverConfirmed, DriverNotConfirmed, RecipientConfirmed, RecipientNotConfirmed, BridgeFailed];
+}
+
+/// <param name="RetryAfterSeconds">Only with <see cref="RecipientCallReasons.RateLimited"/>: when a new request fits.</param>
+public sealed record RecipientCallAvailabilityResult(bool Available, string? Reason, int? RetryAfterSeconds = null)
 {
     public static RecipientCallAvailabilityResult Yes { get; } = new(true, null);
 
     public static RecipientCallAvailabilityResult No(string reason) => new(false, reason);
+
+    public static RecipientCallAvailabilityResult RateLimited(TimeSpan retryAfter) =>
+        new(false, RecipientCallReasons.RateLimited, Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)));
+}
+
+/// <summary>
+/// The answer to the driver's key press: the recipient's number to dial (only in memory, only for the provider's
+/// TwiML), or <see langword="null"/> to hang up without dialing anyone.
+/// </summary>
+public sealed record RecipientCallBridgeDecision(VoicePhoneNumber? Recipient)
+{
+    public static RecipientCallBridgeDecision Hangup { get; } = new((VoicePhoneNumber?)null);
+
+    public override string ToString() => Recipient is null ? "RecipientCallBridgeDecision { Hangup }" : "RecipientCallBridgeDecision { Bridge }";
 }
 
 public sealed record RequestRecipientCallCommand(
@@ -76,6 +125,15 @@ public interface IRecipientCallService
 
     /// <summary>The provider's final report (status callback); returns whether a stored request was updated.</summary>
     Task<bool> RecordStatusAsync(VoiceCallStatusReport report, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11, the driver leg: a first, timely 1 on a call request that may ring returns
+    /// the recipient's number to dial; anything else hangs up and records the outcome. Never throws for the provider.
+    /// </summary>
+    Task<RecipientCallBridgeDecision> ConfirmDriverAsync(VoiceKeypress keypress, CancellationToken cancellationToken);
+
+    /// <summary>The recipient leg: true connects both legs; anything else hangs up and records the outcome.</summary>
+    Task<bool> ConfirmRecipientAsync(VoiceKeypress keypress, CancellationToken cancellationToken);
 }
 
 /// <summary>The actor holds no ACTIVE driver profile in the selected organization (403).</summary>

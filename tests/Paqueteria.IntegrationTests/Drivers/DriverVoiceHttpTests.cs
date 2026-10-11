@@ -18,11 +18,15 @@ namespace Paqueteria.IntegrationTests.Drivers;
 /// <summary>
 /// VOICE-001-MASKED-CALLS-2026-10-11 over HTTP with the services stubbed: DRIVER only, shape checked before any state,
 /// uniform 404, no phone number in any request to the call operation or in any answer, and the Twilio webhooks inert
-/// unless the live provider is configured, signature-checked otherwise.
+/// unless the live provider is configured, signature-checked otherwise (the key-press steps of
+/// VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11 included).
 /// </summary>
 public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebApplicationFactory>
 {
     private const string DriverDigits = "5511112222";
+    private const string RecipientDigits = "5533334444";
+    private static readonly string DriverLegSid = "CA" + new string('b', 32);
+    private static readonly string RecipientLegSid = "CA" + new string('c', 32);
     private static readonly Guid OrderId = Guid.Parse("e4000000-0000-4000-8000-000000000001");
     private static readonly string CallPath = $"/api/v1/driver/me/stops/{OrderId:D}/recipient-call";
 
@@ -206,10 +210,32 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(
-            ["available", "reason"],
+            ["available", "reason", "retry_after_seconds"],
             document.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.False(document.RootElement.GetProperty("available").GetBoolean());
         Assert.Equal("DRIVER_PHONE_REQUIRED", document.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("retry_after_seconds").ValueKind);
+    }
+
+    [Fact]
+    public async Task A_rate_limited_availability_says_when_to_check_again()
+    {
+        factory.Calls.Availability = RecipientCallAvailabilityResult.RateLimited(TimeSpan.FromSeconds(61.2));
+
+        using var response = await client.SendAsync(Request("GET", CallPath, MockIdentityProfiles.ActiveDriver));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(document.RootElement.GetProperty("available").GetBoolean());
+        Assert.Equal("RATE_LIMITED", document.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(62, document.RootElement.GetProperty("retry_after_seconds").GetInt32());
+
+        // Any other answer never carries a retry time.
+        factory.Calls.Availability = new RecipientCallAvailabilityResult(true, null, 30);
+        using var available = await client.SendAsync(Request("GET", CallPath, MockIdentityProfiles.ActiveDriver));
+        using var availableDocument = JsonDocument.Parse(await available.Content.ReadAsStringAsync());
+        Assert.True(availableDocument.RootElement.GetProperty("available").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, availableDocument.RootElement.GetProperty("retry_after_seconds").ValueKind);
     }
 
     [Fact]
@@ -258,7 +284,15 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
     public async Task Webhooks_are_inert_unless_the_live_provider_is_configured()
     {
         factory.Status.Mode = VoiceBridgeMode.Synthetic;
-        foreach (var path in new[] { VoiceWebhookPaths.CallStatusPathAndQuery(MockIdentityProfiles.ViewerOrganizationId, Guid.NewGuid()), VoiceWebhookPaths.Inbound })
+        var organizationId = MockIdentityProfiles.ViewerOrganizationId;
+        foreach (var path in new[]
+                 {
+                     VoiceWebhookPaths.CallStatusPathAndQuery(organizationId, Guid.NewGuid()),
+                     VoiceWebhookPaths.Inbound,
+                     VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.DriverConfirm, organizationId, Guid.NewGuid()),
+                     VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.RecipientScreen, organizationId, Guid.NewGuid()),
+                     VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.RecipientConfirm, organizationId, Guid.NewGuid()),
+                 })
         {
             using var response = await client.SendAsync(Webhook(path, signature: "valid-signature"));
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -337,6 +371,145 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
         Assert.Equal(0, factory.Invocations);
     }
 
+    [Fact]
+    public async Task The_driver_key_press_needs_a_valid_signature_and_only_a_1_dials_the_recipient()
+    {
+        factory.Status.Mode = VoiceBridgeMode.Live;
+        var organizationId = MockIdentityProfiles.ViewerOrganizationId;
+        var callRequestId = Guid.NewGuid();
+        var path = VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.DriverConfirm, organizationId, callRequestId);
+        Assert.True(VoicePhoneNumber.TryParseE164("+52" + RecipientDigits, out var recipient));
+        factory.Calls.DriverDecision = new RecipientCallBridgeDecision(recipient);
+
+        foreach (var signature in new[] { null, "forged" })
+        {
+            using var rejected = await client.SendAsync(Keypress(path, signature, ("CallSid", DriverLegSid), ("Digits", "1")));
+            Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
+        }
+
+        Assert.Equal(0, factory.Invocations);
+
+        using (var response = await client.SendAsync(Keypress(path, "valid-signature", ("CallSid", DriverLegSid), ("Digits", "1"))))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("text/xml", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            Assert.Equal(DriverVoiceHttpWebApplicationFactory.BridgeTwiml, await response.Content.ReadAsStringAsync());
+        }
+
+        Assert.Equal((recipient, organizationId, callRequestId), factory.Verifier.LastBridge);
+        Assert.Equal(path, factory.Verifier.LastPathAndQuery);
+        var (step, keypress) = Assert.Single(factory.Calls.Keypresses);
+        Assert.Equal(("driver", new VoiceKeypress(organizationId, callRequestId, DriverLegSid, true)), (step, keypress));
+
+        // No digit (a voicemail greeting or a timeout), an empty one or any other digit: hang up, nobody is dialed.
+        foreach (var digits in new[] { null, "", "2", "#", "11" })
+        {
+            var fields = digits is null
+                ? new[] { ("CallSid", DriverLegSid) }
+                : new[] { ("CallSid", DriverLegSid), ("Digits", digits) };
+            using var response = await client.SendAsync(Keypress(path, "valid-signature", fields));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(DriverVoiceHttpWebApplicationFactory.HangupTwiml, await response.Content.ReadAsStringAsync());
+        }
+
+        Assert.Equal(6, factory.Calls.Keypresses.Count);
+        Assert.All(factory.Calls.Keypresses.Skip(1), entry => Assert.False(entry.Keypress.Confirmed));
+
+        // A signed but malformed key press is a 400 and reaches nothing.
+        foreach (var malformed in new[]
+                 {
+                     Keypress(path, "valid-signature", ("Digits", "1")),
+                     Keypress(path, "valid-signature", ("CallSid", DriverLegSid), ("Digits", "1"), ("Digits", "1")),
+                     Keypress(VoiceWebhookPaths.DriverConfirm + $"?o={organizationId:D}", "valid-signature", ("CallSid", DriverLegSid), ("Digits", "1")),
+                     Keypress(path + "&x=1", "valid-signature", ("CallSid", DriverLegSid), ("Digits", "1")),
+                 })
+        {
+            using (malformed)
+            using (var response = await client.SendAsync(malformed))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            }
+        }
+
+        Assert.Equal(6, factory.Calls.Keypresses.Count);
+    }
+
+    [Fact]
+    public async Task The_recipient_screen_and_key_press_need_a_valid_signature_and_connect_only_on_a_1()
+    {
+        factory.Status.Mode = VoiceBridgeMode.Live;
+        var organizationId = MockIdentityProfiles.ViewerOrganizationId;
+        var callRequestId = Guid.NewGuid();
+        var screen = VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.RecipientScreen, organizationId, callRequestId);
+        var confirm = VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.RecipientConfirm, organizationId, callRequestId);
+
+        foreach (var path in new[] { screen, confirm })
+        {
+            foreach (var signature in new[] { null, "forged" })
+            {
+                using var rejected = await client.SendAsync(Keypress(
+                    path, signature, ("CallSid", RecipientLegSid), ("ParentCallSid", DriverLegSid), ("Digits", "1")));
+                Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
+            }
+        }
+
+        Assert.Equal(0, factory.Invocations);
+        Assert.Null(factory.Verifier.LastScreen);
+
+        // The screening plays the neutral prompt and gathers one digit; it decides nothing.
+        using (var response = await client.SendAsync(Keypress(screen, "valid-signature", ("CallSid", RecipientLegSid), ("ParentCallSid", DriverLegSid))))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("text/xml", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(DriverVoiceHttpWebApplicationFactory.ScreenTwiml, await response.Content.ReadAsStringAsync());
+        }
+
+        Assert.Equal((organizationId, callRequestId), factory.Verifier.LastScreen);
+        Assert.Equal(0, factory.Invocations);
+
+        // Only the recipient's 1 connects; the key press is bound to the platform's own call (the parent leg).
+        using (var response = await client.SendAsync(Keypress(
+                   confirm, "valid-signature", ("CallSid", RecipientLegSid), ("ParentCallSid", DriverLegSid), ("Digits", "1"))))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            Assert.Equal(DriverVoiceHttpWebApplicationFactory.ConnectTwiml, await response.Content.ReadAsStringAsync());
+        }
+
+        var (step, keypress) = Assert.Single(factory.Calls.Keypresses);
+        Assert.Equal(("recipient", new VoiceKeypress(organizationId, callRequestId, DriverLegSid, true)), (step, keypress));
+
+        foreach (var digits in new[] { null, "", "0", "*" })
+        {
+            var fields = digits is null
+                ? new[] { ("CallSid", RecipientLegSid), ("ParentCallSid", DriverLegSid) }
+                : new[] { ("CallSid", RecipientLegSid), ("ParentCallSid", DriverLegSid), ("Digits", digits) };
+            using var response = await client.SendAsync(Keypress(confirm, "valid-signature", fields));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(DriverVoiceHttpWebApplicationFactory.HangupTwiml, await response.Content.ReadAsStringAsync());
+        }
+
+        Assert.All(factory.Calls.Keypresses.Skip(1), entry => Assert.False(entry.Keypress.Confirmed));
+
+        foreach (var malformed in new[]
+                 {
+                     Keypress(confirm, "valid-signature", ("CallSid", RecipientLegSid), ("Digits", "1")),
+                     Keypress(confirm, "valid-signature", ("CallSid", RecipientLegSid), ("ParentCallSid", DriverLegSid), ("ParentCallSid", DriverLegSid), ("Digits", "1")),
+                     Keypress(VoiceWebhookPaths.RecipientConfirm, "valid-signature", ("ParentCallSid", DriverLegSid), ("Digits", "1")),
+                     Keypress(VoiceWebhookPaths.RecipientScreen + $"?r={callRequestId:D}", "valid-signature", ("CallSid", RecipientLegSid)),
+                 })
+        {
+            using (malformed)
+            using (var response = await client.SendAsync(malformed))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            }
+        }
+
+        Assert.Equal(5, factory.Calls.Keypresses.Count);
+    }
+
     private static HttpRequestMessage Request(
         string method,
         string path,
@@ -402,6 +575,24 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
         return request;
     }
 
+    private static HttpRequestMessage Keypress(string pathAndQuery, string? signature, params (string Name, string Value)[] fields)
+    {
+        var form = new List<KeyValuePair<string, string>>
+        {
+            new("AccountSid", "AC" + new string('0', 32)),
+            new("From", "+525512340000"),
+            new("To", "+52" + DriverDigits),
+        };
+        form.AddRange(fields.Select(field => new KeyValuePair<string, string>(field.Name, field.Value)));
+        var request = new HttpRequestMessage(HttpMethod.Post, pathAndQuery) { Content = new FormUrlEncodedContent(form) };
+        if (signature is not null)
+        {
+            request.Headers.Add("X-Twilio-Signature", signature);
+        }
+
+        return request;
+    }
+
     private static async Task AssertConflictAsync(HttpResponseMessage response, string code)
     {
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -415,6 +606,10 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
 public sealed class DriverVoiceHttpWebApplicationFactory : WebApplicationFactory<Program>
 {
     internal const string InboundTwiml = "<Response><Say>Mensaje fijo sintetico.</Say><Hangup /></Response>";
+    internal const string BridgeTwiml = "<Response><Dial><Number url=\"screen\">bridge</Number></Dial></Response>";
+    internal const string ScreenTwiml = "<Response><Gather><Say>Pantalla sintetica.</Say></Gather><Hangup /></Response>";
+    internal const string ConnectTwiml = "<Response />";
+    internal const string HangupTwiml = "<Response><Hangup /></Response>";
     internal static readonly Guid DriverActorId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11");
     internal static readonly Guid ForeignOrderId = Guid.Parse("e4000000-0000-4000-8000-0000000000ff");
     internal static readonly Guid CallRequestId = Guid.Parse("e4000000-0000-4000-8000-0000000000aa");
@@ -477,11 +672,17 @@ public sealed class DriverVoiceHttpWebApplicationFactory : WebApplicationFactory
 
         public IReadOnlyList<string> LastFieldNames { get; private set; } = [];
 
+        public (VoicePhoneNumber Recipient, Guid OrganizationId, Guid CallRequestId)? LastBridge { get; private set; }
+
+        public (Guid OrganizationId, Guid CallRequestId)? LastScreen { get; private set; }
+
         public void Reset()
         {
             Volatile.Write(ref calls, 0);
             LastPathAndQuery = null;
             LastFieldNames = [];
+            LastBridge = null;
+            LastScreen = null;
         }
 
         public VoiceWebhookVerdict Verify(VoiceWebhookRequest request)
@@ -493,6 +694,22 @@ public sealed class DriverVoiceHttpWebApplicationFactory : WebApplicationFactory
         }
 
         public string BuildInboundCallResponse() => InboundTwiml;
+
+        public string BuildBridgeResponse(VoicePhoneNumber recipient, Guid organizationId, Guid callRequestId)
+        {
+            LastBridge = (recipient, organizationId, callRequestId);
+            return BridgeTwiml;
+        }
+
+        public string BuildRecipientScreenResponse(Guid organizationId, Guid callRequestId)
+        {
+            LastScreen = (organizationId, callRequestId);
+            return ScreenTwiml;
+        }
+
+        public string BuildConnectResponse() => ConnectTwiml;
+
+        public string BuildHangupResponse() => HangupTwiml;
     }
 
     internal sealed class StubPhoneService : IDriverPhoneService
@@ -548,6 +765,11 @@ public sealed class DriverVoiceHttpWebApplicationFactory : WebApplicationFactory
 
         public ConcurrentQueue<VoiceCallStatusReport> Reports { get; private set; } = new();
 
+        public ConcurrentQueue<(string Step, VoiceKeypress Keypress)> Keypresses { get; private set; } = new();
+
+        /// <summary>What a driver's 1 gets; anything but a 1 always hangs up.</summary>
+        public RecipientCallBridgeDecision DriverDecision { get; set; } = RecipientCallBridgeDecision.Hangup;
+
         public void Reset()
         {
             Volatile.Write(ref invocations, 0);
@@ -555,6 +777,8 @@ public sealed class DriverVoiceHttpWebApplicationFactory : WebApplicationFactory
             Availability = RecipientCallAvailabilityResult.Yes;
             Requests = new();
             Reports = new();
+            Keypresses = new();
+            DriverDecision = RecipientCallBridgeDecision.Hangup;
         }
 
         public Task<RecipientCallAvailabilityResult> GetAvailabilityAsync(
@@ -588,6 +812,20 @@ public sealed class DriverVoiceHttpWebApplicationFactory : WebApplicationFactory
             Interlocked.Increment(ref invocations);
             Reports.Enqueue(report);
             return Task.FromResult(true);
+        }
+
+        public Task<RecipientCallBridgeDecision> ConfirmDriverAsync(VoiceKeypress keypress, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref invocations);
+            Keypresses.Enqueue(("driver", keypress));
+            return Task.FromResult(keypress.Confirmed ? DriverDecision : RecipientCallBridgeDecision.Hangup);
+        }
+
+        public Task<bool> ConfirmRecipientAsync(VoiceKeypress keypress, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref invocations);
+            Keypresses.Enqueue(("recipient", keypress));
+            return Task.FromResult(keypress.Confirmed);
         }
     }
 }

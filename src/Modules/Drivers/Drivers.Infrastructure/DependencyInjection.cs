@@ -48,7 +48,8 @@ public static class DependencyInjection
                 "Drivers:LocationTelemetry is invalid.")
             .Validate(options => options.RecipientCalls is { } calls && calls.IsValid(),
                 "Drivers:RecipientCalls needs MaximumPerOrder 1-20, OrderWindowMinutes 1-60, " +
-                "MaximumPerDriverPerHour 1-200 (not below MaximumPerOrder) and IdempotencyLifetimeMinutes 60-10080.")
+                "MaximumPerDriverPerHour 1-200 (not below MaximumPerOrder), IdempotencyLifetimeMinutes 60-10080 and " +
+                "StaleRequestSeconds 60-3600.")
             .ValidateOnStart();
 
         services.TryAddSingleton(serviceProvider =>

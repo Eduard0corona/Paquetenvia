@@ -36,12 +36,20 @@ public sealed class RecipientCallOptions
 
     public int IdempotencyLifetimeMinutes { get; set; } = 1440;
 
+    /// <summary>
+    /// A request still REQUESTED this long after it was made was abandoned between its two transactions (for example a
+    /// process restart): a replay of its key ends it UNCONFIRMED (the call may have rung) instead of answering
+    /// REQUESTED forever. Well above the provider timeout.
+    /// </summary>
+    public int StaleRequestSeconds { get; set; } = 300;
+
     public bool IsValid() =>
         MaximumPerOrder is >= 1 and <= 20 &&
         OrderWindowMinutes is >= 1 and <= 60 &&
         MaximumPerDriverPerHour is >= 1 and <= 200 &&
         MaximumPerDriverPerHour >= MaximumPerOrder &&
-        IdempotencyLifetimeMinutes is >= 60 and <= 10_080;
+        IdempotencyLifetimeMinutes is >= 60 and <= 10_080 &&
+        StaleRequestSeconds is >= 60 and <= 3600;
 }
 
 public sealed class DriverLocationTelemetryOptions

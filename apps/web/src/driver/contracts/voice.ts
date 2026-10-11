@@ -41,6 +41,8 @@ export type RecipientCallStatus = (typeof recipientCallStatuses)[number];
 export interface RecipientCallAvailability {
   readonly available: boolean;
   readonly reason: RecipientCallReason | null;
+  /** Only with RATE_LIMITED: the seconds until a new request fits (the PWA checks again then); null otherwise. */
+  readonly retry_after_seconds: number | null;
 }
 
 export interface RecipientCallRequest {
@@ -65,13 +67,25 @@ export class VoiceContractError extends Error {
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const timestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2})$/;
 
-/** AI-05 RecipientCallAvailability: exactly `available` and a closed `reason` (null when available). */
+/**
+ * AI-05 RecipientCallAvailability: exactly `available`, a closed `reason` (null when available) and
+ * `retry_after_seconds` (1-3600 with RATE_LIMITED, null otherwise).
+ */
 export function parseRecipientCallAvailability(value: unknown): RecipientCallAvailability {
   const root = object(value);
-  exact(root, ["available", "reason"]);
+  exact(root, ["available", "reason", "retry_after_seconds"]);
   if (typeof root.available !== "boolean") throw new VoiceContractError();
   if (root.available ? root.reason !== null : !isReason(root.reason)) throw new VoiceContractError();
-  return Object.freeze({ available: root.available, reason: root.reason as RecipientCallReason | null });
+  const retryAfter = root.retry_after_seconds;
+  const retryAfterValid = root.reason === "RATE_LIMITED"
+    ? typeof retryAfter === "number" && Number.isInteger(retryAfter) && retryAfter >= 1 && retryAfter <= 3600
+    : retryAfter === null;
+  if (!retryAfterValid) throw new VoiceContractError();
+  return Object.freeze({
+    available: root.available,
+    reason: root.reason as RecipientCallReason | null,
+    retry_after_seconds: retryAfter as number | null,
+  });
 }
 
 /** AI-05 RecipientCallRequest: the request id and its status, never a number. */

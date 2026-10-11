@@ -105,6 +105,18 @@ public sealed record RecipientCallProtectedPhones(
     string RecipientKeyVersion)
 {
     public override string ToString() => "RecipientCallProtectedPhones { [redacted] }";
+
+    public ProtectedRecipientPhone Recipient => new(LocationOwnerOrganizationId, LocationId, RecipientCiphertext, RecipientKeyVersion);
+}
+
+/// <summary>The stored, protected phone of a delivery recipient, with the location row it is bound to.</summary>
+public sealed record ProtectedRecipientPhone(
+    Guid LocationOwnerOrganizationId,
+    Guid LocationId,
+    byte[] Ciphertext,
+    string KeyVersion)
+{
+    public override string ToString() => "ProtectedRecipientPhone { [redacted] }";
 }
 
 /// <summary>Why a stored phone cannot be used for a call. It never carries the value.</summary>
@@ -135,6 +147,9 @@ public interface IRecipientCallPhoneResolver
     Task<(VoicePhoneNumber Driver, VoicePhoneNumber Recipient)> ResolveAsync(
         RecipientCallProtectedPhones phones,
         CancellationToken cancellationToken);
+
+    /// <summary>The recipient alone, for the driver's key press (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11).</summary>
+    Task<VoicePhoneNumber> ResolveRecipientAsync(ProtectedRecipientPhone phone, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -148,38 +163,53 @@ public sealed class EnvelopeRecipientCallPhoneResolver(IPiiEnvelopeProtector env
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(phones);
-        var driverDigits = await UnprotectAsync(
-                new PiiBinding(phones.DriverOrganizationId, phones.DriverId),
-                VoicePiiPurposes.DriverPhone,
-                phones.DriverCiphertext,
-                phones.DriverKeyVersion,
-                RecipientCallPhoneProblem.DriverPhoneUnreadable,
-                cancellationToken)
-            .ConfigureAwait(false);
-        var recipientDigits = await UnprotectAsync(
-                new PiiBinding(phones.LocationOwnerOrganizationId, phones.LocationId),
-                VoicePiiPurposes.LocationPhone,
-                phones.RecipientCiphertext,
-                phones.RecipientKeyVersion,
-                RecipientCallPhoneProblem.RecipientPhoneUnusable,
-                cancellationToken)
-            .ConfigureAwait(false);
+        // Both unwraps run together. WhenAll rethrows the first failure in task order, so a driver problem is still
+        // reported before a recipient problem, and the numbers are then checked in the same order as before.
+        var driverTask = UnprotectAsync(
+            new PiiBinding(phones.DriverOrganizationId, phones.DriverId),
+            VoicePiiPurposes.DriverPhone,
+            phones.DriverCiphertext,
+            phones.DriverKeyVersion,
+            RecipientCallPhoneProblem.DriverPhoneUnreadable,
+            cancellationToken);
+        var recipientTask = UnprotectRecipientAsync(phones.Recipient, cancellationToken);
+        await Task.WhenAll(driverTask, recipientTask).ConfigureAwait(false);
 
-        if (!DriverPhonePolicy.TryNormalize(driverDigits, out var driver) ||
+        if (!DriverPhonePolicy.TryNormalize(await driverTask.ConfigureAwait(false), out var driver) ||
             !VoicePhoneNumber.TryFromNationalDigits(driver, out var driverNumber) || !driverNumber.IsDialable)
         {
             throw new RecipientCallPhoneException(RecipientCallPhoneProblem.DriverPhoneNotDialable);
         }
 
-        if (!MexicanPhonePolicy.TryNormalize(recipientDigits, out var recipient) ||
-            !VoicePhoneNumber.TryFromNationalDigits(recipient, out var recipientNumber) || !recipientNumber.IsDialable ||
-            string.Equals(driverNumber.E164, recipientNumber.E164, StringComparison.Ordinal))
+        var recipientNumber = RecipientNumber(await recipientTask.ConfigureAwait(false));
+        if (string.Equals(driverNumber.E164, recipientNumber.E164, StringComparison.Ordinal))
         {
             throw new RecipientCallPhoneException(RecipientCallPhoneProblem.RecipientPhoneUnusable);
         }
 
         return (driverNumber, recipientNumber);
     }
+
+    public async Task<VoicePhoneNumber> ResolveRecipientAsync(ProtectedRecipientPhone phone, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(phone);
+        return RecipientNumber(await UnprotectRecipientAsync(phone, cancellationToken).ConfigureAwait(false));
+    }
+
+    private Task<string> UnprotectRecipientAsync(ProtectedRecipientPhone phone, CancellationToken cancellationToken) =>
+        UnprotectAsync(
+            new PiiBinding(phone.LocationOwnerOrganizationId, phone.LocationId),
+            VoicePiiPurposes.LocationPhone,
+            phone.Ciphertext,
+            phone.KeyVersion,
+            RecipientCallPhoneProblem.RecipientPhoneUnusable,
+            cancellationToken);
+
+    private static VoicePhoneNumber RecipientNumber(string digits) =>
+        MexicanPhonePolicy.TryNormalize(digits, out var recipient) &&
+        VoicePhoneNumber.TryFromNationalDigits(recipient, out var number) && number.IsDialable
+            ? number
+            : throw new RecipientCallPhoneException(RecipientCallPhoneProblem.RecipientPhoneUnusable);
 
     private async Task<string> UnprotectAsync(
         PiiBinding binding,
@@ -227,5 +257,13 @@ public sealed class SyntheticRecipientCallPhoneResolver : IRecipientCallPhoneRes
         _ = VoicePhoneNumber.TryParseE164(DriverPlaceholder, out var driver);
         _ = VoicePhoneNumber.TryParseE164(RecipientPlaceholder, out var recipient);
         return Task.FromResult((driver, recipient));
+    }
+
+    public Task<VoicePhoneNumber> ResolveRecipientAsync(ProtectedRecipientPhone phone, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(phone);
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = VoicePhoneNumber.TryParseE164(RecipientPlaceholder, out var recipient);
+        return Task.FromResult(recipient);
     }
 }

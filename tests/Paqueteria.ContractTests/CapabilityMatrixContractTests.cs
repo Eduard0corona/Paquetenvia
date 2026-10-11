@@ -391,8 +391,14 @@ public sealed class CapabilityMatrixContractTests
                 capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
         }
 
-        Assert.DoesNotContain("receiveTwilioCallStatus", TenantCapabilities.All.Keys);
-        Assert.DoesNotContain("answerTwilioInboundCall", TenantCapabilities.All.Keys);
+        foreach (var webhook in new[]
+                 {
+                     "receiveTwilioCallStatus", "answerTwilioInboundCall", "confirmTwilioDriverKeypress",
+                     "screenTwilioRecipient", "confirmTwilioRecipientKeypress",
+                 })
+        {
+            Assert.DoesNotContain(webhook, TenantCapabilities.All.Keys);
+        }
     }
 
     [Fact]

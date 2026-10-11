@@ -64,6 +64,25 @@ internal sealed class TwilioVoiceWebhookVerifier(IOptions<VoiceBridgeOptions> op
         return TwilioTwiml.Inbound(twilio, company, forward);
     }
 
+    public string BuildBridgeResponse(VoicePhoneNumber recipient, Guid organizationId, Guid callRequestId)
+    {
+        ArgumentNullException.ThrowIfNull(recipient);
+        var twilio = options.Value.Twilio;
+        if (!VoicePhoneNumber.TryParseE164(twilio.CompanyNumber, out var company) || !recipient.IsDialable)
+        {
+            return TwilioTwiml.Hangup();
+        }
+
+        return TwilioTwiml.Bridge(twilio, company, recipient, organizationId, callRequestId);
+    }
+
+    public string BuildRecipientScreenResponse(Guid organizationId, Guid callRequestId) =>
+        TwilioTwiml.RecipientScreen(options.Value.Twilio, organizationId, callRequestId);
+
+    public string BuildConnectResponse() => TwilioTwiml.Connect();
+
+    public string BuildHangupResponse() => TwilioTwiml.Hangup();
+
     /// <summary>The Twilio signature algorithm (also used by the tests to sign synthetic callbacks).</summary>
     internal static string ComputeSignature(
         string authToken,

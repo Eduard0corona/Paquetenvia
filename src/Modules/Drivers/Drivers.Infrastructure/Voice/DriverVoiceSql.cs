@@ -49,6 +49,27 @@ internal static class DriverVoiceSql
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid id ? id : null;
     }
 
+    /// <summary>
+    /// The actor's own driver profile in the selected organization, whatever its status (PENDING, ACTIVE, SUSPENDED or
+    /// INACTIVE). Only for reading and erasing the driver's own phone (ARCO): a driver that is no longer active can
+    /// always see and remove the number it registered. The session already requires an active DRIVER membership.
+    /// </summary>
+    public static async Task<Guid?> ResolveOwnDriverProfileAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid actorId,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = Command(
+            connection,
+            transaction,
+            "SELECT p.id FROM drivers.driver_profiles p WHERE p.user_id=@actor AND p.org_id=@organization");
+        command.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
+        command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid id ? id : null;
+    }
+
     public static async Task WriteAuditAsync(
         IAppendOnlyAuditWriter writer,
         IAuditPayloadRedactor redactor,

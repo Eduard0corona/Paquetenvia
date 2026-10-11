@@ -13,11 +13,12 @@ using static Drivers.Infrastructure.Voice.DriverVoiceSql;
 namespace Drivers.Infrastructure.Voice;
 
 /// <summary>
-/// VOICE-001: the driver's own mobile number for the masked bridge. Reading and removing work whatever the mode (a
-/// driver can always see that a number is stored and erase it); registering requires an enabled bridge. Protection
-/// (ADP-001 Key Vault envelope in live mode) runs between two tenant transactions, so no Key Vault call is made while
-/// a database transaction is held. The number is never returned, logged or audited: the audit row records only that
-/// a number was registered or removed and the consent version.
+/// VOICE-001: the driver's own mobile number for the masked bridge. Reading and removing work whatever the mode and
+/// whatever the driver profile's status (a SUSPENDED or INACTIVE driver can always see that a number is stored and
+/// erase it: ARCO); registering requires an enabled bridge and an ACTIVE driver. Protection (ADP-001 Key Vault
+/// envelope in live mode) runs between two tenant transactions, so no Key Vault call is made while a database
+/// transaction is held. The number is never returned, logged or audited: the audit row records only that a number
+/// was registered or removed and the consent version.
 /// </summary>
 public sealed class PostgreSqlDriverPhoneService(
     TenantTransactionContext<DriversDbContext> transactionContext,
@@ -33,7 +34,7 @@ public sealed class PostgreSqlDriverPhoneService(
     public const string EntityType = "DriverProfile";
 
     public Task<DriverPhoneStatusResult> GetAsync(Guid actorId, Guid organizationId, CancellationToken cancellationToken) =>
-        RunAsync(actorId, organizationId, (connection, transaction, driverId, token) =>
+        RunAsync(actorId, organizationId, activeOnly: false, (connection, transaction, driverId, token) =>
             ReadStatusAsync(connection, transaction, driverId, token), cancellationToken);
 
     public async Task<DriverPhoneStatusResult> RegisterAsync(
@@ -53,10 +54,12 @@ public sealed class PostgreSqlDriverPhoneService(
             throw new ArgumentException("The driver phone command is invalid.", nameof(command));
         }
 
-        // First transaction: who is the driver (the envelope binds the ciphertext to this row).
+        // First transaction: who is the driver (the envelope binds the ciphertext to this row). Only an ACTIVE driver
+        // registers a number.
         var driverId = await RunAsync(
             command.ActorId,
             command.OrganizationId,
+            activeOnly: true,
             (_, _, driver, _) => Task.FromResult(driver),
             cancellationToken).ConfigureAwait(false);
 
@@ -64,7 +67,7 @@ public sealed class PostgreSqlDriverPhoneService(
             .ConfigureAwait(false);
         var now = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
 
-        return await RunAsync(command.ActorId, command.OrganizationId, async (connection, transaction, driver, token) =>
+        return await RunAsync(command.ActorId, command.OrganizationId, activeOnly: true, async (connection, transaction, driver, token) =>
         {
             if (driver != driverId)
             {
@@ -126,7 +129,9 @@ public sealed class PostgreSqlDriverPhoneService(
         Guid organizationId,
         string? requestId,
         CancellationToken cancellationToken) =>
-        RunAsync(actorId, organizationId, async (connection, transaction, driverId, token) =>
+        // Erasure works for the driver's own profile whatever its status (ARCO): a suspended driver keeps the right to
+        // remove its number.
+        RunAsync(actorId, organizationId, activeOnly: false, async (connection, transaction, driverId, token) =>
         {
             int removed;
             await using (var update = Command(
@@ -168,6 +173,7 @@ public sealed class PostgreSqlDriverPhoneService(
     private async Task<T> RunAsync<T>(
         Guid actorId,
         Guid organizationId,
+        bool activeOnly,
         Func<NpgsqlConnection, NpgsqlTransaction, Guid, CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken)
     {
@@ -183,7 +189,9 @@ public sealed class PostgreSqlDriverPhoneService(
                 async (dbContext, token) =>
                 {
                     var (connection, transaction) = Database(dbContext);
-                    var driverId = await ResolveActiveDriverAsync(connection, transaction, actorId, organizationId, token)
+                    var driverId = await (activeOnly
+                            ? ResolveActiveDriverAsync(connection, transaction, actorId, organizationId, token)
+                            : ResolveOwnDriverProfileAsync(connection, transaction, actorId, organizationId, token))
                         .ConfigureAwait(false) ?? throw new DriverPhoneForbiddenException();
                     return await operation(connection, transaction, driverId, token).ConfigureAwait(false);
                 },

@@ -13,8 +13,8 @@ namespace Drivers.Infrastructure.Persistence.Migrations;
 /// <c>phone_consented_at</c>, all nullable and set or cleared together (<c>driver_profiles_phone_check</c>). No
 /// existing row is rewritten: every driver starts without a number.</item>
 /// <item><c>drivers.recipient_call_requests</c>: one row per call a driver asked for (who, which order and
-/// assignment, provider, status, result code, the provider call id and the final call status and duration). It holds
-/// no phone number. FORCE RLS with a tenant policy on <c>org_id</c> (the driver's organization); the Worker has no
+/// assignment, provider, status, result code, the provider call id, the final call status and duration, and how far
+/// the key-press bridge of VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11 got). It holds no phone number. FORCE RLS with a tenant policy on <c>org_id</c> (the driver's organization); the Worker has no
 /// privilege and the API cannot delete. There is no foreign key into Orders or Dispatch: the order and assignment are
 /// verified under RLS when the row is written, so the Drivers schema does not depend on theirs.</item>
 /// </list>
@@ -53,6 +53,7 @@ public sealed class AddDriverVoiceBridge : Migration
         "requested_at:timestamp with time zone:not-null",
         "completed_at:timestamp with time zone:nullable",
         "status_reported_at:timestamp with time zone:nullable",
+        "bridge_stage:text:nullable",
     });
 
     public const string UpSql =
@@ -119,6 +120,7 @@ public sealed class AddDriverVoiceBridge : Migration
           requested_at timestamptz NOT NULL,
           completed_at timestamptz,
           status_reported_at timestamptz,
+          bridge_stage text,
           CONSTRAINT recipient_call_requests_provider_check CHECK (provider IN ('TWILIO','SYNTHETIC')),
           CONSTRAINT recipient_call_requests_status_check
             CHECK (status IN ('REQUESTED','PLACED','UNCONFIRMED','FAILED')),
@@ -129,7 +131,9 @@ public sealed class AddDriverVoiceBridge : Migration
             ('queued','initiated','ringing','in-progress','completed','busy','no-answer','canceled','failed')),
           CONSTRAINT recipient_call_requests_duration_check
             CHECK (call_duration_seconds IS NULL OR call_duration_seconds BETWEEN 0 AND 86400),
-          CONSTRAINT recipient_call_requests_completion_check CHECK ((status='REQUESTED') = (completed_at IS NULL))
+          CONSTRAINT recipient_call_requests_completion_check CHECK ((status='REQUESTED') = (completed_at IS NULL)),
+          CONSTRAINT recipient_call_requests_bridge_stage_check CHECK (bridge_stage IS NULL OR bridge_stage IN
+            ('DRIVER_CONFIRMED','DRIVER_NOT_CONFIRMED','RECIPIENT_CONFIRMED','RECIPIENT_NOT_CONFIRMED','BRIDGE_FAILED'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS recipient_call_requests_call_sid_key
           ON drivers.recipient_call_requests(provider_call_sid) WHERE provider_call_sid IS NOT NULL;

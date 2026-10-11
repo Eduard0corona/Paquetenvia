@@ -65,14 +65,15 @@ describe("VOICE-001 driver API", () => {
     const calls: string[] = [];
     const fetcher = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
       calls.push(`${init?.method} ${new URL(String(input)).pathname}`);
-      if (String(input).endsWith("/recipient-call")) return json({ available: false, reason: "DRIVER_PHONE_REQUIRED" });
+      if (String(input).endsWith("/recipient-call")) return json({ available: false, reason: "DRIVER_PHONE_REQUIRED", retry_after_seconds: null });
       return json({ voice_calls_enabled: true, registered: false, consent_version: null, consented_at: null });
     });
     const api = createDriverVoiceApi(base, session, fetcher as typeof fetch);
 
     await api.getPhone();
     await api.removePhone();
-    expect(await api.getRecipientCallAvailability(orderId)).toEqual({ available: false, reason: "DRIVER_PHONE_REQUIRED" });
+    expect(await api.getRecipientCallAvailability(orderId))
+      .toEqual({ available: false, reason: "DRIVER_PHONE_REQUIRED", retry_after_seconds: null });
     expect(calls).toEqual([
       "GET /api/v1/driver/me/phone",
       "DELETE /api/v1/driver/me/phone",

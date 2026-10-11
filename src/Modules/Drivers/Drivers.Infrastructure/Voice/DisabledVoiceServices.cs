@@ -36,6 +36,12 @@ public sealed class DisabledRecipientCallService : IRecipientCallService
 
     public Task<bool> RecordStatusAsync(VoiceCallStatusReport report, CancellationToken cancellationToken) =>
         Task.FromResult(false);
+
+    public Task<RecipientCallBridgeDecision> ConfirmDriverAsync(VoiceKeypress keypress, CancellationToken cancellationToken) =>
+        Task.FromResult(RecipientCallBridgeDecision.Hangup);
+
+    public Task<bool> ConfirmRecipientAsync(VoiceKeypress keypress, CancellationToken cancellationToken) =>
+        Task.FromResult(false);
 }
 
 /// <summary>The bridge is disabled: no phone is protected or decrypted.</summary>
@@ -56,4 +62,7 @@ public sealed class DisabledRecipientCallPhoneResolver : IRecipientCallPhoneReso
         CancellationToken cancellationToken) =>
         Task.FromException<(VoicePhoneNumber, VoicePhoneNumber)>(
             new RecipientCallPhoneException(RecipientCallPhoneProblem.ProtectionUnavailable));
+
+    public Task<VoicePhoneNumber> ResolveRecipientAsync(ProtectedRecipientPhone phone, CancellationToken cancellationToken) =>
+        Task.FromException<VoicePhoneNumber>(new RecipientCallPhoneException(RecipientCallPhoneProblem.ProtectionUnavailable));
 }

@@ -9,6 +9,7 @@ using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
+using static Drivers.Endpoints.VoiceEndpointResults;
 
 namespace Drivers.Endpoints;
 
@@ -81,7 +82,10 @@ public static class RecipientCallEndpoints
                 tenantContext.OrganizationId,
                 parsedOrderId,
                 cancellationToken);
-            return Results.Ok(new RecipientCallAvailabilityResponse(result.Available, result.Reason));
+            return Results.Ok(new RecipientCallAvailabilityResponse(
+                result.Available,
+                result.Reason,
+                result.Reason == RecipientCallReasons.RateLimited ? result.RetryAfterSeconds : null));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -178,37 +182,14 @@ public static class RecipientCallEndpoints
             return Unavailable();
         }
     }
-
-    private static bool TrySession(IOrganizationRequestSession session, ITenantContext tenantContext, out Guid actorId)
-    {
-        actorId = default;
-        if (!session.IsActive || session.UserId is not { } id || !tenantContext.IsSelected)
-        {
-            return false;
-        }
-
-        actorId = id;
-        return true;
-    }
-
-    private static IResult Conflict(string code) => Results.Problem(
-        statusCode: StatusCodes.Status409Conflict,
-        title: "Conflict.",
-        extensions: new Dictionary<string, object?> { ["code"] = code });
-
-    private static IResult Forbidden() =>
-        Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Forbidden.");
-
-    private static IResult NotFound() =>
-        Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found.");
-
-    private static IResult Unavailable() =>
-        Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
 }
 
+/// <param name="RetryAfterSeconds">Only with <c>RATE_LIMITED</c>: the seconds until a new request fits (the PWA checks
+/// again then); null otherwise.</param>
 public sealed record RecipientCallAvailabilityResponse(
     [property: JsonPropertyName("available")] bool Available,
-    [property: JsonPropertyName("reason")] string? Reason);
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("retry_after_seconds")] int? RetryAfterSeconds);
 
 public sealed record RecipientCallRequestResponse(
     [property: JsonPropertyName("call_request_id")] Guid CallRequestId,

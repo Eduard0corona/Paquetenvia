@@ -1,5 +1,28 @@
 # Changelog
 
+## Llamadas enmascaradas: confirmar con una tecla (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) — 2026-10-11
+
+- Pregunta y respuesta literales del project owner: "Llamadas enmascaradas: si contesta un buzón de voz, el saludo del
+  buzón puede decir el número del repartidor o del destinatario, y eso rompe el enmascarado. ¿Cómo lo evitamos?" →
+  "Confirmar con una tecla (Recommended)" ("Al repartidor le dice "Presiona 1 para llamar al destinatario". Al
+  destinatario: "Tiene una llamada sobre su envío; presione 1 para contestar" (texto neutro, sin marca). Si nadie
+  presiona, se cuelga sin enlazar. Gratis y no falla con buzones."); registrada como
+  `VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11` en `decision-log.md` y en `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: webhooks firmados `confirmTwilioDriverKeypress`, `screenTwilioRecipient` y `confirmTwilioRecipientKeypress`
+  (esquemas `TwilioKeypressForm` y `TwilioRecipientKeypressForm`); `RecipientCallAvailability.retry_after_seconds`;
+  descripciones de `requestRecipientCall` (tecla en ambos tramos, cualquier 5xx es ambiguo, reserva propia tras un
+  commit, solicitudes abandonadas), `receiveTwilioCallStatus` (nunca promueve una solicitud `FAILED`) y del celular del
+  repartidor (consultar y borrar con cualquier estado del perfil; registrar solo con perfil `ACTIVE`); entrada
+  `VOICE-001-VOICEMAIL-KEYPRESS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` (botón deshabilitado sin conexión solo tras confirmar la disponibilidad,
+  respuestas tardías descartadas, una nueva consulta al terminar la espera) y `driver_account` (borrar el celular con
+  cualquier estado del perfil).
+- AI-08: VOICE-001 agrega la decisión, criterios de aceptación (tecla, 5xx ambiguo, solicitudes abandonadas, ARCO) y
+  pruebas de las teclas.
+- AI-24 `voice_bridge`: `call`, `key_presses`, `resilience`, `request`, `webhooks`, `audit` y `erasure`.
+- Sin cambios en AI-06, AI-18 ni AI-12; la columna `bridge_stage` entra en la migración del lane Drivers
+  `20261011000100_AddDriverVoiceBridge`, que aún no se fusiona. No es un sexto flujo de AI-13 §4.
+
 ## Llamadas enmascaradas repartidor–destinatario con Twilio (VOICE-001) — 2026-10-11
 
 - Preguntas y respuestas literales del project owner: "App del repartidor: hoy no ve el teléfono del destinatario.

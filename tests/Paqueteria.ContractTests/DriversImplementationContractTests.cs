@@ -81,7 +81,8 @@ public sealed class DriversImplementationContractTests
         Assert.Contains(".WithName(\"publishDriverLocation\")", implementation, StringComparison.Ordinal);
         Assert.Contains("Count: >= 1 and <= 20", implementation, StringComparison.Ordinal);
 
-        // VOICE-001-MASKED-CALLS-2026-10-11: the driver's own phone, the recipient call and the two signed webhooks.
+        // VOICE-001-MASKED-CALLS-2026-10-11: the driver's own phone, the recipient call and the signed webhooks (the
+        // status callback, the inbound call and the key-press steps of VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11).
         Assert.Contains("public const string Path = \"/api/v1/driver/me/phone\";", implementation, StringComparison.Ordinal);
         Assert.Contains(
             "public const string Path = \"/api/v1/driver/me/stops/{orderId}/recipient-call\";",
@@ -89,10 +90,13 @@ public sealed class DriversImplementationContractTests
             StringComparison.Ordinal);
         Assert.Contains("endpoints.MapPost(VoiceWebhookPaths.CallStatus,", implementation, StringComparison.Ordinal);
         Assert.Contains("endpoints.MapPost(VoiceWebhookPaths.Inbound,", implementation, StringComparison.Ordinal);
+        Assert.Contains("endpoints.MapPost(VoiceWebhookPaths.DriverConfirm,", implementation, StringComparison.Ordinal);
+        Assert.Contains("endpoints.MapPost(VoiceWebhookPaths.RecipientScreen,", implementation, StringComparison.Ordinal);
+        Assert.Contains("endpoints.MapPost(VoiceWebhookPaths.RecipientConfirm,", implementation, StringComparison.Ordinal);
 
         // Exactly these routes and operation ids, nothing else.
         Assert.Equal(2, Count(implementation, "endpoints.MapGet("));
-        Assert.Equal(4, Count(implementation, "endpoints.MapPost("));
+        Assert.Equal(7, Count(implementation, "endpoints.MapPost("));
         Assert.Equal(1, Count(implementation, "endpoints.MapPut("));
         Assert.Equal(1, Count(implementation, "endpoints.MapDelete("));
         Assert.DoesNotContain("MapPatch(", implementation, StringComparison.Ordinal);
@@ -101,6 +105,8 @@ public sealed class DriversImplementationContractTests
         Assert.Equal(
             [
                 "answerTwilioInboundCall",
+                "confirmTwilioDriverKeypress",
+                "confirmTwilioRecipientKeypress",
                 "getMyDriverPhone",
                 "getRecipientCallAvailability",
                 "publishDriverLocation",
@@ -108,6 +114,7 @@ public sealed class DriversImplementationContractTests
                 "registerMyDriverPhone",
                 "removeMyDriverPhone",
                 "requestRecipientCall",
+                "screenTwilioRecipient",
             ],
             System.Text.RegularExpressions.Regex.Matches(implementation, "\\.WithName\\(\"([A-Za-z]+)\"\\)")
                 .Select(match => match.Groups[1].Value)

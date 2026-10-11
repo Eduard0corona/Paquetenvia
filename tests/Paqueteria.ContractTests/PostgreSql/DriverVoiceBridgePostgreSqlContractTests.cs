@@ -28,9 +28,10 @@ namespace Paqueteria.ContractTests.PostgreSql;
 /// <summary>
 /// VOICE-001-MASKED-CALLS-2026-10-11 against a real PostgreSQL: the Drivers lane migration (catalog, idempotency,
 /// drift refusal, guarded rollback), the driver phone stored with the ADP-001 envelope, and the recipient call
-/// request: DRIVER only, own ACCEPTED or ACTIVE assignment, DELIVERING only, uniform not-found, idempotency, rate
-/// limits, the provider outcome and the signed status callback. No number is ever stored in clear, audited or
-/// returned.
+/// request: DRIVER only, own ACCEPTED or ACTIVE assignment, DELIVERING only, uniform not-found, idempotency (retry-safe,
+/// with abandoned requests ended UNCONFIRMED), rate limits, the provider outcome, the signed status callback and the
+/// key presses of VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11. The driver's own phone stays readable and erasable whatever
+/// the profile's status (ARCO). No number is ever stored in clear, audited or returned to the driver.
 /// </summary>
 [Collection(PostgreSqlContractCollection.Name)]
 [Trait("Category", "PostgreSqlContract")]
@@ -314,6 +315,65 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
         await AssertNoDriverPhoneAsync(scenario.DriverId);
     }
 
+    // ------------------------------------------------------------------ ARCO
+
+    [PostgreSqlContractFact]
+    public async Task A_driver_that_is_no_longer_active_still_reads_and_erases_its_phone_but_registers_and_calls_nothing()
+    {
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        var provider = new FakeVoiceProvider(_ => throw new InvalidOperationException("The provider must not be called."));
+        await using var services = CreateServices(VoiceBridgeMode.Live, vault, provider);
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+
+        await scenario.SetDriverProfileStatusAsync("SUSPENDED");
+
+        // Registering and calling need an ACTIVE driver.
+        await Assert.ThrowsAsync<DriverPhoneForbiddenException>(() =>
+            services.Phones.RegisterAsync(Register(scenario, "5533334444"), default));
+        await Assert.ThrowsAsync<RecipientCallForbiddenException>(() =>
+            services.Calls.GetAvailabilityAsync(scenario.DriverUserId, scenario.OrganizationId, scenario.OrderId, default));
+        await Assert.ThrowsAsync<RecipientCallForbiddenException>(() =>
+            services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-suspended"), default));
+        Assert.Equal(vault.CurrentVersion, (await ReadDriverPhoneAsync(scenario.DriverId)).KeyVersion);
+
+        // Seeing and erasing its own number keep working (ARCO), audited as the driver.
+        Assert.Equal(
+            new DriverPhoneStatusResult(true, true, DriverPhoneConsent.CurrentVersion, Now),
+            await services.Phones.GetAsync(scenario.DriverUserId, scenario.OrganizationId, default));
+        services.Clock.UtcNow = Now.AddMinutes(1);
+        Assert.Equal(
+            new DriverPhoneStatusResult(true, false, null, null),
+            await services.Phones.RemoveAsync(scenario.DriverUserId, scenario.OrganizationId, "req-arco", default));
+        await AssertNoDriverPhoneAsync(scenario.DriverId);
+        Assert.Equal(
+            ("DRIVER_PHONE_REMOVED", (Guid?)scenario.DriverUserId, scenario.DriverId),
+            (await ReadAuditsAsync(scenario.OrganizationId, "DriverProfile"))
+                .Select(audit => (audit.Action, audit.ActorId, audit.EntityId))
+                .Last());
+
+        // The same for an INACTIVE or a PENDING profile; a member without a driver profile still has nothing here.
+        foreach (var status in new[] { "INACTIVE", "PENDING" })
+        {
+            await scenario.SetDriverProfileStatusAsync(status);
+            Assert.Equal(
+                new DriverPhoneStatusResult(true, false, null, null),
+                await services.Phones.GetAsync(scenario.DriverUserId, scenario.OrganizationId, default));
+            Assert.Equal(
+                new DriverPhoneStatusResult(true, false, null, null),
+                await services.Phones.RemoveAsync(scenario.DriverUserId, scenario.OrganizationId, null, default));
+            await Assert.ThrowsAsync<DriverPhoneForbiddenException>(() =>
+                services.Phones.RegisterAsync(Register(scenario, DriverDigits), default));
+        }
+
+        await Assert.ThrowsAsync<DriverPhoneForbiddenException>(() =>
+            services.Phones.RemoveAsync(scenario.DispatcherUserId, scenario.OrganizationId, null, default));
+        Assert.Single(
+            await ReadAuditsAsync(scenario.OrganizationId, "DriverProfile"),
+            audit => audit.Action == "DRIVER_PHONE_REMOVED");
+        Assert.Empty(provider.Calls);
+    }
+
     // ------------------------------------------------------------------ recipient call
 
     [PostgreSqlContractFact]
@@ -510,17 +570,24 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
             (await Assert.ThrowsAsync<RecipientCallConflictException>(() =>
                 services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default))).Code);
 
-        // Two calls that may ring fill the order window; failed ones never count.
+        // Two calls that may ring fill the order window; failed ones never count. A 5xx after the request left may
+        // have created the call: UNCONFIRMED, its key kept and counted like a placed call.
         outcome = new VoiceBridgeResult(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed);
         Assert.Equal(RecipientCallStatuses.Placed, (await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default)).Status);
-        outcome = new VoiceBridgeResult(VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Timeout);
+        outcome = new VoiceBridgeResult(VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable);
         Assert.Equal(RecipientCallStatuses.Unconfirmed, (await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-2"), default)).Status);
+        var ambiguousKey = await ReadIdempotencyAsync(scenario.OrganizationId, "voice-001-idem-key-2");
+        Assert.Equal(202, ambiguousKey.Status);
+        Assert.Equal("UNCONFIRMED", JsonDocument.Parse(ambiguousKey.Body!).RootElement.GetProperty("status").GetString());
+        var ambiguousRow = await ReadCallRequestAsync(ambiguousKey.ResourceId!.Value);
+        Assert.Equal(("UNCONFIRMED", "VOICE_PROVIDER_UNAVAILABLE"), (ambiguousRow.Status, ambiguousRow.ResultCode));
 
         var limited = await Assert.ThrowsAsync<RecipientCallRateLimitedException>(() =>
             services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-3"), default));
         Assert.Equal(TimeSpan.FromMinutes(15), limited.RetryAfter);
+        // The availability says when to check again.
         Assert.Equal(
-            RecipientCallAvailabilityResult.No(RecipientCallReasons.RateLimited),
+            new RecipientCallAvailabilityResult(false, RecipientCallReasons.RateLimited, 900),
             await services.Calls.GetAvailabilityAsync(scenario.DriverUserId, scenario.OrganizationId, scenario.OrderId, default));
         Assert.Null(await TryReadIdempotencyAsync(scenario.OrganizationId, "voice-001-idem-key-3"));
         Assert.Equal(4, provider.Calls.Count);
@@ -586,6 +653,369 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
     }
 
     [PostgreSqlContractFact]
+    public async Task The_status_callback_never_promotes_a_failed_request_but_may_complete_one_in_flight()
+    {
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        VoiceServices? current = null;
+        var outcome = new VoiceBridgeResult(VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.Rejected);
+        var provider = new FakeVoiceProvider(
+            _ => outcome,
+            async request =>
+            {
+                if (outcome.Outcome == VoiceBridgeOutcome.Placed)
+                {
+                    // The provider's final report arrives before the request recorded its own outcome.
+                    Assert.True(await current!.Calls.RecordStatusAsync(
+                        new VoiceCallStatusReport(request.OrganizationId, request.CallRequestId, CallSid, "no-answer", 0),
+                        default));
+                }
+            });
+        await using var services = CreateServices(VoiceBridgeMode.Live, vault, provider);
+        current = services;
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+
+        // A request answered as definitively failed (nothing was created) stays FAILED whatever a callback says.
+        await Assert.ThrowsAsync<RecipientCallUnavailableException>(() =>
+            services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default));
+        var failedId = await SingleRequestIdAsync(scenario.OrganizationId, "FAILED");
+        Assert.False(await services.Calls.RecordStatusAsync(
+            new VoiceCallStatusReport(scenario.OrganizationId, failedId, OtherCallSid, "completed", 30), default));
+        var failed = await ReadCallRequestAsync(failedId);
+        Assert.Equal(
+            ("FAILED", "VOICE_PROVIDER_REJECTED", (string?)null, (string?)null),
+            (failed.Status, failed.ResultCode, failed.ProviderCallSid, failed.ProviderCallStatus));
+
+        // A callback that completes the request while it is still REQUESTED: the request keeps that answer, writes no
+        // second outcome and settles its key with it.
+        outcome = new VoiceBridgeResult(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed, CallSid);
+        var placed = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-2"), default);
+        Assert.Equal(RecipientCallStatuses.Placed, placed.Status);
+        var row = await ReadCallRequestAsync(placed.CallRequestId);
+        Assert.Equal(
+            ("PLACED", "VOICE_CALL_REQUESTED", CallSid, "no-answer", (int?)0),
+            (row.Status, row.ResultCode, row.ProviderCallSid, row.ProviderCallStatus, row.DurationSeconds));
+        Assert.Equal(
+            "PLACED",
+            JsonDocument.Parse((await ReadIdempotencyAsync(scenario.OrganizationId, "voice-001-idem-key-2")).Body!).RootElement
+                .GetProperty("status").GetString());
+        Assert.Equal(
+            ["RECIPIENT_CALL_REQUESTED", "RECIPIENT_CALL_STATUS_REPORTED"],
+            (await ReadAuditsAsync(scenario.OrganizationId, "RecipientCallRequest"))
+                .Where(audit => audit.EntityId == placed.CallRequestId)
+                .Select(audit => audit.Action));
+    }
+
+    // ------------------------------------------------------------------ retries and abandoned requests
+
+    [PostgreSqlContractFact]
+    public async Task A_retry_after_the_reservation_committed_goes_on_placing_its_own_call()
+    {
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        var provider = new FakeVoiceProvider(_ => new(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed, CallSid));
+        CrashOnceResolver? crashing = null;
+        var callRequestId = Guid.NewGuid();
+        await using var services = CreateServices(
+            VoiceBridgeMode.Live,
+            vault,
+            provider,
+            newCallRequestId: () => callRequestId,
+            wrapResolver: inner => crashing = new CrashOnceResolver(inner));
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+
+        // Transaction 1 commits (reservation, REQUESTED row, audit) and the attempt stops before the provider is called,
+        // as when the commit's answer is lost and the execution strategy runs transaction 1 again.
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default));
+        Assert.Equal("REQUESTED", (await ReadCallRequestAsync(callRequestId)).Status);
+        Assert.Equal(((int?)null, (Guid?)callRequestId), await PendingReservationAsync(scenario.OrganizationId, "voice-001-idem-key-1"));
+        Assert.Empty(provider.Calls);
+
+        // The retry, with the same call request id, recognizes its own reservation: nothing is written twice and the
+        // call it reserved is placed.
+        crashing!.Crash = false;
+        var result = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default);
+
+        Assert.Equal(new RecipientCallRequestResult(callRequestId, RecipientCallStatuses.Placed), result);
+        Assert.Equal(callRequestId, Assert.Single(provider.Calls).CallRequestId);
+        var row = Assert.Single(await ReadCallRequestsAsync(scenario.OrganizationId));
+        Assert.Equal(("PLACED", "VOICE_CALL_PLACED", CallSid), (row.Status, row.ResultCode, row.ProviderCallSid));
+        Assert.Equal(202, (await ReadIdempotencyAsync(scenario.OrganizationId, "voice-001-idem-key-1")).Status);
+        Assert.Equal(
+            ["RECIPIENT_CALL_REQUESTED", "RECIPIENT_CALL_PLACED"],
+            (await ReadAuditsAsync(scenario.OrganizationId, "RecipientCallRequest")).Select(audit => audit.Action));
+
+        // If the stop stopped qualifying in between, the resumed reservation places nothing and releases its key.
+        callRequestId = Guid.NewGuid();
+        crashing!.Crash = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-2"), default));
+        await scenario.SetOrderStatusAsync("DELIVERED");
+        crashing!.Crash = false;
+        Assert.Equal(
+            RecipientCallConflictCodes.OrderStateNotAllowed,
+            (await Assert.ThrowsAsync<RecipientCallConflictException>(() =>
+                services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-2"), default))).Code);
+        var refused = await ReadCallRequestAsync(callRequestId);
+        Assert.Equal(("FAILED", "VOICE_REQUEST_REFUSED"), (refused.Status, refused.ResultCode));
+        Assert.Null(await TryReadIdempotencyAsync(scenario.OrganizationId, "voice-001-idem-key-2"));
+        Assert.Single(provider.Calls);
+    }
+
+    [PostgreSqlContractFact]
+    public async Task A_request_abandoned_between_its_transactions_ends_unconfirmed_on_a_late_replay()
+    {
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        var provider = new FakeVoiceProvider(_ => throw new InvalidOperationException("The provider must not be called."));
+        await using var services = CreateServices(
+            VoiceBridgeMode.Live,
+            vault,
+            provider,
+            wrapResolver: inner => new CrashOnceResolver(inner));
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+
+        // The process stops after transaction 1: the row stays REQUESTED (the call may or may not ring).
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default));
+        var abandonedId = await SingleRequestIdAsync(scenario.OrganizationId, "REQUESTED");
+
+        // While it may still be in flight, a replay answers REQUESTED and calls nobody.
+        services.Clock.UtcNow = Now.AddSeconds(299);
+        Assert.Equal(
+            new RecipientCallRequestResult(abandonedId, RecipientCallStatuses.Requested),
+            await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default));
+
+        // Once stale, the replay ends it UNCONFIRMED (never retried: the call may have rung) and settles the key.
+        services.Clock.UtcNow = Now.AddSeconds(301);
+        var ended = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default);
+        Assert.Equal(new RecipientCallRequestResult(abandonedId, RecipientCallStatuses.Unconfirmed), ended);
+        var row = await ReadCallRequestAsync(abandonedId);
+        Assert.Equal(
+            ("UNCONFIRMED", "VOICE_OUTCOME_UNKNOWN", (DateTimeOffset?)Now.AddSeconds(301)),
+            (row.Status, row.ResultCode, row.CompletedAt));
+        var key = await ReadIdempotencyAsync(scenario.OrganizationId, "voice-001-idem-key-1");
+        Assert.Equal(202, key.Status);
+        Assert.Equal("UNCONFIRMED", JsonDocument.Parse(key.Body!).RootElement.GetProperty("status").GetString());
+        var audits = await ReadAuditsAsync(scenario.OrganizationId, "RecipientCallRequest");
+        Assert.Equal(
+            [("RECIPIENT_CALL_REQUESTED", (Guid?)scenario.DriverUserId), ("RECIPIENT_CALL_UNCONFIRMED", scenario.DriverUserId)],
+            audits.Select(audit => (audit.Action, audit.ActorId)));
+        Assert.Equal(
+            "VOICE_OUTCOME_UNKNOWN",
+            JsonDocument.Parse(audits[1].Payload).RootElement.GetProperty("result_code").GetString());
+
+        // Later replays answer the stored UNCONFIRMED; a final callback can still complete it.
+        Assert.Equal(ended, await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default));
+        Assert.Equal(2, (await ReadAuditsAsync(scenario.OrganizationId, "RecipientCallRequest")).Count);
+        Assert.True(await services.Calls.RecordStatusAsync(
+            new VoiceCallStatusReport(scenario.OrganizationId, abandonedId, CallSid, "completed", 12), default));
+        Assert.Equal("PLACED", (await ReadCallRequestAsync(abandonedId)).Status);
+        Assert.Empty(provider.Calls);
+    }
+
+    // ------------------------------------------------------------------ key presses (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11)
+
+    [PostgreSqlContractFact]
+    public async Task Only_the_drivers_timely_1_dials_the_recipient_and_only_the_recipients_1_connects_them()
+    {
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        var provider = new FakeVoiceProvider(request =>
+            new(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed, SidFor(request.CallRequestId)));
+        await using var services = CreateServices(VoiceBridgeMode.Live, vault, provider, ManyCalls());
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+        var organizationId = scenario.OrganizationId;
+        var call = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default);
+        var sid = SidFor(call.CallRequestId);
+        Assert.Null(await ReadBridgeStageAsync(call.CallRequestId));
+
+        // The driver pressed 1: the recipient's number comes back, only in memory, for the provider's TwiML.
+        services.Clock.UtcNow = Now.AddSeconds(10);
+        var decision = await services.Calls.ConfirmDriverAsync(new VoiceKeypress(organizationId, call.CallRequestId, sid, true), default);
+        Assert.Equal("+52" + RecipientDigits, decision.Recipient?.E164);
+        Assert.Equal("DRIVER_CONFIRMED", await ReadBridgeStageAsync(call.CallRequestId));
+
+        // A replayed or repeated 1 never dials again.
+        Assert.Null((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, call.CallRequestId, sid, true), default)).Recipient);
+
+        // The recipient pressed 1 on the platform's call: both legs are connected, once.
+        services.Clock.UtcNow = Now.AddSeconds(20);
+        Assert.True(await services.Calls.ConfirmRecipientAsync(new VoiceKeypress(organizationId, call.CallRequestId, sid, true), default));
+        Assert.Equal("RECIPIENT_CONFIRMED", await ReadBridgeStageAsync(call.CallRequestId));
+        Assert.False(await services.Calls.ConfirmRecipientAsync(new VoiceKeypress(organizationId, call.CallRequestId, sid, true), default));
+        Assert.Null((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, call.CallRequestId, sid, true), default)).Recipient);
+
+        var audits = await ReadAuditsAsync(organizationId, "RecipientCallRequest");
+        Assert.Equal(
+            [
+                ("RECIPIENT_CALL_REQUESTED", (Guid?)scenario.DriverUserId),
+                ("RECIPIENT_CALL_PLACED", scenario.DriverUserId),
+                ("RECIPIENT_CALL_DRIVER_CONFIRMED", null),
+                ("RECIPIENT_CALL_BRIDGED", null),
+            ],
+            audits.Select(audit => (audit.Action, audit.ActorId)));
+        var bridged = JsonDocument.Parse(audits[3].Payload).RootElement;
+        Assert.Equal(
+            ["bridge_stage", "call_request_id", "call_sid", "order_id"],
+            bridged.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(("RECIPIENT_CONFIRMED", sid), (bridged.GetProperty("bridge_stage").GetString(), bridged.GetProperty("call_sid").GetString()));
+
+        // The number was only ever returned: never stored, audited or published.
+        Assert.Single(provider.Calls);
+        Assert.Equal(0L, await CountRowsContainingAsync(organizationId, DriverDigits, RecipientDigits));
+        Assert.Equal(
+            0L,
+            await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(
+                fixture.AdminDataSource, organizationId, [DriverDigits, RecipientDigits, "+52" + RecipientDigits]));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Without_a_1_nobody_is_bridged_the_outcome_is_recorded_and_nothing_is_retried()
+    {
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        var provider = new FakeVoiceProvider(request =>
+            new(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed, SidFor(request.CallRequestId)));
+        await using var services = CreateServices(VoiceBridgeMode.Live, vault, provider, ManyCalls());
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+        var organizationId = scenario.OrganizationId;
+
+        // The driver leg reached a voicemail (or the driver pressed nothing): hang up, the recipient is never dialed.
+        var first = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default);
+        var firstSid = SidFor(first.CallRequestId);
+        services.Clock.UtcNow = Now.AddSeconds(10);
+        Assert.Null((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, first.CallRequestId, firstSid, false), default)).Recipient);
+        Assert.Equal("DRIVER_NOT_CONFIRMED", await ReadBridgeStageAsync(first.CallRequestId));
+        // A later 1 and the recipient step change nothing.
+        Assert.Null((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, first.CallRequestId, firstSid, true), default)).Recipient);
+        Assert.False(await services.Calls.ConfirmRecipientAsync(
+            new VoiceKeypress(organizationId, first.CallRequestId, firstSid, true), default));
+        Assert.Equal("DRIVER_NOT_CONFIRMED", await ReadBridgeStageAsync(first.CallRequestId));
+
+        // The driver pressed 1 but the recipient's voicemail (or the recipient) pressed nothing: never connected.
+        services.Clock.UtcNow = Now.AddSeconds(20);
+        var second = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-2"), default);
+        var secondSid = SidFor(second.CallRequestId);
+        services.Clock.UtcNow = Now.AddSeconds(30);
+        Assert.NotNull((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, second.CallRequestId, secondSid, true), default)).Recipient);
+        services.Clock.UtcNow = Now.AddSeconds(40);
+        Assert.False(await services.Calls.ConfirmRecipientAsync(
+            new VoiceKeypress(organizationId, second.CallRequestId, secondSid, false), default));
+        Assert.Equal("RECIPIENT_NOT_CONFIRMED", await ReadBridgeStageAsync(second.CallRequestId));
+        Assert.False(await services.Calls.ConfirmRecipientAsync(
+            new VoiceKeypress(organizationId, second.CallRequestId, secondSid, true), default));
+
+        // Each outcome is audited once, without a number; nothing was placed again.
+        Assert.Equal(2, provider.Calls.Count);
+        var audits = await ReadAuditsAsync(organizationId, "RecipientCallRequest");
+        Assert.Equal(
+            [
+                ("RECIPIENT_CALL_REQUESTED", first.CallRequestId),
+                ("RECIPIENT_CALL_PLACED", first.CallRequestId),
+                ("RECIPIENT_CALL_NOT_CONFIRMED", first.CallRequestId),
+                ("RECIPIENT_CALL_REQUESTED", second.CallRequestId),
+                ("RECIPIENT_CALL_PLACED", second.CallRequestId),
+                ("RECIPIENT_CALL_DRIVER_CONFIRMED", second.CallRequestId),
+                ("RECIPIENT_CALL_NOT_CONFIRMED", second.CallRequestId),
+            ],
+            audits.Select(audit => (audit.Action, audit.EntityId)));
+        Assert.Equal(
+            ["DRIVER_NOT_CONFIRMED", "RECIPIENT_NOT_CONFIRMED"],
+            audits.Where(audit => audit.Action == "RECIPIENT_CALL_NOT_CONFIRMED")
+                .Select(audit => JsonDocument.Parse(audit.Payload).RootElement.GetProperty("bridge_stage").GetString()));
+        Assert.Equal(0L, await CountRowsContainingAsync(organizationId, DriverDigits, RecipientDigits));
+        Assert.Equal(
+            0L,
+            await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(
+                fixture.AdminDataSource, organizationId, [DriverDigits, RecipientDigits, "+52" + RecipientDigits]));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Key_presses_bind_to_the_platforms_own_call_and_fail_closed()
+    {
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        var outcome = new VoiceBridgeResult(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed);
+        var provider = new FakeVoiceProvider(request => outcome.Outcome == VoiceBridgeOutcome.Placed
+            ? outcome with { ProviderCallId = SidFor(request.CallRequestId) }
+            : outcome);
+        await using var services = CreateServices(VoiceBridgeMode.Live, vault, provider, ManyCalls());
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+        var organizationId = scenario.OrganizationId;
+
+        // Another call, another tenant, an unknown request or a malformed call id: nobody is dialed, nothing recorded.
+        var placed = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default);
+        var placedSid = SidFor(placed.CallRequestId);
+        foreach (var keypress in new[]
+                 {
+                     new VoiceKeypress(organizationId, placed.CallRequestId, OtherCallSid, true),
+                     new VoiceKeypress(Guid.NewGuid(), placed.CallRequestId, placedSid, true),
+                     new VoiceKeypress(organizationId, Guid.NewGuid(), placedSid, true),
+                     new VoiceKeypress(organizationId, placed.CallRequestId, "CA-1", true),
+                     new VoiceKeypress(Guid.Empty, placed.CallRequestId, placedSid, true),
+                 })
+        {
+            Assert.Null((await services.Calls.ConfirmDriverAsync(keypress, default)).Recipient);
+            Assert.False(await services.Calls.ConfirmRecipientAsync(keypress, default));
+        }
+
+        Assert.Null(await ReadBridgeStageAsync(placed.CallRequestId));
+        // The recipient step needs the driver's own 1 first.
+        Assert.False(await services.Calls.ConfirmRecipientAsync(
+            new VoiceKeypress(organizationId, placed.CallRequestId, placedSid, true), default));
+        Assert.Null(await ReadBridgeStageAsync(placed.CallRequestId));
+
+        // An ambiguous request has no call id yet: the first key press binds the platform's call to it.
+        outcome = new VoiceBridgeResult(VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable);
+        var ambiguous = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-2"), default);
+        Assert.Equal(RecipientCallStatuses.Unconfirmed, ambiguous.Status);
+        Assert.NotNull((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, ambiguous.CallRequestId, CallSid, true), default)).Recipient);
+        var bound = await ReadCallRequestAsync(ambiguous.CallRequestId);
+        Assert.Equal(("UNCONFIRMED", CallSid), (bound.Status, bound.ProviderCallSid));
+        Assert.False(await services.Calls.ConfirmRecipientAsync(
+            new VoiceKeypress(organizationId, ambiguous.CallRequestId, OtherCallSid, true), default));
+        Assert.True(await services.Calls.ConfirmRecipientAsync(
+            new VoiceKeypress(organizationId, ambiguous.CallRequestId, CallSid, true), default));
+
+        // A failed request never rings: no key press counts for it.
+        outcome = new VoiceBridgeResult(VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.Rejected);
+        await Assert.ThrowsAsync<RecipientCallUnavailableException>(() =>
+            services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-3"), default));
+        var failedId = await SingleRequestIdAsync(organizationId, "FAILED");
+        Assert.Null((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, failedId, OtherCallSid, true), default)).Recipient);
+        Assert.Null(await ReadBridgeStageAsync(failedId));
+
+        // A key press after the window never dials.
+        outcome = new VoiceBridgeResult(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed);
+        var late = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-4"), default);
+        services.Clock.UtcNow = Now.AddMinutes(16);
+        Assert.Null((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, late.CallRequestId, SidFor(late.CallRequestId), true), default)).Recipient);
+        Assert.Null(await ReadBridgeStageAsync(late.CallRequestId));
+
+        // The recipient's number became unusable after the request: the driver's 1 hangs up as BRIDGE_FAILED.
+        var unusable = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-5"), default);
+        await scenario.ClearRecipientPhoneAsync();
+        services.Clock.UtcNow = Now.AddMinutes(17);
+        Assert.Null((await services.Calls.ConfirmDriverAsync(
+            new VoiceKeypress(organizationId, unusable.CallRequestId, SidFor(unusable.CallRequestId), true), default)).Recipient);
+        Assert.Equal("BRIDGE_FAILED", await ReadBridgeStageAsync(unusable.CallRequestId));
+        Assert.Equal(
+            "RECIPIENT_CALL_BRIDGE_FAILED",
+            (await ReadAuditsAsync(organizationId, "RecipientCallRequest")).Last().Action);
+        Assert.Equal(0L, await CountRowsContainingAsync(organizationId, DriverDigits, RecipientDigits));
+    }
+
+    [PostgreSqlContractFact]
     public async Task The_synthetic_mode_never_decrypts_and_places_through_the_deterministic_fake()
     {
         var vault = new Adp001FakeKeyVault();
@@ -630,11 +1060,23 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
     private static RequestRecipientCallCommand Call(VoiceScenario scenario, string key) =>
         new(scenario.DriverUserId, scenario.OrganizationId, scenario.OrderId, key, "req-call");
 
+    /// <summary>Room for several calls of one stop inside the order window.</summary>
+    private static RecipientCallOptions ManyCalls() =>
+        new() { MaximumPerOrder = 10, OrderWindowMinutes = 15, MaximumPerDriverPerHour = 20 };
+
+    /// <summary>A distinct provider call id per request, without digits (the audit redactor masks long digit runs).</summary>
+    private static string SidFor(Guid callRequestId) =>
+        "CA" + new string(callRequestId.ToString("N")
+            .Select(character => char.IsAsciiDigit(character) ? (char)('g' + (character - '0')) : character)
+            .ToArray());
+
     private VoiceServices CreateServices(
         VoiceBridgeMode mode,
         Adp001FakeKeyVault vault,
         FakeVoiceProvider? provider = null,
-        RecipientCallOptions? limits = null)
+        RecipientCallOptions? limits = null,
+        Func<Guid>? newCallRequestId = null,
+        Func<IRecipientCallPhoneResolver, IRecipientCallPhoneResolver>? wrapResolver = null)
     {
         var dataSource = fixture.CreateAppDataSource(maxPoolSize: 2, applicationName: "Paqueteria.VOICE001.Contract");
         var state = new TenantDatabaseExecutionState();
@@ -664,6 +1106,7 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
             VoiceBridgeMode.Synthetic => new SyntheticRecipientCallPhoneResolver(),
             _ => new DisabledRecipientCallPhoneResolver(),
         };
+        resolver = wrapResolver?.Invoke(resolver) ?? resolver;
         var auditWriter = new PostgreSqlAppendOnlyAuditWriter(state);
         var redactor = new AuditPayloadRedactor();
         var clock = new MutableClock { UtcNow = Now };
@@ -678,7 +1121,8 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
                 Provider = DriversProviderKind.PostgreSql,
                 RecipientCalls = limits ?? new RecipientCallOptions(),
             }),
-            NullLogger<PostgreSqlRecipientCallService>.Instance);
+            NullLogger<PostgreSqlRecipientCallService>.Instance,
+            newCallRequestId);
         return new VoiceServices(dataSource, context, phones, calls, clock, envelope);
     }
 
@@ -814,6 +1258,37 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
         }
 
         return rows;
+    }
+
+    private async Task<string?> ReadBridgeStageAsync(Guid id)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            "SELECT bridge_stage FROM drivers.recipient_call_requests WHERE id=@id");
+        command.Parameters.AddWithValue("id", id);
+        return await command.ExecuteScalarAsync() as string;
+    }
+
+    private async Task<Guid> SingleRequestIdAsync(Guid organizationId, string status)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            "SELECT id FROM drivers.recipient_call_requests WHERE org_id=@org AND status=@status");
+        command.Parameters.AddWithValue("org", organizationId);
+        command.Parameters.AddWithValue("status", status);
+        var ids = new List<Guid>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            ids.Add(reader.GetGuid(0));
+        }
+
+        return Assert.Single(ids);
+    }
+
+    private async Task<(int? Status, Guid? ResourceId)> PendingReservationAsync(Guid organizationId, string key)
+    {
+        var reservation = await ReadIdempotencyAsync(organizationId, key);
+        Assert.Null(reservation.Body);
+        return (reservation.Status, reservation.ResourceId);
     }
 
     private async Task<(int? Status, string? Body, Guid? ResourceId)> ReadIdempotencyAsync(Guid organizationId, string key) =>
@@ -1075,6 +1550,12 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
                 SyntheticOrderScenario.P("status", status),
                 SyntheticOrderScenario.P("order", OrderId));
 
+        public Task SetDriverProfileStatusAsync(string status) =>
+            _order.ExecuteAdminAsync(
+                "UPDATE drivers.driver_profiles SET status=@status WHERE id=@driver;",
+                SyntheticOrderScenario.P("status", status),
+                SyntheticOrderScenario.P("driver", DriverId));
+
         public async ValueTask DisposeAsync()
         {
             await _order.ExecuteAdminAsync(
@@ -1100,19 +1581,47 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
         };
     }
 
-    private sealed class FakeVoiceProvider(Func<VoiceBridgeRequest, VoiceBridgeResult> respond) : IVoiceBridgeProvider
+    /// <param name="beforeAnswer">Runs while the provider "holds" the request, before it answers (for example a status
+    /// callback that arrives first).</param>
+    private sealed class FakeVoiceProvider(
+        Func<VoiceBridgeRequest, VoiceBridgeResult> respond,
+        Func<VoiceBridgeRequest, Task>? beforeAnswer = null) : IVoiceBridgeProvider
     {
         public List<(Guid CallRequestId, Guid OrganizationId, string Driver, string Recipient)> Calls { get; } = [];
 
-        public ValueTask<VoiceBridgeResult> PlaceCallAsync(VoiceBridgeRequest request, CancellationToken cancellationToken)
+        public async ValueTask<VoiceBridgeResult> PlaceCallAsync(VoiceBridgeRequest request, CancellationToken cancellationToken)
         {
             Calls.Add((request.CallRequestId, request.OrganizationId, request.Driver.E164, request.Recipient.E164));
-            return ValueTask.FromResult(respond(request));
+            if (beforeAnswer is not null)
+            {
+                await beforeAnswer(request);
+            }
+
+            return respond(request);
         }
     }
 
     private sealed class MutableClock : IClock
     {
         public DateTimeOffset UtcNow { get; set; }
+    }
+
+    /// <summary>
+    /// Stops the attempt right after transaction 1 committed, before the provider is called (as a lost commit answer or a
+    /// process stop would), until <see cref="Crash"/> is cleared.
+    /// </summary>
+    private sealed class CrashOnceResolver(IRecipientCallPhoneResolver inner) : IRecipientCallPhoneResolver
+    {
+        public bool Crash { get; set; } = true;
+
+        public Task<(VoicePhoneNumber Driver, VoicePhoneNumber Recipient)> ResolveAsync(
+            RecipientCallProtectedPhones phones,
+            CancellationToken cancellationToken) =>
+            Crash
+                ? throw new InvalidOperationException("Synthetic stop after transaction 1.")
+                : inner.ResolveAsync(phones, cancellationToken);
+
+        public Task<VoicePhoneNumber> ResolveRecipientAsync(ProtectedRecipientPhone phone, CancellationToken cancellationToken) =>
+            inner.ResolveRecipientAsync(phone, cancellationToken);
     }
 }

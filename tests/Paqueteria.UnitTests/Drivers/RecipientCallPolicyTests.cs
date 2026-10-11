@@ -125,6 +125,11 @@ public sealed class RecipientCallPolicyTests
         Assert.Equal(20, options.MaximumPerDriverPerHour);
         Assert.False(new RecipientCallOptions { MaximumPerOrder = 0 }.IsValid());
         Assert.False(new RecipientCallOptions { MaximumPerDriverPerHour = 1000 }.IsValid());
+        // A request left REQUESTED (for example by a restart) is ended by the next replay of its key after this long.
+        Assert.Equal(300, options.StaleRequestSeconds);
+        Assert.False(new RecipientCallOptions { StaleRequestSeconds = 59 }.IsValid());
+        Assert.False(new RecipientCallOptions { StaleRequestSeconds = 3601 }.IsValid());
+        Assert.Equal(TimeSpan.FromMinutes(15), RecipientCallPolicy.KeypressWindow);
     }
 
     // ------------------------------------------------------------------ phone resolution
@@ -149,6 +154,7 @@ public sealed class RecipientCallPolicyTests
 
     [Theory]
     [InlineData("0511112222", "3312345678", RecipientCallPhoneProblem.DriverPhoneNotDialable)]
+    [InlineData("0511112222", "0312345678", RecipientCallPhoneProblem.DriverPhoneNotDialable)]
     [InlineData("5511112222", "0312345678", RecipientCallPhoneProblem.RecipientPhoneUnusable)]
     [InlineData("5511112222", "not a phone", RecipientCallPhoneProblem.RecipientPhoneUnusable)]
     [InlineData("5511112222", "+52 55 1111 2222", RecipientCallPhoneProblem.RecipientPhoneUnusable)]
@@ -165,6 +171,70 @@ public sealed class RecipientCallPolicyTests
         Assert.Equal(expected, failure.Problem);
         Assert.DoesNotContain(driverPhone, failure.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(recipientPhone, failure.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Live_resolution_unwraps_both_phones_at_the_same_time()
+    {
+        // The driver's unwrap completes only once the recipient's has started: a sequential resolver would wait forever.
+        var envelope = new GatedEnvelope();
+        var phones = new RecipientCallProtectedPhones(
+            Guid.NewGuid(), Guid.NewGuid(), [1], "kv1", Guid.NewGuid(), Guid.NewGuid(), [2], "kv1");
+
+        var (driver, recipient) = await new EnvelopeRecipientCallPhoneResolver(envelope)
+            .ResolveAsync(phones, default)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("+525511112222", driver.E164);
+        Assert.Equal("+523312345678", recipient.E164);
+    }
+
+    [Fact]
+    public async Task The_key_press_resolves_only_the_recipient_with_its_own_binding()
+    {
+        var envelope = new FakeEnvelope();
+        var phones = Phones(envelope, "5511112222", "33 1234 5678");
+
+        var recipient = await new EnvelopeRecipientCallPhoneResolver(envelope).ResolveRecipientAsync(phones.Recipient, default);
+
+        Assert.Equal("+523312345678", recipient.E164);
+        Assert.Equal(
+            [(new PiiBinding(phones.LocationOwnerOrganizationId, phones.LocationId), VoicePiiPurposes.LocationPhone)],
+            envelope.Unprotected);
+        Assert.Equal("ProtectedRecipientPhone { [redacted] }", phones.Recipient.ToString());
+
+        var unusable = new FakeEnvelope();
+        var unusablePhones = Phones(unusable, "5511112222", "0312345678");
+        Assert.Equal(
+            RecipientCallPhoneProblem.RecipientPhoneUnusable,
+            (await Assert.ThrowsAsync<RecipientCallPhoneException>(() =>
+                new EnvelopeRecipientCallPhoneResolver(unusable).ResolveRecipientAsync(unusablePhones.Recipient, default))).Problem);
+        var down = new FakeEnvelope { Failure = new PiiProtectionUnavailableException() };
+        Assert.Equal(
+            RecipientCallPhoneProblem.ProtectionUnavailable,
+            (await Assert.ThrowsAsync<RecipientCallPhoneException>(() =>
+                new EnvelopeRecipientCallPhoneResolver(down).ResolveRecipientAsync(phones.Recipient, default))).Problem);
+
+        var synthetic = await new SyntheticRecipientCallPhoneResolver().ResolveRecipientAsync(phones.Recipient, default);
+        Assert.Equal(SyntheticRecipientCallPhoneResolver.RecipientPlaceholder, synthetic.E164);
+        Assert.False(synthetic.IsDialable);
+        Assert.Equal(
+            RecipientCallPhoneProblem.ProtectionUnavailable,
+            (await Assert.ThrowsAsync<RecipientCallPhoneException>(() =>
+                new DisabledRecipientCallPhoneResolver().ResolveRecipientAsync(phones.Recipient, default))).Problem);
+    }
+
+    [Fact]
+    public void Rate_limited_availability_rounds_the_wait_up_to_whole_seconds()
+    {
+        Assert.Equal(new RecipientCallAvailabilityResult(false, RecipientCallReasons.RateLimited, 62),
+            RecipientCallAvailabilityResult.RateLimited(TimeSpan.FromSeconds(61.2)));
+        Assert.Equal(1, RecipientCallAvailabilityResult.RateLimited(TimeSpan.Zero).RetryAfterSeconds);
+        Assert.Null(RecipientCallAvailabilityResult.Yes.RetryAfterSeconds);
+        Assert.Null(RecipientCallAvailabilityResult.No(RecipientCallReasons.DriverPhoneRequired).RetryAfterSeconds);
+        Assert.Equal("RecipientCallBridgeDecision { Hangup }", RecipientCallBridgeDecision.Hangup.ToString());
+        Assert.True(VoicePhoneNumber.TryParseE164("+523312345678", out var number));
+        Assert.DoesNotContain("3312345678", new RecipientCallBridgeDecision(number).ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -221,6 +291,36 @@ public sealed class RecipientCallPolicyTests
         envelope.Values[(new PiiBinding(phones.DriverOrganizationId, phones.DriverId), VoicePiiPurposes.DriverPhone)] = driver;
         envelope.Values[(new PiiBinding(phones.LocationOwnerOrganizationId, phones.LocationId), VoicePiiPurposes.LocationPhone)] = recipient;
         return phones;
+    }
+
+    /// <summary>Holds the driver's unwrap until the recipient's unwrap has started.</summary>
+    private sealed class GatedEnvelope : IPiiEnvelopeProtector
+    {
+        private readonly TaskCompletionSource recipientStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<PiiProtectedBatch> ProtectAsync(
+            PiiBinding binding,
+            IReadOnlyList<PiiPlaintext> values,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Resolution never protects.");
+
+        public async Task<string> UnprotectAsync(
+            PiiBinding binding,
+            string purpose,
+            byte[] ciphertext,
+            string keyVersion,
+            CancellationToken cancellationToken)
+        {
+            if (purpose == VoicePiiPurposes.DriverPhone)
+            {
+                await recipientStarted.Task.WaitAsync(cancellationToken);
+                return "5511112222";
+            }
+
+            recipientStarted.TrySetResult();
+            await Task.Yield();
+            return "3312345678";
+        }
     }
 
     private sealed class FakeEnvelope : IPiiEnvelopeProtector

@@ -13,10 +13,12 @@ namespace Paqueteria.Infrastructure.Voice;
 /// <summary>
 /// VOICE-001-PROVIDER-TWILIO-2026-10-11 adapter over Twilio Programmable Voice. One REST "create call"
 /// (<c>POST {BaseUri}/2010-04-01/Accounts/{AccountSid}/Calls.json</c>) calls the driver's mobile from the company
-/// number; the inline TwiML greets the driver (no personal data) and dials the recipient with the company number as
-/// caller id, so neither party sees the other's number. Nothing is recorded. Twilio Proxy is not used (Public Beta
-/// without SLA). A create-call request has no idempotency key, so the adapter never retries: an ambiguous answer is
-/// reported as such and the call request ends UNCONFIRMED.
+/// number. Its inline TwiML only asks the driver to press 1 (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11): the recipient's
+/// number is not in it, and the recipient is dialed by the signed key-press webhook only after the driver pressed 1,
+/// through its own screening, so a voicemail never bridges anyone. Neither party sees the other's number and nothing is
+/// recorded. Twilio Proxy is not used (Public Beta without SLA). A create-call request has no idempotency key, so the
+/// adapter never retries: an ambiguous answer (a timeout, a broken answer or any 5xx, after which the call may exist)
+/// is reported as such and the call request ends UNCONFIRMED.
 /// </summary>
 internal sealed partial class TwilioVoiceBridgeProvider(
     IHttpClientFactory httpClientFactory,
@@ -67,17 +69,18 @@ internal sealed partial class TwilioVoiceBridgeProvider(
         var uri = new Uri(
             $"{twilio.BaseUri.TrimEnd('/')}/{ApiVersion}/Accounts/{Uri.EscapeDataString(twilio.AccountSid)}/Calls.json",
             UriKind.Absolute);
-        var statusCallback =
-            twilio.WebhookBaseUri.TrimEnd('/') +
-            VoiceWebhookPaths.CallStatusPathAndQuery(request.OrganizationId, request.CallRequestId);
+        var statusCallback = TwilioTwiml.Url(twilio, VoiceWebhookPaths.CallStatus, request.OrganizationId, request.CallRequestId);
+        // The key presses, the recipient's ringing and screening and the prompts on top of the bridged conversation,
+        // which <Dial timeLimit> caps on its own.
+        var timeLimit = twilio.MaximumCallSeconds + twilio.DriverConfirmSeconds + twilio.RecipientRingSeconds +
+            twilio.RecipientConfirmSeconds + 60;
         var form = new List<KeyValuePair<string, string>>
         {
             new("To", request.Driver.E164),
             new("From", company.E164),
-            new("Twiml", TwilioTwiml.Bridge(twilio, company, request.Recipient)),
+            new("Twiml", TwilioTwiml.DriverLeg(twilio, request.OrganizationId, request.CallRequestId)),
             new("Timeout", twilio.DriverRingSeconds.ToString(CultureInfo.InvariantCulture)),
-            // Greeting and ringing on top of the bridged conversation, which <Dial timeLimit> caps on its own.
-            new("TimeLimit", (twilio.MaximumCallSeconds + twilio.DriverRingSeconds + 60).ToString(CultureInfo.InvariantCulture)),
+            new("TimeLimit", timeLimit.ToString(CultureInfo.InvariantCulture)),
             new("Record", "false"),
             new("StatusCallback", statusCallback),
             new("StatusCallbackMethod", "POST"),
@@ -181,7 +184,9 @@ internal sealed partial class TwilioVoiceBridgeProvider(
         // The provider may have created the call before timing out.
         HttpStatusCode.RequestTimeout or HttpStatusCode.GatewayTimeout =>
             new(VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Timeout),
-        _ when (int)status >= 500 => new(VoiceBridgeOutcome.TransientFailure, VoiceBridgeResultCodes.Unavailable),
+        // Any other 5xx (500, 502, 503...) can also arrive after Twilio created the call: ambiguous, never "nothing was
+        // placed", so the key is kept, the request counts toward the limits and nothing is retried.
+        _ when (int)status >= 500 => new(VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable),
         _ => new(VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.Rejected),
     };
 

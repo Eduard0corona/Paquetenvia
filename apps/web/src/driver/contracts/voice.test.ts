@@ -44,16 +44,27 @@ describe("VOICE-001 contracts", () => {
     for (const code of recipientCallConflictCodes) expect(conflict).toContain(`- ${code}`);
   });
 
-  it("parses availability with a reason only when not available", () => {
-    expect(parseRecipientCallAvailability({ available: true, reason: null })).toEqual({ available: true, reason: null });
-    expect(parseRecipientCallAvailability({ available: false, reason: "DRIVER_PHONE_REQUIRED" }))
-      .toEqual({ available: false, reason: "DRIVER_PHONE_REQUIRED" });
+  it("parses availability with a reason only when not available and a wait only when rate limited", () => {
+    expect(parseRecipientCallAvailability({ available: true, reason: null, retry_after_seconds: null }))
+      .toEqual({ available: true, reason: null, retry_after_seconds: null });
+    expect(parseRecipientCallAvailability({ available: false, reason: "DRIVER_PHONE_REQUIRED", retry_after_seconds: null }))
+      .toEqual({ available: false, reason: "DRIVER_PHONE_REQUIRED", retry_after_seconds: null });
+    expect(parseRecipientCallAvailability({ available: false, reason: "RATE_LIMITED", retry_after_seconds: 900 }))
+      .toEqual({ available: false, reason: "RATE_LIMITED", retry_after_seconds: 900 });
     for (const invalid of [
-      { available: true, reason: "RATE_LIMITED" },
-      { available: false, reason: null },
-      { available: false, reason: "SOMETHING_ELSE" },
-      { available: "yes", reason: null },
-      { available: true, reason: null, phone: "5511112222" },
+      { available: true, reason: "RATE_LIMITED", retry_after_seconds: 60 },
+      { available: false, reason: null, retry_after_seconds: null },
+      { available: false, reason: "SOMETHING_ELSE", retry_after_seconds: null },
+      { available: "yes", reason: null, retry_after_seconds: null },
+      { available: true, reason: null, retry_after_seconds: null, phone: "5511112222" },
+      { available: true, reason: null },
+      { available: false, reason: "RATE_LIMITED", retry_after_seconds: null },
+      { available: false, reason: "RATE_LIMITED", retry_after_seconds: 0 },
+      { available: false, reason: "RATE_LIMITED", retry_after_seconds: 1.5 },
+      { available: false, reason: "RATE_LIMITED", retry_after_seconds: 3601 },
+      { available: false, reason: "RATE_LIMITED", retry_after_seconds: "60" },
+      { available: false, reason: "DRIVER_PHONE_REQUIRED", retry_after_seconds: 60 },
+      { available: true, reason: null, retry_after_seconds: 60 },
       { available: true },
       null,
       [],

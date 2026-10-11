@@ -5,7 +5,8 @@ namespace Paqueteria.ArchitectureTests;
 /// <summary>
 /// VOICE-001-MASKED-CALLS-2026-10-11 and VOICE-001-PROVIDER-TWILIO-2026-10-11: the Twilio adapter is the only voice
 /// code that talks HTTP, its client never logs requests, no voice code logs a number, a credential, a form or a body,
-/// nothing is recorded, Twilio Proxy is not used, and only the two signed webhooks are anonymous.
+/// nothing is recorded, Twilio Proxy is not used, and only the signed webhooks (the status callback, the inbound call and
+/// the three key-press steps of VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) are anonymous.
 /// </summary>
 public sealed class VoiceArchitectureTests
 {
@@ -72,15 +73,19 @@ public sealed class VoiceArchitectureTests
     }
 
     [Fact]
-    public void Only_the_two_signed_twilio_webhooks_are_anonymous()
+    public void Only_the_signed_twilio_webhooks_are_anonymous()
     {
         var endpoints = SourceFiles(DriversEndpointsDirectory.TrimEnd('/')).ToArray();
         var anonymous = endpoints.Where(file => file.Text.Contains(".AllowAnonymous()", StringComparison.Ordinal)).ToArray();
 
         var (path, text) = Assert.Single(anonymous);
         Assert.EndsWith("VoiceWebhookEndpoints.cs", path, StringComparison.Ordinal);
-        Assert.Equal(2, text.Split(".AllowAnonymous()").Length - 1);
-        Assert.Equal(2, text.Split(".DisableAntiforgery()").Length - 1);
+        Assert.Equal(5, text.Split(".AllowAnonymous()").Length - 1);
+        Assert.Equal(5, text.Split(".DisableAntiforgery()").Length - 1);
+        Assert.Equal(5, text.Split("endpoints.MapPost(VoiceWebhookPaths.").Length - 1);
+        // Every handler is inert outside the live provider and reads nothing before the signature is verified.
+        Assert.Equal(5, text.Split("if (voiceStatus.Mode != VoiceBridgeMode.Live)").Length - 1);
+        Assert.Equal(5, text.Split("await ReadVerifiedFormAsync(httpContext, verifier, cancellationToken);").Length - 1);
         Assert.Contains("request.Headers[\"X-Twilio-Signature\"]", text, StringComparison.Ordinal);
         Assert.Contains("verifier.Verify(", text, StringComparison.Ordinal);
         Assert.DoesNotContain("X-Forwarded", text, StringComparison.OrdinalIgnoreCase);

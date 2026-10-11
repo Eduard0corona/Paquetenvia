@@ -14,8 +14,9 @@ namespace Paqueteria.UnitTests.Voice;
 
 /// <summary>
 /// VOICE-001-PROVIDER-TWILIO-2026-10-11: the Twilio Programmable Voice adapter driven through a fake
-/// <see cref="HttpMessageHandler"/> (no test reaches Twilio), the TwiML, the webhook signature, the options and the
-/// registration. Every number used here is synthetic.
+/// <see cref="HttpMessageHandler"/> (no test reaches Twilio), the TwiML (with the key presses of
+/// VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11 on both legs), the webhook signature, the options and the registration.
+/// Every number used here is synthetic.
 /// </summary>
 public sealed class Voice001TwilioBridgeTests
 {
@@ -36,7 +37,7 @@ public sealed class Voice001TwilioBridgeTests
     // ------------------------------------------------------------------ REST create call
 
     [Fact]
-    public async Task Twilio_calls_the_driver_from_the_company_number_and_bridges_the_recipient_with_inline_twiml()
+    public async Task Twilio_calls_the_driver_from_the_company_number_and_only_asks_for_a_key_press()
     {
         var handler = new FakeHandler(_ => Json(HttpStatusCode.Created, $$"""{"sid":"{{CallSid}}","status":"queued"}"""));
         var provider = Twilio(handler, out _);
@@ -59,27 +60,32 @@ public sealed class Voice001TwilioBridgeTests
         Assert.Equal("+52" + DriverDigits, form["To"]);
         Assert.Equal(CompanyNumber, form["From"]);
         Assert.Equal("25", form["Timeout"]);
-        Assert.Equal("385", form["TimeLimit"]);
+        // The bridged conversation (300) plus the driver's key press (10), the recipient's ringing (30) and key press
+        // (10) and a minute of prompts.
+        Assert.Equal("410", form["TimeLimit"]);
         Assert.Equal("false", form["Record"]);
         Assert.Equal(
             $"{WebhookBaseUri}/api/v1/voice/twilio/call-status?o={OrganizationId:D}&r={CallRequestId:D}",
             form["StatusCallback"]);
         Assert.Equal("POST", form["StatusCallbackMethod"]);
+        // VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11: the driver leg only asks for a 1; a voicemail greeting presses
+        // nothing, so the recipient is never dialed on a mere answer.
         Assert.Equal(
             "<Response>" +
-            "<Say language=\"es-MX\" voice=\"Polly.Mia\">Te comunicamos con el destinatario de tu entrega. Espera en la línea.</Say>" +
-            "<Dial callerId=\"+525512340000\" timeout=\"30\" timeLimit=\"300\" record=\"do-not-record\">" +
-            "<Number>+523312345678</Number></Dial>" +
-            "<Say language=\"es-MX\" voice=\"Polly.Mia\">La llamada con el destinatario terminó.</Say>" +
+            "<Gather input=\"dtmf\" numDigits=\"1\" timeout=\"10\" " +
+            $"action=\"{WebhookBaseUri}/api/v1/voice/twilio/driver-confirm?o={OrganizationId:D}&amp;r={CallRequestId:D}\" " +
+            "method=\"POST\" actionOnEmptyResult=\"true\">" +
+            "<Say language=\"es-MX\" voice=\"Polly.Mia\">Presiona 1 para llamar al destinatario.</Say>" +
+            "</Gather>" +
             "</Response>",
             form["Twiml"]);
 
-        // Each number travels exactly where it is needed: the driver only as the called party, the recipient only
-        // inside <Number>, never in the callback URL (which only names the tenant and the call request).
+        // The driver travels only as the called party; the recipient is not in the request at all (it is dialed by the
+        // signed key-press webhook), and no URL carries a number.
         Assert.DoesNotContain(DriverDigits, form["Twiml"], StringComparison.Ordinal);
         Assert.DoesNotContain(DriverDigits, form["StatusCallback"], StringComparison.Ordinal);
         Assert.DoesNotContain(RecipientDigits, form["StatusCallback"], StringComparison.Ordinal);
-        Assert.Equal(1, Occurrences(request.Body, RecipientDigits));
+        Assert.Equal(0, Occurrences(request.Body, RecipientDigits));
         Assert.Equal(1, Occurrences(request.Body, DriverDigits));
     }
 
@@ -115,7 +121,8 @@ public sealed class Voice001TwilioBridgeTests
     [InlineData(20005, HttpStatusCode.Forbidden, VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.AuthenticationFailed)]
     [InlineData(20404, HttpStatusCode.NotFound, VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.AuthenticationFailed)]
     [InlineData(20429, HttpStatusCode.TooManyRequests, VoiceBridgeOutcome.TransientFailure, VoiceBridgeResultCodes.RateLimited)]
-    [InlineData(99999, HttpStatusCode.ServiceUnavailable, VoiceBridgeOutcome.TransientFailure, VoiceBridgeResultCodes.Unavailable)]
+    [InlineData(99999, HttpStatusCode.ServiceUnavailable, VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable)]
+    [InlineData(20500, HttpStatusCode.InternalServerError, VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable)]
     [InlineData(99999, HttpStatusCode.BadRequest, VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.Rejected)]
     public async Task Twilio_error_codes_are_classified_without_reading_the_message(
         int code,
@@ -142,8 +149,10 @@ public sealed class Voice001TwilioBridgeTests
     [InlineData(HttpStatusCode.TooManyRequests, VoiceBridgeOutcome.TransientFailure, VoiceBridgeResultCodes.RateLimited)]
     [InlineData(HttpStatusCode.RequestTimeout, VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Timeout)]
     [InlineData(HttpStatusCode.GatewayTimeout, VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Timeout)]
-    [InlineData(HttpStatusCode.InternalServerError, VoiceBridgeOutcome.TransientFailure, VoiceBridgeResultCodes.Unavailable)]
-    [InlineData(HttpStatusCode.BadGateway, VoiceBridgeOutcome.TransientFailure, VoiceBridgeResultCodes.Unavailable)]
+    // Any 5xx may come after Twilio created the call: ambiguous (UNCONFIRMED, key kept, never retried).
+    [InlineData(HttpStatusCode.InternalServerError, VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable)]
+    [InlineData(HttpStatusCode.BadGateway, VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable)]
     [InlineData(HttpStatusCode.BadRequest, VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.Rejected)]
     [InlineData(HttpStatusCode.Conflict, VoiceBridgeOutcome.PermanentFailure, VoiceBridgeResultCodes.Rejected)]
     public async Task Without_a_twilio_error_body_the_http_status_decides(
@@ -246,7 +255,10 @@ public sealed class Voice001TwilioBridgeTests
         options.Twilio.CircuitBreakerBreakSeconds = 600;
         var provider = Twilio(handler, out _, options);
 
-        Assert.Equal(VoiceBridgeResultCodes.Unavailable, (await provider.PlaceCallAsync(Request(), default)).Code);
+        // Ambiguous 5xx answers count toward the breaker like transient ones.
+        Assert.Equal(
+            new VoiceBridgeResult(VoiceBridgeOutcome.Ambiguous, VoiceBridgeResultCodes.Unavailable),
+            await provider.PlaceCallAsync(Request(), default));
         Assert.Equal(VoiceBridgeResultCodes.Unavailable, (await provider.PlaceCallAsync(Request(), default)).Code);
         Assert.Equal(
             new VoiceBridgeResult(VoiceBridgeOutcome.TransientFailure, VoiceBridgeResultCodes.CircuitOpen),
@@ -420,6 +432,62 @@ public sealed class Voice001TwilioBridgeTests
     }
 
     [Fact]
+    public void Key_press_webhooks_are_signed_over_their_own_url_and_the_digit()
+    {
+        var verifier = new TwilioVoiceWebhookVerifier(Options.Create(LiveOptions()));
+        var driverConfirm = VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.DriverConfirm, OrganizationId, CallRequestId);
+        var recipientConfirm = VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.RecipientConfirm, OrganizationId, CallRequestId);
+        var recipientScreen = VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.RecipientScreen, OrganizationId, CallRequestId);
+        KeyValuePair<string, string>[] driverPress =
+        [
+            new("AccountSid", AccountSid),
+            new("CallSid", CallSid),
+            new("Digits", "1"),
+            new("From", CompanyNumber),
+            new("To", "+52" + DriverDigits),
+        ];
+        var signature = TwilioVoiceWebhookVerifier.ComputeSignature(AuthToken, WebhookBaseUri + driverConfirm, driverPress);
+
+        Assert.Equal(VoiceWebhookVerdict.Verified, verifier.Verify(new(driverConfirm, signature, driverPress)));
+        // A forged 1, a replay on another step or another call request, and no signature are rejected.
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(
+            driverConfirm,
+            signature,
+            driverPress.Select(field => field.Key == "Digits" ? new KeyValuePair<string, string>("Digits", "2") : field).ToArray())));
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(
+            driverConfirm,
+            TwilioVoiceWebhookVerifier.ComputeSignature(
+                AuthToken,
+                WebhookBaseUri + driverConfirm,
+                driverPress.Select(field => field.Key == "Digits" ? new KeyValuePair<string, string>("Digits", "2") : field).ToArray()),
+            driverPress)));
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(recipientConfirm, signature, driverPress)));
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(recipientScreen, signature, driverPress)));
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(
+            VoiceWebhookPaths.PathAndQuery(VoiceWebhookPaths.DriverConfirm, OrganizationId, Guid.NewGuid()), signature, driverPress)));
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(driverConfirm, null, driverPress)));
+
+        // The recipient leg: its own call and the platform's call (ParentCallSid) are both under the signature.
+        KeyValuePair<string, string>[] recipientPress =
+        [
+            new("AccountSid", AccountSid),
+            new("CallSid", "CAabcdef01abcdef01abcdef01abcdef01"),
+            new("ParentCallSid", CallSid),
+            new("Digits", "1"),
+        ];
+        var recipientSignature = TwilioVoiceWebhookVerifier.ComputeSignature(
+            AuthToken, WebhookBaseUri + recipientConfirm, recipientPress);
+        Assert.Equal(VoiceWebhookVerdict.Verified, verifier.Verify(new(recipientConfirm, recipientSignature, recipientPress)));
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(
+            recipientConfirm,
+            recipientSignature,
+            recipientPress.Select(field => field.Key == "ParentCallSid"
+                ? new KeyValuePair<string, string>("ParentCallSid", "CAfedcba98fedcba98fedcba98fedcba98")
+                : field).ToArray())));
+        Assert.Equal(VoiceWebhookVerdict.Rejected, verifier.Verify(new(driverConfirm, recipientSignature, recipientPress)));
+    }
+
+    [Fact]
     public void Without_the_live_provider_webhooks_are_not_configured()
     {
         foreach (var kind in new[] { VoiceBridgeProviderKind.Disabled, VoiceBridgeProviderKind.Synthetic })
@@ -452,9 +520,78 @@ public sealed class Voice001TwilioBridgeTests
         var forward = new TwilioVoiceWebhookVerifier(Options.Create(options)).BuildInboundCallResponse();
         Assert.Equal(
             "<Response><Say language=\"es-MX\" voice=\"Polly.Mia\">" + TwilioTwiml.InboundForwardGreeting + "</Say>" +
-            "<Dial callerId=\"+525512340000\" timeout=\"30\" timeLimit=\"300\" record=\"do-not-record\">" +
+            "<Dial callerId=\"+525512340000\" timeout=\"30\" timeLimit=\"3600\" record=\"do-not-record\">" +
             "<Number>+528112345678</Number></Dial></Response>",
             forward);
+
+        // The forward has its own ring timeout and time limit: the bridge's settings never shape a support call.
+        options.Twilio.RecipientRingSeconds = 12;
+        options.Twilio.MaximumCallSeconds = 90;
+        Assert.Equal(forward, new TwilioVoiceWebhookVerifier(Options.Create(options)).BuildInboundCallResponse());
+        options.Twilio.InboundForwardRingSeconds = 20;
+        options.Twilio.InboundForwardMaximumSeconds = 1200;
+        Assert.Contains(
+            "<Dial callerId=\"+525512340000\" timeout=\"20\" timeLimit=\"1200\" record=\"do-not-record\">",
+            new TwilioVoiceWebhookVerifier(Options.Create(options)).BuildInboundCallResponse(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void After_the_driver_presses_1_the_recipient_is_dialed_through_its_own_key_press()
+    {
+        var options = LiveOptions();
+        var verifier = new TwilioVoiceWebhookVerifier(Options.Create(options));
+        var screen = $"{WebhookBaseUri}/api/v1/voice/twilio/recipient-screen?o={OrganizationId:D}&amp;r={CallRequestId:D}";
+
+        var bridge = verifier.BuildBridgeResponse(Number(RecipientDigits), OrganizationId, CallRequestId);
+
+        Assert.Equal(
+            "<Response>" +
+            "<Say language=\"es-MX\" voice=\"Polly.Mia\">Te comunicamos con el destinatario de tu entrega. Espera en la línea.</Say>" +
+            "<Dial callerId=\"+525512340000\" timeout=\"30\" timeLimit=\"300\" record=\"do-not-record\">" +
+            $"<Number url=\"{screen}\" method=\"POST\">+523312345678</Number></Dial>" +
+            "<Say language=\"es-MX\" voice=\"Polly.Mia\">La llamada con el destinatario terminó.</Say>" +
+            "</Response>",
+            bridge);
+        Assert.Equal(1, Occurrences(bridge, RecipientDigits));
+        Assert.DoesNotContain(DriverDigits, bridge, StringComparison.Ordinal);
+
+        // The recipient hears only the neutral prompt (no brand, GATE-001) and must press 1; otherwise the screening
+        // hangs up and the legs are never connected.
+        Assert.Equal(
+            "<Response>" +
+            "<Gather input=\"dtmf\" numDigits=\"1\" timeout=\"10\" " +
+            $"action=\"{WebhookBaseUri}/api/v1/voice/twilio/recipient-confirm?o={OrganizationId:D}&amp;r={CallRequestId:D}\" " +
+            "method=\"POST\" actionOnEmptyResult=\"true\">" +
+            "<Say language=\"es-MX\" voice=\"Polly.Mia\">Tiene una llamada sobre su envío; presione 1 para contestar.</Say>" +
+            "</Gather>" +
+            "<Hangup />" +
+            "</Response>",
+            verifier.BuildRecipientScreenResponse(OrganizationId, CallRequestId));
+        Assert.Equal("<Response />", verifier.BuildConnectResponse());
+        Assert.Equal("<Response><Hangup /></Response>", verifier.BuildHangupResponse());
+
+        // A recipient that cannot be dialed, or no company number, hangs up instead of dialing.
+        Assert.True(VoicePhoneNumber.TryParseE164("+520000000002", out var placeholder));
+        Assert.Equal("<Response><Hangup /></Response>", verifier.BuildBridgeResponse(placeholder, OrganizationId, CallRequestId));
+        options.Twilio.CompanyNumber = string.Empty;
+        Assert.Equal(
+            "<Response><Hangup /></Response>",
+            new TwilioVoiceWebhookVerifier(Options.Create(options)).BuildBridgeResponse(Number(RecipientDigits), OrganizationId, CallRequestId));
+    }
+
+    [Fact]
+    public void The_key_press_prompts_are_the_owner_decided_sentences()
+    {
+        // VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11, literally.
+        Assert.Equal("Presiona 1 para llamar al destinatario.", TwilioTwiml.DriverConfirmPrompt);
+        Assert.Equal("Tiene una llamada sobre su envío; presione 1 para contestar.", TwilioTwiml.RecipientConfirmPrompt);
+        foreach (var prompt in new[] { TwilioTwiml.DriverConfirmPrompt, TwilioTwiml.RecipientConfirmPrompt })
+        {
+            Assert.Matches(@"^[^\d]*1[^\d]*$", prompt);
+            Assert.DoesNotContain("Paquetenvia", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("{", prompt, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -471,11 +608,28 @@ public sealed class Voice001TwilioBridgeTests
             Assert.DoesNotContain("Paquetenvia", text, StringComparison.OrdinalIgnoreCase);
         }
 
-        var twiml = TwilioTwiml.Bridge(LiveOptions().Twilio, Number("5512340000"), Number(RecipientDigits));
-        Assert.Contains("record=\"do-not-record\"", twiml, StringComparison.Ordinal);
-        Assert.DoesNotContain("<Record", twiml, StringComparison.Ordinal);
-        Assert.DoesNotContain("<Gather", twiml, StringComparison.Ordinal);
-        Assert.DoesNotContain("url=", twiml, StringComparison.OrdinalIgnoreCase);
+        var options = LiveOptions().Twilio;
+        var bridge = TwilioTwiml.Bridge(options, Number("5512340000"), Number(RecipientDigits), OrganizationId, CallRequestId);
+        Assert.Contains("record=\"do-not-record\"", bridge, StringComparison.Ordinal);
+        foreach (var twiml in new[]
+                 {
+                     bridge,
+                     TwilioTwiml.DriverLeg(options, OrganizationId, CallRequestId),
+                     TwilioTwiml.RecipientScreen(options, OrganizationId, CallRequestId),
+                 })
+        {
+            Assert.DoesNotContain("<Record", twiml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Transcribe", twiml, StringComparison.OrdinalIgnoreCase);
+            // The only URLs are the platform's own signed webhooks.
+            foreach (var url in System.Text.RegularExpressions.Regex.Matches(twiml, "(?:url|action)=\"([^\"]+)\"")
+                         .Select(match => match.Groups[1].Value))
+            {
+                Assert.StartsWith(WebhookBaseUri + "/api/v1/voice/twilio/", url, StringComparison.Ordinal);
+            }
+        }
+
+        // Only the screening runs a gather on the recipient's side; the bridge itself asks nothing.
+        Assert.DoesNotContain("<Gather", bridge, StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------------ synthetic and disabled
@@ -618,10 +772,14 @@ public sealed class Voice001TwilioBridgeTests
         options.Twilio.SayVoice = "<Polly>";
         options.Twilio.TimeoutSeconds = 0;
         options.Twilio.MaxConcurrentRequests = 0;
+        options.Twilio.DriverConfirmSeconds = 1;
+        options.Twilio.InboundForwardMaximumSeconds = 30;
 
         var failures = VoiceBridgeOptionsValidator.Validate(options, syntheticAllowed: false, liveAllowed: true);
 
-        Assert.Equal(10, failures.Count);
+        Assert.Equal(12, failures.Count);
+        Assert.Contains(failures, failure => failure.Contains("DriverConfirmSeconds", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("InboundForwardMaximumSeconds", StringComparison.Ordinal));
         var text = string.Join('\n', failures);
         foreach (var value in new[] { AuthToken, "short", ApiKeySid, DriverDigits[..9], "5005550006", RecipientDigits, "PENDING", "<Polly>" })
         {

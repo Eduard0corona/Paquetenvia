@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 86700,
-      "sha256": "69fbd5cff12e1963d2e8c78e012d9db7a65d4edc575a83d53d9b6aac7f782f44"
+      "bytes": 88840,
+      "sha256": "7147501d473ecdfaf28dd21a10f26dac5a6218daf93e42607fe696e04f19768d"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "afe30d6eee5770b945bc65b992445a0c9fde1ea60237b4457f820dc79f9429da"
+      "sha256": "2315bfdabb368cc1724e5af9ed646f371fb9a21fbb743a1f09c8a7ced332f385"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 251788,
-      "sha256": "990a7b798f4958e9ca201d497bfff35d47d0bd77bc7aae6166f83f43bb695640"
+      "bytes": 262348,
+      "sha256": "d50396e38261e52521ab57bb5ae8c080304fa636c0e6856ea17e432251b1cde0"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 160375,
-      "sha256": "b340e6157ecca807cf6011b8eff21ed32b030f394f4d3b9edd856cd327be004b"
+      "bytes": 163924,
+      "sha256": "1841dc0e9a2084bceb4d1fb634ecffe40930c9adba0d5eba0458d86b9b3a4075"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -334,13 +334,13 @@
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 40158,
-      "sha256": "08dec20673ca36eb3f1ae72490a87870b5efa2946d59f280f804eee852904208"
+      "bytes": 40782,
+      "sha256": "1695dcb082db545529acbacad63b7913bae7f3d8523d5e348f67bca470eef922"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 56476,
-      "sha256": "6dcb70c6f5194235296f5fd571fb9e1e28c30fbd88b138f3ac2bdcbbfc634be0"
+      "bytes": 57199,
+      "sha256": "a50de383e00fb6a13b5cc644f2c789258eb0e98ed7113b60ee4a8ec8ddb3761b"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 20266,
-      "sha256": "7b7ecacc92b187fe57d1e831ed5c1a131d019767804957b816d60325f93dd9ed"
+      "bytes": 23263,
+      "sha256": "225792a2de0676ddc447add19c9180309a135d6fac23599a72d8816b24c1e5df"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",

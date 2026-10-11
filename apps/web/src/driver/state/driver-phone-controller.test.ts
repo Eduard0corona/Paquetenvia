@@ -110,6 +110,20 @@ describe("VOICE-001 Cuenta: the driver's own phone", () => {
     expect(controller.state).toMatchObject({ phase: "ready", message: driverPhoneMessages.unavailable });
   });
 
+  it("lets a driver whose profile is not active erase its number but not register one (ARCO)", async () => {
+    const fake = api(stored, [new DriverVoiceApiError("forbidden"), none]);
+    const controller = new DriverPhoneController(fake);
+    await controller.load(true);
+    expect(controller.state).toMatchObject({ phase: "ready", registered: true });
+
+    expect(await controller.register("5533334444", true, true)).toBe(false);
+    expect(controller.state).toMatchObject({ phase: "ready", registered: true, message: driverPhoneMessages.notActive });
+    expect(await controller.remove(true)).toBe(true);
+
+    expect(controller.state).toMatchObject({ phase: "ready", registered: false, message: driverPhoneMessages.removed });
+    expect(fake.removals).toBe(1);
+  });
+
   it("removes the number online only", async () => {
     const fake = api(stored, [none]);
     const controller = new DriverPhoneController(fake);

@@ -57,6 +57,15 @@ public sealed class TwilioVoiceOptions
     /// <summary>Optional dispatch line a call to the company number is forwarded to; without it a message is played.</summary>
     public string InboundForwardNumber { get; set; } = string.Empty;
 
+    /// <summary>How long the dispatch line rings for a forwarded inbound call (its own setting, not the bridge's).</summary>
+    public int InboundForwardRingSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Time limit of a forwarded inbound call. A support conversation is not a bridged delivery call, so the bridge
+    /// cost cap (<see cref="MaximumCallSeconds"/>) does not apply; this bound only stops a forgotten line.
+    /// </summary>
+    public int InboundForwardMaximumSeconds { get; set; } = 3600;
+
     /// <summary>Text-to-speech voice for the Spanish messages (Twilio <c>&lt;Say voice&gt;</c>).</summary>
     public string SayVoice { get; set; } = "Polly.Mia";
 
@@ -65,6 +74,15 @@ public sealed class TwilioVoiceOptions
 
     /// <summary>How long the driver's phone rings (REST <c>Timeout</c>).</summary>
     public int DriverRingSeconds { get; set; } = 25;
+
+    /// <summary>
+    /// VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11: how long the driver has to press 1 after the prompt; without it the call
+    /// hangs up and the recipient is never dialed.
+    /// </summary>
+    public int DriverConfirmSeconds { get; set; } = 10;
+
+    /// <summary>How long the recipient has to press 1 after the screening prompt; without it nobody is connected.</summary>
+    public int RecipientConfirmSeconds { get; set; } = 10;
 
     /// <summary>How long the recipient's phone rings (<c>&lt;Dial timeout&gt;</c>).</summary>
     public int RecipientRingSeconds { get; set; } = 30;
@@ -168,6 +186,16 @@ internal static partial class VoiceBridgeOptionsValidator
         {
             failures.Add(
                 "Voice:Twilio needs TimeoutSeconds 1-30, DriverRingSeconds 5-60, RecipientRingSeconds 5-60 and MaximumCallSeconds 60-1800.");
+        }
+
+        if (twilio.DriverConfirmSeconds is < 3 or > 30 || twilio.RecipientConfirmSeconds is < 3 or > 30)
+        {
+            failures.Add("Voice:Twilio needs DriverConfirmSeconds 3-30 and RecipientConfirmSeconds 3-30.");
+        }
+
+        if (twilio.InboundForwardRingSeconds is < 5 or > 60 || twilio.InboundForwardMaximumSeconds is < 60 or > 14400)
+        {
+            failures.Add("Voice:Twilio needs InboundForwardRingSeconds 5-60 and InboundForwardMaximumSeconds 60-14400.");
         }
 
         if (twilio.CircuitBreakerFailureThreshold is < 1 or > 50 ||
