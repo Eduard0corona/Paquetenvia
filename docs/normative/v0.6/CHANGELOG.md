@@ -16,6 +16,32 @@
   que lo reemplace es una decisión pendiente del owner.
 - Sin cambios en API, AI-04, AI-05, AI-06, AI-18, roles, permisos ni migraciones. GATE-004 sigue abierto.
 
+## Sin enlace de soporte en el seguimiento público (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner: "Quitarlo por ahora (Recommended)"; registrada, con su pregunta, en
+  `decision-log.md`. GATE-001 sigue abierto.
+- Mientras GATE-001 siga abierto, el seguimiento público no muestra enlace de soporte: el workflow del piloto ya no
+  usa el host del piloto como valor por omisión de `PILOT_TRACKING_SUPPORT_URL`, un
+  `NEXT_PUBLIC_TRACKING_SUPPORT_URL` vacío significa sin enlace (la página indica responder por el mismo canal del
+  enlace) y `next build` rechaza un enlace que nombre la marca en cualquier variante.
+- AI-07 `public_tracking.branding` agrega la regla del canal de soporte. Sin cambios en API, AI-04, AI-05, AI-06,
+  AI-18, roles ni migraciones.
+
+## Nombre neutro en el seguimiento público mientras GATE-001 sigue abierto (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10) — 2026-10-10
+
+- Respuestas literales del project owner: "Interno sí, público neutro (Recommended)" y "Seguimiento de envío
+  (Recommended)"; registradas, con sus preguntas, en `decision-log.md`. GATE-001 sigue abierto: solo fija el texto
+  público provisional mientras el nombre comercial no esté validado ante el IMPI.
+- AI-07 `public_tracking.branding`: todos los estados del seguimiento abren con "Seguimiento de envío" y ninguno nombra
+  la marca; el título de la página es "Seguimiento de envío", `/track` no enlaza el manifest de la PWA del repartidor y
+  el 404 al que lleva un enlace mal formado se titula "Página no encontrada". En `show`, `brand` pasa a `heading`.
+- `NEXT_PUBLIC_TRACKING_BRAND_NAME` se conserva sin definir (sin marca): el workflow del piloto ya no pasa
+  "Paquetenvia" y `next build` rechaza ese nombre en cualquier variante.
+- Los mensajes al destinatario que llevan el enlace (TRK-002, plantillas GATE-004) usan el mismo texto neutro; hoy el
+  repositorio no contiene textos para destinatarios.
+- Pantallas internas, login, onboarding y PWA del repartidor conservan "Paquetenvia". Sin cambios en API, AI-04, AI-05,
+  AI-06, AI-18, roles ni migraciones; el dominio `paquetenvia.com` (PILOT-DOMAIN-PRODUCTION) no cambia.
+
 ## Asistente de nueva orden en 4 pasos que crea y confirma (UI-PHASE3-ORDER-WIZARD-2026-10-10) — 2026-10-10
 
 - Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, a la pregunta "Asistente de nueva
