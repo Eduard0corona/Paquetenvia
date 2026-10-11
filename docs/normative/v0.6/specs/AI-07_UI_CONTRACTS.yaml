@@ -581,7 +581,9 @@ screen_contracts:
       - every state (loading, not found, unavailable, rate limited, tracking) opens with the heading and names no brand; the
         commercial name never appears in public tracking text, page title or metadata
       - the page title is the heading and the page links no PWA manifest; the not-found page a malformed tracking link
-        reaches names no brand either
+        reaches names no brand either. That page is the app's single shared not-found page, served for every unknown
+        URL without a session (internal paths included), so it is a public surface and stays neutral; internal screens
+        reached with a session keep the platform name
       - NEXT_PUBLIC_TRACKING_BRAND_NAME stays unset (no brand) and the web build refuses the unvalidated commercial name
       - messages to the recipient that carry the tracking link (TRK-002, GATE-004 templates) use the same neutral text and
         never name the commercial name
