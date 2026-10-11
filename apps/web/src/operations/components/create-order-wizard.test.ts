@@ -241,3 +241,58 @@ describe("new order outcome", () => {
     expect(mfa).toContain('href="/login?mfa=required&amp;return_url=%2Fops%2Forders%2Fx"');
   });
 });
+
+describe("errors shared by several controls (screen readers)", () => {
+  /** The opening tag of the control with this id. */
+  function control(markup: string, id: string): string {
+    const match = markup.match(new RegExp(`<input[^>]*\\sid="${id}"[^>]*>`));
+    expect(match, id).not.toBeNull();
+    return match?.[0] ?? "";
+  }
+
+  function describedBy(tag: string): string[] {
+    return (tag.match(/aria-describedby="([^"]*)"/)?.[1] ?? "").split(" ").filter((value) => value !== "");
+  }
+
+  it("links the coordinates message to latitude and longitude", () => {
+    const markup = wizard(
+      state("where", {
+        fieldErrors: [{ field: "destination.coordinates", message: "Captura latitud y longitud válidas de destino." }],
+      }),
+    );
+    const errorId = "order-destination-coordinates-error";
+    expect(markup).toContain(`id="${errorId}"`);
+    for (const id of ["order-destination-coordinates", "order-destination-longitude"]) {
+      const tag = control(markup, id);
+      expect(describedBy(tag), id).toContain(errorId);
+      expect(tag, id).toContain('aria-invalid="true"');
+    }
+    // The longitude keeps its own hint; next to the fields the message appears once (under the latitude),
+    // besides the error summary at the top of the step.
+    expect(describedBy(control(markup, "order-destination-longitude"))).toContain("order-destination-longitude-hint");
+    expect(markup.split(`id="${errorId}"`).length - 1).toBe(1);
+    expect(markup).not.toContain('id="order-destination-longitude-error"');
+  });
+
+  it("links the measurements message to length, width and height", () => {
+    const message = "Las medidas del paquete 1 deben ser enteros en milímetros mayores que 0.";
+    const markup = wizard(state("what", { fieldErrors: [{ field: "packages.0.dimensions", message }] }));
+    const errorId = "order-packages-0-dimensions-measurements-error";
+    expect(markup).toContain(`id="${errorId}"`);
+    for (const id of ["order-packages-0-dimensions", "order-packages-0-width", "order-packages-0-height"]) {
+      const tag = control(markup, id);
+      expect(describedBy(tag), id).toEqual([errorId]);
+      expect(tag, id).toContain('aria-invalid="true"');
+    }
+    expect(markup.split(`id="${errorId}"`).length - 1).toBe(1);
+  });
+
+  it("adds nothing when there is no error", () => {
+    const markup = wizard(state("what"));
+    for (const id of ["order-packages-0-dimensions", "order-packages-0-width", "order-packages-0-height"]) {
+      const tag = control(markup, id);
+      expect(tag, id).not.toContain("aria-describedby");
+      expect(tag, id).not.toContain("aria-invalid");
+    }
+  });
+});
