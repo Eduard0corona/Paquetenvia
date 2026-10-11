@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using Paqueteria.Domain.Tenancy;
@@ -84,6 +85,13 @@ public sealed record OperationsDriverLocation(
 /// <summary>A time window as UTC instants (OBS-001 pickup_window/delivery_window).</summary>
 public sealed record OperationsTimeWindow(DateTimeOffset From, DateTimeOffset To);
 
+/// <summary>
+/// An amount in integer cents (AI-01 §4.15), never a floating-point value. The dashboard total is the order's
+/// <c>orders.total_cents</c> in MXN with IVA included (GATE-011-VAT-INCLUDED-2026-09-29), the value AI-05
+/// <c>Order.total</c> returns for the same order (UI-PHASE3-INBOX-TOTAL-2026-10-10).
+/// </summary>
+public sealed record OperationsMoney(string Currency, long AmountCents);
+
 public sealed record OperationsDashboardOrder(
     Guid OrderId,
     int AggregateVersion,
@@ -98,6 +106,7 @@ public sealed record OperationsDashboardOrder(
     OperationsZoneSummary? DeliveryZone,
     OperationsAssignmentSummary? Assignment,
     OperationsDriverLocation? LatestDriverLocation,
+    OperationsMoney Total,
     string? CostWarning,
     bool UnassignedAlert,
     OperationsTimeWindow? DeliveryWindow = null);
@@ -149,6 +158,13 @@ public static class OperationsDashboardProjectionPolicy
     /// <summary>The shared non-PII driver label; the assignable-driver list uses the same one.</summary>
     public static string DriverReference(Guid driverId) =>
         Paqueteria.Application.Privacy.DriverReference.From(driverId);
+
+    /// <summary>
+    /// The order total is MXN integer cents and never negative (AI-06 <c>orders</c> CHECKs); anything else is an
+    /// inconsistent projection and fails closed.
+    /// </summary>
+    public static bool IsValidTotal([NotNullWhen(true)] string? currency, long amountCents) =>
+        string.Equals(currency, "MXN", StringComparison.Ordinal) && amountCents >= 0;
 
     public static bool IsValidLocation(
         double latitude,

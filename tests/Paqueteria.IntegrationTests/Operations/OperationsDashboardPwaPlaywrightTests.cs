@@ -223,6 +223,8 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                     AriaRole.Button,
                     new() { Name = "Posiciones", Exact = true })
                 .ClickAsync();
+            // UI-PHASE3-INBOX-2026-10-10: the view lives in the URL; the toggle rewrites it in place.
+            await page.WaitForURLAsync("**/ops/dashboard?view=positions");
             var locationRequests = DashboardRequestCount(requests);
             var locationOutboxId = await database.EnqueueRealtimeLocationAsync();
             Assert.Equal(
@@ -241,6 +243,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                     AriaRole.Button,
                     new() { Name = "Lista", Exact = true })
                 .ClickAsync();
+            await page.WaitForURLAsync(url => new Uri(url).PathAndQuery == "/ops/dashboard");
             var delayNextDashboardRequest = 1;
             var delayedDashboardRequestStarted =
                 new TaskCompletionSource<DateTimeOffset>(
@@ -445,6 +448,29 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             var failureTransitions = await page.EvaluateAsync<string[]>(
                 "() => window.__operationsConnectionTransitions");
             Assert.DoesNotContain("Conectada", failureTransitions);
+
+            // UI-PHASE3-INBOX-2026-10-10 (review of #212): the deep link that "Mapa de posiciones" opens is
+            // rendered as the positions view from the first HTML, never as the list first, and a later
+            // navigation to the same route with another query (the shell's "Tablero") shows the view it names.
+            // Desktop width keeps the sidebar navigation visible without the mobile menu.
+            await page.SetViewportSizeAsync(1440, 900);
+            var deepLink = await page.GotoAsync(
+                new Uri(web.BaseAddress, "/ops/dashboard?view=positions").AbsoluteUri);
+            Assert.NotNull(deepLink);
+            var deepLinkHtml = await deepLink.TextAsync();
+            Assert.Contains("aria-pressed=\"true\">Posiciones</button>", deepLinkHtml, StringComparison.Ordinal);
+            Assert.Contains("aria-pressed=\"false\">Lista</button>", deepLinkHtml, StringComparison.Ordinal);
+            Assert.DoesNotContain("class=\"opsBoard\"", deepLinkHtml, StringComparison.Ordinal);
+            await page.GetByRole(AriaRole.Navigation, new() { Name = "Secciones", Exact = true })
+                .GetByRole(AriaRole.Link, new() { Name = "Tablero", Exact = true })
+                .ClickAsync();
+            await page.WaitForURLAsync(url => new Uri(url).PathAndQuery == "/ops/dashboard");
+            await page.WaitForFunctionAsync(
+                """
+                () => [...document.querySelectorAll("fieldset.opsToggle button")]
+                  .map(button => `${button.textContent?.trim()}:${button.getAttribute("aria-pressed")}`)
+                  .join("|") === "Lista:true|Posiciones:false"
+                """);
         }
         finally
         {

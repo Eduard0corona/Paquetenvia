@@ -25,6 +25,7 @@ function row(minute: number, status: OrderStatus, overrides: Partial<OperationsD
     delivery_zone: null,
     assignment: null,
     latest_driver_location: null,
+    total: { currency: "MXN", amount_cents: 9_000 },
     cost_warning: null,
     unassigned_alert: false,
     ...overrides,
