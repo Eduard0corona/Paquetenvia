@@ -28,12 +28,28 @@ public enum IncidentResolutionOutcome
 
 /// <summary>
 /// The explicit next action AI-09 requires from a failed attempt. Both values are order
-/// statuses ORD-002 already accepts as successors of <c>FAILED_ATTEMPT</c>.
+/// statuses ORD-002 already accepts as successors of <c>FAILED_ATTEMPT</c>. A driver report
+/// records none (<c>NULL</c>): dispatch decides it when the order leaves <c>FAILED_ATTEMPT</c>
+/// (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11, <see cref="IncidentDriverReportPolicy"/>).
 /// </summary>
 public enum IncidentNextAction
 {
     Rescheduled,
     Returning,
+}
+
+/// <summary>
+/// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: who reports decides what an opening carries.
+/// Dispatch — an active DISPATCHER, or an active PLATFORM_ADMIN with a satisfied MFA challenge —
+/// records severity, description and next action exactly as before. A DRIVER, authorized only
+/// through the ACCEPTED or ACTIVE assignment of the order, sends the reason and the evidence and
+/// nothing else; the server derives the rest (<see cref="IncidentDriverReportPolicy"/>). An actor
+/// who is both is dispatch.
+/// </summary>
+public enum IncidentReporter
+{
+    Dispatch,
+    Driver,
 }
 
 public enum IncidentReasonCode
@@ -204,12 +220,58 @@ public static class IncidentOrderStatePolicy
     /// state. The incident is refused before persistence rather than recorded with a next action
     /// the state machine could never honour.
     /// </summary>
+    /// <remarks>
+    /// A driver report carries no next action (<see langword="null"/>): only the opening state
+    /// applies, and dispatch later chooses a successor every guard of ORD-002 still judges, custody
+    /// for <c>RETURNING</c> included.
+    /// </remarks>
     public static bool IsAllowedNextAction(
         string? orderStatus,
         bool custodyAcquired,
-        IncidentNextAction nextAction) =>
+        IncidentNextAction? nextAction) =>
         IsAllowedOpeningState(orderStatus) &&
         (nextAction is not IncidentNextAction.Returning || custodyAcquired);
+}
+
+/// <summary>
+/// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: what the server records for a driver report.
+/// The driver chooses only a reason from a closed list and attaches evidence ("El repartidor solo
+/// manda motivo y foto"); there is no free text, so nothing the driver typed waits unencrypted on
+/// the phone ("Lista cerrada"). The severity follows the reason ("Según el motivo": HIGH for
+/// <c>SECURITY_RISK</c> and <c>PACKAGE_DAMAGED</c>, MEDIUM for the others), which fixes the SLA
+/// through <see cref="IncidentOperationalPolicy"/>. The description is a fixed es-MX sentence built
+/// from the reason, protected and stored exactly like any other description. The next action stays
+/// empty: dispatch decides it.
+/// </summary>
+public static class IncidentDriverReportPolicy
+{
+    public static IncidentSeverity Severity(IncidentReasonCode reasonCode) => reasonCode switch
+    {
+        IncidentReasonCode.SecurityRisk or IncidentReasonCode.PackageDamaged => IncidentSeverity.High,
+        IncidentReasonCode.RecipientAbsent or
+            IncidentReasonCode.AddressNotFound or
+            IncidentReasonCode.RecipientRefused or
+            IncidentReasonCode.AccessRestricted or
+            IncidentReasonCode.PaymentUnavailable => IncidentSeverity.Medium,
+        _ => throw new ArgumentOutOfRangeException(nameof(reasonCode), reasonCode, "Unknown reason code."),
+    };
+
+    /// <summary>The es-MX label of the reason, as the driver picks it from the closed list.</summary>
+    public static string ReasonLabel(IncidentReasonCode reasonCode) => reasonCode switch
+    {
+        IncidentReasonCode.RecipientAbsent => "No había nadie",
+        IncidentReasonCode.AddressNotFound => "Dirección incorrecta",
+        IncidentReasonCode.RecipientRefused => "Rechazó el paquete",
+        IncidentReasonCode.PaymentUnavailable => "No pagó el cobro",
+        IncidentReasonCode.AccessRestricted => "Acceso restringido",
+        IncidentReasonCode.PackageDamaged => "Paquete dañado",
+        IncidentReasonCode.SecurityRisk => "Riesgo de seguridad",
+        _ => throw new ArgumentOutOfRangeException(nameof(reasonCode), reasonCode, "Unknown reason code."),
+    };
+
+    /// <summary>The description stored for a driver report: built from the reason, never typed.</summary>
+    public static string Description(IncidentReasonCode reasonCode) =>
+        $"Intento fallido reportado por el repartidor. Motivo: {ReasonLabel(reasonCode)}.";
 }
 
 /// <summary>
@@ -288,8 +350,9 @@ public static class IncidentEvidencePolicy
 /// windows, the retrospective window a report may claim, the tolerated clock skew and the evidence
 /// ceiling. They are centralized here, bounded and validated as a unit, so a deployment cannot
 /// quietly widen the contract; an invalid combination is rejected rather than applied. The
-/// semantic requirements — reason, at least one proof, an explicit next action, a custody
-/// precondition for <c>RETURNING</c> and an SLA timestamp — are not configurable.
+/// semantic requirements — reason, at least one proof, an explicit next action (or, for a driver
+/// report, the decision left to dispatch), a custody precondition for <c>RETURNING</c> and an SLA
+/// timestamp — are not configurable.
 /// </summary>
 public sealed record IncidentOperationalPolicy
 {

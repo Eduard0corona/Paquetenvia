@@ -60,7 +60,9 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     IClock clock,
     IOrderTrackingLinkIssuer? trackingLinkIssuer = null,
     IOrderTransitionAuthorizationReader? transitionAuthorizationReader = null,
-    IOrderTransitionAuthorizer? transitionAuthorizer = null) : IOrderService
+    IOrderTransitionAuthorizer? transitionAuthorizer = null,
+    IOrderIncidentGuardReader? incidentGuardReader = null,
+    IOrderCustodyGuardReader? custodyGuardReader = null) : IOrderService
 {
     // TRK-002-AUTO-LINK: the order's first public tracking link is issued in this same transaction when public
     // tracking is enabled; without an issuer (public tracking disabled) orders are created without a link.
@@ -72,6 +74,13 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         transitionAuthorizationReader ?? new PostgreSqlOrderTransitionAuthorizationReader();
     private readonly IOrderTransitionAuthorizer transitionAuthorizerPolicy =
         transitionAuthorizer ?? new OrderTransitionAuthorizer();
+
+    // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the exits of a failed attempt are listed from the incident and
+    // custody snapshots transitionOrder's guards read; both readers are stateless.
+    private readonly IOrderIncidentGuardReader failedAttemptIncidents =
+        incidentGuardReader ?? new PostgreSqlOrderIncidentGuardReader();
+    private readonly IOrderCustodyGuardReader failedAttemptCustody =
+        custodyGuardReader ?? new PostgreSqlOrderCustodyGuardReader();
 
     internal const string IdempotencyScope = "ORD-001:CREATE_ORDER";
     private const string PublicIdUniqueConstraint = "orders_public_id_key";
@@ -615,13 +624,24 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 organizationId,
                 orderId,
                 cancellationToken);
+            FailedAttemptExitSnapshot? failedAttempt = null;
+            if (order.Result.Status == OrderStatus.FailedAttempt.ToContractValue())
+            {
+                failedAttempt = new FailedAttemptExitSnapshot(
+                    await failedAttemptIncidents.ReadAsync(
+                        connection, transaction, organizationId, orderId, null, cancellationToken),
+                    await failedAttemptCustody.ReadAsync(
+                        connection, transaction, organizationId, orderId, cancellationToken));
+            }
+
             allowedTransitions = OrderAllowedTransitionsPolicy.Compute(
                 transitionAuthorizerPolicy,
                 organizationId,
                 order.Result,
                 authorization,
                 mfaSatisfied,
-                clock.UtcNow);
+                clock.UtcNow,
+                failedAttempt);
         }
 
         return new OrderDetailResult(order.Result, timeline, allowedTransitions);

@@ -1,12 +1,7 @@
-using Incidents.Infrastructure.Persistence;
 using Incidents.Infrastructure.Persistence.Migrations;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Database.Baseline;
-using Paqueteria.Infrastructure.Tenancy;
 
 namespace Paqueteria.ContractTests.PostgreSql;
 
@@ -22,15 +17,19 @@ public sealed class IncidentEvidenceIndexMigrationPostgreSqlContractTests(Postgr
     private const string Module = "Incidents";
 
     [PostgreSqlContractFact]
-    public async Task The_shared_fixture_carries_the_evidence_index_as_the_latest_incidents_migration()
+    public async Task The_shared_fixture_carries_the_evidence_index_in_the_incidents_lane()
     {
+        // The evidence index is no longer the lane's latest step: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 follows.
         var verified = Assert.Single(ModuleMigrationCoordinator.VerifySources(), state => state.Module == Module);
-        Assert.Equal(IndexIncidentEvidenceByOrderProof.MigrationId, verified.MigrationId);
+        Assert.Equal(AllowDispatchDecidedNextAction.MigrationId, verified.MigrationId);
 
         var applied = Assert.Single(
             await new ModuleMigrationCoordinator().AssertAsync(fixture.DeploymentConnectionString, CancellationToken.None),
             state => state.Module == Module);
         Assert.Equal("APPLIED", applied.Status);
+        Assert.Contains(
+            IndexIncidentEvidenceByOrderProof.MigrationId,
+            await IncidentsLaneMigrations.HistoryAsync(fixture.DeploymentConnectionString));
         Assert.True(await IndexPresentAsync(fixture.DeploymentConnectionString));
     }
 
@@ -46,20 +45,32 @@ public sealed class IncidentEvidenceIndexMigrationPostgreSqlContractTests(Postgr
                 (await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString)).Status);
             var coordinator = new ModuleMigrationCoordinator();
             await coordinator.ApplyAsync(connectionString, CancellationToken.None);
-            Assert.Equal("APPLIED", await LaneStatusAsync(coordinator, connectionString));
+            Assert.Equal("APPLIED", await IncidentsLaneMigrations.LaneStatusAsync(connectionString));
             Assert.True(await IndexPresentAsync(connectionString));
             Assert.Equal(
-                [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
-                await HistoryAsync(connectionString));
+                [
+                    AdoptCanonicalIncidentsBaseline.MigrationId,
+                    IndexIncidentEvidenceByOrderProof.MigrationId,
+                    AllowDispatchDecidedNextAction.MigrationId,
+                ],
+                await IncidentsLaneMigrations.HistoryAsync(connectionString));
             Assert.True(await UsesIndexAsync(connectionString));
 
-            // Down: only the index goes; the adoption and its evidence table stay.
-            await RollBackIndexMigrationAsMigratorAsync(connectionString);
+            // Down, newest step first: the dispatch decision step (no incident leaves its decision to dispatch
+            // here, so it rolls back), then the index; the adoption and its evidence table stay.
+            await IncidentsLaneMigrations.RollBackAsMigratorAsync(
+                connectionString,
+                AllowDispatchDecidedNextAction.MigrationId);
+            await IncidentsLaneMigrations.RollBackAsMigratorAsync(
+                connectionString,
+                IndexIncidentEvidenceByOrderProof.MigrationId);
             Assert.False(await IndexPresentAsync(connectionString));
-            Assert.Equal([AdoptCanonicalIncidentsBaseline.MigrationId], await HistoryAsync(connectionString));
+            Assert.Equal(
+                [AdoptCanonicalIncidentsBaseline.MigrationId],
+                await IncidentsLaneMigrations.HistoryAsync(connectionString));
             Assert.True(await ScalarAsync<bool>(connectionString,
                 "SELECT to_regclass('incidents.incident_evidence') IS NOT NULL"));
-            Assert.Equal("PENDING", await LaneStatusAsync(coordinator, connectionString));
+            Assert.Equal("PENDING", await IncidentsLaneMigrations.LaneStatusAsync(connectionString));
 
             // Up again, through the canonical migrator as deployment runs it.
             await coordinator.ApplyAsync(connectionString, CancellationToken.None);
@@ -69,7 +80,9 @@ public sealed class IncidentEvidenceIndexMigrationPostgreSqlContractTests(Postgr
             Assert.True(await IndexPresentAsync(connectionString));
 
             // The index SQL is idempotent when it runs again.
-            await MigrateSqlAsMigratorAsync(connectionString, IndexIncidentEvidenceByOrderProof.UpSql);
+            await IncidentsLaneMigrations.MigrateSqlAsMigratorAsync(
+                connectionString,
+                IndexIncidentEvidenceByOrderProof.UpSql);
             Assert.True(await IndexPresentAsync(connectionString));
         }
         finally
@@ -119,82 +132,6 @@ public sealed class IncidentEvidenceIndexMigrationPostgreSqlContractTests(Postgr
 
         await transaction.RollbackAsync();
         return plan.Any(line => line.Contains(IndexIncidentEvidenceByOrderProof.IndexName, StringComparison.Ordinal));
-    }
-
-    private static async Task<string[]> HistoryAsync(string connectionString)
-    {
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
-        await using var command = new NpgsqlCommand(
-            "SELECT \"MigrationId\" FROM platform.__ef_migrations_history_incidents ORDER BY \"MigrationId\"",
-            connection);
-        var ids = new List<string>();
-        await using var reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            ids.Add(reader.GetString(0));
-        }
-
-        return [.. ids];
-    }
-
-    private static async Task<string> LaneStatusAsync(ModuleMigrationCoordinator coordinator, string connectionString) =>
-        (await coordinator.PlanAsync(connectionString, CancellationToken.None))
-            .Single(state => state.Module == Module)
-            .Status;
-
-    /// <summary>
-    /// Reverts the index migration exactly as EF Core's migrator does: its Down operations through
-    /// the provider's SQL generator and the removal of its history row, in one transaction, as
-    /// <c>paqueteria_migrator</c>. The pre-EF-format adoption identifier cannot be named as a
-    /// migrator target, so the step is driven through the same services instead.
-    /// </summary>
-    private static async Task RollBackIndexMigrationAsMigratorAsync(string connectionString)
-    {
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
-        {
-            await role.ExecuteNonQueryAsync();
-        }
-
-        var options = new DbContextOptionsBuilder<IncidentsDbContext>()
-            .UseNpgsql(connection, postgres =>
-            {
-                postgres.MigrationsAssembly(typeof(IncidentsDbContext).Assembly.FullName);
-                postgres.MigrationsHistoryTable("__ef_migrations_history_incidents", "platform");
-            })
-            .Options;
-        await using var context = new IncidentsDbContext(options, new TenantDatabaseExecutionState());
-        var assembly = context.GetService<IMigrationsAssembly>();
-        var migration = assembly.CreateMigration(
-            assembly.Migrations[IndexIncidentEvidenceByOrderProof.MigrationId],
-            context.Database.ProviderName!);
-        var commands = context.GetService<IMigrationsSqlGenerator>().Generate(migration.DownOperations);
-        var history = context.GetService<IHistoryRepository>()
-            .GetDeleteScript(IndexIncidentEvidenceByOrderProof.MigrationId);
-
-        await using var transaction = await connection.BeginTransactionAsync();
-        foreach (var sql in commands.Select(command => command.CommandText).Append(history))
-        {
-            await using var command = new NpgsqlCommand(sql, connection, transaction);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        await transaction.CommitAsync();
-    }
-
-    private static async Task MigrateSqlAsMigratorAsync(string connectionString, string sql)
-    {
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
-        await using (var role = new NpgsqlCommand("SET ROLE paqueteria_migrator", connection))
-        {
-            await role.ExecuteNonQueryAsync();
-        }
-
-        await using var command = new NpgsqlCommand(sql, connection);
-        await command.ExecuteNonQueryAsync();
     }
 
     private static async Task<T> ScalarAsync<T>(string connectionString, string sql)

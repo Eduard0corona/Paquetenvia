@@ -29,6 +29,12 @@ public sealed record OrderAllowedTransition(OrderStatus Target, IReadOnlyList<st
 /// The <see cref="OrderTransitionGuardRegistry"/> guards (quote and acceptance, assignment, proofs, custody,
 /// incidents, COD and reconciliation) are not evaluated and never exposed: a listed transition can still be refused
 /// with 409, and transitionOrder re-evaluates everything in its own transaction.
+/// <para>
+/// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the one exception is the decision of a failed attempt. From
+/// <c>FAILED_ATTEMPT</c> the exits follow <see cref="FailedAttemptDecisionPolicy.AllowsExit"/> over the incident and
+/// custody snapshots transitionOrder reads (<paramref name="failedAttempt"/>): who decides, the successor a recorded
+/// next action allows and the custody the target needs. Without that snapshot no exit is listed.
+/// </para>
 /// </summary>
 public static class OrderAllowedTransitionsPolicy
 {
@@ -38,7 +44,8 @@ public static class OrderAllowedTransitionsPolicy
         OrderResult order,
         OrderTransitionAuthorizationSnapshot authorization,
         bool mfaSatisfied,
-        DateTimeOffset evaluatedAt)
+        DateTimeOffset evaluatedAt,
+        FailedAttemptExitSnapshot? failedAttempt = null)
     {
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(order);
@@ -66,6 +73,9 @@ public static class OrderAllowedTransitionsPolicy
                 target,
                 mfaSatisfied,
                 authorization.HasMatchingDriverAssignment)))
+            .Where(target => source != OrderStatus.FailedAttempt ||
+                (failedAttempt is not null &&
+                 FailedAttemptDecisionPolicy.AllowsExit(failedAttempt, authorization.ActiveRole, target)))
             .Select(target => new OrderAllowedTransition(
                 target,
                 OrderTransitionInputPolicy.RequiredMetadataKeys(source, target)))
