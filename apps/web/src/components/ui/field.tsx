@@ -14,17 +14,21 @@ export interface FieldControlProps {
  * the control through aria-describedby; an error also sets aria-invalid.
  */
 export function Field({
+  id: fixedId,
   label,
   hint,
   error,
   children,
 }: {
+  /** A stable control id, for a screen that moves focus to the field; generated otherwise. */
+  readonly id?: string;
   readonly label: ReactNode;
   readonly hint?: ReactNode;
   readonly error?: ReactNode;
   readonly children: (control: FieldControlProps) => ReactNode;
 }) {
-  const id = useId();
+  const generatedId = useId();
+  const id = fixedId ?? generatedId;
   const hintId = hint === undefined ? undefined : `${id}-hint`;
   const errorId = error === undefined || error === null ? undefined : `${id}-error`;
   const describedBy = [hintId, errorId].filter((value) => value !== undefined).join(" ");

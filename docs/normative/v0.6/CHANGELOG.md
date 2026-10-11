@@ -1,5 +1,24 @@
 # Changelog
 
+## Asistente de nueva orden en 4 pasos que crea y confirma (UI-PHASE3-ORDER-WIZARD-2026-10-10) — 2026-10-10
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, a la pregunta "Asistente de nueva
+  orden: al terminar los 4 pasos, ¿cómo debe quedar la orden?", "Confirmada (Recommended)" ("El asistente la crea y la
+  confirma con las casillas del paso 4 (términos y artículos prohibidos). Queda lista para preparar."); registradas en
+  `decision-log.md` como cambio MAJOR de operación (AI-01 §7).
+- AI-07 `/ops/orders/new` y `create_order.wizard`: "1. Dónde", "2. Qué se envía", "3. Servicio y precio" y
+  "4. Confirmar" (solo quién paga y las dos casillas), con stepper, validación por paso junto a cada campo y un resumen
+  fijo (apilado en teléfonos) con el desglose: neto, IVA, total "IVA incluido" y la regla en palabras, antes de
+  confirmar. "Autorizar envío de bajo monto" sigue en el paso 3 con motivo obligatorio.
+- Al terminar: `createOrder` y después `transitionOrder` DRAFT → CONFIRMED con el motivo "Confirmada al crear la orden",
+  `restricted_goods_acknowledged` de la casilla del paso 4 y la versión de la orden creada. Si la confirmación se
+  rechaza, la orden queda en borrador, la pantalla lo dice con el mensaje de ORD-002-GUARD-CODES (o la verificación MFA)
+  y enlaza al detalle, donde "Siguiente paso" la confirma. Los reintentos usan la misma Idempotency-Key: nunca se crea
+  una segunda orden.
+- Pendientes: libreta de direcciones (BUS-001, MVP-2) y selector de cuenta cliente (no hay operación que las liste).
+  La importación CSV y la API siguen creando órdenes en borrador. Sin cambios en API, AI-04, AI-05, AI-06, AI-18, roles
+  ni migraciones.
+
 ## Total de la orden en la bandeja de trabajo (UI-PHASE3-INBOX-TOTAL-2026-10-10) — 2026-10-10
 
 - Completa la columna Total de la tabla aprobada en la fase 3 (respuesta literal del project owner: "avanza con la

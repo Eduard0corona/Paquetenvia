@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { createOrderActionsApi } from "../api/order-actions-api";
 import { createOrdersApi } from "../api/orders-api";
 import {
   readOperationsSession,
@@ -18,6 +19,9 @@ export function useCreateOrder(
       new CreateOrderController({
         readSession: readOperationsSession,
         createApi: (session) => createOrdersApi(apiBaseUrl(), session),
+        // UI-PHASE3-ORDER-WIZARD-2026-10-10: the order is confirmed with the same
+        // transitionOrder client as the order detail's "Siguiente paso".
+        createActionsApi: (session) => createOrderActionsApi(apiBaseUrl(), session),
         loadRole: loadActiveRole,
         acceptanceVersions,
       }),

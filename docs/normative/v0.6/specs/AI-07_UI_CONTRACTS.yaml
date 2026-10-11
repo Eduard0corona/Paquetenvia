@@ -89,18 +89,23 @@ routes:
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
   # guía", the same text for a malformed, missing or other-organization number. No personal data is searchable.
+  # UI-PHASE3-ORDER-WIZARD-2026-10-10 (project owner, 2026-10-09 "avanza con la fase 3"; 2026-10-10 "Confirmada
+  # (Recommended)"): "Nueva orden" is a four-step wizard that creates the order and then confirms it, so an order
+  # captured here leaves the screen CONFIRMED; the backend and RLS remain the barrier.
   /ops/orders/new:
     roles:
     - platform_admin
     - dispatcher
     release: MVP-0
+    screen_contract: create_order
+    decisions:
+    - UI-PHASE3-ORDER-WIZARD-2026-10-10
     steps:
-    - origin
-    - destination
-    - package
-    - service_window
-    - quote
-    - acceptance
+    - where ("1. Dónde") - origin and destination
+    - what ("2. Qué se envía") - packages
+    - service_and_price ("3. Servicio y precio") - service type, consolidated route, optional delivery window, COD,
+      client account and the quote
+    - confirm ("4. Confirmar") - who pays and the acceptance; creates the order and confirms it
   /ops/orders/:id:
     roles:
     - authorized
@@ -400,6 +405,61 @@ screen_contracts:
     - EXTERNAL routing is unavailable
     - ALLY_CAPACITY routing is unavailable
   create_order:
+    # UI-PHASE3-ORDER-WIZARD-2026-10-10 (project owner, 2026-10-09 "avanza con la fase 3"; 2026-10-10, asked how the
+    # order must end after the four steps, "Confirmada (Recommended)"): the wizard creates the order and confirms it
+    # with the step 4 checkboxes, so it is ready to prepare. Every rule below still applies, step by step.
+    wizard:
+      decision: UI-PHASE3-ORDER-WIZARD-2026-10-10
+      route: /ops/orders/new
+      sources:
+        quote: POST /quotes (createQuote)
+        order: POST /orders (createOrder)
+        confirm: POST /orders/{orderId}/transitions (transitionOrder), the same client as the order detail next_step
+      steps:
+      - Dónde - origin and destination; address (8 characters or more), contact, phone (10 Mexican digits, optional
+        +52), latitude and longitude (shown to DISPATCHER and PLATFORM_ADMIN and still required by createQuote) and
+        references; createQuote checks the Culiacán coverage
+      - Qué se envía - 1 to 20 packages with description, weight in grams, declared value in MXN (integer cents) and
+        optional measures in millimeters
+      - Servicio y precio - service type, consolidated route, optional delivery window (America/Mazatlan, at most 12
+        hours), COD in MXN (at most 20,000.00), client account id typed as before (no list operation exists) and
+        "Calcular precio"; "Autorizar envío de bajo monto" with its required reason stays in this step for
+        DISPATCHER and PLATFORM_ADMIN, and a total of 52 MXN or less, IVA included, without consolidated route or
+        authorization does not leave it
+      - Confirmar - only who pays and two required checkboxes - the customer saw the breakdown and accepted the terms
+        and privacy notice in force (versions from configuration, never typed nor shown as codes) and the shipment
+        holds no prohibited goods
+      navigation: a stepper shows completed, current and pending steps; "Siguiente" validates only the current step
+        and shows each message next to its field; "Atrás" and the completed steps of the stepper go back without
+        losing data; a later step is never reached without validating the earlier ones
+      summary: fixed beside the steps on wide screens and stacked on phones (after the fields, before them on the last
+        step); it restates the capture and, once calculated, the price breakdown - net, IVA, total "IVA incluido" and
+        the rule applied in words - so the breakdown is shown before confirmation
+      price: dropped as soon as anything it was calculated from changes (addresses, packages, service type,
+        consolidated route, client account, authorization); an expired or used price is dropped at "Siguiente" or
+        on confirmation and calculated again
+      submit: createOrder, then transitionOrder DRAFT -> CONFIRMED with reason "Confirmada al crear la orden",
+        metadata restricted_goods_acknowledged true from the step 4 checkbox and expected_version of the created order
+      idempotency: one Idempotency-Key per createOrder payload and one per confirmation, each reused for a retry after
+        a network or server failure until a definitive answer; retrying the confirmation never sends createOrder again
+      outcome:
+      - confirmed - "Orden creada y confirmada" with the tracking number, the status the server returned and links to
+        the order detail and to capture another order
+      - confirmation refused - the order stays in DRAFT and the screen says so, with the ORD-002-GUARD-CODES-2026-10-05
+        message (or the MFA step-up back to the order detail) and a link to the order detail, whose next_step confirms
+        it; it never says the order was confirmed
+      - no valid answer - the screen says it cannot tell whether the order was confirmed, offers to retry the
+        confirmation (same key) after a network or server failure and links to the order detail
+      - order refused (createOrder 409) - no order exists; the screen returns to "Servicio y precio" to calculate the
+        price again
+      mfa: PLATFORM_ADMIN confirms only with MFA (transitionOrder); the last step says so beforehand
+      accessibility: es-MX copy without identifiers or internal codes, 44 px targets, keyboard operable, focus on the
+        step title after a step change and on the first field with a message after a refused step, usable from 320 px
+      privacy: the draft lives in memory only, is cleared on an organization switch and is never logged
+      not_supported:
+      - address book - createQuote cannot reference a saved location and listLocations returns no address text; it
+        belongs to BUS-001 (MVP-2)
+      - client account picker - there is no operation that lists client accounts
     validation:
     - Culiacán coverage
     - phone format
