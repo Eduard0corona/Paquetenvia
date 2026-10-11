@@ -16,6 +16,32 @@ public sealed class DriversOptions
     public int CommandTimeoutSeconds { get; set; } = 30;
     public DriverEligibilityOptions Eligibility { get; set; } = new();
     public DriverLocationTelemetryOptions LocationTelemetry { get; set; } = new();
+
+    /// <summary>VOICE-001-MASKED-CALLS-2026-10-11: rate limits and idempotency of recipient calls.</summary>
+    public RecipientCallOptions RecipientCalls { get; set; } = new();
+}
+
+/// <summary>
+/// <c>Drivers:RecipientCalls</c>. Only requests that may have placed a call count (REQUESTED, PLACED, UNCONFIRMED).
+/// </summary>
+public sealed class RecipientCallOptions
+{
+    /// <summary>Calls one driver may request for one order inside <see cref="OrderWindowMinutes"/>.</summary>
+    public int MaximumPerOrder { get; set; } = 3;
+
+    public int OrderWindowMinutes { get; set; } = 15;
+
+    /// <summary>Calls one driver may request in any hour, every order together (bounds the cost of one driver).</summary>
+    public int MaximumPerDriverPerHour { get; set; } = 20;
+
+    public int IdempotencyLifetimeMinutes { get; set; } = 1440;
+
+    public bool IsValid() =>
+        MaximumPerOrder is >= 1 and <= 20 &&
+        OrderWindowMinutes is >= 1 and <= 60 &&
+        MaximumPerDriverPerHour is >= 1 and <= 200 &&
+        MaximumPerDriverPerHour >= MaximumPerOrder &&
+        IdempotencyLifetimeMinutes is >= 60 and <= 10_080;
 }
 
 public sealed class DriverLocationTelemetryOptions

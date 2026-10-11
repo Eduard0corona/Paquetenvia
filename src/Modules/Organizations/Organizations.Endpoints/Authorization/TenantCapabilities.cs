@@ -52,6 +52,15 @@ public static class TenantCapabilities
     public static readonly TenantCapability ListMyEligibleExternalOffers =
         Create("listMyEligibleExternalOffers", Driver);
 
+    // x-capability-matrix voice_call_operations (VOICE-001-MASKED-CALLS-2026-10-11): only a DRIVER, for its own
+    // phone and its own current assignments; every other role receives the uniform 403 before any state is read.
+    public static readonly TenantCapability GetMyDriverPhone = Create("getMyDriverPhone", Driver);
+    public static readonly TenantCapability RegisterMyDriverPhone = Create("registerMyDriverPhone", Driver);
+    public static readonly TenantCapability RemoveMyDriverPhone = Create("removeMyDriverPhone", Driver);
+    public static readonly TenantCapability GetRecipientCallAvailability =
+        Create("getRecipientCallAvailability", Driver);
+    public static readonly TenantCapability RequestRecipientCall = Create("requestRecipientCall", Driver);
+
     // D5-CAPABILITY-MATRIX: FINANCE is limited to settlements and finance.
     public static readonly TenantCapability CreateSettlement = Settlement("createSettlement");
     public static readonly TenantCapability ListSettlements = Settlement("listSettlements");

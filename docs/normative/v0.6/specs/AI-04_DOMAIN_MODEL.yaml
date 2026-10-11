@@ -452,6 +452,9 @@ transaction_coordinator_allowlist:
 privacy_invariants:
 - request_snapshot_redacted contains no plaintext address/contact/phone/access notes
 - driver location is worker personal data and is included in GATE-007 retention/ARCO
+- VOICE-001-MASKED-CALLS-2026-10-11 - driver and recipient phone numbers reach the voice provider only in memory for one
+  bridged call; they are never returned by the call endpoints, logged, audited, published or stored in clear, and the
+  driver's own number is stored only with consent (ADP-001 envelope) and is included in GATE-007 retention/ARCO
 - proof and audit records are append-only; privacy actions use access restriction, pseudonymization or cryptographic erasure
   under approved policy
 outbox_invariants:

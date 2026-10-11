@@ -1,5 +1,27 @@
 # Changelog
 
+## Llamadas enmascaradas repartidor–destinatario con Twilio (VOICE-001) — 2026-10-11
+
+- Preguntas y respuestas literales del project owner: "App del repartidor: hoy no ve el teléfono del destinatario.
+  ¿Debe poder llamarle desde la app?" → "Sí, con número enmascarado"; "Número enmascarado: … ¿Cómo seguimos?" →
+  "Investiga y propón (Recommended)"; "Número enmascarado: comparé proveedores. Azure Communication Services queda
+  descartado: no vende números mexicanos para llamar y Microsoft lo va a retirar. ¿Con cuál seguimos?" → "Twilio
+  (Recommended)". Registradas como `VOICE-001-MASKED-CALLS-2026-10-11` y `VOICE-001-PROVIDER-TWILIO-2026-10-11` (ADR:
+  Twilio como nuevo encargado de datos personales) en `decision-log.md` y en
+  `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: `getMyDriverPhone`, `registerMyDriverPhone`, `removeMyDriverPhone` (`/driver/me/phone`),
+  `getRecipientCallAvailability` y `requestRecipientCall` (`/driver/me/stops/{orderId}/recipient-call`, solo DRIVER,
+  `x-capability-matrix.voice_call_operations`, 404 uniforme, Idempotency-Key, 429, sin números en petición ni
+  respuesta) y los webhooks firmados `receiveTwilioCallStatus` y `answerTwilioInboundCall` (etiqueta Voice); entrada
+  `VOICE-001-MASKED-CALLS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` ("Llamar al destinatario" solo si el servidor lo permite; acción solo en línea,
+  nunca en la cola offline; "masked phone or relay") y `driver_account` (celular propio con consentimiento explícito).
+- AI-08: ítem VOICE-001 (MVP-1, P1, compuerta GATE-007; el piloto no usa números reales antes de resolver GATE-007).
+- AI-24 `voice_bridge`; AI-03 §15 añade `IVoiceBridgeProvider`; AI-04 `privacy_invariants` añade la regla de los
+  teléfonos de la llamada puente.
+- Sin cambios en AI-06, AI-18 ni AI-12: el lane Drivers `20261011000100_AddDriverVoiceBridge` agrega las columnas del
+  celular del repartidor y la tabla `drivers.recipient_call_requests`. No es un sexto flujo de AI-13 §4.
+
 ## Cierre automático de órdenes entregadas (ORD-AUTO-CLOSE-2026-10-10) — 2026-10-10
 
 - Pregunta y respuesta literales del project owner: "Cierre de órdenes: hoy una orden entregada se cierra a mano con "Cerrar orden". El servidor solo lo permite si no tiene incidencias abiertas y el cobro contra entrega ya está conciliado. Aun cerrada, se puede abrir una reclamación dentro del plazo. ¿Quieres que se cierre sola cuando cumpla esas reglas?" → "Sí, que se cierre sola" (descripción de la opción: "Agrego en la fase 3 un proceso en el servidor que la cierra en cuanto cumple las reglas. Requiere ADR, porque cambia el comportamiento.");

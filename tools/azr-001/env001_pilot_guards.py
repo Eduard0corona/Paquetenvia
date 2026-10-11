@@ -173,6 +173,10 @@ PLATFORM_MANAGED_PREFIXES = (
     "Incidents__",
     "OutboxRetention__",
     "OperationalCleanup__",
+    # VOICE-001-PROVIDER-TWILIO-2026-10-11: the masked call bridge stays Disabled in the pilot until the owner
+    # delivers the Twilio account, number and Key Vault secrets and GATE-007 is resolved; enabling it is an
+    # apps.bicep change under review, never a free-form setting.
+    "Voice__",
     "Urls",
 )
 # Settings that no longer exist. The API refuses to start while one is configured, so the pilot refuses

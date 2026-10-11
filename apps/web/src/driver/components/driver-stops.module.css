@@ -576,3 +576,103 @@
     animation: none;
   }
 }
+
+/* VOICE-001: "Cuenta" (the driver's own phone for masked calls) and "Llamar al destinatario". */
+.accountDetails {
+  flex-basis: 100%;
+  text-align: left;
+}
+
+.accountDetails > summary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.accountDetails > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.phonePanel {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.phonePanel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.phoneNote {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.phoneForm {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.phoneForm input[type="tel"] {
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.75rem;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.phoneForm input[type="tel"]:focus-visible,
+.phoneConsent input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.phoneConsent {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+  align-items: start;
+  line-height: 1.45;
+}
+
+.phoneConsent input {
+  width: 1.4rem;
+  height: 1.4rem;
+  margin: 0.1rem 0 0;
+}
+
+.phoneForm button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.phoneForm button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.callHeading {
+  margin: 0;
+  font-size: 1rem;
+}

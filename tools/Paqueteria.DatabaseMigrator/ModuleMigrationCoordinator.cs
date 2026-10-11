@@ -47,8 +47,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20261002000100_VersionDispatchPoliciesPerOrganization.cs"),
         ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
-        ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
-            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
+        ("Drivers", "__ef_migrations_history_drivers", AddDriverVoiceBridge.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261011000100_AddDriverVoiceBridge.cs"),
         ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderAutoCloseDiscovery.MigrationId,
@@ -141,6 +141,10 @@ internal sealed class ModuleMigrationCoordinator
                 // functions (role and grants are declared by AI-18 and stay inert). No table, column, policy, role
                 // or row is dropped, deleted or rewritten.
                 "Dispatch" => IsOperatorOwnerOutboxSource(source),
+                // VOICE-001-MASKED-CALLS-2026-10-11: the lane's latest migration only adds the driver phone columns
+                // and the recipient call request table; its rollback refuses while any request or phone exists and
+                // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
+                "Drivers" => IsDriverVoiceBridgeSource(source),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -258,6 +262,11 @@ internal sealed class ModuleMigrationCoordinator
             "Drivers",
             AdoptCanonicalDriversBaseline.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDriversBaseline.cs");
+        VerifyAdoptionSource(
+            root,
+            "Drivers",
+            AdoptCanonicalDriverPositions.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs");
         VerifyAdoptionSource(
             root,
             "Orders",
@@ -475,7 +484,11 @@ internal sealed class ModuleMigrationCoordinator
         string[] expectedIds = contract.Module switch
         {
             "Drivers" =>
-                [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
+                [
+                    AdoptCanonicalDriversBaseline.MigrationId,
+                    AdoptCanonicalDriverPositions.MigrationId,
+                    AddDriverVoiceBridge.MigrationId,
+                ],
             "Pricing" =>
                 [
                     AdoptCanonicalPricingBaseline.MigrationId,
@@ -537,6 +550,26 @@ internal sealed class ModuleMigrationCoordinator
                 : "DRIFT";
         return new ModuleMigrationState(contract.Module, $"platform.{contract.HistoryTable}", contract.MigrationId, status);
     }
+
+    /// <summary>VOICE-001-MASKED-CALLS-2026-10-11: the driver phone columns and the recipient call request table only;
+    /// the rollback is guarded by <c>VOICE001_DOWNGRADE_BLOCKED_DATA_PRESENT</c> and drops exactly that table.</summary>
+    private static bool IsDriverVoiceBridgeSource(string source) =>
+        source.Contains(AddDriverVoiceBridge.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddDriverVoiceBridge.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Split("DROP TABLE", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("DROP TABLE drivers.recipient_call_requests;", StringComparison.Ordinal) &&
+        source.Contains("FORCE ROW LEVEL SECURITY;", StringComparison.Ordinal) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE drivers", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE drivers", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
 
     /// <summary>ORD-AUTO-CLOSE-2026-10-10: only the auto-close executor, its two column grants and its read-only
     /// discovery function; the rollback drops exactly that function and nothing else.</summary>

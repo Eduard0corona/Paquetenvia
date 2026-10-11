@@ -349,6 +349,52 @@ public sealed class CapabilityMatrixContractTests
         }
     }
 
+    /// <summary>
+    /// VOICE-001-MASKED-CALLS-2026-10-11: AI-05 publishes the masked call operations in their own section, citing the
+    /// owner literals, and the server grants exactly DRIVER without MFA (like listMyStops); every other role, MFA or
+    /// not, is refused before any state is read. The provider webhooks are not tenant operations.
+    /// </summary>
+    [Fact]
+    public void Voice_call_operations_take_only_DRIVER_without_MFA()
+    {
+        var decision = Matrix.Scalar("voice_call_operations_decision");
+        Assert.StartsWith("VOICE-001-MASKED-CALLS-2026-10-11", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí, con número enmascarado\"", decision, StringComparison.Ordinal);
+        Assert.Contains("VOICE-001-PROVIDER-TWILIO-2026-10-11", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Twilio (Recommended)\"", decision, StringComparison.Ordinal);
+        string[] expected =
+        [
+            "getMyDriverPhone",
+            "getRecipientCallAvailability",
+            "registerMyDriverPhone",
+            "removeMyDriverPhone",
+            "requestRecipientCall",
+        ];
+        Assert.Equal(expected, OperationIds(Matrix.Mapping("voice_call_operations")).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [
+                TenantCapabilities.GetMyDriverPhone,
+                TenantCapabilities.GetRecipientCallAvailability,
+                TenantCapabilities.RegisterMyDriverPhone,
+                TenantCapabilities.RemoveMyDriverPhone,
+                TenantCapabilities.RequestRecipientCall,
+            ],
+            expected.Select(operationId => TenantCapabilities.All[operationId]));
+        foreach (var operationId in expected)
+        {
+            var capability = TenantCapabilities.All[operationId];
+            Assert.Equal(
+                [(OrganizationRole.Driver, false)],
+                capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+            Assert.Equal(
+                TenantCapabilities.ListMyStops.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        }
+
+        Assert.DoesNotContain("receiveTwilioCallStatus", TenantCapabilities.All.Keys);
+        Assert.DoesNotContain("answerTwilioInboundCall", TenantCapabilities.All.Keys);
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -435,7 +481,7 @@ public sealed class CapabilityMatrixContractTests
                  {
                      "operations", "finance_operations", "platform_operations", "membership_operations",
                      "tracking_link_operations", "incident_operations", "assignable_driver_operations",
-                     "operations_queue_operations",
+                     "operations_queue_operations", "voice_call_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)
