@@ -27,6 +27,7 @@ tags:
 - name: Onboarding
 - name: Platform
 - name: Operations
+- name: Voice
 paths:
   /quotes:
     post:
@@ -1292,6 +1293,261 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
+  /driver/me/phone:
+    get:
+      tags:
+      - Driver
+      operationId: getMyDriverPhone
+      description: >-
+        VOICE-001-MASKED-CALLS-2026-10-11 - whether the authenticated driver has a mobile number stored for the masked
+        call bridge, the consent version given and when; the number itself is never returned. voice_calls_enabled
+        tells the PWA whether to offer the form at all (no number is collected while the bridge is disabled). DRIVER
+        members holding an ACTIVE OWN or EXTERNAL driver profile in the selected organization only
+        (x-capability-matrix voice_call_operations); every other role receives the uniform 403 before any state is
+        read. Cache-Control no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      responses:
+        '200':
+          description: Phone registration status of the authenticated driver
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverPhoneStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    put:
+      tags:
+      - Driver
+      operationId: registerMyDriverPhone
+      description: >-
+        VOICE-001-MASKED-CALLS-2026-10-11 - stores or replaces the authenticated driver's own mobile number, used only
+        to connect delivery calls through the masked bridge and never shown to recipients. The request must accept the
+        consent text the PWA shows (consent_accepted true and consent_version VOICE-001-CONSENT-V1). The number is ten
+        Mexican digits (ASCII spaces and hyphens and an optional leading +52 are removed, ORD-PHONE-PLUS52-LOCATIONS)
+        whose first digit is 2-9; it is protected with the ADP-001 envelope before it is stored and is never returned,
+        logged or audited (the audit row records only DRIVER_PHONE_REGISTERED and the consent version). A malformed or
+        unexpected body is the uniform 409 INVALID_REQUEST before any state is read; 503 while the bridge is disabled
+        or the protector is unavailable, with nothing stored. Cache-Control no-store.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterDriverPhoneRequest'
+      responses:
+        '200':
+          description: The number is stored; the answer never carries it
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverPhoneStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/DriverPhoneInvalidRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      tags:
+      - Driver
+      operationId: removeMyDriverPhone
+      description: >-
+        VOICE-001-MASKED-CALLS-2026-10-11 - erases the authenticated driver's stored number and consent, whatever the
+        bridge mode, and writes DRIVER_PHONE_REMOVED to the audit; removing a number that is not stored is a no-op.
+        Answers the resulting status. Cache-Control no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      responses:
+        '200':
+          description: No number is stored any more
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverPhoneStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /driver/me/stops/{orderId}/recipient-call:
+    get:
+      tags:
+      - Driver
+      operationId: getRecipientCallAvailability
+      description: >-
+        VOICE-001-MASKED-CALLS-2026-10-11 - whether the authenticated driver may ask for a masked call to the delivery
+        recipient of this stop now; the PWA offers "Llamar al destinatario" only when available is true. Only the
+        driver's own ACCEPTED or ACTIVE assignment of an order the selected organization owns or operates, with its
+        destination visible under RLS (the listMyStops visibility); an unknown order, another organization's order or
+        a stop that is not the driver's is the uniform 404. reason is VOICE_CALLS_DISABLED (bridge not configured;
+        nothing is read), ORDER_STATE_NOT_ALLOWED (the order is not DELIVERING), RECIPIENT_PHONE_UNAVAILABLE,
+        DRIVER_PHONE_REQUIRED or RATE_LIMITED. No phone number is read in clear or returned. Cache-Control no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      x-capability-protected-state:
+      - assignment
+      - order
+      - destination_location
+      - driver_profile
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Availability of the masked recipient call
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipientCallAvailability'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    post:
+      tags:
+      - Driver
+      operationId: requestRecipientCall
+      description: >-
+        VOICE-001-MASKED-CALLS-2026-10-11 and VOICE-001-PROVIDER-TWILIO-2026-10-11 - asks the platform to call the
+        authenticated driver's registered mobile from the company number and, once answered, connect it with the
+        delivery recipient of this stop; neither party sees the other's number and nothing is recorded. Same
+        visibility as getRecipientCallAvailability (uniform 404), the order must be DELIVERING and both phones stored.
+        The request carries no body and no phone number; the answer carries no phone number: only the call request id
+        and REQUESTED (still in progress), PLACED (the provider created the call) or UNCONFIRMED (the provider may have
+        created it; never retried). Idempotency-Key is required: a replay returns the stored answer and places no
+        other call; a refused request stores nothing, and a request that placed nothing releases its key. Rate limited
+        per driver and order (Drivers:RecipientCalls) with 429 and Retry-After. Phones are decrypted only in memory
+        inside the request; the audit records RECIPIENT_CALL_REQUESTED and the outcome (actor, order, provider call
+        id, result code) without numbers. 503 when the bridge is disabled or the provider or key-encryption key is
+        unavailable. It is an online-only action: the PWA never queues it.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-capability-protected-state:
+      - idempotency_lock
+      - idempotency_record
+      - assignment
+      - order
+      - destination_location
+      - driver_profile
+      - recipient_call_requests
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: The call was requested; the driver's phone rings from the company number
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipientCallRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/RecipientCallConflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /voice/twilio/call-status:
+    post:
+      tags:
+      - Voice
+      operationId: receiveTwilioCallStatus
+      security: []
+      description: >-
+        VOICE-001-PROVIDER-TWILIO-2026-10-11 - Twilio status callback of a bridged call, sent server to server to the
+        URL the platform gave when it created the call (query o = organization, r = call request). Anonymous: no
+        session, cookie or CSRF, but X-Twilio-Signature must be the valid HMAC-SHA1 of the configured public URL and
+        the sorted form fields under the account auth token, and AccountSid must be the configured account; otherwise
+        403. Only CallSid, CallStatus and CallDuration are kept (the call request becomes PLACED with its final status
+        and duration and RECIPIENT_CALL_STATUS_REPORTED is audited without an actor); From, To, Caller and Called are
+        read only to verify the signature and are never logged, stored, audited or published. 404 while the Twilio
+        provider is not configured. An unknown or already final call request is acknowledged with 204 and changes
+        nothing.
+      parameters:
+      - name: o
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: r
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/TwilioSignature'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TwilioCallStatusForm'
+      responses:
+        '204':
+          description: Acknowledged
+        '400':
+          $ref: '#/components/responses/VoiceWebhookMalformed'
+        '403':
+          $ref: '#/components/responses/VoiceWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /voice/twilio/inbound:
+    post:
+      tags:
+      - Voice
+      operationId: answerTwilioInboundCall
+      security: []
+      description: >-
+        VOICE-001-MASKED-CALLS-2026-10-11 - Twilio voice webhook of the company number, for a recipient who calls it
+        back. Same signature and account checks as receiveTwilioCallStatus (403 otherwise) and 404 while the Twilio
+        provider is not configured. No session lookup by phone: the TwiML answer either plays a fixed Spanish message
+        without personal data and hangs up, or forwards the call to the configured dispatch line with the company
+        number as caller id; nothing is recorded or stored.
+      parameters:
+      - $ref: '#/components/parameters/TwilioSignature'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TwilioWebhookForm'
+      responses:
+        '200':
+          description: TwiML answer
+          content:
+            text/xml:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/VoiceWebhookMalformed'
+        '403':
+          $ref: '#/components/responses/VoiceWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
   /quotes/{quoteId}:
     get:
       tags:
@@ -2789,6 +3045,18 @@ components:
       schema:
         type: string
         format: uuid
+    TwilioSignature:
+      name: X-Twilio-Signature
+      in: header
+      required: true
+      description: >-
+        VOICE-001-PROVIDER-TWILIO-2026-10-11 - Base64 HMAC-SHA1, under the Twilio account auth token, of the public
+        URL Twilio requested (rebuilt from the configured Voice:Twilio:WebhookBaseUri, never from Host or
+        X-Forwarded-* headers) followed by every form field name and value sorted by name.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
     OrganizationContext:
       name: X-Organization-Id
       in: header
@@ -2956,6 +3224,41 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/DriverLocationInvalidRequestProblem'
+    DriverPhoneInvalidRequest:
+      description: >-
+        VOICE-001 registerMyDriverPhone body that is not exactly phone, consent_accepted true and consent_version
+        VOICE-001-CONSENT-V1, or a number that is not ten dialable Mexican digits. Decided before any state is read;
+        the number is never echoed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/DriverPhoneInvalidRequestProblem'
+    RecipientCallConflict:
+      description: >-
+        VOICE-001 requestRecipientCall conflict identified by a stable code. INVALID_REQUEST (missing, repeated or
+        malformed Idempotency-Key, a query or a body) is decided before any state is read; IDEMPOTENCY_CONFLICT (the
+        key was used for another stop or driver); ORDER_STATE_NOT_ALLOWED (the order is not DELIVERING);
+        RECIPIENT_PHONE_UNAVAILABLE (no usable recipient phone); DRIVER_PHONE_REQUIRED (the driver has no usable
+        registered number); DRIVER_PHONE_REJECTED (the provider or the platform refused the driver's number, which
+        the driver should replace). Never carries a phone number.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/RecipientCallConflictProblem'
+    VoiceWebhookMalformed:
+      description: VOICE-001 webhook that is not a well-formed application/x-www-form-urlencoded Twilio request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    VoiceWebhookRejected:
+      description: >-
+        VOICE-001 webhook without exactly one valid X-Twilio-Signature for the configured public URL, or for another
+        Twilio account. Uniform; nothing is read, logged or stored.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     TooManyRequests:
       description: Request rejected by rate limiting
       content:
@@ -4273,6 +4576,189 @@ components:
           items:
             type: object
             additionalProperties: true
+    DriverPhoneStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - voice_calls_enabled
+      - registered
+      - consent_version
+      - consented_at
+      description: >-
+        VOICE-001 - the driver's own phone registration; never the number. consent_version and consented_at are null
+        while registered is false.
+      properties:
+        voice_calls_enabled:
+          type: boolean
+        registered:
+          type: boolean
+        consent_version:
+          type:
+          - string
+          - 'null'
+          enum:
+          - VOICE-001-CONSENT-V1
+          - null
+        consented_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    RegisterDriverPhoneRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - phone
+      - consent_accepted
+      - consent_version
+      properties:
+        phone:
+          type: string
+          minLength: 10
+          maxLength: 32
+          description: >-
+            The driver's own Mexican mobile, ten digits (first digit 2-9) with optional ASCII spaces, hyphens and a
+            leading +52. Personal data: stored only protected (ADP-001) and never returned.
+        consent_accepted:
+          type: boolean
+          const: true
+        consent_version:
+          type: string
+          const: VOICE-001-CONSENT-V1
+    RecipientCallAvailability:
+      type: object
+      additionalProperties: false
+      required:
+      - available
+      - reason
+      properties:
+        available:
+          type: boolean
+        reason:
+          type:
+          - string
+          - 'null'
+          enum:
+          - VOICE_CALLS_DISABLED
+          - ORDER_STATE_NOT_ALLOWED
+          - RECIPIENT_PHONE_UNAVAILABLE
+          - DRIVER_PHONE_REQUIRED
+          - RATE_LIMITED
+          - null
+    RecipientCallRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - call_request_id
+      - status
+      properties:
+        call_request_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - REQUESTED
+          - PLACED
+          - UNCONFIRMED
+    RecipientCallConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - INVALID_REQUEST
+          - IDEMPOTENCY_CONFLICT
+          - ORDER_STATE_NOT_ALLOWED
+          - RECIPIENT_PHONE_UNAVAILABLE
+          - DRIVER_PHONE_REQUIRED
+          - DRIVER_PHONE_REJECTED
+    DriverPhoneInvalidRequestProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          const: INVALID_REQUEST
+    TwilioWebhookForm:
+      type: object
+      required:
+      - AccountSid
+      description: >-
+        Twilio webhook form. Every posted field takes part in the signature; only AccountSid is read. Fields such as
+        From, To, Caller and Called hold phone numbers and are never logged, stored or audited.
+      properties:
+        AccountSid:
+          type: string
+          pattern: ^AC[0-9a-fA-F]{32}$
+      additionalProperties:
+        type: string
+    TwilioCallStatusForm:
+      type: object
+      required:
+      - AccountSid
+      - CallSid
+      - CallStatus
+      description: >-
+        Twilio status callback form. Only AccountSid, CallSid, CallStatus and CallDuration are read; every other field
+        takes part in the signature only.
+      properties:
+        AccountSid:
+          type: string
+          pattern: ^AC[0-9a-fA-F]{32}$
+        CallSid:
+          type: string
+          pattern: ^[A-Za-z0-9]{2,64}$
+        CallStatus:
+          type: string
+          enum:
+          - queued
+          - initiated
+          - ringing
+          - in-progress
+          - completed
+          - busy
+          - no-answer
+          - canceled
+          - failed
+        CallDuration:
+          type: string
+          pattern: ^[0-9]{1,5}$
+      additionalProperties:
+        type: string
     DriverLocationInvalidRequestProblem:
       type: object
       required:
@@ -6511,6 +6997,17 @@ x-capability-matrix:
     tests)
   low_price_authorization:
     createQuote.low_price_authorization: [DISPATCHER, PLATFORM_ADMIN]
+  voice_call_operations_decision: VOICE-001-MASKED-CALLS-2026-10-11 (project owner, 2026-10-10, "Sí, con número
+    enmascarado") with VOICE-001-PROVIDER-TWILIO-2026-10-11 (project owner, 2026-10-11, "Twilio (Recommended)") - only
+    DRIVER members, without MFA like listMyStops, for their own phone and their own ACCEPTED or ACTIVE assignments;
+    every other role receives the uniform 403 before any state is read; the provider webhooks are not tenant
+    operations (anonymous, signature-verified)
+  voice_call_operations:
+    getMyDriverPhone: [DRIVER]
+    registerMyDriverPhone: [DRIVER]
+    removeMyDriverPhone: [DRIVER]
+    getRecipientCallAvailability: [DRIVER]
+    requestRecipientCall: [DRIVER]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -6538,6 +7035,20 @@ x-pilot-contract-deltas:
       COD_EXPECTED_CENTS_INVALID on the CSV, enforced by OrderInputPolicy and the Order domain guard (no AI-06 CHECK)
     quote: per QUOTE-NO-COD (project owner, 2026-09-27) the quote does not carry COD for now; COD is declared only on the
       order and in the CSV
+  - id: VOICE-001-MASKED-CALLS
+    status: DECIDED
+    decision: VOICE-001-MASKED-CALLS-2026-10-11 and VOICE-001-PROVIDER-TWILIO-2026-10-11
+    literal: 'App del repartidor: hoy no ve el teléfono del destinatario. ¿Debe poder llamarle desde la app? - Sí, con
+      número enmascarado; proveedor - Twilio (Recommended)'
+    implementation: shipped by feat/voice-001-masked-call-bridge together with its code and tests - getMyDriverPhone,
+      registerMyDriverPhone, removeMyDriverPhone, getRecipientCallAvailability, requestRecipientCall,
+      receiveTwilioCallStatus, answerTwilioInboundCall and the Drivers lane 20261011000100_AddDriverVoiceBridge
+    delta: a DRIVER registers its own mobile with consent and asks for a masked call to the delivery recipient of its
+      own DELIVERING stop; Twilio calls the driver from the company number and bridges the recipient; no phone number
+      is ever accepted by or returned from requestRecipientCall, logged, audited or published
+    gate: Voice:Provider stays Disabled in the pilot until the owner provides the Twilio account, number and documents
+      and GATE-007 is resolved (Voice:Twilio:Gate007DecisionId); Twilio is refused in Development, Testing and
+      DEV_SYNTHETIC
   - id: ORD-PHONE-PLUS52-LOCATIONS
     status: DECIDED
     decision: ORD-PHONE-PLUS52-LOCATIONS-2026-10-03

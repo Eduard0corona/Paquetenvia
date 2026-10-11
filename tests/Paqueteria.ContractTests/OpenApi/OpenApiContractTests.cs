@@ -22,12 +22,12 @@ public sealed class OpenApiContractTests
         var root = YamlNodes.LoadMapping(path);
         Assert.Equal("3.1.0", root.Scalar("openapi"));
         Assert.Equal("0.6.0", root.Mapping("info").Scalar("version"));
-        Assert.Equal(58, root.Mapping("paths").Children.Count);
-        Assert.Equal(108, root.Mapping("components").Mapping("schemas").Children.Count);
+        Assert.Equal(62, root.Mapping("paths").Children.Count);
+        Assert.Equal(116, root.Mapping("components").Mapping("schemas").Children.Count);
     }
 
     [Fact]
-    public void Operation_ids_are_unique_and_all_559_internal_references_resolve()
+    public void Operation_ids_are_unique_and_all_608_internal_references_resolve()
     {
         var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
         var operationIds = new List<string>();
@@ -54,7 +54,7 @@ public sealed class OpenApiContractTests
             .Where(mapping => mapping.Children.TryGetValue(new YamlScalarNode("$ref"), out _))
             .Select(mapping => ((YamlScalarNode)mapping.Required("$ref")).Value!)
             .ToArray();
-        Assert.Equal(559, references.Length);
+        Assert.Equal(608, references.Length);
         Assert.All(references, reference => Assert.NotNull(ResolveReference(root, reference)));
     }
 

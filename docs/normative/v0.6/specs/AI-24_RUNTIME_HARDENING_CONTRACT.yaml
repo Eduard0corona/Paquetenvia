@@ -235,3 +235,39 @@ bff_session:
   mfa_step_up: /auth/login?mfa=required sends acr_values urn:authcenter:acr:mfa; the ID token must carry acr urn:authcenter:acr:mfa or urn:authcenter:acr:phr and mfa in amr; a 403 whose only unmet requirement is MFA carries problem code MFA_REQUIRED; nobody is forced to MFA (drivers included)
   callback_errors: access_denied (after state, correlation and iss validate) redirects to /login?error=access_denied; every other failure to /login?error=signin_failed; no protocol detail forwarded
   same_origin_routing: pilot ingress routes /api, /hubs, /auth and /signin-authcenter to the API
+voice_bridge:
+  decisions:
+  - VOICE-001-MASKED-CALLS-2026-10-11
+  - VOICE-001-PROVIDER-TWILIO-2026-10-11
+  port: IVoiceBridgeProvider (Paqueteria.Application.Voice); adapters TwilioVoiceBridgeProvider and the synthetic fake;
+    closed VoiceBridgeResultCodes; phone numbers are VoicePhoneNumber values whose ToString is [redacted]
+  provider_selection: Voice:Provider Disabled (default), Synthetic (Development, Testing or DEV_SYNTHETIC only) or Twilio
+    (refused in Development, Testing, the DevSynthetic environment and any PAQUETERIA_DEPLOYMENT_CLASS=DEV_SYNTHETIC);
+    Twilio requires Voice:Twilio:Gate007DecisionId naming the decision-log row that resolves GATE-007, and the pilot
+    keeps Disabled (Voice__ is platform-managed in the pilot settings)
+  call: one Twilio REST create call (POST /2010-04-01/Accounts/{AccountSid}/Calls.json) To the driver's mobile From the
+    company number with inline TwiML - a fixed Spanish greeting without personal data, then <Dial callerId=company
+    number timeout timeLimit record=do-not-record><Number>recipient</Number></Dial>; Mexican numbers are dialed as +52
+    and ten digits whose first digit is 2-9; no recording, no Twilio Proxy (Public Beta without SLA) and no in-browser
+    calling (mobile browsers do not keep WebRTC calls in background)
+  resilience: per-attempt timeout Voice:Twilio:TimeoutSeconds (default 10), circuit breaker and bulkhead like the
+    messaging adapters; never retried (creating a call has no idempotency key); an ambiguous answer ends UNCONFIRMED
+  credentials: Voice:Twilio:AccountSid, AuthToken, optional ApiKeySid and ApiKeySecret, CompanyNumber and optional
+    InboundForwardNumber only through KeyVaultSecrets:Mappings; the HTTP client has no default loggers
+  phones: the driver's own mobile is stored in drivers.driver_profiles.phone_ciphertext with the ADP-001 envelope
+    (purpose drivers.phone) with consent version VOICE-001-CONSENT-V1; the recipient phone is
+    locations.locations.phone_ciphertext (purpose locations.phone); both are decrypted only in memory inside
+    requestRecipientCall, after the REQUESTED row commits and with no transaction held; synthetic mode never decrypts
+    and uses non-dialable placeholders
+  request: Idempotency-Key (scope VOICE-001:REQUEST_RECIPIENT_CALL in platform.idempotency_keys); rate limits
+    Drivers:RecipientCalls MaximumPerOrder 3 per OrderWindowMinutes 15 and MaximumPerDriverPerHour 20, counting only
+    REQUESTED, PLACED and UNCONFIRMED; drivers.recipient_call_requests keeps who, order, assignment, provider, status,
+    result code, provider call id, final call status and duration, never a number
+  webhooks: POST /api/v1/voice/twilio/call-status and /api/v1/voice/twilio/inbound are anonymous but require a valid
+    X-Twilio-Signature (HMAC-SHA1 under the auth token over Voice:Twilio:WebhookBaseUri plus the request path and query
+    and the sorted form fields; never Host or X-Forwarded-*) and the configured AccountSid; From, To, Caller and Called
+    are used only for the signature; the inbound answer is a fixed message or a forward to the configured dispatch line
+  audit: RECIPIENT_CALL_REQUESTED, RECIPIENT_CALL_PLACED, RECIPIENT_CALL_UNCONFIRMED, RECIPIENT_CALL_FAILED,
+    RECIPIENT_CALL_STATUS_REPORTED, DRIVER_PHONE_REGISTERED and DRIVER_PHONE_REMOVED, without any phone number
+  rollback: Voice:Provider=Disabled stops every call and every new phone; drivers can still remove their number; the
+    Drivers lane rollback refuses while call requests or phones exist

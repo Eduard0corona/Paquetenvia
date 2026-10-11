@@ -503,6 +503,24 @@ screen_contracts:
     - masked phone or relay
     - no client account history
     completion: cannot complete without required POD unless supervisor override ID
+    recipient_call: VOICE-001-MASKED-CALLS-2026-10-11 ("Sí, con número enmascarado") and
+      VOICE-001-PROVIDER-TWILIO-2026-10-11 - the detail of a DELIVERY stop whose confirmed status is DELIVERING offers
+      "Llamar al destinatario" only when getRecipientCallAvailability answers available true; it sends
+      requestRecipientCall with a new Idempotency-Key (reused only to retry the same tap after a network failure) and
+      shows "Te estamos llamando a tu celular…" for PLACED or REQUESTED and a retry hint for UNCONFIRMED; it is an
+      online-only action - offline the button is shown disabled with "Necesitas conexión a internet para llamar" and
+      the action is never queued, cached or replayed by the offline queue; the PWA never receives, shows or stores a
+      phone number of the recipient (masked phone or relay); DRIVER_PHONE_REQUIRED points to "Cuenta"
+  driver_account:
+    route: /driver/stops (header "Cuenta")
+    decision: VOICE-001-MASKED-CALLS-2026-10-11
+    phone: shown only when getMyDriverPhone answers voice_calls_enabled true; the driver types their own mobile (ten
+      Mexican digits, optional +52, spaces and hyphens) and must tick the consent text "Acepto que este número se use
+      solo para conectar mis llamadas con los destinatarios de mis entregas. El destinatario nunca verá mi número y no
+      se usará para nada más. Puedo cambiarlo o borrarlo cuando quiera." (consent_version VOICE-001-CONSENT-V1) before
+      registerMyDriverPhone; the stored number is never displayed (only "Celular registrado" and the date); "Borrar mi
+      celular" calls removeMyDriverPhone; online only, the field is cleared after saving and nothing is kept in browser
+      storage
   external_driver_offers:
     release: MVP-1
     host_route: /driver/stops

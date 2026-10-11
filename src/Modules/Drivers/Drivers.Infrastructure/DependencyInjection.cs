@@ -1,14 +1,20 @@
 using Drivers.Application.Eligibility;
 using Drivers.Application.Locations;
+using Drivers.Application.Voice;
 using Drivers.Infrastructure.Eligibility;
 using Drivers.Infrastructure.Locations;
 using Drivers.Infrastructure.Persistence;
+using Drivers.Infrastructure.Voice;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Voice;
+using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Drivers.Infrastructure;
@@ -40,6 +46,9 @@ public static class DependencyInjection
             .Validate(options => options.Provider != DriversProviderKind.PostgreSql ||
                 IsValid(options.LocationTelemetry),
                 "Drivers:LocationTelemetry is invalid.")
+            .Validate(options => options.RecipientCalls is { } calls && calls.IsValid(),
+                "Drivers:RecipientCalls needs MaximumPerOrder 1-20, OrderWindowMinutes 1-60, " +
+                "MaximumPerDriverPerHour 1-200 (not below MaximumPerOrder) and IdempotencyLifetimeMinutes 60-10080.")
             .ValidateOnStart();
 
         services.TryAddSingleton(serviceProvider =>
@@ -83,6 +92,48 @@ public static class DependencyInjection
                 DriversProviderKind.PostgreSql =>
                     serviceProvider.GetRequiredService<PostgreSqlDriverLocationIngestionService>(),
                 _ => serviceProvider.GetRequiredService<DisabledDriverLocationIngestionService>(),
+            });
+        // VOICE-001-MASKED-CALLS-2026-10-11: the mode comes from IVoiceBridgeStatus (AddPaqueteriaVoiceBridge, API
+        // only); everything below is resolved lazily, so a host without the bridge never builds it.
+        services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
+        services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
+        services.AddSingleton<SyntheticDriverPhoneProtector>();
+        services.AddSingleton<DisabledDriverPhoneProtector>();
+        services.AddSingleton(serviceProvider =>
+            new EnvelopeDriverPhoneProtector(serviceProvider.GetRequiredService<IPiiEnvelopeProtector>()));
+        services.AddSingleton<SyntheticRecipientCallPhoneResolver>();
+        services.AddSingleton<DisabledRecipientCallPhoneResolver>();
+        services.AddSingleton(serviceProvider =>
+            new EnvelopeRecipientCallPhoneResolver(serviceProvider.GetRequiredService<IPiiEnvelopeProtector>()));
+        services.AddScoped<IDriverPhoneProtector>(serviceProvider =>
+            serviceProvider.GetRequiredService<IVoiceBridgeStatus>().Mode switch
+            {
+                VoiceBridgeMode.Live => serviceProvider.GetRequiredService<EnvelopeDriverPhoneProtector>(),
+                VoiceBridgeMode.Synthetic => serviceProvider.GetRequiredService<SyntheticDriverPhoneProtector>(),
+                _ => serviceProvider.GetRequiredService<DisabledDriverPhoneProtector>(),
+            });
+        services.AddScoped<IRecipientCallPhoneResolver>(serviceProvider =>
+            serviceProvider.GetRequiredService<IVoiceBridgeStatus>().Mode switch
+            {
+                VoiceBridgeMode.Live => serviceProvider.GetRequiredService<EnvelopeRecipientCallPhoneResolver>(),
+                VoiceBridgeMode.Synthetic => serviceProvider.GetRequiredService<SyntheticRecipientCallPhoneResolver>(),
+                _ => serviceProvider.GetRequiredService<DisabledRecipientCallPhoneResolver>(),
+            });
+        services.AddSingleton<DisabledDriverPhoneService>();
+        services.AddSingleton<DisabledRecipientCallService>();
+        services.AddScoped<PostgreSqlDriverPhoneService>();
+        services.AddScoped<PostgreSqlRecipientCallService>();
+        services.AddScoped<IDriverPhoneService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<DriversOptions>>().Value.Provider switch
+            {
+                DriversProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlDriverPhoneService>(),
+                _ => serviceProvider.GetRequiredService<DisabledDriverPhoneService>(),
+            });
+        services.AddScoped<IRecipientCallService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<DriversOptions>>().Value.Provider switch
+            {
+                DriversProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlRecipientCallService>(),
+                _ => serviceProvider.GetRequiredService<DisabledRecipientCallService>(),
             });
         services.AddSingleton<DisabledDriverEligibilityService>();
         services.AddScoped<PostgreSqlDriverEligibilityService>();

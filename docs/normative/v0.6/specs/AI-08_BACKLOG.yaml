@@ -2,7 +2,7 @@ meta:
   version: '0.6'
   generated: '2026-07-19'
   execution_order: topological by depends_on; P0 before P1
-  item_count: 65
+  item_count: 66
 definition_of_ready:
 - normative inputs identified
 - dependencies DONE
@@ -1553,3 +1553,33 @@ items:
   - a retired (replaced) token returns the uniform 404 and the next generation differs
   - a finished order resolves for 24 hours after its final event, then the uniform 404
   approval_gate: GATE-004
+- id: VOICE-001
+  decision: VOICE-001-MASKED-CALLS-2026-10-11 and VOICE-001-PROVIDER-TWILIO-2026-10-11 (project owner)
+  epic: Driver PWA
+  release: MVP-1
+  title: Llamadas enmascaradas repartidor-destinatario
+  priority: P1
+  depends_on:
+  - DRV-001
+  - DSP-002
+  - GEO-001
+  - ADP-001
+  expected_outputs:
+  - IVoiceBridgeProvider port with a Twilio Programmable Voice adapter (REST create call, TwiML bridge, no recording) and a deterministic synthetic fake
+  - driver phone registration with explicit consent, stored with the ADP-001 envelope (Drivers lane 20261011000100_AddDriverVoiceBridge)
+  - requestRecipientCall, getRecipientCallAvailability and the signed Twilio webhooks
+  - "PWA: \"Llamar al destinatario\" on the stop detail and the phone form in \"Cuenta\""
+  acceptance_criteria:
+  - only a DRIVER may ask, for its own ACCEPTED or ACTIVE assignment and only while the order is DELIVERING; an unknown or foreign stop is the uniform 404
+  - no phone number travels in the call request or its answer, logs, outbox, events or audit; phones are decrypted only in memory inside the request
+  - Idempotency-Key replays never place a second call; calls are rate limited per driver and order
+  - every webhook requires a valid X-Twilio-Signature; only CallSid, call status and duration are kept
+  - the driver phone is collected only with explicit consent while the bridge is enabled and can be removed at any time
+  - the PWA offers the call only when the server says it is available and never queues it offline
+  - Voice:Provider stays Disabled in the pilot; real phone numbers reach Twilio only after the owner provides the account, the company number and its documents and GATE-007 is resolved (Voice:Twilio:Gate007DecisionId); Twilio is refused in Development, Testing and DEV_SYNTHETIC
+  required_tests:
+  - adapter request, TwiML and +52 formatting, signature validation and redaction (fake HTTP handler)
+  - PostgreSQL authorization matrix, own assignment, states, idempotency, rate limit and uniform 404
+  - migration up, idempotent re-apply and guarded down on real PostgreSQL; driver phone stored encrypted
+  - PWA button and account form (Vitest)
+  approval_gate: GATE-007
