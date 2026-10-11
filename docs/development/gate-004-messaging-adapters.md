@@ -3,6 +3,8 @@
 Owner decision **GATE-004-CHANNELS** (decision-log, 2026-09-27): customer notifications and tracking
 links use WhatsApp through the Meta Cloud API and email through Azure Communication Services (ACS).
 GATE-004 stays **open**: templates, Meta business verification and the sender domain are pending.
+ACS retires on 2028-09-30: the pilot keeps it and production moves email to another provider
+(NTF-EMAIL-ACS-PILOT-2026-10-11, AI-10 `release_gates.PRODUCTION`).
 This change adds the adapters behind the AI-03 §15 `IMessagingProvider` port. It does not send any
 message on its own: no producer, recipient source or pilot configuration uses it yet (see
 "Not in this change").

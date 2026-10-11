@@ -41,10 +41,11 @@ Con `Enabled=true` el Worker exige `ConnectionStrings:PaqueteriaWorker`. El pilo
 `deploy/azure/pilot/apps.bicep` con los valores por defecto. La transición usa además `Orders:CommandTimeoutSeconds`,
 `Orders:IdempotencyLifetimeMinutes` y `Orders:TransitionMetadataMaximumBytes`, con los mismos rangos que la API.
 
-`AddOrdersAutoClose` registra `OrderTransitionGuardRegistry` con una fábrica (`new OrderTransitionGuardRegistry()`,
-las guardas AI-04). Un registro por tipo haría que el contenedor eligiera el constructor
-`IEnumerable<IOrderTransitionGuard>`, que siempre puede satisfacer, y el registro quedaría sin guardas: el job cerraría
-cualquier orden entregada. Las pruebas unitarias, de integración del Worker y de PostgreSQL lo fijan.
+`AddOrdersAutoClose` registra `OrderTransitionGuardRegistry` con la misma fábrica que la API
+(`new OrderTransitionGuardRegistry()`, las guardas AI-04), y el registro ya no expone otro constructor público
+([ORD-002-API-GUARD-REGISTRY](ord-002-api-guard-registry.md)): ningún contenedor puede componerlo sin guardas; sin
+ellas el job cerraría cualquier orden entregada. Las pruebas unitarias, de integración del Worker y de PostgreSQL lo
+fijan.
 
 El ciclo termina al llegar al final de las órdenes `DELIVERED` (`drained`) o al tope de lotes (`capped`); en ese caso
 el siguiente ciclo continúa después de la última orden intentada (pista en memoria; un reinicio empieza de nuevo).

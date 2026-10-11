@@ -96,6 +96,10 @@ El registro evalúa en orden determinista y falla en el primer código no satisf
 
 Los readers ejecutan solo `SELECT`; no crean aceptación, asignación, prueba, incidencia ni transacción COD.
 
+Toda composición (API y Worker) resuelve el registro con las 24 guardas AI-04: el único constructor público es el de
+las guardas por defecto y Orders y Dispatch lo registran con una fábrica explícita
+([ORD-002-API-GUARD-REGISTRY](ord-002-api-guard-registry.md)).
+
 ### Intento vigente, custodia y elegibilidad
 
 - **Custodia.** Existe exactamente cuando el historial append-only de la orden contiene un `ORDER_STATUS_CHANGED` con `new_status = PICKED_UP`. Es la única derivación y la comparten ORD-002 (`IOrderCustodyGuardReader`), INC-001 (`custody_acquired` de la incidencia y la regla `RETURNING`) y la vista de paradas DRV-001. Una `PICKUP_PHOTO` no es custodia: la incidencia de un intento en `AT_PICKUP` exige evidencia y en ese estado solo puede capturarse esa foto.
