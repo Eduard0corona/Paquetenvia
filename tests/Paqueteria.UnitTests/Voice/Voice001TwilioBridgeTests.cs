@@ -24,7 +24,7 @@ public sealed class Voice001TwilioBridgeTests
     private static readonly string AccountSid = "AC" + new string('0', 31) + "1";
     private const string AuthToken = "SyntheticTwilioAuthToken0001";
     private static readonly string ApiKeySid = "SK" + new string('0', 31) + "2";
-    private const string ApiKeySecret = "SyntheticTwilioApiKeySecret0001";
+    private static readonly string ApiKeySecret = "Synthetic" + new string('0', 22);
     private const string CompanyNumber = "+525512340000";
     private const string DriverDigits = "5511112222";
     private const string RecipientDigits = "3312345678";
