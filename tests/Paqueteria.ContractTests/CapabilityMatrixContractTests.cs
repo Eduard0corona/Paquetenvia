@@ -244,7 +244,10 @@ public sealed class CapabilityMatrixContractTests
         }
 
         var listOrders = Contract.Mapping("paths").Mapping("/orders").Mapping("get");
-        Assert.Equal("capability-before-persisted-state", listOrders.Scalar("x-authorization-precedence"));
+        // ORD-LIST-DATE-FILTER-2026-10-12: the creation window and the cursor are request shape, checked first.
+        Assert.Equal(
+            "shape-validation-then-capability-before-persisted-state",
+            listOrders.Scalar("x-authorization-precedence"));
         Assert.Contains("FIN-PENDING-COD-LIST-FINANCE-2026-10-02", listOrders.Scalar("description"), StringComparison.Ordinal);
         var parameter = listOrders.Sequence("parameters").Children.Cast<YamlMappingNode>()
             .Single(node => node.Children.ContainsKey(new YamlScalarNode("name")) &&

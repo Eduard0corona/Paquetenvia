@@ -306,8 +306,8 @@ historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #
   que esas rutas se crean en Rutas (ahora con selectores, `ui-001-phase3-routes.md`). Elegir área de servicio o fecha
   al crear desde el paso no se pidió: la ruta se crea para toda la ciudad y con la fecha de hoy.
 - El costo sugerido por el tabulador: el owner aún no envía sus montos; hoy cada costo se captura a mano.
-- Entrada "Órdenes" del menú aprobado: aún no hay pantalla. "Repartidores" ya existe (`/ops/drivers`,
-  UI-PHASE3-DRIVERS-2026-10-11; ver `ui-001-phase3-drivers.md`).
+- Entradas "Órdenes" y "Repartidores" del menú aprobado: ya existen (`/ops/orders`, UI-PHASE3-ORDERS-LIST-2026-10-12,
+  ver `ui-001-phase3-orders-list.md`; `/ops/drivers`, UI-PHASE3-DRIVERS-2026-10-11, ver `ui-001-phase3-drivers.md`).
 - Terminar o descartar rutas viejas: AI-05 no tiene operación para sacar una ruta de DRAFT, así que las rutas de días
   anteriores siguen en la lista del paso (después de las de hoy) y en Rutas. Queda para después del piloto, por decisión
   del owner (UI-PHASE3-ROUTES-DAILY-2026-10-12, "Terminar o descartar rutas viejas queda para después del piloto."); no

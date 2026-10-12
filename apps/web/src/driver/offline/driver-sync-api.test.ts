@@ -77,6 +77,24 @@ describe("driver sync API", () => {
     }
   });
 
+  it("accepts the order created_at absent or a strict UTC instant and rejects any other value", async () => {
+    // UI-PHASE3-ORDERS-LIST-2026-10-12 (owner, "En dos pasos (Recommended)"): the API adds Order.created_at later.
+    for (const [body, ok] of [
+      [transitionResponse(), true],
+      [{ ...transitionResponse(), created_at: "2026-07-26T11:58:00.1234567+00:00" }, true],
+      [{ ...transitionResponse(), created_at: "2026-07-26T11:58:00Z" }, true],
+      [{ ...transitionResponse(), created_at: null }, false],
+      [{ ...transitionResponse(), created_at: "2026-07-26T11:58:00" }, false],
+      [{ ...transitionResponse(), created_at: "2026-07-26T04:58:00-07:00" }, false],
+      [{ ...transitionResponse(), created_at: "26/07/2026" }, false],
+    ] as const) {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(jsonResponse(body, 200));
+      const api = createDriverSyncApi({ baseUrl: "https://api.synthetic.test", session, fetch });
+      if (ok) await expect(api.transitionOrder(operation)).resolves.toMatchObject({ version: 10 });
+      else await expect(api.transitionOrder(operation)).rejects.toThrow();
+    }
+  });
+
   it("keeps a signed URL memory-only and sends only required PUT headers", async () => {
     const grant = {
       id: "44444444-4444-4444-8444-444444444444",

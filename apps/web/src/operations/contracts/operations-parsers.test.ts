@@ -291,5 +291,14 @@ describe("operations labels and timeline", () => {
         allowed_transitions: [{ target_status: "CANCELLED", required_metadata: [], guard: "x" }],
       }),
     ).toThrow(OperationsContractError);
+    // UI-PHASE3-ORDERS-LIST-2026-10-12 (owner, "En dos pasos (Recommended)"): created_at, absent until the API sends
+    // it, is accepted when it is a strict UTC instant and fails closed otherwise.
+    expect(parseOperationsOrderDetail(detail).created_at).toBeNull();
+    for (const createdAt of ["2026-07-27T01:00:00Z", "2026-07-27T01:00:00.1234567+00:00"])
+      expect(parseOperationsOrderDetail({ ...detail, created_at: createdAt }).created_at).toBe(createdAt);
+    for (const createdAt of [null, "2026-07-27T01:00:00", "2026-07-26T18:00:00-07:00", "2026-07-27", 1])
+      expect(() => parseOperationsOrderDetail({ ...detail, created_at: createdAt }), String(createdAt)).toThrow(
+        OperationsContractError,
+      );
   });
 });

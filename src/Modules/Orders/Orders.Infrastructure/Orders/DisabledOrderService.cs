@@ -19,6 +19,7 @@ public sealed class DisabledOrderService : IOrderService
         bool codPendingReconciliation,
         bool mfaSatisfied,
         string? publicId,
+        OrderListCreatedRange createdRange,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
