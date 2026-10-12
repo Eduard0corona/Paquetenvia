@@ -145,10 +145,11 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests(PostgreSq
         var incident = await OpenIncidentAsync(world, [evidence], IncidentContract.Rescheduled);
         await TransitionAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(incident));
 
-        var stop = Assert.Single(await CreateStopsQuery().ListCurrentDriverStopsAsync(
+        var stop = Assert.Single((await CreateStopsQuery().ListCurrentDriverStopsAsync(
             world.DriverUserId,
             world.Scenario.OrganizationId,
-            CancellationToken.None));
+            true,
+            CancellationToken.None)).Stops);
 
         Assert.Equal("FAILED_ATTEMPT", stop.Status);
         Assert.Equal("PICKUP", stop.StopType);
@@ -171,10 +172,11 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests(PostgreSq
         var cancel = await RefusedAsync(world, OrderStatus.Cancelled);
         Assert.Equal("if_from_at_pickup_then_custody_not_acquired", cancel.GuardCode);
 
-        var stop = Assert.Single(await CreateStopsQuery().ListCurrentDriverStopsAsync(
+        var stop = Assert.Single((await CreateStopsQuery().ListCurrentDriverStopsAsync(
             world.DriverUserId,
             world.Scenario.OrganizationId,
-            CancellationToken.None));
+            true,
+            CancellationToken.None)).Stops);
         Assert.Equal("PICKUP", stop.StopType);
 
         await TransitionAsync(world, OrderStatus.FailedAttempt, IncidentMetadata(incident));
@@ -553,10 +555,11 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests(PostgreSq
         var unrouted = await world.AddSiblingAssignmentAsync();
         await world.AddRouteAsync([sibling, world.Scenario.OrderId]);
 
-        var stops = await CreateStopsQuery().ListCurrentDriverStopsAsync(
+        var stops = (await CreateStopsQuery().ListCurrentDriverStopsAsync(
             world.DriverUserId,
             world.Scenario.OrganizationId,
-            CancellationToken.None);
+            true,
+            CancellationToken.None)).Stops;
 
         Assert.Equal(
             [sibling, world.Scenario.OrderId, unrouted],
@@ -579,10 +582,11 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests(PostgreSq
             (world.Scenario.OrderId, "DELIVERY"),
         ]);
 
-        var stops = await CreateStopsQuery().ListCurrentDriverStopsAsync(
+        var stops = (await CreateStopsQuery().ListCurrentDriverStopsAsync(
             world.DriverUserId,
             world.Scenario.OrganizationId,
-            CancellationToken.None);
+            true,
+            CancellationToken.None)).Stops;
 
         Assert.Equal(
             [(sibling, "PICKUP"), (world.Scenario.OrderId, "DELIVERY")],
@@ -873,6 +877,8 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests(PostgreSq
             .Options;
         return new PostgreSqlDriverStopsQuery(
             new TenantTransactionContext<DispatchDbContext>(new DispatchDbContext(options, state), state),
+            new global::Locations.Infrastructure.Locations.SyntheticLocationPiiReader(),
+            new global::Paqueteria.Infrastructure.SystemClock(),
             NullLogger<PostgreSqlDriverStopsQuery>.Instance);
     }
 

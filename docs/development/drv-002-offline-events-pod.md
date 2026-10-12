@@ -44,6 +44,11 @@ sincronice.
 
 ## IndexedDB v2 y partición
 
+Actualización `UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11`: la base sube a la
+versión `3`, el snapshot al esquema `2` y las operaciones al esquema `2` (agregan
+`cod` y `rejectionCode`, y el tipo `COD_COLLECTION`); las operaciones en cola se
+migran sin perderse. Ver `ui-001-phase3-driver-stop-details.md`.
+
 La base conserva el nombre `paquetenvia-driver-stops-v1` y sube su versión de
 base de datos a `2`. El snapshot DRV-001 conserva `schemaVersion: 1`. La
 actualización agrega:

@@ -93,6 +93,10 @@ public static class DependencyInjection
         services.TryAddScoped<IAssignmentVisibilityDataReader, PostgreSqlAssignmentVisibilityDataReader>();
         services.TryAddScoped<IAssignmentVisibilityResolver, DispatchAssignmentVisibilityResolver>();
         services.TryAddScoped<IAssignmentReplayEvidenceReader, PostgreSqlAssignmentReplayEvidenceReader>();
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the stop details are read through the shared port
+        // Paqueteria.Application.Locations.ILocationPiiReader, which the Locations module registers from its own bound
+        // Locations:PiiProtector option, so Dispatch never repeats the protection mode, purposes or storage format and
+        // takes no project reference to the Locations module.
         services.AddSingleton<DisabledAssignmentService>();
         services.AddSingleton<DisabledDriverStopsQuery>();
         services.AddSingleton<DisabledExternalOfferService>();

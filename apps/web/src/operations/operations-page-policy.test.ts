@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 describe("operations page privacy policy", () => {
   it("keeps operations routes and authenticated requests network-only", () => {
     const source = readFileSync("public/sw.js", "utf8");
-    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v5"');
+    expect(source).toContain('CACHE_NAME = "paquetenvia-driver-shell-v6"');
     expect(source).toContain('url.pathname === "/ops"');
     expect(source).toContain('url.pathname.startsWith("/ops/")');
     expect(source).toContain('request.headers.has("Authorization")');

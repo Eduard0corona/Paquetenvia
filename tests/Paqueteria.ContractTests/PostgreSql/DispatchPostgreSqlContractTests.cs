@@ -8,6 +8,7 @@ using Dispatch.Infrastructure.ExternalOffers;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
 using Dispatch.Infrastructure.Stops;
+using Locations.Infrastructure.Locations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -16,6 +17,7 @@ using NpgsqlTypes;
 using Orders.Application.Orders;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Locations;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Tenancy;
@@ -1060,20 +1062,22 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             .CreateOwnDriverAssignmentAsync(Command(scenario), default);
         var query = CreateStopsQuery(fixture.AppDataSource);
 
-        var pickup = Assert.Single(await query.ListCurrentDriverStopsAsync(
+        var pickup = Assert.Single((await query.ListCurrentDriverStopsAsync(
             scenario.DriverUserId,
             scenario.OrganizationId,
-            default));
+            true,
+            default)).Stops);
         Assert.Equal("PICKUP", pickup.StopType);
         Assert.Equal("READY origin summary", pickup.AddressSummary);
 
         await scenario.ExecuteAdminAsync(
             "UPDATE orders.orders SET status='IN_TRANSIT' WHERE id=@order",
             P("order", scenario.OrderId));
-        var delivery = Assert.Single(await query.ListCurrentDriverStopsAsync(
+        var delivery = Assert.Single((await query.ListCurrentDriverStopsAsync(
             scenario.DriverUserId,
             scenario.OrganizationId,
-            default));
+            true,
+            default)).Stops);
         Assert.Equal("DELIVERY", delivery.StopType);
         Assert.Equal("READY destination summary", delivery.AddressSummary);
 
@@ -1090,20 +1094,22 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             P("order", scenario.OrderId),
             P("org", scenario.OrganizationId),
             P("occurred", OccurredAt.AddMinutes(1)));
-        var custodyDelivery = Assert.Single(await query.ListCurrentDriverStopsAsync(
+        var custodyDelivery = Assert.Single((await query.ListCurrentDriverStopsAsync(
             scenario.DriverUserId,
             scenario.OrganizationId,
-            default));
+            true,
+            default)).Stops);
         Assert.Equal("DELIVERY", custodyDelivery.StopType);
         Assert.Equal("FAILED_ATTEMPT", custodyDelivery.Status);
 
         await scenario.ExecuteAdminAsync(
             "UPDATE orders.orders SET status='RETURNING' WHERE id=@order",
             P("order", scenario.OrderId));
-        var returning = Assert.Single(await query.ListCurrentDriverStopsAsync(
+        var returning = Assert.Single((await query.ListCurrentDriverStopsAsync(
             scenario.DriverUserId,
             scenario.OrganizationId,
-            default));
+            true,
+            default)).Stops);
         Assert.Equal("RETURN", returning.StopType);
         Assert.Equal("READY origin summary", returning.AddressSummary);
         Assert.DoesNotContain(assignment.Id.ToString("D"), returning.AddressSummary, StringComparison.Ordinal);
@@ -1357,7 +1363,10 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             new FixedClock(now ?? OccurredAt));
     }
 
-    private static PostgreSqlDriverStopsQuery CreateStopsQuery(NpgsqlDataSource dataSource)
+    private static PostgreSqlDriverStopsQuery CreateStopsQuery(
+        NpgsqlDataSource dataSource,
+        ILocationPiiReader? locationReader = null,
+        DateTimeOffset? now = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -1369,6 +1378,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         var context = new DispatchDbContext(dbOptions, state);
         return new PostgreSqlDriverStopsQuery(
             new TenantTransactionContext<DispatchDbContext>(context, state),
+            locationReader ?? new SyntheticLocationPiiReader(),
+            new FixedClock(now ?? OccurredAt),
             NullLogger<PostgreSqlDriverStopsQuery>.Instance);
     }
 

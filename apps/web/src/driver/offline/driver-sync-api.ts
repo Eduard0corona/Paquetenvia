@@ -51,6 +51,14 @@ export interface DriverProofReceipt {
   readonly capturedAt: string;
 }
 
+/** AI-05 `CodTransaction` as recordCodCollection returns it; only what the queue checks is kept. */
+export interface DriverCodReceipt {
+  readonly id: string;
+  readonly orderId: string;
+  readonly amountCents: number;
+  readonly status: "EXPECTED" | "RECORDED" | "RECONCILED" | "DISPUTED" | "REVERSED";
+}
+
 export interface DriverSyncApi {
   transitionOrder(
     operation: DriverOfflineOperation,
@@ -71,6 +79,15 @@ export interface DriverSyncApi {
     sha256: string,
     signal?: AbortSignal,
   ): Promise<DriverProofReceipt>;
+  /**
+   * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: records the cash a
+   * COD_COLLECTION carries with its own Idempotency-Key, the same on every
+   * retry, so a lost 201 is replayed instead of recorded twice.
+   */
+  recordCodCollection(
+    operation: DriverOfflineOperation,
+    signal?: AbortSignal,
+  ): Promise<DriverCodReceipt>;
 }
 
 export interface DriverSyncApiOptions {
@@ -161,6 +178,29 @@ export function createDriverSyncApi(
         parseProofReceipt,
         signal,
       ),
+    recordCodCollection: (
+      operation: DriverOfflineOperation,
+      signal?: AbortSignal,
+    ) => {
+      const cod = operation.cod;
+      if (operation.kind !== "COD_COLLECTION" || cod === null) {
+        return Promise.reject(new DriverSyncApiError("invalid-contract"));
+      }
+      return requestJson(
+        options,
+        fetchImplementation,
+        timeoutMilliseconds,
+        `/api/v1/orders/${operation.orderId}/cod-records`,
+        201,
+        cod.idempotencyKey,
+        {
+          amount_cents: cod.amountCents,
+          reference: cod.reference,
+        },
+        parseCodReceipt,
+        signal,
+      );
+    },
   });
 }
 
@@ -456,6 +496,38 @@ function parseProofReceipt(value: unknown): DriverProofReceipt {
     proofType,
     sha256,
     capturedAt: readUtcTimestamp(record.captured_at),
+  });
+}
+
+function parseCodReceipt(value: unknown): DriverCodReceipt {
+  const record = readExactRecord(
+    value,
+    new Set([
+      "id",
+      "order_id",
+      "amount_cents",
+      "status",
+      "recorded_at",
+      "reconciled_at",
+    ]),
+  );
+  const status = record.status;
+  if (
+    status !== "EXPECTED" &&
+    status !== "RECORDED" &&
+    status !== "RECONCILED" &&
+    status !== "DISPUTED" &&
+    status !== "REVERSED"
+  ) {
+    throw new DriverSyncApiError("invalid-contract");
+  }
+  readNullableUtcTimestamp(record.recorded_at);
+  readNullableUtcTimestamp(record.reconciled_at);
+  return Object.freeze({
+    id: readUuid(record.id),
+    orderId: readUuid(record.order_id),
+    amountCents: readPositiveInteger(record.amount_cents),
+    status,
   });
 }
 

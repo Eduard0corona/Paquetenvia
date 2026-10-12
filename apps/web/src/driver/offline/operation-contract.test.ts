@@ -13,37 +13,49 @@ const operationId = "11111111-1111-4111-8111-111111111111";
 const orderId = "22222222-2222-4222-8222-222222222222";
 
 describe("driver offline operation contract", () => {
-  it("defines exactly the five canonical transitions", () => {
+  it("defines exactly the five canonical transitions and the cash collection", () => {
     expect(driverOperationDefinitions).toEqual({
       CHECK_IN: {
         sourceStatus: "ASSIGNED",
         targetStatus: "AT_PICKUP",
         reason: "DRIVER_CHECK_IN",
         proofType: null,
+        transition: true,
       },
       PICKUP_PROOF: {
         sourceStatus: "AT_PICKUP",
         targetStatus: "PICKED_UP",
         reason: "DRIVER_PICKUP_CONFIRMED",
         proofType: "PICKUP_PHOTO",
+        transition: true,
       },
       START_TRANSIT: {
         sourceStatus: "PICKED_UP",
         targetStatus: "IN_TRANSIT",
         reason: "DRIVER_TRANSIT_STARTED",
         proofType: null,
+        transition: true,
       },
       START_DELIVERY: {
         sourceStatus: "IN_TRANSIT",
         targetStatus: "DELIVERING",
         reason: "DRIVER_DELIVERY_STARTED",
         proofType: null,
+        transition: true,
       },
       DELIVERY_PROOF: {
         sourceStatus: "DELIVERING",
         targetStatus: "DELIVERED",
         reason: "DRIVER_DELIVERY_CONFIRMED",
         proofType: "DELIVERY_PHOTO",
+        transition: true,
+      },
+      COD_COLLECTION: {
+        sourceStatus: "DELIVERING",
+        targetStatus: "DELIVERING",
+        reason: "DRIVER_COD_COLLECTED",
+        proofType: null,
+        transition: false,
       },
     });
   });
@@ -126,12 +138,14 @@ describe("driver offline operation contract", () => {
         reason: "client timestamp in reason",
       }),
     ).toThrow();
-    expect(() =>
-      parseDriverOfflineOperation({
-        ...operation,
-        schemaVersion: 2,
-      }),
-    ).toThrow();
+    for (const schemaVersion of [1, 3]) {
+      expect(() =>
+        parseDriverOfflineOperation({
+          ...operation,
+          schemaVersion,
+        }),
+      ).toThrow();
+    }
     expect(() =>
       parseDriverOfflineOperation({
         ...operation,

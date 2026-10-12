@@ -10,7 +10,8 @@ import {
 } from "../cache/driver-stops-cache";
 import {
   DriverOfflineContractError,
-  DriverOfflineOperationSchemaVersion,
+  DriverProofBlobSchemaVersion,
+  DriverSyncLeaseSchemaVersion,
   parseDriverOfflineOperation,
   parseDriverProofBlob,
   parseDriverSyncLease,
@@ -213,7 +214,7 @@ export class IndexedDbDriverOfflineQueue implements DriverOfflineQueue {
           throw new DriverOfflineQueueError("limit");
         }
         blobStore.add({
-          schemaVersion: DriverOfflineOperationSchemaVersion,
+          schemaVersion: DriverProofBlobSchemaVersion,
           partitionKey: partition.key,
           operationId: validatedOperation.id,
           blob: proof.blob,
@@ -471,7 +472,7 @@ export class IndexedDbDriverOfflineQueue implements DriverOfflineQueue {
         return false;
       }
       const lease: DriverSyncLease = {
-        schemaVersion: DriverOfflineOperationSchemaVersion,
+        schemaVersion: DriverSyncLeaseSchemaVersion,
         partitionKey: partition.key,
         ownerId,
         updatedAt: now.toISOString(),

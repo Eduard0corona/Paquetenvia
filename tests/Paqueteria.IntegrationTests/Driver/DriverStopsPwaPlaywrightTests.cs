@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Playwright;
 
 namespace Paqueteria.IntegrationTests.Driver;
@@ -8,25 +9,105 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
 {
     private static readonly object[] Stops =
     [
-        new
-        {
-            order_id = "22222222-2222-2222-2222-222222222222",
-            aggregate_version = 3,
-            order_public_id = "ORD_abcdefghijklmnopqrstuv",
-            stop_type = "PICKUP",
-            status = "ASSIGNED",
-            address_summary = "Centro, Culiacán",
-        },
-        new
-        {
-            order_id = "33333333-3333-3333-3333-333333333333",
-            aggregate_version = 4,
-            order_public_id = "ORD_bcdefghijklmnopqrstuvw",
-            stop_type = "DELIVERY",
-            status = "IN_TRANSIT",
-            address_summary = "Las Quintas, Culiacán",
-        },
+        Stop(
+            "22222222-2222-2222-2222-222222222222",
+            3,
+            "ORD_abcdefghijklmnopqrstuv",
+            "PICKUP",
+            "ASSIGNED",
+            "Centro, Culiacán",
+            contactFullName: "Farmacia Sintética",
+            zoneName: "Centro"),
+        Stop(
+            "33333333-3333-3333-3333-333333333333",
+            4,
+            "ORD_bcdefghijklmnopqrstuvw",
+            "DELIVERY",
+            "IN_TRANSIT",
+            "Las Quintas, Culiacán",
+            contactShortName: "M. López",
+            zoneName: "Tres Ríos",
+            serviceWindow: new
+            {
+                from = "2026-10-11T20:00:00+00:00",
+                to = "2026-10-11T22:00:00+00:00",
+            },
+            codExpectedCents: 125_000),
     ];
+
+    /// <summary>
+    /// Every listMyStops route: the plain path and <c>?details=false</c>, the confirmation read of the sync.
+    /// </summary>
+    internal const string StopsRoute = "**/api/v1/driver/me/stops**";
+
+    /// <summary>
+    /// AI-05 <c>DriverStop</c> with the UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 members. The synthetic marker text
+    /// travels as the address the driver sees; <c>address_summary</c> is shown only when the details are unavailable.
+    /// </summary>
+    internal static object Stop(
+        string orderId,
+        int aggregateVersion,
+        string publicId,
+        string stopType,
+        string status,
+        string addressText,
+        string? contactShortName = null,
+        string? zoneName = null,
+        string? contactFullName = null,
+        object? serviceWindow = null,
+        long? codExpectedCents = null,
+        bool codRecorded = false,
+        bool detailsAvailable = true) => new
+    {
+        order_id = orderId,
+        aggregate_version = aggregateVersion,
+        order_public_id = publicId,
+        stop_type = stopType,
+        status,
+        address_summary = "Synthetic quote destination",
+        details_available = detailsAvailable,
+        contact_short_name = detailsAvailable ? contactShortName : null,
+        contact_full_name = detailsAvailable ? contactFullName : null,
+        zone_name = zoneName,
+        service_window = serviceWindow,
+        cod = codExpectedCents is { } cents
+            ? new { expected = new { currency = "MXN", amount_cents = cents }, recorded = codRecorded }
+            : null,
+        navigation = detailsAvailable
+            ? new
+            {
+                latitude = 24.8067,
+                longitude = -107.3938,
+                address_text = addressText,
+                references = (string?)null,
+            }
+            : null,
+    };
+
+    /// <summary>
+    /// AI-05 <c>DriverStopList</c>, the listMyStops answer. A request with <c>details=false</c> gets the same stops
+    /// without their protected details, as the API answers it.
+    /// </summary>
+    internal static string StopsBody(IRequest request, IEnumerable<object> stops, int completedToday = 0)
+    {
+        var array = JsonSerializer.SerializeToNode(stops.ToArray())!.AsArray();
+        if (new Uri(request.Url).Query == "?details=false")
+        {
+            foreach (var stop in array.OfType<JsonObject>())
+            {
+                stop["details_available"] = false;
+                stop["contact_short_name"] = null;
+                stop["contact_full_name"] = null;
+                stop["navigation"] = null;
+            }
+        }
+
+        return new JsonObject
+        {
+            ["stops"] = array,
+            ["completed_today"] = completedToday,
+        }.ToJsonString();
+    }
 
     [Theory]
     [InlineData(320, 568)]
@@ -47,7 +128,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         });
         var page = await context.NewPageAsync();
         await InstallSessionAsync(page, "opaque-session-mobile-01");
-        await RouteStopsAsync(page, _ => (200, Stops));
+        await RouteStopsAsync(page, _ => (200, Stops), completedToday: 3);
 
         await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
         await ExpectTextAsync(page, "ORD_abcdefghijklmnopqrstuv");
@@ -59,8 +140,20 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         Assert.DoesNotContain("22222222-2222-2222-2222-222222222222", body);
         Assert.DoesNotContain("Teléfono", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Costo", body, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Recolección", body);
+        Assert.DoesNotContain("Synthetic quote", body, StringComparison.Ordinal);
+        Assert.Contains("1 · Recoger", body);
+        Assert.Contains("2 · Entregar", body);
+        Assert.Contains("Siguiente", await cards.Nth(0).InnerTextAsync());
+        Assert.Contains("Pendiente", await cards.Nth(1).InnerTextAsync());
         Assert.Contains("En tránsito", body);
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: zone, short name, window in Mazatlán time and the cash to collect.
+        var delivery = await cards.Nth(1).InnerTextAsync();
+        Assert.Contains("Tres Ríos · M. López", delivery);
+        Assert.Contains("13:00–15:00", delivery);
+        Assert.Contains("Cobrar $1,250.00", delivery);
+        Assert.Contains("Centro · Farmacia Sintética", await cards.Nth(0).InnerTextAsync());
+        // Owner answer "Solo el número": the two open stops plus the three completed today.
+        Assert.Contains("Hoy · 5 paradas · 3 hechas · 1 cobro pendiente $1,250.00", body);
         Assert.False(await HasHorizontalOverflowAsync(page));
 
         var detailLink = cards.Nth(0).GetByRole(AriaRole.Link, new() { Name = "Ver detalle" });
@@ -77,7 +170,20 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         Assert.Equal(
             "ORD_abcdefghijklmnopqrstuv",
             await detailHeading.InnerTextAsync());
-        Assert.Contains("Centro, Culiacán", await page.Locator("body").InnerTextAsync());
+        var detailBody = await page.Locator("body").InnerTextAsync();
+        Assert.Contains("Centro, Culiacán", detailBody);
+        // Owner answer "Completo en recolección": the pickup shows the full contact name.
+        Assert.Contains("Recoger con Farmacia Sintética", detailBody);
+        var directions = page.GetByRole(AriaRole.Link, new() { Name = "Cómo llegar" });
+        Assert.Equal(
+            "https://www.google.com/maps/search/?api=1&query=24.8067%2C-107.3938",
+            await directions.GetAttributeAsync("href"));
+        Assert.Equal("_blank", await directions.GetAttributeAsync("target"));
+        Assert.Equal("noopener noreferrer", await directions.GetAttributeAsync("rel"));
+        var directionsBox = await directions.BoundingBoxAsync();
+        Assert.NotNull(directionsBox);
+        Assert.True(directionsBox.Height >= 44);
+        Assert.False(await HasHorizontalOverflowAsync(page));
         await page.GetByRole(AriaRole.Link, new() { Name = "Volver a mis paradas" }).ClickAsync();
         await page.WaitForURLAsync("**/driver/stops");
         Assert.False(await HasHorizontalOverflowAsync(page));
@@ -92,11 +198,78 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
             new BrowserTypeLaunchOptions { Headless = true });
         var page = await browser.NewPageAsync();
         await InstallSessionAsync(page, "opaque-session-empty-001");
-        await RouteStopsAsync(page, _ => (200, Array.Empty<object>()));
+        await RouteStopsAsync(page, _ => (200, Array.Empty<object>()), completedToday: 2);
         await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
         await ExpectTextAsync(page, "No tienes paradas activas.");
+        await ExpectTextAsync(page, "Hoy · 2 paradas · 2 hechas");
         Assert.DoesNotContain("error", await page.Locator("body").InnerTextAsync(),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 review: one stop that breaks the contract never empties the list,
+    /// and a stop whose details the server could not read says so instead of showing a contact or "Cómo llegar".
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverStopsPwa")]
+    public async Task Broken_stop_is_left_out_and_unreadable_details_are_announced()
+    {
+        const string unreadable = "55555555-5555-5555-5555-555555555555";
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        var page = await browser.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-session-degraded-01");
+        await RouteStopsAsync(
+            page,
+            _ => (200,
+                [
+                    Stops[0],
+                    Stop(
+                        "44444444-4444-4444-4444-444444444444",
+                        2,
+                        "ORD_cdefghijklmnopqrstuvwx",
+                        "PICKUP",
+                        "UNKNOWN",
+                        "No debe mostrarse"),
+                    Stop(
+                        unreadable,
+                        5,
+                        "ORD_efghijklmnopqrstuvwxyz",
+                        "DELIVERY",
+                        "DELIVERING",
+                        "No debe mostrarse",
+                        contactShortName: "M. López",
+                        zoneName: "Tres Ríos",
+                        codExpectedCents: 125_000,
+                        detailsAvailable: false),
+                ]),
+            completedToday: 1);
+
+        await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
+        await ExpectTextAsync(page, "ORD_efghijklmnopqrstuvwxyz");
+        var cards = page.Locator("li");
+        Assert.Equal(2, await cards.CountAsync());
+        var body = await page.Locator("body").InnerTextAsync();
+        Assert.Contains("Hoy · 3 paradas · 1 hecha", body);
+        Assert.DoesNotContain("ORD_cdefghijklmnopqrstuvwx", body);
+        Assert.DoesNotContain("No debe mostrarse", body);
+        var degraded = await cards.Nth(1).InnerTextAsync();
+        Assert.Contains("Datos de entrega no disponibles por ahora", degraded);
+        Assert.Contains("Tres Ríos", degraded);
+        Assert.DoesNotContain("M. López", degraded);
+        Assert.Contains("Synthetic quote destination", degraded);
+
+        await cards.Nth(1).GetByRole(AriaRole.Link, new() { Name = "Ver detalle" }).ClickAsync();
+        await page.WaitForURLAsync($"**/driver/stops/{unreadable}");
+        await ExpectTextAsync(page, "Datos de entrega no disponibles por ahora");
+        Assert.Equal(0, await page.GetByRole(AriaRole.Link, new() { Name = "Cómo llegar" }).CountAsync());
+        var detail = await page.Locator("body").InnerTextAsync();
+        Assert.DoesNotContain("Entregar a", detail);
+        Assert.DoesNotContain("M. López", detail);
+        Assert.Contains("Synthetic quote destination", detail);
+        // The cash does not depend on the protected details.
+        Assert.Contains("Recibí $1,250.00", detail);
     }
 
     [Fact]
@@ -188,24 +361,22 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await using var context = await browser.NewContextAsync();
         var page = await context.NewPageAsync();
         await InstallSessionAsync(page, "opaque-session-switch-01");
-        await page.RouteAsync("**/api/v1/driver/me/stops", async route =>
+        await page.RouteAsync(StopsRoute, async route =>
         {
             var organization = await route.Request.HeaderValueAsync("X-Organization-Id");
             object[] payload = organization == "11111111-1111-1111-1111-111111111111"
                 ? Stops[..1]
                 :
                 [
-                    new
-                    {
-                        order_id = "22222222-2222-2222-2222-222222222222",
-                        aggregate_version = 9,
-                        order_public_id = "ORD_cdefghijklmnopqrstuvwx",
-                        stop_type = "RETURN",
-                        status = "RETURNING",
-                        address_summary = "Organización B",
-                    },
+                    Stop(
+                        "22222222-2222-2222-2222-222222222222",
+                        9,
+                        "ORD_cdefghijklmnopqrstuvwx",
+                        "RETURN",
+                        "RETURNING",
+                        "Organización B"),
                 ];
-            await route.FulfillAsync(JsonResponse(payload));
+            await route.FulfillAsync(JsonResponse(StopsBody(route.Request, payload)));
         });
 
         await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
@@ -263,10 +434,10 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         var page = await browser.NewPageAsync();
         await InstallSessionAsync(page, $"opaque-session-status-{status}");
         await page.RouteAsync(
-            "**/api/v1/driver/me/stops",
+            StopsRoute,
             route => route.FulfillAsync(
                 currentStatus == 200
-                    ? JsonResponse(Stops)
+                    ? JsonResponse(StopsBody(route.Request, Stops))
                     : new RouteFulfillOptions { Status = currentStatus }));
         await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
         await ExpectTextAsync(page, "ORD_abcdefghijklmnopqrstuv");
@@ -279,7 +450,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
             await page.Locator("body").InnerTextAsync());
 
         await page.UnrouteAllAsync();
-        await page.RouteAsync("**/api/v1/driver/me/stops", route => route.AbortAsync());
+        await page.RouteAsync(StopsRoute, route => route.AbortAsync());
         await page.ReloadAsync();
         await ExpectTextAsync(page, "No hay información disponible sin conexión");
     }
@@ -294,25 +465,24 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
             new BrowserTypeLaunchOptions { Headless = true });
         var page = await browser.NewPageAsync();
         await InstallSessionAsync(page, "opaque-session-contract-01");
-        await page.RouteAsync("**/api/v1/driver/me/stops", route =>
+        await page.RouteAsync(StopsRoute, route =>
         {
             response += 1;
             return response switch
             {
-                1 => route.FulfillAsync(JsonResponse(Stops)),
-                2 => route.FulfillAsync(JsonResponse(
+                1 => route.FulfillAsync(JsonResponse(StopsBody(route.Request, Stops))),
+                // The answer itself breaks the contract (the bare list of the previous version).
+                2 => route.FulfillAsync(JsonResponse(JsonSerializer.Serialize(
                 new[]
                 {
-                    new
-                    {
-                        order_id = "22222222-2222-2222-2222-222222222222",
-                        aggregate_version = 4,
-                        order_public_id = "ORD_abcdefghijklmnopqrstuv",
-                        stop_type = "PICKUP",
-                        status = "UNKNOWN",
-                        address_summary = "No debe mostrarse",
-                    },
-                })),
+                    Stop(
+                        "22222222-2222-2222-2222-222222222222",
+                        4,
+                        "ORD_abcdefghijklmnopqrstuv",
+                        "PICKUP",
+                        "ASSIGNED",
+                        "No debe mostrarse"),
+                }))),
                 _ => route.AbortAsync(),
             };
         });
@@ -339,7 +509,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.WaitForFunctionAsync(
             """
             async () => {
-              const cache = await caches.open("paquetenvia-driver-shell-v5");
+              const cache = await caches.open("paquetenvia-driver-shell-v6");
               const keys = await cache.keys();
               return keys.some(key => new URL(key.url).pathname.startsWith("/_next/static/"));
             }
@@ -351,7 +521,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.WaitForFunctionAsync(
             """
             minimum => new Promise(resolve => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
               open.onerror = () => resolve(false);
               open.onsuccess = () => {
                 const database = open.result;
@@ -380,7 +550,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         var state = await page.EvaluateAsync<bool[]>(
             """
             async orderId => {
-              const cache = await caches.open("paquetenvia-driver-shell-v5");
+              const cache = await caches.open("paquetenvia-driver-shell-v6");
               const shell = await cache.match("/driver/stops");
               const exact = await cache.match(`/driver/stops/${orderId}`);
               const shellText = shell ? await shell.clone().text() : "";
@@ -483,21 +653,22 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
 
     private static async Task RouteStopsAsync(
         IPage page,
-        Func<IRequest, (int Status, object Payload)> response) =>
-        await page.RouteAsync("**/api/v1/driver/me/stops", route =>
+        Func<IRequest, (int Status, object[] Stops)> response,
+        int completedToday = 0) =>
+        await page.RouteAsync(StopsRoute, route =>
         {
             var result = response(route.Request);
             return route.FulfillAsync(
                 result.Status == 200
-                    ? JsonResponse(result.Payload)
+                    ? JsonResponse(StopsBody(route.Request, result.Stops, completedToday))
                     : new RouteFulfillOptions { Status = result.Status });
         });
 
-    private static RouteFulfillOptions JsonResponse(object value) => new()
+    private static RouteFulfillOptions JsonResponse(string body) => new()
     {
         Status = 200,
         ContentType = "application/json; charset=utf-8",
-        Body = JsonSerializer.Serialize(value),
+        Body = body,
     };
 
     private static async Task ExpectTextAsync(IPage page, string text) =>

@@ -175,9 +175,7 @@ public sealed class PostgreSqlLocationService(
             new LocationPiiValues(
                 command.OrganizationId,
                 locationId,
-                string.IsNullOrWhiteSpace(command.References)
-                    ? command.AddressText
-                    : $"{command.AddressText}\nReferences: {command.References}",
+                LocationAddressText.Compose(command.AddressText, command.References),
                 command.ContactName,
                 command.Phone),
             cancellationToken);

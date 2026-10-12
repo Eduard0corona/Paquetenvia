@@ -16,6 +16,7 @@ import {
   driverStopStatusLabel,
   driverStopTypeLabel,
 } from "../contracts/labels";
+import { completedTodayAt } from "../contracts/stop-details";
 import {
   createDriverSyncApi,
   DriverSyncApiError,
@@ -25,17 +26,20 @@ import {
   projectDriverOperations,
   type ProjectedDriverStop,
 } from "../offline/operation-projection";
-import type {
-  DriverOfflineOperation,
-  DriverOperationKind,
-  DriverOperationalStatus,
+import {
+  driverOperationDefinitions,
+  type DriverOfflineOperation,
+  type DriverOperationKind,
+  type DriverOperationalStatus,
 } from "../offline/operation-contract";
+import { driverRejectionMessage } from "../offline/rejection-codes";
 import { defaultDriverStopsRealtimeFactory } from "../realtime/driver-stops-realtime";
 import {
   parseDriverStopsPathname,
   type DriverStopsRoute,
 } from "../routing/driver-stops-route";
 import {
+  driverLogoutStartedEvent,
   driverSessionChangedEvent,
   readBrowserDriverSession,
   sessionIdentity,
@@ -55,8 +59,19 @@ import {
 } from "../state/external-offers-controller";
 import { disabledDriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
 import { formatMxnCents } from "../../operations/contracts/money";
+import { useConfirmDialog } from "../../components/confirm-dialog";
 import { DriverAccount } from "./driver-account";
+import { DriverCodCollection } from "./driver-cod-collection";
 import { DriverProofCapture } from "./driver-proof-capture";
+import {
+  NavigationLink,
+  StopDetailFacts,
+  StopHighlights,
+  StopLead,
+  StopsSummary,
+  stopAddressText,
+  stopRowLabel,
+} from "./driver-stop-details";
 import { RecipientCall } from "./recipient-call";
 import styles from "./driver-stops.module.css";
 
@@ -66,6 +81,7 @@ const unavailableState: DriverStopsViewState = Object.freeze({
   synchronizedAt: null,
   realtime: "offline",
   refreshing: false,
+  completedToday: null,
 });
 const unavailableOperationsState: DriverOperationsState = Object.freeze({
   operations: [],
@@ -120,6 +136,19 @@ export function DriverStopsExperience() {
     window.addEventListener(driverSessionChangedEvent, refreshSession);
     return () =>
       window.removeEventListener(driverSessionChangedEvent, refreshSession);
+  }, []);
+
+  useEffect(() => {
+    // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: "Cerrar sesión" wipes the saved
+    // stop details; every controller stops first so no refresh writes them back.
+    const stopControllers = () => {
+      void controllerRef.current?.dispose();
+      void operationsControllerRef.current?.dispose();
+      externalOffersControllerRef.current?.dispose();
+    };
+    window.addEventListener(driverLogoutStartedEvent, stopControllers);
+    return () =>
+      window.removeEventListener(driverLogoutStartedEvent, stopControllers);
   }, []);
 
   useEffect(() => {
@@ -339,6 +368,17 @@ export function DriverStopsExperience() {
                 )
               : Promise.resolve(false)
           }
+          onCollectCod={() =>
+            stop && stop.cod && operationsControllerRef.current
+              ? operationsControllerRef.current.enqueueCodCollection({
+                  orderId: stop.order_id,
+                  orderPublicId: stop.order_public_id,
+                  amountCents: stop.cod.expected.amount_cents,
+                  projectedStatus: stop.projectedStatus,
+                  projectedVersion: stop.projectedVersion,
+                })
+              : Promise.resolve(false)
+          }
           onDiscard={(id, status, version) =>
             void operationsControllerRef.current?.discard(id, status, version)
           }
@@ -384,6 +424,7 @@ export function DriverStopsExperience() {
           operations={[]}
           mutating={operationsState.mutating}
           onEnqueue={() => Promise.resolve(false)}
+          onCollectCod={() => Promise.resolve(false)}
           onDiscard={() => undefined}
           onNewSession={() => undefined}
           onRetrySame={() => undefined}
@@ -562,10 +603,15 @@ function StopList({
       </StatusPanel>
     );
   }
+  const completedToday = completedTodayAt(
+    state.synchronizedAt,
+    state.completedToday,
+  );
   if (state.phase === "empty") {
     return (
       <StatusPanel title="Sin paradas activas">
         No tienes paradas activas.
+        <StopsSummary stops={[]} completedToday={completedToday} />
       </StatusPanel>
     );
   }
@@ -575,26 +621,28 @@ function StopList({
       {state.phase === "offline" ? (
         <OfflineBanner synchronizedAt={state.synchronizedAt} />
       ) : null}
+      <StopsSummary stops={projectedStops} completedToday={completedToday} />
       <ul className={styles.stopList} aria-label="Paradas asignadas">
-        {projectedStops.map((stop) => (
+        {projectedStops.map((stop, index) => (
           <li className={styles.stopCard} key={stop.order_id}>
             <div className={styles.cardHeading}>
               <div>
-                <p className={styles.cardLabel}>Orden</p>
+                <p className={styles.rowLabel}>{stopRowLabel(stop, index)}</p>
                 <h2>{stop.order_public_id}</h2>
               </div>
-              <span className={styles.badge}>
-                {driverStopStatusLabel(stop.confirmedStatus)}
+              <span className={index === 0 ? styles.badge : styles.quietBadge}>
+                {index === 0 ? "Siguiente" : "Pendiente"}
               </span>
             </div>
+            <StopHighlights stop={stop} />
             <dl className={styles.stopFacts}>
               <div>
-                <dt>Tipo de parada</dt>
-                <dd>{driverStopTypeLabel(stop.stop_type)}</dd>
+                <dt>Estado</dt>
+                <dd>{driverStopStatusLabel(stop.confirmedStatus)}</dd>
               </div>
               <div>
                 <dt>Dirección</dt>
-                <dd>{stop.address_summary}</dd>
+                <dd className={styles.addressText}>{stopAddressText(stop)}</dd>
               </div>
               <div>
                 <dt>Sincronización</dt>
@@ -632,6 +680,7 @@ function StopDetail({
   operations,
   mutating,
   onEnqueue,
+  onCollectCod,
   onDiscard,
   onNewSession,
   onRetrySame,
@@ -646,6 +695,7 @@ function StopDetail({
   operations: readonly DriverOfflineOperation[];
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
+  onCollectCod: () => Promise<boolean>;
   onDiscard: (
     operationId: string,
     status: DriverOperationalStatus | null,
@@ -684,10 +734,13 @@ function StopDetail({
       {offline ? <OfflineBanner synchronizedAt={synchronizedAt} /> : null}
       <article className={styles.detail}>
         <p className={styles.cardLabel}>Detalle de parada</p>
+        <StopLead stop={stop} />
         <h2 ref={headingRef} tabIndex={-1}>
           {stop.order_public_id}
         </h2>
+        <NavigationLink stop={stop} />
         <dl className={styles.detailFacts}>
+          <StopDetailFacts stop={stop} />
           <div>
             <dt>Tipo de parada</dt>
             <dd>{driverStopTypeLabel(stop.stop_type)}</dd>
@@ -711,10 +764,6 @@ function StopDetail({
             </div>
           ) : null}
           <div>
-            <dt>Dirección</dt>
-            <dd>{stop.address_summary}</dd>
-          </div>
-          <div>
             <dt>Última sincronización</dt>
             <dd>{formatTimestamp(synchronizedAt)}</dd>
           </div>
@@ -728,6 +777,7 @@ function StopDetail({
           stop={stop}
           disabled={mutating}
           onEnqueue={onEnqueue}
+          onCollectCod={onCollectCod}
         />
         <RecipientCall
           api={voiceApi}
@@ -757,34 +807,91 @@ function StopAction({
   stop,
   disabled,
   onEnqueue,
+  onCollectCod,
 }: Readonly<{
   stop: ProjectedDriverStop;
   disabled: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
+  onCollectCod: () => Promise<boolean>;
 }>) {
+  const { confirm, dialog } = useConfirmDialog();
   const kind = nextDriverOperationKind(stop.projectedStatus);
   if (!kind || stop.attentionCount > 0) return null;
+  if (kind === "DELIVERY_PROOF" && stop.deliveryAwaitingCash) {
+    // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the delivery and its photo are
+    // already saved; they wait for the cash, so only "Recibí" is offered and
+    // the delivery is sent right after the collection.
+    return (
+      <>
+        <fieldset className={styles.actions} disabled={disabled}>
+          <legend>Siguiente acción</legend>
+          <DriverCodCollection
+            stop={stop}
+            disabled={disabled}
+            confirm={confirm}
+            onCollect={onCollectCod}
+          />
+          <p className={styles.deliveryWaitingHint}>
+            La entrega ya está guardada en el teléfono. Se enviará después de
+            registrar el cobro.
+          </p>
+        </fieldset>
+        {dialog}
+      </>
+    );
+  }
   const proofRequired = kind === "PICKUP_PROOF" || kind === "DELIVERY_PROOF";
+  // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the delivery is never queued
+  // before the cash is recorded, at least on the phone; the collection is
+  // queued first, so it also reaches the server first.
+  const cashFirst =
+    kind === "DELIVERY_PROOF" &&
+    stop.cod !== null &&
+    stop.codCollection !== "recorded" &&
+    stop.codCollection !== "queued";
+  const cashHintId = `cash-first-${stop.order_id}`;
   return (
-    <fieldset className={styles.actions} disabled={disabled}>
-      <legend>Siguiente acción</legend>
-      {proofRequired ? (
-        // The photo is queued only from its preview ("Usar esta foto").
-        <DriverProofCapture
-          orderId={stop.order_id}
-          actionLabel={driverOperationLabel(kind)}
-          onUse={(photo) => onEnqueue(kind, photo)}
-        />
-      ) : (
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => void onEnqueue(kind)}
-        >
-          {driverOperationLabel(kind)}
-        </button>
-      )}
-    </fieldset>
+    <>
+      <fieldset className={styles.actions} disabled={disabled}>
+        <legend>Siguiente acción</legend>
+        {kind === "DELIVERY_PROOF" && stop.cod !== null ? (
+          <DriverCodCollection
+            stop={stop}
+            disabled={disabled}
+            confirm={confirm}
+            onCollect={onCollectCod}
+          />
+        ) : null}
+        {proofRequired ? (
+          <fieldset
+            className={styles.proofStep}
+            disabled={cashFirst}
+            aria-describedby={cashFirst ? cashHintId : undefined}
+          >
+            {cashFirst ? (
+              <p id={cashHintId} className={styles.cashFirstHint}>
+                Registra el cobro antes de confirmar la entrega.
+              </p>
+            ) : null}
+            {/* The photo is queued only from its preview ("Usar esta foto"). */}
+            <DriverProofCapture
+              orderId={stop.order_id}
+              actionLabel={driverOperationLabel(kind)}
+              onUse={(photo) => onEnqueue(kind, photo)}
+            />
+          </fieldset>
+        ) : (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => void onEnqueue(kind)}
+          >
+            {driverOperationLabel(kind)}
+          </button>
+        )}
+      </fieldset>
+      {dialog}
+    </>
   );
 }
 
@@ -874,10 +981,7 @@ function ConflictResolution({
   return (
     <section className={styles.conflict} aria-labelledby="conflict-heading">
       <h3 id="conflict-heading">Acción que requiere atención</h3>
-      <p>
-        Esta operación no pudo aplicarse porque la parada cambió. Revisa el
-        estado confirmado antes de continuar.
-      </p>
+      <p>{driverRejectionMessage(attention.kind, attention.rejectionCode)}</p>
       <dl>
         <div>
           <dt>Hora registrada en el dispositivo</dt>
@@ -889,7 +993,11 @@ function ConflictResolution({
         </div>
         <div>
           <dt>Acción prevista</dt>
-          <dd>{driverStopStatusLabel(attention.targetStatus)}</dd>
+          <dd>
+            {driverOperationDefinitions[attention.kind].transition
+              ? driverStopStatusLabel(attention.targetStatus)
+              : driverOperationLabel(attention.kind)}
+          </dd>
         </div>
         <div>
           <dt>Acciones bloqueadas después</dt>
@@ -923,15 +1031,17 @@ function ConflictResolution({
         >
           Reintentar la misma acción
         </button>
-        <button
-          type="button"
-          disabled={disabled || confirmedOperationalStatus === null}
-          onClick={(event) =>
-            requestConfirmation("rebuild", event.currentTarget)
-          }
-        >
-          Crear acción para versión actual
-        </button>
+        {driverOperationDefinitions[attention.kind].transition ? (
+          <button
+            type="button"
+            disabled={disabled || confirmedOperationalStatus === null}
+            onClick={(event) =>
+              requestConfirmation("rebuild", event.currentTarget)
+            }
+          >
+            Crear acción para versión actual
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={disabled}
