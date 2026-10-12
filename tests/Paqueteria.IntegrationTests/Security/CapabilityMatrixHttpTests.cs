@@ -336,12 +336,12 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
         Assert.Equal(pendingId, item.GetProperty("id").GetGuid());
         Assert.NotEqual(otherId, item.GetProperty("id").GetGuid());
         // Exactly the AI-05 Order that every other listOrders reader receives: no COD amount, no address,
-        // coordinates, contact or other personal data.
+        // coordinates, contact or other personal data (ORD-ORDER-CREATED-AT-2026-10-12: created_at, for every reader).
         Assert.Equal(
             [
-                "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id", "operator_org_id",
-                "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id", "quote_id",
-                "service_area_id", "service_type", "service_window", "status", "total", "version",
+                "city_id", "claim_window_ends_at", "created_at", "destination_location_id", "finalized_at", "id",
+                "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
+                "quote_id", "service_area_id", "service_type", "service_window", "status", "total", "version",
             ],
             item.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.DoesNotContain("cod_expected", body, StringComparison.OrdinalIgnoreCase);

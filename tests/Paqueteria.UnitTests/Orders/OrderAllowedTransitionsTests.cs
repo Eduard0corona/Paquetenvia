@@ -366,5 +366,6 @@ public sealed class OrderAllowedTransitionsTests
         "OCCASIONAL",
         new MoneyResult("MXN", 10_000),
         status == OrderStatus.Closed ? Now.AddHours(1) : null,
-        null);
+        null,
+        Now.AddDays(-1));
 }

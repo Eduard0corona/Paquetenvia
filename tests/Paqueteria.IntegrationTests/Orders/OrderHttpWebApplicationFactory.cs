@@ -19,6 +19,13 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal static readonly Guid ExpiredQuoteId = Guid.Parse("81000000-0000-0000-0000-000000000003");
     internal static readonly Guid UsedQuoteId = Guid.Parse("81000000-0000-0000-0000-000000000004");
     internal static readonly Guid ForeignOrderId = Guid.Parse("82000000-0000-0000-0000-000000000001");
+
+    /// <summary>
+    /// ORD-ORDER-CREATED-AT-2026-10-12: the created_at of every stub order, at the microsecond precision PostgreSQL
+    /// stores, so the API writes it as 2026-10-12T17:04:05.123456+00:00.
+    /// </summary>
+    internal static readonly DateTimeOffset CreatedAt =
+        new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero).AddTicks(1_234_560);
     private readonly StubOrderService orderService = new();
     private readonly InMemoryCsvOrderImportBatchIdempotencyStore csvBatches = new();
 
@@ -552,7 +559,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             "OCCASIONAL",
             new MoneyResult("MXN", 3_000_000_000L),
             null,
-            null);
+            null,
+            CreatedAt);
 
         private sealed record StoredResponse(
             string Signature,

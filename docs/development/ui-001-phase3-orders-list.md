@@ -159,6 +159,7 @@ python3 docs/normative/v0.6/tools/validate_contracts.py
   que acepta, por ejemplo, espacios alrededor y otros formatos que `TryParse` reconoce. No se cambió aquí (cambiarlo altera respuestas del
   tablero); alinearlo con `OrderListCreatedRange.TryParseInstant` es un cambio aparte.
 - `created_at` en la `Order` de AI-05 y del API, y la columna "Creada" con datos: PR siguiente ("En dos pasos").
+  Hecho en `ORD-ORDER-CREATED-AT-2026-10-12` (`docs/development/ord-order-created-at.md`).
 - Un detalle de orden para VIEWER (solo `getOrder`): hoy el detalle lee el tablero y VIEWER no lo abre.
 
 ## Rollback
