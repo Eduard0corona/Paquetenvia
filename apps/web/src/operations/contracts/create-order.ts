@@ -1,5 +1,6 @@
 import { isAcceptanceVersion, type AcceptanceVersions, acceptanceVersionsUnavailableMessage } from "./acceptance-versions";
 import { formatMxnCentsWithCurrency, maximumCodExpectedCents, parseMxnToCents } from "./money";
+import { orderCreatedAtField, optionalOrderCreatedAt } from "../../lib/utc-instant";
 import { buildServiceWindow, type ServiceWindowBody } from "./service-window";
 
 /**
@@ -93,6 +94,11 @@ export interface CreatedOrder {
   readonly service_type: ServiceType;
   /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: null means the zone's schedule applies. */
   readonly service_window: ServiceWindowBody | null;
+  /**
+   * UI-PHASE3-ORDERS-LIST-2026-10-12 ("En dos pasos"): the creation instant, once the API adds `Order.created_at`;
+   * null while it is absent.
+   */
+  readonly created_at: string | null;
 }
 
 export interface AddressDraft {
@@ -615,6 +621,8 @@ export function parseCreatedOrder(value: unknown): CreatedOrder {
       "claim_window_ends_at",
       "finalized_at",
       "service_window",
+      // UI-PHASE3-ORDERS-LIST-2026-10-12: accepted before the API sends it, so no deployment order breaks.
+      orderCreatedAtField,
     ],
   );
   uuid(object.owner_org_id);
@@ -636,6 +644,7 @@ export function parseCreatedOrder(value: unknown): CreatedOrder {
       object.service_window === undefined || object.service_window === null
         ? null
         : parseServiceWindow(object.service_window),
+    created_at: optionalOrderCreatedAt(object, fail),
   };
 }
 

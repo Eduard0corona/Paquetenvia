@@ -191,8 +191,16 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         bool codPendingReconciliation,
         bool mfaSatisfied,
         string? publicId,
+        OrderListCreatedRange createdRange,
         CancellationToken cancellationToken)
     {
+        // ORD-LIST-DATE-FILTER-2026-10-12: a creation window outside the policy is a malformed request, refused
+        // before any order is read (the endpoint already refused it before the capability check).
+        if (!createdRange.IsValid)
+        {
+            throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+        }
+
         if (actorId == Guid.Empty || organizationId == Guid.Empty ||
             (status is not null && !OrderStatuses.Contains(status)) ||
             (ownerOrganizationId is { } owner && owner != organizationId) ||
@@ -201,12 +209,25 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             return Task.FromResult(new OrderPageResult([], null));
         }
 
+        // ORD-LIST-DATE-FILTER-2026-10-12, additive: a bound cursor issued for another organization or other filters
+        // is refused instead of paging another list; an unbound cursor of the earlier format pages as before and any
+        // other text is still the empty page.
+        var binding = OrderCursorCodec.Binding(
+            organizationId, status, ownerOrganizationId, codPendingReconciliation, publicId, createdRange);
         DateTimeOffset cursorCreatedAt = default;
         Guid cursorId = default;
         var hasCursor = cursor is not null;
-        if (hasCursor && !OrderCursorCodec.TryDecode(cursor, out cursorCreatedAt, out cursorId))
+        if (hasCursor)
         {
-            return Task.FromResult(new OrderPageResult([], null));
+            switch (OrderCursorCodec.Read(cursor, binding, out cursorCreatedAt, out cursorId))
+            {
+                case OrderCursorReading.BoundToOtherFilters:
+                    throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+                case OrderCursorReading.Unreadable:
+                    return Task.FromResult(new OrderPageResult([], null));
+                case OrderCursorReading.Position:
+                    break;
+            }
         }
 
         return transactionContext.ExecuteAsync(
@@ -219,6 +240,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 codPendingReconciliation,
                 mfaSatisfied,
                 publicId,
+                createdRange,
+                binding,
                 hasCursor,
                 cursorCreatedAt,
                 cursorId,
@@ -495,6 +518,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         bool codPendingReconciliation,
         bool mfaSatisfied,
         string? publicId,
+        OrderListCreatedRange createdRange,
+        string binding,
         bool hasCursor,
         DateTimeOffset cursorCreatedAt,
         Guid cursorId,
@@ -530,6 +555,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             WHERE (@status IS NULL OR status=@status)
               AND (@public_id IS NULL OR public_id=@public_id)
               AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
+              AND (@created_from::timestamptz IS NULL OR created_at>=@created_from)
+              AND (@created_to::timestamptz IS NULL OR created_at<=@created_to)
               AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
             ORDER BY created_at DESC,id DESC
             LIMIT @take
@@ -537,6 +564,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         command.Parameters.Add(P("status", NpgsqlDbType.Text, status));
         command.Parameters.Add(P("public_id", NpgsqlDbType.Text, publicId));
         command.Parameters.Add(P("cod_pending", NpgsqlDbType.Boolean, codPendingReconciliation));
+        command.Parameters.Add(P("created_from", NpgsqlDbType.TimestampTz, createdRange.From?.ToUniversalTime()));
+        command.Parameters.Add(P("created_to", NpgsqlDbType.TimestampTz, createdRange.To?.ToUniversalTime()));
         command.Parameters.Add(P("has_cursor", NpgsqlDbType.Boolean, hasCursor));
         command.Parameters.Add(P("cursor_created_at", NpgsqlDbType.TimestampTz, cursorCreatedAt));
         command.Parameters.Add(P("cursor_id", NpgsqlDbType.Uuid, cursorId));
@@ -556,7 +585,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         }
 
         var nextCursor = hasMore && rows.Count > 0
-            ? OrderCursorCodec.Encode(rows[^1].CreatedAt, rows[^1].Result.Id)
+            ? OrderCursorCodec.Encode(rows[^1].CreatedAt, rows[^1].Result.Id, binding)
             : null;
         return new OrderPageResult(rows.Select(value => value.Result).ToArray(), nextCursor);
     }

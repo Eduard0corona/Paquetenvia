@@ -486,7 +486,7 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
 
 ## 18. Observabilidad y SLO
 
-Toda petición/job/evento debe llevar `trace_id`, `correlation_id`, tenant y actor técnico redactado. Métricas mínimas:
+Toda petición/job/evento debe llevar `trace_id`, `correlation_id`, tenant y actor técnico redactado. El tenant va como seudónimo de la organización (un código HMAC con llave en Key Vault, nunca el id real) y el actor técnico solo como tipo de rol, únicamente en trazas y logs y cuando hay contexto de organización; nunca son etiqueta de métrica, dimensión de alerta o de libro de trabajo ni dimensión de telemetría, y la lista permitida de dimensiones de OBS-002 no los incluye (OBS-003-TENANT-PSEUDONYM-2026-10-12). Métricas mínimas:
 
 - latencia p50/p95/p99 y errores HTTP;
 - conexiones y latencia SignalR;

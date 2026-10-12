@@ -417,9 +417,224 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         using var invalidCursor = await SendAuthenticatedAsync(HttpMethod.Get, "/api/v1/orders?cursor=invalid");
         Assert.Equal("{\"items\":[],\"next_cursor\":null}", await invalidCursor.Content.ReadAsStringAsync());
 
-        var cursor = OrderCursorCodec.Encode(DateTimeOffset.UtcNow, Guid.NewGuid());
+        // ORD-LIST-DATE-FILTER-2026-10-12, additive: the cursor of the earlier format still pages, and so does a bound
+        // one with the filters it was issued for.
+        using var legacyCursor = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?cursor={LegacyCursor()}");
+        Assert.Equal(HttpStatusCode.OK, legacyCursor.StatusCode);
+        var cursor = IssuedCursor();
         using var validCursor = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?cursor={cursor}");
         Assert.Equal(HttpStatusCode.OK, validCursor.StatusCode);
+    }
+
+    /// <summary>
+    /// ORD-LIST-DATE-FILTER-2026-10-12: created_from and created_to reach the service as the inclusive UTC window
+    /// they spell, each alone or both, and narrow every other filter; the response keeps the Order shape.
+    /// </summary>
+    [Fact]
+    public async Task GET_list_passes_the_creation_window_to_the_service()
+    {
+        await CreateIdentityAsync(Guid.NewGuid(), Key());
+        var from = new DateTimeOffset(2026, 10, 1, 7, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 10, 8, 6, 59, 59, TimeSpan.Zero).AddTicks(9_999_990);
+        foreach (var (query, expected) in new (string, OrderListCreatedRange)[]
+                 {
+                     ("created_from=2026-10-01T07:00:00Z&created_to=2026-10-08T06:59:59.999999Z", new(from, to)),
+                     ("created_from=2026-10-01T07:00:00.000Z", new(from, null)),
+                     ("created_to=2026-10-08T06:59:59.999999Z", new(null, to)),
+                     ("status=DRAFT&created_from=2026-10-01T07:00:00Z&created_to=2026-10-01T07:00:00Z", new(from, from)),
+                     ("public_id=ORD_AAAAAAAAAAAAAAAAAAAAAA&created_from=2026-10-01T07:00:00Z", new(from, null)),
+                     (string.Empty, default),
+                 })
+        {
+            var before = factory.ListCallCount;
+            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(before + 1, factory.ListCallCount);
+            Assert.Equal(expected, factory.LastListCreatedRange);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(["items", "next_cursor"], json.RootElement.EnumerateObject().Select(property => property.Name));
+        }
+    }
+
+    /// <summary>
+    /// ORD-LIST-DATE-FILTER-2026-10-12: a malformed or repeated bound, a window that ends before it starts or spans
+    /// more than 31 days is 409 INVALID_REQUEST, decided before the capability check and before any order is read:
+    /// a VIEWER, a DRIVER without listOrders and FINANCE receive the same refusal and the service is never called.
+    /// </summary>
+    [Fact]
+    public async Task GET_list_refuses_a_malformed_creation_window_before_the_capability()
+    {
+        foreach (var query in new[]
+                 {
+                     "created_from=2026-10-01",
+                     "created_from=2026-10-01T00:00:00",
+                     "created_from=2026-10-01T00:00:00-07:00",
+                     "created_from=2026-10-01T07:00:00%2B00:00",
+                     "created_to=ayer",
+                     "created_to=",
+                     "created_from=2026-13-01T00:00:00Z",
+                     // Strict RFC3339 UTC: no date alone with Z, no spaces, no culture formats, at most 7 fraction digits.
+                     "created_from=2026-10-12Z",
+                     "created_from=%202026-10-01T07:00:00Z",
+                     "created_from=2026-10-01T07:00:00.12345678Z",
+                     "created_to=Thu%2C%2001%20Oct%202026%2007%3A00%3A00%20GMT",
+                     "created_to=10%2F01%2F2026%2007%3A00%3A00Z",
+                     "created_from=2026-10-01T07:00:00Z&created_from=2026-10-02T07:00:00Z",
+                     "created_to=2026-10-01T07:00:00Z&created_to=2026-10-02T07:00:00Z",
+                     "created_from=2026-10-08T07:00:00Z&created_to=2026-10-01T07:00:00Z",
+                     "created_from=2026-10-01T07:00:00Z&created_to=2026-11-01T07:00:00.0000001Z",
+                     "created_from=2026-10-01T07:00:00Z&created_to=2026-11-02T06:59:59.999999Z",
+                     "cod_pending_reconciliation=true&created_from=2026-10-08T07:00:00Z&created_to=2026-10-01T07:00:00Z",
+                 })
+        {
+            foreach (var profile in new[]
+                     {
+                         MockIdentityProfiles.ActiveDispatcher, MockIdentityProfiles.ActiveViewer,
+                         MockIdentityProfiles.ActiveDriver, MockIdentityProfiles.ActiveFinanceMfa,
+                     })
+            {
+                var before = factory.ListCallCount;
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/orders?{query}");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", profile);
+                request.Headers.Add("X-Organization-Id", MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
+                using var response = await client.SendAsync(request);
+                await AssertInvalidRequestAsync(response);
+                Assert.Equal(before, factory.ListCallCount);
+            }
+        }
+
+        // Exactly 31 days is the longest window and is accepted.
+        using var longest = await SendAuthenticatedAsync(
+            HttpMethod.Get, "/api/v1/orders?created_from=2026-10-01T07:00:00Z&created_to=2026-11-01T07:00:00Z");
+        Assert.Equal(HttpStatusCode.OK, longest.StatusCode);
+    }
+
+    /// <summary>
+    /// ORD-LIST-DATE-FILTER-2026-10-12, additive: a bound cursor is accepted only with the organization and the filters
+    /// it was issued for; under another status, owner, COD filter, public_id, window or organization it is 409
+    /// INVALID_REQUEST, decided after the capability check as every cursor was before. The unbound cursor of the earlier
+    /// format still pages, and unreadable, empty or repeated cursors and an unknown COD value keep the empty page.
+    /// </summary>
+    [Fact]
+    public async Task GET_list_accepts_a_bound_cursor_only_for_its_filters_and_keeps_every_earlier_answer()
+    {
+        var organization = MockIdentityProfiles.ViewerOrganizationId;
+        var range = new OrderListCreatedRange(
+            new DateTimeOffset(2026, 10, 1, 7, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 10, 8, 7, 0, 0, TimeSpan.Zero));
+        const string window = "created_from=2026-10-01T07:00:00Z&created_to=2026-10-08T07:00:00Z";
+        var cursor = OrderCursorCodec.Encode(
+            range.From!.Value.AddDays(1),
+            Guid.NewGuid(),
+            OrderCursorCodec.Binding(organization, "DELIVERED", null, false, null, range));
+
+        foreach (var query in new[]
+                 {
+                     $"status=DELIVERED&{window}&cursor={cursor}",
+                     // cod_pending_reconciliation=false is the same filter as its absence.
+                     $"status=DELIVERED&cod_pending_reconciliation=false&{window}&cursor={cursor}",
+                     // The earlier unbound format pages with any filters, as before.
+                     $"cursor={LegacyCursor()}",
+                     $"status=CLOSED&{window}&cursor={LegacyCursor()}",
+                 })
+        {
+            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        foreach (var query in new[]
+                 {
+                     $"{window}&cursor={cursor}",
+                     $"status=CLOSED&{window}&cursor={cursor}",
+                     $"status=DELIVERED&owner_org_id={organization:D}&{window}&cursor={cursor}",
+                     $"status=DELIVERED&cod_pending_reconciliation=true&{window}&cursor={cursor}",
+                     $"status=DELIVERED&public_id=ORD_AAAAAAAAAAAAAAAAAAAAAA&{window}&cursor={cursor}",
+                     $"status=DELIVERED&cursor={cursor}",
+                     $"status=DELIVERED&created_from=2026-10-01T07:00:00Z&cursor={cursor}",
+                     $"status=DELIVERED&created_from=2026-10-02T07:00:00Z&created_to=2026-10-08T07:00:00Z&cursor={cursor}",
+                 })
+        {
+            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
+            await AssertInvalidRequestAsync(response);
+        }
+
+        // Every earlier empty-page answer is unchanged.
+        foreach (var query in new[]
+                 {
+                     $"status=DELIVERED&{window}&cursor=invalid",
+                     $"status=DELIVERED&{window}&cursor=",
+                     $"status=DELIVERED&{window}&cursor={cursor}&cursor={cursor}",
+                     $"status=DELIVERED&{window}&cursor={new string('A', 300)}",
+                     $"status=DELIVERED&cod_pending_reconciliation=maybe&{window}&cursor={cursor}",
+                 })
+        {
+            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("{\"items\":[],\"next_cursor\":null}", await response.Content.ReadAsStringAsync());
+        }
+
+        // The capability is still decided before the cursor: callers without listOrders keep their 403.
+        foreach (var (profile, query, mfaRequired) in new[]
+                 {
+                     (MockIdentityProfiles.ActiveDriver, $"status=CLOSED&{window}&cursor={cursor}", false),
+                     (MockIdentityProfiles.ActiveFinanceMfa, $"status=CLOSED&{window}&cursor={cursor}", false),
+                     (MockIdentityProfiles.ActiveFinance, $"cod_pending_reconciliation=true&{window}&cursor={cursor}", true),
+                 })
+        {
+            var before = factory.ListCallCount;
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/orders?{query}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", profile);
+            request.Headers.Add("X-Organization-Id", organization.ToString("D"));
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(mfaRequired, json.RootElement.TryGetProperty("code", out var code) && code.GetString() == "MFA_REQUIRED");
+            Assert.Equal(before, factory.ListCallCount);
+        }
+
+        // A member of two organizations: the cursor pages the organization it was issued for and is refused under the
+        // other one.
+        foreach (var (selected, status) in new[]
+                 {
+                     (organization, HttpStatusCode.OK),
+                     (MockIdentityProfiles.OperationsOrganizationId, HttpStatusCode.Conflict),
+                 })
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get, $"/api/v1/orders?status=DELIVERED&{window}&cursor={cursor}");
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                "Bearer", MockIdentityProfiles.ActiveMultiOrganization);
+            request.Headers.Add("X-Organization-Id", selected.ToString("D"));
+            using var response = await client.SendAsync(request);
+            if (status == HttpStatusCode.OK)
+            {
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            }
+            else
+            {
+                await AssertInvalidRequestAsync(response);
+            }
+        }
+    }
+
+    /// <summary>The unbound cursor the API issued before ORD-LIST-DATE-FILTER-2026-10-12 ("ticks:id" in Base64URL).</summary>
+    private static string LegacyCursor() =>
+        Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+                $"{DateTimeOffset.UtcNow.UtcTicks}:{Guid.NewGuid():D}"))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static string IssuedCursor() => OrderCursorCodec.Encode(
+        DateTimeOffset.UtcNow,
+        Guid.NewGuid(),
+        OrderCursorCodec.Binding(MockIdentityProfiles.ViewerOrganizationId, null, null, false, null, default));
+
+    private static async Task AssertInvalidRequestAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("INVALID_REQUEST", json.RootElement.GetProperty("code").GetString());
+        Assert.Equal(409, json.RootElement.GetProperty("status").GetInt32());
     }
 
     [Fact]

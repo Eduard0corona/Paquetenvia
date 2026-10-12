@@ -122,7 +122,25 @@ paths:
         the request and the session, before any order is read; the COD pending list then re-checks the
         getOrderFinancials roles inside the tenant transaction, before any order is read. FINANCE receives the
         same Order fields as every other reader and never creates, imports, transitions or opens an order.
-      x-authorization-precedence: capability-before-persisted-state
+        ORD-LIST-DATE-FILTER-2026-10-12 is purely additive: every request valid before is answered as before. It
+        adds the optional creation window created_from and created_to, with the bounds of the parameters of the
+        same name of the operations dashboard: strict RFC3339 instants in UTC (yyyy-MM-ddTHH:mm:ss, 0 to 7
+        fractional digits, ending in Z), both inclusive (created_from <= created_at <= created_to), each usable
+        alone; with both, created_from is not after created_to and at most 31 days lie between them. The window
+        narrows every other filter, adds no capability of its own and changes nobody's access (FINANCE may narrow
+        its COD pending list with it and nothing else). A malformed or repeated created_from or created_to and a
+        window outside those rules are request shape - 409 INVALID_REQUEST, decided before the capability check,
+        without opening the tenant transaction or reading any order; only clients that know the new parameters
+        send them. Every next_cursor issued from now on is bound to the selected organization and to the filters of
+        the request that received it (status, owner_org_id, cod_pending_reconciliation, public_id, created_from and
+        created_to); such a bound cursor sent with other filters or another organization is 409 INVALID_REQUEST,
+        decided where the cursor always was, after the capability check and before any order is read. A cursor of
+        the earlier unbound format still pages exactly as before, and any other cursor text, an unknown status, a
+        malformed public_id, another owner_org_id and a cod_pending_reconciliation value other than true or false
+        keep answering the empty page after the capability check, as before. Tenant isolation is the same RLS that
+        scopes every listOrders read: the orders the selected organization owns or operates, newest first.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - name: status
@@ -168,8 +186,45 @@ paths:
         schema:
           type: string
           pattern: ^ORD_[A-Za-z0-9_-]{22}$
+      - name: created_from
+        in: query
+        required: false
+        description: >-
+          ORD-LIST-DATE-FILTER-2026-10-12. Earliest creation instant, inclusive
+          (created_at >= created_from): a strict RFC3339 date-time in UTC
+          (yyyy-MM-ddTHH:mm:ss with 0 to 7 fractional digits and Z, nothing
+          around it), at most once. The operations web sends the first instant
+          of the first chosen calendar day in America/Mazatlan. A malformed or
+          repeated value, a created_from after created_to or more than 31 days
+          between them is 409 INVALID_REQUEST before the capability check.
+        schema:
+          type: string
+          format: date-time
+      - name: created_to
+        in: query
+        required: false
+        description: >-
+          ORD-LIST-DATE-FILTER-2026-10-12. Latest creation instant, inclusive
+          (created_at <= created_to): a strict RFC3339 date-time in UTC
+          (yyyy-MM-ddTHH:mm:ss with 0 to 7 fractional digits and Z, nothing
+          around it), at most once. The operations web sends the last
+          microsecond of the last chosen calendar day in America/Mazatlan. A
+          malformed or repeated value, a created_to before created_from or more
+          than 31 days between them is 409 INVALID_REQUEST before the capability
+          check.
+        schema:
+          type: string
+          format: date-time
       - name: cursor
         in: query
+        description: >-
+          The next_cursor of a previous page, opaque. ORD-LIST-DATE-FILTER-2026-10-12:
+          a next_cursor issued from now on is bound to the selected organization
+          and to every filter of the request that received it, and is valid
+          only with exactly those filters; sent with others it is 409
+          INVALID_REQUEST after the capability check. A cursor of the earlier
+          unbound format still pages as before and any other text is still the
+          empty page.
         schema:
           type: string
       responses:
@@ -192,6 +247,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/preview:
@@ -7967,3 +8024,18 @@ x-pilot-contract-deltas:
       without MFA; the uniform 403 without such a membership; Cache-Control no-store; nothing about any other person,
       no PII and no schema, role, grant or migration change; listOrganizationContexts and OrganizationContext are
       unchanged, so every client and every deployment order keep working
+  - id: ORD-LIST-DATE-FILTER
+    status: DECIDED
+    decision: ORD-LIST-DATE-FILTER-2026-10-12 (project owner, 2026-10-12)
+    literal: '"Corrección mía: para "Órdenes" dije "filtros por estado y fecha con el API que ya existe", pero la lista
+      de órdenes del API no filtra por fecha (solo estado, dueña, cobro pendiente y guía). ¿Cómo la hacemos?" - Agregar
+      filtro de fecha al API (Recommended)'
+    implementation: shipped by feat/ui-001-orders-list together with its code and tests - OrderListCreatedRange,
+      OrderListRequestShape, the bound OrderCursorCodec and the created_at window of the listOrders read
+    delta: purely additive - listOrders accepts the optional created_from and created_to (strict RFC3339 UTC instants
+      ending in Z, inclusive, each alone or both, at most 31 days apart, the operations dashboard bounds); a malformed
+      or repeated bound or a window outside those rules is 409 INVALID_REQUEST before the capability check; every
+      next_cursor issued from now on is bound to the selected organization and the filters, and such a bound cursor
+      sent with other filters is 409 INVALID_REQUEST after the capability check; cursors of the earlier format page
+      as before and unreadable ones keep the empty page (the response gains 409 Conflict); the capability, the Order
+      shape, RLS and every other filter are unchanged; no table, index, role, grant or migration change

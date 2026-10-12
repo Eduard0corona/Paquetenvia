@@ -149,6 +149,11 @@ export interface OperationsOrderDetail {
   readonly finalized_at: string | null;
   /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: null means the zone's schedule applies. */
   readonly service_window: OperationsTimeWindow | null;
+  /**
+   * UI-PHASE3-ORDERS-LIST-2026-10-12 ("En dos pasos"): the creation instant, once the API adds `Order.created_at`;
+   * null while it is absent.
+   */
+  readonly created_at: string | null;
   readonly timeline: readonly OperationsOrderTimelineItem[];
   /**
    * UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the transitions the server says this person may

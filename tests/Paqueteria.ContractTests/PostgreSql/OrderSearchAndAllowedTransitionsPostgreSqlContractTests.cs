@@ -65,9 +65,9 @@ public sealed class OrderSearchAndAllowedTransitionsPostgreSqlContractTests(Post
 
         // The search narrows the other filters instead of replacing them.
         Assert.Empty((await scope.Service.ListAsync(
-            owner.UserId, owner.OrganizationId, "DRAFT", null, null, false, false, ownPublicId, default)).Items);
+            owner.UserId, owner.OrganizationId, "DRAFT", null, null, false, false, ownPublicId, default, default)).Items);
         Assert.Single((await scope.Service.ListAsync(
-            owner.UserId, owner.OrganizationId, "CONFIRMED", null, null, false, false, ownPublicId, default)).Items);
+            owner.UserId, owner.OrganizationId, "CONFIRMED", null, null, false, false, ownPublicId, default, default)).Items);
     }
 
     [PostgreSqlContractFact]
@@ -143,7 +143,7 @@ public sealed class OrderSearchAndAllowedTransitionsPostgreSqlContractTests(Post
     }
 
     private static Task<OrderPageResult> List(IOrderService service, SyntheticOrderScenario scenario, string publicId) =>
-        service.ListAsync(scenario.UserId, scenario.OrganizationId, null, null, null, false, false, publicId, default);
+        service.ListAsync(scenario.UserId, scenario.OrganizationId, null, null, null, false, false, publicId, default, default);
 
     /// <summary>The same characters with the letter case of the random part swapped: a different, valid number.</summary>
     private static string SwapCase(string publicId) =>

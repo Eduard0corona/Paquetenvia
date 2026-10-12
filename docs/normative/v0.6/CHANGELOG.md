@@ -18,6 +18,109 @@
   identidad de la API lee solo ese secreto nuevo; guardas P06 y P23. Sin cambios en AI-04, AI-05, AI-06, AI-12 ni en
   los flujos atómicos de AI-13 §4.
 
+## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como dos cambios
+  MAJOR (AI-01 §7). Primera: "El menú aprobado de Despacho incluye "Órdenes", pero esa pantalla no existe (hoy se llega
+  a una orden desde la bandeja, el tablero o "Buscar guía"). ¿La hacemos?" → "Sí, lista de órdenes (Recommended)"
+  ("Lista de todas las órdenes con búsqueda por guía y filtros por estado y fecha, usando el API que ya existe; abre el
+  detalle."); no elegidas: "No, quitar del menú" y "Después del piloto". Segunda: "Corrección mía: para "Órdenes" dije
+  "filtros por estado y fecha con el API que ya existe", pero la lista de órdenes del API no filtra por fecha (solo
+  estado, dueña, cobro pendiente y guía). ¿Cómo la hacemos?" → "Agregar filtro de fecha al API (Recommended)" ("Cambio
+  pequeño y aditivo (con ADR): la lista de órdenes acepta "desde" y "hasta" (hora de Mazatlán). La pantalla filtra por
+  guía, estado y fecha."); no elegida: "Sin filtro de fecha". ADR: `docs/adr/ADR-ORD-LIST-DATE-FILTER.md`.
+- Preguntas y respuestas literales del project owner durante la revisión (2026-10-12), añadidas a la fila
+  `UI-PHASE3-ORDERS-LIST-2026-10-12`. Primera: "Pantalla Órdenes: el API de la lista no trae la fecha de creación de
+  cada orden, así que la columna "Creada" no se puede mostrar (los filtros por fecha sí funcionan). Agregarla cambia el
+  API y la web actual rechaza campos que no conoce. ¿Qué hacemos?" → "En dos pasos (Recommended)" ("Este PR deja la web
+  lista para aceptar la fecha; en un PR siguiente el API la agrega y se muestra la columna. Así ningún orden de
+  despliegue rompe nada."); no elegida: "Sin columna de fecha" ("La lista queda con guía, estado y total, de la más
+  reciente a la más antigua; la fecha se ve al abrir la orden."). Segunda: "El menú aprobado de Finanzas incluye
+  "Órdenes (lectura)", pero hoy Finanzas solo puede listar órdenes con cobro pendiente de conciliar. ¿Ampliamos su
+  acceso?" → "No por ahora (Recommended)" ("Finanzas sigue viendo solo los cobros pendientes en su pantalla; no aparece
+  "Órdenes" en su menú. Ampliar lectura es un cambio de permisos (ADR)."); no elegida: "Sí, solo lectura".
+- AI-05 `listOrders`, cambio aditivo: parámetros opcionales `created_from` y `created_to` con las cotas del tablero
+  (instantes RFC3339 estrictos en UTC, `yyyy-MM-ddTHH:mm:ss` con 0 a 7 decimales y `Z`; ambos inclusivos, cada uno
+  solo o los dos con 31 días como máximo); una cota mal formada o repetida o un rango fuera de las reglas es
+  `409 INVALID_REQUEST` antes de la capacidad (nueva respuesta `409`,
+  `x-authorization-precedence: shape-validation-then-capability-before-persisted-state`). Cada `next_cursor` nuevo queda
+  ligado a la organización y a los filtros; usado con otros filtros es `409 INVALID_REQUEST` después de la capacidad,
+  donde siempre se leyó el cursor. Todo lo demás responde como antes: un cursor del formato anterior sigue paginando y
+  cualquier otro texto (vacío, largo o ilegible), un estado desconocido, un `public_id` mal formado, otra dueña o un
+  valor de COD que no es `true`/`false` siguen dando la página vacía. Capacidad, forma `Order`, RLS y orden sin cambios;
+  FINANCE solo puede acotar con fechas su lista de cobros pendientes. Entrada `ORD-LIST-DATE-FILTER` en
+  `x-pilot-contract-deltas`; rutas y esquemas siguen en 68 y 124, referencias internas 646.
+- Servidor: la lectura de Orders agrega `created_at >= created_from` y `created_at <= created_to` en la misma
+  transacción tenant con RLS; los índices existentes `orders_owner_status_idx` y `orders_operator_status_idx` toman el
+  rango como condición de índice (EXPLAIN ANALYZE en PostgreSQL 18 con 200 000 órdenes sintéticas, en el ADR). Sin
+  migración, tabla, índice, rol ni permiso; AI-04, AI-06 y AI-18 sin cambios; ningún flujo atómico nuevo.
+- AI-07: ruta `/ops/orders` (DISPATCHER, PLATFORM_ADMIN y VIEWER) y contrato `order_list`; `work_inbox.not_supported` ya
+  no menciona la pantalla faltante. Web: "Órdenes" después de "Bandeja" y antes de "Tablero"; búsqueda por guía exacta
+  (`ORD_…`, misma validación que "Buscar guía"), un estado o todos, "Creada desde" y "Creada hasta" en días de Mazatlán
+  (primer instante y último microsegundo del día), filas con guía, estado y total en centavos enteros, "Cargar más" con
+  el cursor de la misma consulta; la fila abre el detalle existente para DISPATCHER y PLATFORM_ADMIN y no es enlace para
+  VIEWER. El detalle `/ops/orders/:id` sigue bajo "Bandeja" para quien la tiene. Sin almacenamiento del navegador ni
+  consola; sin IDs internos. VIEWER entra a "Órdenes" después del login y al cambiar a una organización donde su página
+  no aplica. La fecha escrita queda como borrador hasta ser un día completo desde 2000-01-01 (mínimo del campo) o hasta
+  vaciar el campo; una fecha incompleta dice "Escribe una fecha completa (día, mes y año, desde 2000).". El foco nunca
+  cae al cuerpo de la página ("Buscar guía", "Quitar búsqueda", último "Cargar más").
+- "En dos pasos": todo lector web de la `Order` de AI-05 (esta lista, "Buscar guía", "Agregar entrega" de Rutas,
+  "Cobro contra entrega", "Nueva orden", el detalle y las transiciones fuera de línea del repartidor) acepta un
+  `created_at` opcional, estricto en UTC cuando viene; "Órdenes" muestra la columna "Creada" (hora de Mazatlán) solo
+  cuando el API lo manda. El API no cambia aquí; lo agrega el PR siguiente. FINANCE sigue sin "Órdenes".
+- Despliegue: el API antes que la web o juntos (un API anterior ignoraría las fechas); una web anterior sigue
+  funcionando con el API nuevo, cursores incluidos. Rollback: revertir el commit, sin datos ni esquema que deshacer.
+
+## Fase 4 de UI-001, plataforma: decisiones y backlog (PHASE4-PLATFORM-APPROVAL-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md`:
+  - `PHASE4-PLATFORM-APPROVAL-2026-10-12`: "La fase 3 quedó completa y en main. ¿Sigo con la fase 4 de la propuesta
+    (plataforma: plomería compartida, un pool de conexiones por rol, espera adaptativa del outbox, OpenTelemetry,
+    límites de tasa y pruebas de punta a punta)?" → "Sí, avanza con la fase 4 (Recommended)" ("Empiezo por
+    OpenTelemetry y correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el
+    piloto."); no elegidas: "Primero preparar el despliegue" ("Antes de más funciones, preparo contigo el despliegue
+    del piloto en Azure con lo que ya está en main.") y "Esperar" ("Me detengo aquí; tú decides después.").
+  - `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12`: "Fase 4, telemetría: ¿a dónde mandamos métricas y trazas? (Hoy solo
+    hay logs en Log Analytics.)" → "Application Insights (Recommended)" ("OpenTelemetry con el exportador oficial de
+    Azure, en México Central, sobre el mismo Log Analytics con muestreo de 10 %. Aprox. 0–5 USD/mes; el peor caso del
+    presupuesto no sube por el tope diario. Admite 7 paquetes nuevos y sube Azure.Core 1.61→1.63 (admisión
+    explícita)."); no elegidas: "Agente OTLP de Container Apps" ("Menos paquetes (sin tocar Azure.Core), mismo costo,
+    pero hay que verificar que acepte métricas.") y "Solo logs" ("Sin paquetes ni costo: identificador de traza en
+    cada log y resúmenes periódicos, pero sin vista de trazas."). La lista exacta de paquetes todavía necesita su
+    admisión explícita por paquete (GOV-DEPENDENCY-ADMISSION-001) cuando se prepare la entrada de admisión.
+  - `SEC-004-RATE-LIMITS-2026-10-12` (cambio MAJOR de AI-01 §7 al aplicarse; la fila es su registro ADR): "Fase 4,
+    límites de tasa: ¿qué endpoints limitamos? (Hoy solo seguimiento público, tiempo real y GPS. Es cambio de contrato:
+    cada uno declara 429 en el API.)" → "Lista corta y generosa (Recommended)" ("Por usuario: CSV 10/min (1 importación
+    a la vez), exportar liquidación 10/min, crear dirección (cuesta Google) 30/min, fotos 30–60/min, tablero y conteos
+    60/min, lista de órdenes 120/min, cotizar 60/min, repartidores asignables 60/min; inicio de sesión 20/min por red.
+    Se ajusta tras 2 semanas con métricas."); no elegidas: "Solo caros o anónimos" ("CSV, exportar, crear dirección e
+    inicio de sesión.") y "Medir primero" ("Dos semanas solo midiendo (sin nuevos 429) y luego fijamos números.").
+  - `OBS-003-TENANT-PSEUDONYM-2026-10-12`: "Fase 4, privacidad en trazas: la arquitectura pide marcar cada traza con la
+    empresa y el actor, pero la observabilidad del piloto lo prohíbe. ¿Qué hacemos?" → "Seudónimo de empresa
+    (Recommended)" ("Un código HMAC con llave en Key Vault (no el id real) solo en trazas y logs, y el actor solo como
+    tipo de rol; nunca en métricas ni alertas."); no elegidas: "Id real de la empresa" ("El id de la organización en
+    las trazas (no en métricas).") y "Sin empresa" ("Las trazas no llevan empresa; se corrige la arquitectura con un
+    ADR.").
+- AI-08: ítems nuevos OBS-003 (trazas W3C y correlación, exportación a Application Insights apagada por defecto con
+  muestreo de 10 %, lista permitida de atributos de span, seudónimo de organización y tipo de rol del actor), SEC-004
+  (plomería compartida de límites de tasa, 429 `application/problem+json` con `Retry-After`, la lista decidida y la
+  declaración 429 en AI-05), SCL-007 (un pool de conexiones por rol de base de datos y espera adaptativa del outbox) y
+  OPS-005 (pruebas de punta a punta de la plataforma); todos MVP-1, P1, compuerta `owner_technology_operations`.
+  `item_count` pasa de 66 a 70; el conjunto MVP-0/P0 no cambia. Quedan como decisiones pendientes del owner en sus
+  criterios: la espera máxima del outbox, el contexto de traza a través del outbox (columna, payload o ninguno), una
+  alerta de métrica sobre conexiones de PostgreSQL y el correo de alertas que el owner fija al desplegar, el mapeo
+  operación por operación de la lista de límites, cómo registra su 429 el tablero (`GET /operations/dashboard`, fuera
+  de AI-05 por ADR-OBS-001), el texto de cada pantalla ante un 429 y los recorridos de negocio de la suite de punta a
+  punta.
+- AI-03 §18: el tenant va como seudónimo HMAC de la organización (llave en Key Vault, nunca el id real) y el actor
+  técnico solo como tipo de rol, únicamente en trazas y logs y con contexto de organización; nunca como etiqueta de
+  métrica, dimensión de alerta o de libro de trabajo ni dimensión de telemetría. La lista permitida de OBS-002
+  (`TelemetryDimensions.Allowed`) no los incluye.
+- AI-13 §10: enmienda mínima de "enrichment tenant/correlation sin PII" con la misma regla, porque se leía como el id
+  real de la organización.
+- Secuencia de diez PR en `docs/development/phase4-platform-plan.md`. Sin cambios en AI-02, AI-04, AI-05, AI-06, AI-07,
+  AI-10, AI-12, AI-15, AI-18, AI-24, código, paquetes, plantillas, roles, migraciones ni flujos cross-module.
+
 ## Rutas: el repartidor (DRV-) en cada fila de la lista (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12) — 2026-10-12
 
 - Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
