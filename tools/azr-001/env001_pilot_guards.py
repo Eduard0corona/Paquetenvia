@@ -1098,29 +1098,47 @@ def load_settings(path: Path) -> list[dict[str, Any]]:
     return document
 
 
+def setting_label(position: int, entry: Any) -> str:
+    """How a failure names a setting without echoing anything unverified (DRV-DISPATCH-CONTACT-2026-10-12): the name
+    only when it is a well-formed .NET key that cannot hold a value (a dispatch contact name only in its exact
+    canonical form, whose index has at most three digits); otherwise the entry's 1-based position in the file. A
+    value is never part of it."""
+    name = entry.get("name") if isinstance(entry, dict) else None
+    if (isinstance(name, str) and SETTING_NAME.match(name) and
+            (not is_dispatch_contact_name(name) or DISPATCH_CONTACT_SETTING.match(name))):
+        return f"setting {name}"
+    return f"setting #{position + 1}"
+
+
 def validate_settings(entries: list[Any], *, allow_sentinel: bool) -> list[str]:
     failures = []
     seen: set[str] = set()
-    for entry in entries:
+    platform_prefixes = tuple(prefix.casefold() for prefix in PLATFORM_MANAGED_PREFIXES)
+    removed = {name.casefold(): reason for name, reason in REMOVED_SETTINGS.items()}
+    for position, entry in enumerate(entries):
+        label = setting_label(position, entry)
         if not isinstance(entry, dict) or set(entry) != {"name", "value"} or not all(isinstance(entry[k], str) for k in entry):
-            failures.append(f"setting must be exactly {{name, value}} strings: {entry!r}")
+            # Never the entry itself: a mistyped value (a JSON number, an extra member) could be a phone number.
+            failures.append(f"{label} must be exactly {{name, value}} strings")
             continue
         name, value = entry["name"], entry["value"]
+        # .NET configuration keys are case-insensitive, so every name rule compares names case-insensitively.
+        folded = name.casefold()
         if not SETTING_NAME.match(name):
-            failures.append(f"setting name {name!r} is not a .NET double-underscore key")
-        if name.startswith(PLATFORM_MANAGED_PREFIXES):
-            failures.append(f"setting {name} is platform-managed by apps.bicep and cannot be overridden")
-        if name in REMOVED_SETTINGS:
-            failures.append(f"setting {name} was removed by {REMOVED_SETTINGS[name]}")
-        if name in seen:
-            failures.append(f"setting {name} declared twice")
-        seen.add(name)
+            failures.append(f"{label} name is not a .NET double-underscore key")
+        if folded.startswith(platform_prefixes):
+            failures.append(f"{label} is platform-managed by apps.bicep and cannot be overridden")
+        if folded in removed:
+            failures.append(f"{label} was removed by {removed[folded]}")
+        if folded in seen:
+            failures.append(f"{label} declared twice (configuration names ignore case)")
+        seen.add(folded)
         if is_forbidden_value(value):
-            failures.append(f"setting {name}={value} is a mock/synthetic value")
+            failures.append(f"{label} has a mock/synthetic value ({value.strip()})")
         if is_owner_sentinel(value) and not allow_sentinel:
-            failures.append(f"setting {name} still awaits an owner decision ({OWNER_SENTINEL})")
+            failures.append(f"{label} still awaits an owner decision ({OWNER_SENTINEL})")
         if re.search(r"(?i)(password|secret|token|key)", name):
-            failures.append(f"setting {name} looks like a secret; secrets belong in Key Vault")
+            failures.append(f"{label} looks like a secret; secrets belong in Key Vault")
     failures.extend(validate_dispatch_contacts(entries))
     return failures
 
@@ -1128,28 +1146,48 @@ def validate_settings(entries: list[Any], *, allow_sentinel: bool) -> list[str]:
 # DRV-DISPATCH-CONTACT-2026-10-12 ("Sí, configurable (Recommended)"): the dispatch number of an organization is an
 # owner business setting, empty by default (no entry: the driver app shows no "Llamar a despacho"). The API refuses
 # to start with an invalid entry, so the pilot checks the same rules before deploying. A failure never echoes a value.
-DISPATCH_CONTACT_PREFIX = "Drivers__DispatchContacts__"
+DISPATCH_CONTACT_PREFIX = "Drivers__DispatchContacts"
 DISPATCH_CONTACT_SETTING = re.compile(r"^Drivers__DispatchContacts__(0|[1-9][0-9]{0,2})__(OrganizationId|PhoneE164)\Z")
+# The same names in any casing, as .NET binds them; only the exact canonical spelling above is accepted.
+DISPATCH_CONTACT_SETTING_ANY_CASE = re.compile(
+    r"^Drivers__DispatchContacts__(0|[1-9][0-9]{0,2})__(OrganizationId|PhoneE164)\Z", re.IGNORECASE)
+DISPATCH_CONTACT_MEMBERS = {"organizationid": "OrganizationId", "phonee164": "PhoneE164"}
 CANONICAL_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 DISPATCH_PHONE_E164 = re.compile(r"^\+52[2-9][0-9]{9}\Z")
 
 
+def is_dispatch_contact_name(name: str) -> bool:
+    """Whether .NET would bind the name under Drivers:DispatchContacts (configuration keys ignore case)."""
+    folded, prefix = name.casefold(), DISPATCH_CONTACT_PREFIX.casefold()
+    return folded == prefix or folded.startswith(prefix + "__")
+
+
 def validate_dispatch_contacts(entries: list[Any]) -> list[str]:
-    """Drivers__DispatchContacts__<n>__OrganizationId and __PhoneE164: both for every n, n = 0, 1, 2... with no gap,
-    a canonical lowercase UUID (never the nil one), +52 and ten digits starting with 2-9, each organization once."""
-    contacts: dict[int, dict[str, str]] = {}
+    """Drivers__DispatchContacts__<n>__OrganizationId and __PhoneE164, spelled exactly so: both for every n,
+    n = 0, 1, 2... with no gap, a canonical lowercase UUID (never the nil one), +52 and ten digits starting with 2-9,
+    each organization once. A name in another casing is refused (and still checked), since .NET binds it anyway. No
+    failure echoes a value or an unverified name."""
+    contacts: dict[int, dict[str, str | None]] = {}
     failures: list[str] = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("value"), str):
+    for position, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             continue
         name = entry["name"]
-        if not name.startswith(DISPATCH_CONTACT_PREFIX):
+        if not is_dispatch_contact_name(name):
             continue
-        match = DISPATCH_CONTACT_SETTING.match(name)
+        label = setting_label(position, entry)
+        match = DISPATCH_CONTACT_SETTING_ANY_CASE.match(name)
         if match is None:
-            failures.append(f"setting {name} is not Drivers__DispatchContacts__<n>__OrganizationId or __PhoneE164")
+            failures.append(f"{label} is not Drivers__DispatchContacts__<n>__OrganizationId or __PhoneE164")
             continue
-        contacts.setdefault(int(match.group(1)), {})[match.group(2)] = entry["value"]
+        if DISPATCH_CONTACT_SETTING.match(name) is None:
+            failures.append(
+                f"{label} must be spelled exactly Drivers__DispatchContacts__<n>__OrganizationId or __PhoneE164 "
+                "(configuration names ignore case, so another casing still reaches the API)")
+        value = entry.get("value")
+        # A value that is not a string is reported by the shape check; here it simply counts as missing.
+        member = DISPATCH_CONTACT_MEMBERS[match.group(2).casefold()]
+        contacts.setdefault(int(match.group(1)), {})[member] = value if isinstance(value, str) else None
     if sorted(contacts) != list(range(len(contacts))):
         failures.append("Drivers__DispatchContacts entries must be numbered 0, 1, 2... without gaps")
     organizations: set[str] = set()

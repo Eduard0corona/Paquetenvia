@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -139,15 +140,78 @@ class SettingsTests(unittest.TestCase):
             "organization twice": contact(0, first, number) + contact(1, first, "+522000000002"),
             "gap": contact(0, first, number) + contact(2, second, number),
             "unknown member": contact(0, first, number) + [{"name": "Drivers__DispatchContacts__0__Label", "value": "x"}],
+            # Review of #235: a mistyped entry never makes the guard print its value.
+            "number as a JSON number": contact(0, first, number)[:1]
+            + [{"name": "Drivers__DispatchContacts__0__PhoneE164", "value": 522000000009}],
+            "extra member": contact(0, first, number)[:1]
+            + [{"name": "Drivers__DispatchContacts__0__PhoneE164", "value": "+522000000009", "slotSetting": False}],
         }
         for case, settings in invalid.items():
             with self.subTest(case=case):
                 failures = guards.validate_settings(settings, allow_sentinel=False)
                 self.assertTrue(failures)
                 self.assertTrue(all("DispatchContacts" in failure for failure in failures), failures)
-                for entry in settings:
-                    if entry["name"].endswith("PhoneE164"):
-                        self.assertFalse(any(entry["value"].strip() in failure for failure in failures), failures)
+                self.assert_no_value_echoed(settings, failures)
+
+        # Review of #235: .NET binds configuration names in any casing, so another casing is refused (and its value
+        # still checked), a case variant of a name counts as the same name, and an unverified name is never echoed.
+        lowercase = [
+            {"name": "drivers__dispatchcontacts__0__organizationid", "value": first},
+            {"name": "drivers__dispatchcontacts__0__phonee164", "value": number},
+        ]
+        failures = guards.validate_settings(lowercase, allow_sentinel=False)
+        self.assertEqual(2, sum("must be spelled exactly Drivers__DispatchContacts__<n>__" in f for f in failures), failures)
+        self.assertTrue(all(f.startswith(("setting #1 ", "setting #2 ")) for f in failures), failures)
+        self.assert_no_value_echoed(lowercase, failures)
+
+        cased = {
+            "lowercase names with bad values": contact(0, first, number) + [
+                {"name": "drivers__dispatchcontacts__1__organizationid", "value": "not-a-uuid-2000000009"},
+                {"name": "drivers__dispatchcontacts__1__phonee164", "value": "2000000009"},
+            ],
+            "the same name in another casing": contact(0, first, number)
+            + [{"name": "DRIVERS__DISPATCHCONTACTS__0__PHONEE164", "value": "+522000000002"}],
+            "an index long enough to be a number": contact(0, first, number)
+            + [{"name": "Drivers__DispatchContacts__2000000009__PhoneE164", "value": number}],
+            "a number typed as a name": contact(0, first, number) + [{"name": "+522000000009", "value": "x"}],
+        }
+        for case, settings in cased.items():
+            with self.subTest(case=case):
+                failures = guards.validate_settings(settings, allow_sentinel=False)
+                self.assertTrue(failures)
+                self.assert_no_value_echoed(settings, failures)
+        bad_values = guards.validate_settings(cased["lowercase names with bad values"], allow_sentinel=False)
+        self.assertIn("Drivers__DispatchContacts__1__OrganizationId must be a canonical lowercase UUID", bad_values)
+        self.assertIn("Drivers__DispatchContacts__1__PhoneE164 must be +52 and ten digits, the first one 2-9", bad_values)
+        self.assertTrue(any("declared twice" in f for f in guards.validate_settings(
+            cased["the same name in another casing"], allow_sentinel=False)))
+
+    def test_setting_names_are_compared_ignoring_case(self):
+        # .NET configuration keys ignore case: a platform-managed, removed or repeated name in another casing is the
+        # same setting for the API, so the guard refuses it as such.
+        cases = {
+            "voice__provider": "is platform-managed by apps.bicep",
+            "connectionstrings__Paqueteria": "is platform-managed by apps.bicep",
+            "pricing__pricingpolicyversion": "was removed by PRC-POLICY-VERSION-PER-ORG",
+        }
+        for name, fragment in cases.items():
+            with self.subTest(name=name):
+                failures = guards.validate_settings([{"name": name, "value": "1"}], allow_sentinel=False)
+                self.assertTrue(any(fragment in failure for failure in failures), failures)
+        failures = guards.validate_settings(
+            [{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"},
+             {"name": "finance__operationaltimezone", "value": "America/Mexico_City"}],
+            allow_sentinel=False)
+        self.assertEqual(["setting finance__operationaltimezone declared twice (configuration names ignore case)"], failures)
+
+    def assert_no_value_echoed(self, settings, failures):
+        """No failure carries a phone-like digit run or any submitted value of eight or more characters."""
+        for failure in failures:
+            self.assertIsNone(re.search(r"\d{7,}", failure), failure)
+            for entry in settings:
+                value = entry.get("value") if isinstance(entry, dict) else None
+                if value is not None and len(str(value).strip()) >= 8:
+                    self.assertNotIn(str(value).strip(), failure)
 
     def test_removed_global_pricing_policy_version_is_rejected(self):
         # PRC-POLICY-VERSION-PER-ORG: the version comes from each organization's tariff rules.

@@ -294,6 +294,42 @@ describe("IndexedDB version 5 (DRV-DISPATCH-CONTACT-2026-10-12), from versions 3
     await vi.waitFor(() => expect(idb.connections.at(-1)?.closed).toBe(true));
   });
 
+  it("when a tab of the version 4 app blocks the upgrade to 5, keeps the queue as it is until it lets go", async () => {
+    const queued = checkIn(uuid(0x503));
+    await new Promise<void>((resolve, reject) => {
+      const open = idb.open(DriverStopsDatabaseName, 4);
+      open.onupgradeneeded = () => {
+        const database = open.result!;
+        database.createObjectStore("snapshots", { keyPath: "partitionKey" });
+        database
+          .createObjectStore("operations", { keyPath: ["partitionKey", "id"] })
+          .createIndex("by_partition", "partitionKey");
+        database
+          .createObjectStore("proof_blobs", { keyPath: ["partitionKey", "operationId"] })
+          .createIndex("by_partition", "partitionKey");
+        database.createObjectStore("sync_leases", { keyPath: "partitionKey" });
+        database.createObjectStore("organization_roles", { keyPath: "partitionKey" });
+      };
+      open.onsuccess = () => {
+        open.result!.close();
+        resolve();
+      };
+      open.onerror = () => reject(open.error);
+    });
+    idb.seed(DriverStopsDatabaseName, DriverOfflineOperationsStoreName, queued);
+    const letGo = idb.holdOpenElsewhere();
+
+    await expect(openDriverDatabase()).rejects.toBeInstanceOf(DriverDatabaseBlockedError);
+    expect(idb.version(DriverStopsDatabaseName)).toBe(4);
+    expect(stored(DriverOfflineOperationsStoreName)).toEqual([queued]);
+
+    letGo();
+    await vi.waitFor(() => expect(idb.version(DriverStopsDatabaseName)).toBe(5));
+    await vi.waitFor(() => expect(idb.connections.at(-1)?.closed).toBe(true));
+    expect(stored(DriverOfflineOperationsStoreName)).toEqual([queued]);
+    expect(stored(DriverDispatchContactStoreName)).toEqual([]);
+  });
+
   it("closes its own connection when a newer version asks for the database", async () => {
     const database = await openDriverDatabase();
     expect(typeof database.onversionchange).toBe("function");

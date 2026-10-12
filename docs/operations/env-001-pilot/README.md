@@ -288,7 +288,9 @@ Each organization takes two entries in the same file, numbered `0`, `1`, … wit
 `Drivers__DispatchContacts__<n>__OrganizationId` (the organization's UUID, lowercase) and
 `Drivers__DispatchContacts__<n>__PhoneE164` (`+52` and ten digits, the first one 2-9). The API refuses to start with
 an invalid entry or an organization written twice; `settings-check` (guard P17) applies the same rules before
-deploying and never echoes the number. The number is a business contact, never logged. See
+deploying and never echoes a value (a malformed entry is named by its canonical name or its position in the file).
+Configuration names ignore case in .NET, so P17 refuses these names in any other casing and treats names that differ
+only in case as the same setting. The number is a business contact, never logged. See
 `docs/development/ui-001-phase3-driver-dispatch-contact.md`.
 
 **Accepted terms and privacy versions (UI-001, owner decision pending).** The operator-assisted order

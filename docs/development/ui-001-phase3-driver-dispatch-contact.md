@@ -53,8 +53,12 @@ entradas:
 
 `env001_pilot_guards.py settings-check` (guarda P17, también en el job `provenance` antes de tocar Azure) aplica las
 mismas reglas que la API: nombres `Drivers__DispatchContacts__<n>__OrganizationId|PhoneE164`, índices 0, 1, 2… sin
-huecos, las dos entradas de cada índice, UUID canónico, `+52` y diez dígitos, y ninguna organización repetida; sus
-mensajes nunca repiten el número. `apps.bicep` no cambia (las pruebas estáticas AZR-001 no fijan el contenido de
+huecos, las dos entradas de cada índice, UUID canónico, `+52` y diez dígitos, y ninguna organización repetida. Como
+.NET no distingue mayúsculas en los nombres de configuración, P17 reconoce esos nombres en cualquier grafía, rechaza
+la que no sea exactamente la canónica (y aun así revisa su valor) y cuenta como repetido un nombre que solo cambia en
+mayúsculas (también para los prefijos administrados por la plataforma y los ajustes eliminados). Sus mensajes nunca
+repiten un valor: una entrada mal formada (un número JSON, un miembro de más) se nombra por su nombre canónico o por su
+posición en el archivo, nunca con su contenido. `apps.bicep` no cambia (las pruebas estáticas AZR-001 no fijan el contenido de
 `apps.settings.json`; solo validan su forma). Ver
 [`docs/operations/env-001-pilot/README.md`](../operations/env-001-pilot/README.md) §4.
 
@@ -182,7 +186,9 @@ Playwright (`tests/Paqueteria.IntegrationTests/Driver`), las respuestas con la f
   la instantánea y los roles guardados. Las lecturas de IndexedDB de las demás pruebas abren la versión 5.
 
 AZR-001: `tools/azr-001/test_env001_pilot_guards.py` (archivo del repositorio sin números; entradas válidas e
-inválidas sin repetir el número).
+inválidas sin repetir ningún valor, también con el número como número JSON, con un miembro de más, con el número
+escrito como nombre o como índice; nombres en otra grafía rechazados y con su valor revisado; nombres que solo
+cambian en mayúsculas, prefijos administrados y ajustes eliminados comparados sin distinguir mayúsculas).
 
 ```bash
 cd apps/web && pnpm run lint && pnpm run typecheck && pnpm exec vitest run && pnpm run build
