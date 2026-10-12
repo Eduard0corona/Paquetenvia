@@ -24,7 +24,7 @@ const openApi = readFileSync(
 describe("getMyDispatchContact answer", () => {
   it("reads a number of the AI-05 form, or null when none is configured", () => {
     expect(parseMyDispatchContact({ phone_e164: syntheticNumber })).toBe(syntheticNumber);
-    expect(parseMyDispatchContact({ phone_e164: "+529990000000" })).toBe("+529990000000");
+    expect(parseMyDispatchContact({ phone_e164: "+522000000009" })).toBe("+522000000009");
     expect(parseMyDispatchContact({ phone_e164: null })).toBeNull();
   });
 

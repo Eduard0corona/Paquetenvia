@@ -67,7 +67,7 @@ public sealed class DriverDispatchContactContractTests
         var pattern = new Regex(phone.Scalar("pattern"), RegexOptions.CultureInvariant | RegexOptions.ECMAScript);
         foreach (var candidate in new[]
                  {
-                     SyntheticNumber, "+529990000000", "+520000000001", "+521000000001", "+52200000000",
+                     SyntheticNumber, "+522000000009", "+520000000001", "+521000000001", "+52200000000",
                      "+5220000000011", "522000000001", "+12025550100", "+52 2000000001", "+52-200-000-0001", "",
                      "+5220000000\u06601",
                  })
