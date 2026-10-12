@@ -76,6 +76,11 @@ class FakeObjectStore {
     return this.transaction.stagedStore(this.name);
   }
 
+  private written(): Map<string, unknown> {
+    this.transaction.markWritten(this.name);
+    return this.staged();
+  }
+
   public createIndex(name: string, keyPath: KeyPath): void {
     this.schema.indexes.set(name, keyPath);
   }
@@ -104,14 +109,14 @@ class FakeObjectStore {
       if (this.staged().has(key)) {
         throw new DOMException("Key already exists.", "ConstraintError");
       }
-      this.staged().set(key, cloneValue(value));
+      this.written().set(key, cloneValue(value));
       return undefined;
     });
   }
 
   public put(value: unknown): FakeRequest {
     return this.request(() => {
-      this.staged().set(
+      this.written().set(
         serializeKey(extractKey(value, this.schema.keyPath)),
         cloneValue(value),
       );
@@ -121,14 +126,14 @@ class FakeObjectStore {
 
   public delete(key: Key): FakeRequest {
     return this.request(() => {
-      this.staged().delete(serializeKey(key));
+      this.written().delete(serializeKey(key));
       return undefined;
     });
   }
 
   public clear(): FakeRequest {
     return this.request(() => {
-      this.staged().clear();
+      this.written().clear();
       return undefined;
     });
   }
@@ -172,6 +177,7 @@ class FakeTransaction {
   public onerror: (() => void) | null = null;
   public onabort: (() => void) | null = null;
   private readonly staging = new Map<string, Map<string, unknown>>();
+  private readonly writtenStores = new Set<string>();
   private pending = 0;
   private finished = false;
 
@@ -197,6 +203,11 @@ class FakeTransaction {
       this.staging.set(name, staged);
     }
     return staged;
+  }
+
+  /** Only the stores a transaction wrote are replaced when it commits. */
+  public markWritten(name: string): void {
+    this.writtenStores.add(name);
   }
 
   public abort(): void {
@@ -240,8 +251,8 @@ class FakeTransaction {
     setTimeout(() => {
       if (this.pending > 0 || this.finished) return;
       this.finished = true;
-      for (const [name, records] of this.staging) {
-        this.state.records.set(name, records);
+      for (const name of this.writtenStores) {
+        this.state.records.set(name, this.stagedStore(name));
       }
       this.onDone(true);
       this.oncomplete?.();

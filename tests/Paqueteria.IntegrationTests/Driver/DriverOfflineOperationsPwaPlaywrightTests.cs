@@ -680,6 +680,11 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await page.GotoAsync(
             new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
         await ExpectTextAsync(page, "por cobrar al entregar");
+        // The reload below is offline, so the Service Worker must control the page and hold the shell first.
+        await EnsureServiceWorkerControlAsync(page);
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "por cobrar al entregar");
         await context.SetOfflineAsync(true);
         try
         {

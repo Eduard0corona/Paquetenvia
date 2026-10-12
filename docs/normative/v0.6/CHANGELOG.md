@@ -1,5 +1,39 @@
 # Changelog
 
+## Repartidor: "No se pudo entregar" con motivo y foto, también sin conexión (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) — 2026-10-12
+
+- Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): fase 3 aprobada con "avanza con la fase 3" y la pantalla de entrega del diseño ("Cómo llegar",
+  "Llamar", "Llegué al destino", "Foto de entrega", "Cobro $…", "Confirmar entrega", "Vista previa de la foto ·
+  Repetir", "Usar esta foto", "No se pudo entregar"; "¿Qué pasó?" con "El despacho decidirá si se reprograma o
+  regresa", "No había nadie", "Dirección incorrecta", "Rechazó el paquete", "No pagó el cobro", "Otro…", "Foto del
+  lugar (obligatoria)" y "Enviar reporte"); el 2026-10-11 "Despacho decide (Recommended)", "Lista cerrada
+  (Recommended)" y "Según el motivo (Recommended)" (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11); el 2026-10-12
+  "Solo si hay cobro (Recommended)" (""No pagó el cobro" aparece solo cuando la parada tiene un cobro COD; en las demás
+  se ven los otros motivos y "Otro…".") y "No, llama a despacho (Recommended)" ("Con un cobro guardado en el teléfono o
+  ya registrado, "No se pudo entregar" no aparece. Si fue un error, descarta el cobro guardado; si ya se registró, la
+  app le pide llamar a despacho, que decide y coordina la devolución del dinero.").
+- AI-07 `/driver/stops/:id` agrega la decisión y `screen_contracts.driver_stop.failed_delivery`: en una parada de
+  entrega en DELIVERING (confirmado o por sincronizar), "No se pudo entregar" abre "¿Qué pasó?" (renglones de 44 px;
+  "No pagó el cobro" solo si `DriverStop.cod` no es null; "Otro…" muestra "Acceso restringido", "Paquete dañado" y
+  "Riesgo de seguridad"), "Foto del lugar (obligatoria)" con la misma vista previa de la entrega y "Enviar reporte",
+  deshabilitado hasta tener motivo y foto, sin texto libre ni confirmación. `cod_collection.not_paid` apunta a este
+  flujo y `cod_collection.door_only` dice que un cobro solo se registra con la parada en DELIVERING.
+- PWA: una operación cerrada FAILED_DELIVERY corre la secuencia de AI-05 (sesión DELIVERY_PHOTO, PUT, prueba,
+  `openIncident` sin severity, description ni next_action, `transitionOrder` a FAILED_ATTEMPT con
+  `metadata.incident_id`), con una Idempotency-Key por petición al API; guarda la foto, las llaves y su avance, así
+  que un reintento o una pestaña nueva siguen en el paso correcto y nunca abren otra incidencia. Operaciones esquema 3,
+  IndexedDB versión 4 (las operaciones en cola se migran sin perderse; una app anterior no puede abrir la base) y caché
+  del Service Worker v7. Pendiente se ve como pendiente ("Reporte guardado en el teléfono. Se enviará cuando haya
+  conexión."); confirmado se ve "Intento fallido · El despacho decide".
+- Cobro: con un cobro guardado en el teléfono el reporte no aparece y la parada pide descartarlo primero (con la
+  confirmación de siempre); con el cobro registrado pide llamar a despacho, sin mostrar teléfono. La sincronización
+  retiene el reporte si aparece un cobro de la orden (antes de la incidencia y antes de la transición) y nunca registra
+  un cobro fuera de la puerta: nunca se mandan los dos. Solo en la PWA: el servidor sigue aceptando el reporte del
+  despacho con cobro, a propósito, porque despacho decide.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, servidor, roles, permisos ni migraciones, y sin un flujo atómico nuevo.
+  Un rollback debe conservar la versión 4 o superior de IndexedDB.
+
 ## Rutas: errores por motivo con "Verificar identidad", fechas legibles, todas las páginas, "Agregar entrega" por guía y detalle sin IDs (UI-PHASE3-ROUTES-NO-IDS-2026-10-12) — 2026-10-12
 
 - Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
