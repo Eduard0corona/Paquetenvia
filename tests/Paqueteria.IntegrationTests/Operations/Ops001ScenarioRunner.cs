@@ -849,8 +849,9 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
                 .ListCurrentDriverStopsAsync(
                     driverUserId,
                     data.OrganizationId,
+                    false,
                     cancellationToken);
-            Assert.Empty(stops);
+            Assert.Empty(stops.Stops);
         }
     }
 

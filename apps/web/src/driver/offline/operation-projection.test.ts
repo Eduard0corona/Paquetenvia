@@ -5,6 +5,7 @@ import {
   type DriverOfflineOperation,
 } from "./operation-contract";
 import { projectDriverOperations } from "./operation-projection";
+import { syntheticNavigation } from "../contracts/driver-stop.fixtures";
 
 const partitionKey = "B".repeat(43);
 const orderA = "11111111-1111-4111-8111-111111111111";
@@ -17,6 +18,13 @@ const stops: readonly DriverStop[] = [
     stop_type: "PICKUP",
     status: "ASSIGNED",
     address_summary: "Zona sintética A",
+    details_available: true,
+    contact_short_name: null,
+    contact_full_name: null,
+    zone_name: null,
+    service_window: null,
+    cod: null,
+    navigation: syntheticNavigation,
   },
   {
     order_id: orderB,
@@ -25,6 +33,13 @@ const stops: readonly DriverStop[] = [
     stop_type: "DELIVERY",
     status: "IN_TRANSIT",
     address_summary: "Zona sintética B",
+    details_available: true,
+    contact_short_name: null,
+    contact_full_name: null,
+    zone_name: null,
+    service_window: null,
+    cod: null,
+    navigation: syntheticNavigation,
   },
 ];
 

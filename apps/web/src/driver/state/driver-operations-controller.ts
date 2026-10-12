@@ -1,10 +1,11 @@
 import { createDriverCachePartition } from "../cache/driver-stops-cache";
-import type { DriverStop } from "../contracts/driver-stop";
+import type { DriverStopList } from "../contracts/driver-stop";
 import {
   IndexedDbDriverOfflineQueue,
   type DriverOfflineQueue,
 } from "../offline/driver-offline-queue";
 import {
+  buildCodReference,
   createDriverOfflineOperation,
   driverOperationDefinitions,
   finalizeIdempotencyKey,
@@ -14,6 +15,11 @@ import {
   type DriverOperationStatus,
   type DriverOperationalStatus,
 } from "../offline/operation-contract";
+import {
+  applyDriverOperation,
+  compareDriverOperationDependency,
+  driverOperationApplies,
+} from "../offline/operation-projection";
 import {
   disabledDriverSyncTelemetry,
   driverProofSizeBucket,
@@ -40,9 +46,8 @@ export interface DriverOperationsState {
 export interface DriverOperationsControllerOptions {
   readonly session: DriverSession;
   readonly api: DriverSyncApi;
-  readonly refreshStops: (
-    signal?: AbortSignal,
-  ) => Promise<readonly DriverStop[]>;
+  /** The confirmation read; see DriverSyncSchedulerOptions.refreshStops. */
+  readonly refreshStops: (signal?: AbortSignal) => Promise<DriverStopList>;
   readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
   readonly telemetry?: DriverSyncTelemetry;
   readonly queue?: DriverOfflineQueue;
@@ -230,6 +235,78 @@ export class DriverOperationsController {
     return true;
   }
 
+  /**
+   * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 ("Recibí $1,250.00"): queues the
+   * cash collection of a DELIVERING delivery stop for exactly the amount the
+   * stop expects, with a reference made of the tracking number and the device
+   * time of this confirmation. It always syncs before the delivery of the same
+   * order (dependency order), also when it is saved again after a discard and
+   * the delivery was already waiting for it. At most one collection per order
+   * is ever queued.
+   */
+  public async enqueueCodCollection(input: {
+    readonly orderId: string;
+    readonly orderPublicId: string;
+    readonly amountCents: number;
+    readonly projectedStatus: DriverOperationalStatus;
+    readonly projectedVersion: number;
+  }): Promise<boolean> {
+    if (!this.partition || this.state.mutating) return false;
+    if (input.projectedStatus !== driverOperationDefinitions.COD_COLLECTION.sourceStatus) {
+      this.setMessage("Actualiza la parada antes de registrar el cobro.");
+      return false;
+    }
+    if (
+      this.state.operations.some(
+        (candidate) =>
+          candidate.orderId === input.orderId &&
+          candidate.kind === "COD_COLLECTION",
+      )
+    ) {
+      return false;
+    }
+
+    this.beginMutation();
+    let operation: DriverOfflineOperation;
+    try {
+      const now = (this.options.now ?? (() => new Date()))();
+      operation = createDriverOfflineOperation({
+        partitionKey: this.partition.key,
+        orderId: input.orderId,
+        kind: "COD_COLLECTION",
+        expectedVersion: input.projectedVersion,
+        cod: {
+          amountCents: input.amountCents,
+          reference: buildCodReference(input.orderPublicId, now),
+        },
+        now: () => now,
+        randomUuid: this.options.randomUuid,
+      });
+      await this.queue.enqueue(this.partition, operation);
+    } catch {
+      this.setState({
+        ...this.state,
+        mutating: false,
+        message: "No fue posible guardar el cobro. Intenta de nuevo.",
+      });
+      return false;
+    }
+
+    const saved = "Cobro guardado. Se registrará cuando haya conexión.";
+    try {
+      await this.reload(saved);
+    } catch {
+      this.setState({
+        operations: [...this.state.operations, operation],
+        loading: false,
+        mutating: false,
+        message: saved,
+      });
+    }
+    void this.scheduler?.requestSync(false);
+    return true;
+  }
+
   public async syncNow(): Promise<void> {
     this.expiredKinds = [];
     this.setMessage("Sincronizando acciones pendientes.");
@@ -314,8 +391,7 @@ export class DriverOperationsController {
     );
     if (
       !operation ||
-      operation.sourceStatus !== confirmedStatus ||
-      operation.expectedVersion !== confirmedVersion
+      !driverOperationApplies(operation, confirmedStatus, confirmedVersion)
     ) {
       this.setMessage("La versión confirmada cambió; crea una acción nueva.");
       return;
@@ -326,6 +402,7 @@ export class DriverOperationsController {
       status: "PENDING",
       nextAttemptAt: (this.options.now ?? (() => new Date()))().toISOString(),
       safeError: null,
+      rejectionCode: null,
     });
     await this.reload("La misma acción quedó lista para reintentar.");
     void this.scheduler?.requestSync(false);
@@ -342,6 +419,12 @@ export class DriverOperationsController {
     );
     if (!old || driverOperationDefinitions[old.kind].sourceStatus !== confirmedStatus) {
       this.setMessage("La acción ya no corresponde al estado confirmado.");
+      return;
+    }
+    if (!driverOperationDefinitions[old.kind].transition) {
+      // A cash collection is never rebuilt with a new key: it is retried as it
+      // is, or discarded and recorded again from the stop.
+      this.setMessage("Reintenta el cobro o descártalo y vuelve a registrarlo.");
       return;
     }
     this.beginMutation();
@@ -399,6 +482,12 @@ export class DriverOperationsController {
     });
   }
 
+  /**
+   * After a discard, the rest of the order's chain is checked again in
+   * dependency order. A delivery left without its cash collection becomes
+   * PENDING here and then waits for the cash (driverDeliveryAwaitsCash), so
+   * "Recibí" is offered again instead of a conflict.
+   */
   private async recalculateOrderChain(
     orderId: string,
     confirmedStatus: DriverOperationalStatus,
@@ -407,11 +496,7 @@ export class DriverOperationsController {
     if (!this.partition) return;
     const operations = (await this.queue.listOperations(this.partition))
       .filter((candidate) => candidate.orderId === orderId)
-      .sort(
-        (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) ||
-          left.id.localeCompare(right.id),
-      );
+      .sort(compareDriverOperationDependency);
     let status = confirmedStatus;
     let version = confirmedVersion;
     let blocked = false;
@@ -419,14 +504,12 @@ export class DriverOperationsController {
       const nextStatus: DriverOperationStatus =
         blocked
           ? "BLOCKED"
-          : operation.sourceStatus === status &&
-              operation.expectedVersion === version
+          : driverOperationApplies(operation, status, version)
             ? "PENDING"
             : "NEEDS_ATTENTION";
       blocked = nextStatus !== "PENDING";
       if (!blocked) {
-        status = operation.targetStatus;
-        version += 1;
+        ({ status, version } = applyDriverOperation(operation, status, version));
       }
       await this.queue.replaceOperation(this.partition, {
         ...operation,
@@ -437,6 +520,7 @@ export class DriverOperationsController {
             : nextStatus === "PENDING"
               ? null
               : operation.safeError,
+        rejectionCode: nextStatus === "PENDING" ? null : operation.rejectionCode,
       });
     }
   }

@@ -1,0 +1,250 @@
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  createDriverOfflineOperation,
+  parseDriverOfflineOperation,
+} from "../offline/operation-contract";
+import {
+  DriverDatabaseVersion,
+  DriverOfflineOperationsStoreName,
+  DriverProofBlobsStoreName,
+  DriverStopsDatabaseName,
+  DriverStopsStoreName,
+  DriverSyncLeasesStoreName,
+  forgetDriverStopDetails,
+  upgradeDriverDatabase,
+} from "./driver-stops-cache";
+
+/**
+ * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: IndexedDB version 3 keeps every
+ * queued operation (rewritten as schema 2), drops the detail-less schema 1
+ * snapshots, and "Cerrar sesión" wipes the saved stop details. A minimal
+ * in-memory stand-in for the IndexedDB calls the module makes is enough here;
+ * the real browser upgrade runs in the Playwright driver suite.
+ */
+const partitionKey = "H".repeat(43);
+
+describe("driver database version 3 upgrade", () => {
+  it("creates every store on a fresh install", async () => {
+    const database = new FakeDatabase();
+    upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 0);
+    await settle();
+    expect(database.storeNames()).toEqual([
+      DriverOfflineOperationsStoreName,
+      DriverProofBlobsStoreName,
+      DriverStopsStoreName,
+      DriverSyncLeasesStoreName,
+    ].sort());
+  });
+
+  it("drops DRV-001 snapshots from version 1, which carry no stop details", async () => {
+    const database = new FakeDatabase();
+    database.seed(DriverStopsStoreName, "snapshot", legacySnapshot());
+    upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 1);
+    await settle();
+    expect(database.records(DriverStopsStoreName)).toEqual([]);
+    expect(database.storeNames()).toHaveLength(4);
+  });
+
+  it("keeps every queued operation, blob and lease from version 2 as schema 2", async () => {
+    const database = new FakeDatabase();
+    for (const name of [
+      DriverStopsStoreName,
+      DriverOfflineOperationsStoreName,
+      DriverProofBlobsStoreName,
+      DriverSyncLeasesStoreName,
+    ]) {
+      database.createObjectStore(name);
+    }
+    const queued = [legacyOperation("11111111-1111-4111-8111-111111111111", "CHECK_IN"), legacyOperation("22222222-2222-4222-8222-222222222222", "START_TRANSIT")];
+    queued.forEach((operation, index) =>
+      database.seed(DriverOfflineOperationsStoreName, `operation-${index}`, operation),
+    );
+    const blob = { schemaVersion: 1, partitionKey, operationId: "x" };
+    const lease = { schemaVersion: 1, partitionKey, ownerId: "y" };
+    database.seed(DriverProofBlobsStoreName, "blob", blob);
+    database.seed(DriverSyncLeasesStoreName, "lease", lease);
+    database.seed(DriverStopsStoreName, "snapshot", legacySnapshot());
+
+    upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 2);
+    await settle();
+
+    const migrated = database.records(DriverOfflineOperationsStoreName);
+    expect(migrated).toHaveLength(2);
+    migrated.forEach((record, index) => {
+      expect(record).toEqual({ ...queued[index], schemaVersion: 2, cod: null, rejectionCode: null });
+      expect(parseDriverOfflineOperation(record, partitionKey).id).toBe(queued[index].id);
+    });
+    expect(database.records(DriverProofBlobsStoreName)).toEqual([blob]);
+    expect(database.records(DriverSyncLeasesStoreName)).toEqual([lease]);
+    expect(database.records(DriverStopsStoreName)).toEqual([]);
+  });
+});
+
+describe("Cerrar sesión wipes the saved stop details", () => {
+  const original = globalThis.indexedDB;
+  afterEach(() => {
+    Object.defineProperty(globalThis, "indexedDB", { value: original, configurable: true });
+  });
+
+  it("clears every snapshot and nothing else", async () => {
+    const database = new FakeDatabase();
+    for (const name of [
+      DriverStopsStoreName,
+      DriverOfflineOperationsStoreName,
+      DriverProofBlobsStoreName,
+      DriverSyncLeasesStoreName,
+    ]) {
+      database.createObjectStore(name);
+    }
+    database.seed(DriverStopsStoreName, "partition-a", { stops: ["a"] });
+    database.seed(DriverStopsStoreName, "partition-b", { stops: ["b"] });
+    database.seed(DriverOfflineOperationsStoreName, "operation", { id: "kept" });
+    const opened: [string, number][] = [];
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      value: {
+        open(name: string, version: number) {
+          opened.push([name, version]);
+          const request: { result?: unknown; onsuccess?: () => void } = {};
+          queueMicrotask(() => {
+            request.result = database.asDatabase();
+            request.onsuccess?.();
+          });
+          return request;
+        },
+      },
+    });
+
+    await forgetDriverStopDetails();
+
+    expect(opened).toEqual([[DriverStopsDatabaseName, DriverDatabaseVersion]]);
+    expect(database.records(DriverStopsStoreName)).toEqual([]);
+    expect(database.records(DriverOfflineOperationsStoreName)).toEqual([{ id: "kept" }]);
+    expect(database.closed).toBe(true);
+  });
+});
+
+function legacyOperation(id: string, kind: "CHECK_IN" | "START_TRANSIT") {
+  const legacy: Record<string, unknown> = {
+    ...createDriverOfflineOperation({
+      partitionKey,
+      orderId: "33333333-3333-4333-8333-333333333333",
+      kind,
+      expectedVersion: 3,
+      now: () => new Date("2026-10-11T19:00:00.000Z"),
+      randomUuid: () => id,
+    }),
+    schemaVersion: 1,
+  };
+  // A DRV-002 (schema 1) record has neither member.
+  delete legacy.cod;
+  delete legacy.rejectionCode;
+  return legacy as { readonly id: string } & Record<string, unknown>;
+}
+
+function legacySnapshot() {
+  return {
+    partitionKey,
+    schemaVersion: 1,
+    synchronizedAt: "2026-10-11T19:00:00.000Z",
+    stops: [],
+  };
+}
+
+async function settle(): Promise<void> {
+  for (let index = 0; index < 10; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+class FakeStore {
+  public readonly records = new Map<string, unknown>();
+
+  public createIndex(): void {}
+
+  public clear(): void {
+    this.records.clear();
+  }
+
+  public openCursor() {
+    const request: { result: unknown; onsuccess?: () => void } = { result: null };
+    const entries = [...this.records.keys()];
+    let position = 0;
+    const step = () =>
+      queueMicrotask(() => {
+        if (position >= entries.length) {
+          request.result = null;
+          request.onsuccess?.();
+          return;
+        }
+        const key = entries[position];
+        request.result = {
+          value: this.records.get(key),
+          update: (value: unknown) => {
+            this.records.set(key, value);
+          },
+          continue: () => {
+            position += 1;
+            step();
+          },
+        };
+        request.onsuccess?.();
+      });
+    step();
+    return request;
+  }
+}
+
+class FakeDatabase {
+  private readonly stores = new Map<string, FakeStore>();
+  public closed = false;
+
+  public createObjectStore(name: string): FakeStore {
+    const store = new FakeStore();
+    this.stores.set(name, store);
+    return store;
+  }
+
+  public seed(name: string, key: string, value: unknown): void {
+    (this.stores.get(name) ?? this.createObjectStore(name)).records.set(key, value);
+  }
+
+  public records(name: string): unknown[] {
+    return [...(this.stores.get(name)?.records.values() ?? [])];
+  }
+
+  public storeNames(): string[] {
+    return [...this.stores.keys()].sort();
+  }
+
+  public asDatabase(): IDBDatabase {
+    return {
+      objectStoreNames: { contains: (name: string) => this.stores.has(name) },
+      createObjectStore: (name: string) => this.createObjectStore(name),
+      transaction: () => {
+        const transaction: { oncomplete?: () => void; objectStore: (name: string) => FakeStore } = {
+          objectStore: (name: string) => {
+            const store = this.stores.get(name);
+            if (!store) throw new Error(`missing store ${name}`);
+            return store;
+          },
+        };
+        setTimeout(() => transaction.oncomplete?.(), 0);
+        return transaction;
+      },
+      close: () => {
+        this.closed = true;
+      },
+    } as unknown as IDBDatabase;
+  }
+
+  public asTransaction(): IDBTransaction {
+    return {
+      objectStore: (name: string) => {
+        const store = this.stores.get(name);
+        if (!store) throw new Error(`missing store ${name}`);
+        return store;
+      },
+    } as unknown as IDBTransaction;
+  }
+}

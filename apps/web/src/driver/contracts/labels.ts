@@ -38,6 +38,7 @@ const operationLabels: Readonly<Record<DriverOperationKind, string>> = {
   START_TRANSIT: "Iniciar traslado",
   START_DELIVERY: "Llegué al destino",
   DELIVERY_PROOF: "Confirmar entrega",
+  COD_COLLECTION: "Registrar cobro",
 };
 
 export function driverOperationLabel(kind: DriverOperationKind): string {

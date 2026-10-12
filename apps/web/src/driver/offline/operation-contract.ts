@@ -1,6 +1,19 @@
 import { asUuid } from "../../realtime/envelope";
+import {
+  isDriverRejectionCode,
+  type DriverRejectionCode,
+} from "./rejection-codes";
 
-export const DriverOfflineOperationSchemaVersion = 1 as const;
+/**
+ * Operation records are schema 2 since UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+ * (cash collection and the kept rejection code). IndexedDB version 3 migrates
+ * every queued schema 1 record in place; see migrateDriverOfflineOperationRecord.
+ */
+export const DriverOfflineOperationSchemaVersion = 2 as const;
+/** Proof blob records keep their schema 1 shape. */
+export const DriverProofBlobSchemaVersion = 1 as const;
+/** Sync lease records keep their schema 1 shape. */
+export const DriverSyncLeaseSchemaVersion = 1 as const;
 
 export const driverOperationKinds = [
   "CHECK_IN",
@@ -8,6 +21,7 @@ export const driverOperationKinds = [
   "START_TRANSIT",
   "START_DELIVERY",
   "DELIVERY_PROOF",
+  "COD_COLLECTION",
 ] as const;
 
 export const driverOperationStatuses = [
@@ -38,6 +52,8 @@ export interface DriverOperationDefinition {
   readonly targetStatus: DriverOperationalStatus;
   readonly reason: string;
   readonly proofType: DriverProofType | null;
+  /** False only for the cash collection, which records COD and changes no order status. */
+  readonly transition: boolean;
 }
 
 export const driverOperationDefinitions: Readonly<
@@ -48,30 +64,45 @@ export const driverOperationDefinitions: Readonly<
     targetStatus: "AT_PICKUP",
     reason: "DRIVER_CHECK_IN",
     proofType: null,
+    transition: true,
   }),
   PICKUP_PROOF: Object.freeze({
     sourceStatus: "AT_PICKUP",
     targetStatus: "PICKED_UP",
     reason: "DRIVER_PICKUP_CONFIRMED",
     proofType: "PICKUP_PHOTO",
+    transition: true,
   }),
   START_TRANSIT: Object.freeze({
     sourceStatus: "PICKED_UP",
     targetStatus: "IN_TRANSIT",
     reason: "DRIVER_TRANSIT_STARTED",
     proofType: null,
+    transition: true,
   }),
   START_DELIVERY: Object.freeze({
     sourceStatus: "IN_TRANSIT",
     targetStatus: "DELIVERING",
     reason: "DRIVER_DELIVERY_STARTED",
     proofType: null,
+    transition: true,
   }),
   DELIVERY_PROOF: Object.freeze({
     sourceStatus: "DELIVERING",
     targetStatus: "DELIVERED",
     reason: "DRIVER_DELIVERY_CONFIRMED",
     proofType: "DELIVERY_PHOTO",
+    transition: true,
+  }),
+  // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 ("Solo confirma el monto"): the
+  // cash received at the door, recorded with recordCodCollection while the
+  // stop is DELIVERING. It is queued before the delivery and must sync first.
+  COD_COLLECTION: Object.freeze({
+    sourceStatus: "DELIVERING",
+    targetStatus: "DELIVERING",
+    reason: "DRIVER_COD_COLLECTED",
+    proofType: null,
+    transition: false,
   }),
 });
 
@@ -83,8 +114,21 @@ export type DriverOperationSafeError =
   | "RESOURCE_UNAVAILABLE"
   | null;
 
+/**
+ * The cash a COD_COLLECTION records: the stop's expected amount in MXN integer
+ * cents, the reference the app built (tracking number and device time) and the
+ * one Idempotency-Key reused on every retry. None of it is personal data.
+ */
+export interface DriverCodCollection {
+  readonly amountCents: number;
+  readonly reference: string;
+  readonly idempotencyKey: string;
+}
+
+export const MaximumCodReferenceLength = 200;
+
 export interface DriverOfflineOperation {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly partitionKey: string;
   readonly id: string;
   readonly orderId: string;
@@ -112,10 +156,14 @@ export interface DriverOfflineOperation {
   readonly uploadAccepted: boolean;
   readonly proofId: string | null;
   readonly safeError: DriverOperationSafeError;
+  /** Present only on COD_COLLECTION. */
+  readonly cod: DriverCodCollection | null;
+  /** The server's rule code when the operation is held for attention, if known. */
+  readonly rejectionCode: DriverRejectionCode | null;
 }
 
 export interface DriverProofBlobRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof DriverProofBlobSchemaVersion;
   readonly partitionKey: string;
   readonly operationId: string;
   readonly blob: Blob;
@@ -125,7 +173,7 @@ export interface DriverProofBlobRecord {
 }
 
 export interface DriverSyncLease {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof DriverSyncLeaseSchemaVersion;
   readonly partitionKey: string;
   readonly ownerId: string;
   readonly expiresAt: string;
@@ -168,6 +216,8 @@ const operationProperties = new Set([
   "uploadAccepted",
   "proofId",
   "safeError",
+  "cod",
+  "rejectionCode",
 ]);
 
 export function createDriverOfflineOperation(input: {
@@ -180,6 +230,10 @@ export function createDriverOfflineOperation(input: {
     readonly sizeBytes: number;
     readonly sha256: string;
   };
+  readonly cod?: {
+    readonly amountCents: number;
+    readonly reference: string;
+  };
   readonly now?: () => Date;
   readonly randomUuid?: () => string;
 }): DriverOfflineOperation {
@@ -188,6 +242,9 @@ export function createDriverOfflineOperation(input: {
   const id = asUuid((input.randomUuid ?? (() => crypto.randomUUID()))());
   const proof = input.proof;
   if ((definition.proofType === null) !== (proof === undefined)) {
+    throw new DriverOfflineContractError();
+  }
+  if ((input.kind === "COD_COLLECTION") !== (input.cod !== undefined)) {
     throw new DriverOfflineContractError();
   }
   return Object.freeze({
@@ -221,7 +278,35 @@ export function createDriverOfflineOperation(input: {
     uploadAccepted: false,
     proofId: null,
     safeError: null,
+    cod: input.cod
+      ? Object.freeze({
+          amountCents: readPositiveSafeInteger(input.cod.amountCents),
+          reference: readCodReference(input.cod.reference),
+          idempotencyKey: codIdempotencyKey(id),
+        })
+      : null,
+    rejectionCode: null,
   });
+}
+
+/**
+ * IndexedDB version 3 upgrade (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11): a
+ * queued schema 1 operation becomes schema 2 unchanged except for the two new
+ * members, so no queued action is lost. Anything else is returned as it is and
+ * the strict parser keeps judging it on read.
+ */
+export function migrateDriverOfflineOperationRecord(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion !== 1) return value;
+  return {
+    ...record,
+    schemaVersion: DriverOfflineOperationSchemaVersion,
+    cod: null,
+    rejectionCode: null,
+  };
 }
 
 export function parseDriverOfflineOperation(
@@ -289,9 +374,13 @@ export function parseDriverOfflineOperation(
   ) {
     throw new DriverOfflineContractError();
   }
+  const cod = readCod(record.cod, id);
+  if ((kind === "COD_COLLECTION") !== (cod !== null)) {
+    throw new DriverOfflineContractError();
+  }
 
   return Object.freeze({
-    schemaVersion: readSchemaVersion(record.schemaVersion),
+    schemaVersion: readOperationSchemaVersion(record.schemaVersion),
     partitionKey,
     id,
     orderId: readUuid(record.orderId),
@@ -321,6 +410,8 @@ export function parseDriverOfflineOperation(
     uploadAccepted: readBoolean(record.uploadAccepted),
     proofId: readNullableUuid(record.proofId),
     safeError: readSafeError(record.safeError),
+    cod,
+    rejectionCode: readRejectionCode(record.rejectionCode),
   });
 }
 
@@ -358,7 +449,7 @@ export function parseDriverProofBlob(
     throw new DriverOfflineContractError();
   }
   return Object.freeze({
-    schemaVersion: readSchemaVersion(record.schemaVersion),
+    schemaVersion: readLegacySchemaVersion(record.schemaVersion),
     partitionKey,
     operationId: readUuid(record.operationId),
     blob: record.blob,
@@ -387,7 +478,7 @@ export function parseDriverSyncLease(
     throw new DriverOfflineContractError();
   }
   return Object.freeze({
-    schemaVersion: readSchemaVersion(record.schemaVersion),
+    schemaVersion: readLegacySchemaVersion(record.schemaVersion),
     partitionKey,
     ownerId: readUuid(record.ownerId),
     expiresAt: readUtcTimestamp(record.expiresAt),
@@ -405,6 +496,47 @@ export function sessionIdempotencyKey(
 ): string {
   return validateIdempotencyKey(
     `drv2-${asUuid(operationId)}-session-${readPositiveSafeInteger(attempt)}`,
+  );
+}
+
+/** One key per cash collection, reused on every retry and after a reload. */
+export function codIdempotencyKey(operationId: string): string {
+  return validateIdempotencyKey(`drv2-${asUuid(operationId)}-cod`);
+}
+
+/**
+ * The reference recordCodCollection stores (owner answer "el sistema pone la
+ * referencia (guía y hora)"): the tracking number and the device's local time
+ * of the confirmation, ISO 8601 with its offset, for example
+ * `ORD_… 2026-10-11T13:05:42-07:00`. At most 200 characters, no surrounding
+ * white space.
+ */
+export function buildCodReference(orderPublicId: string, at: Date): string {
+  return readCodReference(
+    `${orderPublicId.trim()} ${formatLocalTimestamp(at.getTime(), -at.getTimezoneOffset())}`,
+  );
+}
+
+/** Wall-clock time at `offsetMinutes` east of UTC, ISO 8601 with that offset, whole seconds. */
+export function formatLocalTimestamp(
+  epochMilliseconds: number,
+  offsetMinutes: number,
+): string {
+  if (
+    !Number.isFinite(epochMilliseconds) ||
+    !Number.isSafeInteger(offsetMinutes) ||
+    Math.abs(offsetMinutes) > 14 * 60
+  ) {
+    throw new DriverOfflineContractError();
+  }
+  const local = new Date(epochMilliseconds + offsetMinutes * 60_000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absolute = Math.abs(offsetMinutes);
+  return (
+    `${String(local.getUTCFullYear()).padStart(4, "0")}-${pad(local.getUTCMonth() + 1)}-` +
+    `${pad(local.getUTCDate())}T${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}:` +
+    `${pad(local.getUTCSeconds())}${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`
   );
 }
 
@@ -442,10 +574,43 @@ function readExactRecord(
   return record;
 }
 
-function readSchemaVersion(value: unknown): 1 {
+function readOperationSchemaVersion(value: unknown): 2 {
   if (value !== DriverOfflineOperationSchemaVersion) {
     throw new DriverOfflineContractError();
   }
+  return value;
+}
+
+function readLegacySchemaVersion(value: unknown): 1 {
+  if (value !== DriverProofBlobSchemaVersion) {
+    throw new DriverOfflineContractError();
+  }
+  return value;
+}
+
+function readCod(value: unknown, operationId: string): DriverCodCollection | null {
+  if (value === null) return null;
+  const record = readExactRecord(
+    value,
+    new Set(["amountCents", "reference", "idempotencyKey"]),
+  );
+  if (record.idempotencyKey !== codIdempotencyKey(operationId)) {
+    throw new DriverOfflineContractError();
+  }
+  return Object.freeze({
+    amountCents: readPositiveSafeInteger(record.amountCents),
+    reference: readCodReference(record.reference),
+    idempotencyKey: record.idempotencyKey,
+  });
+}
+
+function readCodReference(value: unknown): string {
+  return readText(value, MaximumCodReferenceLength);
+}
+
+function readRejectionCode(value: unknown): DriverRejectionCode | null {
+  if (value === null) return null;
+  if (!isDriverRejectionCode(value)) throw new DriverOfflineContractError();
   return value;
 }
 
