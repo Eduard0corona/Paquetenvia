@@ -1,5 +1,26 @@
 # Changelog
 
+## Correlación W3C sin paquetes (OBS-003-W3C-CORRELATION-2026-10-12, fase 4 PR 1) — 2026-10-12
+
+- Aplica la fase 4 aprobada; no hay pregunta nueva al owner. Respuesta literal del owner
+  (`PHASE4-PLATFORM-APPROVAL-2026-10-12`): "Sí, avanza con la fase 4 (Recommended)" ("Empiezo por OpenTelemetry y
+  correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el piloto.").
+- W3C Trace Context con `System.Diagnostics.Activity` y un `ActivitySource` propio (`Paqueteria`), sin paquetes
+  nuevos. Un listener que solo propaga (`PropagationData`) garantiza una actividad W3C por petición y por ciclo, sin
+  etiquetas, eventos ni baggage.
+- Entrada: se ignoran `traceparent`, `tracestate`, `baggage`, `Request-Id` y `Correlation-Context`; cada petición a la
+  API empieza una traza nueva. Salida: ninguna petición lleva esos encabezados (Google Maps, mensajes, voz, AuthCenter y
+  Azure). Azure.Core agrega `traceparent` aunque `IsDistributedTracingEnabled` sea `false`, así que cada cliente de
+  Azure envía por un transporte que quita esos encabezados.
+- Un solo identificador: el trace id W3C (32 hexadecimales en minúscula) va en `HttpContext.TraceIdentifier`, en
+  `platform.audit_logs.request_id`, en el `traceId` de todo `application/problem+json` y en `State.TraceId` de cada
+  línea de log de la petición. El seguimiento público conserva sus cuerpos uniformes sin `traceId`.
+- Worker: cada ciclo de job y cada ciclo de despacho del outbox (también los despachadores de tiempo real en la API)
+  corre en su propia traza raíz.
+- AI-05, cambio aditivo: `Problem` documenta `traceId` opcional (`^[0-9a-f]{32}$`) y `x-pilot-contract-deltas` agrega
+  `OBS-003-W3C-CORRELATION`; rutas, esquemas y referencias internas siguen en 68, 124 y 646. Sin cambios en AI-04,
+  AI-06, AI-18, roles, permisos, migraciones ni paquetes. Nota: `docs/development/obs-003-w3c-correlation.md`.
+
 ## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como dos cambios

@@ -85,7 +85,9 @@ public static class DependencyInjection
             // (managed identity). Existing unwrapped entries stay readable; new ones are encrypted.
             services.AddAzureWorkloadCredential();
             services.TryAddSingleton(serviceProvider => new DataProtectionKeyEncryptionKeyResolver(
-                new KeyResolver(serviceProvider.GetRequiredService<TokenCredential>())));
+                new KeyResolver(
+                    serviceProvider.GetRequiredService<TokenCredential>(),
+                    DataProtectionKeyEncryptionKeyResolver.CreateClientOptions())));
             dataProtection.ProtectKeysWithAzureKeyVault(
                 keyEncryptionKeyId,
                 serviceProvider => serviceProvider.GetRequiredService<DataProtectionKeyEncryptionKeyResolver>().Resolver);

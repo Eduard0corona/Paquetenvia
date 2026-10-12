@@ -29,7 +29,11 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
 
         if (options.Value.Provider != RealtimeProviderKind.SignalR)
         {
-            await WriteProblemAsync(context, StatusCodes.Status503ServiceUnavailable, "Service unavailable.");
+            await WriteProblemAsync(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                "Service unavailable.",
+                publicTracking: hubKind == "tracking");
             return;
         }
 
@@ -41,7 +45,7 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
 
         if (context.Items.ContainsKey(RealtimePrivateAccessTokenMiddleware.InvalidAccessTokenItemKey))
         {
-            await WriteProblemAsync(context, StatusCodes.Status401Unauthorized, "Unauthorized.");
+            await WritePrivateProblemAsync(context, StatusCodes.Status401Unauthorized, "Unauthorized.");
             return;
         }
 
@@ -51,7 +55,7 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
             userId == Guid.Empty ||
             !RealtimeOrganizationSelector.TryRead(context.Request, out var organizationId))
         {
-            await WriteProblemAsync(context, StatusCodes.Status401Unauthorized, "Unauthorized.");
+            await WritePrivateProblemAsync(context, StatusCodes.Status401Unauthorized, "Unauthorized.");
             return;
         }
 
@@ -91,7 +95,7 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
         }
         catch (RealtimeAuthorizationInfrastructureException)
         {
-            await WriteProblemAsync(context, StatusCodes.Status503ServiceUnavailable, "Service unavailable.");
+            await WriteProblemAsync(context, StatusCodes.Status503ServiceUnavailable, "Service unavailable.", publicTracking: true);
         }
     }
 
@@ -176,20 +180,34 @@ public sealed class RealtimeConnectionGateMiddleware(RequestDelegate next)
     }
 
     private static Task WriteTrackingNotFoundAsync(HttpContext context) =>
-        WriteProblemAsync(context, StatusCodes.Status404NotFound, "Not Found");
+        WriteProblemAsync(context, StatusCodes.Status404NotFound, "Not Found", publicTracking: true);
 
-    private static Task WriteProblemAsync(HttpContext context, int statusCode, string title)
+    private static Task WritePrivateProblemAsync(HttpContext context, int statusCode, string title) =>
+        WriteProblemAsync(context, statusCode, title, publicTracking: false);
+
+    /// <summary>
+    /// OBS-003: the private hubs' problems carry the request's trace id as <c>traceId</c> (AI-05 <c>Problem</c>);
+    /// the public tracking hub keeps its uniform bodies without it (Invariant 5).
+    /// </summary>
+    private static Task WriteProblemAsync(HttpContext context, int statusCode, string title, bool publicTracking)
     {
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/problem+json";
         context.Response.Headers.CacheControl = "no-store";
-        return context.Response.WriteAsync(
-            System.Text.Json.JsonSerializer.Serialize(new
+        var body = publicTracking
+            ? System.Text.Json.JsonSerializer.Serialize(new
             {
                 type = "about:blank",
                 title,
                 status = statusCode,
-            }),
-            context.RequestAborted);
+            })
+            : System.Text.Json.JsonSerializer.Serialize(new
+            {
+                type = "about:blank",
+                title,
+                status = statusCode,
+                traceId = context.TraceIdentifier,
+            });
+        return context.Response.WriteAsync(body, context.RequestAborted);
     }
 }

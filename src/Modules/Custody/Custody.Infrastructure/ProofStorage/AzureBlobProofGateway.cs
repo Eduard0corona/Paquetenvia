@@ -2,10 +2,12 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using Azure;
 using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Custody.Application.ProofUploads;
 using Microsoft.Extensions.Options;
+using Paqueteria.Infrastructure.Cloud;
 
 namespace Custody.Infrastructure.ProofStorage;
 
@@ -80,12 +82,26 @@ public sealed class AzureBlobProofGateway : IProofBlobGateway
     public AzureBlobProofGateway(IOptions<ProofStorageOptions> options, TokenCredential credential)
     {
         var settings = options.Value.AzureBlob;
+        _service = new BlobServiceClient(new Uri(settings.ServiceUri), credential, CreateClientOptions());
+        _container = _service.GetBlobContainerClient(settings.ContainerName);
+    }
+
+    /// <summary>
+    /// The Blob client options: bounded retries, no content logging and no trace context on any request
+    /// (OBS-003, <see cref="AzureClientTracing"/>). <paramref name="transport"/> is a test seam.
+    /// </summary>
+    public static BlobClientOptions CreateClientOptions(HttpPipelineTransport? transport = null)
+    {
         var clientOptions = new BlobClientOptions();
+        if (transport is not null)
+        {
+            clientOptions.Transport = transport;
+        }
+
         clientOptions.Retry.MaxRetries = 3;
         clientOptions.Retry.NetworkTimeout = TimeSpan.FromSeconds(30);
         clientOptions.Diagnostics.IsLoggingContentEnabled = false;
-        _service = new BlobServiceClient(new Uri(settings.ServiceUri), credential, clientOptions);
-        _container = _service.GetBlobContainerClient(settings.ContainerName);
+        return clientOptions.WithoutDistributedTracing();
     }
 
     public string AccountName => _service.AccountName;

@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
 using Azure.Core.Cryptography;
+using Azure.Core.Pipeline;
+using Azure.Security.KeyVault.Keys.Cryptography;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Paqueteria.Infrastructure.Cloud;
 
 namespace Paqueteria.Infrastructure.DataProtection;
 
@@ -12,6 +15,21 @@ namespace Paqueteria.Infrastructure.DataProtection;
 public sealed class DataProtectionKeyEncryptionKeyResolver(IKeyEncryptionKeyResolver resolver)
 {
     public IKeyEncryptionKeyResolver Resolver { get; } = resolver;
+
+    /// <summary>
+    /// Options of the Key Vault cryptography clients the production resolver builds: no trace context on any
+    /// request (OBS-003, <see cref="AzureClientTracing"/>). <paramref name="transport"/> is a test seam.
+    /// </summary>
+    public static CryptographyClientOptions CreateClientOptions(HttpPipelineTransport? transport = null)
+    {
+        var options = new CryptographyClientOptions();
+        if (transport is not null)
+        {
+            options.Transport = transport;
+        }
+
+        return options.WithoutDistributedTracing();
+    }
 }
 
 public sealed record DataProtectionKeyEncryptionKeyId(Uri Value);
