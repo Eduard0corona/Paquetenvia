@@ -353,6 +353,7 @@ public sealed class OrderCodExpectedTests
             bool codPendingReconciliation,
             bool mfaSatisfied,
             string? publicId,
+            OrderListCreatedRange createdRange,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<OrderDetailResult> GetAsync(

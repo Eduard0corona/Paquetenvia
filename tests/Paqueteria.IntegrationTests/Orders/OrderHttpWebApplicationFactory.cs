@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -26,6 +27,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal int ListCallCount => orderService.ListCallCount;
     internal bool? LastListCodPendingReconciliation => orderService.LastListCodPendingReconciliation;
     internal bool? LastListMfaSatisfied => orderService.LastListMfaSatisfied;
+    internal OrderListCreatedRange? LastListCreatedRange => orderService.LastListCreatedRange;
     internal CreateOrderCommand? LastCreateCommand => orderService.LastCreateCommand;
     internal TransitionOrderCommand? LastTransitionCommand => orderService.LastTransitionCommand;
 
@@ -142,6 +144,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         private int listCallCount;
         private int lastListCodPending = -1;
         private int lastListMfa = -1;
+        private StrongBox<OrderListCreatedRange>? lastListCreatedRange;
         private volatile bool refuseCodPendingListInTransaction;
         private readonly ConcurrentDictionary<Guid, byte> codPendingOrders = new();
         private CreateOrderCommand? lastCreateCommand;
@@ -163,6 +166,9 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             1 => true,
             _ => false,
         };
+
+        /// <summary>ORD-LIST-DATE-FILTER-2026-10-12: the creation window the last list call received.</summary>
+        internal OrderListCreatedRange? LastListCreatedRange => Volatile.Read(ref lastListCreatedRange)?.Value;
 
         internal bool RefuseCodPendingListInTransaction
         {
@@ -362,6 +368,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             bool codPendingReconciliation,
             bool mfaSatisfied,
             string? publicId,
+            OrderListCreatedRange createdRange,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -378,9 +385,18 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 return Task.FromResult(new OrderPageResult([], null));
             }
 
-            if (cursor is not null && !OrderCursorCodec.TryDecode(cursor, out _, out _))
+            // ORD-LIST-DATE-FILTER-2026-10-12: like the PostgreSQL service, a window outside the policy or a cursor
+            // not issued for this organization and these filters is refused before any order is read.
+            Volatile.Write(ref lastListCreatedRange, new StrongBox<OrderListCreatedRange>(createdRange));
+            if (!createdRange.IsValid ||
+                (cursor is not null && !OrderCursorCodec.TryDecode(
+                    cursor,
+                    OrderCursorCodec.Binding(
+                        organizationId, status, ownerOrganizationId, codPendingReconciliation, publicId, createdRange),
+                    out _,
+                    out _)))
             {
-                return Task.FromResult(new OrderPageResult([], null));
+                throw new OrderConflictException(OrderConflictCode.InvalidRequest);
             }
 
             // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: like the PostgreSQL service, a malformed tracking number

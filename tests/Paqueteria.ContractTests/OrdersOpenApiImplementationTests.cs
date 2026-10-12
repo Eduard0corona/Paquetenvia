@@ -504,6 +504,73 @@ public sealed class OrdersOpenApiImplementationTests
     }
 
     /// <summary>
+    /// ORD-LIST-DATE-FILTER-2026-10-12: AI-05 publishes created_from and created_to exactly as the server reads them
+    /// (UTC date-time, inclusive, at most 31 days), the cursor bound to the filters with its length, the 409 the
+    /// shape refusal answers before the capability, and the delta entry; the endpoint, the policy and the SQL agree.
+    /// </summary>
+    [Fact]
+    public void The_listOrders_creation_window_and_bound_cursor_match_AI05()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var list = root.Mapping("paths").Mapping("/orders").Mapping("get");
+        Assert.Equal("shape-validation-then-capability-before-persisted-state", list.Scalar("x-authorization-precedence"));
+        Assert.Equal("invalid-request-without-productive-transaction", list.Scalar("x-shape-validation"));
+        var description = list.Scalar("description");
+        Assert.Contains("ORD-LIST-DATE-FILTER-2026-10-12", description, StringComparison.Ordinal);
+        Assert.Contains("created_from <= created_at <= created_to", description, StringComparison.Ordinal);
+        Assert.Contains("at most 31 days", description, StringComparison.Ordinal);
+        Assert.Contains("409 INVALID_REQUEST, decided before the capability", description, StringComparison.Ordinal);
+        Assert.Contains("keep answering the empty page", description, StringComparison.Ordinal);
+
+        var parameters = list.Sequence("parameters").Children.OfType<YamlMappingNode>()
+            .Where(parameter => parameter.Children.ContainsKey(new YamlScalarNode("name")))
+            .ToDictionary(parameter => parameter.Scalar("name"), StringComparer.Ordinal);
+        foreach (var (name, comparison) in new[] { ("created_from", "created_at >= created_from"), ("created_to", "created_at <= created_to") })
+        {
+            var parameter = parameters[name];
+            Assert.Equal("query", parameter.Scalar("in"));
+            Assert.Equal("false", parameter.Scalar("required"));
+            Assert.Equal("string", parameter.Mapping("schema").Scalar("type"));
+            Assert.Equal("date-time", parameter.Mapping("schema").Scalar("format"));
+            Assert.Contains(comparison, parameter.Scalar("description"), StringComparison.Ordinal);
+            Assert.Contains("America/Mazatlan", parameter.Scalar("description"), StringComparison.Ordinal);
+        }
+
+        var cursor = parameters["cursor"];
+        Assert.Equal(
+            OrderCursorCodec.MaximumLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            cursor.Mapping("schema").Scalar("maxLength"));
+        Assert.Contains("bound to the selected organization", cursor.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal("#/components/responses/Conflict", list.Mapping("responses").Mapping("409").Scalar("$ref"));
+        Assert.Equal(TimeSpan.FromDays(31), OrderListCreatedRange.MaximumSpan);
+
+        var delta = root.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Single(entry => entry.Scalar("id") == "ORD-LIST-DATE-FILTER");
+        Assert.Equal("DECIDED", delta.Scalar("status"));
+        Assert.Equal("ORD-LIST-DATE-FILTER-2026-10-12 (project owner, 2026-10-12)", delta.Scalar("decision"));
+        Assert.Contains("Agregar filtro de fecha al API (Recommended)", delta.Scalar("literal"), StringComparison.Ordinal);
+        Assert.Contains("feat/ui-001-orders-list", delta.Scalar("implementation"), StringComparison.Ordinal);
+
+        var source = ReadRepositoryFile("src", "Modules", "Orders", "Orders.Endpoints", "OrderEndpoints.cs");
+        Assert.Contains(".ProducesProblem(StatusCodes.Status409Conflict)", source, StringComparison.Ordinal);
+        Assert.Contains("public const string CreatedFrom = \"created_from\";", source, StringComparison.Ordinal);
+        Assert.Contains("public const string CreatedTo = \"created_to\";", source, StringComparison.Ordinal);
+        Assert.Contains("[\"code\"] = \"INVALID_REQUEST\"", source, StringComparison.Ordinal);
+        // The shape refusal comes before the capability gate of listOrders.
+        var list409 = source.IndexOf("OrderListRequestShape.TryReadCreatedRange(", StringComparison.Ordinal);
+        var gate = source.IndexOf("TenantCapabilities.ListOrders) is { } denied", StringComparison.Ordinal);
+        Assert.True(list409 > 0 && gate > list409);
+
+        var coordinator = ReadRepositoryFile(
+            "src", "Modules", "Orders", "Orders.Infrastructure", "Orders", "QuoteSnapshotToOrderCoordinator.cs");
+        Assert.Contains("AND (@created_from::timestamptz IS NULL OR created_at>=@created_from)", coordinator, StringComparison.Ordinal);
+        Assert.Contains("AND (@created_to::timestamptz IS NULL OR created_at<=@created_to)", coordinator, StringComparison.Ordinal);
+        Assert.Contains("ORDER BY created_at DESC,id DESC", coordinator, StringComparison.Ordinal);
+        Assert.Contains("OrderCursorCodec.Encode(rows[^1].CreatedAt, rows[^1].Result.Id, binding)", coordinator, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: listOrders searches by the exact tracking number only, with the
     /// AI-04 public identifier format, and getOrder returns the advisory allowed_transitions exactly as AI-05 declares.
     /// </summary>
@@ -516,7 +583,7 @@ public sealed class OrdersOpenApiImplementationTests
             .Where(parameter => parameter.Children.ContainsKey(new YamlScalarNode("name")))
             .ToArray();
         Assert.Equal(
-            ["cod_pending_reconciliation", "cursor", "owner_org_id", "public_id", "status"],
+            ["cod_pending_reconciliation", "created_from", "created_to", "cursor", "owner_org_id", "public_id", "status"],
             parameters.Select(parameter => parameter.Scalar("name")).Order(StringComparer.Ordinal));
         var publicId = parameters.Single(parameter => parameter.Scalar("name") == "public_id");
         Assert.Equal("query", publicId.Scalar("in"));

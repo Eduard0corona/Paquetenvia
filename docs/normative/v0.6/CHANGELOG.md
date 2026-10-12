@@ -1,5 +1,40 @@
 # Changelog
 
+## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como dos cambios
+  MAJOR (AI-01 §7). Primera: "El menú aprobado de Despacho incluye "Órdenes", pero esa pantalla no existe (hoy se llega
+  a una orden desde la bandeja, el tablero o "Buscar guía"). ¿La hacemos?" → "Sí, lista de órdenes (Recommended)"
+  ("Lista de todas las órdenes con búsqueda por guía y filtros por estado y fecha, usando el API que ya existe; abre el
+  detalle."); no elegidas: "No, quitar del menú" y "Después del piloto". Segunda: "Corrección mía: para "Órdenes" dije
+  "filtros por estado y fecha con el API que ya existe", pero la lista de órdenes del API no filtra por fecha (solo
+  estado, dueña, cobro pendiente y guía). ¿Cómo la hacemos?" → "Agregar filtro de fecha al API (Recommended)" ("Cambio
+  pequeño y aditivo (con ADR): la lista de órdenes acepta "desde" y "hasta" (hora de Mazatlán). La pantalla filtra por
+  guía, estado y fecha."); no elegida: "Sin filtro de fecha". ADR: `docs/adr/ADR-ORD-LIST-DATE-FILTER.md`.
+- AI-05 `listOrders`: parámetros opcionales `created_from` y `created_to` con las reglas del tablero (instantes RFC3339
+  en UTC que terminan en `Z`, ambos inclusivos, cada uno solo o los dos con 31 días como máximo); el cursor queda
+  ligado a la organización y a todos los filtros (`maxLength: 128`); una cota mal formada o repetida, un rango fuera de
+  las reglas o un cursor que la operación no emitió para esos filtros es `409 INVALID_REQUEST` antes de la capacidad
+  (nueva respuesta `409`, `x-authorization-precedence: shape-validation-then-capability-before-persisted-state`). Antes,
+  un cursor ilegible daba la página vacía: es lo único que no es aditivo. Estado desconocido, `public_id` mal formado,
+  otra dueña o un valor de COD que no es `true`/`false` siguen dando la página vacía. Capacidad, forma `Order`, RLS y
+  orden sin cambios; FINANCE solo puede acotar con fechas su lista de cobros pendientes. Entrada `ORD-LIST-DATE-FILTER`
+  en `x-pilot-contract-deltas`; rutas y esquemas siguen en 68 y 124, referencias internas 646.
+- Servidor: la lectura de Orders agrega `created_at >= created_from` y `created_at <= created_to` en la misma
+  transacción tenant con RLS; los índices existentes `orders_owner_status_idx` y `orders_operator_status_idx` toman el
+  rango como condición de índice (EXPLAIN ANALYZE en PostgreSQL 18 con 200 000 órdenes sintéticas, en el ADR). Sin
+  migración, tabla, índice, rol ni permiso; AI-04, AI-06 y AI-18 sin cambios; ningún flujo atómico nuevo.
+- AI-07: ruta `/ops/orders` (DISPATCHER, PLATFORM_ADMIN y VIEWER) y contrato `order_list`; `work_inbox.not_supported` ya
+  no menciona la pantalla faltante. Web: "Órdenes" después de "Bandeja" y antes de "Tablero"; búsqueda por guía exacta
+  (`ORD_…`, misma validación que "Buscar guía"), un estado o todos, "Creada desde" y "Creada hasta" en días de Mazatlán
+  (primer instante y último microsegundo del día), filas con guía, estado y total en centavos enteros, "Cargar más" con
+  el cursor de la misma consulta; la fila abre el detalle existente para DISPATCHER y PLATFORM_ADMIN y no es enlace para
+  VIEWER. El detalle `/ops/orders/:id` sigue bajo "Bandeja" para quien la tiene. Sin almacenamiento del navegador ni
+  consola; sin IDs internos.
+- Pendiente para el owner: la fecha y hora de creación por fila (la `Order` de `listOrders` no trae `created_at`),
+  "Órdenes (lectura)" de FINANCE y el aterrizaje de VIEWER en "Órdenes".
+- Despliegue: el API antes que la web o juntos. Rollback: revertir el commit, sin datos ni esquema que deshacer.
+
 ## Roles propios en la organización activa: `GET /me/organization-roles` (ORG-MY-ROLES-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR

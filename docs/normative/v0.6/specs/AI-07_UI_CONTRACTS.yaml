@@ -89,6 +89,20 @@ routes:
     - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-DAILY-2026-10-12
+  # UI-PHASE3-ORDERS-LIST-2026-10-12 (project owner, 2026-10-12, "Sí, lista de órdenes (Recommended)"): "Órdenes", the
+  # list of every order of the selected organization, the second item of the approved dispatcher menu; filtered by
+  # status and creation date through listOrders (ORD-LIST-DATE-FILTER-2026-10-12, "Agregar filtro de fecha al API
+  # (Recommended)"). The backend and RLS remain the barrier.
+  /ops/orders:
+    roles:
+    - platform_admin
+    - dispatcher
+    - viewer
+    release: MVP-1
+    screen_contract: order_list
+    decisions:
+    - UI-PHASE3-ORDERS-LIST-2026-10-12
+    - ORD-LIST-DATE-FILTER-2026-10-12
   # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the app shell top bar offers "Buscar guía" to the roles that open the
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
@@ -611,7 +625,6 @@ screen_contracts:
     - finishing or discarding the driver's older DRAFT routes - AI-05 has no operation that takes a route out of DRAFT,
       so they stay listed (after today's) until after the pilot (UI-PHASE3-ROUTES-DAILY-2026-10-12;
       route_planner.not_supported)
-    - Órdenes menu item of the approved menu - no screen yet (Repartidores is /ops/drivers, UI-PHASE3-DRIVERS-2026-10-11)
   route_planner:
     release: MVP-1
     route: /ops/routes
@@ -1357,6 +1370,70 @@ screen_contracts:
     - names and phones while GATE-007 is open
     not_supported:
     - EXTERNAL drivers and retired (INACTIVE) drivers - outside the approved list
+  order_list:
+    release: MVP-1
+    route: /ops/orders
+    decision: UI-PHASE3-ORDERS-LIST-2026-10-12
+    decision_amendments:
+    - ORD-LIST-DATE-FILTER-2026-10-12
+    authority: REST API + PostgreSQL
+    sources:
+      list: GET /orders (listOrders) with status, public_id, created_from, created_to and cursor
+      detail: /ops/orders/:id (the existing order detail; this screen adds nothing to it)
+    roles: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    excluded_roles: FINANCE, DRIVER and every other role; the shell does not offer the screen to them and the API answers
+      403 (FINANCE lists only COD-pending orders, FIN-PENDING-COD-LIST-FINANCE-2026-10-02, and keeps that access
+      unchanged)
+    navigation: the shell item Órdenes right after Bandeja, as in the approved menu "Bandeja · Órdenes · + Nueva orden ·
+      Rutas · Incidencias · Importar CSV · Repartidores", then Tablero; Órdenes owns /ops/orders, the order detail
+      /ops/orders/:id stays under Bandeja for the roles that have it and falls to Órdenes for VIEWER, which has no
+      Bandeja
+    population: every order the selected organization owns or operates, the orders listOrders returns under RLS,
+      newest first (created_at, then id)
+    search: Guía (ORD_…) - only the exact tracking number (listOrders public_id), validated like the top-bar "Buscar
+      guía" before anything is sent; a malformed, missing or other-organization number shows "No encontramos esa
+      guía"; it narrows the other filters; recipient, sender or any other personal data is never searched
+    filters:
+    - Estado - one AI-04 status or Todos los estados, grouped by the five UI-STATUS-GROUPS-2026-10-05 groups with the
+      exact es-MX status labels
+    - Creada desde and Creada hasta (hora de Mazatlán) - two optional calendar dates in America/Mazatlan, both
+      included; Desde is sent as created_from, the first instant of that Mazatlán day, and Hasta as created_to, the
+      last microsecond of that Mazatlán day (src/lib/mazatlan-time.ts); Desde after Hasta or more than 31 days is
+      refused on screen ("La fecha «Desde» no puede ser posterior a la fecha «Hasta».", "Elige un periodo de 31 días o
+      menos.") and nothing is sent
+    - status and dates live in the URL (status, from, to) so the browser returns to the same list; the guía search does
+      not
+    table:
+      columns:
+      - Guía (Order.public_id; a link to the order detail for DISPATCHER and PLATFORM_ADMIN, plain text for VIEWER)
+      - Estado (exact status with its group color, dot and text, never color alone)
+      - Total (IVA incluido) (Order.total, integer MXN cents through the shared Money component)
+      row: a click anywhere on the row opens /ops/orders/:id for the roles that open the detail; the guía link is the
+        keyboard path; VIEWER rows are not links and the screen says the detail is opened by dispatch and
+        administration
+      order: newest first, as listOrders returns it
+      states: loading, empty (Sin órdenes, Sin órdenes con estos filtros, No encontramos esa guía), error keeping the
+        rows, the period refused before sending, no session, access unavailable and the MFA step-up when only the
+        second factor is missing
+    pagination: Cargar más sends the next_cursor with exactly the query that issued it (listOrders binds a cursor to
+      its organization and filters); a repeated cursor or a refused page stops the paging with a message
+    recovery:
+    - load, Actualizar and every filter change read the first page again; a filter change drops the previous rows at
+      once; the page becoming visible and window focus read it again only while a single page is shown (never while
+      hidden and never twice within 5 seconds); optimistic UI is never authoritative
+    - a 401 or 403 clears the rows; a 409 INVALID_REQUEST says the server did not accept the filters
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears the list and the guía search
+    - no internal identifier, address, contact, phone or other personal data is shown; the order id is only the link
+      target
+    forbidden:
+    - changing an order from the list (no transitions, assignments or bulk actions)
+    - a search criterion other than the exact guía
+    not_supported:
+    - the creation date and time of each order - the AI-05 Order representation listOrders returns has no created_at;
+      showing it needs an API change the owner has not decided yet
+    - FINANCE "Órdenes (lectura)" of the approved menu - listOrders admits FINANCE only for the COD-pending list; an
+      open owner question
   settlement_desk:
     release: MVP-1
     route: /finance/settlements

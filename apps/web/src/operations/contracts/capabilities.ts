@@ -203,7 +203,25 @@ export function resolveActiveRole(
 export const orderDetailRoles = ["DISPATCHER", "PLATFORM_ADMIN"] as const;
 
 export function canSearchOrders(role: string | null): boolean {
-  return canPerform(role, "listOrders") && (orderDetailRoles as readonly (string | null)[]).includes(role);
+  return canPerform(role, "listOrders") && canOpenOrderDetail(role);
+}
+
+/**
+ * The roles that open /ops/orders/:id, which reads the operations dashboard (DISPATCHER, and PLATFORM_ADMIN with
+ * MFA). UI-PHASE3-ORDERS-LIST-2026-10-12: "Órdenes" links its rows to the detail only for them; VIEWER lists orders
+ * without a link, as it is not offered "Buscar guía" either.
+ */
+export function canOpenOrderDetail(role: string | null): boolean {
+  return (orderDetailRoles as readonly (string | null)[]).includes(role);
+}
+
+/**
+ * UI-PHASE3-ORDERS-LIST-2026-10-12: "Órdenes" is offered to the listOrders roles (DISPATCHER, PLATFORM_ADMIN and
+ * VIEWER). FINANCE only lists COD-pending orders (FIN-PENDING-COD-LIST-FINANCE-2026-10-02), so it is not offered the
+ * screen; its approved "Órdenes (lectura)" item stays an open owner question.
+ */
+export function canOpenOrderList(role: string | null): boolean {
+  return canPerform(role, "listOrders");
 }
 
 /**
